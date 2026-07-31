@@ -3235,6 +3235,39 @@ class SyncClient {
 
   // --- Integrity alarms --------------------------------------------------------
 
+  /// Raise [IntegrityAlarmKind.epochKeySetUnpublishable] for this Workspace.
+  ///
+  /// A narrow public seam so [_raiseAlarm] stays private: the rotation resume lives
+  /// in `EnrolmentService` and holds a scoped client, and this is the one accusation
+  /// it needs to file. `authorMemberId` is deliberately **null** — the condition
+  /// accuses nobody, and the server was right to refuse.
+  ///
+  /// Because the upsert key is `(workspace, kind, author)`, every epoch of one
+  /// Workspace shares one row: [detail] carries the most recent and
+  /// `occurrenceCount` counts terminalisations. Acceptable, because at most one
+  /// pending record is ever live in practice (`pending_rotation_store.dart`).
+  ///
+  /// [detail] must stand on its own for #584 — no reader should need this call site
+  /// to interpret it.
+  Future<void> raiseEpochKeySetUnpublishableAlarm({required String detail}) async {
+    await _raiseAlarm(IntegrityAlarmKind.epochKeySetUnpublishable, detail: detail);
+  }
+
+  /// Raise [IntegrityAlarmKind.ownWriteRefusedPermanently] for this Workspace.
+  ///
+  /// Carries `authorMemberId` the way `own_writes_rollback` does — this *is* an
+  /// own-writes accusation — and is epoch-agnostic, because the flush it comes from
+  /// is one call per Workspace.
+  Future<void> raiseOwnWriteRefusedPermanentlyAlarm({
+    required String detail,
+  }) async {
+    await _raiseAlarm(
+      IntegrityAlarmKind.ownWriteRefusedPermanently,
+      detail: detail,
+      authorMemberId: identity.memberId,
+    );
+  }
+
   /// Raise or re-raise one accusation, keyed by `(workspace, kind, author)`.
   ///
   /// Re-raising un-resolves: an accusation that stands again is not history.
