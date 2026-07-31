@@ -119,6 +119,14 @@ abstract class PendingRotationStore {
         final held = await readRaw(workspaceId);
         final existing = held[set.epoch];
         if (existing != null && !_sameEpochKeySet(existing, set)) {
+          // Defense-in-depth, NOT dead code: since #624 serialized ceremonies
+          // per-User through `EnrolmentService._runCeremonyExclusive`, two ceremonies
+          // for one User can no longer reach this `put` concurrently for the same
+          // epoch, so this no longer fires on the honest in-process path. It remains
+          // the last-resort backstop for a bypass of that serialization — a future
+          // caller authoring a rotate outside `rotateWorkspaceKeys`, or a store
+          // shared across processes (out of scope) — and converts the silent orphan
+          // into a loud error. Do not remove it because the honest path went quiet.
           throw ConflictingPendingRotation(workspaceId, set.epoch);
         }
         await write(workspaceId, {...held, set.epoch: set});

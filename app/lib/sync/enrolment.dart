@@ -482,6 +482,63 @@ class EnrolmentService {
   Future<SyncClient> _scoped(String workspaceId) async =>
       workspaceId == client.workspaceId ? client : await workspaceClientFactory(workspaceId);
 
+  // --- Ceremony serialization --------------------------------------------------
+
+  /// One lock per `EnrolmentService` instance, and this service is built once per
+  /// User (its [_workspaces] are `derivableWorkspaceIds(client.userId)`), so the
+  /// grain is **per-User**. A single ceremony already spans both Workspaces
+  /// sequentially, so there is never a legitimate reason to run two ceremonies for
+  /// one User at once — a per-Workspace lock would only force a ceremony to hold two
+  /// of them across the whole run and reintroduce lock-ordering risk for no benefit.
+  ///
+  /// Built on the future-chain idiom [PendingRotationStore] uses, but with two
+  /// acquisition modes rather than one: [_runCeremonyExclusive] waits (FIFO), and
+  /// [_tryRunCeremonyExclusive] skips when busy. There is no `Mutex`/`synchronized`
+  /// package in this codebase to lean on.
+
+  /// The tail of the ceremony chain: completes when the last enqueued ceremony (a
+  /// waiting rotation, or a try-acquired resume that actually ran) releases. A
+  /// waiting ceremony chains onto it; a try-acquiring resume runs only when nothing
+  /// is in flight.
+  Future<void> _ceremonyTail = Future<void>.value();
+
+  /// How many ceremonies are **enqueued or running**. Incremented at *enqueue*
+  /// (before the body starts), decremented when the body settles.
+  ///
+  /// A counter, not a bare "running" flag, and incremented at enqueue rather than at
+  /// body-start, so a try-acquiring resume checking `> 0` cannot slip into the window
+  /// between a ceremony being enqueued and its body actually starting — the secondary
+  /// hazard #624 calls out.
+  int _ceremoniesInFlight = 0;
+
+  /// Run [body] under the ceremony lock, **waiting** (FIFO) for any in-flight
+  /// ceremony to finish first. What a full rotation does — it must never race another.
+  Future<T> _runCeremonyExclusive<T>(Future<T> Function() body) {
+    _ceremoniesInFlight++;
+    final previous = _ceremonyTail;
+    final next = previous.then((_) => body());
+    // The tail swallows the body's error (so a failed ceremony does not poison the
+    // next one's chain) and drops the in-flight count exactly once, when this body
+    // settles — success or throw.
+    _ceremonyTail = next.then<void>(
+      (_) => _ceremoniesInFlight--,
+      onError: (Object _) => _ceremoniesInFlight--,
+    );
+    return next;
+  }
+
+  /// Run [body] under the ceremony lock only if **nothing is in flight**; otherwise
+  /// skip it and return at once. What the resume triggers do — they never block.
+  ///
+  /// A successful acquire delegates to [_runCeremonyExclusive], so a resume that does
+  /// run is registered in-flight and chained onto the tail for its whole duration —
+  /// a `rotateWorkspaceKeys` starting mid-resume then waits for it rather than racing
+  /// its operations. The try-body is never run off-chain.
+  Future<void> _tryRunCeremonyExclusive(Future<void> Function() body) {
+    if (_ceremoniesInFlight > 0) return Future<void>.value();
+    return _runCeremonyExclusive(body);
+  }
+
   // --- Key rotation ------------------------------------------------------------
 
   /// Turn encryption **on** for every Workspace of this User.
@@ -496,6 +553,9 @@ class EnrolmentService {
   ///
   /// Idempotent in the only sense that matters: running it on an already-encrypted
   /// Workspace rotates it, which is a legal thing to do at any time.
+  ///
+  /// Serializes with every other ceremony for this User through [rotateWorkspaceKeys]
+  /// — it takes no lock of its own, so a ceremony acquires exactly once (#624).
   Future<Map<String, int>> turnOnEncryption({required String passphrase}) =>
       rotateWorkspaceKeys(passphrase: passphrase);
 
@@ -516,6 +576,9 @@ class EnrolmentService {
   ///
   /// Takes the passphrase because only Root may revoke an owner Grant (ADR-0031) and
   /// every Device holds one — the deliberate corollary of "Devices are owners".
+  ///
+  /// Serializes with every other ceremony for this User through [rotateWorkspaceKeys]
+  /// — it takes no lock of its own, so a ceremony acquires exactly once (#624).
   Future<Map<String, int>> revokeAndRotate({
     required String passphrase,
     required String memberId,
@@ -538,13 +601,32 @@ class EnrolmentService {
   Future<Map<String, int>> rotateWorkspaceKeys({
     required String passphrase,
     String? revokeMemberId,
+  }) =>
+      // A full ceremony waits (FIFO) for any in-flight ceremony to finish first, so
+      // two overlapping ceremonies for this User run one-after-the-other rather than
+      // both reading the same `epochFloor`, preparing distinct sets for one `toEpoch`
+      // and racing the `put` — #624. `turnOnEncryption` and `revokeAndRotate` reach
+      // here and take no lock of their own, so a ceremony acquires exactly once.
+      _runCeremonyExclusive(() => _rotateWorkspaceKeysCore(
+            passphrase: passphrase,
+            revokeMemberId: revokeMemberId,
+          ));
+
+  /// The rotation ceremony proper, run under the ceremony lock its wrapper holds.
+  Future<Map<String, int>> _rotateWorkspaceKeysCore({
+    required String passphrase,
+    String? revokeMemberId,
   }) async {
     // Finish any rotation this User left stranded before starting a new one. This
     // also delivers AC-5: `_rotateOne` writes its own record before its own flush,
     // so a throw on the second Workspace leaves the first with no record (deleted on
     // its success) and the second with a live one — the next ceremony resumes only
     // the second and does not re-rotate the first.
-    await resumePendingRotations();
+    //
+    // The *unlocked* core, never the public `resumePendingRotations` wrapper: this
+    // ceremony already holds the lock, and re-entering it would deadlock a wait-mutex
+    // or (with this try-skip resume) silently skip the drain the ceremony depends on.
+    await _resumePendingRotationsCore();
     final (_, root, secrets) = await _recoverRoot(passphrase);
     try {
       final epochs = <String, int>{};
@@ -685,7 +767,22 @@ class EnrolmentService {
   /// Best-effort by contract: a transient/offline failure leaves the record for the
   /// next trigger, and the only records it *deletes* are the ones it has provably
   /// finished (key now held) or that never materialised a rotate to finish.
-  Future<void> resumePendingRotations({String? workspaceId}) async {
+  Future<void> resumePendingRotations({String? workspaceId}) =>
+      // Try-acquire, and skip if any ceremony is in flight — the resume triggers
+      // never block (AC-5): the launch resume is awaited inside activation and the
+      // pull-tail resume gates the next pull, so queuing behind a long ceremony would
+      // stall both. Skipping loses no work: the lock-holder drains every stranded
+      // record first (`_rotateWorkspaceKeysCore` calls `_resumePendingRotationsCore`
+      // at the top), and any record it authors it survives a crash for the next
+      // trigger. A *successful* try-acquire still registers in-flight and chains onto
+      // the tail, so a `rotateWorkspaceKeys` starting mid-resume waits for it (#624).
+      _tryRunCeremonyExclusive(
+          () => _resumePendingRotationsCore(workspaceId: workspaceId));
+
+  /// The resume proper, run under the ceremony lock — either its own try-acquire, or
+  /// directly by a ceremony that already holds the lock (the internal drain). Never
+  /// takes the lock itself, so the ceremony's internal call cannot re-enter it.
+  Future<void> _resumePendingRotationsCore({String? workspaceId}) async {
     final targets = workspaceId == null ? _workspaces : [workspaceId];
     // Per-record best-effort: a transient failure on one record must not abandon
     // the epochs behind it or the other Workspaces — they are independent. Hold the
