@@ -217,6 +217,19 @@ void main() {
     final first = a.stack.enrolment.turnOnEncryption(passphrase: passphrase);
     await park.reached;
 
+    // Idempotent release, registered before the in-window assertion below: if that
+    // assertion throws, the test aborts without ever calling `park.release()`, and the
+    // parked `putKeyWraps` would otherwise hang the ceremony (and this fixture) through
+    // teardown and into the next test.
+    var parkReleased = false;
+    void releasePark() {
+      if (parkReleased) return;
+      parkReleased = true;
+      park.release();
+    }
+
+    addTearDown(releasePark);
+
     // The second ceremony is fired while the first is parked. It must queue behind the
     // first (its body must not start), so it drives no `putKeyWraps` of its own.
     final second = a.stack.enrolment.rotateWorkspaceKeys(passphrase: passphrase);
@@ -228,7 +241,7 @@ void main() {
             'is removed)');
 
     // Release the first; both now run to completion, one after the other.
-    park.release();
+    releasePark();
     final firstEpochs = await first;
     final secondEpochs = await second;
 
@@ -257,14 +270,15 @@ void main() {
     // it (that would stall the pull loop / activation — AC-5). It try-acquires, sees a
     // ceremony in flight, and returns at once. Awaiting it here completes *before* the
     // ceremony is released — the property that fails if the resume were a wait-queue.
-    var resumeReturned = false;
-    final resume = a.stack.enrolment
+    // Bound the await: a `.timeout(...)` turns a wait-queue regression into a fast,
+    // clear failure here instead of an unbounded hang (the ceremony still parked would
+    // never release it otherwise).
+    await a.stack.enrolment
         .resumePendingRotations(workspaceId: defaultWs())
-        .then((_) => resumeReturned = true);
-    await resume;
-    expect(resumeReturned, isTrue,
-        reason: 'the resume returned while the ceremony was still parked — it skipped '
-            'rather than blocking (a wait-queue resume would hang here until release)');
+        .timeout(const Duration(seconds: 2),
+            onTimeout: () => fail('resumePendingRotations did not return promptly — it '
+                'appears to have queued behind the in-flight ceremony instead of '
+                'try-skipping it'));
     expect(gate.putKeyWrapsCallCount, 1,
         reason: 'the skipped resume issued no publish — it did not race the '
             "ceremony's put");
