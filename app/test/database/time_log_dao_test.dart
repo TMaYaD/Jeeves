@@ -222,6 +222,140 @@ void main() {
     });
 
     // -------------------------------------------------------------------------
+    // Per-stint minute ceiling boundaries (issue #615)
+    //
+    // The ceiling is exact integer-millisecond arithmetic, so both failure
+    // modes of the older float formulations are pinned here: a genuine
+    // sub-minute remainder must round *up* (the reported bug), and a stint
+    // that is a true whole number of minutes must *not* round up — no matter
+    // what start offset it sits at. The `:11`-second case below is the
+    // regression guard: computing the ceiling from a `julianday()` REAL makes
+    // it read as 2 minutes, because that function's ~2.46e6-day magnitude
+    // carries tens of microseconds of double-precision noise in either
+    // direction.
+    // -------------------------------------------------------------------------
+
+    group('per-stint minute ceiling', () {
+      /// Inserts one closed stint on `task1` spanning [startedAtUtc] →
+      /// [endedAtUtc] verbatim, so a test can pin an exact wall-clock span
+      /// rather than one derived from `DateTime.now()`.
+      Future<void> insertStint(
+        GtdDatabase db, {
+        required DateTime startedAtUtc,
+        required DateTime endedAtUtc,
+        String id = 'log1',
+      }) async {
+        await db.into(db.timeLogs).insert(TimeLogsCompanion(
+              id: Value(id),
+              userId: const Value(_userId),
+              taskId: const Value('task1'),
+              startedAt: Value(startedAtUtc.toIso8601String()),
+              endedAt: Value(endedAtUtc.toIso8601String()),
+            ));
+      }
+
+      setUp(() => _insertTodo(db, id: 'task1', title: 'Task 1'));
+
+      test('an exactly-60-second stint is 1 minute, not 2', () async {
+        await insertStint(
+          db,
+          startedAtUtc: DateTime.utc(2026, 3, 15, 0, 0, 0),
+          endedAtUtc: DateTime.utc(2026, 3, 15, 0, 1, 0),
+        );
+        expect(await db.timeLogDao.totalMinutesForTask('task1'), 1);
+      });
+
+      test(
+          'an exact-minute stint at a start offset where float noise lands '
+          'above the integer is still 1 minute', () async {
+        // Regression guard for the rejected fix (ceiling the julianday float):
+        // this true 60.000s span computes as 1.00000061094761 minutes there,
+        // so a mathematical ceiling inflates it to 2. Measured over 864,000
+        // exact-whole-minute stints, 48.9% of them over-count that way.
+        await insertStint(
+          db,
+          startedAtUtc: DateTime.utc(2026, 3, 15, 0, 0, 11),
+          endedAtUtc: DateTime.utc(2026, 3, 15, 0, 1, 11),
+        );
+        expect(await db.timeLogDao.totalMinutesForTask('task1'), 1,
+            reason: 'a whole-minute stint must never inflate by a minute');
+      });
+
+      test('a stint 3 milliseconds past a minute boundary rounds up to 2',
+          () async {
+        // The reported bug: the old `+ 0.9999` epsilon swallowed any remainder
+        // under 6ms and reported 1 minute for this span.
+        await insertStint(
+          db,
+          startedAtUtc: DateTime.utc(2026, 3, 15, 0, 0, 0),
+          endedAtUtc: DateTime.utc(2026, 3, 15, 0, 1, 0, 3),
+        );
+        expect(await db.timeLogDao.totalMinutesForTask('task1'), 2);
+      });
+
+      test('a stint a fraction of a millisecond short of a minute is 1 minute',
+          () async {
+        // Noise *below* a boundary is the common real-world shape; it must not
+        // truncate a whole minute away.
+        await insertStint(
+          db,
+          startedAtUtc: DateTime.utc(2026, 3, 15, 0, 0, 0),
+          endedAtUtc: DateTime.utc(2026, 3, 15, 0, 0, 59, 999, 500),
+        );
+        expect(await db.timeLogDao.totalMinutesForTask('task1'), 1);
+      });
+
+      test('a zero-duration stint is 0 minutes', () async {
+        final instant = DateTime.utc(2026, 3, 15, 0, 0, 0);
+        await insertStint(db, startedAtUtc: instant, endedAtUtc: instant);
+        expect(await db.timeLogDao.totalMinutesForTask('task1'), 0);
+      });
+
+      test('a multi-day stint is the exact integer minute count', () async {
+        // 60.5 days = 87,120 minutes, with no precision loss at that span.
+        final startedAtUtc = DateTime.utc(2026, 3, 15, 0, 0, 0);
+        await insertStint(
+          db,
+          startedAtUtc: startedAtUtc,
+          endedAtUtc: startedAtUtc.add(const Duration(days: 60, hours: 12)),
+        );
+        expect(await db.timeLogDao.totalMinutesForTask('task1'), 87120);
+      });
+
+      test('a clock-skewed stint that ends before it starts clamps to 0',
+          () async {
+        // Without the MAX(0, …) clamp, integer ceiling division returns -1
+        // here — a negative summand that silently *reduces* the Outcome's
+        // total rather than merely mis-rounding one stint.
+        await insertStint(
+          db,
+          startedAtUtc: DateTime.utc(2026, 3, 15, 0, 1, 30),
+          endedAtUtc: DateTime.utc(2026, 3, 15, 0, 0, 0),
+        );
+        expect(await db.timeLogDao.totalMinutesForTask('task1'), 0,
+            reason: 'clock skew must never subtract from a total');
+      });
+
+      test('a skewed stint cannot cancel out a real one in the same total',
+          () async {
+        final base = DateTime.utc(2026, 3, 15, 0, 0, 0);
+        await insertStint(
+          db,
+          id: 'real',
+          startedAtUtc: base,
+          endedAtUtc: base.add(const Duration(minutes: 5)),
+        );
+        await insertStint(
+          db,
+          id: 'skewed',
+          startedAtUtc: base.add(const Duration(minutes: 20)),
+          endedAtUtc: base.add(const Duration(minutes: 10)),
+        );
+        expect(await db.timeLogDao.totalMinutesForTask('task1'), 5);
+      });
+    });
+
+    // -------------------------------------------------------------------------
     // Action-grain attribution (issue #476)
     // -------------------------------------------------------------------------
 
