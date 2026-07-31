@@ -1254,11 +1254,24 @@ def _control_vector(
 
 
 def _genesis_payload(
-    label: str, *, wall_ms: int, prev_control_hash: bytes = ZERO_PREV_CONTROL_HASH
+    label: str,
+    *,
+    wall_ms: int,
+    prev_control_hash: bytes = ZERO_PREV_CONTROL_HASH,
+    workspace_id: uuid.UUID = WORKSPACE_ID,
+    root_pk: bytes = ROOT_PUBLIC_KEY,
 ) -> tuple[ControlPayload, str]:
+    """``workspace_id`` and ``root_pk`` are what the *document* claims.
+
+    Both default to the spec Workspace's own, which is what every positive vector
+    wants.  Overriding one produces a genesis that is still genuinely signed by the
+    spec Root — the signature covers whatever the document says — while naming a
+    Workspace or a Root the receiver did not pin.  That is the only way to reach the
+    two cross-checks after the signature check, so the negative vectors need it.
+    """
     certificate = GenesisCertificate(
-        workspace_id=WORKSPACE_ID,
-        root_pk=ROOT_PUBLIC_KEY,
+        workspace_id=workspace_id,
+        root_pk=root_pk,
         founder=_member_keys(label),
         created_at_hlc=Hlc.for_member(MEMBER_IDS[label], wall_ms),
     )
@@ -1284,7 +1297,15 @@ def _grant_payload(
     wall_ms: int,
     signing_key: SigningKey = ROOT_SIGNING_KEY,
     corrupt_signature: bool = False,
+    authority: str | None = None,
 ) -> tuple[ControlPayload, str]:
+    """``granter`` is what the *certificate* says; ``authority`` is the payload field.
+
+    They are the same value in every honest Grant, so ``authority`` defaults to
+    ``granter``.  Setting them apart is the only way to reach the granter cross-check
+    — the payload field decides which key verifies the certificate, so a vector that
+    wants a *valid* signature and a disagreeing granter has to say both.
+    """
     certificate = GrantCertificate(
         workspace_id=WORKSPACE_ID,
         grant_id=_grant_id(grant_name),
@@ -1303,7 +1324,7 @@ def _grant_payload(
             prev_control_hash=prev_control_hash,
             cert_bytes=cert_bytes,
             signature=bytes(signature),
-            authority=granter,
+            authority=granter if authority is None else authority,
         ),
         cert_bytes.decode("utf-8"),
     )
@@ -1319,6 +1340,7 @@ def _revoke_payload(
     wall_ms: int,
     signing_key: SigningKey = ROOT_SIGNING_KEY,
     corrupt_signature: bool = False,
+    authority: str | None = None,
 ) -> tuple[ControlPayload, str]:
     """``revoker_member_id`` is the *device* authoring the revocation.
 
@@ -1327,6 +1349,9 @@ def _revoke_payload(
     minted ``revoke_id`` would order revocations by a certificate id rather than by
     the device behind them.  Mirrors ``backend/tests/sync/builders.py`` and
     ``app/test/sync/harness/sim_workspace.dart``.
+
+    ``authority`` is the payload field, defaulting to the ``revoker`` the certificate
+    names; see :func:`_grant_payload` for why a vector ever sets them apart.
     """
     revoke_id = _revoke_id(revoke_name)
     certificate = RevokeCertificate(
@@ -1346,7 +1371,7 @@ def _revoke_payload(
             prev_control_hash=prev_control_hash,
             cert_bytes=cert_bytes,
             signature=bytes(signature),
-            authority=revoker,
+            authority=revoker if authority is None else authority,
         ),
         cert_bytes.decode("utf-8"),
     )
@@ -1663,6 +1688,55 @@ def _negative_control_vectors() -> list[dict[str, Any]]:
         corrupt_signature=True,
     )
 
+    # --- The certificate-binding family's remaining three (#580) ------------
+    #
+    # Every one of these is genuinely Root-signed over exactly the bytes it
+    # carries: the signature check *passes* and the cross-check after it is the
+    # only thing left to fire.  That is what makes them pin a distinct code
+    # rather than the signature failure that would otherwise mask it.
+    #
+    # A real Ed25519 public key that is not Root's.  A labelled hash would work
+    # for the comparison and would say nothing about whether a verifier confused
+    # "not Root" with "not a key", so this is a key somebody genuinely holds.
+    foreign_root_pk = bytes(SIGNING_KEYS["device_b"].verify_key)
+    foreign_root_genesis_payload, _ = _genesis_payload(
+        "device_a", wall_ms=BASE_WALL_MS + 8000, root_pk=foreign_root_pk
+    )
+    other_workspace_cert_bytes = _certificate(
+        "device_a", wall_ms=BASE_WALL_MS + 9000, workspace_id=OTHER_WORKSPACE_ID
+    ).encode()
+    other_workspace_signature = sign_registration_certificate(
+        other_workspace_cert_bytes, ROOT_SIGNING_KEY
+    )
+    # Both cross-checks violated at once, which is what pins their *order*.
+    both_wrong_genesis_payload, _ = _genesis_payload(
+        "device_a",
+        wall_ms=BASE_WALL_MS + 10000,
+        workspace_id=OTHER_WORKSPACE_ID,
+        root_pk=foreign_root_pk,
+    )
+    granter_mismatch_grant_payload, _ = _grant_payload(
+        grant_name="granter_mismatch",
+        member_id=MEMBER_IDS["device_b"],
+        # `participant`, not `owner`: an owner Grant under a member granter is
+        # refused as `owner_grant_requires_root` at decode, before the granter
+        # cross-check is reached.
+        role=ROLE_PARTICIPANT,
+        granter=str(MEMBER_IDS["device_a"]),
+        prev_control_hash=hashlib.sha256(b"predecessor").digest(),
+        wall_ms=BASE_WALL_MS + 11000,
+        authority=GRANTER_ROOT,
+    )
+    revoker_mismatch_revoke_payload, _ = _revoke_payload(
+        revoke_name="revoker_mismatch",
+        grant_id=_grant_id("service_suggester"),
+        revoker=str(MEMBER_IDS["device_a"]),
+        revoker_member_id=MEMBER_IDS["device_a"],
+        prev_control_hash=hashlib.sha256(b"predecessor").digest(),
+        wall_ms=BASE_WALL_MS + 12000,
+        authority=GRANTER_ROOT,
+    )
+
     return [
         control_negative(
             "control_bad_root_signature",
@@ -1881,6 +1955,81 @@ def _negative_control_vectors() -> list[dict[str, Any]]:
                 "means the header names a key the certificate does not carry, "
                 "which is a different attack from a certificate about somebody "
                 "else and remediated differently."
+            ),
+        ),
+        control_negative(
+            "control_certificate_root_pk_mismatch",
+            reason="cert_root_pk_mismatch",
+            payload=foreign_root_genesis_payload,
+            note=(
+                "A genesis genuinely signed by the spec Root whose *embedded* "
+                "root_pk is another device's real Ed25519 key. The Root signature "
+                "verifies — that is the point — so `bad_root_signature` would be a "
+                "claim about a signature nothing is wrong with. What disagrees is "
+                "the Root inside the signed document versus the Root this receiver "
+                "pinned, which is why root_pk is in there at all. "
+                "`cert_root_pk_mismatch` names that field, and is the same code the "
+                "server returns at 422."
+            ),
+        ),
+        control_negative(
+            "control_certificate_workspace_mismatch",
+            reason="cert_workspace_mismatch",
+            payload=ControlPayload(
+                control_type=CONTROL_TYPE_MEMBER_REGISTER,
+                prev_control_hash=hashlib.sha256(b"predecessor").digest(),
+                cert_bytes=other_workspace_cert_bytes,
+                signature=other_workspace_signature,
+            ),
+            note=(
+                "A genuinely Root-signed registration for *another* Workspace, "
+                "wrapped in an envelope whose header names the expected one — so "
+                "the header check passes and the certificate's own workspace_id is "
+                "what refuses. `cert_workspace_mismatch` is deliberately not the "
+                "header-level `workspace_mismatch`: 'the server served us another "
+                "Workspace's op' and 'a Root-signed document names another "
+                "Workspace' are different accusations with different remediations, "
+                "and a Quarantine row is the one surface that has to tell them "
+                "apart with no server to ask. The same code the server returns."
+            ),
+        ),
+        control_negative(
+            "control_certificate_workspace_and_root_pk_mismatch",
+            reason="cert_workspace_mismatch",
+            payload=both_wrong_genesis_payload,
+            note=(
+                "A Root-signed genesis violating *both* cross-checks at once, which "
+                "is what pins their order rather than merely their existence: the "
+                "Workspace binding is asked first, so this is a Workspace mismatch "
+                "and not a root-pk one. Without this vector the two verifiers could "
+                "each refuse the same bytes under a different code and both stay "
+                "green."
+            ),
+        ),
+        control_negative(
+            "control_grant_granter_mismatch",
+            reason="cert_granter_mismatch",
+            payload=granter_mismatch_grant_payload,
+            note=(
+                "A Root-signed Grant whose certificate names a *member* as its "
+                "granter while the payload's authority field says Root. The "
+                "signature verifies under Root, so `bad_grant_signature` would name "
+                "the wrong thing entirely: the certificate carries its own granter, "
+                "and the payload field only says which key to check it against. A "
+                "disagreement is a forgery attempt, not a spelling — "
+                "`cert_granter_mismatch`, as the server says."
+            ),
+        ),
+        control_negative(
+            "control_revoke_revoker_mismatch",
+            reason="cert_granter_mismatch",
+            payload=revoker_mismatch_revoke_payload,
+            note=(
+                "The same rule on the unmaking side, and under the *same* code: the "
+                "server does not split granter from revoker here, so neither may a "
+                "client. A Revoke naming a member revoker under a Root authority, "
+                "Root-signed, so the Revoke signature verifies and only the field "
+                "disagrees."
             ),
         ),
     ]

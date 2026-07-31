@@ -242,6 +242,15 @@ enum SyncRejectionReason {
   payloadOverrunsBody('payload_overruns_body'),
   nonZeroPadding('non_zero_padding'),
   badSignature('bad_signature'),
+
+  /// The envelope **header** names a Workspace this device did not pull from.
+  ///
+  /// Header-level and nothing else: it is an accusation against the *server*,
+  /// which is the only party that chose what to serve here. A Root-signed
+  /// document naming another Workspace is a different event with a different
+  /// remediation and earns [certWorkspaceMismatch] instead — the two were one
+  /// string until #580, which left a Quarantine row unable to say whether the
+  /// header lied or the certificate did.
   workspaceMismatch('workspace_mismatch'),
 
   /// An `op_class = control` op wearing suite `aead_v1`.
@@ -359,6 +368,13 @@ enum SyncRejectionReason {
   /// different claims: this one says nothing signed by Root vouches for the
   /// author, whatever the server's registry says.
   memberNotChainedToRoot('member_not_chained_to_root'),
+
+  /// A Root signature that does not verify — over a registration, or over a
+  /// genesis, under that document's own domain.
+  ///
+  /// A claim strictly *about the signature*. Kept for the case where the bytes
+  /// really are unsigned or tampered with; the genesis root-pk cross-check no
+  /// longer lands here (see [certRootPkMismatch]).
   badRootSignature('bad_root_signature'),
 
   /// A Root-signed certificate that is *about* a different member than the
@@ -374,11 +390,46 @@ enum SyncRejectionReason {
   /// different attack with a different remediation (ADR-0032).
   certKeyMismatch('cert_key_mismatch'),
 
+  /// The Root embedded in a signed genesis is not the Root this device pinned.
+  ///
+  /// Distinct from [badRootSignature] because the Root signature *verified*: the
+  /// genesis is genuinely signed over exactly these bytes, and what disagrees is
+  /// the `root_pk` inside the signed document. That is the whole reason `root_pk`
+  /// is in there — a verifier can only cross-check a Root it can see. Saying
+  /// `bad_root_signature` here would accuse a signature nothing is wrong with,
+  /// destroying a distinction a skewed Device cannot recover (ADR-0039). The
+  /// same code the server returns at 422.
+  certRootPkMismatch('cert_root_pk_mismatch'),
+
+  /// A Root-signed certificate or statement names a Workspace this device did
+  /// not pull from.
+  ///
+  /// Separate from [workspaceMismatch], which is the *header* check: a header
+  /// naming another Workspace accuses the server of serving the wrong log, while
+  /// a signed document naming one is a forged document that survived its own
+  /// signature check. Two accusations, two remediations — and a Quarantine row is
+  /// the one surface that has to tell them apart with no server to ask. The same
+  /// code the server returns at 422.
+  certWorkspaceMismatch('cert_workspace_mismatch'),
+
   /// A Grant's granter did not sign it, under the Grant's own domain.
   badGrantSignature('bad_grant_signature'),
 
   /// A Revoke's revoker did not sign it, under the Revoke's own domain.
   badRevokeSignature('bad_revoke_signature'),
+
+  /// A Grant or Revoke certificate names a different granter/revoker than the
+  /// payload's `authority` field, or nominates an authority the envelope's
+  /// author does not hold.
+  ///
+  /// Distinct from [badGrantSignature]/[badRevokeSignature] because no signature
+  /// is being accused: authority rides in the signed certificate bytes, and the
+  /// payload field only says which key to check them against. A disagreement
+  /// between the two is a forgery attempt, not a broken signature. One code
+  /// covers both sides because the server does not split them either — the
+  /// granting and unmaking halves share `cert_granter_mismatch` at 422, so
+  /// neither may a client.
+  certGranterMismatch('cert_granter_mismatch'),
 
   /// A role outside owner/participant/compactor/suggester. Fails closed: a role
   /// a verifier cannot interpret is never read as a permissive default.

@@ -120,8 +120,14 @@ Future<Uint8List> grantEnvelope({
   AuthorFixture? signer,
   bool corruptSignature = false,
   int? authorSeq,
+  String? authority,
 }) async {
   final resolvedGranter = granter ?? granterRoot;
+  // The payload's `authority` field says which key verifies the certificate; the
+  // certificate's own `granter` says who granted. They agree in every honest
+  // Grant, so this defaults to the granter — setting them apart is how a test
+  // reaches the cross-check with a signature that genuinely verifies.
+  final resolvedAuthority = authority ?? resolvedGranter;
   final certificate = GrantCertificate(
     workspaceId: workspaceId,
     grantId: grantId ?? const Uuid().v4(),
@@ -143,7 +149,7 @@ Future<Uint8List> grantEnvelope({
       prevControlHash: prevControlHash,
       certBytes: certBytes,
       signature: signature,
-      authority: resolvedGranter,
+      authority: resolvedAuthority,
     ).encode(),
     authorSeq: authorSeq,
   );
@@ -161,8 +167,12 @@ Future<Uint8List> revokeEnvelope({
   AuthorFixture? signer,
   bool corruptSignature = false,
   int? authorSeq,
+  String? authority,
 }) async {
   final resolvedRevoker = revoker ?? granterRoot;
+  // See `grantEnvelope` for why the payload field and the certificate's own
+  // revoker are separable.
+  final resolvedAuthority = authority ?? resolvedRevoker;
   final revokeId = const Uuid().v4();
   final certificate = RevokeCertificate(
     workspaceId: workspaceId,
@@ -188,7 +198,7 @@ Future<Uint8List> revokeEnvelope({
       prevControlHash: prevControlHash,
       certBytes: certBytes,
       signature: signature,
-      authority: resolvedRevoker,
+      authority: resolvedAuthority,
     ).encode(),
     authorSeq: authorSeq,
   );

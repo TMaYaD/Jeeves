@@ -347,11 +347,17 @@ class SpecRoot:
         corrupt_signature: bool = False,
         author_seq: int | None = None,
         advance: bool = True,
+        authority: str | None = None,
     ) -> bytes:
         """``signing_key`` defaults to Root; pass a device's to mint under it.
 
         The two are not interchangeable: an ``owner`` role may only be minted
         under Root, which is the ceiling ADR-0031 records.
+
+        ``authority`` is the *payload* field, which says which key verifies the
+        certificate; it defaults to the ``granter`` the certificate itself names,
+        because every honest Grant has them agree.  Setting them apart is the only
+        way to reach the granter cross-check with a signature that verifies.
         """
         cert_bytes = certificate.encode()
         signature = bytearray(sign_grant_certificate(cert_bytes, signing_key or self.signing_key))
@@ -365,7 +371,7 @@ class SpecRoot:
                 prev_control_hash=prev_control_hash,
                 cert_bytes=cert_bytes,
                 signature=bytes(signature),
-                authority=certificate.granter,
+                authority=certificate.granter if authority is None else authority,
             ).encode(),
             author_seq=author_seq,
             advance=advance,

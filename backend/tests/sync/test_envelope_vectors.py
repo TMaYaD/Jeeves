@@ -48,6 +48,9 @@ _PROTOCOL = _DOCUMENT["protocol"]
 _IDENTITIES = _DOCUMENT["identities"]
 _KEYS_BY_LABEL = {entry["label"]: entry for entry in _IDENTITIES["keys"]}
 _ROOT_PUBLIC_KEY = bytes.fromhex(_IDENTITIES["root"]["root_pk_hex"])
+#: The Workspace every positive vector belongs to — the one a receiver running them
+#: has pulled from, so a certificate naming anything else is a mismatch.
+_WORKSPACE_ID = uuid.UUID(_IDENTITIES["workspace_id"])
 
 
 class _CertMemberMismatchError(ControlPayloadError):
@@ -65,6 +68,29 @@ class _CertKeyMismatchError(ControlPayloadError):
     """The header names a key the certificate does not carry."""
 
     reason = "cert_key_mismatch"
+
+
+class _CertRootPkMismatchError(ControlPayloadError):
+    """The Root inside a signed genesis is not the Root this receiver pinned."""
+
+    reason = "cert_root_pk_mismatch"
+
+
+class _CertWorkspaceMismatchError(ControlPayloadError):
+    """A Root-signed certificate or statement names another Workspace.
+
+    Deliberately not ``env.WorkspaceMismatchError``, which is the *header*-level
+    refusal: 'the server served us another Workspace's op' and 'a Root-signed
+    document names another Workspace' are different accusations.
+    """
+
+    reason = "cert_workspace_mismatch"
+
+
+class _CertGranterMismatchError(ControlPayloadError):
+    """A Grant or Revoke certificate disagrees with the payload's authority field."""
+
+    reason = "cert_granter_mismatch"
 
 
 def _header_from_json(raw: dict[str, Any]) -> OpHeader:
@@ -157,12 +183,18 @@ def _check_registration_binds_the_envelope(
         raise _CertKeyMismatchError("certificate key id is not the one the header names")
 
 
-def _receive_control(envelope: bytes, root_pk: bytes) -> Any:
+def _receive_control(envelope: bytes, root_pk: bytes, expected_workspace_id: uuid.UUID) -> Any:
     """The control half of the receive pipeline, dispatched per type.
 
     Returns the parsed certificate: a ``RegistrationCertificate`` for a
     ``member_register`` *and* for a ``workspace_genesis`` (genesis embeds the
     founder's registration), a ``GrantCertificate``, or a ``RevokeCertificate``.
+
+    ``expected_workspace_id`` is the Workspace this receiver pulled from, so every
+    Root-signed document's own ``workspace_id`` can be compared against it.  That
+    comparison is *not* the header check — a header naming another Workspace is a
+    server-integrity event, a certificate naming one is a forged document — so it
+    refuses as ``cert_workspace_mismatch`` and never as ``workspace_mismatch``.
 
     Everything needing receiver **state** is deliberately absent, because a vector
     cannot carry it: the position rule (``author_seq == 1``), the chain rule
@@ -184,10 +216,16 @@ def _receive_control(envelope: bytes, root_pk: bytes) -> Any:
     if payload.control_type == control.CONTROL_TYPE_WORKSPACE_GENESIS:
         control.verify_genesis_certificate(payload.cert_bytes, payload.root_sig, root_pk)
         genesis = payload.genesis_certificate()
+        # Workspace before Root, matching ``_verify_genesis`` in the ops route: with
+        # two distinct codes the sub-order decides which one a both-fields-disagree
+        # genesis earns, and the two verifiers must earn the same one.
+        if genesis.workspace_id != expected_workspace_id:
+            raise _CertWorkspaceMismatchError("the genesis names another workspace")
         if genesis.root_pk != root_pk:
             # The Root inside the signed genesis must be the Root this receiver
-            # pinned: that cross-check is why it is in there at all.
-            raise ControlPayloadError("cert_root_pk_mismatch")
+            # pinned: that cross-check is why it is in there at all.  The signature
+            # verified, so this is not a signature failure.
+            raise _CertRootPkMismatchError("the genesis names another Root")
         # The founder's registration is *inside* the genesis, so the binding check
         # runs against it while the genesis certificate stays what was signed.
         _check_registration_binds_the_envelope(genesis.as_registration(), envelope, header)
@@ -196,6 +234,8 @@ def _receive_control(envelope: bytes, root_pk: bytes) -> Any:
     if payload.control_type == control.CONTROL_TYPE_MEMBER_REGISTER:
         control.verify_registration_certificate(payload.cert_bytes, payload.root_sig, root_pk)
         registration = payload.certificate()
+        if registration.workspace_id != expected_workspace_id:
+            raise _CertWorkspaceMismatchError("the registration names another workspace")
         _check_registration_binds_the_envelope(registration, envelope, header)
         return registration
 
@@ -210,7 +250,10 @@ def _receive_control(envelope: bytes, root_pk: bytes) -> Any:
         # statement's own shape.  The authority check is pinned by the route tests.
         env.verify_envelope(envelope, _member_sign_pk(str(header.author_member_id)))
         assert not payload.is_root_signed
-        return payload.rotate_statement()
+        rotate = payload.rotate_statement()
+        if rotate.workspace_id != expected_workspace_id:
+            raise _CertWorkspaceMismatchError("the rotate names another workspace")
+        return rotate
 
     authority_pk = (
         root_pk if payload.authority == control.GRANTER_ROOT else _member_sign_pk(payload.authority)
@@ -219,16 +262,21 @@ def _receive_control(envelope: bytes, root_pk: bytes) -> Any:
     if payload.control_type == control.CONTROL_TYPE_GRANT:
         control.verify_grant_certificate(payload.cert_bytes, payload.signature, authority_pk)
         grant = payload.grant_certificate()
+        if grant.workspace_id != expected_workspace_id:
+            raise _CertWorkspaceMismatchError("the grant names another workspace")
         if grant.granter != payload.authority:
             # The signed certificate names its own granter; the payload field
-            # only says which key to check it against.
-            raise ControlPayloadError("cert_granter_mismatch")
+            # only says which key to check it against.  The certificate verified
+            # under that key, so this is not a signature failure either.
+            raise _CertGranterMismatchError("the certificate and the payload disagree")
         return grant
 
     control.verify_revoke_certificate(payload.cert_bytes, payload.signature, authority_pk)
     revoke = payload.revoke_certificate()
+    if revoke.workspace_id != expected_workspace_id:
+        raise _CertWorkspaceMismatchError("the revoke names another workspace")
     if revoke.revoker != payload.authority:
-        raise ControlPayloadError("cert_granter_mismatch")
+        raise _CertGranterMismatchError("the certificate and the payload disagree")
     return revoke
 
 
@@ -935,7 +983,7 @@ def test_control_vector_round_trips_through_the_receive_pipeline(
     vector: dict[str, Any],
 ) -> None:
     envelope = bytes.fromhex(vector["envelope_hex"])
-    decoded = _receive_control(envelope, _ROOT_PUBLIC_KEY)
+    decoded = _receive_control(envelope, _ROOT_PUBLIC_KEY, _WORKSPACE_ID)
 
     payload = ControlPayload.decode(env.parse_body(env.split_envelope(envelope)[1]))
     assert payload.control_type == vector["control_type"]
@@ -976,7 +1024,9 @@ def test_a_registering_control_vector_carries_its_authors_own_keys(
     (ADR-0031).  Either way the certificate has to carry the very key that signed
     the envelope, or the envelope could not be verified at all.
     """
-    decoded = _receive_control(bytes.fromhex(vector["envelope_hex"]), _ROOT_PUBLIC_KEY)
+    decoded = _receive_control(
+        bytes.fromhex(vector["envelope_hex"]), _ROOT_PUBLIC_KEY, _WORKSPACE_ID
+    )
     registration = (
         decoded.as_registration() if isinstance(decoded, control.GenesisCertificate) else decoded
     )
@@ -1096,7 +1146,7 @@ def test_negative_control_vector_fails_closed_with_the_pinned_reason(
 ) -> None:
     envelope = bytes.fromhex(vector["envelope_hex"])
     try:
-        _receive_control(envelope, _ROOT_PUBLIC_KEY)
+        _receive_control(envelope, _ROOT_PUBLIC_KEY, uuid.UUID(vector["expected_workspace_id"]))
     except (EnvelopeError, ControlPayloadError) as rejection:
         assert rejection.reason == vector["reason"]
     else:
@@ -1119,7 +1169,7 @@ def test_a_certificate_wrapped_around_another_devices_envelope_is_refused() -> N
     forged = env.build_envelope(header, env.frame_body(payload), forger)
 
     with pytest.raises(env.BadSignatureEnvelopeError):
-        _receive_control(forged, _ROOT_PUBLIC_KEY)
+        _receive_control(forged, _ROOT_PUBLIC_KEY, _WORKSPACE_ID)
 
 
 # --- Escrow and challenge preimages -----------------------------------------

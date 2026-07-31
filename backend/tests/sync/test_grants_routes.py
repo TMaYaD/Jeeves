@@ -694,6 +694,58 @@ async def test_a_grant_signed_by_someone_other_than_its_author_is_refused(
     assert detail_of(response) == {"code": "cert_granter_mismatch", "index": 0}
 
 
+async def test_a_grant_whose_certificate_disagrees_about_the_granter_is_refused(
+    client: AsyncClient, session: Session
+) -> None:
+    """The same code, one step earlier: the certificate and the payload disagree.
+
+    Distinct from the case above, which reaches ``cert_granter_mismatch`` inside
+    ``_authority_public_key`` because the *author* is not the authority it claims.
+    Here author and authority agree and the **certificate** names somebody else.
+    The certificate is Root-signed and the payload nominates Root, so
+    ``verify_grant_certificate`` passes and only the field comparison refuses —
+    which is why ``bad_grant_signature`` would name the wrong thing (#580).
+    """
+    certificate = session.root.grant_certificate(
+        session.workspace_id,
+        member_id=session.device.member_id,
+        role=ROLE_SUGGESTER,
+        granter=str(session.device.member_id),
+    )
+    envelope = session.root.grant_envelope(
+        session.device,
+        session.workspace_id,
+        certificate=certificate,
+        prev_control_hash=session.control_head,
+        authority=GRANTER_ROOT,
+    )
+    response = await _post(client, session, envelope)
+    assert response.status_code == 422, response.text
+    assert detail_of(response) == {"code": "cert_granter_mismatch", "index": 0}
+
+
+async def test_a_registration_naming_another_workspace_is_refused(
+    client: AsyncClient, session: Session
+) -> None:
+    """A Root-signed certificate must name the Workspace it is posted into.
+
+    Not the header-level ``workspace_mismatch``: the envelope header names this
+    Workspace, so the route was reached honestly and the *document* is what
+    disagrees. The client draws the same distinction under the same code (#580).
+    """
+    sibling, sibling_token = await _join_sibling(client, session)
+    certificate = session.root.certificate(sibling, default_workspace_id("somebody-entirely-else"))
+    envelope = session.root.member_register_envelope(
+        sibling,
+        session.workspace_id,
+        prev_control_hash=session.control_head,
+        certificate=certificate,
+    )
+    response = await _post(client, session, envelope, token=sibling_token)
+    assert response.status_code == 422, response.text
+    assert detail_of(response) == {"code": "cert_workspace_mismatch", "index": 0}
+
+
 # --- The preferences Workspace ----------------------------------------------
 
 

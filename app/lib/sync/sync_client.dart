@@ -2150,18 +2150,25 @@ class SyncClient {
       case controlTypeWorkspaceGenesis:
         await verifyGenesisCertificate(payload.certBytes, payload.rootSig, rootPk);
         final genesis = payload.genesisCertificate();
-        if (!sameBytes(genesis.rootPk, rootPk)) {
-          // The Root inside the signed genesis must be the Root this device
-          // pinned: that cross-check is why it is in there at all.
-          throw const SyncRejection(
-            SyncRejectionReason.badRootSignature,
-            'the genesis names a different Root than this device pinned',
-          );
-        }
+        // Workspace before Root, which is the order the ops route asks them in.
+        // With two distinct codes the sub-order decides which one a genesis that
+        // disagrees on *both* fields earns, so the two verifiers have to agree
+        // about the order and not merely about each check in isolation — pinned
+        // by `control_certificate_workspace_and_root_pk_mismatch`.
         if (genesis.workspaceId != workspaceId) {
           throw SyncRejection(
-            SyncRejectionReason.workspaceMismatch,
+            SyncRejectionReason.certWorkspaceMismatch,
             'genesis names workspace ${genesis.workspaceId}, pulled from $workspaceId',
+          );
+        }
+        if (!sameBytes(genesis.rootPk, rootPk)) {
+          // The Root inside the signed genesis must be the Root this device
+          // pinned: that cross-check is why it is in there at all. The Root
+          // signature verified over these very bytes, so nothing is wrong with
+          // the signature — what disagrees is the Root the document names.
+          throw const SyncRejection(
+            SyncRejectionReason.certRootPkMismatch,
+            'the genesis names a different Root than this device pinned',
           );
         }
         learned = genesis.asRegistration();
@@ -2172,7 +2179,7 @@ class SyncClient {
         final certificate = payload.certificate();
         if (certificate.workspaceId != workspaceId) {
           throw SyncRejection(
-            SyncRejectionReason.workspaceMismatch,
+            SyncRejectionReason.certWorkspaceMismatch,
             'certificate names workspace ${certificate.workspaceId}, pulled from '
             '$workspaceId',
           );
@@ -2323,15 +2330,17 @@ class SyncClient {
     final grant = payload.grantCertificate();
     if (grant.workspaceId != workspaceId) {
       throw SyncRejection(
-        SyncRejectionReason.workspaceMismatch,
+        SyncRejectionReason.certWorkspaceMismatch,
         'grant names workspace ${grant.workspaceId}, pulled from $workspaceId',
       );
     }
     if (grant.granter != payload.authority) {
       // The signed certificate names its own granter; the payload's field only
-      // says which key to check it against.
+      // says which key to check it against. The certificate verified under that
+      // key, so this is a forgery attempt rather than a broken signature —
+      // `bad_grant_signature` would accuse a signature nothing is wrong with.
       throw const SyncRejection(
-        SyncRejectionReason.badGrantSignature,
+        SyncRejectionReason.certGranterMismatch,
         'the certificate and the payload disagree about the granter',
       );
     }
@@ -2379,7 +2388,7 @@ class SyncClient {
     final rotate = payload.rotateStatement();
     if (rotate.workspaceId != workspaceId) {
       throw SyncRejection(
-        SyncRejectionReason.workspaceMismatch,
+        SyncRejectionReason.certWorkspaceMismatch,
         'rotate names workspace ${rotate.workspaceId}, pulled from $workspaceId',
       );
     }
@@ -2411,13 +2420,16 @@ class SyncClient {
     final revoke = payload.revokeCertificate();
     if (revoke.workspaceId != workspaceId) {
       throw SyncRejection(
-        SyncRejectionReason.workspaceMismatch,
+        SyncRejectionReason.certWorkspaceMismatch,
         'revoke names workspace ${revoke.workspaceId}, pulled from $workspaceId',
       );
     }
     if (revoke.revoker != payload.authority) {
+      // The same reading as the Grant half, and under the *same* code: the
+      // server does not split granter from revoker at 422, so neither may a
+      // client.
       throw const SyncRejection(
-        SyncRejectionReason.badRevokeSignature,
+        SyncRejectionReason.certGranterMismatch,
         'the certificate and the payload disagree about the revoker',
       );
     }
@@ -2452,8 +2464,12 @@ class SyncClient {
   ) async {
     if (authority == granterRoot) return rootPk;
     if (authority != header.authorMemberId) {
+      // The same code the server's `_authority_public_key` returns, and for the
+      // same reason: nothing has been verified yet, so this is no claim about a
+      // signature — the payload nominates an authority the envelope's author
+      // does not hold.
       throw SyncRejection(
-        SyncRejectionReason.badGrantSignature,
+        SyncRejectionReason.certGranterMismatch,
         'a member-signed control op must be authored by the member whose '
         'authority it claims',
       );
