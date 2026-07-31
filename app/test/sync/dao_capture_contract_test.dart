@@ -11,6 +11,8 @@
 @TestOn('!browser')
 library;
 
+import 'dart:async';
+
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -579,29 +581,154 @@ void main() {
       expect(capture.recorded, isEmpty);
     });
 
+    // --- attribution under overlap (#562) -----------------------------------
+    //
+    // `capturing` opens its scope as its first *synchronous* statement, while
+    // its body cannot run until drift's `transaction` has awaited `ensureOpen`.
+    // So two un-awaited `capturing` calls **always** both open their scope
+    // before either body runs — the production UI issues exactly that shape
+    // (`clarify_card.dart` fires un-awaited top-level domain writes, so two
+    // quick taps produce it). Attribution therefore cannot be "the scope begun
+    // most recently"; it is the scope of the execution context that described
+    // the effect.
+
+    test('an op is emitted by the commit of the scope that described it',
+        () async {
+      final labelling = _CommitLabellingCapture();
+      final overlapDb =
+          GtdDatabase(NativeDatabase.memory(), opCapture: labelling);
+      addTearDown(overlapDb.close);
+
+      final a = overlapDb.capturing(() => overlapDb.todoDao
+          .insertOutcome(id: 'overlap-a', title: 'A', userId: _userId, now: _ts));
+      final b = overlapDb.capturing(() => overlapDb.todoDao
+          .insertOutcome(id: 'overlap-b', title: 'B', userId: _userId, now: _ts));
+      await a;
+      await b;
+
+      // The overlap precondition, asserted rather than assumed: were drift ever
+      // to stop serialising transactions, this case would pass vacuously.
+      expect(labelling.openedOver['S2'], ['S1'],
+          reason: "B's scope opened while A's was still open — "
+              'no overlap, no test');
+      // Attribution is read off the commit that flushed each op, not off
+      // emission order: a seam emitting the right ops under the wrong commit is
+      // the defect, and an order-only assertion would pass on it.
+      expect(labelling.emittedUnder, [
+        '$todosCollection/overlap-a@S1',
+        '$todosCollection/overlap-b@S2',
+      ]);
+    });
+
+    test('a nested scope under an overlap emits at its own parent\'s commit',
+        () async {
+      final labelling = _CommitLabellingCapture();
+      final overlapDb =
+          GtdDatabase(NativeDatabase.memory(), opCapture: labelling);
+      addTearDown(overlapDb.close);
+
+      final a = overlapDb.capturing(() async {
+        await overlapDb.todoDao
+            .insertOutcome(id: 'nest-a', title: 'A', userId: _userId, now: _ts);
+        await overlapDb.captureDao.insertCapture(
+          CapturesCompanion(
+            id: const Value('nest-cap'),
+            title: const Value('also A'),
+            userId: const Value(_userId),
+            createdAt: Value(_ts),
+            updatedAt: Value(_ts),
+          ),
+        );
+      });
+      final b = overlapDb.capturing(() => overlapDb.todoDao
+          .insertOutcome(id: 'nest-b', title: 'B', userId: _userId, now: _ts));
+      await a;
+      await b;
+
+      // Both of A's nested DAO scopes belong to A, even though B's scope was
+      // open the whole time they were.
+      expect(labelling.emittedUnder, [
+        '$todosCollection/nest-a@S1',
+        '$capturesCollection/nest-cap@S1',
+        '$todosCollection/nest-b@S2',
+      ]);
+    });
+
+    // The phantom direction, through the real DAOs: an op asserting a row this
+    // store never kept, signed under the other scope's commit.
+    test('an overlapping rollback authors nothing, and the committing scope '
+        'authors only its own', () async {
+      final rolledBack = db.capturing(() async {
+        await db.todoDao.insertOutcome(
+            id: 'phantom-a', title: 'never kept', userId: _userId, now: _ts);
+        throw StateError('rolled back');
+      });
+      final committed = db.capturing(() => db.todoDao
+          .insertOutcome(id: 'kept-b', title: 'kept', userId: _userId, now: _ts));
+      await expectLater(rolledBack, throwsStateError);
+      await committed;
+
+      expect(await db.todoDao.getTodo('phantom-a'), isNull,
+          reason: 'the rolled-back write kept no row');
+      expect(await db.todoDao.getTodo('kept-b'), isNotNull);
+      expect(capture.keys, ['$todosCollection/kept-b'],
+          reason: 'a rolled-back write must never be signed under another '
+              "scope's commit");
+    });
+
+    // The loss direction, and the severe one: the row commits, the *other*
+    // scope rolls back, and `rollbackScope` clears its buffer — taking the
+    // committed scope's op with it. A committed local row with no op, for ever.
+    test('a committed scope keeps its op when an overlapping scope rolls back',
+        () async {
+      final committed = db.capturing(() => db.todoDao.insertOutcome(
+          id: 'committed-a', title: 'kept', userId: _userId, now: _ts));
+      // Attached before either is awaited: the rolled-back call can reject while
+      // the committed one is still in flight, and an unobserved rejection would
+      // surface as an unhandled error rather than as this assertion.
+      final refused = expectLater(
+        db.capturing(() async => throw StateError('rolled back')),
+        throwsStateError,
+      );
+      await committed;
+      await refused;
+
+      expect(await db.todoDao.getTodo('committed-a'), isNotNull,
+          reason: 'the row committed');
+      expect(capture.keys, ['$todosCollection/committed-a'],
+          reason: 'a committed write can never lose its op');
+    });
+
     test('an overlapping rollback discards only its own scope', () async {
       // `capturing` awaits its own body, but nothing stops two un-awaited
       // callers overlapping. Under a stack of marks, A's rollback popped *B's*
       // mark: A's rolled-back write stayed in the buffer and B's commit signed
-      // it. Token-bound scopes make that unrepresentable.
+      // it. Token-bound scopes make that unrepresentable, and the ambient scope
+      // each write is described in is what says whose write it was.
       final scopeA = capture.beginScope();
-      capture.write(
-        collection: todosCollection,
-        entityId: 'rolled-back',
-        fields: const {'title': 'never signed'},
-      );
       final scopeB = capture.beginScope();
-      capture.write(
-        collection: todosCollection,
-        entityId: 'committed-before',
-        fields: const {'title': 'survives'},
-      );
+      await capture.runInScope(scopeA, () async {
+        capture.write(
+          collection: todosCollection,
+          entityId: 'rolled-back',
+          fields: const {'title': 'never signed'},
+        );
+      });
+      await capture.runInScope(scopeB, () async {
+        capture.write(
+          collection: todosCollection,
+          entityId: 'committed-before',
+          fields: const {'title': 'survives'},
+        );
+      });
       capture.rollbackScope(scopeA);
-      capture.write(
-        collection: todosCollection,
-        entityId: 'committed-after',
-        fields: const {'title': 'also survives'},
-      );
+      await capture.runInScope(scopeB, () async {
+        capture.write(
+          collection: todosCollection,
+          entityId: 'committed-after',
+          fields: const {'title': 'also survives'},
+        );
+      });
       await capture.commitScope(scopeB);
 
       expect(capture.keys, [
@@ -611,25 +738,153 @@ void main() {
     });
 
     test('a nested scope merges into its parent rather than emitting', () async {
+      // Opened the way `capturing` opens one: the inner `beginScope` happens
+      // inside the outer scope's zone, which is what makes it the outer's child.
       final outer = capture.beginScope();
-      capture.write(
-        collection: todosCollection,
-        entityId: 'o1',
-        fields: const {'title': 'from the parent'},
-      );
-      final inner = capture.beginScope();
-      capture.write(
-        collection: todosCollection,
-        entityId: 'o1',
-        fields: const {'notes': 'from the child'},
-      );
-      await capture.commitScope(inner);
-      expect(capture.recorded, isEmpty, reason: 'only the outermost emits');
+      await capture.runInScope(outer, () async {
+        capture.write(
+          collection: todosCollection,
+          entityId: 'o1',
+          fields: const {'title': 'from the parent'},
+        );
+        final inner = capture.beginScope();
+        await capture.runInScope(inner, () async {
+          capture.write(
+            collection: todosCollection,
+            entityId: 'o1',
+            fields: const {'notes': 'from the child'},
+          );
+        });
+        await capture.commitScope(inner);
+        expect(capture.recorded, isEmpty, reason: 'only the outermost emits');
+      });
 
       await capture.commitScope(outer);
       expect(capture.keys, ['$todosCollection/o1']);
       expect(only(todosCollection).fields,
           {'title': 'from the parent', 'notes': 'from the child'});
+    });
+
+    test('two overlapping top-level scopes each emit their own writes',
+        () async {
+      // The same defect at its smallest — no drift, no DAOs, no timing. Both
+      // scopes are open before either write is described, so "the scope begun
+      // most recently" files A's write into B.
+      final scopeA = capture.beginScope();
+      final scopeB = capture.beginScope();
+      await capture.runInScope(scopeA, () async {
+        capture.write(
+          collection: todosCollection,
+          entityId: 'from-a',
+          fields: const {'title': 'A'},
+        );
+      });
+      await capture.runInScope(scopeB, () async {
+        capture.write(
+          collection: todosCollection,
+          entityId: 'from-b',
+          fields: const {'title': 'B'},
+        );
+      });
+
+      await capture.commitScope(scopeA);
+      expect(capture.keys, ['$todosCollection/from-a'],
+          reason: "A's commit emits A's write, and only A's");
+      await capture.commitScope(scopeB);
+      expect(capture.keys,
+          ['$todosCollection/from-a', '$todosCollection/from-b']);
+    });
+
+    test('a described effect with no live scope is refused, never dropped',
+        () async {
+      // Fail closed. A dropped op leaves a committed row nothing will ever
+      // author — invisible and unrecoverable — so the seam throws at the call
+      // site that caused it instead.
+      expect(
+        () => capture.write(
+          collection: todosCollection,
+          entityId: 'unscoped',
+          fields: const {'title': 'nowhere to file this'},
+        ),
+        throwsStateError,
+      );
+      expect(
+        () => capture.tombstone(
+            collection: todosCollection, entityId: 'unscoped'),
+        throwsStateError,
+      );
+      expect(capture.recorded, isEmpty);
+    });
+
+    test('a described effect in a closed scope is refused, not refiled',
+        () async {
+      final scope = capture.beginScope();
+      await capture.commitScope(scope);
+      await capture.runInScope(scope, () async {
+        expect(
+          () => capture.write(
+            collection: todosCollection,
+            entityId: 'too-late',
+            fields: const {'title': 'after the commit'},
+          ),
+          throwsStateError,
+        );
+      });
+      expect(capture.recorded, isEmpty);
+    });
+
+    test('uncapturedTransaction masks the enclosing scope rather than filing '
+        'into it', () async {
+      await db.capturing(() async {
+        capture.write(
+          collection: todosCollection,
+          entityId: 'in-scope',
+          fields: const {'title': 'filed'},
+        );
+        // The projector is the only production caller and describes no effects;
+        // the mask is what makes "authors nothing" enforced rather than
+        // incidental, so one that tried would be refused rather than absorbed by
+        // the enclosing scope.
+        await expectLater(
+          db.uncapturedTransaction(() async {
+            capture.write(
+              collection: todosCollection,
+              entityId: 'leaked',
+              fields: const {'title': 'never'},
+            );
+          }),
+          throwsStateError,
+        );
+      });
+      expect(capture.keys, ['$todosCollection/in-scope']);
+    });
+
+    test('the no-op seam records nothing and throws nothing, in or out of a '
+        'scope', () async {
+      const noop = NoopDomainOpCapture();
+      noop.write(
+        collection: todosCollection,
+        entityId: 'ignored',
+        fields: const {'title': 'ignored'},
+      );
+      noop.tombstone(collection: todosCollection, entityId: 'ignored');
+      final scope = noop.beginScope();
+      await noop.runInScope(scope, () async {
+        noop.write(
+          collection: todosCollection,
+          entityId: 'ignored',
+          fields: const {'title': 'still ignored'},
+        );
+      });
+      await noop.commitScope(scope);
+      // Nothing to assert about but the absence of an exception: the no-op reads
+      // no zone and keeps no buffer, so "authors nothing" is structural. A
+      // GtdDatabase on it still writes rows.
+      final plainDb = GtdDatabase(NativeDatabase.memory());
+      addTearDown(plainDb.close);
+      await plainDb.todoDao
+          .insertOutcome(id: 'o1', title: 'Ship it', userId: _userId, now: _ts);
+      expect(await plainDb.todoDao.getTodo('o1'), isNotNull);
     });
 
     test('several writes to one entity in one transaction coalesce to one op',
@@ -742,4 +997,62 @@ void main() {
           reason: 'the escape hatch is for writes that must never author ops');
     });
   });
+}
+
+/// A recording seam that labels every emitted op with the **commit that flushed
+/// it**, and records which scopes were already open when each one began.
+///
+/// Both are needed to state attribution as a property rather than as an outcome.
+/// Emission order alone cannot distinguish "each scope emitted its own op" from
+/// "one scope emitted both, in the same order" — which is exactly the #562
+/// defect — and without the overlap record a case could pass by never having
+/// overlapped at all.
+class _CommitLabellingCapture extends BufferedDomainOpCapture {
+  final Map<CaptureScope, String> _labels = <CaptureScope, String>{};
+  final List<CaptureScope> _live = <CaptureScope>[];
+
+  /// Per scope label, the labels of the scopes already open when it began.
+  final Map<String, List<String>> openedOver = <String, List<String>>{};
+
+  /// `collection/entityId@label` per emitted op, in emission order.
+  final List<String> emittedUnder = <String>[];
+
+  /// Where the label of the commit currently flushing rides. Per seam instance
+  /// and per commit, for the same reason the live scope itself rides a zone
+  /// rather than a field: a shared field would let one commit's `emit` read a
+  /// later commit's label, so the oracle could report a false pass or a false
+  /// failure on the very interleaving it exists to detect.
+  final Object _committingKey = Object();
+
+  String get _committing =>
+      Zone.current[_committingKey] as String? ?? 'no commit';
+
+  @override
+  CaptureScope beginScope() {
+    final scope = super.beginScope();
+    final label = 'S${_labels.length + 1}';
+    _labels[scope] = label;
+    openedOver[label] = [for (final open in _live) _labels[open]!];
+    _live.add(scope);
+    return scope;
+  }
+
+  @override
+  Future<void> commitScope(CaptureScope scope) async {
+    _live.remove(scope);
+    await runZoned(
+      () => super.commitScope(scope),
+      zoneValues: {_committingKey: _labels[scope]},
+    );
+  }
+
+  @override
+  void rollbackScope(CaptureScope scope) {
+    _live.remove(scope);
+    super.rollbackScope(scope);
+  }
+
+  @override
+  Future<void> emit(CapturedOp op) async =>
+      emittedUnder.add('${op.collection}/${op.entityId}@$_committing');
 }

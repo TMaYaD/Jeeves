@@ -14,6 +14,7 @@ import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/sync/collection_codecs.dart';
 import 'package:jeeves/sync/domain_op_capture.dart';
 import 'package:jeeves/sync/hlc.dart';
@@ -67,9 +68,12 @@ void main() {
     return [for (final row in rows) row.workspaceId];
   }
 
+  /// The shape `GtdDatabase.capturing` produces: the scope is opened, the body
+  /// runs *inside* it, and only then does it commit. A described effect is filed
+  /// into the ambient scope, so a body run outside one is refused.
   Future<void> capturing(void Function() body) async {
     final scope = capture.beginScope();
-    body();
+    await capture.runInScope(scope, () async => body());
     await capture.commitScope(scope);
   }
 
@@ -236,8 +240,49 @@ void main() {
 
     // A rolled-back scope authors nothing, so nothing rolled back is ever signed.
     final rolledBack = capture.beginScope();
-    writePreference();
+    await capture.runInScope(rolledBack, () async => writePreference());
     capture.rollbackScope(rolledBack);
     expect(await queuedWorkspaceIds(), hasLength(1));
+  });
+
+  test('a committed write reaches the outbox even when an overlapping scope '
+      'rolls back', () async {
+    // The loss direction of #562, over the real clients and the real outbox —
+    // the half no recording double can demonstrate, because what is lost is the
+    // *queued envelope*, not a recorded call.
+    //
+    // A real domain store, because the claim is about a row that committed and
+    // an op that did not follow it. `capturing` opens its scope as its first
+    // synchronous statement while its body waits behind drift's `ensureOpen`, so
+    // two un-awaited calls always both open before either body runs: filing a
+    // write into the scope begun most recently puts A's op in B's buffer, and
+    // B's `rollbackScope` then clears it. Committed row, no op, for ever.
+    await capture.bind(
+        gtdClient: gtdClient, preferencesClient: preferencesClient);
+    final domain = GtdDatabase(NativeDatabase.memory(), opCapture: capture);
+    addTearDown(domain.close);
+
+    final committed = domain.capturing(() => domain.todoDao.insertOutcome(
+          id: _outcomeId,
+          title: 'Write the thing',
+          userId: _userId,
+          now: DateTime.fromMillisecondsSinceEpoch(_nowMs, isUtc: true),
+        ));
+    // The expectation is attached before either is awaited: the rolled-back call
+    // can reject while the committed one is still in flight, and an unobserved
+    // rejection would surface as an unhandled error rather than as this
+    // assertion.
+    final refused = expectLater(
+      domain.capturing(() async => throw StateError('rolled back')),
+      throwsStateError,
+    );
+    await committed;
+    await refused;
+
+    expect(await domain.todoDao.getTodo(_outcomeId), isNotNull,
+        reason: 'the write committed to the domain store');
+    expect(await queuedWorkspaceIds(), [defaultWorkspaceId(_userId)],
+        reason: "the committed row's op must be queued, not discarded with the "
+            "overlapping scope's buffer");
   });
 }
