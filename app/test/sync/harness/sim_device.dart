@@ -43,6 +43,7 @@ import 'package:jeeves/sync/workspace_key_store.dart';
 
 import 'fake_sync_server.dart';
 import 'signal_probe.dart';
+import 'store_fault.dart';
 
 /// Argon2id costs for the harness.
 ///
@@ -399,6 +400,7 @@ class SimDevice {
     required this.client,
     required this.link,
     required this.projector,
+    required WorkspaceRoutingOpCapture capture,
     required this.keyStore,
     required this.workspaceKeys,
     required this.enrolment,
@@ -409,7 +411,8 @@ class SimDevice {
     required this.workspaceClientFactory,
     required this.strategies,
     required SyncClient preferencesWorkspaceClient,
-  })  : _syncStore = database,
+  })  : _capture = capture,
+        _syncStore = database,
         // Preferences are authored into the **preferences** Workspace, not the
         // GTD one: the entity id is `uuid5(workspace_id, key)`, so the id and the
         // Workspace the op lands in have to be the same Workspace or two devices
@@ -445,7 +448,14 @@ class SimDevice {
     Duration keepaliveInterval = signalKeepaliveInterval,
     int pullPageLimit = defaultPullPageLimit,
     bool fileBacked = false,
+    StoreWriteFault? storeFault,
   }) async {
+    if (storeFault != null && !fileBacked) {
+      throw ArgumentError(
+        'a storeFault is only meaningful on a file-backed store — the point is '
+        'to reopen after the write dies',
+      );
+    }
     if (passphrase != null && chosenPassphrase != null) {
       throw ArgumentError(
         'passphrase enrols against an existing escrow and chosenPassphrase '
@@ -460,10 +470,11 @@ class SimDevice {
     // device that has to prove it gets a real file it can be reopened over.
     final storeDirectory =
         fileBacked ? Directory.systemTemp.createTempSync('jeeves-sim-device-') : null;
+    final storeExecutor = storeDirectory == null
+        ? NativeDatabase.memory()
+        : NativeDatabase(File('${storeDirectory.path}/sync.sqlite'));
     final database = SyncDatabase(
-      storeDirectory == null
-          ? NativeDatabase.memory()
-          : NativeDatabase(File('${storeDirectory.path}/sync.sqlite')),
+      storeFault == null ? storeExecutor : storeFault.wrap(storeExecutor),
     );
     final identity = await MemberIdentity.generate(
       memberId: memberId,
@@ -592,6 +603,7 @@ class SimDevice {
       client: client,
       link: link,
       projector: projector,
+      capture: capture,
       keyStore: keyStore,
       workspaceKeys: workspaceKeys,
       enrolment: enrolment,
@@ -618,11 +630,22 @@ class SimDevice {
   final MemberIdentity identity;
   final FakeClock clock;
   final HlcClock hlc;
-  final CollectionRegistry registry;
-  final SyncClient client;
+
+  // The store-dependent graph. Not `final`: [reopenSyncStore] rebuilds every one
+  // of these over the reopened store, because a relaunched app runs its whole
+  // stack over the store it reopened, not half over a closed one.
+  CollectionRegistry registry;
+  SyncClient client;
+  DomainProjector projector;
+
   final DeviceLink link;
-  final DomainProjector projector;
   final DeviceKeyStore keyStore;
+
+  /// Routes DAO-path writes to whichever clients are live. Held so
+  /// [reopenSyncStore] can re-point it at the rebuilt clients — the [domain] was
+  /// constructed around this exact instance, so rebinding it is how a
+  /// post-restart DAO write reaches the reopened store rather than the closed one.
+  final WorkspaceRoutingOpCapture _capture;
 
   /// This device's `epoch -> K_{w,epoch}` map, per Workspace. A test asserts on it to
   /// say what this device can and cannot read.
@@ -640,15 +663,18 @@ class SimDevice {
   /// for the first device is the only copy that will ever exist.
   final EnrolmentOutcome outcome;
 
-  final PreferencesStore preferences;
+  /// Preferences over the preferences-Workspace client. Rebuilt by
+  /// [reopenSyncStore] over the reopened store's client, like the rest of the graph.
+  PreferencesStore preferences;
 
   /// Where a file-backed device's sync store lives, or null for a memory one.
   final Directory? storeDirectory;
 
   /// The per-Workspace client the ceremony used, memoised. A test that wants to
   /// drive the preferences Workspace asks for it here rather than building a
-  /// second client with its own directory.
-  final Future<SyncClient> Function(String workspaceId) workspaceClientFactory;
+  /// second client with its own directory. Rebuilt (with a fresh memo) by
+  /// [reopenSyncStore] so `preferencesClient` resolves over the reopened store.
+  Future<SyncClient> Function(String workspaceId) workspaceClientFactory;
 
   /// The merge-strategy registry every [Reducer] on this device is built with —
   /// including the one [reopenSyncStore] builds. A device that reduced under a
@@ -682,43 +708,134 @@ class SimDevice {
   /// The live sync store — [database] until [reopenSyncStore] replaces it.
   SyncDatabase _syncStore;
 
+  /// The store as it stands now, following a [reopenSyncStore] rather than the
+  /// original [database] a crash-recovery test opened over. A test asserting on
+  /// rows the reopened client wrote reads them here.
+  SyncDatabase get store => _syncStore;
+
   SimTimers get timers => link.timers;
 
-  /// Close this device's sync store and open it again over the same file.
+  /// Close this device's sync store and open it again over the same file,
+  /// **rebinding the whole device to the reopened store**.
   ///
-  /// Process death, as far as the store is concerned. The returned client is a
-  /// reader over the reopened database: it can inspect quarantine rows and
-  /// alarms, which is what "survives restart" has to mean to be worth asserting.
-  /// Enrolment is deliberately not re-run — a real relaunch reloads its identity
-  /// from the key store rather than registering itself a second time.
+  /// Process death and relaunch. A relaunched app runs its entire stack over the
+  /// store it reopened, so this rebuilds every store-dependent object — the
+  /// registry, the default and per-Workspace clients, the projector, the
+  /// preferences store, the DAO-write routing, and the signal listeners — over
+  /// the reopened database and re-points [client], [registry], [projector],
+  /// [preferences] and [workspaceClientFactory] at them. Nothing keeps a handle
+  /// on the closed store: [sync], [preferencesClient] and a post-restart DAO
+  /// write all reach the reopened one, and a content or prune pull projects into
+  /// the domain read model through the normal receive path, exactly as it did
+  /// before the crash.
+  ///
+  /// The transport and epoch-key store are wired, as a real relaunch would, so
+  /// the device can not only inspect quarantine rows and alarms but *pull*, which
+  /// is what proves a crash mid-apply converges on the next sync (#618). The
+  /// rebuilt default client's member directory is fresh (self only): a relaunch
+  /// hydrates it from the log it pulls, exactly as first enrolment did. Enrolment
+  /// is deliberately not re-run — a real relaunch reloads its identity from the
+  /// key store rather than registering itself a second time; [enrolment] keeps
+  /// its pre-restart client because re-enrolling is not a thing a relaunch does.
+  ///
+  /// The in-memory [domain] read model is not a file, so it carries across the
+  /// reopen rather than being reopened — the projector is rebuilt over it, and
+  /// what the pre-crash run projected stays visible, as a persisted read model
+  /// reopened alongside the sync store would.
+  ///
+  /// Returns the rebuilt default-Workspace client, which is also the new [client].
   Future<SyncClient> reopenSyncStore() async {
     final directory = storeDirectory;
     if (directory == null) {
       throw StateError('a memory-backed device has no file to reopen');
     }
+    final pullPageLimit = client.pullPageLimit;
     await _syncStore.close();
     final reopened = SyncDatabase(NativeDatabase(File('${directory.path}/sync.sqlite')));
     _syncStore = reopened;
-    return SyncClient(
+
+    // The graph, rebuilt over the reopened store in the same shape [create] wires
+    // it: registry, then projector over it and the surviving domain, then a
+    // default client (fresh directory, transport and keys wired since enrolment
+    // is not re-run), then the per-Workspace factory sharing that client's
+    // directory and keys. Kept in step with [create] deliberately — a device that
+    // reduced and projected one way before the crash has to do so identically
+    // after, or the restart becomes the divergence the test is ruling out.
+    registry = CollectionRegistry(reopened);
+    projector = DomainProjector(registry: registry, domain: domain);
+    final reopenedClient = SyncClient(
       workspaceId: client.workspaceId,
       userId: userId,
       identity: identity,
       database: reopened,
       clock: hlc,
       reducer: Reducer(reopened, nowMs: () => clock.nowMs, strategies: strategies),
+      transport: link,
+      workspaceKeys: workspaceKeys,
+      pullPageLimit: pullPageLimit,
       now: () => clock.asDateTime,
+    )..projector = projector;
+    client = reopenedClient;
+
+    final workspaceClients = <String, SyncClient>{
+      reopenedClient.workspaceId: reopenedClient,
+    };
+    workspaceClientFactory = (String scopedWorkspaceId) async =>
+        workspaceClients.putIfAbsent(
+          scopedWorkspaceId,
+          () => SyncClient(
+            workspaceId: scopedWorkspaceId,
+            userId: userId,
+            identity: identity,
+            database: reopened,
+            clock: hlc,
+            reducer:
+                Reducer(reopened, nowMs: () => clock.nowMs, strategies: strategies),
+            transport: link,
+            directory: reopenedClient.directory,
+            workspaceKeys: workspaceKeys,
+            pullPageLimit: pullPageLimit,
+            now: () => clock.asDateTime,
+          )..projector = projector,
+        );
+
+    final reopenedPreferencesClient =
+        await workspaceClientFactory(userPreferencesWorkspaceId(userId));
+    // Re-point the same capture the domain was built around at the rebuilt
+    // clients, so a DAO-path write after the restart authors into the reopened
+    // store rather than the closed one.
+    await _capture.bind(
+      gtdClient: reopenedClient,
+      preferencesClient: reopenedPreferencesClient,
     );
+    preferences =
+        PreferencesStore(client: reopenedPreferencesClient, registry: registry);
+
+    // Drop the listeners so the getters rebuild them over the new client; the old
+    // ones drove the client whose store just closed.
+    await _listener?.dispose();
+    _listener = null;
+    await _preferencesListener?.dispose();
+    _preferencesListener = null;
+
+    return reopenedClient;
   }
+
+  SignalListener? _listener;
 
   /// The subscription lifecycle, on this device's deterministic hooks: the
   /// harness's timer wheel for backoff and a jitter that always picks the
   /// ceiling, so an asserted schedule is the ladder's, not a sample of it.
-  late final SignalListener listener = SignalListener(
-    client: client,
-    transport: link,
-    delay: link.timers.delay,
-    random: CeilingJitter(),
-  );
+  ///
+  /// Built lazily over the *current* [client] rather than pinned at construction,
+  /// so [reopenSyncStore] can drop it and have the next access rebind to the
+  /// reopened store's client instead of driving the closed one.
+  SignalListener get listener => _listener ??= SignalListener(
+        client: client,
+        transport: link,
+        delay: link.timers.delay,
+        random: CeilingJitter(),
+      );
 
   /// The same lifecycle over the preferences Workspace.
   ///
@@ -781,7 +898,7 @@ class SimDevice {
   }
 
   Future<void> close() async {
-    await listener.dispose();
+    await _listener?.dispose();
     await _preferencesListener?.dispose();
     await domain.close();
     await _syncStore.close();

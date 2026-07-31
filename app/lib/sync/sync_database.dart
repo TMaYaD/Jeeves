@@ -42,7 +42,10 @@ class OpLog extends Table {
   DateTimeColumn get receivedAt => dateTime()();
 
   /// When the reducer applied this op. Null means "logged as chain evidence and
-  /// never applied" — see [refusedReason]. Exactly one of the two is set.
+  /// not (yet) applied" — either a refusal (see [refusedReason]) or, for a
+  /// control op whose apply a crash interrupted, an attempt a later pull resumes
+  /// (#618). At rest a settled row has exactly one of [appliedAt]/[refusedReason];
+  /// both null is a control op still owed its apply.
   DateTimeColumn get appliedAt => dateTime().nullable()();
 
   /// The `SyncRejectionReason.code` of the reducer guard that refused this op.
