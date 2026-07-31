@@ -24,10 +24,16 @@ import 'package:sqlite3/common.dart' show SqliteException;
 const int _sqliteIoerr = 10;
 
 class FaultInjectingInterceptor extends QueryInterceptor {
-  /// The table name that, when its next insert runs, should throw — or null when
-  /// disarmed. Matched as a substring of the statement, which for a drift insert
-  /// is `INSERT INTO "table" (...)`.
+  /// The table name that, when its next matching insert runs, should throw — or
+  /// null when disarmed. Matched as a substring of the statement, which for a
+  /// drift insert is `INSERT INTO "table" (...)`.
   String? _failNextInsertIntoTable;
+
+  /// How many matching inserts to let pass before the fault fires. Lets a test
+  /// target the *Nth* insert into a table when the earlier ones belong to a
+  /// different op — e.g. a chain-successor replay whose `op_log` write follows
+  /// its predecessor's own write into the same table in one pull.
+  int _skipMatchingInserts = 0;
 
   /// How many faults this injector has thrown, so a test can assert the write it
   /// meant to interrupt was actually reached.
@@ -36,13 +42,22 @@ class FaultInjectingInterceptor extends QueryInterceptor {
   /// Arm the injector: the next insert into [table] throws a [SqliteException]
   /// once, then disarms. Names a table rather than a statement so a test says
   /// *which durable effect* it is interrupting, not how drift spells the SQL.
-  void failNextInsertInto(String table) {
+  void failNextInsertInto(String table) => failNthInsertInto(table, 1);
+
+  /// Arm the injector on the [n]th (1-based) insert into [table]: the first
+  /// `n - 1` matching inserts pass through, the nth throws once, then it disarms.
+  /// The op-agnostic way to interrupt a write that shares its table with an
+  /// earlier write in the same unit of work.
+  void failNthInsertInto(String table, int n) {
+    assert(n >= 1, 'the target insert is 1-based');
     _failNextInsertIntoTable = table;
+    _skipMatchingInserts = n - 1;
   }
 
   /// Drop any armed fault. Writes pass through untouched from here on.
   void disarm() {
     _failNextInsertIntoTable = null;
+    _skipMatchingInserts = 0;
   }
 
   @override
@@ -56,6 +71,10 @@ class FaultInjectingInterceptor extends QueryInterceptor {
     // so a column or literal that happens to share the target's name elsewhere
     // in the statement can never mistakenly arm the fault on the wrong insert.
     if (target != null && statement.contains('INSERT INTO "$target"')) {
+      if (_skipMatchingInserts > 0) {
+        _skipMatchingInserts--;
+        return super.runInsert(executor, statement, args);
+      }
       _failNextInsertIntoTable = null;
       firedCount++;
       throw SqliteException(
