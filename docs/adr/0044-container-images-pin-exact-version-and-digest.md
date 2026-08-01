@@ -64,8 +64,12 @@ pinned digest really resolves to the version its tag claims — not built here.
 
 Dependabot does not read service-container images out of GitHub Actions workflow
 files ([dependabot-core#5819](https://github.com/dependabot/dependabot-core/issues/5819)),
-so the Postgres pin in `.github/workflows/backend-ci.yml` is updated by hand and
-is the one most likely to rot. It had already drifted a rebuild behind the
-otherwise-identical pin in `infra/docker-compose.yml` by the time this decision
-was written. Naming the version does not fix that — it makes it visible, which
-is a precondition for fixing it.
+so the Postgres pin in `.github/workflows/backend-ci.yml` is the one reference
+nothing updates, and it is updated by hand. It is held byte-identical to the
+Postgres pin in `infra/docker-compose.yml` — same tag, same digest — so CI tests
+against the image local dev runs, and the two are compared by eye as one string
+rather than reasoned about as two. Dependabot bumps the compose side; whoever
+merges that bump copies it across. Naming the version is what makes a divergence
+legible at all, but it does not prevent one: nothing fails when the two drift,
+which is how the CI pin had already fallen a rebuild behind before this decision
+was written.
