@@ -18,9 +18,9 @@ could not get back to their data: the ceremony needs the network to found or joi
 there was none. The only control on the screen was **Sign out**.
 
 The underlying problem was the premise. The combination the trap needed — an unverified
-session over a store that genuinely reports "not enrolled" — was never exercised anywhere,
-because every test of an unverified session ran without a sync stack and so could not read
-enrolment at all. The arm was untested, not merely wrong.
+session over a store that genuinely reports "not enrolled" — was never exercised anywhere.
+The arm was untested, not merely wrong, and it shipped because the state it turned on was
+one nothing could produce.
 
 ## Decision
 
@@ -52,8 +52,8 @@ broken.
 
 Removing the redirect makes the entry points load-bearing rather than convenient: with
 nothing routing the user in, an entry point that is missing or hidden does not make
-enrolment awkward, it makes sync impossible. They have to be pinned by test, and kept
-discoverable, for as long as this decision stands.
+enrolment awkward, it makes sync impossible. Discoverability stops being a courtesy and
+becomes the mechanism, for as long as this decision stands.
 
 Reading enrolment can fail — the store may not be readable when the question is asked — and
 the answer on failure has to be one that sends nobody anywhere. That is now a safe default

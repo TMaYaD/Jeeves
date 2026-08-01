@@ -272,6 +272,23 @@ Automated coverage:
   reaches the app, and deliberate navigation to the ceremony still works. `runAsync` is
   load-bearing — the launch waits on real Dio/SQLite/KDF timers that fake time never fires.
 
+**The blind spot these close, and the setup that caused it.** ADR-0046's failure shipped
+because the state it depended on was one the tests could not produce: every case covering
+an unverified session ran *without* a sync stack, so the enrolment read could not reach a
+store, failed open, and reported an enrolled-looking answer. The combination that mattered
+— unverified session over a store that genuinely says "not enrolled" — was therefore never
+exercised, and the arm looked covered while being untested.
+
+Two standing requirements follow, and neither may be dropped while ADR-0046 stands:
+
+- **A session-layer test that omits the sync stack is not evidence about enrolment.** In
+  those tests a `ready` means "unreadable", not "enrolled". Any case making a claim about
+  enrolment behaviour has to assemble a stack that actually answers, as
+  `offline_relaunch_session_test.dart` does.
+- **The entry points are pinned by test, because they are the only way sync can start.**
+  With nothing routing the user in, deleting the Settings tile does not make enrolment
+  awkward — it makes it impossible. `sync_section_test.dart` must fail if the tile goes.
+
 ### Manual runbook
 
 The ceremony's real path needs a real key store and a real server, so it only runs by hand.
@@ -334,10 +351,26 @@ emulator install**:
    present **and `jeeves.sqlite` still there, untouched**. Its disappearance is the failure:
    the app must not unlink a file it did not create, and on desktop targets this directory
    is the user's own Documents folder.
-4. On a device that was enrolled, expect the domain store to hold the data the op log has
-   reduced; on one that never enrolled, expect it empty. Empty is a **steady state**, not a
-   staging post — the device keeps working local-only, and enrolment is offered in Settings
-   rather than required (ADR-0046).
+4. Check the new store's contents, and **do not read "un-enrolled" as "has no data"** —
+   that premise is the one this whole issue exists to unlearn:
+   - **Enrolled:** expect the domain store to hold the data the op log has reduced. The log
+     is the record and the store is its projection.
+   - **Never enrolled, and nothing entered locally yet:** expect it empty. This is the only
+     case where empty is the pass. It is a **steady state**, not a staging post — the
+     device keeps working local-only, and enrolment is offered in Settings rather than
+     required (ADR-0046).
+   - **Never enrolled, but carrying local work:** expect that work to **still be there and
+     still usable**. A local-only device is a fully functional GTD store; it authors no ops
+     because there is nowhere to author them, which says nothing about whether it holds
+     data. An empty store here is a **failure**, not the expected result.
+
+   The one loss is at the cutover instant and is bounded to it: a never-enrolled device's
+   *pre-cutover* rows lived in `jeeves.sqlite`, which the new build does not read, so they
+   are not carried into `jeeves_domain.sqlite` (ADR-0035, sanctioned once and deliberately).
+   Everything entered after that launch lives in the new store and stays. If the user later
+   enrols, the initial upload carries whatever is in it onto the op log (ADR-0034) — so
+   local-only work is never a reason to delay enrolling, and enrolling is never a reason to
+   expect a fresh start.
 
 A **release** phone cannot be checked this way at all (`run-as: package not debuggable`),
 so it gets behavioural verification only: sign up → land in the **app** → open enrolment
