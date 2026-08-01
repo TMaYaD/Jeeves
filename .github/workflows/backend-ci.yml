@@ -36,14 +36,26 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      # uv, not pip: `uv sync --locked` installs exactly what backend/uv.lock
+      # pins, so no tool version is written here.  `working-directory` points
+      # the action at backend/ so its cache key is keyed on backend/uv.lock —
+      # and so the deliberately-unset `version` input falls back to
+      # `[tool.uv] required-version` in backend/pyproject.toml, which is where
+      # uv's own version is pinned.  Both knobs stay in backend config.
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
+          working-directory: backend
           python-version: "3.12"
-          cache: pip
-      - run: pip install -e ".[dev]"
-      - run: ruff check .
-      - run: ruff format --check .
-      - run: mypy .
+          enable-cache: true
+      # A named check, so drift between pyproject.toml and uv.lock fails as
+      # "lockfile out of date" instead of surfacing as a resolution error in
+      # the install step below.
+      - name: Check uv.lock is up to date
+        run: uv lock --check
+      - run: uv sync --locked --extra dev
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy .
 
   test:
     name: Test
@@ -86,13 +98,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
+          working-directory: backend
           python-version: "3.12"
-          cache: pip
-      - run: pip install -e ".[dev]"
-      - run: python -m app.migrate
-      - run: pytest --cov=app --cov-report=term-missing
+          enable-cache: true
+      - run: uv sync --locked --extra dev
+      - run: uv run python -m app.migrate
+      - run: uv run pytest --cov=app --cov-report=term-missing
 
   infra-shell:
     name: Infra & hooks shell lint + tests

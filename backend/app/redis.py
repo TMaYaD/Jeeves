@@ -13,13 +13,13 @@ _redis_pool: aioredis.Redis | None = None
 def _get_pool() -> aioredis.Redis:
     global _redis_pool
     if _redis_pool is None:
-        # `from_url` is untyped in redis-py 6 and typed from 8 on, and the two
-        # resolutions are both live: `uv.lock` pins 6.4.0 while CI's
-        # `pip install -e ".[dev]"` floats to the newest matching `redis>=5.0.4`.
-        # `unused-ignore` keeps the suppression honest under both — without it,
-        # whichever set mypy runs against fails the other.  Dropping
-        # `no-untyped-call` once the floor is raised past 6 is the tidy-up.
-        _redis_pool = aioredis.from_url(  # type: ignore[no-untyped-call,unused-ignore]
+        # `from_url` is untyped in the redis-py that `uv.lock` pins, and that
+        # lock is now the only resolution mypy ever sees — CI installs it with
+        # `uv sync --locked` just as local dev does.  So a single ignore code
+        # is exact; `strict = true` turns any spare code into an error.  When a
+        # lockfile bump crosses into a redis-py that types `from_url`, mypy
+        # will flag this ignore as unused and it can simply be deleted.
+        _redis_pool = aioredis.from_url(  # type: ignore[no-untyped-call]
             settings.redis_url,
             encoding="utf-8",
             decode_responses=True,
