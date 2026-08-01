@@ -14,6 +14,7 @@ import '../widgets/jeeves_logo.dart';
 import '../widgets/nudge_banner.dart';
 import 'common/tag_cloud.dart';
 import 'sync_health/sync_health_copy.dart';
+import 'sync_health/sync_health_screen.dart';
 
 /// The shared title-bar title for each of the seven shell list routes, keyed
 /// by [GoRouterState] path. The bar's title is a pure function of route state,
@@ -412,9 +413,23 @@ class _SyncIndicator extends StatelessWidget {
       null => (Icons.cloud_off_outlined, const Color(0xFF9CA3AF), 'Local only'),
     };
 
-    return Tooltip(
+    final glyph = Tooltip(
       message: tooltip,
       child: Icon(icon, size: 20, color: color),
+    );
+
+    // Tappable **iff there is something to report**, read off the same value the
+    // glyph came from so the tile and its tappability cannot disagree. A healthy
+    // device has no entry point at all — see docs/DESIGN.md § Sync health for
+    // why that is a decision rather than an omission.
+    if (indication?.hasSomethingToReport != true) return glyph;
+    return InkWell(
+      borderRadius: BorderRadius.circular(4),
+      onTap: () {
+        Navigator.pop(context);
+        context.push(SyncHealthScreen.routePath);
+      },
+      child: Padding(padding: const EdgeInsets.all(8), child: glyph),
     );
   }
 }
