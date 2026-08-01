@@ -75,9 +75,12 @@ new_fake_sdk() {
   SDK="${WORK}/fake-sdk-${SDK_SEQ}"
   mkdir -p "${SDK}/bin/cache"
 
+  # Probes are written under $sdk_root/.probe/, deliberately NOT under
+  # bin/cache/ — anything dropped there would perturb sdk_cache_identity().
   cat > "${SDK}/bin/flutter" <<'FLUTTER'
 #!/bin/sh
 sdk_root=$(cd "$(dirname "$0")/.." && pwd -P)
+mkdir -p "$sdk_root/.probe"
 case "$1" in
   --version)
     rev=$(git rev-parse HEAD 2>/dev/null || echo "0.0.0-unknown")
@@ -85,15 +88,44 @@ case "$1" in
     printf '{"flutterVersion":"%s","repositoryUrl":"%s"}\n' "$rev" "$url" \
       > "$sdk_root/bin/cache/flutter.version.json"
     ;;
-  analyze) : ;;
-  test) : ;;
+  analyze)
+    env | grep '^GIT_' | sort > "$sdk_root/.probe/flutter-analyze-git-env.txt"
+    ;;
+  test)
+    env | grep '^GIT_' | sort > "$sdk_root/.probe/flutter-test-git-env.txt"
+    ;;
 esac
 exit 0
 FLUTTER
   chmod +x "${SDK}/bin/flutter"
 
+  # Mirrors the real SDK's bin/internal/shared.sh, which `bin/dart` sources:
+  # the launcher validates its tool cache against the SDK's OWN revision
+  # (shared.sh:124), judges it stale when the two disagree (shared.sh:136), and
+  # deletes bin/cache/flutter.version.json (shared.sh:150). With a leaked
+  # GIT_DIR that `git` resolves the OUTER repo, so the check can never pass.
+  #
+  # The non-zero exit on a missing version file is not decoration: real
+  # `dart run build_runner` fails outright once the SDK is corrupted, and that
+  # failure is #644's headline symptom ("commits from any worktree fail
+  # deterministically"). Without it the hook — and any real `git commit`
+  # driving it — returns 0 whether or not the SDK was just wrecked, and every
+  # exit-status assertion below is vacuous.
   cat > "${SDK}/bin/dart" <<'DART'
 #!/bin/sh
+sdk_root=$(cd "$(dirname "$0")/.." && pwd -P)
+mkdir -p "$sdk_root/.probe"
+env | grep '^GIT_' | sort > "$sdk_root/.probe/dart-git-env.txt"
+cd "$sdk_root" || exit 1
+rev=$(git rev-parse HEAD 2>/dev/null || echo unknown)
+stamped=$(grep -o '"flutterVersion":"[^"]*"' bin/cache/flutter.version.json 2>/dev/null | cut -d'"' -f4)
+if [ "$rev" != "$stamped" ]; then
+  rm -f "$sdk_root/bin/cache/flutter.version.json"
+fi
+if [ ! -f "$sdk_root/bin/cache/flutter.version.json" ]; then
+  echo "Could not find the Flutter SDK version file." >&2
+  exit 1
+fi
 exit 0
 DART
   chmod +x "${SDK}/bin/dart"
@@ -109,6 +141,36 @@ DART
   sdk_rev=$(git -C "${SDK}" rev-parse HEAD)
   printf '{"flutterVersion":"%s","repositoryUrl":"git@github.com:flutter/flutter.git"}\n' \
     "${sdk_rev}" > "${SDK}/bin/cache/flutter.version.json"
+}
+
+# The names git itself considers repo-local — the exact set the hook unsets,
+# and the exact set that misresolves a child process to the wrong repository.
+# Deliberately not "every GIT_* name": GIT_SSH_COMMAND and GIT_ASKPASS are not
+# in this list and must survive, or a `dart pub` fetch of a git-sourced
+# dependency loses its credential path for no benefit.
+LOCAL_GIT_ENV_VARS=$(git -C "${TESTS_DIR}" rev-parse --local-env-vars)
+
+# Asserts that a probe file written by a flutter/dart child carries none of
+# them. A missing probe file is a failure, not a pass — it means the child
+# never ran, so the assertion would otherwise be trivially satisfied.
+assert_no_local_git_env_leaked() {
+  local label="$1" probe_file="$2"
+  local leaked="" var_name
+  if [ ! -f "${probe_file}" ]; then
+    bad "${label}: no probe at ${probe_file} — the child process never ran, so this proves nothing"
+    return
+  fi
+  while IFS= read -r var_name; do
+    [ -n "${var_name}" ] || continue
+    if grep -q "^${var_name}=" "${probe_file}"; then
+      leaked="${leaked} ${var_name}"
+    fi
+  done <<< "${LOCAL_GIT_ENV_VARS}"
+  if [ -n "${leaked}" ]; then
+    bad "${label}: repo-local git vars reached the child:${leaked}"
+  else
+    ok "${label}: no repo-local git vars reached the child"
+  fi
 }
 
 sdk_cache_identity() {
@@ -145,9 +207,38 @@ stage_app_change() {
 }
 
 run_hook() {
-  local cwd="$1"
-  OUT=$(cd "${cwd}" && PATH="${BARE_PATH}" HOME="${WORK}/empty-home" sh "${HOOK}" 2>&1)
+  # $1 = cwd, $2 = optional PATH prefix (used to shadow `git` with a shim)
+  local cwd="$1" path_prefix="${2:-}"
+  local run_path="${BARE_PATH}"
+  if [ -n "${path_prefix}" ]; then
+    run_path="${path_prefix}:${BARE_PATH}"
+  fi
+  OUT=$(cd "${cwd}" && PATH="${run_path}" HOME="${WORK}/empty-home" sh "${HOOK}" 2>&1)
   RC=$?
+}
+
+# A `git` that behaves exactly like the real one except for
+# `rev-parse --local-env-vars`, which it breaks in one of two ways: `empty`
+# answers with nothing and exits 0, `nonzero` fails outright. Everything else
+# is exec'd through to the real binary, because the hook needs a working `git`
+# both before this point (`diff --cached`, `rev-parse --git-common-dir`) and
+# inside the stub SDK.
+make_broken_git_shim() {
+  local shim_dir="$1" failure_mode="$2"
+  local real_git
+  real_git=$(command -v git)
+  mkdir -p "${shim_dir}"
+  cat > "${shim_dir}/git" <<SHIM
+#!/bin/sh
+if [ "\$1" = "rev-parse" ] && [ "\$2" = "--local-env-vars" ]; then
+  case "${failure_mode}" in
+    empty)   exit 0 ;;
+    nonzero) echo 'fatal: simulated rev-parse failure' >&2; exit 128 ;;
+  esac
+fi
+exec "${real_git}" "\$@"
+SHIM
+  chmod +x "${shim_dir}/git"
 }
 
 OUT=""
@@ -375,6 +466,13 @@ else
   bad "SDK cache identity changed: ${before_identity} -> ${after_identity}"
 fi
 
+# This case and the real-`git commit` one below are BOTH red/green detectors for
+# #644 — neither is a passive bystander. This one is the cheaper of the two: it
+# synthesises the hook environment, so it runs in milliseconds and pins the
+# mechanism. Measured against the unfixed hook (unset still confined to the
+# self-heal subshell): "FAIL — SDK cache identity changed unexpectedly", and the
+# hook exits 1. The case below earns its extra cost with real-`git commit`
+# fidelity — it does not have to guess which variables git exports.
 start_case "linked worktree, invoked with git's own hook env: self-heal doesn't leak the outer worktree's identity into the SDK cache"
 new_fake_sdk
 new_repo
@@ -406,6 +504,79 @@ else
   bad "SDK cache identity changed unexpectedly: ${before_identity} -> ${after_identity}"
 fi
 
+# Driven by a REAL `git commit` from a REAL linked worktree, so nothing about
+# git's hook environment is guessed: whatever git 2.x exports is what the hook
+# gets. This is the case that covers #644 end to end, and it reaches past the
+# self-heal into `dart run build_runner` / `flutter analyze` / `flutter test` —
+# the invocations the old fix never protected.
+#
+# Measured, run against the unfixed hook (the unset still confined to the
+# self-heal subshell, everything else in this file identical). Seven of the
+# suite's nine failures came from this case alone; the other two are the
+# synthesised-env case above:
+#
+#   FAIL — real git commit: hook rejected the commit (rc=1): … Could not find
+#          the Flutter SDK version file. ❌ build_runner failed!
+#   FAIL — real git commit: the shared SDK's flutter.version.json was deleted
+#   FAIL — real git commit: SDK cache identity changed: <sdk rev> -> <deleted>
+#   FAIL — real git commit / dart: repo-local git vars reached the child:
+#          GIT_DIR GIT_INDEX_FILE GIT_PREFIX
+#   FAIL — real git commit / flutter analyze: no probe … the child never ran
+#   FAIL — real git commit / flutter test: no probe … the child never ran
+#   FAIL — real git commit: nothing was committed — the hook blocked it
+#
+# (The two "child never ran" lines are the corruption's blast radius: the hook
+# died at build_runner, so analyze and test were never reached.) All green with
+# the fix in place. If this case ever passes both ways it has stopped testing
+# anything — check the dart stub still exits non-zero on a missing version file.
+start_case "linked worktree, real \`git commit\`: no repo-local git env reaches dart/flutter and the shared SDK survives"
+new_fake_sdk
+new_repo
+before_identity=$(sdk_cache_identity)
+commit_wt="${WORK}/linked-wt-real-commit-${REPO_SEQ}"
+git -C "${REPO}" worktree add -q -b "wt-commit-branch-${REPO_SEQ}" "${commit_wt}"
+# A fresh linked worktree never carries its own app/.fvm — that is the real
+# shape, and it makes the hook resolve the main checkout's SDK.
+rm -rf "${commit_wt}/app/.fvm"
+# Install ONLY pre-commit, into the common hooks dir a linked worktree shares.
+# Pointing core.hooksPath at .githooks would also enlist commit-msg and
+# prepare-commit-msg, which are out of scope here and would interfere.
+ln -sf "${HOOK}" "${REPO}/.git/hooks/pre-commit"
+stage_app_change "${commit_wt}"
+# `env -i` so the assertion is unambiguous about provenance: every GIT_* name
+# the probes see was exported by git itself, not inherited from this suite.
+commit_out=$(env -i PATH="${BARE_PATH}" HOME="${WORK}/empty-home" \
+  git -C "${commit_wt}" commit -q -m 'trigger the hook' 2>&1)
+commit_rc=$?
+if [ "${commit_rc}" -eq 0 ]; then
+  ok "real git commit: the commit succeeded with no manual SDK repair"
+else
+  bad "real git commit: hook rejected the commit (rc=${commit_rc}): ${commit_out}"
+fi
+if [ -f "${SDK}/bin/cache/flutter.version.json" ]; then
+  ok "real git commit: the shared SDK still has bin/cache/flutter.version.json"
+else
+  bad "real git commit: the shared SDK's flutter.version.json was deleted — every other worker on this machine is now broken (#644)"
+fi
+after_identity=$(sdk_cache_identity)
+worktree_rev=$(git -C "${commit_wt}" rev-parse HEAD)
+if [ "${after_identity}" = "${worktree_rev}" ]; then
+  bad "real git commit: SDK cache was stamped with the committing worktree's revision (${worktree_rev})"
+elif [ "${after_identity}" = "${before_identity}" ]; then
+  ok "real git commit: SDK cache still carries the SDK's own revision (${after_identity})"
+else
+  bad "real git commit: SDK cache identity changed: ${before_identity} -> ${after_identity:-<deleted>}"
+fi
+assert_no_local_git_env_leaked "real git commit / dart" "${SDK}/.probe/dart-git-env.txt"
+assert_no_local_git_env_leaked "real git commit / flutter analyze" "${SDK}/.probe/flutter-analyze-git-env.txt"
+assert_no_local_git_env_leaked "real git commit / flutter test" "${SDK}/.probe/flutter-test-git-env.txt"
+# Guards against a hook that "passes" by never reaching the Flutter block at all.
+if git -C "${commit_wt}" log --oneline -1 2>/dev/null | grep -qF 'trigger the hook'; then
+  ok "real git commit: the commit actually landed"
+else
+  bad "real git commit: nothing was committed — the hook blocked it"
+fi
+
 start_case "no SDK anywhere: hook fails loudly, does not attempt build_runner"
 new_repo
 rm -rf "${REPO}/app/.fvm"
@@ -426,6 +597,39 @@ if printf '%s' "${OUT}" | grep -q 'Running build_runner'; then
 else
   ok "hook stopped before build_runner (no partial state)"
 fi
+
+# The unset is only as good as the list it is handed, and that list comes from a
+# command that can fail. The empty-but-successful variant is the one a status
+# check alone cannot see: `unset $local_git_env_vars` degrades to a bare `unset`
+# with no operands — a no-op under sh/bash/dash, a non-fatal error under zsh —
+# so nothing is cleared and the hook has no way to notice. Measured with the
+# guard reverted, both variants: rc=0 and "Running build_runner" in the output,
+# i.e. every Flutter invocation running with the repo-local git env intact,
+# which is #644 back in force and completely silent about it.
+for local_env_failure in empty nonzero; do
+  start_case "\`git rev-parse --local-env-vars\` answers ${local_env_failure}: hook fails loudly instead of unsetting nothing"
+  new_fake_sdk
+  new_repo
+  broken_git_dir="${WORK}/broken-git-${local_env_failure}-${REPO_SEQ}"
+  make_broken_git_shim "${broken_git_dir}" "${local_env_failure}"
+  stage_app_change "${REPO}"
+  run_hook "${REPO}" "${broken_git_dir}"
+  if [ "${RC}" -eq 1 ]; then
+    ok "${local_env_failure}: hook exits 1"
+  else
+    bad "${local_env_failure}: hook exited ${RC}, expected 1: ${OUT}"
+  fi
+  if printf '%s' "${OUT}" | grep -qF "repo-local environment variables"; then
+    ok "${local_env_failure}: message names the safeguard that could not be applied"
+  else
+    bad "${local_env_failure}: failure message is unclear: ${OUT}"
+  fi
+  if printf '%s' "${OUT}" | grep -qF 'Running build_runner'; then
+    bad "${local_env_failure}: hook ran build_runner with the repo-local git env still set (#644)"
+  else
+    ok "${local_env_failure}: hook stopped before build_runner (no partial state)"
+  fi
+done
 
 for backend_shell in ${BACKEND_SHELLS}; do
 
