@@ -1,13 +1,13 @@
 /// Rebuild a fresh domain read model from the local op log.
 ///
-/// The store cutover (ADR-0035) gives the device a brand-new
-/// `jeeves_domain.sqlite` and deletes the PowerSync-era file rather than
-/// converting it. For an **enrolled** device that is not a data loss: its op log
-/// is the record, `jeeves_sync.sqlite` is a file of its own, and reduced state is
-/// exactly what the domain read model is a projection of. So the new store is
-/// replayed into, once — gated on the marker a completed replay writes rather than
-/// on the store's own creation, so a replay that failed is retried on the next
-/// launch (`database/domain_store_io.dart`).
+/// The domain read model is a projection of reduced state (ADR-0035), so a store
+/// that has never been projected into gets the walk once — gated on the marker a
+/// completed replay writes rather than on the store's own creation, so a replay
+/// that failed is retried on the next launch (`database/domain_store_io.dart`).
+///
+/// **This is not a recovery path and nothing may treat it as one.** It replays
+/// what the local op log holds; a device with no log has nothing to replay, and
+/// this compensates for no loss anywhere else.
 ///
 /// Nothing new is computed here. The reduce already happened — this walks the
 /// entities the substrate holds and drives them through the same
@@ -21,8 +21,9 @@
 /// "Alice" entries. The reconcile runs on the tail, after the projection has
 /// committed, because its passes author ops.
 ///
-/// A device that never enrolled has no log and gets an empty store; that is the
-/// sanctioned path (fresh sign-up → enrolment → re-import), not a failure.
+/// A device that never enrolled has no log, so this leaves its store exactly as
+/// it found it. That is the ordinary case, not a failure: a local-only device's
+/// data lives in the domain store itself and is never rebuilt from anywhere.
 library;
 
 import '../database/gtd_database.dart';

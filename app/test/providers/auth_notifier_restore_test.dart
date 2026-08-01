@@ -5,8 +5,14 @@
 /// interceptor chain over a scripted adapter. No sync stack — `_enrolmentGate()`
 /// fails open to `SessionGate.ready` by design when the stack cannot be read — so
 /// these run in milliseconds and say nothing about the spine.
-/// `test/sync/offline_relaunch_session_test.dart` is where the spine's half is
-/// proven; this file is where the branch table lives.
+///
+/// **`SessionGate.ready` here means "the stack could not be read", not "enrolled",
+/// and no test in this file may be read as covering the enrolment answer.** That
+/// conflation is what let #673 through: every `SessionUnverified` case below
+/// falls open, so the combination of an unverified session and a store that
+/// genuinely says `notEnrolled` was never exercised anywhere. It is now, in
+/// `test/sync/offline_relaunch_session_test.dart`, over a stack that assembles.
+/// This file is where the branch table lives, and only that.
 ///
 /// The table (ADR-0041): the arms that clear credentials are a corroborated 401,
 /// nothing-stored-to-refresh, and an inconclusive answer that leaves no account id

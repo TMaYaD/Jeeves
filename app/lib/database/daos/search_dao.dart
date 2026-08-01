@@ -29,7 +29,7 @@ class SearchDao {
   // the current Action's value with the Outcome column as fallback. Structured
   // filters match on these — and results hydrate through them — so search
   // ranks and filters an Outcome by the effort of doing its *current* Action,
-  // falling through to the Outcome column for Actionless / legacy rows. The
+  // falling through to the Outcome column for Actionless Outcomes. The
   // outer table alias is Drift's default for the main table of a join: the
   // table's own name, `todos`. `Precedence.primary` marks the COALSECE(...)
   // as an atomic operand so surrounding `IN` / `<=` / `IS NULL` need no parens.

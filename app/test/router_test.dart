@@ -1,13 +1,18 @@
-/// Tests for the production router's redirect policy (issues #225, #595).
+/// Tests for the production router's redirect policy (issues #225, #595, #673).
 ///
-/// Two rules live in the one redirect. /focus must be unconditionally
-/// accessible regardless of whether the day has been planned — planning is
-/// entered explicitly via the Focus screen's "Plan the Day" button or the Nudge
-/// banner, never via an automatic redirect ("planning done" derives from an open
-/// session (ADR-0020), not a notifier, so there is no router state to toggle
-/// here). And onboarding is enforced: a signed-in device whose store says it is
-/// not enrolled cannot be anywhere but /enrolment, and nothing else can be
-/// there.
+/// One rule, applied twice. **The router never sends the user somewhere they
+/// did not ask to go.** /focus is unconditionally accessible regardless of
+/// whether the day has been planned — planning is entered explicitly via the
+/// Focus screen's "Plan the Day" button or the Nudge banner ("planning done"
+/// derives from an open session (ADR-0020), not a notifier, so there is no
+/// router state to toggle here). And enrolment is opt-in: a signed-in device
+/// whose store says it is not enrolled runs the app exactly like any other, and
+/// reaches `/enrolment` only by navigating there itself.
+///
+/// The redirect's remaining job is negative — keeping `/enrolment` out of reach
+/// of the two sessions it cannot mean anything for (signed out: no account to
+/// enrol against; enrolled: already done). Bouncing *off* a route is not routing
+/// *to* one.
 library;
 
 import 'package:flutter/material.dart';
@@ -63,7 +68,7 @@ GoRouter _buildSwsRouter() => GoRouter(
     );
 
 // Stub router carrying the production redirect over a gate the test owns, plus
-// the three locations the onboarding rule arbitrates between.
+// the three locations the enrolment rule arbitrates between.
 ({GoRouter router, ValueNotifier<SessionGate> gate}) _buildGatedRouter(
   SessionGate initial,
 ) {
@@ -155,29 +160,44 @@ void main() {
     expect(find.text('register'), findsNothing);
   });
 
-  group('onboarding gate', () {
-    testWidgets('needsEnrolment pins every location to /enrolment',
+  group('enrolment is opt-in', () {
+    testWidgets('an unenrolled session reaches the app, not the ceremony',
         (tester) async {
-      final gated = _buildGatedRouter(SessionGate.needsEnrolment);
+      // The defect this group exists for: the user opened the app and was put
+      // in the enrolment ceremony with no way back to their data.
+      final gated = _buildGatedRouter(SessionGate.signedInNotEnrolled);
 
       await tester
           .pumpWidget(MaterialApp.router(routerConfig: gated.router));
       await tester.pumpAndSettle();
 
-      // Even the initial location: a cold start on a half-founded session goes
-      // straight to the resume controls.
-      expect(find.text('enrolment'), findsOneWidget);
+      expect(find.text('inbox'), findsOneWidget);
+      expect(find.text('enrolment'), findsNothing);
 
       gated.router.go('/settings');
       await tester.pumpAndSettle();
-      expect(find.text('enrolment'), findsOneWidget);
-      expect(find.text('settings'), findsNothing);
+      expect(find.text('settings'), findsOneWidget);
     });
 
-    testWidgets('flipping the gate to needsEnrolment routes without navigation',
+    testWidgets('an unenrolled session can navigate to /enrolment deliberately',
         (tester) async {
-      // The refreshListenable contract: signing in from Settings must not leave
-      // the user sitting on Settings with onboarding unfinished.
+      // Opt-in, not unreachable. Settings and the first-launch card both send
+      // the user here on purpose, and the route has to accept them.
+      final gated = _buildGatedRouter(SessionGate.signedInNotEnrolled);
+
+      await tester
+          .pumpWidget(MaterialApp.router(routerConfig: gated.router));
+      await tester.pumpAndSettle();
+
+      gated.router.go('/enrolment');
+      await tester.pumpAndSettle();
+      expect(find.text('enrolment'), findsOneWidget);
+    });
+
+    testWidgets('signing in does not move the user off where they were',
+        (tester) async {
+      // The refreshListenable still fires; what it must no longer do is carry
+      // the user away. Signing in from Settings leaves them on Settings.
       final gated = _buildGatedRouter(SessionGate.signedOut);
 
       await tester
@@ -187,9 +207,10 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('settings'), findsOneWidget);
 
-      gated.gate.value = SessionGate.needsEnrolment;
+      gated.gate.value = SessionGate.signedInNotEnrolled;
       await tester.pumpAndSettle();
-      expect(find.text('enrolment'), findsOneWidget);
+      expect(find.text('settings'), findsOneWidget);
+      expect(find.text('enrolment'), findsNothing);
     });
 
     testWidgets('ready bounces /enrolment back to the app', (tester) async {
@@ -207,10 +228,15 @@ void main() {
 
     testWidgets('a completed ceremony lands in the app on its own',
         (tester) async {
-      final gated = _buildGatedRouter(SessionGate.needsEnrolment);
+      // The one place the router still moves somebody: the ceremony screen has
+      // nothing left to say once the device is enrolled, so finishing it hands
+      // the user back to the app rather than stranding them on a dead surface.
+      final gated = _buildGatedRouter(SessionGate.signedInNotEnrolled);
 
       await tester
           .pumpWidget(MaterialApp.router(routerConfig: gated.router));
+      await tester.pumpAndSettle();
+      gated.router.go('/enrolment');
       await tester.pumpAndSettle();
       expect(find.text('enrolment'), findsOneWidget);
 
@@ -258,7 +284,7 @@ void main() {
     });
 
     test('/enrolment is a top-level route, outside the AppShell', () {
-      // Outside on purpose: onboarding is not a drawer destination, and the
+      // Outside on purpose: the ceremony is not a drawer destination, and the
       // shell's own surfaces (indicator, capture) assume an enrolled-or-local
       // device rather than a session mid-ceremony.
       expect(

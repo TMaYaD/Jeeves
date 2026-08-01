@@ -174,10 +174,14 @@ Each line runs in its own subshell, so the two are pasteable as a block and both
 
 `flutter test` must run from `app/`: the vector loader reaches the repo-root `spec/` by relative path.
 
-## Enrolment ceremony (the onboarding surface)
+## Enrolment ceremony
 
-The screen a signed-in but un-enrolled device is routed to, and cannot leave except by
-signing out (`app/lib/screens/enrolment/`, route `/enrolment`). It runs
+Opt-in, and **nothing routes here** (`app/lib/screens/enrolment/`, route `/enrolment`).
+A signed-in, un-enrolled device runs the app normally; the user opens the ceremony from
+Settings' "Set up sync on this device", and the app bar's back arrow is a real way out.
+Tests that assert the absence of a redirect live in `test/router_test.dart` (the rule) and
+`test/sync/offline_relaunch_session_test.dart` (the rule over a real store that genuinely
+reads `notEnrolled`, which is the combination #673 was missed for). It runs
 `EnrolmentService` on the device: passphrase → Root → both escrow slots → member
 registration → per-Workspace genesis and this Device's owner Grant, and then
 `SyncLifecycle.activate` — so completing a ceremony is what starts syncing.

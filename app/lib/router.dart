@@ -42,23 +42,28 @@ GoRouterRedirect buildAppRouterRedirect({
       // /login where the "Connect wallet" flow lives.
       if (swsMode && state.matchedLocation == '/register') return '/login';
 
-      // Onboarding is one decision, taken here rather than by each screen's
-      // success handler: sign-in and sign-up both just `go('/inbox')` and this
-      // routes them, a deep link cannot skip enrolment, and a cold start that
-      // restores a half-founded session lands straight on the resume controls.
+      // **Nothing here routes anybody *to* enrolment.** Enrolment is opt-in
+      // (issue #673): local-only is a supported steady state, so a signed-in,
+      // un-enrolled device runs the app like any other and reaches the ceremony
+      // only by navigating there itself — from Settings, or from the
+      // first-launch card. The router used to pin every location to
+      // `/enrolment`, which on a device with no network was a trap with no way
+      // back to the user's own data.
+      //
+      // What remains is the negative half: keeping the ceremony out of reach of
+      // the two sessions it cannot mean anything for. Bouncing *off* a route is
+      // not routing *to* one.
       switch ((gate ?? sessionGateNotifier).value) {
         case SessionGate.checking:
-          // Nothing is known yet; guessing would flash onboarding at an
-          // enrolled device.
+        case SessionGate.signedInNotEnrolled:
+          // Restore has not answered, or it has and the answer changes nothing
+          // about where the user may be.
           return null;
-        case SessionGate.needsEnrolment:
-          return state.matchedLocation == EnrolmentCeremonyScreen.routePath
-              ? null
-              : EnrolmentCeremonyScreen.routePath;
         case SessionGate.signedOut:
         case SessionGate.ready:
-          // The screen has no reason to exist for either: a signed-out device
-          // has no account to enrol against, and an enrolled one is done.
+          // The screen has nothing to say to either: a signed-out device has no
+          // account to enrol against, and an enrolled one is done — which is
+          // also how a completed ceremony hands the user back to the app.
           return state.matchedLocation == EnrolmentCeremonyScreen.routePath
               ? '/inbox'
               : null;
@@ -78,9 +83,9 @@ final GoRouterRedirect appRouterRedirect = buildAppRouterRedirect();
 final appRouter = GoRouter(
   initialLocation: '/inbox',
   redirect: appRouterRedirect,
-  // Without this the gate would only be consulted on the next navigation, so a
-  // sign-in from Settings would leave the user sitting on Settings with
-  // onboarding unfinished.
+  // Kept for the one move the gate still makes: a completed ceremony has to
+  // hand the user back to the app, and without this the bounce would wait for
+  // the next navigation.
   refreshListenable: sessionGateNotifier,
   routes: [
     GoRoute(
@@ -114,8 +119,9 @@ final appRouter = GoRouter(
       path: SyncHealthScreen.routePath,
       builder: (context, state) => const SyncHealthScreen(),
     ),
-    // Onboarding, not a settings page: a signed-in device that is not enrolled
-    // is routed here and cannot leave until it is (or signs out).
+    // Outside the shell, like /settings: a ceremony rather than a place in the
+    // app. Nothing routes here — Settings and the first-launch card push it, on
+    // purpose, and the user can back out of it at any point.
     GoRoute(
       path: EnrolmentCeremonyScreen.routePath,
       builder: (context, state) => const EnrolmentCeremonyScreen(),

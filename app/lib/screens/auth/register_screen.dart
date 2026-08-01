@@ -40,9 +40,10 @@ class _RegisterScreenState extends ConsumerState<RegisterScreen> {
             _passwordController.text,
           );
       if (!mounted) return;
-      // Never a pop back to the caller: a brand-new account is by definition
-      // un-enrolled, and the router's session gate takes it to onboarding from
-      // here.
+      // Never a pop back to the caller: a finished sign-up must not leave the
+      // screen that pushed this one sitting underneath it. Into the app, not a
+      // ceremony — a brand-new account is by definition un-enrolled, and #673
+      // makes that a place to work from rather than a queue to be marched into.
       context.go('/inbox');
     } on DioException catch (e) {
       if (!mounted) return;

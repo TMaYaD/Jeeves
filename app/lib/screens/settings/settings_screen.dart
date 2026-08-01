@@ -14,16 +14,22 @@ import '../../providers/periodic_review_provider.dart';
 import '../../providers/periodic_review_settings_provider.dart';
 import '../../providers/shutdown_settings_provider.dart';
 import '../../widgets/app_title_bar/app_title_bar.dart';
+import '../enrolment/enrolment_ceremony_screen.dart';
 import '../../widgets/capture/capture_action.dart';
 import '../../widgets/jeeves_logo.dart';
 
 /// Settings.
 ///
-/// The SYNC section has exactly **two** states — an offer to sign in, or a way
-/// to sign out — and says nothing about how sync is going. Sync *state* is the
-/// drawer indicator's job (`app_shell.dart`, derived from the op-log spine's
-/// `SyncHealth`): a second presentation here was where the untruth lived, a
-/// "Sync active" subtitle that a device syncing nothing still showed.
+/// The SYNC section offers the one thing there is to do next — sign in, set this
+/// device up for sync, or sign out — and says nothing about how sync is *going*.
+/// Sync state is the drawer indicator's job (`app_shell.dart`, derived from the
+/// op-log spine's `SyncHealth`): a second presentation here was where the
+/// untruth lived, a "Sync active" subtitle that a device syncing nothing still
+/// showed.
+///
+/// **This screen is where enrolment is found.** Nothing routes a signed-in,
+/// un-enrolled device into the ceremony (issue #673), so the tile below is the
+/// difference between opt-in and unreachable.
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
 
@@ -41,7 +47,7 @@ class SettingsScreen extends ConsumerWidget {
           // `checking` shows the signed-out offer: it is the honest thing to say
           // while restore is in flight, and the tile is an offer rather than a
           // claim about the account.
-          final isAuthenticated = gate == SessionGate.needsEnrolment ||
+          final isAuthenticated = gate == SessionGate.signedInNotEnrolled ||
               gate == SessionGate.ready;
           return ListView(
         children: [
@@ -65,6 +71,29 @@ class SettingsScreen extends ConsumerWidget {
               onTap: () => context.push('/login'),
             ),
           ] else ...[
+            // The only door into the enrolment ceremony. `push`, not `go`: the
+            // user is choosing to look at it and must be able to back out with
+            // the app bar's own arrow.
+            if (gate == SessionGate.signedInNotEnrolled)
+              ListTile(
+                key: const Key('enrolment_ceremony_tile'),
+                leading: const Icon(Icons.cloud_sync_outlined,
+                    color: Color(0xFF2563EB)),
+                title: const Text(
+                  'Set up sync on this device',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w500,
+                    color: Color(0xFF2563EB),
+                  ),
+                ),
+                subtitle: const Text(
+                  'Enrol this device with a recovery passphrase. Until you do, '
+                  'everything stays here.',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+                ),
+                onTap: () =>
+                    context.push(EnrolmentCeremonyScreen.routePath),
+              ),
             ListTile(
               key: const Key('sign_out_tile'),
               leading: const Icon(Icons.logout, color: Color(0xFF9CA3AF)),

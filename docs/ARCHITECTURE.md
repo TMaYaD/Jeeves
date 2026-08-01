@@ -62,15 +62,24 @@ The domain read model lives in `jeeves_domain.sqlite`, a file **Drift owns outri
 every application-visible name is a real table Drift created, `schemaVersion` is 1 with
 `onCreate: createAll()`, and the next schema change is an ordinary `onUpgrade` step.
 
-It is a *new* file. The previous store, `jeeves.sqlite`, was owned by a replication engine
-that served those names as views over its own internal tables, which is why the Drift
-schema had grown a 28-step ladder made mostly of `sqlite_master` guards. The store is cut
-over by creation rather than conversion, and the old file is deleted on the first open —
-and idempotently on every launch after ([ADR-0035](./adr/0035-domain-store-cut-over-by-fresh-file.md)).
+It is a *new* file. The name `jeeves.sqlite` belonged to a replication engine that is no
+longer a dependency and that served those names as views over its own internal tables,
+which is why the Drift schema had grown a 28-step ladder made mostly of `sqlite_master`
+guards. The store is created rather than converted
+([ADR-0035](./adr/0035-domain-store-cut-over-by-fresh-file.md)).
+
+The open path also unlinks that dead name and its `-wal`/`-shm` sidecars, on every launch.
+That is **housekeeping, not a decision**: `removeDeadStoreFile` reads nothing about the
+device — not enrolment, not the op log, not the file — and the open returns the same thing
+whether it removed three files or none. Nothing downstream may assume it happened. The
+argument that makes it safe is about the build, not the caller: no code here can open that
+file, so nothing can depend on it. It must not grow a condition; the moment its behaviour
+turns on something about the device it is a migration and belongs somewhere it can be
+reasoned about (#673).
 
 | Piece | File | Role |
 |---|---|---|
-| Open path | `app/lib/database/domain_store_io.dart` (+ `_stub`) | Resolves the documents directory, opens the file over `sqlite_async`, reports whether the op log still owes it a replay, and disposes of the legacy store. |
+| Open path | `app/lib/database/domain_store_io.dart` (+ `_stub`) | Resolves the documents directory, opens the file over `sqlite_async`, reports whether the op log still owes it a replay, and sweeps the dead file name. |
 | Providers | `app/lib/providers/database_provider.dart` | `domainStoreProvider` (the opened file), `databaseProvider` (the Drift `GtdDatabase` over it, wrapped in `DatabaseConnection.delayed` so queries issued before the open resolves are queued), `domainStoreRebuildProvider` (the replay, plus the marker write and the failure log). |
 | Replay | `app/lib/sync/domain_rebuild.dart` | Projects everything the local op log has reduced into a store that has not been projected into yet, through the same `DomainProjector` a pull batch uses. Idempotent, tombstones included. |
 
@@ -262,9 +271,9 @@ export '*_stub.dart'
 
 #### `app/lib/database/domain_store.dart`
 
-Opens the domain store, and disposes of the legacy one (ADR-0035).
+Opens the domain store (ADR-0035).
 
-- **Native (`domain_store_io.dart`):** resolves the documents directory via `path_provider`, opens `jeeves_domain.sqlite` over `sqlite_async`, reports whether the open created the file, and deletes `jeeves.sqlite` plus its `-wal`/`-shm` sidecars. Shared by Android, iOS, macOS, Linux and Windows — a platform gaining divergent behaviour (an encryption key out of the Keychain, say) should split its own adapter rather than branching inside this one.
+- **Native (`domain_store_io.dart`):** resolves the documents directory via `path_provider`, opens `jeeves_domain.sqlite` over `sqlite_async`, reports whether the open created the file, and unconditionally unlinks the dead `jeeves.sqlite` name plus its `-wal`/`-shm` sidecars. Shared by Android, iOS, macOS, Linux and Windows — a platform gaining divergent behaviour (an encryption key out of the Keychain, say) should split its own adapter rather than branching inside this one.
 - **Web (`domain_store_stub.dart`):** throws `UnsupportedError`. Not a gap: the fleet is one Android phone, and a browser adapter would be an untested claim rather than a capability.
 
 #### `app/lib/sync/sync_store.dart`
@@ -287,7 +296,9 @@ Focus Mode is the task execution layer activated after daily planning. Its archi
 
 `/focus/active` is a top-level `GoRoute` registered **outside** the `ShellRoute`, so `AppShell` (drawer, navigation) is not rendered. The user sees only the active task. `/focus` (the daily plan list) remains inside the `ShellRoute`.
 
-The router has a `redirect` callback only for SWS mode (redirect `/register` to `/login`). `/focus` is unconditionally accessible from the drawer (entry labelled "Now" — the execution home's user-facing title; internal identifiers stay Focus, see CONTEXT.md); daily planning is entered explicitly via the "Plan the Day" button on the Focus screen or the amber `FocusSessionPlanningBanner` in `AppShell`. `/focus/active` is reached from the execution home's Start buttons and from the task detail screen's "Start focus" affordance, which engages the task with or without an open session (see `FocusModeNotifier`).
+The router's `redirect` callback does two things, and **neither of them sends the user anywhere they did not ask to go**. It bounces `/register` to `/login` in SWS mode (the wallet is the identity, so there is no email signup), and it bounces `/enrolment` back to `/inbox` for the two sessions the ceremony cannot mean anything for — signed out (no account to enrol against) and enrolled (already done, which is also how finishing the ceremony hands the user back to the app). A signed-in, un-enrolled device is redirected nowhere: enrolment is opt-in, reached from Settings, and the app is fully usable without it (#673). `refreshListenable: sessionGateNotifier` exists for the completed-ceremony bounce, so it does not wait for the next navigation.
+
+`/focus` is unconditionally accessible from the drawer (entry labelled "Now" — the execution home's user-facing title; internal identifiers stay Focus, see CONTEXT.md); daily planning is entered explicitly via the "Plan the Day" button on the Focus screen or the amber `FocusSessionPlanningBanner` in `AppShell`. `/focus/active` is reached from the execution home's Start buttons and from the task detail screen's "Start focus" affordance, which engages the task with or without an open session (see `FocusModeNotifier`).
 
 ### Top-level routes outside the ShellRoute
 
@@ -484,15 +495,17 @@ The verdict comes from `AuthService.refreshSession()`, which returns a sealed `S
 
 | Situation | Credentials | `currentUserIdProvider` | `SessionGate` | Capture seam |
 |---|---|---|---|---|
-| Access token valid | retained | account | `ready` / `needsEnrolment` | bound |
+| Access token valid | retained | account | `ready` / `signedInNotEnrolled` | bound |
 | Expired token, refresh **401 + corroboration** | **cleared** | `'local'` | `signedOut` | silent |
 | Expired token, **bare 401** (captive portal / proxy) | **retained** | account | `ready` | **bound** |
-| Expired token, server unreachable / 5xx / garbage | **retained** | account | `ready` / `needsEnrolment` | **bound** |
+| Expired token, server unreachable / 5xx / garbage | **retained** | account | `ready` / `signedInNotEnrolled` | **bound** |
 | Inconclusive, and no account id recoverable from the stored token | cleared | `'local'` | `signedOut` | silent |
 | No credentials stored | cleared (no-op) | `'local'` | `signedOut` | silent |
 | User taps **Sign out**, offline | **cleared** | `'local'` | `signedOut` | silent |
 
 The stakes are two-sided and both are tested. Clearing credentials resets the user to `'local'`, which makes `syncStackProvider` refuse and `syncLifecycleProvider` settle the capture seam silent — so on a device whose initial-upload marker is set, an over-eager clear drops the whole session's writes with nothing left to re-carry them. Retaining them too readily would leave a genuinely revoked device signed in. `test/sync/offline_relaunch_session_test.dart` holds both ends end-to-end; `test/providers/auth_notifier_restore_test.dart` holds the branch table at the session layer.
+
+**`SessionGate` reports; it does not route.** `_enrolmentGate()` reads this device's own store with no network, and `signedInNotEnrolled` decides what Settings offers rather than where the user is (#673). It **fails open to `ready`** when the stack cannot be read — which is why every `SessionUnverified` case in `auth_notifier_restore_test.dart` reports `ready` regardless of enrolment, and why the un-enrolled combination is covered in `offline_relaunch_session_test.dart` instead, over a stack that assembles for real.
 
 `SessionUnverified` returns the **expired** access token rather than null, so `authTokenProvider`'s value matches the `Authorization` header `AuthService.getToken()` has already set. Nothing reads that value for an authorisation decision, and keeping the two consistent means the first request once the network returns 401s into `_AuthRetryInterceptor` and the session self-heals.
 

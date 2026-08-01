@@ -154,23 +154,27 @@ class AuthNotifier extends AsyncNotifier<String?> {
     sessionGateNotifier.value = SessionGate.signedOut;
   }
 
-  /// Where a signed-in device belongs: the app, or onboarding.
+  /// Whether this signed-in device is enrolled, as a [SessionGate].
   ///
   /// Read from this device's own store, with **no network** — a device that has
   /// never enrolled holds no member credential to ask with, and the answer has
   /// to be the same offline.
   ///
+  /// **The answer routes nobody.** It decides what Settings offers, not where
+  /// the user is; a device that reads [SessionGate.signedInNotEnrolled] runs the
+  /// app exactly as an enrolled one does, minus the sync (issue #673).
+  ///
   /// **Fails open to [SessionGate.ready].** A store that cannot be read is a bug
-  /// to fix, not a reason to lock somebody out of an app that works offline; the
-  /// worst case is a device that is not syncing and does not say so on this
-  /// surface, which the drawer indicator still reports honestly.
+  /// to fix, not a reason to change what the app offers; the worst case is a
+  /// device that is not syncing and does not say so on this surface, which the
+  /// drawer indicator still reports honestly.
   Future<SessionGate> _enrolmentGate() async {
     try {
       final stack = await ref.read(syncStackProvider.future);
       return (await stack.readEnrolmentStatus()).state ==
               EnrolmentState.enrolled
           ? SessionGate.ready
-          : SessionGate.needsEnrolment;
+          : SessionGate.signedInNotEnrolled;
     } catch (_) {
       return SessionGate.ready;
     }

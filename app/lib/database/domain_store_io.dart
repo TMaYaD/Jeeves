@@ -5,9 +5,9 @@
 // available. All dart:io and path_provider usage is confined here so the rest of
 // the codebase compiles on web.
 //
-// This file is where the store cutover happens (ADR-0035): it opens a file Drift
-// owns outright, reports whether it had to create it, and deletes the
-// PowerSync-era store it replaces.
+// It opens a file Drift owns outright (ADR-0035) and reports whether it had to
+// create it. It also sweeps up one dead file name on the way past — see
+// [removeDeadStoreFile], which is housekeeping and not a decision.
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
@@ -18,15 +18,13 @@ import 'package:sqlite_async/sqlite_async.dart';
 /// writes it.
 const String domainStoreFileName = 'jeeves_domain.sqlite';
 
-/// The PowerSync-era store this replaces, deleted on the first open of the new
-/// one.
+/// A file name nothing in this build writes, reads, or can open.
 ///
-/// Not converted, and not kept: its application-visible names were *views* over
-/// PowerSync's internal `ps_data__*` tables, so nothing in it can be read by a
-/// Drift-owned schema without the engine that installed the views — and keeping
-/// the engine on to read it once is the branching the pivot exists to remove.
-/// The local op log, which lives in its own file, is the recovery path.
-const String legacyPowerSyncStoreFileName = 'jeeves.sqlite';
+/// It belonged to a replication engine that is no longer a dependency, and its
+/// contents were views over that engine's own internal tables — so no code here
+/// could read it even if it wanted to. Nothing depends on these bytes, which is
+/// the whole of the argument for deleting them; see [removeDeadStoreFile].
+const String deadStoreFileName = 'jeeves.sqlite';
 
 /// The marker that records a *completed* op-log replay into the domain store.
 ///
@@ -64,7 +62,7 @@ class DomainStoreImpl {
 /// The whole of the open path, over an explicit [directoryPath].
 ///
 /// Split out from [DomainStoreImpl.openDatabase] so the behaviour that matters —
-/// the replay gate and the legacy file's disposal — is testable against a temp
+/// the replay gate, and the housekeeping sweep — is testable against a temp
 /// directory instead of only on a device.
 Future<DomainStoreOpening> openDomainStoreIn(String directoryPath) async {
   final file = File(p.join(directoryPath, domainStoreFileName));
@@ -88,7 +86,10 @@ Future<DomainStoreOpening> openDomainStoreIn(String directoryPath) async {
   final database = SqliteDatabase(path: file.path);
   await database.initialize();
 
-  deleteLegacyPowerSyncStore(directoryPath);
+  // Housekeeping, deliberately after the open and deliberately ignored: the
+  // return value below is identical whether this removed anything, failed, or
+  // found nothing. Nothing downstream may treat it as having happened.
+  removeDeadStoreFile(directoryPath);
 
   return (
     database: database,
@@ -100,15 +101,26 @@ Future<DomainStoreOpening> openDomainStoreIn(String directoryPath) async {
   );
 }
 
-/// Delete the PowerSync-era store and its SQLite sidecars.
+/// Unlink [deadStoreFileName] and its SQLite sidecars, if they are there.
 ///
-/// Idempotent: absence is a no-op, so it is safe on every launch and there is no
-/// "have I done this yet" flag to get wrong. Best-effort per file — a store that
-/// could not be deleted is wasted disk, not a broken app, and the next launch
-/// tries again.
-void deleteLegacyPowerSyncStore(String directoryPath) {
+/// **Housekeeping, not a decision.** It reads nothing and asks nothing — not the
+/// enrolment state, not the op log, not the file's contents — and the caller
+/// proceeds identically whether it removed three files, one, or none. It has no
+/// arms, and it must not grow any: the moment this function's behaviour depends
+/// on something about the device, it is a migration wearing a sweep's clothes
+/// and belongs somewhere it can be reasoned about.
+///
+/// The claim that makes it safe is a claim about the *build*, not the caller: no
+/// code in this app can open that file, so nothing can be depending on it. That
+/// is unconditional. An earlier version of this argued the deletion was
+/// recoverable because the op log could be replayed — which was true only for a
+/// device that had one, and false for exactly the device it cost.
+///
+/// Idempotent, and best-effort per file: absence is a no-op, and a file that
+/// cannot be unlinked is wasted disk rather than a broken app.
+void removeDeadStoreFile(String directoryPath) {
   for (final suffix in const ['', '-wal', '-shm']) {
-    final file = File(p.join(directoryPath, '$legacyPowerSyncStoreFileName$suffix'));
+    final file = File(p.join(directoryPath, '$deadStoreFileName$suffix'));
     if (!file.existsSync()) continue;
     try {
       file.deleteSync();

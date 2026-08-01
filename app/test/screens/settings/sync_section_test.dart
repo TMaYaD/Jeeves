@@ -1,12 +1,17 @@
 /// The Settings SYNC section, and what Settings must *not* say about sync
-/// (issue #595, AC-3).
+/// (issues #595 AC-3, #673).
 ///
-/// Two states and nothing else: an offer to sign in, or a way to sign out. The
-/// section used to carry a second presentation of sync *state* — a "Sync
-/// enabled" tile whose `default:` subtitle read "Sync active" — which is
+/// Three states, one per thing the user can do next: sign in, set this device
+/// up for sync, or sign out. It still says nothing about how sync is *going* —
+/// the section used to carry a second presentation of sync state, a "Sync
+/// enabled" tile whose `default:` subtitle read "Sync active", which is
 /// precisely the untruth the user reported on a device that was syncing nothing.
-/// Sync state now has exactly one home, the drawer indicator in `app_shell.dart`
+/// Sync state has exactly one home, the drawer indicator in `app_shell.dart`
 /// derived from the op-log spine.
+///
+/// The enrolment tile is the load-bearing one (#673): now that nothing routes a
+/// signed-in, un-enrolled device into the ceremony, this is where the user finds
+/// it. Without it, enrolment would be unreachable rather than opt-in.
 ///
 /// The CUTOVER TOOLING section is asserted absent by name and by tile key: it was
 /// operator tooling for the #553 cutover and there is no debug gate keeping a
@@ -95,13 +100,14 @@ void main() {
 
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
-  group('Settings — SYNC has two states', () {
+  group('Settings — SYNC offers the one thing to do next', () {
     testWidgets('signed out: an offer to sign in, and no sign-out',
         (tester) async {
       await _pumpSettings(tester, SessionGate.signedOut);
 
       expect(find.byKey(const Key('sign_in_to_sync_tile')), findsOneWidget);
       expect(find.byKey(const Key('sign_out_tile')), findsNothing);
+      expect(find.byKey(const Key('enrolment_ceremony_tile')), findsNothing);
     });
 
     testWidgets('checking shows the offer rather than claiming a session',
@@ -112,9 +118,10 @@ void main() {
 
       expect(find.byKey(const Key('sign_in_to_sync_tile')), findsOneWidget);
       expect(find.byKey(const Key('sign_out_tile')), findsNothing);
+      expect(find.byKey(const Key('enrolment_ceremony_tile')), findsNothing);
     });
 
-    for (final gate in [SessionGate.needsEnrolment, SessionGate.ready]) {
+    for (final gate in [SessionGate.signedInNotEnrolled, SessionGate.ready]) {
       testWidgets('${gate.name}: a way to sign out, and no sign-in offer',
           (tester) async {
         await _pumpSettings(tester, gate);
@@ -123,6 +130,21 @@ void main() {
         expect(find.byKey(const Key('sign_in_to_sync_tile')), findsNothing);
       });
     }
+
+    testWidgets('signed in but not enrolled: the way into the ceremony',
+        (tester) async {
+      // #673. Nothing routes this device into enrolment any more, so if the
+      // tile is not here the ceremony is unreachable and sync can never start.
+      await _pumpSettings(tester, SessionGate.signedInNotEnrolled);
+
+      expect(find.byKey(const Key('enrolment_ceremony_tile')), findsOneWidget);
+    });
+
+    testWidgets('enrolled: nothing left to set up', (tester) async {
+      await _pumpSettings(tester, SessionGate.ready);
+
+      expect(find.byKey(const Key('enrolment_ceremony_tile')), findsNothing);
+    });
 
     testWidgets('no legacy sync-state presentation, in any state',
         (tester) async {
@@ -138,15 +160,12 @@ void main() {
   });
 
   group('Settings — no cutover tooling', () {
-    testWidgets('the section and all three tiles are gone', (tester) async {
+    testWidgets('the section and both tiles are gone', (tester) async {
       await _pumpSettings(tester, SessionGate.ready);
 
       expect(find.text('CUTOVER TOOLING'), findsNothing);
       expect(find.byKey(const Key('converge_verify_tile')), findsNothing);
       expect(find.byKey(const Key('reseed_tile')), findsNothing);
-      // The ceremony is onboarding now, reached by the router, not a settings
-      // entry the user has to know to find.
-      expect(find.byKey(const Key('enrolment_ceremony_tile')), findsNothing);
     });
   });
 }
