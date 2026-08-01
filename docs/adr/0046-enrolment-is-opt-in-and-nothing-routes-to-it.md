@@ -18,9 +18,10 @@ could not get back to their data: the ceremony needs the network to found or joi
 there was none. The only control on the screen was **Sign out**.
 
 The underlying problem was the premise. The combination the trap needed — an unverified
-session over a store that genuinely reports "not enrolled" — was never exercised anywhere.
-The arm was untested, not merely wrong, and it shipped because the state it turned on was
-one nothing could produce.
+session over a store that genuinely reports "not enrolled" — was never exercised by any
+test. The arm was untested rather than merely wrong, and it shipped because **the old tests
+could not produce this state**, not because nothing could: production reached it on the
+first try, by the offline relaunch described above.
 
 ## Decision
 
@@ -32,9 +33,10 @@ signing up both land in the app whatever the store says.
 The ceremony is reachable from two places, both pushed so backing out is real: the SYNC
 section of Settings ("Set up sync on this device"), and the first-launch card's "Sign in
 to sync", which leads to sign-in and from there to registration. The router's only
-remaining move is negative — bouncing `/enrolment` back to `/inbox` for a signed-out
-device (no account to enrol against) and an enrolled one (nothing left to do, which is
-also how a completed ceremony hands the user back to the app).
+remaining move concerning the ceremony is negative — bouncing `/enrolment` back to `/inbox`
+for a signed-out device (no account to enrol against) and an enrolled one (nothing left to
+do, which is also how a completed ceremony hands the user back to the app). It keeps one
+other redirect, unrelated to enrolment: `/register` to `/login` in SWS mode.
 
 The alternative we rejected is routing into the ceremony from a *successful sign-in*, on
 the argument that the user asked for sync. It reads as a continuation of their action, and
@@ -55,10 +57,14 @@ nothing routing the user in, an entry point that is missing or hidden does not m
 enrolment awkward, it makes sync impossible. Discoverability stops being a courtesy and
 becomes the mechanism, for as long as this decision stands.
 
-Reading enrolment can fail — the store may not be readable when the question is asked — and
-the answer on failure has to be one that sends nobody anywhere. That is now a safe default
-rather than a dangerous one, which is the second reason this decision is worth having: under
-the old redirect, an unreadable store was one bad guess away from stranding a device.
+Reading enrolment can fail — the store may not be readable when the question is asked — so
+the guarantee the failure default has to carry is narrow and exact: **when the stack or the
+enrolment store cannot be read, a signed-in device must not be routed into `/enrolment`.**
+Not "goes nowhere": the read fails open to `ready`, under which the router still bounces an
+already-open `/enrolment` to `/inbox`. That is a bounce *off* the ceremony, which is the
+direction this decision cares about. The default is now safe rather than dangerous, and
+that is the second reason the decision is worth having: under the old redirect an unreadable
+store was one bad guess away from stranding a device in a ceremony it could not complete.
 
 See `docs/ARCHITECTURE.md` for where the states are produced and read, and
 `docs/TESTING.md` for the coverage that holds them.
