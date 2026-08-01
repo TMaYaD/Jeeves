@@ -1,8 +1,6 @@
-# 44. Container images pin the exact version *and* the digest
+# 0045 — Container images pin the exact version *and* the digest
 
-## Status
-
-Accepted
+**Status:** accepted (2026-08-01)
 
 ## Context
 
