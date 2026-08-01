@@ -157,6 +157,34 @@ if git diff --cached --name-only | grep -q "^app/"; then
 
     export PATH="$flutter_bin_dir:$PATH"
 
+    # Clear git's repo-local environment variables for the WHOLE Flutter
+    # section, before any flutter/dart invocation below.
+    #
+    # When `git commit` runs this hook from a linked worktree, git exports
+    # GIT_DIR/GIT_INDEX_FILE/GIT_PREFIX (and friends) into the hook's own
+    # environment, pointing at the committing worktree's git-dir. Every child
+    # process inherits them, and git's repo resolution prefers an explicit
+    # GIT_DIR over cwd-based discovery — so a `cd` cannot escape them.
+    #
+    # Both SDK launchers resolve their own identity through git. `flutter`
+    # derives the revision it stamps into bin/cache/flutter.version.json from
+    # the git repo it resolves; `dart` (bin/internal/shared.sh) validates its
+    # tool cache against `git -C "$FLUTTER_ROOT" rev-parse HEAD` and, when that
+    # answers with a foreign revision, deletes bin/cache/flutter.version.json
+    # and never rewrites it. FLUTTER_ROOT is the *shared* SDK, so one commit
+    # from one worktree breaks `dart pub` for every other worker on the
+    # machine (#594, #644).
+    #
+    # Clearing once here — rather than per invocation — is deliberate: it makes
+    # every tool call below clean by construction instead of only the ones we
+    # remembered to wrap. The corollary is load-bearing for future edits:
+    # ANY NEW `git` INVOCATION IN THIS SECTION MUST GO ABOVE THE UNSET BELOW.
+    local_git_env_vars=$(git rev-parse --local-env-vars)
+    # Word-splitting is intentional: local_git_env_vars is a newline-separated
+    # list of variable names to unset.
+    # shellcheck disable=SC2086
+    unset $local_git_env_vars
+
     # Self-heal the Flutter version file before invoking dart. pub locates the
     # SDK via bin/cache/flutter.version.json, but the SDK wrapper deletes that
     # file on a stale tool-cache check and only a `flutter` invocation rewrites
@@ -168,24 +196,11 @@ if git diff --cached --name-only | grep -q "^app/"; then
     # derives the identity it stamps into bin/cache/flutter.version.json from
     # the git repo of its cwd. From app/ that repo is Jeeves itself, and
     # flutter will happily write Jeeves's revision into the shared SDK's
-    # cache — corrupting it for every other worker on the machine (#594).
-    #
-    # The cd alone isn't enough when this hook was invoked by `git commit`
-    # from a linked worktree: git sets GIT_DIR/GIT_INDEX_FILE (and friends)
-    # in the hook's own environment, pointing at the worktree's git-dir, and
-    # those are inherited by the subshell regardless of cwd. Git's repo
-    # resolution prefers an explicit GIT_DIR over cwd-based discovery, so
-    # flutter's internal git calls would still resolve to Jeeves — silently
-    # reproducing the exact corruption the cd above is meant to prevent.
-    # Clear them first, per git's own local-env-vars idiom.
+    # cache — corrupting it for every other worker on the machine (#594). The
+    # subshell exists solely to contain that cd.
     flutter_sdk_root=$(cd "$flutter_bin_dir/.." && pwd -P 2>/dev/null)
     if [ -n "$flutter_sdk_root" ]; then
-        local_git_env_vars=$(git rev-parse --local-env-vars)
         (
-            # Word-splitting is intentional: local_git_env_vars is a
-            # newline-separated list of variable names to unset.
-            # shellcheck disable=SC2086
-            unset $local_git_env_vars
             cd "$flutter_sdk_root" && flutter --version >/dev/null 2>&1
         )
     fi
