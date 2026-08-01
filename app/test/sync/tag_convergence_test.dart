@@ -89,18 +89,61 @@ void main() {
     }
   }
 
-  /// Sync [order] repeatedly until nothing more moves.
+  /// Everything that can still move, per device - the fixpoint [settle] watches.
   ///
-  /// Three rounds rather than [SimWorkspace.syncAll]'s two, because the fold is a
-  /// *write*: its ops are authored at the pull tail and therefore only leave the
-  /// device on a later push. The explicit device order is what makes "both arrival
-  /// orders" expressible.
-  Future<void> settle(List<SimDevice> order, {int rounds = 3}) async {
-    for (var round = 0; round < rounds; round++) {
+  /// Reduced state, **and** the log and outbox depths. Reduced state alone is
+  /// not enough, and the gap is not academic: an op can be delivered and *lose*
+  /// its LWW race, growing the receiver's log while leaving its reduced state
+  /// byte-identical. Three devices each authoring the same deterministic rehome
+  /// do precisely that, so a reduced-state-only fingerprint reports a fixpoint a
+  /// round or two before the ops have finished propagating - and the read models
+  /// already agree by then, which is what makes the miss so quiet.
+  ///
+  /// Both depths only grow or drain, and authoring stops once the convergence
+  /// passes find nothing, so the loop terminates.
+  Future<String> convergenceFingerprint(List<SimDevice> devices) async {
+    final parts = <String>[];
+    for (final device in devices) {
+      final depths = await device.database
+          .customSelect('SELECT (SELECT COUNT(*) FROM op_log) AS ops, '
+              '(SELECT COUNT(*) FROM outbox WHERE sent_at IS NULL) AS unsent')
+          .getSingle();
+      parts.add('${device.label}='
+          '${depths.read<int>('ops')}ops/'
+          '${depths.read<int>('unsent')}unsent/'
+          '${await canonicalReducedState(device.database)}');
+    }
+    return parts.join('|');
+  }
+
+  /// Sync [order] repeatedly until a whole round changes nothing anywhere.
+  ///
+  /// A real fixpoint, not a round count that is assumed to be enough. The fold is
+  /// a *write*: its ops are authored at a pull tail, so they only leave the device
+  /// on a later push, and how many rounds that takes depends on the arrival order
+  /// each test is staging — which is the thing under test rather than a constant
+  /// to hard-code. Stopping short would let a test assert cross-device equality
+  /// over a state both devices were still part-way through, and pass.
+  ///
+  /// The explicit device order is preserved, because it is what makes "both
+  /// arrival orders" expressible.
+  ///
+  /// [maxRounds] is a safety limit rather than a target: reaching it means the
+  /// passes are not converging, which is a failure to report and not a longer
+  /// wait to endure.
+  Future<void> settle(List<SimDevice> order, {int maxRounds = 12}) async {
+    var before = await convergenceFingerprint(order);
+    for (var round = 1; round <= maxRounds; round++) {
       for (final device in order) {
         await device.syncIfOnline();
       }
+      final after = await convergenceFingerprint(order);
+      if (after == before) return;
+      before = after;
     }
+    fail('sync did not reach a fixpoint in $maxRounds rounds over '
+        '${order.map((device) => device.label).join(", ")} — the convergence '
+        'passes are still authoring, which is the failure this bound is for');
   }
 
   Future<String> outcomeOn(SimDevice device, String label) async {
@@ -288,6 +331,19 @@ void main() {
         final outcomeA = await outcomeOn(scenario.a, 'order-outcome-a');
         await tagWithId(scenario.a, ids.last);
         await scenario.a.domain.tagDao.assignTag(outcomeA, ids.last, _userId);
+        // A tag hint on the *loser*, so `capture_tags` carries a row the fold has
+        // to repoint. Without it the cross-run comparison of that table would be
+        // `[] == []` — a column of the claim that is true of any two runs at all.
+        final captureA = _id('order-capture-a');
+        await scenario.a.domain.captureDao.insertCapture(CapturesCompanion(
+          id: Value(captureA),
+          title: const Value('ring Alice back'),
+          captureSource: const Value('voice'),
+          userId: const Value(_userId),
+          createdAt: Value(scenario.a.clock.asDateTime),
+        ));
+        await scenario.a.domain.captureDao
+            .assignTagHint(captureA, ids.last, _userId);
         final outcomeB = await outcomeOn(scenario.b, 'order-outcome-b');
         await tagWithId(scenario.b, ids.first);
         await scenario.b.domain.tagDao.assignTag(outcomeB, ids.first, _userId);
@@ -296,13 +352,24 @@ void main() {
         await settle(aPullsFirst
             ? [scenario.a, scenario.b]
             : [scenario.b, scenario.a]);
-        await expectConverged([scenario.a, scenario.b], 'tags');
 
-        return {
-          'tags': await domainRows(scenario.a.domain, 'tags'),
-          'todo_tags': await domainRows(scenario.a.domain, 'todo_tags'),
-          'capture_tags': await domainRows(scenario.a.domain, 'capture_tags'),
+        // Every table through `expectConverged`, which asserts the two devices
+        // agree *and* hands back the rows they agree on. Reading them off
+        // `scenario.a` instead would have let this run pass while `scenario.b`
+        // diverged — the run-to-run comparison below only ever saw one peer.
+        final rows = {
+          'tags': await expectConverged([scenario.a, scenario.b], 'tags'),
+          'todo_tags':
+              await expectConverged([scenario.a, scenario.b], 'todo_tags'),
+          'capture_tags':
+              await expectConverged([scenario.a, scenario.b], 'capture_tags'),
         };
+        expect(rows['capture_tags'], hasLength(1),
+            reason: 'the hint fixture has to survive for its comparison to say '
+                'anything');
+        expect(rows['capture_tags']!.single['tag_id'], ids.first,
+            reason: 'the hint follows the fold onto MIN(id)');
+        return rows;
       }
 
       final aFirst = await run(true);
@@ -429,7 +496,7 @@ void main() {
       // Stage 2: C arrives with X. B and C converge without ever seeing A's fold,
       // so they fold the whole visible group — {X, Y, Z} — onto X, and tombstone Y.
       c.goOnline();
-      await settle([b, c], rounds: 3);
+      await settle([b, c]);
       expect((await personTags(b)).map((row) => row['id']), [x]);
 
       // Stage 3: A rejoins and finally pushes. Its junction-on-Y assertion lands on
@@ -438,7 +505,7 @@ void main() {
       // COUNT = 1, so the fold pass is blind to it. Only the rehome pass recovers
       // this assignment.
       a.goOnline();
-      await settle([a, b, c], rounds: 4);
+      await settle([a, b, c]);
 
       final tags = await expectConverged([a, b, c], 'tags');
       expect(tags.where((row) => row['name'] == 'Alice').map((row) => row['id']),

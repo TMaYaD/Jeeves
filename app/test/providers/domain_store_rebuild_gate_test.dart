@@ -115,10 +115,25 @@ void main() {
   }
 
   ProviderContainer containerOverDirectory() {
+    // `ref.onDispose` takes a `void` callback and `ProviderContainer.dispose()`
+    // is synchronous, so the close it starts is a discarded `Future` — and the
+    // directory teardown could unlink the file while it is still running. Hold
+    // it, and await it between the two.
+    //
+    // Registered *before* the dispose teardown so it runs *after* it: teardowns
+    // are last-registered-first, so dispose starts the close, this awaits it,
+    // and only then does the directory go. `??=` keeps it idempotent if the
+    // provider is ever disposed twice.
+    Future<void>? closingDomainStore;
+    addTearDown(() async {
+      await closingDomainStore;
+    });
     final container = ProviderContainer(overrides: [
       domainStoreProvider.overrideWith((ref) async {
         final opening = await openDomainStoreIn(directory.path);
-        ref.onDispose(opening.database.close);
+        ref.onDispose(
+          () => closingDomainStore ??= opening.database.close(),
+        );
         return opening;
       }),
       syncDatabaseProvider.overrideWith((ref) async => device.database),
