@@ -24,6 +24,7 @@ import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/sync/device_key_store.dart';
 import 'package:jeeves/sync/domain_op_capture.dart';
 import 'package:jeeves/sync/domain_projector.dart';
+import 'package:jeeves/sync/domain_reconciler.dart';
 import 'package:jeeves/sync/enrolment.dart';
 import 'package:jeeves/sync/hlc.dart';
 import 'package:jeeves/sync/ids.dart';
@@ -401,6 +402,7 @@ class SimDevice {
     required this.client,
     required this.link,
     required this.projector,
+    required this.reconciler,
     required this.keyStore,
     required this.workspaceKeys,
     required this.pendingRotations,
@@ -535,7 +537,11 @@ class SimDevice {
     final capture = WorkspaceRoutingOpCapture();
     final domain = GtdDatabase(NativeDatabase.memory(), opCapture: capture);
     final projector = DomainProjector(registry: registry, domain: domain);
+    // The reconciler rides alongside, on the same registry: its rehome pass reads
+    // the same reduced state the projector does.
+    final reconciler = DomainReconciler(registry: registry, domain: domain);
     client.projector = projector;
+    client.reconciler = reconciler;
 
     // One client per Workspace, over the *same* store, identity and transport.
     // A real device is exactly this: two Workspaces of one User, one set of keys,
@@ -560,7 +566,9 @@ class SimDevice {
             workspaceKeys: workspaceKeys,
             pullPageLimit: pullPageLimit,
             now: () => clock.asDateTime,
-          )..projector = projector,
+          )
+            ..projector = projector
+            ..reconciler = reconciler,
         );
 
     await capture.bind(
@@ -604,6 +612,7 @@ class SimDevice {
       client: client,
       link: link,
       projector: projector,
+      reconciler: reconciler,
       keyStore: keyStore,
       workspaceKeys: workspaceKeys,
       pendingRotations: pendingRotations,
@@ -635,6 +644,10 @@ class SimDevice {
   final SyncClient client;
   final DeviceLink link;
   final DomainProjector projector;
+
+  /// The convergence passes the pull tail drives — the Tag fold and the
+  /// dangling-junction rehome.
+  final DomainReconciler reconciler;
   final DeviceKeyStore keyStore;
 
   /// This device's `epoch -> K_{w,epoch}` map, per Workspace. A test asserts on it to
@@ -724,9 +737,9 @@ class SimDevice {
   /// own keys, via [SyncClient]'s constructor), so a re-pulled op it must verify
   /// has to be one this device itself authored — which every #618 crash case is.
   ///
-  /// The reopened client gets its own [DomainProjector], over a fresh
-  /// [CollectionRegistry] bound to [reopened] rather than the pre-crash
-  /// [database] the original `registry` closed over — [CollectionRegistry]
+  /// The reopened client gets its own [DomainProjector] and [DomainReconciler],
+  /// over a fresh [CollectionRegistry] bound to `reopened` rather than the
+  /// pre-crash [database] the original `registry` closed over — [CollectionRegistry]
   /// holds that binding as a `final` field, so the original instance cannot
   /// simply be reattached (it would read a closed connection). [domain] itself
   /// is untouched: it is memory-backed and independent of the sync store file,
@@ -740,6 +753,7 @@ class SimDevice {
     await _syncStore.close();
     final reopened = SyncDatabase(NativeDatabase(File('${directory.path}/sync.sqlite')));
     _syncStore = reopened;
+    final freshRegistry = CollectionRegistry(reopened);
     return SyncClient(
       workspaceId: client.workspaceId,
       userId: userId,
@@ -750,7 +764,9 @@ class SimDevice {
       transport: attachTransport ? link : null,
       workspaceKeys: workspaceKeys,
       now: () => clock.asDateTime,
-    )..projector = DomainProjector(registry: CollectionRegistry(reopened), domain: domain);
+    )
+      ..projector = DomainProjector(registry: freshRegistry, domain: domain)
+      ..reconciler = DomainReconciler(registry: freshRegistry, domain: domain);
   }
 
   /// The subscription lifecycle, on this device's deterministic hooks: the

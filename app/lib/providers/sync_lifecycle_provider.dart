@@ -1,8 +1,8 @@
 /// Starts syncing: the one provider that turns an enrolled store into a syncing
 /// device.
 ///
-/// Eagerly watched from `main.dart`, like [postSyncHooksProvider], because a lazy
-/// provider is a lifecycle that never runs — nothing else reads it, so nothing
+/// Eagerly watched from `main.dart`, like [domainStoreRebuildProvider], because a
+/// lazy provider is a lifecycle that never runs — nothing else reads it, so nothing
 /// else would build it, and a relaunched enrolled device would sit with its keys
 /// and no transport until the user happened to open the enrolment screen.
 ///

@@ -6,11 +6,13 @@
 /// the *same* closure production runs — including the member-transport
 /// propagation below, which no harness fake can stand in for.
 ///
-/// **The domain projector is attached here, at assembly**, to every client the
-/// factory builds — not later, on activation. Enrolment *pulls* the existing log,
-/// and on a second device that pull has to project into the domain store on the
-/// way in; a projector attached after activation would strand the ceremony's own
-/// pull as reduced-but-unprojected. Attaching before enrolment is harmless: an
+/// **The domain projector and reconciler are attached here, at assembly**, to
+/// every client the factory builds — not later, on activation. Enrolment *pulls*
+/// the existing log, and on a second device that pull has to project into the
+/// domain store on the way in; a projector attached after activation would strand
+/// the ceremony's own pull as reduced-but-unprojected, and an unattached
+/// reconciler would leave the very first pull — the one most likely to carry a
+/// peer's duplicate Tag — unconverged. Attaching before enrolment is harmless: an
 /// un-enrolled client never pulls. Pass no `domain` and reduction stays headless,
 /// which is what the collection-generic reducer tests want.
 ///
@@ -26,6 +28,7 @@ import 'control_payload.dart' show zeroPrevControlHash;
 import 'device_key_store.dart';
 import 'enrolment.dart';
 import 'domain_projector.dart';
+import 'domain_reconciler.dart';
 import 'enrolment_state.dart';
 import 'envelope.dart' show sameBytes;
 import 'hlc.dart';
@@ -95,15 +98,19 @@ class SyncStack {
     final clock = HlcClock(memberIdHex: identity.memberIdHex, nowMs: nowMs);
     DateTime now() => DateTime.fromMillisecondsSinceEpoch(nowMs(), isUtc: true);
 
-    // One registry and one projector over the whole device: reduced state is
-    // keyed by collection and entity id, so both Workspaces feed the same read
-    // model through the same views.
+    // One registry, one projector and one reconciler over the whole device:
+    // reduced state is keyed by collection and entity id, so both Workspaces feed
+    // the same read model through the same views.
+    final registry = CollectionRegistry(database);
     final projector = domain == null
         ? null
-        : DomainProjector(
-            registry: CollectionRegistry(database),
-            domain: domain,
-          );
+        : DomainProjector(registry: registry, domain: domain);
+    // Attached alongside the projector, and consulted only at the pull tail: the
+    // projector materialises reduced state, this takes the convergence decisions
+    // that have to author ops to reach peers.
+    final reconciler = domain == null
+        ? null
+        : DomainReconciler(registry: registry, domain: domain);
 
     // One store per device, keyed by Workspace inside — the platform keychain in
     // production, injected by a harness that needs N independent stores in one
@@ -127,7 +134,9 @@ class SyncStack {
       reducer: Reducer(database, nowMs: nowMs, strategies: strategies),
       workspaceKeys: epochKeys,
       now: now,
-    )..projector = projector;
+    )
+      ..projector = projector
+      ..reconciler = reconciler;
 
     // One client per Workspace over the *same* store, identity, clock and
     // member directory: a device is two Workspaces of one User, not two devices.
@@ -150,7 +159,9 @@ class SyncStack {
           directory: defaultClient.directory,
           workspaceKeys: epochKeys,
           now: now,
-        )..projector = projector,
+        )
+            ..projector = projector
+            ..reconciler = reconciler,
       );
       // **Lazily, on every call, and never at construction.** The ceremony
       // reaches this factory twice at different points of its own progress:

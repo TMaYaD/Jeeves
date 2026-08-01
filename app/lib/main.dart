@@ -12,7 +12,6 @@ import 'providers/focus_session_planning_provider.dart';
 import 'providers/focus_session_planning_settings_provider.dart';
 import 'providers/onboarding_provider.dart';
 import 'providers/periodic_review_settings_provider.dart';
-import 'providers/post_sync_hooks_provider.dart';
 import 'providers/sync_lifecycle_provider.dart';
 import 'providers/shutdown_settings_provider.dart';
 import 'router.dart';
@@ -156,11 +155,6 @@ class JeevesApp extends ConsumerWidget {
     // user opens a screen that reads it (login, settings), and the app
     // appears signed out across restarts.
     ref.watch(authTokenProvider);
-
-    // Eagerly materialise [postSyncHooksProvider] so its arm-on-first-sync
-    // listener attaches at startup.  Without this read it stays lazy and
-    // the dedupe pass never fires.
-    ref.watch(postSyncHooksProvider);
 
     // Eagerly materialise [syncLifecycleProvider] so an enrolled device starts
     // syncing at launch: it re-mints its member credential, resumes an

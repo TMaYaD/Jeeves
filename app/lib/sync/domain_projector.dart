@@ -35,6 +35,15 @@
 /// routine and a tombstoned parent is permanent, so the projector never checks
 /// referential existence — a TimeLog outlives its hard-deleted Outcome and
 /// renders as *elsewhere*, it does not vanish and does not raise.
+///
+/// **The projector materialises; it never decides.** It authors nothing, which is
+/// what makes it a pure function of reduced state and therefore order-independent
+/// for free. Convergence *decisions* — which of two same-`(name, type)` Tag
+/// entities survives, and where a junction on a tombstoned one should point —
+/// have to reach peers, so they author ops and live in [DomainReconciler], which
+/// runs after this has committed. That separation is also why `tags` carries no
+/// `UNIQUE (name, type)`: the fold's own detection query has to be able to *see*
+/// the duplicate, so the duplicate has to be representable (ADR-0043, #605).
 library;
 
 import 'package:drift/drift.dart';
@@ -49,11 +58,17 @@ class DomainProjector {
   final CollectionRegistry registry;
   final GtdDatabase domain;
 
-  /// Project every entity in [affected] and fire the ADR-0010 view notifies for
-  /// the collection groups that changed.
-  Future<void> project(Iterable<AffectedEntity> affected) async {
-    if (affected.isEmpty) return;
+  /// Project every entity in [affected], fire the ADR-0010 view notifies for the
+  /// collection groups that changed, and return those groups.
+  ///
+  /// The returned set is what a batch tail hands [DomainReconciler]: the trigger
+  /// for a convergence pass is derived from the rows the projection actually
+  /// wrote, not guessed at from the batch. It is the same set the notifies fire
+  /// for, so a collection whose only entity was *held back* — a required column
+  /// has not arrived yet — is absent from both.
+  Future<Set<String>> project(Iterable<AffectedEntity> affected) async {
     final touched = <String>{};
+    if (affected.isEmpty) return touched;
     // The projector materialises reduced state that is already on the op log,
     // so it must author nothing — the one sanctioned un-captured domain
     // transaction (GtdDatabase refuses a bare `transaction` outside a capturing
@@ -74,6 +89,7 @@ class DomainProjector {
       }
     });
     notify(touched);
+    return touched;
   }
 
   /// Fire the self-notify helper for every collection group in [collections].

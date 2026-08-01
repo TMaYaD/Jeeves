@@ -45,20 +45,53 @@ Future<List<Map<String, Object?>>> _columns(
 Future<Set<String>> _columnNames(GtdDatabase db, String table) async =>
     (await _columns(db, table)).map((c) => c['name'] as String).toSet();
 
+/// The indexes SQLite created for [table]'s `UNIQUE (...)` **table constraints**.
+///
+/// `PRAGMA index_list` reports `origin` as `pk` for a primary key, `u` for a
+/// `UNIQUE` clause inside the `CREATE TABLE`, and `c` for an explicit
+/// `CREATE UNIQUE INDEX`. Filtering on `u` is the only way to say "the table
+/// declares this pair unique" — and the only shape that can assert the *absence*
+/// of one. An insert-throws assertion cannot: once a constraint is gone, the
+/// insert succeeding is the expected state, so that shape passes whether or not
+/// the migration ever ran.
+Future<List<String>> _uniqueConstraintIndexes(
+  GtdDatabase db,
+  String table,
+) async {
+  final rows = await db.customSelect("PRAGMA index_list('$table')").get();
+  return [
+    for (final row in rows)
+      if (row.read<String>('origin') == 'u') row.read<String>('name'),
+  ];
+}
+
+/// Every row of [table] as full maps, ordered by [orderBy] — contents, not just
+/// a count, because a recreate that dropped a column or reordered the copy would
+/// keep the count intact.
+Future<List<Map<String, Object?>>> _rows(
+  GtdDatabase db,
+  String table, {
+  String orderBy = 'id',
+}) async {
+  final rows =
+      await db.customSelect('SELECT * FROM $table ORDER BY $orderBy').get();
+  return [for (final row in rows) row.data];
+}
+
 void main() {
   setUpAll(configureSqliteForTests);
 
   group('schema version', () {
-    test('is 2 — one onUpgrade step behind the fresh baseline', () async {
+    test('is 3 — two onUpgrade steps behind the fresh baseline', () async {
       final db = _openInMemory();
       addTearDown(db.close);
-      expect(db.schemaVersion, 2);
+      expect(db.schemaVersion, 3);
       // A fresh file runs onCreate at the current version, not the ladder.
       expect(
         await db.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        2,
+        3,
       );
     });
   });
@@ -181,6 +214,27 @@ void main() {
       await expectLater(insert('p2'), throwsA(isA<Exception>()));
     });
 
+    test('tags declares no (name, type) uniqueness, user_preferences still does',
+        () async {
+      // The asymmetry is the whole point (ADR-0043). A preference's entity id is
+      // *derived* from `(workspace, key)`, so two devices writing the same
+      // preference are two writes to one entity and its constraint is safe. A Tag
+      // id is client-random by protocol policy, so two devices creating "Alice"
+      // fork into two entities — reduced state can hold both, and a projection of
+      // reduced state that could not represent them would raise instead of
+      // converging (#605).
+      final db = _openInMemory();
+      addTearDown(db.close);
+
+      expect(await _uniqueConstraintIndexes(db, 'tags'), isEmpty,
+          reason: '(name, type) is an eventual invariant the DomainReconciler '
+              'folds towards, not a schema constraint');
+      // The control: the same detection *does* find one where one exists, so an
+      // empty result above is a fact about `tags` rather than about the pragma.
+      expect(await _uniqueConstraintIndexes(db, 'user_preferences'),
+          hasLength(1));
+    });
+
     test('todos defaults land without being supplied', () async {
       final db = _openInMemory();
       addTearDown(db.close);
@@ -245,7 +299,9 @@ void main() {
       await seed.customStatement('PRAGMA user_version = 1');
       await seed.close();
 
-      // Open 2: Drift sees user_version=1, schemaVersion=2, runs the onUpgrade.
+      // Open 2: Drift sees user_version=1 and schemaVersion=3, so it runs the
+      // whole ladder — the v2 drop asserted here, and the v3 `tags` recreate the
+      // group below owns.
       final upgraded = GtdDatabase(
         NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
       );
@@ -255,7 +311,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        2,
+        3,
       );
       expect(await _columnNames(upgraded, 'todos'),
           isNot(contains('time_spent_minutes')),
@@ -276,6 +332,136 @@ void main() {
           .customSelect("SELECT task_id FROM time_logs WHERE id = 'tl1'")
           .get();
       expect(logs.single.read<String>('task_id'), 't1');
+    });
+  });
+
+  group('v3 onUpgrade drops the tags (name, type) uniqueness', () {
+    /// A faithful v2 `tags` table: the current declaration with the retired
+    /// `UNIQUE (name, type)` clause put back.
+    ///
+    /// Spliced onto the CREATE statement Drift itself emitted rather than
+    /// hand-written, so the fixture cannot drift from the real column definitions
+    /// (lengths, defaults, nullability) and quietly stop being a v2 store.
+    Future<void> reinstateV2TagsTable(GtdDatabase seed) async {
+      final createSql = (await seed
+              .customSelect("SELECT sql FROM sqlite_master "
+                  "WHERE type = 'table' AND name = 'tags'")
+              .getSingle())
+          .read<String>('sql');
+      expect(createSql, isNot(contains('UNIQUE')),
+          reason: 'onCreate must already build the v3 shape');
+      await seed.customStatement('DROP TABLE tags');
+      await seed.customStatement(
+        createSql.replaceFirst(RegExp(r'\)\s*$'), ', UNIQUE (name, type))'),
+      );
+    }
+
+    test('the upgrade drops the constraint and preserves every row', () async {
+      // One raw sqlite3 handle across two Drift opens, for the reason the v2 test
+      // states: an in-memory NativeDatabase dies with its connection.
+      final raw = sqlite3.openInMemory();
+      addTearDown(raw.close);
+
+      final seed = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      // Registered at construction rather than left to the explicit close below:
+      // every fixture assertion between here and there would otherwise leak this
+      // handle on the failing path. The explicit close stays where it is and is
+      // still load-bearing — `upgraded` opens over the same `raw`, so this one
+      // has to be gone first — which is why the teardown only covers the case
+      // where the test never reached it.
+      var seedClosed = false;
+      Future<void> closeSeed() async {
+        if (seedClosed) return;
+        seedClosed = true;
+        await seed.close();
+      }
+
+      addTearDown(closeSeed);
+      await reinstateV2TagsTable(seed);
+
+      final createdMs =
+          DateTime.parse('2026-07-30T09:00:00.000Z').millisecondsSinceEpoch;
+      await seed.customStatement(
+        'INSERT INTO tags (id, name, color, type, user_id) '
+        "VALUES ('tag-alice', 'Alice', '#ff8800', 'person', 'u1')",
+      );
+      await seed.customStatement(
+        'INSERT INTO tags (id, name, color, type, user_id) '
+        "VALUES ('tag-home', 'Home', NULL, 'context', 'u1')",
+      );
+      await seed.customStatement(
+        'INSERT INTO todos (id, title, user_id, created_at, intent, clarified) '
+        "VALUES ('t1', 'Ring Alice', 'u1', ?, 'next', 1)",
+        [createdMs],
+      );
+      await seed.customStatement(
+        'INSERT INTO todo_tags (id, todo_id, tag_id, user_id) '
+        "VALUES ('tt1', 't1', 'tag-alice', 'u1')",
+      );
+      await seed.customStatement(
+        'INSERT INTO captures (id, title, created_at, user_id) '
+        "VALUES ('c1', 'ring Alice back', ?, 'u1')",
+        [createdMs],
+      );
+      await seed.customStatement(
+        'INSERT INTO capture_tags (id, capture_id, tag_id, user_id) '
+        "VALUES ('ct1', 'c1', 'tag-alice', 'u1')",
+      );
+      // **A pre-existing orphan** — the residue `TagDao.merge` leaves behind by
+      // repointing only `todo_tags` (#645). FK enforcement is off (#637), so it is
+      // on real users' disks today, and the recreate has to tolerate it: `tags` is
+      // dropped and rebuilt mid-migration, and `capture_tags.tag_id` declares
+      // `ON DELETE CASCADE`, so a migration that ran with enforcement on would
+      // silently delete every tag hint instead of upgrading.
+      await seed.customStatement(
+        'INSERT INTO capture_tags (id, capture_id, tag_id, user_id) '
+        "VALUES ('ct-orphan', 'c1', 'tag-long-gone', 'u1')",
+      );
+
+      final tagsBefore = await _rows(seed, 'tags');
+      final todoTagsBefore = await _rows(seed, 'todo_tags');
+      final captureTagsBefore = await _rows(seed, 'capture_tags');
+      expect(await _uniqueConstraintIndexes(seed, 'tags'), hasLength(1),
+          reason: 'the fixture is only a v2 store if the constraint is there');
+
+      await seed.customStatement('PRAGMA user_version = 2');
+      await closeSeed();
+
+      final upgraded = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      addTearDown(upgraded.close);
+
+      expect(
+        await upgraded.customSelect('PRAGMA user_version').getSingle().then(
+              (r) => r.read<int>('user_version'),
+            ),
+        3,
+      );
+      expect(await _uniqueConstraintIndexes(upgraded, 'tags'), isEmpty,
+          reason: 'v3 drops UNIQUE (name, type)');
+
+      // Data integrity is absolute: same rows, same contents, in all three
+      // tables the recreate could have touched.
+      expect(await _rows(upgraded, 'tags'), tagsBefore);
+      expect(await _rows(upgraded, 'todo_tags'), todoTagsBefore);
+      expect(await _rows(upgraded, 'capture_tags'), captureTagsBefore);
+      expect(
+        (await _rows(upgraded, 'capture_tags'))
+            .map((row) => row['tag_id'])
+            .toSet(),
+        {'tag-alice', 'tag-long-gone'},
+        reason: 'the orphan survives as the dangling reference it was',
+      );
+
+      // And the point of the drop: a peer's duplicate pair can now land.
+      await upgraded.customStatement(
+        'INSERT INTO tags (id, name, color, type, user_id) '
+        "VALUES ('tag-alice-peer', 'Alice', '#00ff88', 'person', 'u1')",
+      );
+      expect(await _rows(upgraded, 'tags'), hasLength(3));
     });
   });
 }

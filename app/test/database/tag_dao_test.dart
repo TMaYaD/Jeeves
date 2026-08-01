@@ -129,22 +129,24 @@ void main() {
       expect(rows.first.id, todoTagIdFor('todo-idem', 'ctx-idem'));
     });
 
-    test(
-        'upsertTag with a fresh id claiming an occupied (name, type) replaces '
-        'the incumbent instead of duplicating it', () async {
+    test('upsertTag no longer deletes a tag that occupies the same (name, type)',
+        () async {
+      // The INSERT OR REPLACE footgun the dropped constraint carried: under
+      // `UNIQUE (name, type)` a colliding write resolved by **deleting** the other
+      // tag row — id, references and all — silently, since FK enforcement is off
+      // (#637). With no constraint to conflict on there is nothing to replace, so
+      // both rows survive and the duplicate becomes the ordinary transient state
+      // `DomainReconciler`'s fold collapses (#605).
+      //
+      // Both branches of `upsertTag`, since each reached the conflict differently:
+      // a *fresh* id falls through to the raw insert, and an *existing* id takes
+      // the fill-from-stored-row path and re-inserts.
       await db.tagDao.upsertTag(TagsCompanion(
         id: const Value('ctx-incumbent'),
         name: const Value('phone'),
         type: const Value('context'),
         userId: const Value(_userId),
       ));
-
-      // `upsertTag` finds no row under the new id and falls through to
-      // INSERT OR REPLACE, which resolves the table's `UNIQUE (name, type)`
-      // conflict by *deleting* the incumbent — id and all. That is precisely
-      // why nothing in the app creates a tag by calling this directly:
-      // `findOrCreateTag` reuses the existing row, and `rename` folds into
-      // `merge` rather than writing a colliding one.
       await db.tagDao.upsertTag(TagsCompanion(
         id: const Value('ctx-usurper'),
         name: const Value('phone'),
@@ -152,9 +154,54 @@ void main() {
         userId: const Value(_userId),
       ));
 
-      final tags = await db.tagDao.watchByType('context').first;
-      expect(tags, hasLength(1));
-      expect(tags.single.id, 'ctx-usurper');
+      /// Every context tag as `id -> name`.
+      ///
+      /// The pair, not the id alone: "nobody was evicted" is only half the
+      /// claim — the write also has to have *landed*, and a no-op write would
+      /// satisfy a set-of-ids assertion perfectly.
+      Future<Map<String, String>> contextTagNames() async => {
+            for (final tag in await db.tagDao.watchByType('context').first)
+              tag.id: tag.name,
+          };
+
+      expect(
+        await contextTagNames(),
+        {'ctx-incumbent': 'phone', 'ctx-usurper': 'phone'},
+        reason: 'a fresh-id write must not evict the incumbent, and both rows '
+            'hold the duplicate pair',
+      );
+
+      await db.tagDao.upsertTag(TagsCompanion(
+        id: const Value('ctx-other'),
+        name: const Value('errand'),
+        type: const Value('context'),
+        userId: const Value(_userId),
+      ));
+      await db.tagDao.upsertTag(TagsCompanion(
+        id: const Value('ctx-other'),
+        name: const Value('phone'),
+      ));
+
+      expect(
+        await contextTagNames(),
+        {
+          'ctx-incumbent': 'phone',
+          'ctx-usurper': 'phone',
+          'ctx-other': 'phone',
+        },
+        reason: 'renaming onto an occupied pair evicts nobody AND renames: '
+            'three rows now hold (phone, context)',
+      );
+      // The partial companion carried no `type` or `user_id`, so the
+      // fill-from-stored-row branch had to supply them. A rename that dropped
+      // them would leave the row out of `watchByType('context')` entirely, so
+      // read them back rather than inferring it.
+      final renamed = await (db.select(db.tags)
+            ..where((tag) => tag.id.equals('ctx-other')))
+          .getSingle();
+      expect(renamed.name, 'phone');
+      expect(renamed.type, 'context');
+      expect(renamed.userId, _userId);
     });
 
     test('enforceSingleProject removes old project and assigns new one',
@@ -250,77 +297,80 @@ void main() {
       expect(ctxId, isNot(projId));
     });
 
-    test(
-        'tripwire: a plain insert of a duplicate (name, type) throws under the '
-        'unique key', () async {
-      // The `UNIQUE (name, type)` tripwire on the real table (`tables.dart`),
-      // asserted through the statement shape production actually issues raw:
+    test('a plain insert of a duplicate (name, type) is accepted', () async {
+      // The inverse of the retired `UNIQUE (name, type)` tripwire (ADR-0043), and
+      // asserted through the statement shape production issues raw:
       // `DomainProjector._upsert` locates a tag by `id` and, finding none,
-      // INSERTs. So this is not only a guard on the DAO — it is the reason a
-      // duplicate `(name, type)` cannot reach disk at all (see the
-      // `TagDao.dedupeTags` group below).
+      // INSERTs. Reduced state can hold two Tag entities for one pair, so its
+      // projection has to be able to hold two rows — otherwise the projector
+      // raises `SqliteException(2067)` and rolls back the whole pull batch (#605).
+      //
+      // *Absence* of the constraint is pinned by `PRAGMA index_list` in
+      // `schema_baseline_test.dart`, since an insert succeeding cannot distinguish
+      // "the constraint is gone" from "the migration never ran".
       await db.into(db.tags).insert(TagsCompanion(
             id: const Value('dup1'),
             name: const Value('Alice'),
             type: const Value('person'),
             userId: const Value(_userId),
           ));
+      await db.into(db.tags).insert(TagsCompanion(
+            id: const Value('dup2'),
+            name: const Value('Alice'),
+            type: const Value('person'),
+            userId: const Value(_userId),
+          ));
 
       expect(
-        () => db.into(db.tags).insert(TagsCompanion(
-              id: const Value('dup2'),
-              name: const Value('Alice'),
-              type: const Value('person'),
-              userId: const Value(_userId),
-            )),
-        throwsA(isA<SqliteException>()),
+        (await db.select(db.tags).get()).map((row) => row.id).toSet(),
+        {'dup1', 'dup2'},
       );
     });
   });
 
-  // **`dedupeTags`' collapse path is unreachable on the real schema, so only
-  // its no-op contract is asserted here.**
+  // **`foldDuplicateTags` is covered in full by `sync/domain_reconciler_test.dart`**,
+  // where it belongs: the fold is one of the two convergence passes the
+  // `DomainReconciler` drives, its ranking rule (`MIN(id)` alone, never reference
+  // counts) is a convergence property rather than a DAO detail, and the op set it
+  // authors — the half that carries the decision to peers — is only assertable
+  // against a recording capture seam. The cross-device statement it exists to make
+  // is `sync/tag_convergence_test.dart`.
   //
-  // `tags` carries `UNIQUE (name, type)` (`tables.dart`), and nothing can put a
-  // second row with a duplicate pair behind it: DAO writes go through
-  // `INSERT OR REPLACE`, which resolves the conflict by replacing rather than
-  // duplicating, and production's one raw `INSERT INTO tags` —
-  // `DomainProjector._upsert`, which locates a tag by `id` — raises
-  // `SqliteException(2067)` instead (the `tripwire:` test above pins that
-  // statement shape). The pre-#595 store was where duplicates could exist:
-  // `tags` was a constraint-free view over a PowerSync backing table, so a
-  // peer's independently minted "Home" landed as a second row. That topology is
-  // gone (ADR-0035) and the old local store is deleted rather than converted,
-  // so it cannot arrive on disk either. The test that used to cover the collapse
-  // rebuilt that view topology purely so its own fixture could get past the
-  // unique key.
-  //
-  // The behaviours it asserted are covered on the real schema elsewhere, by the
-  // reachable route to the same collapse — `TagDao.merge` and the `rename` that
-  // folds into it, in `tag_filter_dao_test.dart`: junction rows repointed onto
-  // the surviving tag id, the resulting `(todo_id, tag_id)` PK collision
-  // collapsing to one row, the losing tag deleted, unrelated tags untouched.
-  // Its deterministic junction id is pinned by `assignTag is idempotent` above.
-  // What is left uncovered is `dedupeTags`' own group ranking (most references
-  // wins, `MIN(id)` as tiebreaker), because no input can reach it.
-  //
-  // The projector raising instead of converging is a live defect rather than a
-  // property of the design — see #605, which also decides whether the fix makes
-  // this path reachable again or retires the dedupe machinery.
-  group('TagDao.dedupeTags', () {
+  // What stays here is the DAO-local half: that the schema accepts a duplicate pair
+  // at all (above), and that the `(name, type)` lookups stay deterministic while
+  // one is on disk.
+  group('TagDao lookups with duplicates on disk', () {
     late GtdDatabase db;
 
     setUp(() => db = _openInMemory());
     tearDown(() => db.close());
 
-    test('dedupeTags is a no-op when no duplicates exist', () async {
+    test('the fold is a no-op when no duplicates exist', () async {
       await db.tagDao.findOrCreateTag('Alice', 'person', _userId);
       await db.tagDao.findOrCreateTag('Bob', 'person', _userId);
 
-      await db.tagDao.dedupeTags();
+      await db.tagDao.foldDuplicateTags();
 
       final rows = await db.tagDao.watchPersonTags().first;
       expect(rows, hasLength(2));
+    });
+
+    test('findOrCreateTag and findPersonTagByName both return MIN(id)', () async {
+      // Deterministic across devices, and the same rule the fold ranks by, so a
+      // lookup made before the fold has run agrees with the survivor it picks.
+      for (final id in ['dup-b', 'dup-a']) {
+        await db.into(db.tags).insert(TagsCompanion(
+              id: Value(id),
+              name: const Value('Alice'),
+              type: const Value('person'),
+              userId: const Value(_userId),
+            ));
+      }
+
+      expect(await db.tagDao.findOrCreateTag('Alice', 'person', _userId), 'dup-a');
+      expect((await db.tagDao.findPersonTagByName('Alice'))!.id, 'dup-a');
+      expect((await db.select(db.tags).get()), hasLength(2),
+          reason: 'a lookup must not mint a third row');
     });
   });
 }
