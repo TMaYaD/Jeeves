@@ -45,6 +45,19 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
 
+[tool.uv]
+# Pins the resolver itself, not just what it resolves.  `uv.lock` fixes the
+# dependency set; without this, uv's own version still floats — CI would take
+# whatever `astral-sh/setup-uv` happens to default to, and a release that
+# changed resolution or lockfile-format behaviour would arrive unannounced.
+#
+# This is the only place uv's version is written.  setup-uv reads it from here
+# (its `version` input is left unset in .github/workflows/backend-ci.yml, so it
+# falls back to `[tool.uv] required-version` in this file), and uv enforces it
+# again at runtime: a mismatched uv refuses to run any subcommand rather than
+# proceeding quietly.  Bumping uv is therefore a deliberate edit here.
+required-version = "==0.12.0"
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"

@@ -38,7 +38,10 @@ jobs:
           persist-credentials: false
       # uv, not pip: `uv sync --locked` installs exactly what backend/uv.lock
       # pins, so no tool version is written here.  `working-directory` points
-      # the action at backend/ so its cache key is keyed on backend/uv.lock.
+      # the action at backend/ so its cache key is keyed on backend/uv.lock —
+      # and so the deliberately-unset `version` input falls back to
+      # `[tool.uv] required-version` in backend/pyproject.toml, which is where
+      # uv's own version is pinned.  Both knobs stay in backend config.
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           working-directory: backend
