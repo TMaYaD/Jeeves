@@ -442,7 +442,8 @@ Two copy rules, both asserted by test (`sync_health_copy_test.dart`):
 
 *   **Banned vocabulary.** The user has Tasks, lists, devices; they edited,
     finished, deleted things. They never see *op*, *envelope*, *epoch*, *chain*,
-    *attestation*, *quarantine*, *upstream*, *seq*, *workspace*, *prune*, *HLC*,
+    *attestation*, *quarantine*, *upstream*, *seq*, *author*, *stream*,
+    *workspace*, *prune*, *HLC*,
     *alarm* or *kind*, and no snake_case reaches the collapsed screen. Raw codes
     and ids live only inside a per-row expandable.
 *   **The device rule.** *Name this device, or name a set, or name nobody — never

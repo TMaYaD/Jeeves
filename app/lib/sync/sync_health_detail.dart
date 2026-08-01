@@ -5,10 +5,12 @@
 /// the screen's grouping is by *class* and not by table: a refused envelope and
 /// the accusation it raised are the same event told from either side, and the
 /// user has no reason to know they live in different places.
+/// **It carries no copy.** A row here is the stored code, the class it falls
+/// under and when it happened; the sentence the user reads is resolved in
+/// `screens/sync_health/sync_health_copy.dart` from exactly those. That is what
+/// keeps this file — which reads the two tables — from importing a screen.
 library;
 
-import '../screens/sync_health/sync_health_copy.dart';
-import 'ids.dart';
 import 'sync_condition_class.dart';
 import 'sync_database.dart';
 
@@ -25,7 +27,6 @@ class SyncHealthCondition {
     required this.workspaceId,
     required this.source,
     required this.code,
-    required this.sentence,
     required this.firstSeenAt,
     required this.lastSeenAt,
     required this.occurrenceCount,
@@ -43,9 +44,6 @@ class SyncHealthCondition {
   /// Shown only inside a row's expandable, never in the collapsed screen: it is
   /// the string an operator needs and the one a user should never have to read.
   final String code;
-
-  /// The one plain sentence this condition is told as.
-  final String sentence;
 
   final DateTime firstSeenAt;
   final DateTime lastSeenAt;
@@ -87,7 +85,6 @@ List<SyncHealthCondition> syncHealthConditionsFor({
             workspaceId: workspaceId,
             source: SyncConditionSource.standingCondition,
             code: row.kind,
-            sentence: sentenceForAlarmCode(row.kind),
             firstSeenAt: row.firstDetectedAt,
             lastSeenAt: row.lastDetectedAt,
             occurrenceCount: row.occurrenceCount,
@@ -102,7 +99,6 @@ List<SyncHealthCondition> syncHealthConditionsFor({
             workspaceId: workspaceId,
             source: SyncConditionSource.refusedItem,
             code: row.reason,
-            sentence: sentenceForRefusalCode(row.reason),
             firstSeenAt: row.detectedAt,
             lastSeenAt: row.releasedAt ?? row.detectedAt,
             occurrenceCount: 1,
@@ -119,13 +115,3 @@ SyncConditionClass classOfCondition(SyncHealthCondition condition) =>
       SyncConditionSource.standingCondition => classOfAlarmCode(condition.code),
       SyncConditionSource.refusedItem => classOfRefusalCode(condition.code),
     };
-
-/// What to call one of the device's two Workspaces, in the user's own terms.
-///
-/// Null for an id this build does not recognise — a section with no honest label
-/// shows no label at all, rather than a raw uuid.
-String? syncWorkspaceLabelFor(String workspaceId, String userId) {
-  if (workspaceId == defaultWorkspaceId(userId)) return 'TASKS AND LISTS';
-  if (workspaceId == userPreferencesWorkspaceId(userId)) return 'SETTINGS';
-  return null;
-}

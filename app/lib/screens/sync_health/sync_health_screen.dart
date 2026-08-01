@@ -91,7 +91,8 @@ class SyncHealthScreen extends ConsumerWidget {
       _overline(heading, const Color(0xFF374151)),
       for (final entry in byWorkspace.entries) ...[
         ?_workspaceOverline(entry.key, userId),
-        for (final condition in entry.value) _ConditionRow(condition: condition),
+        for (final condition in entry.value)
+          _ConditionRow(key: conditionRowKey(condition), condition: condition),
       ],
     ];
   }
@@ -115,13 +116,41 @@ class SyncHealthScreen extends ConsumerWidget {
       );
 }
 
+/// The one plain sentence a condition is told as.
+///
+/// The copy-side twin of `classOfCondition`, and the reason [SyncHealthCondition]
+/// carries no sentence of its own: the sync tier says *what happened* and *what
+/// class it is*, and the words are resolved here, from the stored code and the
+/// side of the store it came from. `sync_health_copy.dart` still owns every
+/// string — this only picks which of its two lookups applies.
+String sentenceForCondition(SyncHealthCondition condition) =>
+    switch (condition.source) {
+      SyncConditionSource.standingCondition => sentenceForAlarmCode(condition.code),
+      SyncConditionSource.refusedItem => sentenceForRefusalCode(condition.code),
+    };
+
+/// What identifies a row to the element tree, so an expander stays attached to
+/// the condition it was opened on.
+///
+/// `ExpansionTile` owns its expanded state, and without a key Flutter matches
+/// old children to new ones **by position**: a condition arriving, healing, or
+/// moving between the two groups would slide one row's open detail under a
+/// different row's sentence.
+///
+/// All three parts are load-bearing, because `rowId` alone is not unique here.
+/// It is a table row id, and the screen folds two tables across two Workspaces
+/// into one list — an alarm and a refusal can share id 1, and duplicate sibling
+/// keys are a crash rather than a mis-match.
+Key conditionRowKey(SyncHealthCondition condition) =>
+    ValueKey('${condition.workspaceId}/${condition.source.name}/${condition.rowId}');
+
 /// One condition: a sentence, when it happened, and nothing to press.
 ///
 /// Every machine string — the stored code, the member id, the row id, the
 /// engine's own `detail` — lives inside the expandable, so the collapsed screen
 /// carries none of it (#584 AC-4).
 class _ConditionRow extends StatelessWidget {
-  const _ConditionRow({required this.condition});
+  const _ConditionRow({super.key, required this.condition});
   final SyncHealthCondition condition;
 
   @override
@@ -134,7 +163,7 @@ class _ConditionRow extends StatelessWidget {
         tilePadding: const EdgeInsets.symmetric(horizontal: 16),
         childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
         title: Text(
-          condition.sentence,
+          sentenceForCondition(condition),
           style: const TextStyle(fontSize: 14, color: Color(0xFF374151)),
         ),
         subtitle: Padding(

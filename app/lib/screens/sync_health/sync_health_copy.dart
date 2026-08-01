@@ -1,4 +1,11 @@
-/// Every sentence the sync-health screen can say, and nothing else.
+/// Every word the sync-health surface puts in front of a user, and nothing else.
+///
+/// **Copy only — no classification.** What class a stored code belongs to is
+/// domain state and lives in `sync/sync_condition_class.dart`; this file answers
+/// only what to *call* it, keyed by the same stored code. Keeping the two apart
+/// is what lets the sync tier classify a condition without importing a screen,
+/// which is the direction `CONTEXT.md` prescribes and the reverse of what
+/// shipped first.
 ///
 /// **Plain voice. No Jeeves register anywhere on this surface**, deliberately and
 /// as a recorded rule (`docs/DESIGN.md` § Sync health). This is where a user
@@ -26,6 +33,7 @@
 library;
 
 import '../../sync/chain_verifier.dart';
+import '../../sync/ids.dart';
 import '../../sync/sync_condition_class.dart';
 
 /// The screen's own strings.
@@ -133,23 +141,14 @@ String sentenceForRefusalCode(String code) {
 const String syncHealthUnreadableRefusalSentence =
     "Some changes couldn't be read by this app, so they weren't applied.";
 
-/// The class of a stored alarm code — the screen's grouping, and the indicator's.
+/// What to call one of the device's two Workspaces, in the user's own terms.
 ///
-/// An unrecognised code is [SyncConditionClass.reported]: a code we cannot
-/// classify has, by definition, no evidence behind it that anything of the
-/// user's is stuck, so calling it an error would be a claim we cannot support.
-SyncConditionClass classOfAlarmCode(String code) {
-  final kind = integrityAlarmKindByCodeOrNull(code);
-  return kind == null ? SyncConditionClass.reported : syncConditionClassOf(kind);
-}
-
-/// The class of a stored refusal reason. An unrecognised one is reported, for
-/// the same reason an unrecognised alarm code is.
-SyncConditionClass classOfRefusalCode(String code) {
-  final reason = syncRejectionReasonByCodeOrNull(code);
-  return reason == null
-      ? SyncConditionClass.reported
-      : syncConditionClassOfRefusal(reason);
+/// Null for an id this build does not recognise — a section with no honest label
+/// shows no label at all, rather than a raw uuid.
+String? syncWorkspaceLabelFor(String workspaceId, String userId) {
+  if (workspaceId == defaultWorkspaceId(userId)) return 'TASKS AND LISTS';
+  if (workspaceId == userPreferencesWorkspaceId(userId)) return 'SETTINGS';
+  return null;
 }
 
 /// Vocabulary that must never reach this surface, asserted by test.
@@ -170,7 +169,12 @@ const List<String> syncHealthBannedWords = [
   'quarantine',
   'quarantined',
   'upstream',
+  // Both forms, because the match is by whole word: "seq" does not catch "seqs".
   'seq',
+  'seqs',
+  'author',
+  'stream',
+  'streams',
   'workspace',
   'workspaces',
   'prune',

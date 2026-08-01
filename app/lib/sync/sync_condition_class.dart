@@ -13,6 +13,14 @@
 /// different hat. It is computed from the stored `kind` / `reason` string and
 /// persisted nowhere, so there is no column that can disagree with the code.
 ///
+/// **Every classification of a stored code lives here, and no user-facing word
+/// does.** A class is domain state — the health query reads it, the indicator's
+/// colour follows from it, and the compaction gate sits beside it — so it belongs
+/// in the tier that owns the two tables. What a condition is *called* is the
+/// screens tier's (`screens/sync_health/sync_health_copy.dart`), and the
+/// dependency runs one way: screens read the class, the sync tier never reads a
+/// sentence.
+///
 /// See ADR-0044.
 library;
 
@@ -127,4 +135,23 @@ SyncRejectionReason? syncRejectionReasonByCodeOrNull(String code) {
     if (reason.code == code) return reason;
   }
   return null;
+}
+
+/// The class of a stored alarm code — the screen's grouping, and the indicator's.
+///
+/// An unrecognised code is [SyncConditionClass.reported]: a code we cannot
+/// classify has, by definition, no evidence behind it that anything of the
+/// user's is stuck, so calling it an error would be a claim we cannot support.
+SyncConditionClass classOfAlarmCode(String code) {
+  final kind = integrityAlarmKindByCodeOrNull(code);
+  return kind == null ? SyncConditionClass.reported : syncConditionClassOf(kind);
+}
+
+/// The class of a stored refusal reason. An unrecognised one is reported, for
+/// the same reason an unrecognised alarm code is.
+SyncConditionClass classOfRefusalCode(String code) {
+  final reason = syncRejectionReasonByCodeOrNull(code);
+  return reason == null
+      ? SyncConditionClass.reported
+      : syncConditionClassOfRefusal(reason);
 }
