@@ -3474,6 +3474,16 @@ SELECT
       codes.every((code) => RegExp(r'^[a-z0-9_]+$').hasMatch(code)),
       'a condition code that is not a bare identifier cannot be inlined',
     );
+    // An empty class would inline as `IN ()` / `NOT IN ()`, which SQLite rejects
+    // outright — and there is no literal that is right for both callers, since
+    // an empty class means "match nothing" under `IN` and "match everything"
+    // under `NOT IN`. It cannot happen: both lists are derived from exhaustive
+    // switches over non-empty enums. Say so at the point of construction rather
+    // than let the health query fail later as a syntax error, or — worse — hand
+    // one of the two callers a silently wrong count.
+    if (codes.isEmpty) {
+      throw StateError('a condition class with no codes cannot be inlined');
+    }
     return codes.map((code) => "'$code'").join(', ');
   }
 

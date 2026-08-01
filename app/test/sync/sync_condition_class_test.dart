@@ -318,5 +318,56 @@ void main() {
       );
       expect(health.degraded, isFalse, reason: 'but it is not called an error');
     });
+
+    test('I6 a code from a later build is reported by the query too', () async {
+      // The one case in this file a real fault cannot stage: an unknown code is
+      // by definition one a *newer* build wrote, so the rows are written by
+      // hand. What is under test is not the receive path but the two generated
+      // predicates — `kind IN (…actionable…)` and `reason NOT IN (…transient…)`
+      // — agreeing with the Dart classifiers about a code neither has heard of.
+      // They are the same decision expressed twice, in SQL and in Dart, and this
+      // is the only assertion that holds them together for an unmatched code.
+      workspace = await SimWorkspace.create(deviceCount: 1);
+      final a = workspace.a;
+      final when = DateTime.utc(2026, 8, 1);
+      await a.database.into(a.database.integrityAlarms).insert(
+            IntegrityAlarmsCompanion.insert(
+              workspaceId: a.client.workspaceId,
+              kind: 'from_the_future',
+              detail: '',
+              occurrenceCount: 1,
+              firstDetectedAt: when,
+              lastDetectedAt: when,
+            ),
+          );
+      await a.database.into(a.database.quarantinedOps).insert(
+            QuarantinedOpsCompanion.insert(
+              workspaceId: a.client.workspaceId,
+              reason: 'from_the_future',
+              detail: '',
+              envelope: Uint8List(0),
+              detectedAt: when,
+            ),
+          );
+
+      final health = await a.client.health();
+      expect(health.unresolvedAlarmCount, 1, reason: 'the accusation stands');
+      expect(
+        health.actionableAlarmCount,
+        0,
+        reason: 'an unclassifiable code is no evidence that anything is stuck',
+      );
+      expect(health.quarantineCount, 1);
+      expect(
+        health.reportableQuarantineCount,
+        1,
+        reason: 'unknown is not self-healing: erring toward telling the user',
+      );
+      expect(health.degraded, isFalse);
+      expect(health.hasSomethingToReport, isTrue);
+
+      expect(classOfAlarmCode('from_the_future'), SyncConditionClass.reported);
+      expect(classOfRefusalCode('from_the_future'), SyncConditionClass.reported);
+    });
   });
 }
