@@ -85,20 +85,33 @@ void main() {
   /// Bring the on-disk store to a *completed-replay* state at [schemaVersion],
   /// with the domain row deliberately missing — the hole an aborted projection
   /// left behind.
+  /// Both connections close on **every** path, including the assertion below
+  /// failing. They cannot be left to `addTearDown` the way the setUp resources
+  /// are: this helper's whole point is to hand the file back *shut*, so the
+  /// providers under test can open it themselves — and the directory teardown
+  /// would otherwise run against a live database. Nested `finally`s, so the
+  /// underlying store still closes when the Drift wrapper's close is what threw.
   Future<void> seedStoreAt(int schemaVersion) async {
     final opening = await openDomainStoreIn(directory.path);
-    final db = GtdDatabase(SqliteAsyncDriftConnection(opening.database));
-    // The first query is what runs onCreate, which builds the current schema.
-    await db.customSelect('SELECT 1').getSingle();
-    expect(await db.select(db.todos).get(), isEmpty,
-        reason: 'the hole: reduced state has the Outcome, the read model does not');
-    await db.customStatement('PRAGMA user_version = $schemaVersion');
-    // The marker a *finished* replay writes. With it present the ordinary
-    // `needsRebuild` gate is closed, so anything that re-projects from here does
-    // so because of the upgrade and for no other reason.
-    opening.markRebuilt();
-    await db.close();
-    await opening.database.close();
+    try {
+      final db = GtdDatabase(SqliteAsyncDriftConnection(opening.database));
+      try {
+        // The first query is what runs onCreate, which builds the current schema.
+        await db.customSelect('SELECT 1').getSingle();
+        expect(await db.select(db.todos).get(), isEmpty,
+            reason:
+                'the hole: reduced state has the Outcome, the read model does not');
+        await db.customStatement('PRAGMA user_version = $schemaVersion');
+        // The marker a *finished* replay writes. With it present the ordinary
+        // `needsRebuild` gate is closed, so anything that re-projects from here
+        // does so because of the upgrade and for no other reason.
+        opening.markRebuilt();
+      } finally {
+        await db.close();
+      }
+    } finally {
+      await opening.database.close();
+    }
   }
 
   ProviderContainer containerOverDirectory() {

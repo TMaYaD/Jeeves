@@ -141,13 +141,18 @@ void main() {
 
     setUp(() async {
       workspace = await SimWorkspace.create();
+      // Registered here rather than as a group `tearDown` over the `late` field:
+      // `SimWorkspace.create` runs two full enrolment ceremonies and can throw,
+      // and a teardown that read the unassigned `late` would die with a
+      // `LateInitializationError` that buries the real failure — while two
+      // devices' stores leaked.
+      addTearDown(workspace.close);
       a = workspace.a;
       b = workspace.b;
       // Settle enrolment before the scenario, so the batch under test carries
       // only the scenario's own ops.
       await workspace.syncAll();
     });
-    tearDown(() async => workspace.close());
 
     test(
         "a peer's duplicate (name, type) Tag converges, and the rest of its "
