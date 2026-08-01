@@ -26,38 +26,109 @@ import 'sync_lifecycle_provider.dart';
 import 'sync_stack_provider.dart';
 import 'user_constants.dart';
 
-enum SyncStatus { localOnly, connecting, syncing, synced, error }
+enum SyncStatus {
+  localOnly,
+  connecting,
+  syncing,
+  synced,
 
-/// The status two Workspaces' health adds up to, given what the store says about
+  /// Visible, non-red, nothing to do: there is an account of what happened worth
+  /// reading, and none of it needs the User.
+  ///
+  /// **Named for what the User is told, not for our model** — not `reported`,
+  /// not `informational`, both of which name the classification rather than the
+  /// message. It is the same phrase as the indicator's tooltip and as the
+  /// screen's own explanation, so the enum member, the tooltip and the sentence
+  /// are one idea in three places.
+  ///
+  /// It exists because the alternative was worse: fourteen of the eighteen alarm
+  /// kinds live in this band, and if it looked identical to healthy the entry
+  /// point would be a secret rather than a surface.
+  worthKnowing,
+
+  error,
+}
+
+/// Everything the drawer indicator needs, from one read.
+///
+/// The tappability and the glyph come out of the **same** value deliberately:
+/// two providers over the same health would be two subscriptions, free to
+/// disagree about whether there is anything behind the tile the user just
+/// tapped.
+typedef SyncIndication = ({SyncStatus status, bool hasSomethingToReport});
+
+/// What two Workspaces' health adds up to, given what the store says about
 /// enrolment and whether a member credential is in hand.
 ///
 /// Pure, so the table is asserted directly rather than through a staged device.
-/// Worst news first: an accusation that still stands, or an op this device refused
-/// to apply, outranks a queue that is merely busy.
-SyncStatus syncStatusFor({
+///
+/// **Worst *undecided* news first.** The order is:
+///
+/// ```
+/// 1. not enrolled                                   -> localOnly
+/// 2. ANY workspace has an undecided actionable alarm -> error
+/// 3. no member credential                            -> connecting
+/// 4. ANY workspace pendingOpCount > 0                -> syncing
+/// 5. ANY workspace hasSomethingToReport              -> worthKnowing
+/// 6. otherwise                                       -> synced
+/// ```
+///
+/// Row 2 is stated as *any* Workspace because a two-Workspace bug is invisible
+/// to a single-Workspace test: **one Workspace in the calm band beside another
+/// holding an undecided actionable alarm renders as the error.** Calm news must
+/// never mask a condition nobody has looked at.
+///
+/// `syncing` sits above `worthKnowing` on purpose — a flush in progress is
+/// transient and more informative in the moment, and the calm state will still
+/// be there when it drains, since it is the resting state whenever there is
+/// history to read.
+SyncIndication syncIndicationFor({
   required EnrolmentState enrolment,
   required bool hasMemberCredential,
   required Iterable<SyncHealth> health,
 }) {
-  // A device that has not finished enrolling has no log to sync with. That is the
-  // ordinary offline case, not a degraded one.
-  if (enrolment != EnrolmentState.enrolled) return SyncStatus.localOnly;
-  if (health.any((one) => one.degraded)) return SyncStatus.error;
-  // Enrolled, and the credential has not been re-minted yet — the window between
-  // launch and the lifecycle's proof-of-possession exchange.
-  if (!hasMemberCredential) return SyncStatus.connecting;
-  if (health.any((one) => one.pendingOpCount > 0)) return SyncStatus.syncing;
-  return SyncStatus.synced;
+  final hasSomethingToReport = health.any((one) => one.hasSomethingToReport);
+  SyncStatus status() {
+    // A device that has not finished enrolling has no log to sync with. That is
+    // the ordinary offline case, not a degraded one.
+    if (enrolment != EnrolmentState.enrolled) return SyncStatus.localOnly;
+    if (health.any((one) => one.degraded)) return SyncStatus.error;
+    // Enrolled, and the credential has not been re-minted yet — the window
+    // between launch and the lifecycle's proof-of-possession exchange.
+    if (!hasMemberCredential) return SyncStatus.connecting;
+    if (health.any((one) => one.pendingOpCount > 0)) return SyncStatus.syncing;
+    if (hasSomethingToReport) return SyncStatus.worthKnowing;
+    return SyncStatus.synced;
+  }
+
+  // Reachability is the health's own answer, not the status's: `syncing` and
+  // `connecting` outrank the calm state, and a tile that stopped being tappable
+  // for the length of a flush would make the account of events look like it had
+  // been withdrawn.
+  return (status: status(), hasSomethingToReport: hasSomethingToReport);
 }
 
-/// Stream of the current sync status.
+/// The indicator's state alone. The pure table, asserted directly.
+SyncStatus syncStatusFor({
+  required EnrolmentState enrolment,
+  required bool hasMemberCredential,
+  required Iterable<SyncHealth> health,
+}) =>
+    syncIndicationFor(
+      enrolment: enrolment,
+      hasMemberCredential: hasMemberCredential,
+      health: health,
+    ).status;
+
+/// Stream of the current sync indication — the status, and whether there is
+/// anything behind the tile to open.
 ///
 /// [SyncStatus.localOnly] while nobody is signed in, and while a signed-in device
 /// has not finished enrolling.
-final syncStatusProvider = StreamProvider<SyncStatus>((ref) async* {
+final syncStatusProvider = StreamProvider<SyncIndication>((ref) async* {
   final userId = ref.watch(currentUserIdProvider);
   if (userId == kLocalUserId) {
-    yield SyncStatus.localOnly;
+    yield (status: SyncStatus.localOnly, hasSomethingToReport: false);
     return;
   }
 
@@ -67,9 +138,9 @@ final syncStatusProvider = StreamProvider<SyncStatus>((ref) async* {
   await ref.watch(syncLifecycleProvider.future);
   final stack = await ref.watch(syncStackProvider.future);
 
-  final controller = StreamController<SyncStatus>();
+  final controller = StreamController<SyncIndication>();
   final health = <String, SyncHealth>{};
-  SyncStatus? lastEmitted;
+  SyncIndication? lastEmitted;
 
   // Every failure lands on the stream, because most emissions are un-awaited
   // (below): a throw from the enrolment read would otherwise be an unhandled
@@ -84,7 +155,7 @@ final syncStatusProvider = StreamProvider<SyncStatus>((ref) async* {
       // and the ceremony's own pull stamps `sync_cursors.last_sync_completed_at`,
       // which is one of the columns the health query watches — so the tick
       // arrives.
-      final next = syncStatusFor(
+      final next = syncIndicationFor(
         enrolment: (await stack.readEnrolmentStatus()).state,
         hasMemberCredential: stack.defaultClient.isEnrolled,
         health: health.values,

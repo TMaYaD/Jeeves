@@ -28,6 +28,58 @@ void main() {
       // what `clean` is defined as — that stays pending + unresolved alarms.
       expect(const SyncHealth(quarantineCount: 1).clean, isTrue);
     });
+
+    test('degraded is the actionable count and nothing else', () {
+      // ADR-0044: an accusation standing is not the same as the user being told
+      // something is wrong.
+      expect(const SyncHealth().degraded, isFalse);
+      expect(
+        const SyncHealth(unresolvedAlarmCount: 3).degraded,
+        isFalse,
+        reason: 'three handled conditions are three things that went right',
+      );
+      expect(
+        const SyncHealth(quarantineCount: 9, reportableQuarantineCount: 9).degraded,
+        isFalse,
+        reason: 'refusing bytes is the fail-closed rule working',
+      );
+      expect(
+        const SyncHealth(unresolvedAlarmCount: 1, actionableAlarmCount: 1).degraded,
+        isTrue,
+      );
+    });
+
+    test('reachability is broader than error, and narrower than everything', () {
+      expect(const SyncHealth().hasSomethingToReport, isFalse);
+      expect(
+        const SyncHealth(unresolvedAlarmCount: 1).hasSomethingToReport,
+        isTrue,
+        reason: 'handled is not an error, but it is still an account to read',
+      );
+      expect(
+        const SyncHealth(quarantineCount: 1).hasSomethingToReport,
+        isFalse,
+        reason: 'a wrap that has not arrived yet is not an event',
+      );
+      expect(
+        const SyncHealth(quarantineCount: 1, reportableQuarantineCount: 1)
+            .hasSomethingToReport,
+        isTrue,
+      );
+    });
+
+    test('the new counts are part of identity', () {
+      // The indicator only re-renders on a change, so a count the equality
+      // ignores is a count the drawer never notices moving.
+      expect(
+        const SyncHealth(unresolvedAlarmCount: 1),
+        isNot(const SyncHealth(unresolvedAlarmCount: 1, actionableAlarmCount: 1)),
+      );
+      expect(
+        const SyncHealth(quarantineCount: 1),
+        isNot(const SyncHealth(quarantineCount: 1, reportableQuarantineCount: 1)),
+      );
+    });
   });
 
   group('the stream', () {

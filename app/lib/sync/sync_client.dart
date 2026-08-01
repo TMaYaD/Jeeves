@@ -73,6 +73,7 @@ import 'op_payload.dart';
 import 'prune_payload.dart';
 import 'reducer.dart';
 import 'recovery_escrow.dart';
+import 'sync_condition_class.dart';
 import 'sync_database.dart';
 import 'sync_health.dart';
 import 'sync_transport.dart';
@@ -3436,23 +3437,51 @@ class SyncClient {
 
   /// SQL behind both [health] and [watchSyncHealth], so the one-shot and the
   /// stream cannot report different numbers.
-  static const String _healthSql = '''
+  ///
+  /// The two class-filtered counts inline their code lists rather than binding
+  /// them, and the lists are **generated from the classification itself**
+  /// (`sync_condition_class.dart`) rather than written out here: a hand-written
+  /// `IN (…)` beside an enum is a second copy of the decision, free to drift the
+  /// first time a kind is added. The interpolated values are our own enum codes,
+  /// never anything a server or a user supplied.
+  static final String _healthSql = '''
 SELECT
   (SELECT COUNT(*) FROM outbox
     WHERE workspace_id = ? AND sent_at IS NULL) AS pending_op_count,
   (SELECT COUNT(*) FROM quarantined_ops
     WHERE workspace_id = ? AND released_at IS NULL) AS quarantine_count,
+  (SELECT COUNT(*) FROM quarantined_ops
+    WHERE workspace_id = ? AND released_at IS NULL
+      AND reason NOT IN (${_sqlCodeList(transientRefusalCodes)}))
+    AS reportable_quarantine_count,
   (SELECT COUNT(*) FROM integrity_alarms
     WHERE workspace_id = ? AND resolved_at IS NULL) AS unresolved_alarm_count,
+  (SELECT COUNT(*) FROM integrity_alarms
+    WHERE workspace_id = ? AND resolved_at IS NULL
+      AND kind IN (${_sqlCodeList(actionableAlarmCodes)}))
+    AS actionable_alarm_count,
   (SELECT group_concat(DISTINCT kind) FROM integrity_alarms
     WHERE workspace_id = ? AND resolved_at IS NULL) AS alarm_kinds,
   (SELECT last_sync_completed_at FROM sync_cursors
     WHERE workspace_id = ?) AS last_synced_at
 ''';
 
+  /// Enum codes as a SQL literal list. They are `[a-z_]` identifiers declared in
+  /// this repo's own source; the assertion says so out loud rather than trusting
+  /// a reader to check.
+  static String _sqlCodeList(List<String> codes) {
+    assert(
+      codes.every((code) => RegExp(r'^[a-z0-9_]+$').hasMatch(code)),
+      'a condition code that is not a bare identifier cannot be inlined',
+    );
+    return codes.map((code) => "'$code'").join(', ');
+  }
+
   Selectable<QueryRow> _healthQuery() => _db.customSelect(
         _healthSql,
         variables: [
+          Variable<String>(workspaceId),
+          Variable<String>(workspaceId),
           Variable<String>(workspaceId),
           Variable<String>(workspaceId),
           Variable<String>(workspaceId),
@@ -3472,7 +3501,9 @@ SELECT
     return SyncHealth(
       pendingOpCount: row.read<int>('pending_op_count'),
       quarantineCount: row.read<int>('quarantine_count'),
+      reportableQuarantineCount: row.read<int>('reportable_quarantine_count'),
       unresolvedAlarmCount: row.read<int>('unresolved_alarm_count'),
+      actionableAlarmCount: row.read<int>('actionable_alarm_count'),
       alarmKinds: kinds == null || kinds.isEmpty ? const <String>{} : kinds.split(',').toSet(),
       lastSyncedAt: row.read<DateTime?>('last_synced_at'),
     );
@@ -3491,12 +3522,22 @@ SELECT
   /// something the user gets to look at, and hiding it would make the
   /// distinction between "healed" and "never happened" invisible.
   Future<List<QuarantineRow>> quarantined({bool includeReleased = true}) =>
-      (_db.select(_db.quarantinedOps)
-            ..where((row) => includeReleased
-                ? row.workspaceId.equals(workspaceId)
-                : row.workspaceId.equals(workspaceId) & row.releasedAt.isNull())
-            ..orderBy([(row) => OrderingTerm(expression: row.id)]))
-          .get();
+      _quarantineQuery(includeReleased: includeReleased).get();
+
+  /// The same rows, live — what the sync-health screen renders.
+  ///
+  /// The sibling of [watchIntegrityAlarms], and released rows are included for
+  /// the same reason [quarantined] includes them: a reorder that healed is what
+  /// separates "withheld and still missing" from "arrived out of order", and the
+  /// screen marks it re-admitted rather than hiding it.
+  Stream<List<QuarantineRow>> watchQuarantined() => _quarantineQuery().watch();
+
+  Selectable<QuarantineRow> _quarantineQuery({bool includeReleased = true}) =>
+      _db.select(_db.quarantinedOps)
+        ..where((row) => includeReleased
+            ? row.workspaceId.equals(workspaceId)
+            : row.workspaceId.equals(workspaceId) & row.releasedAt.isNull())
+        ..orderBy([(row) => OrderingTerm(expression: row.id)]);
 
   /// Watchable so the UI can surface "something arrived that we refused" rather
   /// than swallowing it. Counts what still stands refused.
