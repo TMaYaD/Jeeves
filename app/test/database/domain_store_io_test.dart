@@ -1,17 +1,17 @@
 /// The open path at the file level (ADR-0035, issues #595, #673).
 ///
 /// The one part no widget or DAO test can reach: whether the store is created,
-/// whether the open can tell that the op log still owes it a replay, and whether
-/// the dead `jeeves.sqlite` name is actually gone afterwards. Asserted over a
-/// temp directory rather than the app documents directory, which is why the open
-/// path takes one — `DomainStoreImpl.openDatabase()` is that call plus
-/// `path_provider`.
+/// whether the open can tell that the op log still owes it a replay, and that
+/// the open unlinks nothing. Asserted over a temp directory rather than the app
+/// documents directory, which is why the open path takes one —
+/// `DomainStoreImpl.openDatabase()` is that call plus `path_provider`.
 ///
-/// The sweep is irreversible, so it is pinned by behaviour rather than by a
-/// comment: a fabricated file with both SQLite sidecars goes in, and nothing
-/// comes out. What the cases below must never grow is a *conditional* — the
-/// sweep asks nothing about the device, and a test that set something up to make
-/// it behave differently would be pinning an arm this build does not have.
+/// The last of those is the one worth stating out loud. The open path used to
+/// delete the predecessor name unconditionally; it does not any more, and the
+/// case at the bottom is what keeps it that way. The directory this resolves to
+/// is app-private on Android but the *user's* own Documents folder on Linux and
+/// Windows, so a file the app did not create can sit in it — and deleting by
+/// file name alone cannot tell the difference.
 @TestOn('!browser')
 library;
 
@@ -22,18 +22,21 @@ import 'package:jeeves/database/domain_store.dart';
 
 import '../test_helpers.dart';
 
-/// A plausible occupant of the dead name: a real file, with the `-wal` and
-/// `-shm` sidecars SQLite leaves beside one in WAL mode.
-List<File> _fabricateDeadStore(Directory directory) {
+/// The name the domain read model used before ADR-0035 cut it over, with the
+/// `-wal` and `-shm` sidecars SQLite leaves beside one in WAL mode.
+///
+/// Spelled out here rather than imported: no production code knows this name any
+/// more, and re-introducing a constant for it would be the first step back
+/// towards touching it.
+List<File> _fabricatePredecessorStore(Directory directory) {
   final files = [
     for (final suffix in const ['', '-wal', '-shm'])
-      File('${directory.path}/$deadStoreFileName$suffix'),
+      File('${directory.path}/jeeves.sqlite$suffix'),
   ];
   for (final file in files) {
-    // Deliberately *not* a faithful SQLite header. The sweep never opens
-    // or inspects these bytes, so a fixture that mimicked one would
-    // suggest the contents are load-bearing. (It also carried a literal
-    // NUL, which made this whole file undiffable in review.)
+    // Deliberately *not* a faithful SQLite header: the open path never opens or
+    // inspects these bytes, so a fixture that mimicked one would suggest the
+    // contents are load-bearing.
     file.writeAsStringSync('not a database; a file is a file');
   }
   return files;
@@ -109,46 +112,32 @@ void main() {
     expect(second.needsRebuild, isTrue);
   });
 
-  test('opening the store sweeps the dead name and its sidecars', () async {
-    final dead = _fabricateDeadStore(directory);
-    expect(dead.every((f) => f.existsSync()), isTrue,
-        reason: 'the fixture has to exist for its removal to mean anything');
+  test('the open leaves a file it did not create alone', () async {
+    final predecessor = _fabricatePredecessorStore(directory);
+    expect(predecessor.every((f) => f.existsSync()), isTrue,
+        reason: 'the fixture has to exist for its survival to mean anything');
 
     final opening = await openDomainStoreIn(directory.path);
     addTearDown(opening.database.close);
 
-    // Unconditional, and deliberately so: nothing in this build can open that
-    // file, so there is nothing to weigh and no state to consult.
-    for (final file in dead) {
-      expect(file.existsSync(), isFalse, reason: file.path);
+    // Green-field: there is no legacy store to migrate, so there is nothing to
+    // be gained by unlinking one — and on Linux and Windows this directory is
+    // the user's own Documents folder, where a `jeeves.sqlite` need not be ours.
+    // The open creates its file and reads its marker; it deletes nothing.
+    for (final file in predecessor) {
+      expect(file.existsSync(), isTrue, reason: file.path);
     }
     expect(File('${directory.path}/$domainStoreFileName').existsSync(), isTrue);
   });
 
-  test('the sweep is idempotent when there is nothing to sweep', () async {
-    // Every launch runs it, so absence has to be a no-op rather than a throw —
-    // that is what makes the "have I already done this" flag unnecessary.
-    expect(() => removeDeadStoreFile(directory.path), returnsNormally);
-
-    final opening = await openDomainStoreIn(directory.path);
-    addTearDown(opening.database.close);
-    expect(
-      File('${directory.path}/$deadStoreFileName').existsSync(),
-      isFalse,
-    );
-  });
-
-  test('a re-open after the dead name is gone still succeeds', () async {
-    _fabricateDeadStore(directory);
+  test('a re-open beside a file it did not create still succeeds', () async {
+    _fabricatePredecessorStore(directory);
     final first = await openDomainStoreIn(directory.path);
     await first.database.close();
 
     final second = await openDomainStoreIn(directory.path);
     addTearDown(second.database.close);
     expect(File('${directory.path}/$domainStoreFileName').existsSync(), isTrue);
-    expect(
-      File('${directory.path}/$deadStoreFileName').existsSync(),
-      isFalse,
-    );
+    expect(File('${directory.path}/jeeves.sqlite').existsSync(), isTrue);
   });
 }

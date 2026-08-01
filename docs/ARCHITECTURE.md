@@ -68,18 +68,19 @@ which is why the Drift schema had grown a 28-step ladder made mostly of `sqlite_
 guards. The store is created rather than converted
 ([ADR-0035](./adr/0035-domain-store-cut-over-by-fresh-file.md)).
 
-The open path also unlinks that dead name and its `-wal`/`-shm` sidecars, on every launch.
-That is **housekeeping, not a decision**: `removeDeadStoreFile` reads nothing about the
-device — not enrolment, not the op log, not the file — and the open returns the same thing
-whether it removed three files or none. Nothing downstream may assume it happened. The
-argument that makes it safe is about the build, not the caller: no code here can open that
-file, so nothing can depend on it. It must not grow a condition; the moment its behaviour
-turns on something about the device it is a migration and belongs somewhere it can be
-reasoned about (#673).
+**The open path deletes nothing.** It creates `jeeves_domain.sqlite` and writes its own
+replay marker; the predecessor `jeeves.sqlite` and its `-wal`/`-shm` sidecars are left
+where they lie. An earlier build unlinked them on every launch, which this is a deliberate
+reversal of (#673): a green-field build has no legacy store to migrate, so the deletion
+bought nothing, and the directory `path_provider` resolves to is app-private only on
+Android and iOS — on Linux and Windows it is the user's own Documents folder, where a file
+of that name need not be the app's at all. Deleting by file name cannot tell the
+difference, so it does not delete. A stale predecessor costs disk; the alternative costs
+somebody else's data.
 
 | Piece | File | Role |
 |---|---|---|
-| Open path | `app/lib/database/domain_store_io.dart` (+ `_stub`) | Resolves the documents directory, opens the file over `sqlite_async`, reports whether the op log still owes it a replay, and sweeps the dead file name. |
+| Open path | `app/lib/database/domain_store_io.dart` (+ `_stub`) | Resolves the documents directory, opens the file over `sqlite_async`, and reports whether the op log still owes it a replay. Touches no file it did not create. |
 | Providers | `app/lib/providers/database_provider.dart` | `domainStoreProvider` (the opened file), `databaseProvider` (the Drift `GtdDatabase` over it, wrapped in `DatabaseConnection.delayed` so queries issued before the open resolves are queued), `domainStoreRebuildProvider` (the replay, plus the marker write and the failure log). |
 | Replay | `app/lib/sync/domain_rebuild.dart` | Projects everything the local op log has reduced into a store that has not been projected into yet, through the same `DomainProjector` a pull batch uses. Idempotent, tombstones included. |
 
@@ -90,8 +91,13 @@ with the marker the next launch retries it, and a failure is logged. Creating th
 a stale marker, so a store deleted out from under the app is replayed into again.
 
 An enrolled device therefore loses nothing across the cutover: its op log is the record and
-the domain store is a projection of it. A device that never enrolled has no log and starts
-empty — the sanctioned path from there is sign-up → enrolment → re-import.
+the domain store is a projection of it. A device that never enrolled has no log, so its
+store starts empty and stays whatever the user puts in it. **That is a steady state, not a
+gap to be closed** — enrolment is opt-in and nothing routes the user into it
+([ADR-0046](./adr/0046-enrolment-is-opt-in-and-nothing-routes-to-it.md)), so a device may
+run local-only indefinitely. If the user does later choose sync, the initial upload carries
+the store they already have onto the op log (ADR-0034); enrolling is not a fresh start and
+costs them nothing they had accrued.
 
 #### The `actions` table (issue #471 story 1, issue #472 story 2, issue #473 story 3, issue #474 story 4, issue #478 story 8, ADR-0001)
 
@@ -273,7 +279,7 @@ export '*_stub.dart'
 
 Opens the domain store (ADR-0035).
 
-- **Native (`domain_store_io.dart`):** resolves the documents directory via `path_provider`, opens `jeeves_domain.sqlite` over `sqlite_async`, reports whether the open created the file, and unconditionally unlinks the dead `jeeves.sqlite` name plus its `-wal`/`-shm` sidecars. Shared by Android, iOS, macOS, Linux and Windows — a platform gaining divergent behaviour (an encryption key out of the Keychain, say) should split its own adapter rather than branching inside this one.
+- **Native (`domain_store_io.dart`):** resolves the documents directory via `path_provider`, opens `jeeves_domain.sqlite` over `sqlite_async`, and reports whether the open created the file. It writes only names it owns and deletes nothing. Shared by Android, iOS, macOS, Linux and Windows, whose documents directories are *not* equally private — app-private on Android and iOS, the user's own folder on Linux and Windows — which is why nothing here may act on a file by name alone. A platform gaining divergent behaviour (an encryption key out of the Keychain, say) should split its own adapter rather than branching inside this one.
 - **Web (`domain_store_stub.dart`):** throws `UnsupportedError`. Not a gap: the fleet is one Android phone, and a browser adapter would be an untested claim rather than a capability.
 
 #### `app/lib/sync/sync_store.dart`

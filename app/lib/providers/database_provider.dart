@@ -28,8 +28,8 @@ final Provider<WorkspaceRoutingOpCapture> domainOpCaptureProvider =
 /// Two stores per device by design (see `sync/domain_projector.dart`): this one is
 /// the domain read model, `syncDatabaseProvider`'s is the convergence substrate.
 /// It reports whether the op log still owes it a replay — which is what
-/// [domainStoreRebuildProvider] keys on — and sweeps a dead file name off disk
-/// on the way past, which changes nothing either way.
+/// [domainStoreRebuildProvider] keys on. The open creates its own file and
+/// deletes nothing (issue #673).
 final FutureProvider<DomainStoreOpening> domainStoreProvider =
     FutureProvider<DomainStoreOpening>((ref) async {
   ref.keepAlive();

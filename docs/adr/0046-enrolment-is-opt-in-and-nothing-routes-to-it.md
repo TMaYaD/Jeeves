@@ -17,10 +17,10 @@ first time on that path. The author opened the app, was put in the enrolment cer
 could not get back to their data: the ceremony needs the network to found or join, and
 there was none. The only control on the screen was **Sign out**.
 
-The deeper problem was the premise. Every existing `SessionUnverified` test ran without a
-sync stack, so `_enrolmentGate()` could not read the store, failed open to `ready`, and
-the combination "unverified session, store that genuinely says `notEnrolled`" was never
-exercised anywhere. The arm was untested, not merely wrong.
+The underlying problem was the premise. The combination the trap needed — an unverified
+session over a store that genuinely reports "not enrolled" — was never exercised anywhere,
+because every test of an unverified session ran without a sync stack and so could not read
+enrolment at all. The arm was untested, not merely wrong.
 
 ## Decision
 
@@ -50,13 +50,15 @@ Local-only is a first-class steady state whether or not the device is signed in,
 app must never present it as transitional. A signed-in device that never enrols is not
 broken.
 
-Removing the redirect makes the Settings tile load-bearing: without it, enrolment is not
-opt-in but unreachable, and sync could never start. `test/screens/settings/sync_section_test.dart`
-pins it for exactly that reason.
+Removing the redirect makes the entry points load-bearing rather than convenient: with
+nothing routing the user in, an entry point that is missing or hidden does not make
+enrolment awkward, it makes sync impossible. They have to be pinned by test, and kept
+discoverable, for as long as this decision stands.
 
-The blind spot is closed rather than merely worked around: `test/sync/offline_relaunch_session_test.dart`
-now covers a signed-in, genuinely un-enrolled device over a stack that assembles for real,
-online and off, and asserts both that the user reaches the app and that deliberate
-navigation to the ceremony still works. `_enrolmentGate()` continues to fail open to
-`ready` when the stack cannot be read, and that is now stated where it can mislead: a
-`ready` in the session-layer tests means "unreadable", not "enrolled".
+Reading enrolment can fail — the store may not be readable when the question is asked — and
+the answer on failure has to be one that sends nobody anywhere. That is now a safe default
+rather than a dangerous one, which is the second reason this decision is worth having: under
+the old redirect, an unreadable store was one bad guess away from stranding a device.
+
+See `docs/ARCHITECTURE.md` for where the states are produced and read, and
+`docs/TESTING.md` for the coverage that holds them.

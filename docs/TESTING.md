@@ -258,9 +258,19 @@ Automated coverage:
   screen offers no founding" — a claim other cases in the file make on purpose.
 - `app/test/screens/enrolment/enrolment_ceremony_status_test.dart` — the state table and the
   failure classification as pure functions.
-- `app/test/router_test.dart` — the gate that routes here and pins the device here
-  (`needsEnrolment` forces every location to `/enrolment`; `ready`/`signedOut` bounce it
-  back to `/inbox`; `checking` redirects nothing).
+- `app/test/router_test.dart` — that **nothing routes the user here** (ADR-0046).
+  `signedInNotEnrolled` and `checking` redirect nothing at all, so a signed-in un-enrolled
+  device uses the app normally; `ready` and `signedOut` bounce `/enrolment` back to
+  `/inbox`, the router's only remaining move and a negative one. A case that asserted a
+  redirect *into* `/enrolment` would be pinning the trap this ADR removed.
+- `app/test/screens/settings/sync_section_test.dart` — the "Set up sync on this device"
+  tile. With no redirect, this tile is the only way sync can ever start, so its absence
+  would make enrolment unreachable rather than merely awkward; the test must fail if it is
+  deleted.
+- `app/test/sync/offline_relaunch_session_test.dart` — a signed-in, genuinely un-enrolled
+  device over a stack that assembles for real, unverified and verified, offline: the user
+  reaches the app, and deliberate navigation to the ceremony still works. `runAsync` is
+  load-bearing — the launch waits on real Dio/SQLite/KDF timers that fake time never fires.
 
 ### Manual runbook
 
@@ -268,9 +278,12 @@ The ceremony's real path needs a real key store and a real server, so it only ru
 Against the compose stack (`podman compose -f infra/docker-compose.yml up -d`) with an
 emulator:
 
-1. **Sign up or sign in.** The Workspace ids, the escrow slot and the Grants all derive from
-   the account, so there is nothing to enrol against before authenticating — and the flow
-   takes you here on its own, with no Settings entry to find.
+1. **Sign up or sign in, then open the ceremony yourself.** Authenticating lands you in the
+   app, not here: nothing routes you to enrolment (ADR-0046). The Workspace ids, the escrow
+   slot and the Grants all derive from the account, so there is nothing to enrol against
+   before authenticating — but taking the next step is your move. Go to **Settings → SYNC →
+   Set up sync on this device**. Check the app bar's back arrow works: it is pushed, so
+   backing out returns you to Settings with the device still un-enrolled and still usable.
 2. Expect *Not enrolled* and **Generate passphrase** on a fresh account; expect the
    passphrase field and no founding control on a second device of an account that is
    already founded.
@@ -280,17 +293,21 @@ emulator:
 4. **Verify server-side**: `podman compose -f infra/docker-compose.yml exec postgres psql -U jeeves -d jeeves -c "SELECT workspace_id, version FROM recovery_escrows"`
    shows two slots, and `SELECT workspace_id, author_member_id, author_seq, op_class FROM ops ORDER BY seq`
    shows two control ops per Workspace (genesis, then the root-signed owner Grant).
-5. **Re-open the app.** Expect the Inbox, not the ceremony: the gate reads *enrolled* from
-   the store and the redirect stops firing. Navigating to `/enrolment` by hand bounces to
-   `/inbox`.
-6. **Airplane mode, fresh account.** Expect the retry note rather than a founding button
+5. **Re-open the app.** Expect the Inbox. Navigating to `/enrolment` by hand bounces to
+   `/inbox`: the gate reads *enrolled*, and there is nothing left for the ceremony to do.
+6. **Relaunch signed in but un-enrolled, with no network** — the regression that motivated
+   ADR-0046. Sign in, back out of the ceremony without founding, kill the app, turn on
+   airplane mode, relaunch. Expect the **Inbox**, working, with the Settings tile still
+   offering enrolment. Landing in the ceremony is the bug: it needs the network the device
+   has just failed to reach, and offers no way back to the user's own data.
+7. **Airplane mode, fresh account.** Expect the retry note rather than a founding button
    (the escrow probe cannot answer). With the probe answered and the *founding* offline,
    expect "Server unreachable", *Not enrolled* still on screen, and the generated
    passphrase still shown for the retry. The copy deliberately does **not** claim nothing
    was written: "unreachable" describes the request that failed, and a lost response to the
    escrow PUT is indistinguishable from one that never arrived — so it tells the user to
    keep the passphrase and, if a retry then reports an existing escrow, to enrol with it.
-7. **Screen capture.** `adb shell screencap` on the ceremony screen returns a black frame
+8. **Screen capture.** `adb shell screencap` on the ceremony screen returns a black frame
    while `FLAG_SECURE` is set, and a normal one on any other screen — which is also the
    check that the flag is being cleared on the way out.
 
@@ -300,10 +317,11 @@ lands you in the app.
 
 ## The store cutover (verify on a debug install)
 
-The first open of a build carrying #595 creates `jeeves_domain.sqlite` and **deletes**
-`jeeves.sqlite` and its `-wal`/`-shm` sidecars (ADR-0035). The io-level behaviour — the
-replay gate (the `jeeves_domain.rebuilt` marker, including the retry after a replay that
-never completed), the deletion, its idempotence — is asserted over a temp directory in
+The first open of a build carrying #595 creates `jeeves_domain.sqlite` (ADR-0035). It
+**deletes nothing**: the predecessor `jeeves.sqlite` and its `-wal`/`-shm` sidecars are left
+in place (#673). The io-level behaviour — the replay gate (the `jeeves_domain.rebuilt`
+marker, including the retry after a replay that never completed) and the fact that the open
+touches no file it did not create — is asserted over a temp directory in
 `app/test/database/domain_store_io_test.dart`, and the op-log replay itself in
 `app/test/sync/domain_rebuild_test.dart`.
 
@@ -313,14 +331,19 @@ emulator install**:
 1. Install a pre-cutover build (or fabricate the file: `adb exec-out run-as loonyb.in.jeeves.dev sh -c 'echo x > app_flutter/jeeves.sqlite'`).
 2. Install the cutover build and launch it.
 3. `adb exec-out run-as loonyb.in.jeeves.dev ls app_flutter` — expect `jeeves_domain.sqlite`
-   present and `jeeves.sqlite` (with both sidecars) gone.
+   present **and `jeeves.sqlite` still there, untouched**. Its disappearance is the failure:
+   the app must not unlink a file it did not create, and on desktop targets this directory
+   is the user's own Documents folder.
 4. On a device that was enrolled, expect the domain store to hold the data the op log has
-   reduced; on one that never enrolled, expect it empty, which is the sanctioned state to
-   re-import from.
+   reduced; on one that never enrolled, expect it empty. Empty is a **steady state**, not a
+   staging post — the device keeps working local-only, and enrolment is offered in Settings
+   rather than required (ADR-0046).
 
 A **release** phone cannot be checked this way at all (`run-as: package not debuggable`),
-so it gets behavioural verification only: sign up → land in enrolment → found → the drawer
-indicator goes green → run the Nirvana import and watch the server's op count rise.
+so it gets behavioural verification only: sign up → land in the **app** → open enrolment
+from Settings → found → the drawer indicator goes green → run the Nirvana import and watch
+the server's op count rise. Signing up landing you anywhere but the app is itself the
+failure (ADR-0046).
 
 The op count now covers **every** imported entity — Outcomes, Captures, Tags and both
 junction tables — not just the Tags, so the expected rise is roughly three ops per imported
