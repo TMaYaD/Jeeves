@@ -2,9 +2,8 @@
 
 **Status:** accepted (2026-08-01)
 
-`_resolveAlarm` is called for exactly one of eighteen alarm kinds — two call sites,
-both `IntegrityAlarmKind.authorChainGap` — against thirteen `_raiseAlarm` sites.
-Seventeen kinds have no code path that can ever clear them, so the subsystem is
+Exactly one of the eighteen alarm kinds — `author_chain_gap` — has any code path
+that can clear it. The other seventeen can only be raised, so the subsystem is
 effectively write-only and every alarm it raises is immortal from the moment it
 fires. Beside that, `SyncHealth.degraded` counted *every* unresolved alarm and
 *every* unreleased quarantine row. The two together produced the defect this ADR
