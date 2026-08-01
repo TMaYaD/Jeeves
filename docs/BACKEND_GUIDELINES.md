@@ -47,6 +47,7 @@ The Jeeves FastAPI service is built following the [12-Factor App methodology](ht
 ### 10. Dev/Prod Parity
 - **Principle:** Keep development, staging, and production as similar as possible.
 - **Application:** We use `infra/` (Docker Compose) to run the exact same PostgreSQL and Redis infrastructure locally that we use in production.
+- **Image pins:** every image reference — `backend/Dockerfile`, `infra/docker-compose.yml`, and the Postgres service in `.github/workflows/backend-ci.yml` — carries both the exact upstream version in the tag and the `@sha256:` digest (ADR-0044). The digest is what resolves and what makes the pull immutable; the tag states which version those bytes are, so a dependency bump is readable as a version change rather than a hex swap. Read the files for the values; this document deliberately does not restate them. Dependabot rewrites both halves together for the Dockerfile and the compose file, but does not read workflow service images — the CI Postgres pin is bumped by hand and is kept in step with the compose one.
 
 ### 11. Logs
 - **Principle:** Treat logs as event streams.
