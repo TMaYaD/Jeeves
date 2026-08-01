@@ -13,6 +13,8 @@ import '../widgets/capture/capture_action.dart';
 import '../widgets/jeeves_logo.dart';
 import '../widgets/nudge_banner.dart';
 import 'common/tag_cloud.dart';
+import 'sync_health/sync_health_copy.dart';
+import 'sync_health/sync_health_screen.dart';
 
 /// The shared title-bar title for each of the seven shell list routes, keyed
 /// by [GoRouterState] path. The bar's title is a pure function of route state,
@@ -136,8 +138,10 @@ class CustomDrawer extends ConsumerWidget {
     final waitingForCount = ref.watch(waitingForProvider).asData?.value.length ?? 0;
     final maybeCount = ref.watch(maybeProvider).asData?.value.length ?? 0;
     final syncAsync = ref.watch(syncStatusProvider);
-    final syncStatus = syncAsync.hasError
-        ? SyncStatus.error
+    // A throwing health read is a red indicator with nothing behind it: we do
+    // not know what to report, so the tile must not offer to explain.
+    final syncIndication = syncAsync.hasError
+        ? (status: SyncStatus.error, hasSomethingToReport: false)
         : syncAsync.asData?.value;
 
     final projectTags = ref.watch(projectTagsProvider).asData?.value ?? [];
@@ -155,7 +159,7 @@ class CustomDrawer extends ConsumerWidget {
                   // Pointillist at 32 px — threshold for auto, meets clear-space req
                   const JeevesLogo(size: 32),
                   const Spacer(),
-                  _SyncIndicator(status: syncStatus),
+                  SyncIndicator(indication: syncIndication),
                 ],
               ),
             ),
@@ -383,24 +387,55 @@ class CustomDrawer extends ConsumerWidget {
 }
 
 /// Small sync indicator shown in the drawer header.
-class _SyncIndicator extends StatelessWidget {
-  const _SyncIndicator({required this.status});
-  final SyncStatus? status;
+///
+/// [SyncStatus.worthKnowing] differs from healthy in **both glyph and tone**,
+/// because colour alone is not an accessible difference: amber against green can
+/// collapse under deuteranopia at 20px. Filled `cloud_done` in green stays
+/// healthy; the calm state is the outlined glyph in amber, a shape difference
+/// readable with no colour at all.
+///
+/// Public **so that the tests assert this widget** rather than a second copy of
+/// its status-to-(glyph, tone, tooltip) table. A test that re-declares the table
+/// passes whatever the shell happens to render, which would leave the one thing
+/// this surface exists to get right — the calm band being visibly neither
+/// healthy nor an error — unguarded.
+class SyncIndicator extends StatelessWidget {
+  const SyncIndicator({super.key, required this.indication});
+  final SyncIndication? indication;
 
   @override
   Widget build(BuildContext context) {
-    final (icon, color, tooltip) = switch (status) {
+    final (icon, color, tooltip) = switch (indication?.status) {
       SyncStatus.localOnly => (Icons.cloud_off_outlined, const Color(0xFF9CA3AF), 'Local only'),
       SyncStatus.connecting => (Icons.cloud_upload_outlined, const Color(0xFF9CA3AF), 'Connecting'),
       SyncStatus.syncing => (Icons.cloud_sync, const Color(0xFF2563EB), 'Syncing'),
       SyncStatus.synced => (Icons.cloud_done, const Color(0xFF16A34A), 'Synced'),
+      SyncStatus.worthKnowing => (
+          Icons.cloud_done_outlined,
+          const Color(0xFFF59E0B),
+          syncHealthWorthKnowingTooltip,
+        ),
       SyncStatus.error => (Icons.cloud_off, const Color(0xFFDC2626), 'Sync error'),
       null => (Icons.cloud_off_outlined, const Color(0xFF9CA3AF), 'Local only'),
     };
 
-    return Tooltip(
+    final glyph = Tooltip(
       message: tooltip,
       child: Icon(icon, size: 20, color: color),
+    );
+
+    // Tappable **iff there is something to report**, read off the same value the
+    // glyph came from so the tile and its tappability cannot disagree. A healthy
+    // device has no entry point at all — see docs/DESIGN.md § Sync health for
+    // why that is a decision rather than an omission.
+    if (indication?.hasSomethingToReport != true) return glyph;
+    return InkWell(
+      borderRadius: BorderRadius.circular(4),
+      onTap: () {
+        Navigator.pop(context);
+        context.push(SyncHealthScreen.routePath);
+      },
+      child: Padding(padding: const EdgeInsets.all(8), child: glyph),
     );
   }
 }

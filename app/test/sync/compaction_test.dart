@@ -576,7 +576,14 @@ void main() {
         health.alarmKinds,
         contains(IntegrityAlarmKind.pruneAttestationDivergence.code),
       );
-      expect(health.degraded, isTrue);
+      // The accusation stands and the device keeps its own copy, so nothing of
+      // the user's was lost — the condition is `reported`, not an error
+      // (ADR-0044). It still counts in `unresolvedAlarmCount`, so this Workspace
+      // still cannot compact.
+      expect(health.unresolvedAlarmCount, greaterThan(0));
+      expect(health.clean, isFalse);
+      expect(health.degraded, isFalse);
+      expect(health.hasSomethingToReport, isTrue);
     });
   });
 

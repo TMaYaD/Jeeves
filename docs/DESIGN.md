@@ -117,6 +117,8 @@ Our color palette is designed for a **light** color mode, prioritizing clarity a
 *   **Tertiary Color**: `#4A5568` - A sophisticated gray-blue accent, providing depth for highlights or decorative elements.
 *   **Neutral Color**: `#4A5568` - This versatile neutral forms the foundation for backgrounds and general UI surfaces.
 
+**Amber (`#F59E0B`) means "worth your eye, not your action."** One meaning covering both its uses: the capacity bar's approaching-a-limit segment (§ Capacity bar), and the sync indicator's calm state (§ Sync health). Read narrowly as "warn", the second use would look like a drift; read as above, the two are the same statement about the same kind of thing. **Amber is spent on those two.** It is not available for a transient or in-progress state — see § Sync health for why a future "working on it" indicator should not be a colour at all.
+
 ### Typography
 Our brand font is **Manrope**, used consistently across every surface of the app. Manrope ships as an embedded variable font (`assets/fonts/Manrope-VariableFont_wght.ttf`) so the app works without internet access.
 *   **Headlines**: `Manrope` - Modern and highly legible for titles and headings.
@@ -248,6 +250,14 @@ him things and he keeps them. Three registers, kept distinct:
 
 Vocabulary follows CONTEXT.md's domain terms and Avoid lists (a Capture is never
 a "todo", "item", "thought", or "note").
+
+**One surface deliberately opts out of the Jeeves register: the sync-health
+screen.** It is where a user lands when they suspect something is broken.
+Character in that moment reads as evasive — a valet's understatement about data
+the user is worried about is the wrong instrument. The Jeeves register stays where
+the app is helping rather than accounting for itself. The opt-out is asserted by
+test (`sync_health_copy_test.dart`), so reintroducing the persona there means
+deleting a test to do it. See § Sync health.
 
 ## App title bar
 
@@ -385,3 +395,61 @@ Directly under the Plan section, so the whole Action chain — what's next and w
 Each row is two lines: the Action's text (14px, `#374151`), then a meta line (12px, `#9CA3AF`) reading `Done YYYY-MM-DD` or `Abandoned YYYY-MM-DD`, with ` · 25m` appended when that Action logged time. Zero minutes are omitted, not rendered as `0m`. Rows are newest-first by terminal timestamp. **No successor link is drawn** between an abandoned Action and whatever replaced it — the model stores none (ADR-0018), so the surface invents none.
 
 **Read-only by construction.** History rows are `Text` and nothing else: no icon buttons, no tap-to-edit, no drag handles, no remove. A terminated Action is a record, so the absence of affordances is structural rather than a rule to remember — the only tap target in the section is the expander itself.
+
+### Sync health — report, don't interrupt
+The drawer's sync indicator and the screen behind it (`/sync-health`,
+`app/lib/screens/sync_health/`) hold to three lines, and they are the whole
+behaviour of the surface (ADR-0044).
+
+**Reachable** — the indicator is tappable if and only if there is something to
+report: any unresolved integrity alarm, or any unreleased refusal whose reason is
+not self-healing. **A device with nothing to report has no entry point at all.**
+There is deliberately no permanent way into this screen from Settings or the
+drawer, and that is a decision rather than an omission: a standing way to check on
+a subsystem that is working is a standing invitation to worry about it, and the
+second presentation of sync state is exactly where the last untruth lived (the
+deleted Settings tile that read "Sync active" on a device syncing nothing). A
+device whose only condition is a wrap in flight also has no entry point — that is
+not an event.
+
+**An error** — the indicator is red if and only if an *actionable* alarm stands:
+four of eighteen kinds, the ones where something of the user's is stuck or lost.
+Fourteen kinds and every refusal report instead. Across the device's two
+Workspaces the worst *undecided* news wins, so a calm Workspace beside one holding
+an actionable alarm still renders red.
+
+**Worth knowing** — the calm state between them: amber `#F59E0B` with
+`Icons.cloud_done_outlined`, against healthy's green `#16A34A` with the filled
+`Icons.cloud_done`. **Both glyph and tone differ, because colour alone is not an
+accessible difference** — amber against green can collapse under deuteranopia at
+20px, and the outlined-versus-filled shape reads with no colour at all. Tooltip:
+*A few things worth knowing*.
+
+Amber is **spent** here (§ Color Palette). When alarm resolutions land, "a
+resolution is in flight" must not be amber, and should probably not be a colour:
+in-flight is a transient state, and motion, a progress treatment or an inline
+row-level indicator all say "working on it" more honestly than a hue that has to
+be memorised.
+
+The screen itself is a plain `ListView` under `AppTitleBar(title: 'Sync')`, white,
+2/4/6 radii, per-Workspace overline sections in the Settings `_sectionHeader`
+idiom. Two groups — **NEEDS ATTENTION** and **HANDLED** — and, whenever nothing
+needs attention, one sentence above them saying so. **No buttons of any kind**: no
+dismiss, no retry, no release. There are no resolutions yet, and a control that
+did nothing would be worse than none.
+
+Two copy rules, both asserted by test (`sync_health_copy_test.dart`):
+
+*   **Banned vocabulary.** The user has Tasks, lists, devices; they edited,
+    finished, deleted things. They never see *op*, *envelope*, *epoch*, *chain*,
+    *attestation*, *quarantine*, *upstream*, *seq*, *author*, *stream*,
+    *workspace*, *prune*, *HLC*,
+    *alarm* or *kind*, and no snake_case reaches the collapsed screen. Raw codes
+    and ids live only inside a per-row expandable.
+*   **The device rule.** *Name this device, or name a set, or name nobody — never
+    an anonymous singular peer.* "Another device" is uninformative precisely where
+    a name exists to be shown, so it is not written at all and there is no rejected
+    string to retire when device naming lands.
+
+There is **no healthy or empty state copy**, because a healthy device cannot reach
+the screen. The absence is deliberate.

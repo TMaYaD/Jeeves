@@ -14,6 +14,7 @@ import 'screens/periodic_review/periodic_review_screen.dart';
 import 'screens/planning/focus_session_planning_screen.dart';
 import 'screens/settings/settings_screen.dart';
 import 'screens/someday_maybe/someday_maybe_screen.dart';
+import 'screens/sync_health/sync_health_screen.dart';
 import 'screens/task_detail/task_detail_screen.dart';
 import 'screens/trash/trash_screen.dart';
 import 'screens/waiting_for/waiting_for_screen.dart';
@@ -105,6 +106,13 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/settings',
       builder: (context, state) => const SettingsScreen(),
+    ),
+    // Outside the shell, like /settings: it is an account of what happened
+    // rather than a place in the app. Nothing routes here on its own — the
+    // drawer indicator pushes it, and only while there is something to report.
+    GoRoute(
+      path: SyncHealthScreen.routePath,
+      builder: (context, state) => const SyncHealthScreen(),
     ),
     // Onboarding, not a settings page: a signed-in device that is not enrolled
     // is routed here and cannot leave until it is (or signs out).

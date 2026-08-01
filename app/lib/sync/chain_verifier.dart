@@ -88,9 +88,11 @@ enum IntegrityAlarmKind {
   /// publish: the resume PUT was refused under a code no retry can change.
   ///
   /// Accuses nobody — see the library header. The prepared bytes are **retained**
-  /// on this device (ADR-0040) and the record is simply no longer resumed, so this
-  /// stands until a recovery path or a dismissal (#575) clears it. There is no
-  /// heal, so nothing resolves it.
+  /// on this device (ADR-0040) and the record is simply no longer resumed. There
+  /// is no heal, so nothing resolves it, and no dismissal exists to clear it: it
+  /// is reported on the sync-health screen and stands. Classified `actionable`
+  /// (ADR-0044), because the User's data really has stopped moving onto the new
+  /// key — the recovery path is still owed.
   epochKeySetUnpublishable('epoch_key_set_unpublishable'),
 
   /// A second envelope under the same `(author, op_id)` with different bytes:
