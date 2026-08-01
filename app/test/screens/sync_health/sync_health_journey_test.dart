@@ -24,6 +24,7 @@
 @TestOn('!browser')
 library;
 
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -33,6 +34,7 @@ import 'package:go_router/go_router.dart';
 import 'package:jeeves/providers/auth_provider.dart';
 import 'package:jeeves/providers/sync_health_detail_provider.dart';
 import 'package:jeeves/providers/sync_status_provider.dart';
+import 'package:jeeves/screens/app_shell.dart';
 import 'package:jeeves/screens/sync_health/sync_health_copy.dart';
 import 'package:jeeves/screens/sync_health/sync_health_screen.dart';
 import 'package:jeeves/sync/chain_verifier.dart';
@@ -119,8 +121,15 @@ Widget _screenOver(DeviceReport report, {required String userId}) => ProviderSco
       child: const MaterialApp(home: SyncHealthScreen()),
     );
 
-/// Just the drawer indicator, mounted the way the shell mounts it — enough to
-/// assert the glyph, the tone, the tooltip and whether a tap goes anywhere.
+/// **The shipped `SyncIndicator`**, in the slot the shell puts it in: inside the
+/// drawer, over a router that has somewhere for a tap to go.
+///
+/// It is the production widget and not a copy of its table, which is the whole
+/// point — a test that re-declared the status-to-(glyph, tone, tooltip) mapping
+/// would agree with itself no matter what the shell rendered, and the calm
+/// band's amber outlined glyph is exactly the thing this file exists to hold.
+/// The drawer is load-bearing too: the widget's tap closes the drawer before it
+/// routes, and a `Drawer` registers a local history entry for that pop.
 Widget _indicatorOver(DeviceReport report) {
   final router = GoRouter(
     initialLocation: '/inbox',
@@ -128,10 +137,13 @@ Widget _indicatorOver(DeviceReport report) {
       GoRoute(
         path: '/inbox',
         builder: (_, _) => Scaffold(
-          body: Consumer(
-            builder: (context, ref, _) =>
-                _IndicatorHarness(indication: ref.watch(syncStatusProvider).value),
+          drawer: Drawer(
+            child: Consumer(
+              builder: (context, ref, _) =>
+                  SyncIndicator(indication: ref.watch(syncStatusProvider).value),
+            ),
           ),
+          body: const SizedBox.shrink(),
         ),
       ),
       GoRoute(
@@ -148,36 +160,18 @@ Widget _indicatorOver(DeviceReport report) {
   );
 }
 
-/// A stand-in for the drawer header's slot: the production `_SyncIndicator` is
-/// private, so this asserts the same contract against the same values — the
-/// tuple the shell renders, and the tap the shell wires.
-class _IndicatorHarness extends StatelessWidget {
-  const _IndicatorHarness({required this.indication});
-  final SyncIndication? indication;
-
-  @override
-  Widget build(BuildContext context) {
-    final (icon, color, tooltip) = switch (indication?.status) {
-      SyncStatus.localOnly => (Icons.cloud_off_outlined, const Color(0xFF9CA3AF), 'Local only'),
-      SyncStatus.connecting => (Icons.cloud_upload_outlined, const Color(0xFF9CA3AF), 'Connecting'),
-      SyncStatus.syncing => (Icons.cloud_sync, const Color(0xFF2563EB), 'Syncing'),
-      SyncStatus.synced => (Icons.cloud_done, const Color(0xFF16A34A), 'Synced'),
-      SyncStatus.worthKnowing => (
-          Icons.cloud_done_outlined,
-          const Color(0xFFF59E0B),
-          syncHealthWorthKnowingTooltip,
-        ),
-      SyncStatus.error => (Icons.cloud_off, const Color(0xFFDC2626), 'Sync error'),
-      null => (Icons.cloud_off_outlined, const Color(0xFF9CA3AF), 'Local only'),
-    };
-    final glyph = Tooltip(message: tooltip, child: Icon(icon, size: 20, color: color));
-    if (indication?.hasSomethingToReport != true) return glyph;
-    return InkWell(
-      onTap: () => context.push(SyncHealthScreen.routePath),
-      child: Padding(padding: const EdgeInsets.all(8), child: glyph),
-    );
-  }
+/// Open the drawer, which is how a user reaches the indicator at all.
+Future<void> _openDrawerOver(WidgetTester tester, DeviceReport report) async {
+  await tester.pumpWidget(_indicatorOver(report));
+  await tester.pumpAndSettle();
+  tester.state<ScaffoldState>(find.byType(Scaffold)).openDrawer();
+  await tester.pumpAndSettle();
 }
+
+/// Scoped to the indicator, so nothing the drawer or the scaffold happens to
+/// build can stand in for what the widget under test rendered.
+Finder _inIndicator(Finder matching) =>
+    find.descendant(of: find.byType(SyncIndicator), matching: matching);
 
 /// Every string the screen actually rendered, off-stage children excluded — the
 /// collapsed screen is the thing under test.
@@ -206,20 +200,19 @@ void main() {
       expect(report.indication.status, SyncStatus.worthKnowing);
       expect(report.indication.hasSomethingToReport, isTrue);
 
-      await tester.pumpWidget(_indicatorOver(report));
-      await tester.pumpAndSettle();
+      await _openDrawerOver(tester, report);
 
-      final icon = tester.widget<Icon>(find.byType(Icon));
+      final icon = tester.widget<Icon>(_inIndicator(find.byType(Icon)));
       expect(icon.icon, Icons.cloud_done_outlined,
           reason: 'the shape differs from healthy, so the state survives a '
               'colour-blind reading');
       expect(icon.color, const Color(0xFFF59E0B));
       expect(
-        tester.widget<Tooltip>(find.byType(Tooltip)).message,
+        tester.widget<Tooltip>(_inIndicator(find.byType(Tooltip))).message,
         syncHealthWorthKnowingTooltip,
       );
 
-      await tester.tap(find.byType(InkWell));
+      await tester.tap(_inIndicator(find.byType(InkWell)));
       await tester.pumpAndSettle();
       expect(find.text('the sync health screen'), findsOneWidget);
     });
@@ -375,14 +368,16 @@ void main() {
       expect(report.indication.hasSomethingToReport, isFalse);
       expect(report.conditions, isEmpty);
 
-      await tester.pumpWidget(_indicatorOver(report));
-      await tester.pumpAndSettle();
+      await _openDrawerOver(tester, report);
       expect(
-        find.byType(InkWell),
+        _inIndicator(find.byType(InkWell)),
         findsNothing,
         reason: 'a device with nothing to report offers no way in',
       );
-      expect(tester.widget<Icon>(find.byType(Icon)).icon, Icons.cloud_done);
+      expect(
+        tester.widget<Icon>(_inIndicator(find.byType(Icon))).icon,
+        Icons.cloud_done,
+      );
     });
 
     testWidgets('deep-linking it anyway shows an empty account, not a blank page',
@@ -434,9 +429,8 @@ void main() {
       expect(report.indication.hasSomethingToReport, isFalse);
       expect(report.conditions, isEmpty);
 
-      await tester.pumpWidget(_indicatorOver(report));
-      await tester.pumpAndSettle();
-      expect(find.byType(InkWell), findsNothing);
+      await _openDrawerOver(tester, report);
+      expect(_inIndicator(find.byType(InkWell)), findsNothing);
     });
   });
 
@@ -477,6 +471,82 @@ void main() {
         'SETTINGS',
       );
       expect(syncWorkspaceLabelFor('not-a-workspace-of-ours', 'sim-user'), isNull);
+    });
+  });
+
+  group('an expander stays on the row it was opened on', () {
+    // The one group here whose rows are hand-built rather than staged from a
+    // real fault, because the claim is not about the store: it is about element
+    // identity across two emissions. `ExpansionTile` owns its expanded state and
+    // Flutter matches children by position without a key, so a re-ordered
+    // emission would slide one row's open detail under another row's sentence —
+    // and `rowId` alone cannot be that key, since the screen folds two tables
+    // across two Workspaces and their row ids collide.
+    SyncHealthCondition conditionFor(IntegrityAlarmKind kind, int rowId) =>
+        SyncHealthCondition(
+          workspaceId: 'w1',
+          source: SyncConditionSource.standingCondition,
+          code: kind.code,
+          firstSeenAt: DateTime.utc(2026, 7, 1),
+          lastSeenAt: DateTime.utc(2026, 7, 1),
+          occurrenceCount: 1,
+          reAdmitted: false,
+          rowId: rowId,
+        );
+
+    test('two rows sharing a table id are still told apart', () {
+      final alarm = conditionFor(IntegrityAlarmKind.signatureInvalid, 1);
+      final refusal = SyncHealthCondition(
+        workspaceId: 'w1',
+        source: SyncConditionSource.refusedItem,
+        code: SyncRejectionReason.badSignature.code,
+        firstSeenAt: DateTime.utc(2026, 7, 1),
+        lastSeenAt: DateTime.utc(2026, 7, 1),
+        occurrenceCount: 1,
+        reAdmitted: false,
+        rowId: 1,
+      );
+      expect(
+        conditionRowKey(alarm),
+        isNot(conditionRowKey(refusal)),
+        reason: 'duplicate sibling keys are a crash, not a mis-match',
+      );
+    });
+
+    testWidgets('a re-ordered emission does not move the open detail',
+        (tester) async {
+      final first = conditionFor(IntegrityAlarmKind.signatureInvalid, 1);
+      final second = conditionFor(IntegrityAlarmKind.aeadFailure, 2);
+      final conditions = StreamController<List<SyncHealthCondition>>();
+      addTearDown(conditions.close);
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          currentUserIdProvider.overrideWith(() => _SignedInAs('sim-user')),
+          syncHealthDetailProvider.overrideWith((_) => conditions.stream),
+        ],
+        child: const MaterialApp(home: SyncHealthScreen()),
+      ));
+      conditions.add([first, second]);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text(sentenceForCondition(first)));
+      await tester.pumpAndSettle();
+      expect(find.textContaining(first.code), findsOneWidget);
+
+      conditions.add([second, first]);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining(first.code),
+        findsOneWidget,
+        reason: 'the row the user opened closed itself when the list re-ordered',
+      );
+      expect(
+        find.textContaining(second.code),
+        findsNothing,
+        reason: "a row nobody opened is showing another row's detail",
+      );
     });
   });
 }

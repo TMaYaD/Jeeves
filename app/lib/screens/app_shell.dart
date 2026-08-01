@@ -159,7 +159,7 @@ class CustomDrawer extends ConsumerWidget {
                   // Pointillist at 32 px — threshold for auto, meets clear-space req
                   const JeevesLogo(size: 32),
                   const Spacer(),
-                  _SyncIndicator(indication: syncIndication),
+                  SyncIndicator(indication: syncIndication),
                 ],
               ),
             ),
@@ -393,8 +393,14 @@ class CustomDrawer extends ConsumerWidget {
 /// collapse under deuteranopia at 20px. Filled `cloud_done` in green stays
 /// healthy; the calm state is the outlined glyph in amber, a shape difference
 /// readable with no colour at all.
-class _SyncIndicator extends StatelessWidget {
-  const _SyncIndicator({required this.indication});
+///
+/// Public **so that the tests assert this widget** rather than a second copy of
+/// its status-to-(glyph, tone, tooltip) table. A test that re-declares the table
+/// passes whatever the shell happens to render, which would leave the one thing
+/// this surface exists to get right — the calm band being visibly neither
+/// healthy nor an error — unguarded.
+class SyncIndicator extends StatelessWidget {
+  const SyncIndicator({super.key, required this.indication});
   final SyncIndication? indication;
 
   @override
