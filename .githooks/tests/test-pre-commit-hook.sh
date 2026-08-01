@@ -207,9 +207,38 @@ stage_app_change() {
 }
 
 run_hook() {
-  local cwd="$1"
-  OUT=$(cd "${cwd}" && PATH="${BARE_PATH}" HOME="${WORK}/empty-home" sh "${HOOK}" 2>&1)
+  # $1 = cwd, $2 = optional PATH prefix (used to shadow `git` with a shim)
+  local cwd="$1" path_prefix="${2:-}"
+  local run_path="${BARE_PATH}"
+  if [ -n "${path_prefix}" ]; then
+    run_path="${path_prefix}:${BARE_PATH}"
+  fi
+  OUT=$(cd "${cwd}" && PATH="${run_path}" HOME="${WORK}/empty-home" sh "${HOOK}" 2>&1)
   RC=$?
+}
+
+# A `git` that behaves exactly like the real one except for
+# `rev-parse --local-env-vars`, which it breaks in one of two ways: `empty`
+# answers with nothing and exits 0, `nonzero` fails outright. Everything else
+# is exec'd through to the real binary, because the hook needs a working `git`
+# both before this point (`diff --cached`, `rev-parse --git-common-dir`) and
+# inside the stub SDK.
+make_broken_git_shim() {
+  local shim_dir="$1" failure_mode="$2"
+  local real_git
+  real_git=$(command -v git)
+  mkdir -p "${shim_dir}"
+  cat > "${shim_dir}/git" <<SHIM
+#!/bin/sh
+if [ "\$1" = "rev-parse" ] && [ "\$2" = "--local-env-vars" ]; then
+  case "${failure_mode}" in
+    empty)   exit 0 ;;
+    nonzero) echo 'fatal: simulated rev-parse failure' >&2; exit 128 ;;
+  esac
+fi
+exec "${real_git}" "\$@"
+SHIM
+  chmod +x "${shim_dir}/git"
 }
 
 OUT=""
@@ -568,6 +597,39 @@ if printf '%s' "${OUT}" | grep -q 'Running build_runner'; then
 else
   ok "hook stopped before build_runner (no partial state)"
 fi
+
+# The unset is only as good as the list it is handed, and that list comes from a
+# command that can fail. The empty-but-successful variant is the one a status
+# check alone cannot see: `unset $local_git_env_vars` degrades to a bare `unset`
+# with no operands — a no-op under sh/bash/dash, a non-fatal error under zsh —
+# so nothing is cleared and the hook has no way to notice. Measured with the
+# guard reverted, both variants: rc=0 and "Running build_runner" in the output,
+# i.e. every Flutter invocation running with the repo-local git env intact,
+# which is #644 back in force and completely silent about it.
+for local_env_failure in empty nonzero; do
+  start_case "\`git rev-parse --local-env-vars\` answers ${local_env_failure}: hook fails loudly instead of unsetting nothing"
+  new_fake_sdk
+  new_repo
+  broken_git_dir="${WORK}/broken-git-${local_env_failure}-${REPO_SEQ}"
+  make_broken_git_shim "${broken_git_dir}" "${local_env_failure}"
+  stage_app_change "${REPO}"
+  run_hook "${REPO}" "${broken_git_dir}"
+  if [ "${RC}" -eq 1 ]; then
+    ok "${local_env_failure}: hook exits 1"
+  else
+    bad "${local_env_failure}: hook exited ${RC}, expected 1: ${OUT}"
+  fi
+  if printf '%s' "${OUT}" | grep -qF "repo-local environment variables"; then
+    ok "${local_env_failure}: message names the safeguard that could not be applied"
+  else
+    bad "${local_env_failure}: failure message is unclear: ${OUT}"
+  fi
+  if printf '%s' "${OUT}" | grep -qF 'Running build_runner'; then
+    bad "${local_env_failure}: hook ran build_runner with the repo-local git env still set (#644)"
+  else
+    ok "${local_env_failure}: hook stopped before build_runner (no partial state)"
+  fi
+done
 
 for backend_shell in ${BACKEND_SHELLS}; do
 

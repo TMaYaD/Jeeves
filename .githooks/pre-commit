@@ -179,7 +179,24 @@ if git diff --cached --name-only | grep -q "^app/"; then
     # every tool call below clean by construction instead of only the ones we
     # remembered to wrap. The corollary is load-bearing for future edits:
     # ANY NEW `git` INVOCATION IN THIS SECTION MUST GO ABOVE THE UNSET BELOW.
-    local_git_env_vars=$(git rev-parse --local-env-vars)
+    #
+    # That list IS the safeguard, so obtaining it is a prerequisite, not a
+    # best-effort step. Two conditions, because a status check alone is not
+    # sufficient: an empty-but-successful answer leaves the line below a bare
+    # `unset` with no operands, which is a silent no-op under sh/bash/dash and
+    # a non-fatal error under zsh. Either way nothing is cleared, every
+    # invocation below inherits the leaked variables, and the section goes on
+    # to corrupt the shared SDK with no diagnostic and a zero exit — the
+    # failure mode this whole section exists to prevent. Fail closed instead.
+    if ! local_git_env_vars=$(git rev-parse --local-env-vars) ||
+        [ -z "$local_git_env_vars" ]; then
+        echo "❌ Could not enumerate git's repo-local environment variables."
+        echo "   'git rev-parse --local-env-vars' failed or answered with nothing,"
+        echo "   so the Flutter checks below cannot be run against a clean git"
+        echo "   environment. Running them anyway would corrupt the shared"
+        echo "   Flutter SDK for every worktree on this machine (#644)."
+        exit 1
+    fi
     # Word-splitting is intentional: local_git_env_vars is a newline-separated
     # list of variable names to unset.
     # shellcheck disable=SC2086
