@@ -256,9 +256,9 @@ class SyncStack {
   /// What this device's own store says about its enrolment. **No network.**
   ///
   /// One reader for three callers — `sync_lifecycle.dart`, which decides whether
-  /// to attach a transport and author anything; the router's session gate, which
-  /// decides whether the device belongs in onboarding; and the enrolment surface,
-  /// which decides which controls to offer. The reads and the
+  /// to attach a transport and author anything; the session gate, which decides
+  /// what Settings offers; and the enrolment surface, which decides which
+  /// controls to show. The reads and the
   /// derivation are here because two copies of either would be free to disagree,
   /// and the lifecycle's answer has to be the one the screen shows.
   Future<EnrolmentCeremonyStatus> readEnrolmentStatus() async {

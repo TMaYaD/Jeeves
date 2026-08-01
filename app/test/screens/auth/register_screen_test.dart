@@ -21,7 +21,7 @@ class _SuccessAuthNotifier extends AuthNotifier {
   Future<void> register(String email, String password) async {
     // What the real notifier does for a brand-new account: it is signed in and
     // by definition not enrolled.
-    sessionGateNotifier.value = SessionGate.needsEnrolment;
+    sessionGateNotifier.value = SessionGate.signedInNotEnrolled;
     state = const AsyncData('fake.jwt.token');
   }
 }
@@ -194,8 +194,8 @@ void main() {
     // The production redirect over the production gate, with stub routes: what
     // is under test is that signing up needs no navigation decision of its own.
     // The gate is passed rather than left to the redirect's fallback, so what
-    // the onboarding enforcement reads is visible here — it is the same global
-    // the fake AuthNotifiers above write and `tearDown` resets.
+    // the redirect reads is visible here — it is the same global the fake
+    // AuthNotifiers above write and `tearDown` resets.
     GoRouter gatedRouter({String initialLocation = '/register'}) => GoRouter(
           initialLocation: initialLocation,
           redirect:
@@ -223,7 +223,7 @@ void main() {
           ],
         );
 
-    testWidgets('a fresh account is taken straight into enrolment',
+    testWidgets('a fresh account is taken straight into the app',
         (tester) async {
       await tester.pumpWidget(_buildScreen(
         notifierFactory: _SuccessAuthNotifier.new,
@@ -238,16 +238,19 @@ void main() {
       await tester.tap(find.byKey(const Key('create_account_button')));
       await tester.pumpAndSettle();
 
-      // No detour through the app and no pop back to the caller: the whole
-      // point of AC-2 is that sign-up flows into onboarding.
-      expect(find.text('Enrolment'), findsOneWidget);
+      // A brand-new account is by definition un-enrolled, and #673 says that is
+      // a place to work from rather than a ceremony to be marched into. The
+      // account exists, the app opens, and enrolling is offered in Settings.
+      expect(find.text('Inbox'), findsOneWidget);
+      expect(find.text('Enrolment'), findsNothing);
       expect(find.byKey(const Key('create_account_button')), findsNothing);
     });
 
     testWidgets('a register pushed from Settings does not pop back to it',
         (tester) async {
       // It used to: the screen popped when it could, which on a signed-up but
-      // un-enrolled device left the user on Settings with onboarding unstarted.
+      // un-enrolled device left the user on Settings underneath a finished
+      // sign-up. `go('/inbox')` replaces the stack instead.
       await tester.pumpWidget(_buildScreen(
         notifierFactory: _SuccessAuthNotifier.new,
         router: gatedRouter(initialLocation: '/settings'),
@@ -264,7 +267,8 @@ void main() {
       await tester.tap(find.byKey(const Key('create_account_button')));
       await tester.pumpAndSettle();
 
-      expect(find.text('Enrolment'), findsOneWidget);
+      expect(find.text('Inbox'), findsOneWidget);
+      expect(find.text('Enrolment'), findsNothing);
       expect(find.text('Open register'), findsNothing);
     });
   });

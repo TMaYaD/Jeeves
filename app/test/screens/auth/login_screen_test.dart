@@ -25,14 +25,15 @@ class _SuccessAuthNotifier extends AuthNotifier {
   }
 }
 
-/// Signs in a device whose store says it is not enrolled: into onboarding.
+/// Signs in a device whose store says it is not enrolled. Still into the app:
+/// enrolment is opt-in (#673), so the gate reports the state and routes nothing.
 class _UnenrolledAuthNotifier extends AuthNotifier {
   @override
   Future<String?> build() async => null;
 
   @override
   Future<void> login(Map<String, dynamic> params) async {
-    sessionGateNotifier.value = SessionGate.needsEnrolment;
+    sessionGateNotifier.value = SessionGate.signedInNotEnrolled;
     state = const AsyncData('fake.jwt.token');
   }
 }
@@ -214,8 +215,8 @@ void main() {
   group('LoginScreen — success flow', () {
     // The production redirect over the production gate, with stub routes. The
     // gate is passed rather than left to the redirect's fallback, so what the
-    // onboarding enforcement reads is visible here — it is the same global the
-    // fake AuthNotifiers above write and `tearDown` resets.
+    // redirect reads is visible here — it is the same global the fake
+    // AuthNotifiers above write and `tearDown` resets.
     GoRouter gatedRouter({String initialLocation = '/login'}) => GoRouter(
           initialLocation: initialLocation,
           redirect:
@@ -266,8 +267,10 @@ void main() {
       expect(find.byType(CircularProgressIndicator), findsNothing);
     });
 
-    testWidgets('an un-enrolled device signs in into onboarding',
+    testWidgets('an un-enrolled device also signs in straight into the app',
         (tester) async {
+      // #673: the app is the destination whatever the store says about
+      // enrolment. Local-only is a steady state, not a waiting room.
       await tester.pumpWidget(_buildScreen(
         notifierFactory: _UnenrolledAuthNotifier.new,
         router: gatedRouter(),
@@ -276,14 +279,14 @@ void main() {
 
       await signIn(tester);
 
-      expect(find.text('Enrolment'), findsOneWidget);
-      expect(find.text('Inbox'), findsNothing);
+      expect(find.text('Inbox'), findsOneWidget);
+      expect(find.text('Enrolment'), findsNothing);
     });
 
     testWidgets('a login pushed from Settings does not pop back to it',
         (tester) async {
-      // It used to pop, which on an un-enrolled device left the user on
-      // Settings with onboarding unstarted. The gate routes instead.
+      // It used to pop, leaving the caller's screen underneath a completed
+      // sign-in. `go('/inbox')` replaces the stack instead, on both gates.
       await tester.pumpWidget(_buildScreen(
         notifierFactory: _UnenrolledAuthNotifier.new,
         router: gatedRouter(initialLocation: '/settings'),
@@ -294,7 +297,8 @@ void main() {
       await tester.pumpAndSettle();
       await signIn(tester);
 
-      expect(find.text('Enrolment'), findsOneWidget);
+      expect(find.text('Inbox'), findsOneWidget);
+      expect(find.text('Enrolment'), findsNothing);
       expect(find.text('Open login'), findsNothing);
       expect(find.byKey(const Key('sign_in_button')), findsNothing);
     });

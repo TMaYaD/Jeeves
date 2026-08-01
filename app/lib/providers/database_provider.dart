@@ -27,9 +27,9 @@ final Provider<WorkspaceRoutingOpCapture> domainOpCaptureProvider =
 ///
 /// Two stores per device by design (see `sync/domain_projector.dart`): this one is
 /// the domain read model, `syncDatabaseProvider`'s is the convergence substrate.
-/// Opening this one also disposes of the PowerSync-era `jeeves.sqlite`
-/// (ADR-0035), and reports whether the op log still owes it a replay — which is
-/// what [domainStoreRebuildProvider] keys on.
+/// It reports whether the op log still owes it a replay — which is what
+/// [domainStoreRebuildProvider] keys on. The open creates its own file and
+/// deletes nothing (issue #673).
 final FutureProvider<DomainStoreOpening> domainStoreProvider =
     FutureProvider<DomainStoreOpening>((ref) async {
   ref.keepAlive();

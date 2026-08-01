@@ -138,12 +138,12 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   // ---------------------------------------------------------------------------
 
   /// D2 read rule for `energy_level`: the current Action's value, else the
-  /// Outcome column. The COALESCE fallback keeps Actionless Outcomes and
-  /// never-migrated legacy stores (no `actions` rows) displaying their stored
-  /// value — no data loss, no blank-out — and, under the write-side mirror
-  /// (D1) + startup sweep, resolves to the current Action's value once one
-  /// exists. [t] is the `todos` table's SQL alias in the enclosing query
-  /// (`'todos'` or `'t'`).
+  /// Outcome column. The COALESCE fallback exists for **Actionless Outcomes** —
+  /// a supported, ordinary shape, not a leftover: an Outcome with no next action
+  /// still has an effort estimate the user typed, and it must not blank out.
+  /// Under the write-side mirror (D1) it resolves to the current Action's value
+  /// as soon as one exists. [t] is the `todos` table's SQL alias in the
+  /// enclosing query (`'todos'` or `'t'`).
   static String effectiveEnergyLevelSql(String t) =>
       'COALESCE('
       "${ActionDao.currentActionColumnSubquery('energy_level', '$t.id')}, "

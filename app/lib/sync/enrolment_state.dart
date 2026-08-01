@@ -2,9 +2,9 @@
 ///
 /// **Permanent sync-layer machinery.** Three callers derive the same three states
 /// from the same evidence: `sync_lifecycle.dart` decides whether to attach a
-/// transport and author anything, the router's session gate decides whether the
-/// device belongs in onboarding, and the enrolment surface decides which controls
-/// to offer. Deriving it more than once is how they would drift.
+/// transport and author anything, the session gate decides what Settings offers
+/// (never where the user is — #673), and the enrolment surface decides which
+/// controls to show. Deriving it more than once is how they would drift.
 ///
 /// Read from the store alone — **no network**. The answer must be the same
 /// offline, and a relaunched enrolled device holds no member credential to ask

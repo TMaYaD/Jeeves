@@ -1,9 +1,10 @@
-/// The enrolment ceremony surface — the app's onboarding step (issues #586,
-/// #595).
+/// The enrolment ceremony surface (issues #586, #595, #673).
 ///
-/// Signing in or up routes here whenever this device's store says it is not yet
-/// enrolled, and leaving it enrolled is what starts sync. A device that lands
-/// here on a session it no longer wants signs out from the app bar.
+/// **Opt-in, and nothing routes here.** Enrolling is what starts sync, and the
+/// user chooses when — from Settings' "Set up sync on this device", pushed so
+/// the app bar's back arrow is a real way out. A signed-in device that never
+/// comes here is not broken; it is a local-only device with an account, which is
+/// a supported steady state.
 ///
 /// Two presentations, chosen from the account rather than guessed: an account
 /// whose recovery-escrow slot is empty is **founded** from here (generate a
@@ -219,10 +220,10 @@ class _EnrolmentCeremonyScreenState
       appBar: AppBar(
         title: const Text('Enrolment ceremony'),
         actions: [
-          // The escape hatch, and the only one: the router pins an un-enrolled
-          // session here, so without this a session the user no longer wants —
-          // a restored legacy one, or the wrong account — would have nowhere to
-          // go. It is also the fresh-signup path off such a session.
+          // Not an escape hatch any more — backing out is what the app bar's
+          // arrow does. This is the fresh-signup path: a user who opened the
+          // ceremony and found the wrong account on it enrols a different one
+          // from here without going hunting through Settings.
           IconButton(
             key: const Key('enrolment_sign_out'),
             icon: const Icon(Icons.logout),

@@ -6,7 +6,6 @@
 import 'package:sqlite_async/sqlite_async.dart';
 
 const String domainStoreFileName = 'jeeves_domain.sqlite';
-const String legacyPowerSyncStoreFileName = 'jeeves.sqlite';
 const String domainRebuildMarkerFileName = 'jeeves_domain.rebuilt';
 
 typedef DomainStoreOpening = ({
@@ -26,5 +25,3 @@ class DomainStoreImpl {
 
 Future<DomainStoreOpening> openDomainStoreIn(String directoryPath) =>
     DomainStoreImpl().openDatabase();
-
-void deleteLegacyPowerSyncStore(String directoryPath) {}

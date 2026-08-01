@@ -1,7 +1,8 @@
 /// Drives the enrolment ceremony from the phone, and says what state it is in.
 ///
-/// The ceremony is the app's onboarding step: signing in or up leads here, and a
-/// device leaves it enrolled and syncing. The machinery it drives lives in
+/// The ceremony is how a device starts syncing, entered by choice from Settings
+/// rather than routed into (#673); a device leaves it enrolled and syncing —
+/// or leaves it alone, and stays local-only. The machinery it drives lives in
 /// `sync/enrolment.dart` and `sync/sync_stack.dart`; this is the surface's own
 /// seam onto it.
 ///
@@ -225,10 +226,11 @@ final enrolmentCeremonyRunnerProvider = Provider<EnrolmentCeremonyRunner>(
   (ref) => StackEnrolmentCeremonyRunner(
     () => ref.read(syncStackProvider.future),
     onEnrolled: () async {
-      // Onboarding is finished, so the router stops pinning the device here.
-      // Flipped before the activation because activation is a network round trip
-      // and possibly a walk of the whole store: the user should not be held on
-      // the ceremony screen waiting for their first upload.
+      // Enrolled, so the router hands the user back to the app — the screen has
+      // nothing left to say. Flipped before the activation because activation is
+      // a network round trip and possibly a walk of the whole store: the user
+      // should not be held on the ceremony screen waiting for their first
+      // upload.
       sessionGateNotifier.value = SessionGate.ready;
       final lifecycle = await ref.read(syncLifecycleProvider.future);
       if (lifecycle == null) return;

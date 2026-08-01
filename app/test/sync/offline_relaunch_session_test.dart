@@ -1,4 +1,19 @@
-/// An offline relaunch must not cost an enrolled device its enrolment (#606).
+/// An offline relaunch must not cost the user their device (#606, #673).
+///
+/// Two halves, both proven over one real device across process deaths. #606 is
+/// that an inconclusive refresh must not destroy an *enrolled* device's
+/// credentials. #673 is the sibling the first fix exposed: a device that is
+/// signed in and genuinely **not** enrolled must still reach the app. Restoring
+/// the session rather than dropping it made the enrolment gate reachable on the
+/// offline path for the first time, and the gate pinned every location to the
+/// ceremony — which needs the network, which was not there.
+///
+/// **Why the second half needs this harness and not a lighter one.** Every
+/// `SessionUnverified` test in `test/providers/auth_notifier_restore_test.dart`
+/// runs without a sync stack, so `_enrolmentGate()` cannot read the store, fails
+/// open to `ready`, and the real combination is never exercised. Here the stack
+/// assembles for real over a real store, so `readEnrolmentStatus()` answers
+/// `notEnrolled` on its own account — the gate is being *read*, not defaulted.
 ///
 /// The whole journey, through the production providers: session restore →
 /// `currentUserIdProvider` → `syncStackProvider` → `syncLifecycleProvider` → the
@@ -43,8 +58,10 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:drift/drift.dart' show driftRuntimeOptions;
 import 'package:drift/native.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 
 import 'package:jeeves/auth/auth_mode.dart';
 import 'package:jeeves/auth/password/password_auth_provider.dart';
@@ -55,10 +72,12 @@ import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/sync_lifecycle_provider.dart';
 import 'package:jeeves/providers/sync_stack_provider.dart';
 import 'package:jeeves/providers/user_constants.dart';
+import 'package:jeeves/router.dart' show buildAppRouterRedirect;
 import 'package:jeeves/services/api_service.dart';
 import 'package:jeeves/services/auth_service.dart';
 import 'package:jeeves/sync/device_key_store.dart';
 import 'package:jeeves/sync/domain_op_capture.dart';
+import 'package:jeeves/sync/enrolment_state.dart';
 import 'package:jeeves/sync/pending_rotation_store.dart';
 import 'package:jeeves/sync/sync_database.dart';
 import 'package:jeeves/sync/sync_lifecycle.dart';
@@ -340,6 +359,12 @@ class _Launch {
   Future<InitialUploadStateRow?> marker() =>
       InitialUploadMarkerStore(syncStore).read(_userId);
 
+  /// What this device's own store says about its enrolment — the thing
+  /// `AuthNotifier._enrolmentGate()` reads, asked here directly so a test can
+  /// prove the gate was *read* rather than defaulted to by a stack that threw.
+  Future<EnrolmentState> get enrolmentState async =>
+      (await (await stack).readEnrolmentStatus()).state;
+
   /// Process death: dispose the container (which deactivates the lifecycle) and
   /// release both files before the next launch reopens them.
   ///
@@ -525,5 +550,123 @@ void main() {
         reason: 'a captive portal cost the user their session');
 
     await relaunch.end();
+  });
+
+  // -------------------------------------------------------------------------
+  // #673 — signed in, genuinely not enrolled, and still in the app
+  // -------------------------------------------------------------------------
+
+  group('a signed-in device with a genuinely unenrolled store', () {
+    /// A launch from inside a widget test.
+    ///
+    /// **[WidgetTester.runAsync] is not optional here.** `testWidgets` runs the
+    /// body in fake time, and a launch drives real work that waits on real
+    /// timers — Dio's connect timeout on the refresh, SQLite, the KDF. In fake
+    /// time those timers never fire and the launch simply never returns.
+    Future<_Launch> launchInRealTime(
+      WidgetTester tester, {
+      ResponseBody? Function() refreshAnswer = _unreachable,
+    }) async =>
+        (await tester.runAsync(() => device.launch(refreshAnswer: refreshAnswer)))!;
+
+    /// The production redirect over the production gate global, with stub
+    /// routes. The gate is the same notifier `AuthNotifier` just wrote, so what
+    /// these assert is the whole journey — restore, store read, gate, router —
+    /// rather than a redirect fed a hand-set enum.
+    GoRouter routerOverTheLiveGate() => GoRouter(
+          initialLocation: '/inbox',
+          redirect:
+              buildAppRouterRedirect(swsMode: false, gate: sessionGateNotifier),
+          refreshListenable: sessionGateNotifier,
+          routes: [
+            GoRoute(
+                path: '/inbox',
+                builder: (_, _) => const Scaffold(body: Text('inbox'))),
+            GoRoute(
+                path: '/settings',
+                builder: (_, _) => const Scaffold(body: Text('settings'))),
+            GoRoute(
+                path: '/enrolment',
+                builder: (_, _) => const Scaffold(body: Text('enrolment'))),
+          ],
+        );
+
+    testWidgets('an unverified session on an unenrolled store reaches the app',
+        (tester) async {
+      // The exact combination nothing covered: the refresh was inconclusive
+      // (#606 keeps the session) *and* the store really has never enrolled. No
+      // `runOnlineLaunch()` here — that is what makes the store unenrolled.
+      device.storeCredentials(accessTokenValidForSeconds: -1);
+      device.link.online = false;
+      final relaunch = await launchInRealTime(tester);
+
+      expect(relaunch.adapter.refreshRequestCount, 1);
+      expect(relaunch.userId, _userId, reason: 'the session was not kept');
+      expect(await tester.runAsync(() => relaunch.enrolmentState),
+          EnrolmentState.notEnrolled,
+          reason: 'the store is enrolled, so this proves nothing about the gate');
+      expect(relaunch.gate, SessionGate.signedInNotEnrolled,
+          reason: 'the gate failed open instead of reading the store — the '
+              'blind spot that let the trap through');
+
+      await tester.pumpWidget(MaterialApp.router(
+        routerConfig: routerOverTheLiveGate(),
+      ));
+      await tester.pumpAndSettle();
+
+      // The defect, stated: the user opens the app and is in the app.
+      expect(find.text('inbox'), findsOneWidget);
+      expect(find.text('enrolment'), findsNothing);
+
+      await tester.runAsync(relaunch.end);
+    });
+
+    testWidgets('a verified session on an unenrolled store, offline, likewise',
+        (tester) async {
+      // Nothing about this turns on the refresh: a stored token that is still
+      // good is restored without asking anyone, and the store is still
+      // unenrolled. The device works, offline, with every surface reachable.
+      device.storeCredentials(accessTokenValidForSeconds: 3600);
+      device.link.online = false;
+      final relaunch = await launchInRealTime(tester);
+
+      expect(relaunch.adapter.refreshRequestCount, 0);
+      expect(relaunch.userId, _userId);
+      expect(await tester.runAsync(() => relaunch.enrolmentState),
+          EnrolmentState.notEnrolled);
+      expect(relaunch.gate, SessionGate.signedInNotEnrolled);
+
+      final router = routerOverTheLiveGate();
+      await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+      await tester.pumpAndSettle();
+      expect(find.text('inbox'), findsOneWidget);
+
+      router.go('/settings');
+      await tester.pumpAndSettle();
+      expect(find.text('settings'), findsOneWidget,
+          reason: 'a surface was walled off from an un-enrolled device');
+
+      await tester.runAsync(relaunch.end);
+    });
+
+    testWidgets('and enrolment is still reachable by deliberate navigation',
+        (tester) async {
+      // Opt-in, not unreachable. Removing the redirect must not turn into
+      // "you can never enrol": Settings pushes this route, and it has to open.
+      device.storeCredentials(accessTokenValidForSeconds: 3600);
+      device.link.online = false;
+      final relaunch = await launchInRealTime(tester);
+      expect(relaunch.gate, SessionGate.signedInNotEnrolled);
+
+      final router = routerOverTheLiveGate();
+      await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+      await tester.pumpAndSettle();
+
+      router.go('/enrolment');
+      await tester.pumpAndSettle();
+      expect(find.text('enrolment'), findsOneWidget);
+
+      await tester.runAsync(relaunch.end);
+    });
   });
 }

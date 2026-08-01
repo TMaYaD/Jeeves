@@ -33,9 +33,10 @@ class _PasswordLoginWidgetState extends ConsumerState<PasswordLoginWidget> {
           .read(authTokenProvider.notifier)
           .login({'email': email, 'password': password});
       if (!mounted) return;
-      // Always the app, never a pop back to the caller: the router's session
-      // gate decides where a freshly signed-in device belongs, and an
-      // un-enrolled one is taken to onboarding from here.
+      // Always the app, never a pop back to the caller: a finished sign-in must
+      // not leave the screen that pushed this one sitting underneath it. The
+      // app is the destination whatever the store says about enrolment —
+      // setting sync up is offered in Settings, not imposed here (#673).
       context.go('/inbox');
     } on DioException catch (e) {
       if (!mounted) return;

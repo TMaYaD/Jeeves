@@ -28,8 +28,9 @@ class _SwsLoginWidgetState extends ConsumerState<SwsLoginWidget> {
     try {
       await ref.read(authTokenProvider.notifier).login({});
       if (!mounted) return;
-      // The router's session gate routes from here — an un-enrolled device
-      // lands in onboarding rather than back on the caller's screen.
+      // The app, rather than a pop back to the caller's screen. Enrolment is
+      // opt-in and offered in Settings (#673); connecting a wallet does not
+      // conscript the user into a ceremony.
       context.go('/inbox');
     } catch (e) {
       if (!mounted) return;
