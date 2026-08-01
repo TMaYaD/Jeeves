@@ -5,6 +5,7 @@
 /// the screen's grouping is by *class* and not by table: a refused envelope and
 /// the accusation it raised are the same event told from either side, and the
 /// user has no reason to know they live in different places.
+///
 /// **It carries no copy.** A row here is the stored code, the class it falls
 /// under and when it happened; the sentence the user reads is resolved in
 /// `screens/sync_health/sync_health_copy.dart` from exactly those. That is what
