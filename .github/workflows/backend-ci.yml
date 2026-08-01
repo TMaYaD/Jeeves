@@ -123,8 +123,11 @@ jobs:
           find infra/ci .githooks -type f \( -name '*.sh' -o -path '*/stubs/*' \) -print0 \
             | xargs -0 shellcheck --severity=style
           shellcheck --shell=sh .githooks/pre-commit
+          shellcheck --shell=sh .githooks/prepare-commit-msg
       - name: compute-server-version.sh tests
         run: ./infra/ci/tests/test-compute-server-version.sh
       - name: pre-commit hook tests
         run: ./.githooks/tests/test-pre-commit-hook.sh
+      - name: prepare-commit-msg hook tests
+        run: ./.githooks/tests/test-prepare-commit-msg-hook.sh
 
