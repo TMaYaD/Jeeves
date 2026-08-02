@@ -384,6 +384,47 @@ for hook_shell in ${HOOK_SHELLS}; do
   commit_with_editor "${EDITOR_QUIT}" ''
   assert_nothing_committed "${hook_shell}, commit.verbose + editor quit"
 
+  start_case "editor (${hook_shell}): core.commentChar does not defeat the abort"
+  # git's comment block and scissors line start with core.commentChar, not
+  # necessarily `#`. An "is the message empty yet?" heuristic built on `^#`
+  # therefore reads git's own template as a subject the moment this is set,
+  # appends to it, and the quit-to-cancel abort fails open with a ` (#605)`
+  # commit. The $COMMIT_SOURCE guard is what makes the abort independent of it.
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  git -C "${CASE_REPO}" config core.commentChar ';'
+  commit_with_editor "${EDITOR_QUIT}" ''
+  assert_nothing_committed "${hook_shell}, core.commentChar=';' + editor quit"
+
+  start_case "editor (${hook_shell}): core.commentString does not defeat the abort"
+  # Same hole, through the multi-character spelling (git 2.45+). Skipped where
+  # git is too old to know the key, rather than silently asserting nothing.
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  if git -C "${CASE_REPO}" config core.commentString '//' 2>/dev/null; then
+    commit_with_editor "${EDITOR_QUIT}" ''
+    assert_nothing_committed "${hook_shell}, core.commentString='//' + editor quit"
+  else
+    skip "${hook_shell}, core.commentString: unsupported by $(git --version)"
+  fi
+
+  start_case "editor (${hook_shell}): core.commentChar + commit.verbose does not defeat the abort"
+  # Both knobs at once: the scissors line no longer starts with `#` either, so
+  # the un-commented staged diff below it is in play as well.
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  git -C "${CASE_REPO}" config core.commentChar ';'
+  git -C "${CASE_REPO}" config commit.verbose true
+  printf 'hello\n' > "${CASE_REPO}/f.txt"
+  git -C "${CASE_REPO}" add f.txt
+  commit_with_editor "${EDITOR_QUIT}" ''
+  assert_nothing_committed "${hook_shell}, core.commentChar + commit.verbose + editor quit"
+
+  start_case "extraction (${hook_shell}): core.commentChar leaves the -m path working"
+  # The guard must close the editor hole without costing the -m path its
+  # reference under the same config.
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  git -C "${CASE_REPO}" config core.commentChar ';'
+  commit_with -m "${SEED_SUBJECT}"
+  assert_subject "${hook_shell}, core.commentChar=';' + -m" "${SEED_SUBJECT} (#605)"
+
   start_case "guard (${hook_shell}): a #605 inside the verbose diff is not a reference"
   # `-m ... -e` is the one path with both a real subject and a verbose diff.
   # The diff mentions #605; the message does not. The append must still happen.

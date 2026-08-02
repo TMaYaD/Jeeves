@@ -8,8 +8,25 @@
 COMMIT_MSG_FILE=$1
 COMMIT_SOURCE=$2
 
-# Guard clause: Exit if the commit has a predefined source other than a regular '-m' message
-if [ -n "$COMMIT_SOURCE" ] && [ "$COMMIT_SOURCE" != "message" ]; then
+# Guard clause: only ever append to a message git already has in hand.
+#
+# $COMMIT_SOURCE is "message" for `-m`/`-F`, one of "template"/"merge"/
+# "squash"/"commit" when git supplied the text itself, and EMPTY on a plain
+# `git commit` — the editor path.
+#
+# The empty case is the one that matters. This hook runs BEFORE the editor
+# opens, so there is nothing to append to yet: the file holds only git's
+# comment block, and line 1 is blank. Writing there fills a file git would
+# otherwise see as empty, so quitting the editor without saving records a
+# commit whose subject is ` (#NNN)` instead of aborting. Quit-to-cancel is the
+# standard way to call off a commit; it must keep working.
+#
+# Testing $COMMIT_SOURCE rather than inspecting the file is what makes that
+# exact. An "is there a message yet?" heuristic has to tell git's comment block
+# apart from message text, which means knowing the comment character — and
+# under `core.commentChar` or `core.commentString` it is not `#`, so such a
+# heuristic reads git's own template as a subject and the abort fails open.
+if [ "$COMMIT_SOURCE" != "message" ]; then
     exit 0
 fi
 
@@ -46,14 +63,21 @@ BRANCH_NAME=$(git symbolic-ref --short HEAD 2>/dev/null)
 #     identical to `<type>/<number>-<slug>` and appends `(#2026)`.
 #     Distinguishing it needs a heuristic worse than the disease. Don't name
 #     branches that way.
-#   * `git commit -m 'feat: x' -m '#605'` yields `feat: x (#605)` with a `#605`
-#     body line left below it. Both guards below read the message through
-#     `message_body`, which drops `#` lines — that is what keeps git's own
-#     status block from being read as message text, and it is what makes the
-#     empty-message guard work at all. Telling git's comment block apart from a
-#     user's deliberate `#605` line would need core.commentChar parsing, to buy
-#     a cosmetic duplicate. `-m 'Closes #605'` is the shape people actually
-#     write, and it is matched.
+#   * A `-m` line the user starts with `#` is invisible to the already-
+#     referenced guard, because `message_body` drops `#` lines to keep git's
+#     own status block from being read as message text — it cannot tell the
+#     two apart. So `-m 'feat: x' -m '#605'` yields `feat: x (#605)` with a
+#     `#605` body line below it, and `-m '#605'` yields `#605 (#605)`.
+#     Telling them apart would need `core.commentChar`/`core.commentString`
+#     parsing, and since the abort no longer depends on reading the message at
+#     all, all that parsing would buy here is suppressing a duplicate.
+#     Note the direction, which is easy to get backwards: it was the OMISSION
+#     of comment-character awareness that endangered the abort guard — an
+#     emptiness heuristic keyed on `^#` misreads git's own template as a
+#     subject the moment the comment character is not `#`, and fabricates a
+#     ` (#NNN)` commit out of a cancelled one. The $COMMIT_SOURCE guard above
+#     retires that dependency rather than papering over it.
+#     `-m 'Closes #605'` is the shape people actually write, and it is matched.
 issue_number_from_branch() {
     branch=$1
     case $branch in
@@ -79,14 +103,22 @@ if [ -z "$ISSUE_NUMBER" ]; then
     exit 0
 fi
 
-# Everything in the file that git will actually keep as the message. Two things
-# are dropped, and both matter:
+# Everything in the file that git will keep as the message. The guard below is
+# the only caller, so this only ever runs with $COMMIT_SOURCE = "message" —
+# where a plain `-m` leaves the file holding nothing but the message, but
+# `-m ... -e` has git append its status block and, under commit.verbose, the
+# staged diff. Two things are dropped:
 #
 #   * Comment lines, so git's own `# On branch fix/605-...` status block is not
-#     read as message text.
+#     scanned for a reference.
 #   * Everything from the scissors line down. Under `commit.verbose` git puts
-#     the staged diff there, un-commented — so without this the diff counts as
-#     message text, and a `#605` inside it counts as a reference.
+#     the staged diff there, un-commented — so without this a `#605` inside the
+#     diff reads as an existing reference and suppresses a legitimate append.
+#
+# Both patterns hard-code `#`. Under `core.commentChar`/`core.commentString`
+# neither fires, and the guard then scans text git will discard. That can only
+# ever suppress an append — never fabricate a commit, which is what the
+# $COMMIT_SOURCE guard above now guarantees on its own.
 message_body() {
     sed -e '/^# -* >8 -*$/q' "$COMMIT_MSG_FILE" | grep -v '^#'
 }
@@ -97,17 +129,6 @@ message_body() {
 # all. $ISSUE_NUMBER is digits by construction, so nothing regex-significant is
 # interpolated.
 if message_body | grep -qE "#${ISSUE_NUMBER}([^0-9]|$)"; then
-    exit 0
-fi
-
-# Guard clause: Exit if there is no message yet — the file holds only git's
-# comment block. That is the EDITOR path: this hook runs BEFORE the editor
-# opens, so on a plain `git commit` there is no subject to append to, and line
-# 1 of the template is empty. Writing to it fills a file git would otherwise
-# see as empty, and quitting the editor without saving then records a commit
-# subject of ` (#NNN)` instead of aborting. Quit-to-cancel is the standard way
-# to call off a commit; it must keep working.
-if ! message_body | grep -q '[^[:space:]]'; then
     exit 0
 fi
 
