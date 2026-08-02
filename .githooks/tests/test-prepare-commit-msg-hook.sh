@@ -417,6 +417,20 @@ for hook_shell in ${HOOK_SHELLS}; do
   commit_with_editor "${EDITOR_QUIT}" ''
   assert_nothing_committed "${hook_shell}, core.commentChar + commit.verbose + editor quit"
 
+  start_case "editor (${hook_shell}): core.commentString + commit.verbose does not defeat the abort"
+  # The sixth cell of the abort matrix — {default, commentChar, commentString}
+  # x {verbose on, off}. All six must record zero commits.
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  if git -C "${CASE_REPO}" config core.commentString '//' 2>/dev/null; then
+    git -C "${CASE_REPO}" config commit.verbose true
+    printf 'hello\n' > "${CASE_REPO}/f.txt"
+    git -C "${CASE_REPO}" add f.txt
+    commit_with_editor "${EDITOR_QUIT}" ''
+    assert_nothing_committed "${hook_shell}, core.commentString + commit.verbose + editor quit"
+  else
+    skip "${hook_shell}, core.commentString + verbose: unsupported by $(git --version)"
+  fi
+
   start_case "extraction (${hook_shell}): core.commentChar leaves the -m path working"
   # The guard must close the editor hole without costing the -m path its
   # reference under the same config.
@@ -461,6 +475,54 @@ for hook_shell in ${HOOK_SHELLS}; do
   else
     skip "${hook_shell}, core.commentString: unsupported by $(git --version)"
   fi
+
+  # --- The comment character the already-referenced guard reads through ---
+
+  start_case "guard (${hook_shell}): git's own status block is skipped under core.commentChar"
+  # The reachable form of the hard-coded-`^#` defect, and it needs no unusual
+  # message — only an unusual config. Under `core.commentChar=';'` git writes
+  # its status block with `;`, so the line `; On branch fix/605-#605` sails
+  # straight through a `^#` filter; the guard then reads the `#605` in git's
+  # OWN text as an existing reference and silently suppresses a legitimate
+  # append. `message_body` goes through `git stripspace --strip-comments`,
+  # which reads `core.commentChar` itself, so the block is dropped as git
+  # drops it.
+  new_case_repo 'fix/605-#605' "${hook_shell}"
+  git -C "${CASE_REPO}" config core.commentChar ';'
+  commit_with_editor "${EDITOR_QUIT}" '' -m "${SEED_SUBJECT}" -e
+  assert_subject "${hook_shell}, status block under core.commentChar=';'" "${SEED_SUBJECT} (#605)"
+
+  # The same branch under the DEFAULT comment character, so the case above is
+  # pinned to the config and not to the branch name.
+  new_case_repo 'fix/605-#605' "${hook_shell}"
+  commit_with_editor "${EDITOR_QUIT}" '' -m "${SEED_SUBJECT}" -e
+  assert_subject "${hook_shell}, status block under the default comment char" "${SEED_SUBJECT} (#605)"
+
+  start_case "guard (${hook_shell}): a #605 body line is message text under core.commentChar"
+  # The mirror image. With the comment character set to `;`, a `#605` line the
+  # user wrote is NOT a comment — git keeps it, so it is a genuine reference
+  # and the append must be suppressed. A hard-coded `^#` filter dropped it and
+  # appended a second reference.
+  new_case_repo 'fix/605-x' "${hook_shell}"
+  git -C "${CASE_REPO}" config core.commentChar ';'
+  commit_with -m "${SEED_SUBJECT}" -m '#605'
+  assert_subject "${hook_shell}, '#605' body line under core.commentChar=';'" "${SEED_SUBJECT}"
+
+  start_case "guard (${hook_shell}): the accepted duplicate residual is comment-char-uniform"
+  # Under the default character a `#605` body line IS a comment to this hook,
+  # so the append happens and the message carries the reference twice. That is
+  # the residual the hook's comment records: its cause is git's cleanup MODE
+  # (plain `-m` cleans up with `whitespace`, which KEEPS comment lines), not
+  # the comment character. Pinned so it stays uniform — the same shape under
+  # `core.commentChar=';'` behaves the same way, where it used to differ.
+  new_case_repo 'fix/605-x' "${hook_shell}"
+  commit_with -m "${SEED_SUBJECT}" -m '#605'
+  assert_subject "${hook_shell}, '#605' body line under the default comment char" "${SEED_SUBJECT} (#605)"
+
+  new_case_repo 'fix/605-x' "${hook_shell}"
+  git -C "${CASE_REPO}" config core.commentChar ';'
+  commit_with -m "${SEED_SUBJECT}" -m '; note #605'
+  assert_subject "${hook_shell}, ';' body line under core.commentChar=';'" "${SEED_SUBJECT} (#605)"
 
   # --- The COMMIT_SOURCE guard ---
 
