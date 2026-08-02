@@ -109,18 +109,29 @@ fi
 # `-m ... -e` has git append its status block and, under commit.verbose, the
 # staged diff. Two things are dropped:
 #
-#   * Comment lines, so git's own `# On branch fix/605-...` status block is not
-#     scanned for a reference.
 #   * Everything from the scissors line down. Under `commit.verbose` git puts
 #     the staged diff there, un-commented — so without this a `#605` inside the
-#     diff reads as an existing reference and suppresses a legitimate append.
+#     diff reads as an existing reference and suppresses a legitimate append,
+#     which is the one plausible way to lose a reference on this path.
 #
-# Both patterns hard-code `#`. Under `core.commentChar`/`core.commentString`
-# neither fires, and the guard then scans text git will discard. That can only
-# ever suppress an append — never fabricate a commit, which is what the
+#     Git's scissors line is comment-PREFIXED, so anchoring the trim on `#`
+#     loses it the moment the comment character changes — and then the entire
+#     diff is scanned. The pattern therefore matches the `---- >8 ----` run and
+#     ignores whatever precedes it, which holds identically under `#`,
+#     `core.commentChar`, `core.commentString` and `core.commentChar=auto`.
+#     Reading `git config` could not match that: under `auto` git picks the
+#     character per message and reports only the word "auto".
+#   * Comment lines, so git's own `# On branch fix/605-...` status block is not
+#     scanned for a reference. This pattern does hard-code `#`, and under a
+#     non-default comment character the status block is scanned rather than
+#     skipped. It carries no `#NNN` of its own, so the cost is theoretical, and
+#     the only exact fix is the config parsing ruled out above.
+#
+# The residual runs one way: scanning text git will discard can only ever
+# SUPPRESS an append, never fabricate a commit — which is what the
 # $COMMIT_SOURCE guard above now guarantees on its own.
 message_body() {
-    sed -e '/^# -* >8 -*$/q' "$COMMIT_MSG_FILE" | grep -v '^#'
+    sed -e '/-\{8,\} >8 -\{8,\}$/,$d' "$COMMIT_MSG_FILE" | grep -v '^#'
 }
 
 # Guard clause: Exit if the message already references this issue. `#` is its

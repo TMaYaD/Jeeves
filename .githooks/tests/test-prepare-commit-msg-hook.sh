@@ -435,6 +435,33 @@ for hook_shell in ${HOOK_SHELLS}; do
   commit_with_editor "${EDITOR_QUIT}" '' -m "${SEED_SUBJECT}" -e
   assert_subject "${hook_shell}, #605 in the verbose diff only" "${SEED_SUBJECT} (#605)"
 
+  start_case "guard (${hook_shell}): the verbose-diff trim survives core.commentChar"
+  # The scissors line git writes above the verbose diff carries the comment
+  # character, so a trim anchored on `#` misses it entirely once that character
+  # changes — and the whole diff, `#605` and all, is scanned as if it were the
+  # message. Same case as above, one config away.
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  git -C "${CASE_REPO}" config commit.verbose true
+  git -C "${CASE_REPO}" config core.commentChar ';'
+  printf 'see #605 for context\n' > "${CASE_REPO}/notes.txt"
+  git -C "${CASE_REPO}" add notes.txt
+  commit_with_editor "${EDITOR_QUIT}" '' -m "${SEED_SUBJECT}" -e
+  assert_subject "${hook_shell}, verbose diff + core.commentChar=';'" "${SEED_SUBJECT} (#605)"
+
+  start_case "guard (${hook_shell}): the verbose-diff trim survives core.commentString"
+  # `core.commentString` makes the prefix a whole string rather than one
+  # character, which is why the trim matches the `>8` run and not the prefix.
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  git -C "${CASE_REPO}" config commit.verbose true
+  if git -C "${CASE_REPO}" config core.commentString '//' 2>/dev/null; then
+    printf 'see #605 for context\n' > "${CASE_REPO}/notes.txt"
+    git -C "${CASE_REPO}" add notes.txt
+    commit_with_editor "${EDITOR_QUIT}" '' -m "${SEED_SUBJECT}" -e
+    assert_subject "${hook_shell}, verbose diff + core.commentString='//'" "${SEED_SUBJECT} (#605)"
+  else
+    skip "${hook_shell}, core.commentString: unsupported by $(git --version)"
+  fi
+
   # --- The COMMIT_SOURCE guard ---
 
   start_case "COMMIT_SOURCE (${hook_shell}): a merge commit is left alone"
