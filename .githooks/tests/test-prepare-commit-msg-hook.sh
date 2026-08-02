@@ -1,31 +1,43 @@
 #!/usr/bin/env bash
-# Tests for .githooks/prepare-commit-msg — the hook that appends an issue
-# reference (e.g. "(#605)") drawn from the current branch name to the commit
-# message.
+# Tests for .githooks/prepare-commit-msg — the issue reference it appends to a
+# commit subject from the current branch name (#666).
 #
-# The behaviour worth protecting is that the appended reference is a REAL issue
-# number or nothing at all. The old hook extracted the first '<letters>-<digits>'
-# or bare digit run anywhere in the branch name, so generated branch names —
-# which is what agents committing from `git worktree` branches always have —
-# appended a wrong reference and linked the commit to an unrelated issue in the
-# tracker permanently (#666):
+# Every case builds a throwaway git repository in a temp directory, checks out
+# a branch under test, and runs a REAL `git commit`. Nothing here invokes the
+# hook by hand: going through git is what makes $COMMIT_SOURCE real, and the
+# assertion is always on the message git actually recorded (`git log -1`),
+# never on the hook's stdout. A hook that exits 0 having done nothing and one
+# that exits 0 having done the right thing are indistinguishable by status.
 #
-#   review-655                        -> (#review-655)
-#   coderabbit-review-proxy-3048c7    -> (#proxy-3048)
-#   worktree-agent-a0c916b19a98a11ae  -> (#0)      (first digit run in the hex)
+# `core.hooksPath` points at an isolated directory holding ONLY a copy of
+# prepare-commit-msg. Pointing it at the real .githooks would drag in
+# pre-commit (the whole Flutter + backend gauntlet) and commit-msg, so each
+# case would be testing four hooks at once.
 #
-# A second defect compounded it: the "already referenced" guard was a bare
-# substring test, so a degenerate id like '0' matched almost any message and
-# silently skipped the append, and a real id could match an unrelated number in
-# the body.
+# The hook has no external dependencies, so nothing is stubbed anywhere.
 #
-# Every case runs the REAL hook (AGENTS.md: no mocks for system components).
-# The default driver is a real `git commit` in a throwaway repo checked out on
-# the branch under test, with only prepare-commit-msg installed — the exact
-# production path, argv and all, that produced the wrong "(#review-655)" in the
-# first place. The COMMIT_SOURCE cases invoke the hook with git's own argv
-# directly, because a merge/template source is awkward to synthesise through a
-# plain `-m` commit.
+# The two defects being pinned, from #666:
+#
+#   1. The extraction was `grep -oE '([a-zA-Z]+-[0-9]+|[0-9]+)' | head -n 1`,
+#      unanchored, so the LEFTMOST digit-ish run anywhere in the name won:
+#      `review-655` -> `(#review-655)`, `coderabbit-review-proxy-3048c7` ->
+#      `(#proxy-3048)`, `worktree-agent-<hex>` -> `(#0)`. Agents work in
+#      generated worktree branches, so the wrong-id case is routine, and a
+#      wrong `(#NNN)` links a commit to an unrelated issue permanently.
+#   2. The already-referenced guard was `grep -q "$ISSUE_ID"` — a raw
+#      substring search over the whole file. With a degenerate id like `0` it
+#      matched almost any message; with a real one it matched unrelated
+#      numbers in prose, and the append was skipped silently.
+#
+# Each case is run under every shell present, by rewriting the copied hook's
+# shebang. `sh` is the production path — git executes the hook through its
+# `#!/bin/sh`. `dash` is NOT redundant with it: on Linux (so in CI) /bin/sh IS
+# dash, but on macOS it is bash in POSIX mode, and the two disagree about
+# parameter-expansion and `case` edge cases. Without an explicit dash row a
+# developer's local run cannot see a dash-only failure at all — the same gap
+# docs/TESTING.md records the pre-commit suite as having closed deliberately.
+# `bash` and `zsh` are cross-shell coverage for anyone who rewrites the
+# shebang or sources the logic elsewhere.
 #
 # Usage: ./test-prepare-commit-msg-hook.sh
 set -uo pipefail
@@ -41,6 +53,7 @@ FAILURES=0
 start_case() { printf '\n%s\n' "$1"; }
 ok()   { printf '  ok   — %s\n' "$1"; }
 bad()  { printf '  FAIL — %s\n' "$1"; FAILURES=$((FAILURES + 1)); }
+skip() { printf '  SKIP — %s\n' "$1"; }
 
 report() {
   echo
@@ -52,199 +65,509 @@ report() {
   exit 1
 }
 
-# ----- Throwaway repo on a chosen branch ------------------------------------
-# `git init -b "<branch>"` puts HEAD on an unborn "<branch>", which is all the
-# hook reads (`git symbolic-ref --short HEAD`). Branch names with slashes are
-# fine. Only prepare-commit-msg is installed, so no other hook interferes.
+# ----- Per-shell hook installs ----------------------------------------------
+# A copy of the real hook with its shebang rewritten to the interpreter under
+# test. Everything below line 1 is the production file, byte for byte.
 
-REPO=""
-REPO_SEQ=0
+hooks_dir_for() { printf '%s/hooks-%s' "${WORK}" "$1"; }
 
-new_repo_on_branch() {
-  REPO_SEQ=$((REPO_SEQ + 1))
-  REPO="${WORK}/repo-${REPO_SEQ}"
-  git init -q -b "$1" "${REPO}"
-  git -C "${REPO}" config user.email 'jeeves@example.invalid'
-  git -C "${REPO}" config user.name 'Jeeves Dev'
-  git -C "${REPO}" config commit.gpgsign false
-  ln -sf "${HOOK}" "${REPO}/.git/hooks/prepare-commit-msg"
+install_hook_for_shell() {
+  local shell_name="$1" interpreter dir
+  interpreter=$(command -v "${shell_name}")
+  dir=$(hooks_dir_for "${shell_name}")
+  mkdir -p "${dir}"
+  {
+    printf '#!%s\n' "${interpreter}"
+    tail -n +2 "${HOOK}"
+  } > "${dir}/prepare-commit-msg"
+  chmod +x "${dir}/prepare-commit-msg"
 }
 
-# Drive a real `git commit` (source = "message"). Each -m argument becomes one
-# paragraph, exactly as on the command line. Sets SUBJECT / BODY_MSG / RC.
-SUBJECT=""
-BODY_MSG=""
-RC=0
-commit_with_messages() {
-  local repo="$1"; shift
-  local margs=() m
-  for m in "$@"; do margs+=(-m "$m"); done
-  printf 'seed\n' > "${repo}/file.txt"
-  git -C "${repo}" add file.txt
-  RC=0
-  git -C "${repo}" commit -q "${margs[@]}" >/dev/null 2>&1 || RC=$?
-  SUBJECT=$(git -C "${repo}" log -1 --format=%s 2>/dev/null)
-  BODY_MSG=$(git -C "${repo}" log -1 --format=%B 2>/dev/null)
-}
-
-# Invoke the hook with git's own argv on a message file, for the COMMIT_SOURCE
-# variants. Sets DIRECT_MSG / DIRECT_RC.
-DIRECT_MSG=""
-DIRECT_RC=0
-run_hook_direct() {
-  # $1 = repo (for branch context), $2 = message content, $3 = source arg
-  local repo="$1" content="$2" source="$3"
-  local msg_file="${repo}/COMMIT_MSG_UNDER_TEST"
-  printf '%s\n' "${content}" > "${msg_file}"
-  ( cd "${repo}" && sh "${HOOK}" "${msg_file}" "${source}" )
-  DIRECT_RC=$?
-  DIRECT_MSG=$(cat "${msg_file}")
-}
-
-assert_subject() {
-  # $1 = label, $2 = expected subject
-  if [ "${SUBJECT}" = "$2" ]; then
-    ok "$1: subject is \"$2\""
+HOOK_SHELLS=""
+for candidate_shell in sh dash bash zsh; do
+  if command -v "${candidate_shell}" >/dev/null 2>&1; then
+    HOOK_SHELLS="${HOOK_SHELLS} ${candidate_shell}"
+    install_hook_for_shell "${candidate_shell}"
   else
-    bad "$1: expected subject \"$2\", got \"${SUBJECT}\""
-  fi
-}
-
-assert_committed() {
-  # A no-op append must still succeed silently — the commit lands, rc 0.
-  if [ "${RC}" -eq 0 ]; then
-    ok "$1: commit succeeded (rc 0)"
-  else
-    bad "$1: commit failed (rc ${RC}) — the hook did not exit silently and successfully"
-  fi
-}
-
-# ----- Cases: shapes that SHOULD contribute a reference ---------------------
-
-start_case "PR branch fix/<n>-<slug>: appends (#605) — the existing correct behaviour must still hold"
-new_repo_on_branch "fix/605-converge-duplicate-tags"
-commit_with_messages "${REPO}" "fix(tags): converge duplicates"
-assert_committed "fix/605"
-assert_subject "fix/605" "fix(tags): converge duplicates (#605)"
-
-start_case "PR branch feat/<n>-<slug>: number right after the first slash"
-new_repo_on_branch "feat/584-sync-health-visibility"
-commit_with_messages "${REPO}" "feat(sync): health visibility"
-assert_subject "feat/584" "feat(sync): health visibility (#584)"
-
-start_case "generated worktree branch issue-<n>/<slug>: the shape agents actually commit on"
-new_repo_on_branch "issue-666/prepare-commit-msg-appends-a-wrong-issue-reference"
-commit_with_messages "${REPO}" "fix(githooks): anchor issue extraction"
-assert_subject "issue-666" "fix(githooks): anchor issue extraction (#666)"
-
-start_case "worktree branch issue-<n>-<slug> (no slash): still a leading issue token"
-new_repo_on_branch "issue-304-plan"
-commit_with_messages "${REPO}" "docs: plan"
-assert_subject "issue-304" "docs: plan (#304)"
-
-start_case "bare leading number <n>-<slug>: appends (#123)"
-new_repo_on_branch "123-add-login"
-commit_with_messages "${REPO}" "feat: add login"
-assert_subject "123-slug" "feat: add login (#123)"
-
-start_case "Jira-style key JVS-<n>: appends (#123)"
-new_repo_on_branch "JVS-123"
-commit_with_messages "${REPO}" "chore: tidy"
-assert_subject "JVS-123" "chore: tidy (#123)"
-
-# ----- Cases: the observed wrong-reference shapes MUST append nothing --------
-
-start_case "review-655: was (#review-655) — must now append nothing"
-new_repo_on_branch "review-655"
-commit_with_messages "${REPO}" "fix: address review"
-assert_committed "review-655"
-assert_subject "review-655" "fix: address review"
-
-start_case "coderabbit-review-proxy-3048c7: was (#proxy-3048) — must append nothing"
-new_repo_on_branch "coderabbit-review-proxy-3048c7"
-commit_with_messages "${REPO}" "fix: proxy tweak"
-assert_committed "coderabbit-proxy"
-assert_subject "coderabbit-proxy" "fix: proxy tweak"
-
-start_case "worktree-agent-<hex>: was (#0) from the first digit run in the hex — must append nothing"
-new_repo_on_branch "worktree-agent-a0c916b19a98a11ae"
-commit_with_messages "${REPO}" "chore: worktree work"
-assert_committed "worktree-agent"
-assert_subject "worktree-agent" "chore: worktree work"
-
-start_case "main: no issue number — appends nothing, silently and successfully"
-new_repo_on_branch "main"
-commit_with_messages "${REPO}" "chore: release prep"
-assert_committed "main"
-assert_subject "main" "chore: release prep"
-
-# ----- The already-referenced guard: whole token, not substring -------------
-
-start_case "already references (#605) in the subject: not appended twice"
-new_repo_on_branch "fix/605-converge-duplicate-tags"
-commit_with_messages "${REPO}" "fix(tags): converge duplicates (#605)"
-assert_subject "no-dup" "fix(tags): converge duplicates (#605)"
-
-start_case "already references #605 (bare, no parens) in the body: not appended"
-new_repo_on_branch "fix/605-converge-duplicate-tags"
-commit_with_messages "${REPO}" "fix(tags): converge duplicates" "Follow-up to #605."
-if [ "${SUBJECT}" = "fix(tags): converge duplicates" ]; then
-  ok "bare-#605-in-body: subject left unchanged"
-else
-  bad "bare-#605-in-body: subject was modified to \"${SUBJECT}\""
-fi
-
-start_case "id appears only inside a longer number (#6050) in the body: the guard must NOT suppress the real append"
-new_repo_on_branch "fix/605-converge-duplicate-tags"
-commit_with_messages "${REPO}" "fix(tags): converge duplicates" "Unrelated to #6050."
-assert_subject "not-fooled-by-6050" "fix(tags): converge duplicates (#605)"
-if printf '%s' "${BODY_MSG}" | grep -qF '#6050'; then
-  ok "not-fooled-by-6050: the unrelated #6050 in the body is preserved"
-else
-  bad "not-fooled-by-6050: the body's #6050 was lost"
-fi
-
-# ----- Body preservation ----------------------------------------------------
-
-start_case "multi-paragraph message: reference lands on the subject, the body is untouched"
-new_repo_on_branch "fix/605-converge-duplicate-tags"
-commit_with_messages "${REPO}" "fix(tags): converge duplicates" "Detailed explanation line."
-assert_subject "body-preserved" "fix(tags): converge duplicates (#605)"
-if printf '%s' "${BODY_MSG}" | grep -qF 'Detailed explanation line.'; then
-  ok "body-preserved: the body paragraph survived"
-else
-  bad "body-preserved: the body paragraph was lost: ${BODY_MSG}"
-fi
-
-# ----- COMMIT_SOURCE guard --------------------------------------------------
-# On a branch that WOULD otherwise contribute (#605), a non-"message" source
-# must make the hook exit without touching the message.
-
-for source in merge template squash commit; do
-  start_case "COMMIT_SOURCE=${source}: hook leaves the message untouched even on an issue branch"
-  new_repo_on_branch "fix/605-converge-duplicate-tags"
-  run_hook_direct "${REPO}" "Merge branch 'x'" "${source}"
-  if [ "${DIRECT_RC}" -eq 0 ]; then
-    ok "${source}: hook exits 0"
-  else
-    bad "${source}: hook exited ${DIRECT_RC}"
-  fi
-  if [ "${DIRECT_MSG}" = "Merge branch 'x'" ]; then
-    ok "${source}: message left untouched"
-  else
-    bad "${source}: message was modified to \"${DIRECT_MSG}\""
+    skip "${candidate_shell} not on PATH — that interpreter's parameter-expansion behaviour goes unexercised"
   fi
 done
 
-# The empty-source path (an editor commit) is NOT an early exit — the hook
-# proceeds and appends, same as the "message" source above.
-start_case "empty COMMIT_SOURCE (editor commit): hook proceeds and appends"
-new_repo_on_branch "fix/605-converge-duplicate-tags"
-run_hook_direct "${REPO}" "fix(tags): converge duplicates" ""
-if [ "${DIRECT_MSG}" = "fix(tags): converge duplicates (#605)" ]; then
-  ok "empty-source: reference appended"
-else
-  bad "empty-source: expected the reference to be appended, got \"${DIRECT_MSG}\""
+# This suite's whole body is inside `for hook_shell in ${HOOK_SHELLS}`. An empty
+# list would run zero assertions and still print "All checks passed." — the one
+# way this file can lie. `sh` is guaranteed here (it is this script's own
+# interpreter's neighbour, and bash — the shebang — is itself a candidate), so
+# the branch is not reachable today; it is a tripwire for whoever edits the
+# candidate list.
+if [ -z "${HOOK_SHELLS# }" ]; then
+  bad "no shell interpreter found — the suite would otherwise report success having asserted nothing"
+  report
 fi
+
+# ----- Repo fixtures --------------------------------------------------------
+
+CASE_REPO=""
+CASE_SEQ=0
+
+new_case_repo() {
+  # $1 = branch name to sit on, $2 = shell the hook runs under
+  CASE_SEQ=$((CASE_SEQ + 1))
+  CASE_REPO="${WORK}/case-${CASE_SEQ}"
+  mkdir -p "${CASE_REPO}"
+  git -C "${CASE_REPO}" init -q -b "$1"
+  git -C "${CASE_REPO}" config user.email 'jeeves@example.invalid'
+  git -C "${CASE_REPO}" config user.name 'Jeeves Dev'
+  git -C "${CASE_REPO}" config commit.gpgsign false
+  git -C "${CASE_REPO}" config core.hooksPath "$(hooks_dir_for "$2")"
+}
+
+COMMIT_RC=0
+COMMIT_OUT=""
+SUBJECT=""
+FULL_MSG=""
+
+commit_with() {
+  # Remaining args are passed straight to `git commit`. --allow-empty keeps the
+  # fixtures to one concern: what is staged is irrelevant to this hook.
+  COMMIT_OUT=$(git -C "${CASE_REPO}" commit -q --allow-empty "$@" 2>&1)
+  COMMIT_RC=$?
+  SUBJECT=$(git -C "${CASE_REPO}" log -1 --pretty=%s 2>/dev/null)
+  FULL_MSG=$(git -C "${CASE_REPO}" log -1 --pretty=%B 2>/dev/null)
+}
+
+# AC #2 is "appends nothing, silently AND successfully", so the exit status is
+# asserted on every single case, not just the negative ones.
+assert_commit_succeeded() {
+  if [ "${COMMIT_RC}" -eq 0 ]; then
+    ok "$1: git commit succeeded"
+  else
+    bad "$1: git commit exited ${COMMIT_RC}: ${COMMIT_OUT}"
+  fi
+}
+
+assert_subject() {
+  # $1 = label, $2 = the exact subject line expected
+  assert_commit_succeeded "$1"
+  if [ "${SUBJECT}" = "$2" ]; then
+    ok "$1: subject is \"${SUBJECT}\""
+  else
+    bad "$1: subject is \"${SUBJECT}\", expected \"$2\""
+  fi
+}
+
+assert_nothing_committed() {
+  # $1 = label. Quitting the editor without saving must leave the repo exactly
+  # as it was — a non-zero status alone is not enough, because a hook that
+  # writes a junk message makes git succeed.
+  if [ "${COMMIT_RC}" -ne 0 ]; then
+    ok "$1: git commit aborted (status ${COMMIT_RC})"
+  else
+    bad "$1: git commit succeeded, expected an abort — recorded \"${SUBJECT}\""
+  fi
+  local commit_count
+  commit_count=$(git -C "${CASE_REPO}" rev-list --all --count 2>/dev/null || printf '0')
+  if [ "${commit_count}" = "0" ]; then
+    ok "$1: nothing was committed"
+  else
+    bad "$1: ${commit_count} commit(s) recorded, expected none — subject \"${SUBJECT}\""
+  fi
+}
+
+# ----- Capability probe: core.commentString (git 2.45+) ---------------------
+# `git config core.commentString '//'` is NOT a capability test — git stores
+# unknown configuration keys and exits 0 for any of them, so a gate keyed on its
+# status never skips, on any git. Probe the BEHAVIOUR instead: feed stripspace a
+# line that is a comment only if the key is understood. A git that knows the key
+# strips it and prints nothing; one that does not keeps it. The probe body must
+# be the comment ALONE — with any other text alongside it the output is non-empty
+# either way, and the probe silently answers "supported" on every git.
+if [ -z "$(printf '// probe\n' | git -c core.commentString='//' stripspace --strip-comments)" ]; then
+  COMMENT_STRING_SUPPORTED=yes
+else
+  COMMENT_STRING_SUPPORTED=no
+fi
+
+# ----- Editor-path fixtures -------------------------------------------------
+# A plain `git commit` reaches this hook with $COMMIT_SOURCE EMPTY, and the
+# message file at that moment holds nothing but git's `#` comment block. That
+# is the path every developer and agent takes when they do not pass -m, and a
+# scripted GIT_EDITOR is the only way to drive it from a test.
+
+EDITOR_QUIT="${WORK}/editor-quit"
+printf '#!/bin/sh\nexit 0\n' > "${EDITOR_QUIT}"
+chmod +x "${EDITOR_QUIT}"
+
+# Types ${EDITOR_SUBJECT} above git's comment block and saves — what a
+# developer who actually writes a subject leaves behind.
+EDITOR_WRITE="${WORK}/editor-write"
+cat > "${EDITOR_WRITE}" <<'EDITOR_SCRIPT'
+#!/bin/sh
+{ printf '%s\n' "${EDITOR_SUBJECT}"; cat "$1"; } > "$1.typed"
+mv "$1.typed" "$1"
+EDITOR_SCRIPT
+chmod +x "${EDITOR_WRITE}"
+
+commit_with_editor() {
+  # $1 = editor script, $2 = the subject it types (ignored by editor-quit).
+  # Remaining args go to `git commit`. With none, there is no -m, so git opens
+  # the editor and $COMMIT_SOURCE is empty.
+  local editor="$1" typed="$2"
+  shift 2
+  COMMIT_OUT=$(EDITOR_SUBJECT="${typed}" GIT_EDITOR="${editor}" \
+    git -C "${CASE_REPO}" commit -q --allow-empty "$@" 2>&1)
+  COMMIT_RC=$?
+  SUBJECT=$(git -C "${CASE_REPO}" log -1 --pretty=%s 2>/dev/null)
+  FULL_MSG=$(git -C "${CASE_REPO}" log -1 --pretty=%B 2>/dev/null)
+}
+
+# ----- Cases ----------------------------------------------------------------
+# Two seed messages, deliberately free of digits, so the only thing that can
+# put a number in the subject is the hook.
+SEED_SUBJECT='feat: add the thing'
+
+for hook_shell in ${HOOK_SHELLS}; do
+
+  # --- Extraction: the shapes that must yield a reference ---
+
+  start_case "extraction (${hook_shell}): conventional branch shapes append the right number"
+
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  commit_with -m "${SEED_SUBJECT}"
+  assert_subject "${hook_shell}, fix/605-converge-duplicate-tags" "${SEED_SUBJECT} (#605)"
+
+  new_case_repo 'reviews/586' "${hook_shell}"
+  commit_with -m "${SEED_SUBJECT}"
+  assert_subject "${hook_shell}, reviews/586" "${SEED_SUBJECT} (#586)"
+
+  # The most dangerous of the wrong shapes, because `(#issue-458)` looks
+  # plausible enough to survive a glance in a way `(#proxy-3048)` does not.
+  new_case_repo 'issue-458/global-capture-fab' "${hook_shell}"
+  commit_with -m "${SEED_SUBJECT}"
+  assert_subject "${hook_shell}, issue-458/global-capture-fab" "${SEED_SUBJECT} (#458)"
+
+  new_case_repo '605-add-login' "${hook_shell}"
+  commit_with -m "${SEED_SUBJECT}"
+  assert_subject "${hook_shell}, 605-add-login" "${SEED_SUBJECT} (#605)"
+
+  # The prefix must never survive into the message: (#123), not (#JVS-123).
+  new_case_repo 'JVS-123' "${hook_shell}"
+  commit_with -m "${SEED_SUBJECT}"
+  assert_subject "${hook_shell}, JVS-123" "${SEED_SUBJECT} (#123)"
+
+  # --- Extraction: the shapes that must yield nothing ---
+
+  start_case "extraction (${hook_shell}): ad-hoc and generated branch names append nothing"
+
+  # Observed in practice on PR #655: produced (#review-655), caught by hand.
+  new_case_repo 'review-655' "${hook_shell}"
+  commit_with -m "${SEED_SUBJECT}"
+  assert_subject "${hook_shell}, review-655" "${SEED_SUBJECT}"
+
+  new_case_repo 'coderabbit-review-proxy-3048c7' "${hook_shell}"
+  commit_with -m "${SEED_SUBJECT}"
+  assert_subject "${hook_shell}, coderabbit-review-proxy-3048c7" "${SEED_SUBJECT}"
+
+  # 87 of these existed in the checkout when #666 was written. The first digit
+  # run in the hex suffix used to win, giving (#0).
+  new_case_repo 'worktree-agent-a0c916b19a98a11ae' "${hook_shell}"
+  commit_with -m "${SEED_SUBJECT}"
+  assert_subject "${hook_shell}, worktree-agent-<hex>" "${SEED_SUBJECT}"
+
+  new_case_repo 'drive-epic-666-644-b99fc4' "${hook_shell}"
+  commit_with -m "${SEED_SUBJECT}"
+  assert_subject "${hook_shell}, drive-epic-666-644-b99fc4" "${SEED_SUBJECT}"
+
+  # 0028 is a migration number, not issue #28 — but what stops this one is the
+  # ANCHOR: the last segment starts with `alembic-`, not a digit. The leading
+  # zero never gets a say.
+  new_case_repo 'fix/alembic-0028-ambiguous-parameter' "${hook_shell}"
+  commit_with -m "${SEED_SUBJECT}"
+  assert_subject "${hook_shell}, fix/alembic-0028-..." "${SEED_SUBJECT}"
+
+  # Same, for an ADR number — and again it is the anchor doing the work.
+  new_case_repo 'docs/renumber-duplicate-adr-0044' "${hook_shell}"
+  commit_with -m "${SEED_SUBJECT}"
+  assert_subject "${hook_shell}, docs/renumber-duplicate-adr-0044" "${SEED_SUBJECT}"
+
+  # THIS is the case the leading-zero rule exists for: the digits sit right on
+  # the anchor, so the anchor passes them and only the zero check rejects them.
+  new_case_repo 'fix/0028-ambiguous-parameter' "${hook_shell}"
+  commit_with -m "${SEED_SUBJECT}"
+  assert_subject "${hook_shell}, fix/0028-ambiguous-parameter" "${SEED_SUBJECT}"
+
+  new_case_repo 'fix/agp9-kotlin-android-plugin' "${hook_shell}"
+  commit_with -m "${SEED_SUBJECT}"
+  assert_subject "${hook_shell}, fix/agp9-kotlin-android-plugin" "${SEED_SUBJECT}"
+
+  new_case_repo 'dependabot/gradle/app/android/com.android.application-9.2.0' "${hook_shell}"
+  commit_with -m "${SEED_SUBJECT}"
+  assert_subject "${hook_shell}, dependabot/.../com.android.application-9.2.0" "${SEED_SUBJECT}"
+
+  # The trailing-number shape is deliberately unsupported — that is where
+  # versions, ADR numbers and dependabot bumps collide.
+  new_case_repo 'feat/login-registration-ui-94' "${hook_shell}"
+  commit_with -m "${SEED_SUBJECT}"
+  assert_subject "${hook_shell}, feat/login-registration-ui-94" "${SEED_SUBJECT}"
+
+  # Digits must be followed by a separator, never by more branch name.
+  new_case_repo 'fix/605_underscore' "${hook_shell}"
+  commit_with -m "${SEED_SUBJECT}"
+  assert_subject "${hook_shell}, fix/605_underscore" "${SEED_SUBJECT}"
+
+  new_case_repo 'deps/pin-postgres-exact-versions' "${hook_shell}"
+  commit_with -m "${SEED_SUBJECT}"
+  assert_subject "${hook_shell}, deps/pin-postgres-exact-versions" "${SEED_SUBJECT}"
+
+  new_case_repo 'main' "${hook_shell}"
+  commit_with -m "${SEED_SUBJECT}"
+  assert_subject "${hook_shell}, main" "${SEED_SUBJECT}"
+
+  # --- The already-referenced guard ---
+
+  start_case "guard (${hook_shell}): the reference token is matched, not an arbitrary substring"
+
+  new_case_repo 'fix/605-x' "${hook_shell}"
+  commit_with -m "${SEED_SUBJECT} (#605)"
+  assert_subject "${hook_shell}, already referenced" "${SEED_SUBJECT} (#605)"
+
+  # The substring guard used to see `605` inside `1605` and skip the append,
+  # leaving the commit with no reference at all.
+  new_case_repo 'fix/605-x' "${hook_shell}"
+  commit_with -m 'fix: handle 1605 rows'
+  assert_subject "${hook_shell}, unrelated number in subject" 'fix: handle 1605 rows (#605)'
+
+  # #6051 is a different issue. The append SHOULD happen.
+  new_case_repo 'fix/605-x' "${hook_shell}"
+  commit_with -m "${SEED_SUBJECT}" -m 'Refs #6051'
+  assert_subject "${hook_shell}, body references #6051" "${SEED_SUBJECT} (#605)"
+
+  # A genuine reference anywhere in the message suppresses the append.
+  new_case_repo 'fix/605-x' "${hook_shell}"
+  commit_with -m "${SEED_SUBJECT}" -m 'Closes #605'
+  assert_subject "${hook_shell}, body closes #605" "${SEED_SUBJECT}"
+  case "${FULL_MSG}" in
+    *"Closes #605"*) ok "${hook_shell}, body closes #605: body preserved" ;;
+    *) bad "${hook_shell}, body closes #605: body lost — ${FULL_MSG}" ;;
+  esac
+
+  # The old hook extracted ISSUE_ID=0 here, which its substring guard then
+  # found inside `v1.0.3` — so it exited early for entirely the wrong reason.
+  # Assert the message, not just the status: they are indistinguishable
+  # otherwise, and only one of them is the behaviour under test.
+  start_case "guard (${hook_shell}): a generated branch appends nothing and exits 0, on its own merits"
+  new_case_repo 'worktree-agent-a0c916b19a98a11ae' "${hook_shell}"
+  commit_with -m 'chore: bump to v1.0.3'
+  assert_subject "${hook_shell}, worktree-agent + version-like message" 'chore: bump to v1.0.3'
+
+  # --- The COMMIT_SOURCE guard: the editor path ($COMMIT_SOURCE empty) ---
+
+  start_case "editor (${hook_shell}): quitting without saving still aborts the commit"
+  # Quit-to-cancel is the standard gesture for calling off a commit, and it
+  # works because git sees an empty message. A hook that appends to line 1 of a
+  # file holding only git's comment block destroys that: the file is no longer
+  # empty, so git happily records a commit whose subject is " (#605)".
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  commit_with_editor "${EDITOR_QUIT}" ''
+  assert_nothing_committed "${hook_shell}, editor quit without saving"
+
+  start_case "editor (${hook_shell}): a typed subject is recorded exactly as typed"
+  # This hook runs BEFORE the editor opens, so on the editor path there is no
+  # subject for it to append to — only git's comment block and an empty line 1.
+  # It therefore appends nothing here, which is also what the pre-#666 hook did
+  # (by accident: its substring guard found the branch number inside git's own
+  # `# On branch fix/605-...` line). What must never happen is the middle
+  # ground: a ` (#605)` fragment left on its own line above the comment block,
+  # which git folds into the subject as `feat: add the thing  (#605)`.
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  commit_with_editor "${EDITOR_WRITE}" "${SEED_SUBJECT}"
+  assert_subject "${hook_shell}, editor typed a subject" "${SEED_SUBJECT}"
+
+  start_case "editor (${hook_shell}): a typed subject already carrying the reference is not doubled"
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  commit_with_editor "${EDITOR_WRITE}" "${SEED_SUBJECT} (#605)"
+  assert_subject "${hook_shell}, editor typed an existing reference" "${SEED_SUBJECT} (#605)"
+
+  start_case "editor (${hook_shell}): commit.verbose does not defeat the abort"
+  # Under commit.verbose git appends the staged diff below the scissors line,
+  # UN-commented. A guard that only strips `#` lines sees that diff as message
+  # text and appends anyway — the same junk commit, one config away.
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  git -C "${CASE_REPO}" config commit.verbose true
+  printf 'hello\n' > "${CASE_REPO}/f.txt"
+  git -C "${CASE_REPO}" add f.txt
+  commit_with_editor "${EDITOR_QUIT}" ''
+  assert_nothing_committed "${hook_shell}, commit.verbose + editor quit"
+
+  start_case "editor (${hook_shell}): core.commentChar does not defeat the abort"
+  # git's comment block and scissors line start with core.commentChar, not
+  # necessarily `#`. An "is the message empty yet?" heuristic built on `^#`
+  # therefore reads git's own template as a subject the moment this is set,
+  # appends to it, and the quit-to-cancel abort fails open with a ` (#605)`
+  # commit. The $COMMIT_SOURCE guard is what makes the abort independent of it.
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  git -C "${CASE_REPO}" config core.commentChar ';'
+  commit_with_editor "${EDITOR_QUIT}" ''
+  assert_nothing_committed "${hook_shell}, core.commentChar=';' + editor quit"
+
+  start_case "editor (${hook_shell}): core.commentString does not defeat the abort"
+  # Same hole, through the multi-character spelling (git 2.45+). Skipped where
+  # git is too old to know the key, rather than silently asserting nothing.
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  if [ "${COMMENT_STRING_SUPPORTED}" = yes ]; then
+    git -C "${CASE_REPO}" config core.commentString '//'
+    commit_with_editor "${EDITOR_QUIT}" ''
+    assert_nothing_committed "${hook_shell}, core.commentString='//' + editor quit"
+  else
+    skip "${hook_shell}, core.commentString: unsupported by $(git --version)"
+  fi
+
+  start_case "editor (${hook_shell}): core.commentChar + commit.verbose does not defeat the abort"
+  # Both knobs at once: the scissors line no longer starts with `#` either, so
+  # the un-commented staged diff below it is in play as well.
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  git -C "${CASE_REPO}" config core.commentChar ';'
+  git -C "${CASE_REPO}" config commit.verbose true
+  printf 'hello\n' > "${CASE_REPO}/f.txt"
+  git -C "${CASE_REPO}" add f.txt
+  commit_with_editor "${EDITOR_QUIT}" ''
+  assert_nothing_committed "${hook_shell}, core.commentChar + commit.verbose + editor quit"
+
+  start_case "editor (${hook_shell}): core.commentString + commit.verbose does not defeat the abort"
+  # The sixth cell of the abort matrix — {default, commentChar, commentString}
+  # x {verbose on, off}. All six must record zero commits.
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  if [ "${COMMENT_STRING_SUPPORTED}" = yes ]; then
+    git -C "${CASE_REPO}" config core.commentString '//'
+    git -C "${CASE_REPO}" config commit.verbose true
+    printf 'hello\n' > "${CASE_REPO}/f.txt"
+    git -C "${CASE_REPO}" add f.txt
+    commit_with_editor "${EDITOR_QUIT}" ''
+    assert_nothing_committed "${hook_shell}, core.commentString + commit.verbose + editor quit"
+  else
+    skip "${hook_shell}, core.commentString + verbose: unsupported by $(git --version)"
+  fi
+
+  start_case "extraction (${hook_shell}): core.commentChar leaves the -m path working"
+  # The guard must close the editor hole without costing the -m path its
+  # reference under the same config.
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  git -C "${CASE_REPO}" config core.commentChar ';'
+  commit_with -m "${SEED_SUBJECT}"
+  assert_subject "${hook_shell}, core.commentChar=';' + -m" "${SEED_SUBJECT} (#605)"
+
+  start_case "guard (${hook_shell}): a #605 inside the verbose diff is not a reference"
+  # `-m ... -e` is the one path with both a real subject and a verbose diff.
+  # The diff mentions #605; the message does not. The append must still happen.
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  git -C "${CASE_REPO}" config commit.verbose true
+  printf 'see #605 for context\n' > "${CASE_REPO}/notes.txt"
+  git -C "${CASE_REPO}" add notes.txt
+  commit_with_editor "${EDITOR_QUIT}" '' -m "${SEED_SUBJECT}" -e
+  assert_subject "${hook_shell}, #605 in the verbose diff only" "${SEED_SUBJECT} (#605)"
+
+  start_case "guard (${hook_shell}): the verbose-diff trim survives core.commentChar"
+  # The scissors line git writes above the verbose diff carries the comment
+  # character, so a trim anchored on `#` misses it entirely once that character
+  # changes — and the whole diff, `#605` and all, is scanned as if it were the
+  # message. Same case as above, one config away.
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  git -C "${CASE_REPO}" config commit.verbose true
+  git -C "${CASE_REPO}" config core.commentChar ';'
+  printf 'see #605 for context\n' > "${CASE_REPO}/notes.txt"
+  git -C "${CASE_REPO}" add notes.txt
+  commit_with_editor "${EDITOR_QUIT}" '' -m "${SEED_SUBJECT}" -e
+  assert_subject "${hook_shell}, verbose diff + core.commentChar=';'" "${SEED_SUBJECT} (#605)"
+
+  start_case "guard (${hook_shell}): the verbose-diff trim survives core.commentString"
+  # `core.commentString` makes the prefix a whole string rather than one
+  # character, which is why the trim matches the `>8` run and not the prefix.
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  git -C "${CASE_REPO}" config commit.verbose true
+  if [ "${COMMENT_STRING_SUPPORTED}" = yes ]; then
+    git -C "${CASE_REPO}" config core.commentString '//'
+    printf 'see #605 for context\n' > "${CASE_REPO}/notes.txt"
+    git -C "${CASE_REPO}" add notes.txt
+    commit_with_editor "${EDITOR_QUIT}" '' -m "${SEED_SUBJECT}" -e
+    assert_subject "${hook_shell}, verbose diff + core.commentString='//'" "${SEED_SUBJECT} (#605)"
+  else
+    skip "${hook_shell}, core.commentString: unsupported by $(git --version)"
+  fi
+
+  # --- The comment character the already-referenced guard reads through ---
+
+  start_case "guard (${hook_shell}): git's own status block is skipped under core.commentChar"
+  # The reachable form of the hard-coded-`^#` defect, and it needs no unusual
+  # message — only an unusual config. Under `core.commentChar=';'` git writes
+  # its status block with `;`, so the line `; On branch fix/605-#605` sails
+  # straight through a `^#` filter; the guard then reads the `#605` in git's
+  # OWN text as an existing reference and silently suppresses a legitimate
+  # append. `message_body` goes through `git stripspace --strip-comments`,
+  # which reads `core.commentChar` itself, so the block is dropped as git
+  # drops it.
+  new_case_repo 'fix/605-#605' "${hook_shell}"
+  git -C "${CASE_REPO}" config core.commentChar ';'
+  commit_with_editor "${EDITOR_QUIT}" '' -m "${SEED_SUBJECT}" -e
+  assert_subject "${hook_shell}, status block under core.commentChar=';'" "${SEED_SUBJECT} (#605)"
+
+  # The same branch under the DEFAULT comment character, so the case above is
+  # pinned to the config and not to the branch name.
+  new_case_repo 'fix/605-#605' "${hook_shell}"
+  commit_with_editor "${EDITOR_QUIT}" '' -m "${SEED_SUBJECT}" -e
+  assert_subject "${hook_shell}, status block under the default comment char" "${SEED_SUBJECT} (#605)"
+
+  start_case "guard (${hook_shell}): a #605 body line is message text under core.commentChar"
+  # The mirror image. With the comment character set to `;`, a `#605` line the
+  # user wrote is NOT a comment — git keeps it, so it is a genuine reference
+  # and the append must be suppressed. A hard-coded `^#` filter dropped it and
+  # appended a second reference.
+  new_case_repo 'fix/605-x' "${hook_shell}"
+  git -C "${CASE_REPO}" config core.commentChar ';'
+  commit_with -m "${SEED_SUBJECT}" -m '#605'
+  assert_subject "${hook_shell}, '#605' body line under core.commentChar=';'" "${SEED_SUBJECT}"
+
+  start_case "guard (${hook_shell}): the accepted duplicate residual is comment-char-uniform"
+  # Under the default character a `#605` body line IS a comment to this hook,
+  # so the append happens and the message carries the reference twice. That is
+  # the residual the hook's comment records: its cause is git's cleanup MODE
+  # (plain `-m` cleans up with `whitespace`, which KEEPS comment lines), not
+  # the comment character. Pinned so it stays uniform — the same shape under
+  # `core.commentChar=';'` behaves the same way, where it used to differ.
+  new_case_repo 'fix/605-x' "${hook_shell}"
+  commit_with -m "${SEED_SUBJECT}" -m '#605'
+  assert_subject "${hook_shell}, '#605' body line under the default comment char" "${SEED_SUBJECT} (#605)"
+
+  new_case_repo 'fix/605-x' "${hook_shell}"
+  git -C "${CASE_REPO}" config core.commentChar ';'
+  commit_with -m "${SEED_SUBJECT}" -m '; note #605'
+  assert_subject "${hook_shell}, ';' body line under core.commentChar=';'" "${SEED_SUBJECT} (#605)"
+
+  # --- The COMMIT_SOURCE guard ---
+
+  start_case "COMMIT_SOURCE (${hook_shell}): a merge commit is left alone"
+  new_case_repo 'fix/605-x' "${hook_shell}"
+  commit_with -m 'chore: seed'
+  git -C "${CASE_REPO}" checkout -q -b side
+  printf 'side\n' > "${CASE_REPO}/side.txt"
+  git -C "${CASE_REPO}" add side.txt
+  git -C "${CASE_REPO}" commit -q -m 'chore: side'
+  git -C "${CASE_REPO}" checkout -q 'fix/605-x'
+  printf 'trunk\n' > "${CASE_REPO}/trunk.txt"
+  git -C "${CASE_REPO}" add trunk.txt
+  git -C "${CASE_REPO}" commit -q -m 'chore: trunk'
+  MERGE_OUT=$(git -C "${CASE_REPO}" merge --no-ff --no-edit -m 'Merge branch side' side 2>&1)
+  MERGE_RC=$?
+  MERGE_SUBJECT=$(git -C "${CASE_REPO}" log -1 --pretty=%s)
+  if [ "${MERGE_RC}" -eq 0 ]; then
+    ok "${hook_shell}, merge: git merge succeeded"
+  else
+    bad "${hook_shell}, merge: git merge exited ${MERGE_RC}: ${MERGE_OUT}"
+  fi
+  if [ "${MERGE_SUBJECT}" = 'Merge branch side' ]; then
+    ok "${hook_shell}, merge: subject untouched (\"${MERGE_SUBJECT}\")"
+  else
+    bad "${hook_shell}, merge: subject is \"${MERGE_SUBJECT}\", expected \"Merge branch side\""
+  fi
+
+done
 
 report
