@@ -1,3 +1,7 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -7,12 +11,14 @@ import '../../models/clarify_mode.dart';
 import '../../models/focus_session_planning_settings.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/clarify_mode_provider.dart';
+import '../../providers/dev_options_provider.dart';
 import '../../providers/evening_shutdown_provider.dart';
 import '../../providers/focus_session_planning_settings_provider.dart';
 import '../../providers/focus_settings_provider.dart';
 import '../../providers/periodic_review_provider.dart';
 import '../../providers/periodic_review_settings_provider.dart';
 import '../../providers/shutdown_settings_provider.dart';
+import '../../services/export_service.dart';
 import '../../widgets/app_title_bar/app_title_bar.dart';
 import '../enrolment/enrolment_ceremony_screen.dart';
 import '../../widgets/capture/capture_action.dart';
@@ -30,11 +36,23 @@ import '../../widgets/jeeves_logo.dart';
 /// **This screen is where enrolment is found.** Nothing routes a signed-in,
 /// un-enrolled device into the ceremony (issue #673), so the tile below is the
 /// difference between opt-in and unreachable.
-class SettingsScreen extends ConsumerWidget {
+class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends ConsumerState<SettingsScreen> {
+  /// Taps on the Jeeves nameplate accumulated so far. Seven unlocks the hidden
+  /// developer options — the Android build-number Easter egg, applied to the one
+  /// name the About section already shows.
+  static const int _tapsToUnlock = 7;
+  int _jeevesTaps = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final devUnlocked = ref.watch(devOptionsUnlockedProvider);
     return Scaffold(
       appBar: AppTitleBar(
         title: 'Settings',
@@ -108,7 +126,7 @@ class SettingsScreen extends ConsumerWidget {
                 'Your local data will remain on this device.',
                 style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
               ),
-              onTap: () => _confirmLogout(context, ref),
+              onTap: () => _confirmLogout(context),
             ),
           ],
           const Divider(height: 1, color: Color(0xFFF3F4F6)),
@@ -155,12 +173,17 @@ class SettingsScreen extends ConsumerWidget {
                     appIcon: true,
                   ),
                   const SizedBox(height: 4),
-                  const Text(
-                    'Jeeves',
-                    style: TextStyle(
-                        fontWeight: FontWeight.w600,
-                        fontSize: 18,
-                        color: Color(0xFF1A1A2E)),
+                  GestureDetector(
+                    key: const Key('about_jeeves_name'),
+                    behavior: HitTestBehavior.opaque,
+                    onTap: _onJeevesTapped,
+                    child: const Text(
+                      'Jeeves',
+                      style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 18,
+                          color: Color(0xFF1A1A2E)),
+                    ),
                   ),
                   const Text(
                     'Offline-first GTD task manager',
@@ -181,11 +204,76 @@ class SettingsScreen extends ConsumerWidget {
             onTap: () =>
                 showLicensePage(context: context, applicationName: 'Jeeves'),
           ),
+          if (devUnlocked) ...[
+            const Divider(height: 1, color: Color(0xFFF3F4F6)),
+            _sectionHeader('DEVELOPER OPTIONS'),
+            ListTile(
+              key: const Key('developer_options_export_tile'),
+              leading: const Icon(Icons.code, color: Color(0xFF9CA3AF)),
+              title: const Text(
+                'Export data',
+                style: TextStyle(
+                    fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+              ),
+              subtitle: const Text(
+                'Save a copy of your data to a file.',
+                style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+              ),
+              onTap: () => _exportData(context),
+            ),
+          ],
         ],
       );
         },
       ),
     );
+  }
+
+  /// Counts a tap on the Jeeves nameplate; the seventh unlocks the hidden
+  /// developer options for the rest of the session. A no-op once unlocked.
+  void _onJeevesTapped() {
+    if (ref.read(devOptionsUnlockedProvider)) return;
+    _jeevesTaps++;
+    if (_jeevesTaps >= _tapsToUnlock) {
+      ref.read(devOptionsUnlockedProvider.notifier).unlock();
+    }
+  }
+
+  /// Build the export and hand it to the platform save dialog. The file-picker
+  /// writes [bytes] itself, so this works the same on mobile and desktop.
+  Future<void> _exportData(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final json = await ref.read(exportServiceProvider).buildJson();
+      final path = await FilePicker.saveFile(
+        dialogTitle: 'Export data',
+        fileName: _exportFileName(),
+        type: FileType.custom,
+        allowedExtensions: const ['json'],
+        bytes: Uint8List.fromList(utf8.encode(json)),
+      );
+      if (path != null && messenger.mounted) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Data exported')),
+        );
+      }
+    } catch (e) {
+      if (messenger.mounted) {
+        messenger.showSnackBar(
+          SnackBar(content: Text('Export failed: $e')),
+        );
+      }
+    }
+  }
+
+  /// A dated default name so successive exports do not clobber one another; the
+  /// user can still rename it in the save dialog.
+  String _exportFileName() {
+    final now = DateTime.now();
+    final year = now.year.toString().padLeft(4, '0');
+    final month = now.month.toString().padLeft(2, '0');
+    final day = now.day.toString().padLeft(2, '0');
+    return 'jeeves-export-$year$month$day.json';
   }
 
   Widget _sectionHeader(String title) {
@@ -203,7 +291,7 @@ class SettingsScreen extends ConsumerWidget {
     );
   }
 
-  Future<void> _confirmLogout(BuildContext context, WidgetRef ref) async {
+  Future<void> _confirmLogout(BuildContext context) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
