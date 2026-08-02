@@ -38,6 +38,7 @@ import 'package:uuid/enums.dart' show Namespace;
 
 import '../database/gtd_database.dart';
 import '../models/todo.dart' show Intent;
+import 'jeeves_export.dart' show isJeevesExport, importJeevesExport;
 import 'nirvana_item.dart';
 import 'nirvana_parser.dart';
 
@@ -84,6 +85,14 @@ Future<ImportResult> importNirvanaLocally({
   } catch (_) {
     // Latin-1 fallback: treat each byte as a Unicode code point directly.
     content = String.fromCharCodes(bytes);
+  }
+
+  // A Jeeves-native export round-trips through this same entry point, silently:
+  // it is detected by its envelope — which a Nirvana JSON export (a bare list)
+  // can never carry — and nothing in the UI or copy distinguishes it. The
+  // Nirvana `format` hint is ignored here on purpose; the content decides.
+  if (isJeevesExport(content)) {
+    return importJeevesExport(content: content, userId: userId, db: db);
   }
 
   final effectiveFormat =
