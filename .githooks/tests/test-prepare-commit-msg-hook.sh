@@ -173,6 +173,20 @@ assert_nothing_committed() {
   fi
 }
 
+# ----- Capability probe: core.commentString (git 2.45+) ---------------------
+# `git config core.commentString '//'` is NOT a capability test — git stores
+# unknown configuration keys and exits 0 for any of them, so a gate keyed on its
+# status never skips, on any git. Probe the BEHAVIOUR instead: feed stripspace a
+# line that is a comment only if the key is understood. A git that knows the key
+# strips it and prints nothing; one that does not keeps it. The probe body must
+# be the comment ALONE — with any other text alongside it the output is non-empty
+# either way, and the probe silently answers "supported" on every git.
+if [ -z "$(printf '// probe\n' | git -c core.commentString='//' stripspace --strip-comments)" ]; then
+  COMMENT_STRING_SUPPORTED=yes
+else
+  COMMENT_STRING_SUPPORTED=no
+fi
+
 # ----- Editor-path fixtures -------------------------------------------------
 # A plain `git commit` reaches this hook with $COMMIT_SOURCE EMPTY, and the
 # message file at that moment holds nothing but git's `#` comment block. That
@@ -399,7 +413,8 @@ for hook_shell in ${HOOK_SHELLS}; do
   # Same hole, through the multi-character spelling (git 2.45+). Skipped where
   # git is too old to know the key, rather than silently asserting nothing.
   new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
-  if git -C "${CASE_REPO}" config core.commentString '//' 2>/dev/null; then
+  if [ "${COMMENT_STRING_SUPPORTED}" = yes ]; then
+    git -C "${CASE_REPO}" config core.commentString '//'
     commit_with_editor "${EDITOR_QUIT}" ''
     assert_nothing_committed "${hook_shell}, core.commentString='//' + editor quit"
   else
@@ -421,7 +436,8 @@ for hook_shell in ${HOOK_SHELLS}; do
   # The sixth cell of the abort matrix — {default, commentChar, commentString}
   # x {verbose on, off}. All six must record zero commits.
   new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
-  if git -C "${CASE_REPO}" config core.commentString '//' 2>/dev/null; then
+  if [ "${COMMENT_STRING_SUPPORTED}" = yes ]; then
+    git -C "${CASE_REPO}" config core.commentString '//'
     git -C "${CASE_REPO}" config commit.verbose true
     printf 'hello\n' > "${CASE_REPO}/f.txt"
     git -C "${CASE_REPO}" add f.txt
@@ -467,7 +483,8 @@ for hook_shell in ${HOOK_SHELLS}; do
   # character, which is why the trim matches the `>8` run and not the prefix.
   new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
   git -C "${CASE_REPO}" config commit.verbose true
-  if git -C "${CASE_REPO}" config core.commentString '//' 2>/dev/null; then
+  if [ "${COMMENT_STRING_SUPPORTED}" = yes ]; then
+    git -C "${CASE_REPO}" config core.commentString '//'
     printf 'see #605 for context\n' > "${CASE_REPO}/notes.txt"
     git -C "${CASE_REPO}" add notes.txt
     commit_with_editor "${EDITOR_QUIT}" '' -m "${SEED_SUBJECT}" -e
