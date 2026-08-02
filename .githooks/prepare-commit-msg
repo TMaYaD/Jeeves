@@ -30,18 +30,30 @@ BRANCH_NAME=$(git symbolic-ref --short HEAD 2>/dev/null)
 # Three rules that look like they could be simplified away, and must not be:
 #
 #   * A leading zero disqualifies. GitHub issue numbers never carry one; this
-#     repo's migration and ADR numbers always do, so `fix/alembic-0028-...`
-#     and `docs/...-adr-0044` would otherwise link commits to issues #28/#44.
+#     repo's migration and ADR numbers always do, so `fix/0028-ambiguous-
+#     parameter` would otherwise link commits to issue #28. It has to be an
+#     anchor-adjacent example: `fix/alembic-0028-...` and `docs/...-adr-0044`
+#     are already rejected by the anchor, before this rule is ever consulted.
 #   * The `issue-*/*` arm must stay ABOVE the `*/*` arm. Swap them and
 #     `issue-458/global-capture-fab` silently yields nothing.
 #   * A trailing number is deliberately NOT accepted (`feat/login-ui-94`).
 #     That convention was abandoned in April 2026, and the tail of a branch
 #     name is exactly where versions, ADR numbers and dependabot bumps live.
 #
-# Known residual, accepted and unguarded: a date-prefixed branch such as
-# `chore/2026-08-audit` is structurally identical to `<type>/<number>-<slug>`
-# and would append `(#2026)`. Distinguishing it needs a heuristic worse than
-# the disease. Don't name branches that way.
+# Known residuals, accepted and unguarded:
+#
+#   * A date-prefixed branch such as `chore/2026-08-audit` is structurally
+#     identical to `<type>/<number>-<slug>` and appends `(#2026)`.
+#     Distinguishing it needs a heuristic worse than the disease. Don't name
+#     branches that way.
+#   * `git commit -m 'feat: x' -m '#605'` yields `feat: x (#605)` with a `#605`
+#     body line left below it. Both guards below read the message through
+#     `message_body`, which drops `#` lines — that is what keeps git's own
+#     status block from being read as message text, and it is what makes the
+#     empty-message guard work at all. Telling git's comment block apart from a
+#     user's deliberate `#605` line would need core.commentChar parsing, to buy
+#     a cosmetic duplicate. `-m 'Closes #605'` is the shape people actually
+#     write, and it is matched.
 issue_number_from_branch() {
     branch=$1
     case $branch in
@@ -67,13 +79,35 @@ if [ -z "$ISSUE_NUMBER" ]; then
     exit 0
 fi
 
+# Everything in the file that git will actually keep as the message. Two things
+# are dropped, and both matter:
+#
+#   * Comment lines, so git's own `# On branch fix/605-...` status block is not
+#     read as message text.
+#   * Everything from the scissors line down. Under `commit.verbose` git puts
+#     the staged diff there, un-commented — so without this the diff counts as
+#     message text, and a `#605` inside it counts as a reference.
+message_body() {
+    sed -e '/^# -* >8 -*$/q' "$COMMIT_MSG_FILE" | grep -v '^#'
+}
+
 # Guard clause: Exit if the message already references this issue. `#` is its
 # own left boundary and the right boundary is a non-digit or end of line, so
 # `#605` does not match `#6051`, and a bare `605` in prose does not match at
 # all. $ISSUE_NUMBER is digits by construction, so nothing regex-significant is
-# interpolated. Comment lines are stripped first: git's own `# On branch ...`
-# status block is not message text.
-if grep -v '^#' "$COMMIT_MSG_FILE" | grep -qE "#${ISSUE_NUMBER}([^0-9]|$)"; then
+# interpolated.
+if message_body | grep -qE "#${ISSUE_NUMBER}([^0-9]|$)"; then
+    exit 0
+fi
+
+# Guard clause: Exit if there is no message yet — the file holds only git's
+# comment block. That is the EDITOR path: this hook runs BEFORE the editor
+# opens, so on a plain `git commit` there is no subject to append to, and line
+# 1 of the template is empty. Writing to it fills a file git would otherwise
+# see as empty, and quitting the editor without saving then records a commit
+# subject of ` (#NNN)` instead of aborting. Quit-to-cancel is the standard way
+# to call off a commit; it must keep working.
+if ! message_body | grep -q '[^[:space:]]'; then
     exit 0
 fi
 

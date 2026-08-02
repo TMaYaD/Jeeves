@@ -93,6 +93,17 @@ for candidate_shell in sh dash bash zsh; do
   fi
 done
 
+# This suite's whole body is inside `for hook_shell in ${HOOK_SHELLS}`. An empty
+# list would run zero assertions and still print "All checks passed." — the one
+# way this file can lie. `sh` is guaranteed here (it is this script's own
+# interpreter's neighbour, and bash — the shebang — is itself a candidate), so
+# the branch is not reachable today; it is a tripwire for whoever edits the
+# candidate list.
+if [ -z "${HOOK_SHELLS# }" ]; then
+  bad "no shell interpreter found — the suite would otherwise report success having asserted nothing"
+  report
+fi
+
 # ----- Repo fixtures --------------------------------------------------------
 
 CASE_REPO=""
@@ -142,6 +153,57 @@ assert_subject() {
   else
     bad "$1: subject is \"${SUBJECT}\", expected \"$2\""
   fi
+}
+
+assert_nothing_committed() {
+  # $1 = label. Quitting the editor without saving must leave the repo exactly
+  # as it was — a non-zero status alone is not enough, because a hook that
+  # writes a junk message makes git succeed.
+  if [ "${COMMIT_RC}" -ne 0 ]; then
+    ok "$1: git commit aborted (status ${COMMIT_RC})"
+  else
+    bad "$1: git commit succeeded, expected an abort — recorded \"${SUBJECT}\""
+  fi
+  local commit_count
+  commit_count=$(git -C "${CASE_REPO}" rev-list --all --count 2>/dev/null || printf '0')
+  if [ "${commit_count}" = "0" ]; then
+    ok "$1: nothing was committed"
+  else
+    bad "$1: ${commit_count} commit(s) recorded, expected none — subject \"${SUBJECT}\""
+  fi
+}
+
+# ----- Editor-path fixtures -------------------------------------------------
+# A plain `git commit` reaches this hook with $COMMIT_SOURCE EMPTY, and the
+# message file at that moment holds nothing but git's `#` comment block. That
+# is the path every developer and agent takes when they do not pass -m, and a
+# scripted GIT_EDITOR is the only way to drive it from a test.
+
+EDITOR_QUIT="${WORK}/editor-quit"
+printf '#!/bin/sh\nexit 0\n' > "${EDITOR_QUIT}"
+chmod +x "${EDITOR_QUIT}"
+
+# Types ${EDITOR_SUBJECT} above git's comment block and saves — what a
+# developer who actually writes a subject leaves behind.
+EDITOR_WRITE="${WORK}/editor-write"
+cat > "${EDITOR_WRITE}" <<'EDITOR_SCRIPT'
+#!/bin/sh
+{ printf '%s\n' "${EDITOR_SUBJECT}"; cat "$1"; } > "$1.typed"
+mv "$1.typed" "$1"
+EDITOR_SCRIPT
+chmod +x "${EDITOR_WRITE}"
+
+commit_with_editor() {
+  # $1 = editor script, $2 = the subject it types (ignored by editor-quit).
+  # Remaining args go to `git commit`. With none, there is no -m, so git opens
+  # the editor and $COMMIT_SOURCE is empty.
+  local editor="$1" typed="$2"
+  shift 2
+  COMMIT_OUT=$(EDITOR_SUBJECT="${typed}" GIT_EDITOR="${editor}" \
+    git -C "${CASE_REPO}" commit -q --allow-empty "$@" 2>&1)
+  COMMIT_RC=$?
+  SUBJECT=$(git -C "${CASE_REPO}" log -1 --pretty=%s 2>/dev/null)
+  FULL_MSG=$(git -C "${CASE_REPO}" log -1 --pretty=%B 2>/dev/null)
 }
 
 # ----- Cases ----------------------------------------------------------------
@@ -201,18 +263,20 @@ for hook_shell in ${HOOK_SHELLS}; do
   commit_with -m "${SEED_SUBJECT}"
   assert_subject "${hook_shell}, drive-epic-666-644-b99fc4" "${SEED_SUBJECT}"
 
-  # 0028 is a migration number, not issue #28. The leading zero is the tell.
+  # 0028 is a migration number, not issue #28 — but what stops this one is the
+  # ANCHOR: the last segment starts with `alembic-`, not a digit. The leading
+  # zero never gets a say.
   new_case_repo 'fix/alembic-0028-ambiguous-parameter' "${hook_shell}"
   commit_with -m "${SEED_SUBJECT}"
   assert_subject "${hook_shell}, fix/alembic-0028-..." "${SEED_SUBJECT}"
 
-  # Same, for an ADR number.
+  # Same, for an ADR number — and again it is the anchor doing the work.
   new_case_repo 'docs/renumber-duplicate-adr-0044' "${hook_shell}"
   commit_with -m "${SEED_SUBJECT}"
   assert_subject "${hook_shell}, docs/renumber-duplicate-adr-0044" "${SEED_SUBJECT}"
 
-  # A leading zero directly after the anchor must be rejected too, not just
-  # deep inside a slug.
+  # THIS is the case the leading-zero rule exists for: the digits sit right on
+  # the anchor, so the anchor passes them and only the zero check rejects them.
   new_case_repo 'fix/0028-ambiguous-parameter' "${hook_shell}"
   commit_with -m "${SEED_SUBJECT}"
   assert_subject "${hook_shell}, fix/0028-ambiguous-parameter" "${SEED_SUBJECT}"
@@ -280,6 +344,55 @@ for hook_shell in ${HOOK_SHELLS}; do
   new_case_repo 'worktree-agent-a0c916b19a98a11ae' "${hook_shell}"
   commit_with -m 'chore: bump to v1.0.3'
   assert_subject "${hook_shell}, worktree-agent + version-like message" 'chore: bump to v1.0.3'
+
+  # --- The COMMIT_SOURCE guard: the editor path ($COMMIT_SOURCE empty) ---
+
+  start_case "editor (${hook_shell}): quitting without saving still aborts the commit"
+  # Quit-to-cancel is the standard gesture for calling off a commit, and it
+  # works because git sees an empty message. A hook that appends to line 1 of a
+  # file holding only git's comment block destroys that: the file is no longer
+  # empty, so git happily records a commit whose subject is " (#605)".
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  commit_with_editor "${EDITOR_QUIT}" ''
+  assert_nothing_committed "${hook_shell}, editor quit without saving"
+
+  start_case "editor (${hook_shell}): a typed subject is recorded exactly as typed"
+  # This hook runs BEFORE the editor opens, so on the editor path there is no
+  # subject for it to append to — only git's comment block and an empty line 1.
+  # It therefore appends nothing here, which is also what the pre-#666 hook did
+  # (by accident: its substring guard found the branch number inside git's own
+  # `# On branch fix/605-...` line). What must never happen is the middle
+  # ground: a ` (#605)` fragment left on its own line above the comment block,
+  # which git folds into the subject as `feat: add the thing  (#605)`.
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  commit_with_editor "${EDITOR_WRITE}" "${SEED_SUBJECT}"
+  assert_subject "${hook_shell}, editor typed a subject" "${SEED_SUBJECT}"
+
+  start_case "editor (${hook_shell}): a typed subject already carrying the reference is not doubled"
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  commit_with_editor "${EDITOR_WRITE}" "${SEED_SUBJECT} (#605)"
+  assert_subject "${hook_shell}, editor typed an existing reference" "${SEED_SUBJECT} (#605)"
+
+  start_case "editor (${hook_shell}): commit.verbose does not defeat the abort"
+  # Under commit.verbose git appends the staged diff below the scissors line,
+  # UN-commented. A guard that only strips `#` lines sees that diff as message
+  # text and appends anyway — the same junk commit, one config away.
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  git -C "${CASE_REPO}" config commit.verbose true
+  printf 'hello\n' > "${CASE_REPO}/f.txt"
+  git -C "${CASE_REPO}" add f.txt
+  commit_with_editor "${EDITOR_QUIT}" ''
+  assert_nothing_committed "${hook_shell}, commit.verbose + editor quit"
+
+  start_case "guard (${hook_shell}): a #605 inside the verbose diff is not a reference"
+  # `-m ... -e` is the one path with both a real subject and a verbose diff.
+  # The diff mentions #605; the message does not. The append must still happen.
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  git -C "${CASE_REPO}" config commit.verbose true
+  printf 'see #605 for context\n' > "${CASE_REPO}/notes.txt"
+  git -C "${CASE_REPO}" add notes.txt
+  commit_with_editor "${EDITOR_QUIT}" '' -m "${SEED_SUBJECT}" -e
+  assert_subject "${hook_shell}, #605 in the verbose diff only" "${SEED_SUBJECT} (#605)"
 
   # --- The COMMIT_SOURCE guard ---
 
