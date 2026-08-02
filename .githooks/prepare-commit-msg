@@ -1,38 +1,188 @@
 #!/bin/sh
 
 # prepare-commit-msg hook
-# Appends an issue identifier from the current branch name to the commit message.
+# Appends an issue reference from the current branch name to the commit message.
+#
+# This hook is the only place the repo's branch-name contract is written down.
 
 COMMIT_MSG_FILE=$1
 COMMIT_SOURCE=$2
 
-# Guard clause: Exit if the commit has a predefined source other than a regular '-m' message
-if [ -n "$COMMIT_SOURCE" ] && [ "$COMMIT_SOURCE" != "message" ]; then
+# Guard clause: only ever append to a message git already has in hand.
+#
+# $COMMIT_SOURCE is "message" for `-m`/`-F`, one of "template"/"merge"/
+# "squash"/"commit" when git supplied the text itself, and EMPTY on a plain
+# `git commit` — the editor path.
+#
+# The empty case is the one that matters. This hook runs BEFORE the editor
+# opens, so there is nothing to append to yet: the file holds only git's
+# comment block, and line 1 is blank. Writing there fills a file git would
+# otherwise see as empty, so quitting the editor without saving records a
+# commit whose subject is ` (#NNN)` instead of aborting. Quit-to-cancel is the
+# standard way to call off a commit; it must keep working.
+#
+# Testing $COMMIT_SOURCE rather than inspecting the file is what makes that
+# exact. An "is there a message yet?" heuristic has to tell git's comment block
+# apart from message text, which means knowing the comment character — and
+# under `core.commentChar` or `core.commentString` it is not `#`, so such a
+# heuristic reads git's own template as a subject and the abort fails open.
+if [ "$COMMIT_SOURCE" != "message" ]; then
     exit 0
 fi
 
 BRANCH_NAME=$(git symbolic-ref --short HEAD 2>/dev/null)
 
-# Identify issue numbers like '123' from 'feature/123-add-login' or 'JVS-123'
-ISSUE_ID=$(echo "$BRANCH_NAME" | grep -oE '([a-zA-Z]+-[0-9]+|[0-9]+)' | head -n 1)
+# Prints a bare GitHub issue number, or nothing at all. Accepted branch shapes:
+#
+#   <type>/<number>[-<slug>]   fix/605-converge-duplicate-tags, reviews/586
+#   issue-<number>/<slug>      issue-458/global-capture-fab
+#   JVS-<number>[-<slug>]      JVS-123
+#   <number>[-<slug>]          605-add-login
+#
+# The number is always anchored to the *start* of the last path segment, and
+# what this prints is always bare digits — no prefix ever reaches the message,
+# which is what makes `(#review-655)` and `(#proxy-3048)` structurally
+# impossible rather than merely unlikely (#666).
+#
+# Three rules that look like they could be simplified away, and must not be:
+#
+#   * A leading zero disqualifies. GitHub issue numbers never carry one; this
+#     repo's migration and ADR numbers always do, so `fix/0028-ambiguous-
+#     parameter` would otherwise link commits to issue #28. It has to be an
+#     anchor-adjacent example: `fix/alembic-0028-...` and `docs/...-adr-0044`
+#     are already rejected by the anchor, before this rule is ever consulted.
+#   * The `issue-*/*` arm must stay ABOVE the `*/*` arm. Swap them and
+#     `issue-458/global-capture-fab` silently yields nothing.
+#   * A trailing number is deliberately NOT accepted (`feat/login-ui-94`).
+#     That convention was abandoned in April 2026, and the tail of a branch
+#     name is exactly where versions, ADR numbers and dependabot bumps live.
+#
+# Known residuals, accepted and unguarded:
+#
+#   * A date-prefixed branch such as `chore/2026-08-audit` is structurally
+#     identical to `<type>/<number>-<slug>` and appends `(#2026)`.
+#     Distinguishing it needs a heuristic worse than the disease. Don't name
+#     branches that way.
+#   * A `-m` body line the user starts with the comment character is invisible
+#     to the already-referenced guard. `message_body` strips comment lines so
+#     git's own status block is not read as message text — but on the plain
+#     `-m` path git's cleanup mode is `whitespace`, not `strip`, so git KEEPS
+#     those lines. `-m 'feat: x' -m '#605'` therefore records a `#605` body
+#     line AND appends, giving `feat: x (#605)`; `-m '#605'` gives
+#     `#605 (#605)`.
+#     The cause is the cleanup MODE, not the comment character. Matching git
+#     exactly would mean predicting whether git is about to open an editor,
+#     since that is what selects `strip` over `whitespace`, and $COMMIT_SOURCE
+#     is "message" either way. Since the abort no longer depends on reading
+#     the message at all, all that would buy here is suppressing a duplicate.
+#     What it is NOT any more is comment-character-dependent: `message_body`
+#     goes through `git stripspace`, so this behaves identically under `#`,
+#     `core.commentChar` and `core.commentString` instead of varying with a
+#     setting nobody remembers having.
+#     Note the direction, which is easy to get backwards: it was the OMISSION
+#     of comment-character awareness that endangered the abort guard — an
+#     emptiness heuristic keyed on `^#` misreads git's own template as a
+#     subject the moment the comment character is not `#`, and fabricates a
+#     ` (#NNN)` commit out of a cancelled one. The $COMMIT_SOURCE guard above
+#     retires that dependency rather than papering over it.
+#     `-m 'Closes #605'` is the shape people actually write, and it is matched.
+issue_number_from_branch() {
+    branch=$1
+    case $branch in
+        JVS-*)     rest=${branch#JVS-} ;;
+        issue-*/*) rest=${branch#issue-} ;;
+        */*)       rest=${branch##*/} ;;
+        *)         rest=$branch ;;
+    esac
+    number=${rest%%[!0-9]*}
+    [ -n "$number" ] || return 1
+    case $number in 0*) return 1 ;; esac
+    # The digits must be followed by a separator or nothing — never by more
+    # branch name, so `fix/605_underscore` is rejected rather than truncated.
+    case ${rest#"$number"} in ''|-*|/*) ;; *) return 1 ;; esac
+    printf '%s' "$number"
+}
 
-# Guard clause: Exit if no issue ID found in branch name
-if [ -z "$ISSUE_ID" ]; then
+ISSUE_NUMBER=$(issue_number_from_branch "$BRANCH_NAME")
+
+# Guard clause: Exit if the branch name carries no issue number. This is the
+# silent, successful no-op path — most ad-hoc and generated branches land here.
+if [ -z "$ISSUE_NUMBER" ]; then
     exit 0
 fi
 
-# Guard clause: Exit if the commit message already contains this issue ID
-if grep -q "$ISSUE_ID" "$COMMIT_MSG_FILE"; then
+# Everything in the file that git will keep as the message. The guard below is
+# the only caller, so this only ever runs with $COMMIT_SOURCE = "message" —
+# where a plain `-m` leaves the file holding nothing but the message, but
+# `-m ... -e` has git append its status block and, under commit.verbose, the
+# staged diff. Two things are dropped:
+#
+#   * Everything from the scissors line down. Under `commit.verbose` git puts
+#     the staged diff there, un-commented — so without this a `#605` inside the
+#     diff reads as an existing reference and suppresses a legitimate append,
+#     which is the one plausible way to lose a reference on this path.
+#
+#     Git's scissors line is comment-PREFIXED, so anchoring the trim on `#`
+#     loses it the moment the comment character changes — and then the entire
+#     diff is scanned. The pattern therefore matches the `---- >8 ----` run and
+#     ignores whatever precedes it, which holds identically under `#`,
+#     `core.commentChar`, `core.commentString` and `core.commentChar=auto`.
+#   * Comment lines, so git's own `# On branch fix/605-...` status block is not
+#     scanned for a reference. `git stripspace --strip-comments` is git's own
+#     plumbing for exactly this: run in the repository, it reads
+#     `core.commentChar` / `core.commentString` itself. Nothing is interpolated
+#     into a pattern and no prefix is escaped — a hand-rolled
+#     `grep -v "^$prefix"` would need both, because git's candidate list
+#     contains `$`, which raw in a BRE is the end-of-line anchor and would
+#     silently strip every blank line instead.
+#
+#     What that buys, concretely: under `core.commentChar=';'` on a branch
+#     named `fix/605-#605`, git's own status line `; On branch fix/605-#605`
+#     survived a hard-coded `^#` filter, and the guard below read the `#605`
+#     in it as an existing reference — silently suppressing a legitimate
+#     append. That needed no unusual message, only an unusual config.
+#
+#     `core.commentChar=auto` is the one spelling stripspace does not resolve:
+#     it falls back to the default `#` rather than running git-commit's
+#     per-message candidate scan. Measured on git 2.55: `-m '#605 subject' -e`
+#     under `auto` makes git write its status block with `;`, while stripspace
+#     strips the `#` line. So under `auto` this behaves exactly as the old
+#     hard-coded `^#` did — no better, no worse — and reimplementing the
+#     candidate scan is the only exact fix. `auto` is not a value anyone here
+#     sets, and the residual runs the safe way (below).
+#
+#     If stripspace exits non-zero, this yields NO text, so the guard finds no
+#     reference and the append proceeds. That direction is deliberate: this
+#     function feeds only the already-referenced guard and never the message
+#     that gets written, so its worst case is a visible duplicate `(#605)` in
+#     the subject. Failing the other way would silently drop the reference the
+#     hook exists to add, and silence is the failure mode #666 was filed for.
+#
+# The residual runs one way: scanning text git will discard can only ever
+# SUPPRESS an append, never fabricate a commit — which is what the
+# $COMMIT_SOURCE guard above now guarantees on its own.
+message_body() {
+    stripped=$(sed -e '/-\{8,\} >8 -\{8,\}$/,$d' "$COMMIT_MSG_FILE" \
+        | git stripspace --strip-comments 2>/dev/null) || return 0
+    printf '%s\n' "$stripped"
+}
+
+# Guard clause: Exit if the message already references this issue. `#` is its
+# own left boundary and the right boundary is a non-digit or end of line, so
+# `#605` does not match `#6051`, and a bare `605` in prose does not match at
+# all. $ISSUE_NUMBER is digits by construction, so nothing regex-significant is
+# interpolated.
+if message_body | grep -qE "#${ISSUE_NUMBER}([^0-9]|$)"; then
     exit 0
 fi
 
-# Append the issue ID to the end of the first line
+# Append the issue reference to the end of the first line
 # Using temporary file for safety across sed implementations
 TMP_FILE=$(mktemp)
 
-# Extract first line, append issue ID
+# Extract first line, append issue reference
 FIRST_LINE=$(head -n 1 "$COMMIT_MSG_FILE")
-echo "$FIRST_LINE (#$ISSUE_ID)" > "$TMP_FILE"
+echo "$FIRST_LINE (#$ISSUE_NUMBER)" > "$TMP_FILE"
 
 # Append the rest of the file
 tail -n +2 "$COMMIT_MSG_FILE" >> "$TMP_FILE"
