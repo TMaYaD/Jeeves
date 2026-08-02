@@ -2,10 +2,13 @@ import 'dart:convert';
 
 import 'package:drift/drift.dart' hide isNull;
 import 'package:drift/native.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/import/jeeves_export.dart';
 import 'package:jeeves/import/nirvana_local_import.dart';
+import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/services/export_service.dart';
 import 'package:jeeves/sync/domain_op_capture.dart'
     show NoopDomainOpCapture, RecordingDomainOpCapture;
 
@@ -367,6 +370,82 @@ void main() {
       }
       // The preference collection authored nothing — it was never exported.
       expect(authored.any((k) => k.startsWith('user_preferences/')), isFalse);
+    });
+
+    test('a row that cannot be located is skipped — no local row, and no op',
+        () async {
+      // A junction whose domain key is unresolvable (a non-String tag_id): the
+      // importer can neither locate nor write it, so it must author no op and
+      // not count it — otherwise a peer would receive a row this device never
+      // kept, and importedCount would overstate.
+      final malformed = jsonEncode({
+        jeevesExportEnvelopeKey: jeevesExportVersion,
+        jeevesExportCollectionsKey: {
+          'todos': [
+            {
+              'id': 'todo-x',
+              'title': 'Keep me',
+              'created_at': '2026-07-28T05:00:00.000Z',
+              'user_id': _userId,
+              'intent': 'next',
+              'clarified': true,
+            }
+          ],
+          'todo_tags': [
+            {
+              'id': 'tt-bad',
+              'todo_id': 'todo-x',
+              'tag_id': 123, // not a String — _identity cannot locate the row
+              'user_id': _userId,
+            }
+          ],
+        },
+      });
+
+      final recorder = RecordingDomainOpCapture();
+      final db = _openInMemory(recorder: recorder);
+      addTearDown(db.close);
+      final result =
+          await importJeevesExport(content: malformed, userId: _userId, db: db);
+
+      // The valid Outcome landed; the unlocatable junction did not.
+      expect(await db.select(db.todos).get(), hasLength(1));
+      expect(await db.select(db.todoTags).get(), isEmpty);
+      // importedCount counts only the Outcome that was actually written.
+      expect(result.importedCount, 1);
+      // The op log asserts the Outcome but never the skipped junction.
+      final authored = recorder.keys.toSet();
+      expect(authored, contains('todos/todo-x'));
+      expect(authored.any((k) => k.startsWith('todo_tags/')), isFalse);
+    });
+  });
+
+  group('the export action (real container, real store)', () {
+    test('ExportService.buildJson yields an export that imports back', () async {
+      // Drive the exact call the developer-options Export item triggers, through
+      // a real ProviderContainer over a real database — no mocks. The only piece
+      // not exercised here is the FilePicker.saveFile platform channel, which is
+      // the thin untestable shell (as the Import-from-Nirvana screen's picker is).
+      final db = _openInMemory();
+      addTearDown(db.close);
+      // currentUserIdProvider defaults to 'local', so seed that user.
+      await _seed(db, userId: 'local');
+
+      final container = ProviderContainer(
+        overrides: [databaseProvider.overrideWithValue(db)],
+      );
+      addTearDown(container.dispose);
+
+      final json = await container.read(exportServiceProvider).buildJson();
+      expect(isJeevesExport(json), isTrue);
+
+      final restored = _openInMemory();
+      addTearDown(restored.close);
+      final result =
+          await importJeevesExport(content: json, userId: 'local', db: restored);
+      expect(result.importedCount, 2);
+      expect(await restored.select(restored.todos).get(), hasLength(2));
+      expect(await restored.select(restored.tags).get(), hasLength(4));
     });
   });
 }

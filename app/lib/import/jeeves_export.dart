@@ -217,7 +217,11 @@ Future<ImportResult> importJeevesExport({
     await db.capturing(() async {
       for (final row in batch) {
         final fields = _importFields(row.codec, row.raw, userId);
-        await _writeRow(db, row.codec, row.id, fields);
+        // Author the op only if the local row was actually persisted. When
+        // [_writeRow] cannot locate the row (an unresolvable junction key),
+        // it skips both the write and the count, so the op log never asserts a
+        // row this device did not keep and importedCount never overstates.
+        if (!await _writeRow(db, row.codec, row.id, fields)) continue;
         // The op that makes this row reach the user's other devices. On an
         // un-enrolled device the seam drops it; on an enrolled one it syncs.
         db.opCapture.write(
@@ -261,7 +265,11 @@ Map<String, Object?> _importFields(
 /// already occupies. Mirrors `DomainProjector`'s codec-driven upsert: an owned
 /// entity is located by `id`, a junction by its domain pair, so a re-import
 /// lands on the same row rather than duplicating it.
-Future<void> _writeRow(
+///
+/// Returns whether the row is now persisted: `false` only when [_identity]
+/// cannot locate it (an unresolvable junction key), so the caller can skip
+/// authoring an op for a row this device never kept.
+Future<bool> _writeRow(
   GtdDatabase db,
   CollectionCodec codec,
   String id,
@@ -274,7 +282,7 @@ Future<void> _writeRow(
   });
 
   final identity = _identity(codec, id, fields);
-  if (identity == null) return;
+  if (identity == null) return false;
 
   final existing = await db
       .customSelect(
@@ -290,7 +298,7 @@ Future<void> _writeRow(
       'INSERT INTO "${codec.table}" ($columns) VALUES ($placeholders)',
       variables: values.values.toList(),
     );
-    return;
+    return true;
   }
 
   final assignments = <String>[];
@@ -300,12 +308,15 @@ Future<void> _writeRow(
     assignments.add('"$column" = ?');
     bound.add(variable);
   });
-  if (assignments.isEmpty) return;
+  // The row already exists (identity matched); nothing to update but it is
+  // persisted, so the caller still authors its op.
+  if (assignments.isEmpty) return true;
   await db.customUpdate(
     'UPDATE "${codec.table}" SET ${assignments.join(', ')} '
     'WHERE ${identity.sql}',
     variables: [...bound, ...identity.variables],
   );
+  return true;
 }
 
 /// How to locate the row this entity occupies: by `id` for an owned entity, by
