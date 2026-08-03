@@ -10,12 +10,16 @@
 # never on the hook's stdout. A hook that exits 0 having done nothing and one
 # that exits 0 having done the right thing are indistinguishable by status.
 #
-# `core.hooksPath` points at an isolated directory holding ONLY a copy of
-# prepare-commit-msg. Pointing it at the real .githooks would drag in
+# `core.hooksPath` points at an isolated directory holding a copy of
+# prepare-commit-msg and the shared contract it sources
+# (lib/issue-reference.sh). Pointing it at the real .githooks would drag in
 # pre-commit (the whole Flutter + backend gauntlet) and commit-msg, so each
-# case would be testing four hooks at once.
+# case would be testing four hooks at once. commit-msg — the editor path's
+# other half — has its own suite (test-commit-msg-hook.sh); this one stays
+# scoped to the `-m`/`-F` path prepare-commit-msg owns.
 #
-# The hook has no external dependencies, so nothing is stubbed anywhere.
+# The only thing the hook needs beside it is that lib, copied in unchanged; no
+# system component is stubbed.
 #
 # The two defects being pinned, from #666:
 #
@@ -91,7 +95,8 @@ report() {
 
 # ----- Per-shell hook installs ----------------------------------------------
 # A copy of the real hook with its shebang rewritten to the interpreter under
-# test. Everything below line 1 is the production file, byte for byte.
+# test, and the shared lib copied in beside it. Everything below line 1 of the
+# hook, and the whole lib, is the production file byte for byte.
 
 hooks_dir_for() { printf '%s/hooks-%s' "${WORK}" "$1"; }
 
@@ -99,12 +104,15 @@ install_hook_for_shell() {
   local shell_name="$1" interpreter dir
   interpreter=$(command -v "${shell_name}")
   dir=$(hooks_dir_for "${shell_name}")
-  mkdir -p "${dir}"
+  mkdir -p "${dir}/lib"
   {
     printf '#!%s\n' "${interpreter}"
     tail -n +2 "${HOOK}"
   } > "${dir}/prepare-commit-msg"
   chmod +x "${dir}/prepare-commit-msg"
+  # The hook sources the shared contract, so it must be beside it. It is not
+  # shebang-rewritten: the hook runs it via `.`, under the hook's interpreter.
+  cp "${HOOK%/*}/lib/issue-reference.sh" "${dir}/lib/issue-reference.sh"
 }
 
 HOOK_SHELLS=""
@@ -420,6 +428,14 @@ for hook_shell in ${HOOK_SHELLS}; do
   new_case_repo 'fix/605-x' "${hook_shell}"
   commit_with -m "${SEED_SUBJECT} (#605)"
   assert_subject "${hook_shell}, already referenced" "${SEED_SUBJECT} (#605)"
+
+  # The trailing-reference guard, shared with commit-msg (#679): a subject that
+  # already ends with SOME issue's reference does not gain this branch's on top.
+  # #500 is not #605, so the already-referenced guard above does not catch it —
+  # only the trailing-reference guard keeps it from becoming `... (#500) (#605)`.
+  new_case_repo 'fix/605-x' "${hook_shell}"
+  commit_with -m 'feat: carried over (#500)'
+  assert_subject "${hook_shell}, subject trailing a foreign reference" 'feat: carried over (#500)'
 
   # The substring guard used to see `605` inside `1605` and skip the append,
   # leaving the commit with no reference at all.

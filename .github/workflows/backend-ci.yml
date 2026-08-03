@@ -117,17 +117,23 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Covers the extensionless test stubs as well as the *.sh scripts.
+      # Covers the extensionless test stubs as well as the *.sh scripts (the
+      # shared lib/issue-reference.sh among them).
       - name: shellcheck
         run: |
           find infra/ci .githooks -type f \( -name '*.sh' -o -path '*/stubs/*' \) -print0 \
             | xargs -0 shellcheck --severity=style
           shellcheck --shell=sh .githooks/pre-commit
-          shellcheck --shell=sh .githooks/prepare-commit-msg
+          # -x so the `# shellcheck source=` directives in these two hooks
+          # follow lib/issue-reference.sh instead of reporting SC1091.
+          shellcheck --shell=sh -x .githooks/prepare-commit-msg
+          shellcheck --shell=sh -x .githooks/commit-msg
       - name: compute-server-version.sh tests
         run: ./infra/ci/tests/test-compute-server-version.sh
       - name: pre-commit hook tests
         run: ./.githooks/tests/test-pre-commit-hook.sh
       - name: prepare-commit-msg hook tests
         run: ./.githooks/tests/test-prepare-commit-msg-hook.sh
+      - name: commit-msg hook tests
+        run: ./.githooks/tests/test-commit-msg-hook.sh
 

@@ -1,9 +1,38 @@
 #!/bin/sh
 
-# Regex to check for conventional commits (wip allowed locally, blocked on push)
-commit_regex='^((fixup|squash)! )?(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert|wip)(\([a-zA-Z0-9_-]+\))?: .+'
+# commit-msg hook
+#
+# Two responsibilities, in this order:
+#
+#   1. Reject a subject that is not in Conventional Commits format.
+#   2. Append the branch's issue reference on the EDITOR path — the commit
+#      prepare-commit-msg cannot reach, because it runs before the editor opens
+#      and there is no subject to append to yet (#679).
+#
+# Validation runs first and needs no shared library, so a missing lib can never
+# silently disable it — the check every push depends on keeps working even if
+# the issue-reference feature cannot load.
 
-if ! grep -iqE "$commit_regex" "$1"; then
+# --- 1. Conventional Commits validation -------------------------------------
+# (wip allowed locally, blocked on push)
+#
+# Validate the SUBJECT — the first non-blank line, the same line the reference
+# logic below treats as the subject — not the whole file. A grep over the whole
+# file passes a non-conventional subject on the strength of a
+# Conventional-Commits-shaped line in the BODY (`git commit -m 'wip' -m 'fix: x'`
+# recorded `wip` as the subject); reading only the first non-blank line closes
+# that. On the editor-quit path that first non-blank line is one of git's own
+# comment lines, which never matches the regex, so the commit still aborts —
+# under the default comment character and under core.commentChar /
+# core.commentString alike.
+#
+# `amend!` joins `fixup!`/`squash!` in the accepted prefixes: git authors those
+# subjects for `--fixup=amend:` / `--fixup=reword:`, and append_issue_reference
+# leaves all three verbatim, so they must pass validation to reach it.
+commit_regex='^((fixup|squash|amend)! )?(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert|wip)(\([a-zA-Z0-9_-]+\))?: .+'
+
+subject=$(awk 'NF { print; exit }' "$1")
+if ! printf '%s\n' "$subject" | grep -iqE "$commit_regex"; then
     echo "❌ Error: Commit message does not follow Conventional Commits format."
     echo "Expected format: type(scope): subject"
     echo "Examples: "
@@ -11,3 +40,66 @@ if ! grep -iqE "$commit_regex" "$1"; then
     echo "  fix(api): resolve null pointer exception"
     exit 1
 fi
+
+# Everything from here down is the issue-reference append. Reaching it means
+# validation passed, so a comments-only file — the editor quit without saving —
+# has already been rejected above and never gets a fabricated subject. That is
+# how the quit-to-cancel gesture stays intact on this path: the subject read
+# there is one of git's own comment lines, which never matches the
+# conventional-format regex.
+
+# --- 2. Issue reference on the editor path ----------------------------------
+#
+# commit-msg is handed only the message file; git does not pass $COMMIT_SOURCE
+# here. So the cases where prepare-commit-msg would have skipped are
+# reconstructed from intrinsic signals instead:
+#
+#   * merge      — MERGE_HEAD exists.  Guarded here.
+#   * squash     — SQUASH_MSG exists (git merge --squash, rebase squash).
+#                  Guarded here.
+#   * autosquash — the subject begins fixup!/squash!/amend!.  In the lib.
+#   * rebase reword/edit — HEAD is detached, so no branch name and no number.
+#                  In the lib, via git symbolic-ref.
+#   * already referenced / already trailing a (#N) — in the lib.
+#
+# The merge and squash signals live here because they are reasons to skip the
+# append outright; the per-subject guards live in append_issue_reference so
+# both hooks share them. A conventional merge subject (e.g. `chore: merge x`)
+# passes the validation above and would otherwise gain a reference — this is
+# what keeps it byte-identical, matching the `-m`/prepare behaviour. A
+# non-conventional `Merge branch ...` was already rejected by validation, as it
+# is today.
+if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 ||
+    [ -f "$(git rev-parse --git-path SQUASH_MSG 2>/dev/null)" ]; then
+    exit 0
+fi
+
+# Locate the shared contract. Same candidate list as prepare-commit-msg: a
+# `.git/hooks/* -> ../../.githooks/*` symlink layout runs this file with $0 in
+# .git/hooks, where lib/ does not exist, so `dirname "$0"` alone is not enough.
+# First readable candidate wins.
+lib=""
+for candidate in \
+    "$( unset CDPATH; cd -- "$(dirname -- "$0")" 2>/dev/null && pwd )/lib/issue-reference.sh" \
+    "$(git rev-parse --git-path hooks 2>/dev/null)/lib/issue-reference.sh" \
+    "$(git rev-parse --show-toplevel 2>/dev/null)/.githooks/lib/issue-reference.sh"; do
+    if [ -r "$candidate" ]; then
+        lib=$candidate
+        break
+    fi
+done
+
+# Guard clause: degrade to a silent no-op if the lib is missing. This must come
+# BEFORE the `.` below, because `.` is a POSIX special builtin whose failure
+# aborts the script under sh/dash — and here that would reject a
+# validation-passing commit. Validation has already run, so bailing out only
+# forgoes the issue reference, never the format check.
+if [ -z "$lib" ]; then
+    echo "commit-msg: shared issue-reference lib not found; skipping issue reference" >&2
+    exit 0
+fi
+
+# shellcheck source=.githooks/lib/issue-reference.sh
+. "$lib"
+
+append_issue_reference "$1"
