@@ -247,9 +247,10 @@ commit_with_editor() {
 # ----- Autosquash fixtures (#675) -------------------------------------------
 # `git commit --fixup`/`--squash` build a subject git's own autosquash matches
 # against its target BYTE-FOR-BYTE, so a real `git rebase --autosquash` is the
-# only honest proof the fixup collapses. `--autosquash` is honoured only with
-# `-i`; the two env editors below accept the auto-arranged todo list and any
-# combined squash message with no human present.
+# only honest proof the fixup collapses. It runs as a non-interactive
+# `rebase -i --autosquash`: GIT_SEQUENCE_EDITOR=true accepts the auto-arranged
+# todo list and GIT_EDITOR=true accepts any combined squash message, so no
+# editor blocks and no human is needed.
 
 TARGET_SUBJECT=""
 TARGET_SHA=""
@@ -275,7 +276,7 @@ assert_autosquash_collapses() {
   # $1 = label, $2 = the subject prefix that must NOT survive ("fixup!"/"squash!").
   # Runs a non-interactive `git rebase -i --autosquash` from the root commit and
   # asserts the history shrank by exactly one and no such subject is left.
-  local label="$1" survivor_prefix="$2" root_sha count_before count_after
+  local label="$1" survivor_prefix="$2" root_sha count_before count_after survivor_count
   root_sha=$(git -C "${CASE_REPO}" rev-list --max-parents=0 HEAD)
   count_before=$(git -C "${CASE_REPO}" rev-list --count HEAD)
   GIT_SEQUENCE_EDITOR=true GIT_EDITOR=true \
@@ -295,8 +296,16 @@ assert_autosquash_collapses() {
   else
     bad "${label}: history is ${count_after} commit(s), expected $((count_before - 1)) — the fixup did not squash"
   fi
-  if git -C "${CASE_REPO}" log --pretty=%s | grep -q "^${survivor_prefix} "; then
-    bad "${label}: a '${survivor_prefix}' subject survived the rebase"
+  # Count with `grep -c`, not `grep -q`, and read the value — never the
+  # pipeline status. Under `set -o pipefail` (:67) a `git log | grep -q` returns
+  # grep's 0 on the first match but git-log races to SIGPIPE (141), and pipefail
+  # then surfaces that 141 as the pipeline status, so the `if` sees non-zero and
+  # falls to the `else` — reporting "no survivor" while a survivor is present.
+  # `grep -c` reads to EOF (no early close, no SIGPIPE) and prints the count; a
+  # zero-match `grep -c` exits 1, which is why we test the number, not the rc.
+  survivor_count=$(git -C "${CASE_REPO}" log --pretty=%s | grep -c "^${survivor_prefix} ")
+  if [ "${survivor_count}" -ne 0 ]; then
+    bad "${label}: ${survivor_count} '${survivor_prefix}' subject(s) survived the rebase"
   else
     ok "${label}: no '${survivor_prefix}' subject survived"
   fi
