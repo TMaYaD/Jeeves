@@ -26,10 +26,14 @@
 # under the default comment character and under core.commentChar /
 # core.commentString alike.
 #
-# `amend!` joins `fixup!`/`squash!` in the accepted prefixes: git authors those
-# subjects for `--fixup=amend:` / `--fixup=reword:`, and append_issue_reference
-# leaves all three verbatim, so they must pass validation to reach it.
-commit_regex='^((fixup|squash|amend)! )?(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert|wip)(\([a-zA-Z0-9_-]+\))?: .+'
+# `amend!` joins `fixup!`/`squash!` in the accepted prefixes, and the `*`
+# quantifier accepts them REPEATED: git prepends another prefix when the fixup
+# target is itself a fixup (`git commit --fixup` of a `fixup!` commit yields
+# `fixup! fixup! <subject>`), so a chained subject is just as git-authored as a
+# single one. append_issue_reference leaves all of them verbatim (its guard
+# matches the leading prefix), so they must pass validation to reach it — with
+# `?` a `fixup! fixup!` subject was rejected and the commit blocked outright.
+commit_regex='^((fixup|squash|amend)! )*(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert|wip)(\([a-zA-Z0-9_-]+\))?: .+'
 
 subject=$(awk 'NF { print; exit }' "$1")
 if ! printf '%s\n' "$subject" | grep -iqE "$commit_regex"; then
@@ -102,4 +106,8 @@ fi
 # shellcheck source=.githooks/lib/issue-reference.sh
 . "$lib"
 
+# The append is best-effort: exit 0 regardless of its status, so a failed write
+# inside append_issue_reference (e.g. a failed mv) can never reject a commit that
+# already passed validation.
 append_issue_reference "$1"
+exit 0

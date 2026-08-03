@@ -200,12 +200,16 @@ append_issue_reference() {
 
     # Append the reference to the end of the first non-blank line. A single awk
     # pass copies the file verbatim except for that one line; `d` fires once so
-    # only the subject is touched. A temp file keeps the write atomic across awk
-    # implementations, as the old sed-based version did.
-    tmp=$(mktemp) || return 0
+    # only the subject is touched. The temp file is created BESIDE the target,
+    # not in $TMPDIR: $TMPDIR is often a different filesystem, where `mv` is a
+    # copy-plus-unlink rather than an atomic rename — so a same-directory temp is
+    # what makes the swap atomic and keeps a half-written file from ever being
+    # seen. If the awk fails, or the mv fails, the temp is removed so a failed
+    # write leaves nothing behind.
+    tmp=$(mktemp "$file.XXXXXX") || return 0
     if awk -v ref=" (#${number})" '!d && NF { print $0 ref; d=1; next } { print }' \
         "$file" > "$tmp"; then
-        mv "$tmp" "$file"
+        mv "$tmp" "$file" || rm -f "$tmp"
     else
         rm -f "$tmp"
     fi

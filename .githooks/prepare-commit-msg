@@ -61,4 +61,7 @@ fi
 # shellcheck source=.githooks/lib/issue-reference.sh
 . "$lib"
 
+# The append is best-effort: exit 0 regardless of its status, so a failed write
+# inside append_issue_reference (e.g. a failed mv) can never reject the commit.
 append_issue_reference "$COMMIT_MSG_FILE"
+exit 0
