@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Tests for .githooks/prepare-commit-msg — the issue reference it appends to a
-# commit subject from the current branch name (#666).
+# commit subject from the current branch name (#666), and the autosquash
+# subjects it must leave verbatim (#675).
 #
 # Every case builds a throwaway git repository in a temp directory, checks out
 # a branch under test, and runs a REAL `git commit`. Nothing here invokes the
@@ -28,6 +29,29 @@
 #      substring search over the whole file. With a degenerate id like `0` it
 #      matched almost any message; with a real one it matched unrelated
 #      numbers in prose, and the append was skipped silently.
+#
+# The defect pinned from #675:
+#
+#   `git commit --fixup <sha>`, `--squash <sha>`, `--fixup=amend:<sha>` and
+#   `--fixup=reword:<sha>` all reach the hook with $COMMIT_SOURCE=message — the
+#   same value a plain `-m` produces — so the COMMIT_SOURCE guard lets them
+#   through. git built those subjects itself as `fixup! <target>` /
+#   `squash! <target>` / `amend! <target>` (both amend: and reword: emit
+#   `amend!`), and `git rebase --autosquash` matches them against the target's
+#   subject BYTE-FOR-BYTE. Appending ` (#NNN)` breaks that match, so the fixup
+#   never squashes and survives the rebase as a standalone commit. The
+#   autosquash cases below drive a REAL `git commit --fixup`/`--squash` and a
+#   REAL `git rebase --autosquash`, per AGENTS.md (no mocks for system parts).
+#
+#   Non-vacuity is load-bearing here: each autosquash case builds the target
+#   commit ON `main`, reference-free, then checks out the numbered branch before
+#   creating the fixup. Were the target built on the numbered branch it would
+#   already carry `(#605)`, and the already-referenced guard would suppress the
+#   append even on the UNPATCHED hook — so the case would pass against the bug
+#   and prove nothing. Do NOT "simplify" the target back onto the numbered
+#   branch; that silently re-vacuums every case. (This is the exact invisibility
+#   the issue names: the defect hides whenever the target already carries the
+#   reference.)
 #
 # Each case is run under every shell present, by rewriting the copied hook's
 # shebang. `sh` is the production path — git executes the hook through its
@@ -218,6 +242,73 @@ commit_with_editor() {
   COMMIT_RC=$?
   SUBJECT=$(git -C "${CASE_REPO}" log -1 --pretty=%s 2>/dev/null)
   FULL_MSG=$(git -C "${CASE_REPO}" log -1 --pretty=%B 2>/dev/null)
+}
+
+# ----- Autosquash fixtures (#675) -------------------------------------------
+# `git commit --fixup`/`--squash` build a subject git's own autosquash matches
+# against its target BYTE-FOR-BYTE, so a real `git rebase --autosquash` is the
+# only honest proof the fixup collapses. It runs as a non-interactive
+# `rebase -i --autosquash`: GIT_SEQUENCE_EDITOR=true accepts the auto-arranged
+# todo list and GIT_EDITOR=true accepts any combined squash message, so no
+# editor blocks and no human is needed.
+
+TARGET_SUBJECT=""
+TARGET_SHA=""
+
+seed_autosquash_target() {
+  # $1 = shell the hook runs under. Builds the rebase root and a REFERENCE-FREE
+  # target ON `main`, records its subject/SHA, then moves onto the numbered
+  # branch. Reference-free is the whole point (see the header note): a target
+  # built on the numbered branch already carries `(#605)`, and the
+  # already-referenced guard then suppresses the append even on the unpatched
+  # hook, so the case would pass against the bug.
+  new_case_repo 'main' "$1"
+  commit_with -m 'chore: base'          # the root the autosquash rebase stops at
+  commit_with -m 'fix: seed subject'    # the target — no reference on `main`
+  TARGET_SUBJECT="${SUBJECT}"
+  TARGET_SHA=$(git -C "${CASE_REPO}" rev-parse HEAD)
+  git -C "${CASE_REPO}" checkout -q -b 'fix/605-converge-duplicate-tags'
+}
+
+REBASE_RC=0
+
+assert_autosquash_collapses() {
+  # $1 = label, $2 = the subject prefix that must NOT survive ("fixup!"/"squash!").
+  # Runs a non-interactive `git rebase -i --autosquash` from the root commit and
+  # asserts the history shrank by exactly one and no such subject is left.
+  local label="$1" survivor_prefix="$2" root_sha count_before count_after survivor_count
+  root_sha=$(git -C "${CASE_REPO}" rev-list --max-parents=0 HEAD)
+  count_before=$(git -C "${CASE_REPO}" rev-list --count HEAD)
+  GIT_SEQUENCE_EDITOR=true GIT_EDITOR=true \
+    git -C "${CASE_REPO}" rebase -i --autosquash "${root_sha}" >/dev/null 2>&1
+  REBASE_RC=$?
+  if [ "${REBASE_RC}" -ne 0 ]; then
+    # A wedged rebase must not leak state into a later case. Each case gets a
+    # fresh repo anyway, but this keeps a mid-rebase failure self-contained.
+    git -C "${CASE_REPO}" rebase --abort >/dev/null 2>&1
+    bad "${label}: git rebase --autosquash exited ${REBASE_RC}"
+    return
+  fi
+  ok "${label}: git rebase --autosquash succeeded"
+  count_after=$(git -C "${CASE_REPO}" rev-list --count HEAD)
+  if [ "${count_after}" -eq $((count_before - 1)) ]; then
+    ok "${label}: history shrank by one (${count_before} -> ${count_after})"
+  else
+    bad "${label}: history is ${count_after} commit(s), expected $((count_before - 1)) — the fixup did not squash"
+  fi
+  # Count with `grep -c`, not `grep -q`, and read the value — never the
+  # pipeline status. Under `set -o pipefail` (:67) a `git log | grep -q` returns
+  # grep's 0 on the first match but git-log races to SIGPIPE (141), and pipefail
+  # then surfaces that 141 as the pipeline status, so the `if` sees non-zero and
+  # falls to the `else` — reporting "no survivor" while a survivor is present.
+  # `grep -c` reads to EOF (no early close, no SIGPIPE) and prints the count; a
+  # zero-match `grep -c` exits 1, which is why we test the number, not the rc.
+  survivor_count=$(git -C "${CASE_REPO}" log --pretty=%s | grep -c "^${survivor_prefix} ")
+  if [ "${survivor_count}" -ne 0 ]; then
+    bad "${label}: ${survivor_count} '${survivor_prefix}' subject(s) survived the rebase"
+  else
+    ok "${label}: no '${survivor_prefix}' subject survived"
+  fi
 }
 
 # ----- Cases ----------------------------------------------------------------
@@ -567,6 +658,58 @@ for hook_shell in ${HOOK_SHELLS}; do
   else
     bad "${hook_shell}, merge: subject is \"${MERGE_SUBJECT}\", expected \"Merge branch side\""
   fi
+
+  # --- Autosquash: git-authored fixup!/squash!/amend! subjects (#675) ---
+
+  start_case "autosquash (${hook_shell}): --fixup subject stays byte-identical and squashes"
+  # AC #1, #3, #4, #5. --fixup reaches the hook with $COMMIT_SOURCE=message, so
+  # the COMMIT_SOURCE guard lets it through; the subject must still be left as
+  # git's `fixup! <target>` or autosquash cannot match it.
+  seed_autosquash_target "${hook_shell}"
+  # AC #5: an ordinary commit on the numbered branch still gets its reference.
+  # This is its OWN commit, distinct from the fixup target — reusing the target
+  # here would give it back `(#605)` and re-mask the defect.
+  commit_with -m "${SEED_SUBJECT}"
+  assert_subject "${hook_shell}, ordinary commit alongside a fixup" "${SEED_SUBJECT} (#605)"
+  # AC #1: byte-identical to `fixup! ` + the target's reference-free subject.
+  commit_with --fixup="${TARGET_SHA}"
+  assert_subject "${hook_shell}, --fixup byte-identical" "fixup! ${TARGET_SUBJECT}"
+  # AC #3, #4: a real autosquash rebase collapses it into its target.
+  assert_autosquash_collapses "${hook_shell}, --fixup autosquash" 'fixup!'
+
+  start_case "autosquash (${hook_shell}): --squash subject stays byte-identical and squashes"
+  # AC #2, #3. --squash arrives the same way, but unlike --fixup it OPENS THE
+  # EDITOR by default to invite an extended message, so with no editor
+  # configured (as in CI) a plain `git commit --squash` errors "Terminal is
+  # dumb, but EDITOR unset". It therefore goes through commit_with_editor like
+  # the amend:/reword: cases: the hook runs before the editor, the file already
+  # holds `squash! <target>`, and quitting without saving keeps it. (The rebase
+  # below opens its own combining editor, accepted by GIT_EDITOR=true inside
+  # assert_autosquash_collapses.)
+  seed_autosquash_target "${hook_shell}"
+  commit_with_editor "${EDITOR_QUIT}" '' --squash="${TARGET_SHA}"
+  assert_subject "${hook_shell}, --squash byte-identical" "squash! ${TARGET_SUBJECT}"
+  assert_autosquash_collapses "${hook_shell}, --squash autosquash" 'squash!'
+
+  start_case "autosquash (${hook_shell}): --fixup=amend: and --fixup=reword: keep amend! verbatim"
+  # Both emit `amend!` and OPEN THE EDITOR (git errors with none configured), so
+  # they must go through commit_with_editor, not plain commit_with. The hook
+  # runs before the editor, the file already holds `amend! <target>`, and
+  # quitting without saving keeps it. No rebase — subject identity is the AC.
+  seed_autosquash_target "${hook_shell}"
+  commit_with_editor "${EDITOR_QUIT}" '' --fixup=amend:"${TARGET_SHA}"
+  assert_subject "${hook_shell}, --fixup=amend: byte-identical" "amend! ${TARGET_SUBJECT}"
+  seed_autosquash_target "${hook_shell}"
+  commit_with_editor "${EDITOR_QUIT}" '' --fixup=reword:"${TARGET_SHA}"
+  assert_subject "${hook_shell}, --fixup=reword: byte-identical" "amend! ${TARGET_SUBJECT}"
+
+  start_case "autosquash (${hook_shell}): a hand-typed fixup! subject is left verbatim"
+  # A genuine user path that $COMMIT_SOURCE structurally cannot catch: a
+  # hand-typed `fixup!` subject arrives as $COMMIT_SOURCE=message just like any
+  # `-m`. Only the subject prefix distinguishes it, and the append must not fire.
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  commit_with -m 'fixup! chore: tidy imports'
+  assert_subject "${hook_shell}, hand-typed fixup! via -m" 'fixup! chore: tidy imports'
 
 done
 

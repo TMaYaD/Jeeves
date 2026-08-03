@@ -30,6 +30,24 @@ if [ "$COMMIT_SOURCE" != "message" ]; then
     exit 0
 fi
 
+# Guard clause: leave git's autosquash messages byte-identical.
+#
+# `git commit --fixup <sha>`, `--squash <sha>`, `--fixup=amend:<sha>` and
+# `--fixup=reword:<sha>` all reach this hook with $COMMIT_SOURCE = "message" —
+# the very value a plain `-m` produces — so the guard above lets them through.
+# But git has built these subjects itself as `fixup! <target>` /
+# `squash! <target>` / `amend! <target>` (both amend: and reword: emit
+# `amend!`), and `git rebase --autosquash` matches them against the target's
+# subject byte-for-byte. Appending ` (#NNN)` breaks that match, so the fixup
+# never squashes and survives the rebase as a standalone commit (#675). These
+# are exactly the prefixes git's own autosquash recognises; a subject shaped
+# like one is git's to own, so leave it verbatim. $COMMIT_SOURCE cannot tell
+# these apart from `-m`, so the subject prefix is the only signal — and matching
+# only these three git-authored prefixes means a non-match costs nothing.
+case $(head -n 1 "$COMMIT_MSG_FILE") in
+    'fixup! '*|'squash! '*|'amend! '*) exit 0 ;;
+esac
+
 BRANCH_NAME=$(git symbolic-ref --short HEAD 2>/dev/null)
 
 # Prints a bare GitHub issue number, or nothing at all. Accepted branch shapes:
