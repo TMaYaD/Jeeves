@@ -21,6 +21,19 @@ on:
       - ".githooks/tests/test-pre-commit-real-sdk.sh"
       - ".github/workflows/flutter-ci.yml"
 
+# Every job here only reads the repository (checkout with persist-credentials:
+# false, build, test), so grant the least-privilege token scope once at the
+# workflow level rather than inheriting the broad default.
+permissions:
+  contents: read
+
+# Cancel a superseded PR run rather than let it hold a runner — the real-SDK job
+# downloads a full uncached SDK, so a stale run is expensive. Pushes to main are
+# left to complete.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # Path detector. Named for its original android-build role and kept that name
   # stable so a required-check name never moves (#678), but it now also gates
@@ -124,6 +137,10 @@ jobs:
     needs: android-build-changes
     if: needs.android-build-changes.outputs.app == 'true' || needs.android-build-changes.outputs.hook == 'true'
     runs-on: ubuntu-latest
+    # Bounds the uncached SDK download + warm + commit-driven build_runner well
+    # above its ~2-minute observed runtime, so a hang cannot hold a runner for
+    # the 360-minute default (and bounds the window the exit trap cannot repair).
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
