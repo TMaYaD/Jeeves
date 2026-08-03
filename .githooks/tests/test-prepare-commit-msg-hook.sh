@@ -669,10 +669,16 @@ for hook_shell in ${HOOK_SHELLS}; do
   assert_autosquash_collapses "${hook_shell}, --fixup autosquash" 'fixup!'
 
   start_case "autosquash (${hook_shell}): --squash subject stays byte-identical and squashes"
-  # AC #2, #3. --squash arrives the same way; the combining editor git opens for
-  # the squashed message is accepted by GIT_EDITOR=true inside the helper.
+  # AC #2, #3. --squash arrives the same way, but unlike --fixup it OPENS THE
+  # EDITOR by default to invite an extended message, so with no editor
+  # configured (as in CI) a plain `git commit --squash` errors "Terminal is
+  # dumb, but EDITOR unset". It therefore goes through commit_with_editor like
+  # the amend:/reword: cases: the hook runs before the editor, the file already
+  # holds `squash! <target>`, and quitting without saving keeps it. (The rebase
+  # below opens its own combining editor, accepted by GIT_EDITOR=true inside
+  # assert_autosquash_collapses.)
   seed_autosquash_target "${hook_shell}"
-  commit_with --squash="${TARGET_SHA}"
+  commit_with_editor "${EDITOR_QUIT}" '' --squash="${TARGET_SHA}"
   assert_subject "${hook_shell}, --squash byte-identical" "squash! ${TARGET_SUBJECT}"
   assert_autosquash_collapses "${hook_shell}, --squash autosquash" 'squash!'
 
