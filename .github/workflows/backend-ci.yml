@@ -117,6 +117,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The hook suites run each case under sh, dash, bash and zsh
+      # (docs/TESTING.md) but SKIP any interpreter absent from PATH. zsh is not
+      # preinstalled on ubuntu-latest, so without this its rows would be silently
+      # skipped here while the docs claim four-shell coverage.
+      - name: Install zsh for the hook test matrix
+        run: sudo apt-get update && sudo apt-get install -y zsh
       # Covers the extensionless test stubs as well as the *.sh scripts (the
       # shared lib/issue-reference.sh among them).
       - name: shellcheck
