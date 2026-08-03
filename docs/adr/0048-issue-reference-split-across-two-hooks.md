@@ -8,68 +8,50 @@ which #666 left as a deliberate no-op.
 
 `.githooks/prepare-commit-msg` appends `(#N)` to a commit subject from the branch name. It
 runs **before** git opens the editor, so on a plain `git commit` the file it receives holds
-only git's comment block and a blank first line — there is no subject to append to. The hook
-therefore appends nothing on the editor path, by design (#666). The result was a gap: `git
-commit -m` got a reference, `git commit` through the editor did not, and which one a
-contributor got depended only on how they happened to commit (#679).
+only git's comment block and no subject — there is nothing to append to, and the hook
+appends nothing there by design (#666). The result was a gap: `git commit -m` got a
+reference, `git commit` through the editor did not, and which one a contributor got depended
+only on how they happened to commit (#679).
 
-The subject the editor path is owed exists only **after** the editor closes — which is
-exactly when `.githooks/commit-msg` runs. `commit-msg` already exists and is already wired
-through `core.hooksPath`, so the reference belongs there. The catch is that `commit-msg` is
-handed only the message file; git does **not** pass it `$COMMIT_SOURCE`, the signal
-`prepare-commit-msg` uses to tell `-m` from a merge from a fixup from the editor.
+The subject the editor path is owed exists only **after** the editor closes — which is when
+`.githooks/commit-msg` runs. `commit-msg` already exists and is already wired through
+`core.hooksPath`, so the reference belongs there. The catch is that git does **not** pass
+`commit-msg` the `$COMMIT_SOURCE` that `prepare-commit-msg` uses to tell `-m` from a merge
+from a fixup from the editor.
 
 ## Decision
 
 **Both hooks append through one shared library, `.githooks/lib/issue-reference.sh`.** The
-branch-name contract — accepted shapes, bare-digits output, the already-referenced guard —
+branch-name contract — accepted shapes, bare-digits output, the already-referenced guards —
 lives there once, so the two callers cannot drift. `prepare-commit-msg` keeps the `-m`/`-F`
-path (guarded on `$COMMIT_SOURCE = message`); `commit-msg` takes the editor path.
+path; `commit-msg` takes the editor path.
 
-**`commit-msg` reconstructs the absent `$COMMIT_SOURCE` from intrinsic signals** — the part
-no future reader would guess from the code alone:
+**`commit-msg` reconstructs the absent `$COMMIT_SOURCE` from intrinsic signals** rather than
+having it handed over: a merge or squash is recognised from git's in-progress marker files,
+an autosquash from the `fixup!`/`squash!`/`amend!` subject prefix, and a rebase from the fact
+that git parks you on a **detached HEAD** there — so no branch name, and no number, is
+produced. That last one is the load-bearing subtlety of the whole design: it is an *accident
+of git's rebase implementation*, not a guard anyone wrote, and it is the only reason a reword
+or an autosquash-combine does not acquire a spurious reference. It carries a dedicated
+regression test precisely because a future git that stopped detaching HEAD there would
+silently break it. (The exact signals, guard ordering, and library-location fallback are
+documented where they live — in the hook comments and `docs/TESTING.md` — not here.)
 
-- **merge** — `MERGE_HEAD` exists → skip. A non-conventional `Merge branch …` subject is
-  already rejected by the format validation that runs first, exactly as it is today; the
-  guard exists for a *conventional* merge subject (`chore: merge x`), which passes
-  validation and would otherwise gain a reference.
-- **squash** — `SQUASH_MSG` exists (`git merge --squash`, rebase squash) → skip.
-- **autosquash** — the subject begins `fixup!`/`squash!`/`amend!` → skip, so
-  `git rebase --autosquash` still matches it byte-for-byte (#675). Checked in the lib, so
-  both hooks share it.
-- **rebase reword/edit** — **HEAD is detached**, so `git symbolic-ref` fails, the branch
-  name is empty, and no number is produced. This is an *accident of git's rebase
-  implementation*, not a guard anyone wrote, and it is the whole reason a reword or an
-  autosquash-combine does not acquire a spurious reference. It is pinned by a test
-  precisely because a future git that stopped detaching HEAD there would silently break it.
-- **already referenced / already trailing a `(#N)`** — checked in the lib. The
-  already-referenced guard only looks for *this* branch's number, so a commit authored on
-  one numbered branch and amended on another (`feat: work (#605)` amended on `fix/999-b`)
-  needs a second, **trailing-reference** guard to keep it from stacking `(#999)` on top.
-
-Validation runs **before** the reference logic and needs no library, so a missing or
-unreadable lib degrades the *feature* to a silent no-op without ever disabling the
-format check that every push depends on. It reads the **subject** — the first non-blank
-line, the same line the reference logic uses — not the whole file, so a conventional-shaped
-body line cannot pass a non-conventional subject; and it accepts `amend!` alongside
-`fixup!`/`squash!` so those git-authored autosquash subjects clear it and reach the (no-op)
-append. The lib is located by a candidate list — `$0`'s directory, then
-`git rev-parse --git-path hooks`, then `--show-toplevel`/.githooks — because a
-`.git/hooks/* → ../../.githooks/*` symlink layout puts `$0` where `lib/` is not. The
-missing-lib guard sits *before* the `.` source, because `.` is a POSIX special builtin whose
-failure aborts the script under `sh`/`dash` and would otherwise reject the commit.
+The format validation runs **before** the reference logic and needs no library, so an
+unreadable or missing lib degrades the *feature* to a non-blocking no-op (a warning on
+stderr, then success) without ever disabling the format check that every push depends on.
 
 ## Consequences
 
 Plain `git commit --amend` of a genuinely *unreferenced* subject on a conventional branch
 now gains that branch's `(#N)`. That is a change in the safe direction — it adds the correct
-reference and, thanks to the trailing-reference guard, never doubles or corrupts one — and
-it is consistent with the user story. Making plain `--amend` byte-for-byte unchanged would
+reference and, thanks to a trailing-reference guard, never doubles or corrupts one — and it
+is consistent with the user story. Making plain `--amend` byte-for-byte unchanged would
 require relaying `$COMMIT_SOURCE` from `prepare-commit-msg` through `.git/` state into
-`commit-msg`; that was rejected as adding a cross-hook invariant the codebase's hook
-comments consistently avoid, and the trade is recorded here so it is not re-litigated.
+`commit-msg`; that was rejected as adding a cross-hook invariant the codebase's hook comments
+consistently avoid, and the trade is recorded here so it is not re-litigated.
 
-A stale `SQUASH_MSG` from an abandoned `merge --squash` can suppress one append until git
-removes it on the next commit — again the safe direction (a missing reference, never a
-corrupted subject). The detached-HEAD reliance is the one fragile assumption, which is why
-it carries a dedicated regression test rather than living only in this document.
+The reliance on the detached-HEAD accident is the one fragile assumption, which is why it
+lives behind a test rather than only in this document. A stale `SQUASH_MSG` from an abandoned
+`merge --squash` can suppress one append until git removes it — again the safe direction (a
+missing reference, never a corrupted subject).
