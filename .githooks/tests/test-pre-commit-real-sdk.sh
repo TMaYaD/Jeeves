@@ -199,13 +199,26 @@ sdk_head=$(git -C "${sdk}" rev-parse HEAD)
 
 # Hard-refuse the shared SDKs a mis-designation would land on: the FVM store and
 # the hook's own $HOME/system fallbacks. Refusal, not a warning.
+#
+# FVM keeps its versions under <cache>/versions/<ver>. The cache defaults to
+# ~/fvm or ~/.fvm but is configurable via FVM_CACHE_PATH (current) or FVM_HOME
+# (legacy fallback), so a shared SDK can live outside the two default roots.
+# Enumerate the configured caches too — a designation that lands on any of them
+# must be refused, exactly like the hard-coded roots.
 refuse_if_shared() {
   local candidate resolved
-  for candidate in \
-    "${REAL_HOME}/fvm/versions"/* \
-    "${REAL_HOME}/development/flutter" \
-    "${REAL_HOME}/flutter" \
-    "/opt/flutter"; do
+  local -a shared_candidates=(
+    "${REAL_HOME}/fvm/versions"/*
+    "${REAL_HOME}/.fvm/versions"/*
+  )
+  [ -n "${FVM_CACHE_PATH:-}" ] && shared_candidates+=( "${FVM_CACHE_PATH}/versions"/* )
+  [ -n "${FVM_HOME:-}" ] && shared_candidates+=( "${FVM_HOME}/versions"/* )
+  shared_candidates+=(
+    "${REAL_HOME}/development/flutter"
+    "${REAL_HOME}/flutter"
+    "/opt/flutter"
+  )
+  for candidate in "${shared_candidates[@]}"; do
     [ -d "${candidate}" ] || continue
     resolved=$(cd "${candidate}" && pwd -P) || continue
     if [ "${resolved}" = "${sdk}" ]; then
@@ -422,7 +435,12 @@ if [ ! -x "${HOOK}" ]; then
   bad "the hook at ${HOOK} is not executable — git would ignore it; run 'chmod +x' on it (teeth-proof copies especially)"
   report
 fi
-ln -sf "${HOOK}" "${main_checkout}/.git/hooks/pre-commit"
+# git resolves a hook symlink against the hooks dir, not this script's cwd, so a
+# relative HOOK (an overridden teeth-proof copy) would install a DANGLING link
+# that git silently ignores — surfacing later as a mysterious "Flutter block
+# never ran". The default HOOK is already absolute; pin an overridden one too.
+hook_abs=$(cd -- "$(dirname -- "${HOOK}")" && printf '%s/%s\n' "$(pwd -P)" "$(basename -- "${HOOK}")")
+ln -sf "${hook_abs}" "${main_checkout}/.git/hooks/pre-commit"
 
 # Stage a single app/ file so the diff unambiguously matches the hook's
 # `^app/` gate, without dragging in pub artefacts.
