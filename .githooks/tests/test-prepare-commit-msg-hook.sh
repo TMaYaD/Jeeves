@@ -437,6 +437,13 @@ for hook_shell in ${HOOK_SHELLS}; do
   commit_with -m 'feat: carried over (#500)'
   assert_subject "${hook_shell}, subject trailing a foreign reference" 'feat: carried over (#500)'
 
+  # The complement, which proves the guard is TRAILING-specific and not "contains
+  # a reference anywhere": a `(#500)` that is not at the end must still gain this
+  # branch's reference. A guard matching anywhere would wrongly suppress it.
+  new_case_repo 'fix/605-x' "${hook_shell}"
+  commit_with -m 'feat: revert of (#500) behaviour'
+  assert_subject "${hook_shell}, subject with a non-trailing reference" 'feat: revert of (#500) behaviour (#605)'
+
   # The substring guard used to see `605` inside `1605` and skip the append,
   # leaving the commit with no reference at all.
   new_case_repo 'fix/605-x' "${hook_shell}"

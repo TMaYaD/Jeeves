@@ -57,6 +57,15 @@
 # Usage: ./test-commit-msg-hook.sh
 set -uo pipefail
 
+# Ambient global/system git config must not reach the fixtures. A stray
+# `rebase.abbreviateCommands=true` would make git write `p <sha>` in the rebase
+# todo, so SEQ_REWORD_FIRST's `1s/^pick/reword/` matches nothing and the reword
+# cases pass without ever rewording; a stray `core.commentChar` or
+# `commit.template` would leak into every case the same way. Pin the sources
+# (git 2.32+; older git ignores these, losing only the isolation).
+export GIT_CONFIG_GLOBAL=/dev/null
+export GIT_CONFIG_SYSTEM=/dev/null
+
 TESTS_DIR=$(cd -- "$(dirname -- "$0")" && pwd)
 GITHOOKS="${TESTS_DIR}/.."
 
@@ -235,10 +244,21 @@ assert_nothing_committed() {
 # unknown keys and exits 0. Probe the BEHAVIOUR: feed stripspace a line that is
 # a comment only if the key is understood. The probe body must be the comment
 # ALONE, or the output is non-empty either way and the probe lies "supported".
-if [ -z "$(printf '// probe\n' | git -c core.commentString='//' stripspace --strip-comments)" ]; then
+#
+# Check the exit status separately from the output and discard stderr: a git
+# that errors (e.g. it rejects core.commentString, or an ambient core.commentChar
+# makes the two mutually exclusive) also prints nothing to stdout, so keying
+# "supported" on empty output alone would misread a failure as success and leak
+# the error to the terminal. The GIT_CONFIG_GLOBAL/SYSTEM=/dev/null isolation at
+# the top of this file keeps any ambient core.commentChar out of the way; the
+# exit-status check is the belt-and-braces if that is ever removed. (Do NOT add
+# `-c core.commentChar=` here — git rejects an empty comment character outright,
+# which would make this probe report "unsupported" on every git.)
+COMMENT_STRING_SUPPORTED=no
+if probe_out=$(printf '// probe\n' \
+  | git -c core.commentString='//' stripspace --strip-comments 2>/dev/null) \
+  && [ -z "${probe_out}" ]; then
   COMMENT_STRING_SUPPORTED=yes
-else
-  COMMENT_STRING_SUPPORTED=no
 fi
 
 # ----- Editor fixtures ------------------------------------------------------
@@ -503,6 +523,33 @@ for hook_shell in ${HOOK_SHELLS}; do
     skip "${hook_shell}, quit, core.commentString + verbose: unsupported by $(git --version)"
   fi
 
+  # --- The append path IS comment-character-aware (positive counterpart) ---
+  # The six quit cells above all abort, but they would abort just the same on a
+  # hook that strips only `#` — a surviving `;`/`//` block fails validation like
+  # an empty message does, so they do not discriminate comment-character
+  # handling. These cases do: the branch is `fix/605-#605`, so git's own
+  # `; On branch fix/605-#605` status line carries a `#605`. Only a hook whose
+  # already-referenced guard drops that line through git stripspace (which reads
+  # core.commentChar / core.commentString) still appends; a hook hard-coding
+  # `^#` reads git's own text as an existing reference and suppresses the append,
+  # recording `feat: add the thing` with no reference — so this case FAILS there.
+
+  start_case "editor (${hook_shell}): a typed subject is referenced under core.commentChar"
+  new_case_repo 'fix/605-#605' "${hook_shell}"
+  git -C "${CASE_REPO}" config core.commentChar ';'
+  commit_with_editor "${EDITOR_WRITE}" "${SEED_SUBJECT}"
+  assert_subject "${hook_shell}, commentChar=';' append" "${SEED_SUBJECT} (#605)"
+
+  start_case "editor (${hook_shell}): a typed subject is referenced under core.commentString"
+  new_case_repo 'fix/605-#605' "${hook_shell}"
+  if [ "${COMMENT_STRING_SUPPORTED}" = yes ]; then
+    git -C "${CASE_REPO}" config core.commentString '//'
+    commit_with_editor "${EDITOR_WRITE}" "${SEED_SUBJECT}"
+    assert_subject "${hook_shell}, commentString='//' append" "${SEED_SUBJECT} (#605)"
+  else
+    skip "${hook_shell}, commentString append: unsupported by $(git --version)"
+  fi
+
   # --- AC #4 companion: a non-conventional subject typed in the editor is
   # still rejected, exactly as it is on the -m path. ---
   start_case "editor (${hook_shell}): a non-conventional typed subject is rejected"
@@ -679,6 +726,15 @@ for hook_shell in ${HOOK_SHELLS}; do
   new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
   commit_with -m 'fixup! chore: tidy imports'
   assert_subject "${hook_shell}, hand-typed fixup! via -m" 'fixup! chore: tidy imports'
+
+  start_case "autosquash (${hook_shell}): a chained fixup! fixup! subject passes validation, left verbatim"
+  # git prepends another prefix when the fixup target is itself a fixup, so
+  # `fixup! fixup! <subject>` is a real git-authored subject. The validation
+  # regex accepts a repeated prefix (`*`, not `?`) — with `?` this commit was
+  # rejected outright — and append_issue_reference leaves it byte-identical.
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  commit_with -m 'fixup! fixup! chore: tidy imports'
+  assert_subject "${hook_shell}, chained fixup! fixup! via -m" 'fixup! fixup! chore: tidy imports'
 
 done
 
