@@ -15,6 +15,8 @@
 /// - [eveningShutdownProvider] — step / disposition state for the ritual.
 library;
 
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -132,6 +134,17 @@ class ShutdownSessionDateNotifier extends Notifier<String> {
 // Stream providers — backed by the active focus session
 // ---------------------------------------------------------------------------
 
+/// A stream that never emits and never closes, so a [StreamProvider] returning
+/// it stays in its loading state instead of publishing a value it does not
+/// have yet. The subscription is discarded when the dependency being waited on
+/// arrives and the provider rebuilds.
+///
+/// Both stream providers below need it for the same reason: an empty
+/// Settlement map is indistinguishable from "nothing Settled", so a loading map
+/// defaulted to empty is not a neutral placeholder — it is a wrong answer
+/// wearing the shape of a right one.
+Stream<T> _holdInLoading<T>() => StreamController<T>().stream;
+
 /// The order the summary renders Settlement groups in: achieved, then
 /// continuing, then blocked on someone else, then parked.
 ///
@@ -158,9 +171,17 @@ const sessionSettlementRenderOrder = <SessionSettlement>[
 final sessionSettlementGroupsProvider =
     StreamProvider<Map<SessionSettlement, List<Todo>>>((ref) {
   final db = ref.watch(databaseProvider);
-  final settlements = ref.watch(activeSessionSettlementsProvider).value ??
-      const <String, SessionSettlement>{};
-  return db.focusSessionDao.watchActiveSessionReviewSurface().map((surface) {
+  final surfaceStream = db.focusSessionDao.watchActiveSessionReviewSurface();
+  final settlementsAsync = ref.watch(activeSessionSettlementsProvider);
+  if (settlementsAsync.hasError) {
+    return Stream.error(settlementsAsync.error!, settlementsAsync.stackTrace);
+  }
+  // The two streams emit independently, so defaulting a not-yet-emitted map to
+  // empty publishes a first AsyncData claiming the day resolved nothing —
+  // which the summary step renders as its empty state.
+  final settlements = settlementsAsync.value;
+  if (settlements == null) return _holdInLoading();
+  return surfaceStream.map((surface) {
     final groups = <SessionSettlement, List<Todo>>{};
     for (final bucket in sessionSettlementRenderOrder) {
       final members =
@@ -205,9 +226,18 @@ final unfinishedSelectedTodayProvider = StreamProvider<List<Todo>>((ref) {
   final dispositions = ref.watch(
     eveningShutdownProvider.select((s) => s.dispositions),
   );
-  final settlements = ref.watch(activeSessionSettlementsProvider).value ??
-      const <String, SessionSettlement>{};
-  return db.focusSessionDao.watchActiveSessionReviewSurface().map(
+  final surfaceStream = db.focusSessionDao.watchActiveSessionReviewSurface();
+  final settlementsAsync = ref.watch(activeSessionSettlementsProvider);
+  if (settlementsAsync.hasError) {
+    return Stream.error(settlementsAsync.error!, settlementsAsync.stackTrace);
+  }
+  // Same gate as [sessionSettlementGroupsProvider]: a not-yet-emitted map
+  // defaulted to empty would count every Settled Outcome as unfinished work on
+  // the first emission — the banner's count and the ritual header's
+  // "remaining" figure.
+  final settlements = settlementsAsync.value;
+  if (settlements == null) return _holdInLoading();
+  return surfaceStream.map(
         (tasks) => tasks
             .where((t) =>
                 t.doneAt == null &&

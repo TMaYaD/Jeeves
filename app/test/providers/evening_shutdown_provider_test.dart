@@ -3,6 +3,8 @@
 /// [FocusSessionDao] (post-#185).
 library;
 
+import 'dart:async';
+
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -12,6 +14,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/evening_shutdown_provider.dart';
+import 'package:jeeves/providers/focus_session_planning_provider.dart'
+    show activeSessionSettlementsProvider;
 import 'package:jeeves/services/notification_service.dart';
 import '../test_helpers.dart';
 
@@ -39,6 +43,22 @@ ProviderContainer _container(GtdDatabase db) => ProviderContainer(
         notificationServiceProvider
             .overrideWithValue(StubNotificationService()),
         eveningShutdownProvider.overrideWith(() => _StubShutdownNotifier()),
+      ],
+    );
+
+/// As [_container], but with the Settlement stream under the test's control so
+/// it can hold the map back while the review-surface stream emits.
+ProviderContainer _containerWithSettlements(
+  GtdDatabase db,
+  Stream<Map<String, SessionSettlement>> settlements,
+) =>
+    ProviderContainer(
+      overrides: [
+        databaseProvider.overrideWithValue(db),
+        notificationServiceProvider
+            .overrideWithValue(StubNotificationService()),
+        eveningShutdownProvider.overrideWith(() => _StubShutdownNotifier()),
+        activeSessionSettlementsProvider.overrideWith((_) => settlements),
       ],
     );
 
@@ -430,6 +450,59 @@ void main() {
         isNot(contains('open1')),
         reason: 'an untouched Outcome settled nothing',
       );
+    });
+
+    test(
+        'neither consumer reads a not-yet-emitted settlement map as '
+        '"nothing Settled"', () async {
+      await stageOneOfEach();
+
+      // A settlement stream this test controls, so the review-surface stream
+      // can emit first — the ordering the two independent Drift watches make
+      // reachable in the app.
+      final settlements =
+          StreamController<Map<String, SessionSettlement>>.broadcast();
+      addTearDown(settlements.close);
+      final gated = _containerWithSettlements(db, settlements.stream);
+      addTearDown(gated.dispose);
+
+      final groupsSub = gated.listen(sessionSettlementGroupsProvider, (_, _) {});
+      final unfinishedSub = gated.listen<AsyncValue<List<Todo>>>(
+          unfinishedSelectedTodayProvider, (_, _) {});
+      // The review surface is ready and would emit; only the settlement map
+      // is outstanding.
+      await db.focusSessionDao
+          .watchActiveSessionReviewSurface()
+          .first
+          .timeout(const Duration(seconds: 5));
+      await pumpEventQueue();
+
+      expect(
+        gated.read(sessionSettlementGroupsProvider).hasValue,
+        isFalse,
+        reason: 'an empty-groups AsyncData renders "nothing resolved today" '
+            'over a day that resolved four things',
+      );
+      expect(
+        gated.read(unfinishedSelectedTodayProvider).hasValue,
+        isFalse,
+        reason: 'a first emission here counts every Settled Outcome as '
+            'unfinished work',
+      );
+
+      settlements.add(await db.focusSessionDao.getActiveSessionSettlements());
+
+      final groups = await gated
+          .read(sessionSettlementGroupsProvider.future)
+          .timeout(const Duration(seconds: 5));
+      expect(groups.keys, orderedEquals(sessionSettlementRenderOrder));
+      final unfinished = await gated
+          .read(unfinishedSelectedTodayProvider.future)
+          .timeout(const Duration(seconds: 5));
+      expect(unfinished.map((t) => t.id), ['open1']);
+
+      groupsSub.close();
+      unfinishedSub.close();
     });
 
     test('the disposition step only presents unhandled work (AC4/AC5)',

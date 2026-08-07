@@ -242,7 +242,11 @@ void main() {
     await tester.pumpWidget(_buildScreen(
       activeSession: _openSession(),
       tasks: [_todo('t1', 'Achieved task', doneAt: doneAt)],
-      settlements: const {'t1': SessionSettlement.done},
+      // Deliberately empty: Completion alone has to strike the row off, with
+      // no help from the settlement map. Seeding `t1: done` here would only
+      // re-test the Settlement path above and would hide a regression on the
+      // frames before the settlement stream has emitted.
+      settlements: const {},
     ));
     await tester.pump();
 

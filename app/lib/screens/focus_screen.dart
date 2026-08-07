@@ -20,9 +20,11 @@ class FocusScreen extends ConsumerWidget {
     final activeSession = ref.watch(activeSessionProvider).asData?.value;
     final currentTaskId = activeSession?.currentTaskId;
     // Which Plan members the user has already answered for this session
-    // (issue #693). Absent from the map == not Settled; empty until the first
-    // emission lands, which reads as "nothing settled yet" — the pre-#693
-    // rendering, so no row is ever struck off speculatively.
+    // (issue #693). Absent from the map == not Settled, and the map is empty
+    // until the first emission lands — so nothing is ever struck off
+    // speculatively. Completion is *not* left waiting on it: the row keeps
+    // striking off on `doneAt` alone (see [_TaskRow]), which is what it did
+    // before #693 and what AC4 preserves.
     final settlements = ref.watch(activeSessionSettlementsProvider).value ??
         const <String, SessionSettlement>{};
 
@@ -268,12 +270,17 @@ class _TaskRow extends ConsumerWidget {
         ref.watch(focusSettingsProvider).sprintDurationMinutes;
     final estimate = todo.timeEstimate;
     final isDone = todo.doneAt != null;
-    // Strike-off is Settlement, not Completion: an Outcome the user finished an
-    // Action on and re-clarified to "more work later" / "waiting" / "someday"
-    // is handled *for this session*, and should stop demanding attention here.
-    // It keeps its normal GTD List memberships outside the session — Settlement
-    // is a read and writes nothing.
+    // Strike-off widens from Completion to Settlement: an Outcome the user
+    // finished an Action on and re-clarified to "more work later" / "waiting" /
+    // "someday" is handled *for this session*, and should stop demanding
+    // attention here. It keeps its normal GTD List memberships outside the
+    // session — Settlement is a read and writes nothing.
     final isSettled = settlement != null;
+    // Widens, not replaces. A completed Outcome always settles as `done`, so
+    // the two agree once the settlement stream has emitted — but it has not
+    // emitted on the first frames, and a row that already shows the filled
+    // check must not lose its strike-off while that is in flight (#693 AC4).
+    final isStruckOff = isDone || isSettled;
     final isCurrentTask = currentTaskId == todo.id;
 
     return Padding(
@@ -293,12 +300,12 @@ class _TaskRow extends ConsumerWidget {
                       todo.title,
                       style: TextStyle(
                         fontSize: 16,
-                        color: isSettled
+                        color: isStruckOff
                             ? const Color(0xFF9CA3AF)
                             : const Color(0xFF1A1A2E),
                         fontWeight: FontWeight.w500,
                         decoration:
-                            isSettled ? TextDecoration.lineThrough : null,
+                            isStruckOff ? TextDecoration.lineThrough : null,
                       ),
                     ),
                     if (todo.dueDate != null) ...[
