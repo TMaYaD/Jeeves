@@ -39,17 +39,33 @@ documented where they live — in the hook comments and `docs/TESTING.md` — no
 
 The format validation runs **before** the reference logic and needs no library, so an
 unreadable or missing lib degrades the *feature* to a non-blocking no-op (a warning on
-stderr, then success) without ever disabling the format check that every push depends on.
+stderr, then success) without ever disabling the format check that every push depends on. The
+same ordering keeps quit-to-cancel intact on the editor path: a comments-only quit fails
+validation, and an *untouched* `commit.template` is detected and left unappended so git's own
+"did not edit the message" abort still fires — appending would otherwise fabricate a commit
+from a cancelled one.
 
 ## Consequences
 
-Plain `git commit --amend` of a genuinely *unreferenced* subject on a conventional branch
-now gains that branch's `(#N)`. That is a change in the safe direction — it adds the correct
-reference and, thanks to a trailing-reference guard, never doubles or corrupts one — and it
-is consistent with the user story. Making plain `--amend` byte-for-byte unchanged would
-require relaying `$COMMIT_SOURCE` from `prepare-commit-msg` through `.git/` state into
-`commit-msg`; that was rejected as adding a cross-hook invariant the codebase's hook comments
-consistently avoid, and the trade is recorded here so it is not re-litigated.
+Behaviour on the `-m`/reuse family is **not** byte-identical to `main`. It differs two
+safe-direction ways, both because the append moved onto a hook that cannot see
+`$COMMIT_SOURCE`:
+
+- **The `$COMMIT_SOURCE = commit` reuse paths gain a reference `main` did not add.** Plain
+  `git commit --amend`, `git commit -c <commit>` and `git commit -C <commit>` of a genuinely
+  *unreferenced* subject on a conventional branch now gain that branch's `(#N)`. `main`'s
+  `prepare-commit-msg` skipped these (source `commit`); `commit-msg` cannot tell them from
+  the editor path, so it appends.
+- **The trailing-reference guard suppresses a reference `main` would have appended.** On any
+  path — including `-m` — a subject already ending in *some* issue's reference keeps it and
+  is not given a second: `main` recorded `fix: follow-up to (#500) (#605)`, the shared
+  contract now records `fix: follow-up to (#500)`.
+
+Both are the safe direction — a correct-or-absent reference, never a doubled or corrupted
+subject — and consistent with the user story. Making them byte-identical would require
+relaying `$COMMIT_SOURCE` from `prepare-commit-msg` through `.git/` state into `commit-msg`;
+that was rejected as adding a cross-hook invariant the codebase's hook comments consistently
+avoid, and the trade is recorded here so it is not re-litigated.
 
 The reliance on the detached-HEAD accident is the one fragile assumption, which is why it
 lives behind a test rather than only in this document. A stale `SQUASH_MSG` from an abandoned
