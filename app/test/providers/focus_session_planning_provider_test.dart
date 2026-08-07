@@ -897,26 +897,6 @@ void main() {
       expect(state.reviewNav.index, 1);
     });
 
-    test('updateReviewItemNextAction: sets the current Action; stamps lastClarifiedAt; reviewIndex advances',
-        () async {
-      final id = await insertActionlessTask();
-      final notifier = container.read(focusSessionPlanningProvider.notifier);
-
-      expect(
-          await db.todoDao.getNeedsReview(), hasLength(1));
-
-      await notifier.updateReviewItemNextAction(id, 'Draft the proposal');
-
-      expect(
-          await db.todoDao.getNeedsReview(), isEmpty);
-
-      expect((await db.actionDao.getCurrentAction(id))?.actionText,
-          'Draft the proposal');
-
-      final state = container.read(focusSessionPlanningProvider);
-      expect(state.reviewNav.index, 1);
-    });
-
     test('markReviewItemDone: task doneAt set; not in result; reviewIndex advances',
         () async {
       final id = await insertStaleTask();
@@ -1019,34 +999,6 @@ void main() {
       expect(state.reviewNav.index, 1);
     });
 
-    test('updateReviewItemNextAction with blank text: stays in result; reviewIndex does not advance; action record cleared',
-        () async {
-      // Blank text normalises to NULL → task stays Actionless → not counted as done.
-      final id = await insertActionlessTask();
-      final notifier = container.read(focusSessionPlanningProvider.notifier);
-
-      // Load review items so the prior-action lookup can resolve the task
-      // (intro → Clarify Inbox → Review Tasks).
-      await notifier.advanceStep();
-      await notifier.advanceStep();
-      expect(container.read(focusSessionPlanningProvider).reviewNav.items, hasLength(1));
-
-      // First commit a real action so there's a stale record to clear.
-      await notifier.updateReviewItemNextAction(id, 'Draft the proposal');
-      expect(container.read(focusSessionPlanningProvider).reviewNav.index, 1);
-      notifier.reviewBack();
-
-      // Submit blank — should clear the stale record without advancing.
-      await notifier.updateReviewItemNextAction(id, '   ');
-
-      expect(await db.todoDao.getNeedsReview(), isNotEmpty);
-
-      final state = container.read(focusSessionPlanningProvider);
-      expect(state.reviewNav.index, 0);
-      expect(state.reviewActions[0], isNull,
-          reason: 'stale action record must be cleared so dialog does not pre-fill with old text');
-    });
-
     // ---- Re-selection (back + different action) --------------------------------
 
     test('markDone then back then deferToSomeday: done_at cleared, intent=maybe',
@@ -1116,7 +1068,7 @@ void main() {
       expect(task?.doneAt, isNull);
     });
 
-    test('updateNextAction then back then deferToSomeday: the Action is preserved',
+    test('set an Action then back then deferToSomeday: the Action is preserved',
         () async {
       final id = await insertActionlessTask();
       final notifier = container.read(focusSessionPlanningProvider.notifier);
@@ -1124,7 +1076,9 @@ void main() {
       await notifier.advanceStep(); // intro (0) → Clarify Inbox (1)
       await notifier.advanceStep(); // Clarify Inbox (1) → Review Tasks (2)
 
-      await notifier.updateReviewItemNextAction(id, 'Draft the brief');
+      // The Action write itself is not the subject here — re-selection is —
+      // so it goes straight to the DAO rather than through a review helper.
+      await db.todoDao.setCurrentActionText(id, 'Draft the brief');
 
       notifier.reviewBack();
 

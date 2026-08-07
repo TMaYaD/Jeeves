@@ -869,36 +869,6 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     ));
   }
 
-  /// "Update next action" — sets the Outcome's current Action and stamps
-  /// last_clarified_at. Blank text clears the Action; the task stays Actionless
-  /// and the review cursor does not advance.
-  Future<void> updateReviewItemNextAction(String id, String text) async {
-    final idx = state.reviewNav.index;
-    final trimmed = text.trim();
-    await _clarification.clarifyToOutcome(
-      id,
-      to: RoutingKind.nextAction,
-      actionText: text,
-      userId: _userId,
-    );
-    if (state.reviewNav.index != idx) return;
-    if (trimmed.isNotEmpty) {
-      _recordAndAdvance(ReviewActionRecord(
-        kind: ReviewActionKind.updateNextAction,
-        actionText: trimmed,
-      ));
-    } else {
-      // Blank text normalises to NULL and the cursor does not advance, but
-      // any stale action record must be cleared so the dialog does not
-      // pre-fill with the old text when the user navigates back.
-      if (state.reviewActions.containsKey(idx)) {
-        state = state.copyWith(
-          reviewActions: Map.of(state.reviewActions)..remove(idx),
-        );
-      }
-    }
-  }
-
   /// "Mark done" — sets done_at and stamps last_clarified_at.
   Future<void> markReviewItemDone(String id) async {
     final idx = state.reviewNav.index;
@@ -951,18 +921,6 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// only the in-session bookkeeping remains.
   void recordReviewActionAndAdvance(ReviewActionRecord record) =>
       _recordAndAdvance(record);
-
-  /// Removes the action record at the current review index without
-  /// advancing the cursor. Used when the user saves a blank next-action text
-  /// via the [nextActionDialog] modifier — the task stays Actionless and the
-  /// review cursor does not move.
-  void clearCurrentReviewAction() {
-    final index = state.reviewNav.index;
-    if (!state.reviewActions.containsKey(index)) return;
-    state = state.copyWith(
-      reviewActions: Map.of(state.reviewActions)..remove(index),
-    );
-  }
 
   // ---- Banner dismissal ------------------------------------------------------
 

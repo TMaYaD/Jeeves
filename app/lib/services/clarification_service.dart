@@ -230,6 +230,25 @@ abstract class ClarificationService {
   /// only, leaving every other column untouched.
   Future<void> stampClarified(String id);
 
+  /// Applies the **title-as-action fallback** to [id]: writes [title] as the
+  /// Outcome's current Action, but **only** while the Outcome is Actionless.
+  /// Returns whether it wrote.
+  ///
+  /// The policy (CONTEXT.md § Action): when a surface routes an Outcome to
+  /// Next or Waiting For and the user supplied no next-action phrase, the
+  /// Outcome's own title stands in — so the row never lands on Next
+  /// Actionless, where it would re-arm the re-clarification queue on every
+  /// subsequent planning pass. Actionless-guarded so a deliberate phrase the
+  /// user already wrote is never clobbered; [title] must be non-blank
+  /// (a blank one has nothing to stand in *as*, and the caller stalls
+  /// instead).
+  ///
+  /// Named on this seam rather than reached for on the DAO so the clarify
+  /// surfaces keep delegating every write here. The check and the write share
+  /// one transaction (issue #501), so a `current` Action landed by sync
+  /// between them cannot be overwritten.
+  Future<bool> mirrorTitleIfActionless(String id, String title);
+
   /// Persists attribute edits made on a clarify card (title / notes /
   /// energy / time estimate / due date). Passing `null` for a typed
   /// parameter means "no change"; use the matching `clear*` flag to null
@@ -515,6 +534,10 @@ class DaoClarificationService implements ClarificationService {
   @override
   Future<void> stampClarified(String id) =>
       _db.todoDao.stampLastClarifiedAt(id);
+
+  @override
+  Future<bool> mirrorTitleIfActionless(String id, String title) =>
+      _db.todoDao.setCurrentActionTextIfActionless(id, title);
 
   @override
   Future<void> updateFields(

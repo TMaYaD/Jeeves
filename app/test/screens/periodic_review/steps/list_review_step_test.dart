@@ -481,8 +481,55 @@ void main() {
     });
 
     testWidgets(
-        'blank Save re-reads the row, records no routing, and does not advance',
+        'blank Save falls back to the title, records a nextAction routing, '
+        'and advances (#691)', (tester) async {
+      final todo = await _insertTodo(
+        db,
+        id: 't1',
+        intent: 'maybe',
+        title: 'Call the dentist',
+      );
+      var advances = 0;
+      final recorded = <MapEntry<int, RoutingKind>>[];
+      await tester.pumpWidget(_harness(
+        db: db,
+        nav: SnapshotNav<Todo>(items: [todo]),
+        emptyState: const ListReviewEmpty(
+          icon: Icons.star_border,
+          title: 'Empty',
+          subtitle: 'Tap Next',
+        ),
+        onRetry: () {},
+        onRecordRouting: (i, k) => recorded.add(MapEntry(i, k)),
+        onAdvance: () => advances++,
+      ));
+
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+      // Leave the field empty. For a simple Outcome the title *is* the
+      // action, so the route lands, the title stands in as the current
+      // Action, and the wizard moves on rather than stranding the user on a
+      // card they have nothing more to say about.
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+
+      final row = await db.todoDao.getTodo('t1');
+      expect(row?.intent, 'next',
+          reason: 'a blank Save still resolves the item to Next');
+      expect((await db.actionDao.getCurrentAction('t1'))?.actionText,
+          'Call the dentist',
+          reason: 'the title-as-action fallback keeps the row off the '
+              'permanently-re-arming Actionless branch');
+      expect(recorded, hasLength(1));
+      expect(recorded.first.value, RoutingKind.nextAction);
+      expect(advances, 1);
+    });
+
+    testWidgets(
+        'cancelling the dialog records no routing and does not advance',
         (tester) async {
+      // The distinction a blank Save must never swallow: cancel resolves to
+      // null, a blank Save to ''. Only the former leaves the item unresolved.
       final todo = await _insertTodo(db, id: 't1', intent: 'maybe');
       var advances = 0;
       final recorded = <MapEntry<int, RoutingKind>>[];
@@ -501,21 +548,14 @@ void main() {
 
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
-      // Leave the field empty — the dialog skips the write, so the Outcome
-      // stays Actionless. ListReviewStep re-reads, sees blank,
-      // and must neither record a routing nor advance the cursor.
-      await tester.tap(find.text('Save'));
+      await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
 
       final row = await db.todoDao.getTodo('t1');
-      expect(row?.intent, 'maybe',
-          reason: 'blank Save must not change the intent');
-      expect(await db.actionDao.getCurrentAction('t1'), isNull,
-          reason: 'blank Save must not write a phrase');
-      expect(recorded, isEmpty,
-          reason: 'blank promotion must not record a routing');
-      expect(advances, 0,
-          reason: 'blank promotion must leave the cursor on the item');
+      expect(row?.intent, 'maybe');
+      expect(await db.actionDao.getCurrentAction('t1'), isNull);
+      expect(recorded, isEmpty);
+      expect(advances, 0);
     });
   });
 }

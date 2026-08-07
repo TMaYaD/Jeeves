@@ -19,7 +19,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../database/gtd_database.dart';
-import '../../../providers/database_provider.dart';
 import '../../../utils/snapshot_nav.dart';
 import '../../../widgets/process_to_handlers.dart';
 import '_review_card.dart';
@@ -42,9 +41,8 @@ class ListReviewEmpty {
 ///
 /// The parent owns the slice projection: it watches the step-specific
 /// [SnapshotNav<T>], `loadError`, `routings`, and (optionally) `personTags`
-/// from [periodicReviewProvider] and passes them in. The widget itself
-/// reads no provider state except [databaseProvider] for the dialog-modifier
-/// re-read — it dispatches back to the parent via [onRetry],
+/// from [periodicReviewProvider] and passes them in. The widget itself reads
+/// no provider state at all — it dispatches back to the parent via [onRetry],
 /// [onRecordRouting], and [onAdvance].
 ///
 /// Per-step axes are exposed as configuration:
@@ -188,21 +186,10 @@ class ListReviewStep<T extends Todo> extends ConsumerWidget {
             onAdvance();
             return;
           }
-          if (action == ProcessAction.nextActionDialog) {
-            // A blank save does not route (the widget skips the write), so
-            // the Outcome's current Action is unchanged. Stay on the item
-            // rather than recording a routing or advancing the cursor —
-            // the user's intent to promote was not followed through with a
-            // concrete action phrase (#293).
-            final current = await ref
-                .read(databaseProvider)
-                .actionDao
-                .getCurrentAction(todo.id);
-            if (current == null) return;
-            onRecordRouting(index, RoutingKind.nextAction);
-            onAdvance();
-            return;
-          }
+          // `nextActionDialog` needs no branch of its own: it collapses onto
+          // `RoutingKind.nextAction` below, and a route has landed whenever it
+          // arrives here — a blank save falls back to the Outcome's title
+          // rather than skipping the write (#691).
           final kind = action.toRoutingKind();
           // `keep` and a bare `reclarify` are the only actions whose
           // toRoutingKind() returns null; `keep` is handled above and the
