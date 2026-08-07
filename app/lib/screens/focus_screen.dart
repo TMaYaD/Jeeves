@@ -19,6 +19,14 @@ class FocusScreen extends ConsumerWidget {
     final asyncTasks = ref.watch(activeSessionTasksProvider);
     final activeSession = ref.watch(activeSessionProvider).asData?.value;
     final currentTaskId = activeSession?.currentTaskId;
+    // Which Plan members the user has already answered for this session
+    // (issue #693). Absent from the map == not Settled, and the map is empty
+    // until the first emission lands — so nothing is ever struck off
+    // speculatively. Completion is *not* left waiting on it: the row keeps
+    // striking off on `doneAt` alone (see [_TaskRow]), which is what it did
+    // before #693 and what AC4 preserves.
+    final settlements = ref.watch(activeSessionSettlementsProvider).value ??
+        const <String, SessionSettlement>{};
 
     return Scaffold(
       body: SafeArea(
@@ -114,7 +122,10 @@ class FocusScreen extends ConsumerWidget {
                           if (planningDone && sortedTasks.isNotEmpty)
                             ...sortedTasks.map(
                               (t) => _TaskRow(
-                                  todo: t, currentTaskId: currentTaskId),
+                                todo: t,
+                                currentTaskId: currentTaskId,
+                                settlement: settlements[t.id],
+                              ),
                             )
                           else if (sortedTasks.isEmpty)
                             Padding(
@@ -141,9 +152,7 @@ class FocusScreen extends ConsumerWidget {
                           // harmlessly falls through to the Plan-the-Day CTA.
                           if (showShutdownEntry && activeSession != null)
                             _PrimaryCallout(
-                              kind: tasks.every((t) => t.doneAt != null)
-                                  ? _CalloutKind.endSession
-                                  : _CalloutKind.beginShutdown,
+                              kind: focusCalloutKindFor(tasks, settlements),
                               onTap: () => _beginShutdown(
                                   context, ref, tasks, activeSession),
                             )
@@ -208,6 +217,14 @@ class FocusScreen extends ConsumerWidget {
   /// Either ends the session cleanly (all tasks done) or routes the user into
   /// the evening-shutdown ritual where they assign dispositions to unfinished
   /// tasks. The session is only closed by [closeSession] / the ritual itself.
+  ///
+  /// The all-done test stays keyed on Completion alone, deliberately. A day
+  /// where everything Settled to a non-done verdict must still go through
+  /// Evening Shutdown: `closeSession` is not a Disposition commit point, so
+  /// closing there would silently drop every implicit `rollover` — and it would
+  /// skip the grouped summary on exactly the days that summary exists for. The
+  /// rule the two branches encode: `closeSession` is for a day with nothing to
+  /// dispose; `/shutdown` is for a day with anything.
   Future<void> _beginShutdown(
     BuildContext context,
     WidgetRef ref,
@@ -235,9 +252,17 @@ class FocusScreen extends ConsumerWidget {
 // ---------------------------------------------------------------------------
 
 class _TaskRow extends ConsumerWidget {
-  const _TaskRow({required this.todo, required this.currentTaskId});
+  const _TaskRow({
+    required this.todo,
+    required this.currentTaskId,
+    required this.settlement,
+  });
   final Todo todo;
   final String? currentTaskId;
+
+  /// How this Outcome Settled in the open session, or null if it has not
+  /// (issue #693).
+  final SessionSettlement? settlement;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -245,6 +270,17 @@ class _TaskRow extends ConsumerWidget {
         ref.watch(focusSettingsProvider).sprintDurationMinutes;
     final estimate = todo.timeEstimate;
     final isDone = todo.doneAt != null;
+    // Strike-off widens from Completion to Settlement: an Outcome the user
+    // finished an Action on and re-clarified to "more work later" / "waiting" /
+    // "someday" is handled *for this session*, and should stop demanding
+    // attention here. It keeps its normal GTD List memberships outside the
+    // session — Settlement is a read and writes nothing.
+    final isSettled = settlement != null;
+    // Widens, not replaces. A completed Outcome always settles as `done`, so
+    // the two agree once the settlement stream has emitted — but it has not
+    // emitted on the first frames, and a row that already shows the filled
+    // check must not lose its strike-off while that is in flight (#693 AC4).
+    final isStruckOff = isDone || isSettled;
     final isCurrentTask = currentTaskId == todo.id;
 
     return Padding(
@@ -264,12 +300,12 @@ class _TaskRow extends ConsumerWidget {
                       todo.title,
                       style: TextStyle(
                         fontSize: 16,
-                        color: isDone
+                        color: isStruckOff
                             ? const Color(0xFF9CA3AF)
                             : const Color(0xFF1A1A2E),
                         fontWeight: FontWeight.w500,
                         decoration:
-                            isDone ? TextDecoration.lineThrough : null,
+                            isStruckOff ? TextDecoration.lineThrough : null,
                       ),
                     ),
                     if (todo.dueDate != null) ...[
@@ -316,9 +352,16 @@ class _TaskRow extends ConsumerWidget {
             ),
           ),
           const SizedBox(width: 8),
+          // Three-way. The filled glyph belongs to Completion alone — a Settled
+          // but unachieved Outcome must not borrow it, because that is exactly
+          // the Action/Outcome conflation this work removes. And a Settled row
+          // offers no Start: it is handled for this session (#693 AC2).
           if (isDone)
             const Icon(Icons.check_circle,
                 color: Color(0xFF2667B7), size: 20)
+          else if (isSettled)
+            const Icon(Icons.check_circle_outline,
+                color: Color(0xFF9CA3AF), size: 20)
           else
             _StartButton(todoId: todo.id, isResume: isCurrentTask),
           const SizedBox(width: 4),
@@ -533,17 +576,44 @@ class _CarriedOverTaskRow extends StatelessWidget {
 // Primary call-to-action footer
 // ---------------------------------------------------------------------------
 
-enum _CalloutKind { beginShutdown, endSession }
+/// Which primary call-to-action the Now screen's footer offers.
+///
+/// [wrapUp] and [beginShutdown] both route to `/shutdown`; they differ only in
+/// emphasis, because the label has to keep telling the truth about where the
+/// tap goes. A filled "End Session" on a tap that opens a wizard would be copy
+/// that lies.
+@visibleForTesting
+enum FocusCalloutKind { beginShutdown, wrapUp, endSession }
+
+/// The footer's kind for [tasks] (the session's Plan) given [settlements].
+///
+/// * every task's Completion recorded → [FocusCalloutKind.endSession], the one
+///   state `closeSession` may be reached from (see [FocusScreen._beginShutdown]);
+/// * every task **Settled**, not all done → [FocusCalloutKind.wrapUp]: the user
+///   is finished for the day, and the emphasis says so, but the tap still opens
+///   Evening Shutdown so the day's Dispositions get committed;
+/// * anything outstanding → [FocusCalloutKind.beginShutdown].
+@visibleForTesting
+FocusCalloutKind focusCalloutKindFor(
+  List<Todo> tasks,
+  Map<String, SessionSettlement> settlements,
+) {
+  if (tasks.every((t) => t.doneAt != null)) return FocusCalloutKind.endSession;
+  if (tasks.every((t) => settlements.containsKey(t.id))) {
+    return FocusCalloutKind.wrapUp;
+  }
+  return FocusCalloutKind.beginShutdown;
+}
 
 class _PrimaryCallout extends StatelessWidget {
   const _PrimaryCallout({required this.kind, required this.onTap});
 
-  final _CalloutKind kind;
+  final FocusCalloutKind kind;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    if (kind == _CalloutKind.endSession) {
+    if (kind == FocusCalloutKind.endSession) {
       return FilledButton(
         onPressed: onTap,
         style: FilledButton.styleFrom(
@@ -559,6 +629,32 @@ class _PrimaryCallout extends StatelessWidget {
         ),
       );
     }
+    const label = Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Icon(Icons.nightlight_outlined, size: 18),
+        SizedBox(width: 8),
+        Text(
+          'Begin Evening Shutdown',
+          style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+        ),
+      ],
+    );
+    // Everything on the Plan is Settled: the emphasis carries "you're finished
+    // for the day" while the label keeps naming the destination.
+    if (kind == FocusCalloutKind.wrapUp) {
+      return FilledButton(
+        onPressed: onTap,
+        style: FilledButton.styleFrom(
+          backgroundColor: const Color(0xFF1E3A5F),
+          foregroundColor: Colors.white,
+          minimumSize: const Size.fromHeight(52),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+        child: label,
+      );
+    }
     return OutlinedButton(
       onPressed: onTap,
       style: OutlinedButton.styleFrom(
@@ -569,17 +665,7 @@ class _PrimaryCallout extends StatelessWidget {
         shape:
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
-      child: const Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.nightlight_outlined, size: 18),
-          SizedBox(width: 8),
-          Text(
-            'Begin Evening Shutdown',
-            style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
-          ),
-        ],
-      ),
+      child: label,
     );
   }
 }

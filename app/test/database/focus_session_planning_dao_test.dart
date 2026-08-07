@@ -6,6 +6,8 @@ import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:jeeves/database/daos/focus_session_dao.dart'
+    show SessionSettlement;
 import 'package:jeeves/database/gtd_database.dart';
 import '../test_helpers.dart';
 
@@ -1112,6 +1114,458 @@ void main() {
       );
 
       await future;
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Settlements (#693) — derived, session-scoped, writes nothing
+  // ---------------------------------------------------------------------------
+
+  group('FocusSessionDao — active session Settlements', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    final anchorAt = DateTime.utc(2026, 5, 1, 10, 0);
+
+    /// The two facts the settlement anchor joins: a `done` Action on [taskId],
+    /// and a TimeLog attributing that Action's engagement to [sessionId].
+    Future<String> completeActionInSession(
+      String sessionId,
+      String taskId, {
+      DateTime? doneAt,
+      String? actionId,
+    }) async {
+      final at = doneAt ?? anchorAt;
+      final aid = actionId ?? 'act-$taskId';
+      await db.into(db.actions).insert(ActionsCompanion(
+            id: Value(aid),
+            outcomeId: Value(taskId),
+            userId: const Value(_userId),
+            actionText: const Value('do the thing'),
+            role: const Value('done'),
+            doneAt: Value(at),
+            createdAt: Value(at.subtract(const Duration(hours: 2))),
+          ));
+      await db.into(db.timeLogs).insert(TimeLogsCompanion(
+            id: Value('tl-$aid'),
+            userId: const Value(_userId),
+            taskId: Value(taskId),
+            actionId: Value(aid),
+            startedAt:
+                Value(at.subtract(const Duration(minutes: 25)).toIso8601String()),
+            endedAt: Value(at.toIso8601String()),
+            focusSessionId: Value(sessionId),
+          ));
+      return aid;
+    }
+
+    Future<void> reclarifyAt(String taskId, DateTime at) =>
+        (db.update(db.todos)..where((t) => t.id.equals(taskId)))
+            .write(TodosCompanion(lastClarifiedAt: Value(at)));
+
+    Future<void> seedCurrent(String taskId, {DateTime? createdAt}) =>
+        db.into(db.actions).insert(ActionsCompanion(
+              id: Value('cur-$taskId'),
+              outcomeId: Value(taskId),
+              userId: const Value(_userId),
+              actionText: const Value('the next move'),
+              role: const Value('current'),
+              createdAt: Value(createdAt ?? anchorAt.add(const Duration(minutes: 1))),
+            ));
+
+    Future<void> tagPerson(String taskId) async {
+      await db.into(db.tags).insert(
+            TagsCompanion(
+              id: const Value('tag-person'),
+              name: const Value('Trixy'),
+              type: const Value('person'),
+              userId: const Value(_userId),
+            ),
+            mode: InsertMode.insertOrReplace,
+          );
+      await db.into(db.todoTags).insert(TodoTagsCompanion(
+            id: Value('tt-$taskId'),
+            todoId: Value(taskId),
+            tagId: const Value('tag-person'),
+            userId: const Value(_userId),
+          ));
+    }
+
+    Future<void> setIntent(String taskId, String intent) =>
+        (db.update(db.todos)..where((t) => t.id.equals(taskId)))
+            .write(TodosCompanion(intent: Value(intent)));
+
+    Future<String> openWith(List<String> taskIds) => db.focusSessionDao
+        .openSession(userId: _userId, taskIds: taskIds, now: DateTime(2026, 5, 1, 9));
+
+    test('no open session settles nothing, on both surfaces', () async {
+      expect(await db.focusSessionDao.getActiveSessionSettlements(), isEmpty);
+      expect(
+        await db.focusSessionDao.watchActiveSessionSettlements().first,
+        isEmpty,
+      );
+    });
+
+    test('a completed Outcome settles as done (arm (a), #693 AC4)', () async {
+      await _insertTodo(db, id: 'X', title: 'X');
+      await openWith(['X']);
+      await (db.update(db.todos)..where((t) => t.id.equals('X'))).write(
+        TodosCompanion(doneAt: Value(anchorAt.toIso8601String())),
+      );
+
+      expect(
+        await db.focusSessionDao.getActiveSessionSettlements(),
+        {'X': SessionSettlement.done},
+      );
+    });
+
+    test(
+        'an Action completed in-session then re-clarified settles as next '
+        '(arm (b)) — and the watcher agrees with the one-shot', () async {
+      await _insertTodo(db, id: 'X', title: 'X');
+      final sessionId = await openWith(['X']);
+      await completeActionInSession(sessionId, 'X');
+      await reclarifyAt('X', anchorAt.add(const Duration(seconds: 5)));
+      await seedCurrent('X');
+
+      expect(
+        await db.focusSessionDao.getActiveSessionSettlements(),
+        {'X': SessionSettlement.next},
+      );
+      expect(
+        await db.focusSessionDao.watchActiveSessionSettlements().first,
+        {'X': SessionSettlement.next},
+      );
+    });
+
+    test(
+        'the watcher re-emits as the verdict moves down the ladder — every '
+        'table it reads is a live dependency', () async {
+      await _insertTodo(db, id: 'X', title: 'X');
+      final sessionId = await openWith(['X']);
+
+      // Subscribed *before* the writes: this is the Now screen's subscription,
+      // which has to strike the row off without re-subscribing. Each write
+      // below is the sole trigger for the transition that follows it, so a
+      // table dropped from `readsFrom` stalls the sequence instead of passing
+      // on a lucky first read.
+      final ladder = expectLater(
+        db.focusSessionDao.watchActiveSessionSettlements(),
+        emitsInOrder([
+          isEmpty,
+          // actions + time_logs: the anchor is a `done` Action carrying a
+          // session-attributed TimeLog, and it lands after the re-clarify.
+          emitsThrough({'X': SessionSettlement.next}),
+          // todo_tags + tags: a person Tag with no current Action.
+          emitsThrough({'X': SessionSettlement.waitingFor}),
+          // actions: a current Action outranks the person Tag.
+          emitsThrough({'X': SessionSettlement.next}),
+          // todos: Intent `maybe` outranks both.
+          emitsThrough({'X': SessionSettlement.someday}),
+        ]),
+      );
+
+      await reclarifyAt('X', anchorAt.add(const Duration(seconds: 5)));
+      await completeActionInSession(sessionId, 'X');
+      await tagPerson('X');
+      await seedCurrent('X');
+      await setIntent('X', 'maybe');
+
+      await ladder.timeout(const Duration(seconds: 10));
+    });
+
+    test('intent = maybe wins over a current Action → someday', () async {
+      await _insertTodo(db, id: 'X', title: 'X');
+      final sessionId = await openWith(['X']);
+      await completeActionInSession(sessionId, 'X');
+      await reclarifyAt('X', anchorAt.add(const Duration(seconds: 5)));
+      await setIntent('X', 'maybe');
+
+      expect(
+        await db.focusSessionDao.getActiveSessionSettlements(),
+        {'X': SessionSettlement.someday},
+      );
+    });
+
+    test('a person Tag with no current Action → waitingFor', () async {
+      await _insertTodo(db, id: 'X', title: 'X');
+      final sessionId = await openWith(['X']);
+      await completeActionInSession(sessionId, 'X');
+      await reclarifyAt('X', anchorAt.add(const Duration(seconds: 5)));
+      await tagPerson('X');
+
+      expect(
+        await db.focusSessionDao.getActiveSessionSettlements(),
+        {'X': SessionSettlement.waitingFor},
+      );
+    });
+
+    test(
+        'a person Tag AND a current Action → next: rung 3 sits ahead of rung 4',
+        () async {
+      await _insertTodo(db, id: 'X', title: 'X');
+      final sessionId = await openWith(['X']);
+      await completeActionInSession(sessionId, 'X');
+      await reclarifyAt('X', anchorAt.add(const Duration(seconds: 5)));
+      await tagPerson('X');
+      await seedCurrent('X');
+
+      expect(
+        await db.focusSessionDao.getActiveSessionSettlements(),
+        {'X': SessionSettlement.next},
+        reason: 'the user gave it a next move; that is what the summary says',
+      );
+    });
+
+    test(
+        're-planned by promoting an already-queued Action → next, even when '
+        'the Outcome carries a person Tag (created_at is untouched by promote)',
+        () async {
+      await _insertTodo(db, id: 'X', title: 'X');
+      final sessionId = await openWith(['X']);
+      await tagPerson('X');
+      // A planned Action that predates the session entirely.
+      await db.actionDao.addPlannedAction(
+        'X',
+        'the queued move',
+        now: DateTime.utc(2026, 4, 20, 9),
+      );
+      await completeActionInSession(sessionId, 'X');
+      final planned = await (db.select(db.actions)
+            ..where((a) => a.outcomeId.equals('X') & a.role.equals('planned')))
+          .getSingle();
+      // Promote stamps last_clarified_at, so this alone settles the row.
+      await db.actionDao.promotePlannedAction(
+        planned.id,
+        now: anchorAt.add(const Duration(seconds: 5)),
+      );
+
+      expect(
+        await db.focusSessionDao.getActiveSessionSettlements(),
+        {'X': SessionSettlement.next},
+      );
+    });
+
+    test('an Action completed in a different session does not settle',
+        () async {
+      await _insertTodo(db, id: 'X', title: 'X');
+      final priorId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: ['X'],
+        now: DateTime(2026, 4, 30, 9),
+      );
+      await completeActionInSession(priorId, 'X',
+          doneAt: DateTime.utc(2026, 4, 30, 10));
+      await db.focusSessionDao
+          .closeSession(sessionId: priorId, now: DateTime(2026, 4, 30, 17));
+      await reclarifyAt('X', DateTime.utc(2026, 4, 30, 11));
+
+      await openWith(['X']);
+
+      expect(await db.focusSessionDao.getActiveSessionSettlements(), isEmpty,
+          reason: 'attribution is by session id, never a wall-clock window');
+    });
+
+    test('completed but never re-clarified does not settle', () async {
+      await _insertTodo(db, id: 'X', title: 'X');
+      final sessionId = await openWith(['X']);
+      await completeActionInSession(sessionId, 'X');
+
+      expect(await db.focusSessionDao.getActiveSessionSettlements(), isEmpty,
+          reason:
+              'a dismissed re-clarify sheet writes nothing — the Outcome still '
+              'owes an answer and belongs in the disposition step');
+    });
+
+    test('re-clarified *before* the completion does not settle', () async {
+      await _insertTodo(db, id: 'X', title: 'X');
+      final sessionId = await openWith(['X']);
+      await reclarifyAt('X', anchorAt.subtract(const Duration(hours: 1)));
+      await completeActionInSession(sessionId, 'X');
+
+      expect(await db.focusSessionDao.getActiveSessionSettlements(), isEmpty);
+    });
+
+    test(
+        'the anchor and the clarification are the same SQLite storage class, '
+        'whichever write path produced them', () async {
+      await _insertTodo(db, id: 'X', title: 'X');
+      final sessionId = await openWith(['X']);
+      // Anchor: a Drift `DateTime` column write, as `ActionDao` makes it.
+      await completeActionInSession(sessionId, 'X');
+      // Clarification: `reviewAndCloseSession`'s raw `encodeInstant` bind, the
+      // one path that hands SQLite a Dart `String` for this column.
+      await db.focusSessionDao.reviewAndCloseSession(
+        sessionId: sessionId,
+        dispositions: {'X': 'maybe'},
+        now: anchorAt.add(const Duration(seconds: 5)),
+      );
+
+      final row = await db
+          .customSelect(
+            "SELECT typeof(a.done_at) AS anchor_type, "
+            "typeof(t.last_clarified_at) AS clarified_type "
+            "FROM actions a JOIN todos t ON t.id = a.outcome_id "
+            "WHERE a.id = 'act-X'",
+          )
+          .getSingle();
+
+      expect(row.read<String>('anchor_type'), 'text');
+      expect(row.read<String>('clarified_type'), 'text');
+      // `storeDateTimeAsText: true` on GtdDatabase makes every DateTimeColumn a
+      // TEXT column, so `>=` in _settlementsSql is a same-class lexicographic
+      // ISO-8601 comparison. If either side were an INTEGER, SQLite's
+      // storage-class ordering (INTEGER < TEXT) would settle every row with any
+      // non-null clarification — see the earlier/later pair below.
+    });
+
+    test(
+        'a clarification bound as TEXT still orders against the anchor, in '
+        'both directions', () async {
+      await _insertTodo(db, id: 'early', title: 'clarified before the anchor');
+      await _insertTodo(db, id: 'late', title: 'clarified after the anchor');
+      final earlyId = await openWith(['early']);
+      await completeActionInSession(earlyId, 'early');
+      await db.focusSessionDao.reviewAndCloseSession(
+        sessionId: earlyId,
+        dispositions: {'early': 'maybe'},
+        now: anchorAt.subtract(const Duration(hours: 1)),
+      );
+
+      expect(
+        await db.focusSessionDao.getSettlementsForSession(earlyId),
+        isEmpty,
+        reason:
+            'the clarification predates the anchor, so the Outcome still owes '
+            'an answer — a storage-class mismatch would settle it regardless',
+      );
+
+      final lateId = await openWith(['late']);
+      await completeActionInSession(lateId, 'late');
+      await db.focusSessionDao.reviewAndCloseSession(
+        sessionId: lateId,
+        dispositions: {'late': 'maybe'},
+        now: anchorAt.add(const Duration(hours: 1)),
+      );
+
+      expect(
+        await db.focusSessionDao.getSettlementsForSession(lateId),
+        {'late': SessionSettlement.someday},
+        reason: 'the same binding, on the other side of the anchor, settles',
+      );
+    });
+
+    test('an off-Plan engaged Outcome settles the same as a Plan member',
+        () async {
+      await _insertTodo(db, id: 'X', title: 'X'); // Plan member
+      await _insertTodo(db, id: 'Z', title: 'Z'); // off-Plan
+      final sessionId = await openWith(['X']);
+      await completeActionInSession(sessionId, 'Z');
+      await reclarifyAt('Z', anchorAt.add(const Duration(seconds: 5)));
+      await seedCurrent('Z');
+
+      expect(
+        await db.focusSessionDao.getActiveSessionSettlements(),
+        {'Z': SessionSettlement.next},
+      );
+    });
+
+    test(
+        'an Actionless engagement never settles under arm (b): the TimeLog '
+        'carries no action_id, so there is no anchor to compare against',
+        () async {
+      await _insertTodo(db, id: 'X', title: 'X');
+      final sessionId = await openWith(['X']);
+      // A sprint started on an Actionless Plan member: task-attributed, but
+      // action_id IS NULL (TimeLogDao's resolver finds nothing `current`).
+      await db.into(db.timeLogs).insert(TimeLogsCompanion(
+            id: const Value('tl-actionless'),
+            userId: const Value(_userId),
+            taskId: const Value('X'),
+            startedAt: Value(anchorAt.toIso8601String()),
+            focusSessionId: Value(sessionId),
+          ));
+      await reclarifyAt('X', anchorAt.add(const Duration(minutes: 5)));
+      await seedCurrent('X');
+
+      expect(await db.focusSessionDao.getActiveSessionSettlements(), isEmpty,
+          reason:
+              'documented hole: no Action was completed, so nothing settled');
+    });
+
+    test(
+        'Settlement is a read: it changes no GTD List membership and writes '
+        'nothing (#693 AC5)', () async {
+      await _insertTodo(db, id: 'N', title: 'still on Next');
+      await _insertTodo(db, id: 'W', title: 'waiting on Trixy');
+      final sessionId = await openWith(['N', 'W']);
+
+      await completeActionInSession(sessionId, 'N');
+      await reclarifyAt('N', anchorAt.add(const Duration(seconds: 5)));
+      await seedCurrent('N');
+
+      await completeActionInSession(sessionId, 'W');
+      await reclarifyAt('W', anchorAt.add(const Duration(seconds: 5)));
+      await tagPerson('W');
+
+      final before = await db.select(db.todos).get();
+      final settlements =
+          await db.focusSessionDao.getActiveSessionSettlements();
+      expect(settlements,
+          {'N': SessionSettlement.next, 'W': SessionSettlement.waitingFor});
+
+      // Exactly what each verdict implies — Settlement did not move anything.
+      expect((await db.todoDao.watchNext().first).map((t) => t.id),
+          contains('N'));
+      expect((await db.todoDao.watchPersonTagged().first).map((t) => t.id),
+          contains('W'));
+      expect((await db.todoDao.watchMaybe().first), isEmpty);
+
+      expect(await db.select(db.todos).get(), equals(before),
+          reason: 'reading Settlements must never write through');
+    });
+
+    test(
+        'getSettlementsForSession answers the session it names, not the '
+        'active-session winner', () async {
+      await _insertTodo(db, id: 'mine', title: 'settled in the named session');
+      await _insertTodo(db, id: 'theirs', title: 'settled in the rival');
+      final sessionId = await openWith(['mine']);
+
+      // A rival open session, landed the way a pull lands one: straight into
+      // the table, past openSession's guard (ADR-0020). Later started_at, so it
+      // is the active-session winner from here on.
+      await db.into(db.focusSessions).insert(FocusSessionsCompanion(
+            id: const Value('rival'),
+            userId: const Value(_userId),
+            startedAt: Value(DateTime(2026, 5, 2, 9).toUtc().toIso8601String()),
+            endedAt: const Value(null),
+          ));
+
+      await completeActionInSession(sessionId, 'mine');
+      await reclarifyAt('mine', anchorAt.add(const Duration(seconds: 5)));
+      await seedCurrent('mine');
+
+      await completeActionInSession('rival', 'theirs');
+      await reclarifyAt('theirs', anchorAt.add(const Duration(seconds: 5)));
+      await seedCurrent('theirs');
+
+      expect(
+        await db.focusSessionDao.getActiveSessionSettlements(),
+        {'theirs': SessionSettlement.next},
+        reason: 'the unscoped read follows the winner, by design',
+      );
+      expect(
+        await db.focusSessionDao.getSettlementsForSession(sessionId),
+        {'mine': SessionSettlement.next},
+        reason: 'the named session, whether or not it is the winner',
+      );
+      expect(
+        await db.focusSessionDao.getSettlementsForSession('rival'),
+        {'theirs': SessionSettlement.next},
+      );
     });
   });
 }

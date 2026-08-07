@@ -5,32 +5,44 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../providers/evening_shutdown_provider.dart';
 
-/// Step 0 of the shutdown ritual: review tasks completed today.
+/// Step 0 of the shutdown ritual: the day's **Settled** Outcomes, grouped by
+/// how each settled.
 ///
-/// Shows each completed task alongside its time estimate and actual time spent,
-/// letting the user reflect on the day's work before proceeding.
+/// Everything the user resolved during the day appears here — achieved work and
+/// work they answered for some other way ("more work later", "waiting on
+/// someone", "defer") — so the disposition step that follows only has to ask
+/// about what is genuinely still open (#694).
 ///
 /// Actual time spent is derived from `time_logs` via
 /// [loggedMinutesByOutcomeProvider] — no Outcome row carries a total. The map is
 /// read once for the whole step and serves both the per-card chip and the
 /// summary bar's fold, so the two can never disagree.
-class CompletedReviewStep extends ConsumerWidget {
-  const CompletedReviewStep({super.key});
+class SettledReviewStep extends ConsumerWidget {
+  const SettledReviewStep({super.key});
+
+  /// The heading each group renders under.
+  static String _labelFor(SessionSettlement bucket, int count) =>
+      switch (bucket) {
+        SessionSettlement.done => 'COMPLETED TODAY ($count)',
+        SessionSettlement.next => 'MORE WORK LATER ($count)',
+        SessionSettlement.waitingFor => 'WAITING ON SOMEONE ($count)',
+        SessionSettlement.someday => 'DEFERRED TO SOMEDAY ($count)',
+      };
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final asyncCompleted = ref.watch(completedTodayProvider);
+    final asyncGroups = ref.watch(sessionSettlementGroupsProvider);
     // Absent while the first emission is in flight, and absent per Outcome that
     // has no stints: an unresolved total reads as 0, which is what the chips
     // suppress on.
     final loggedMinutes =
         ref.watch(loggedMinutesByOutcomeProvider).value ?? const {};
 
-    if (asyncCompleted.isLoading) {
+    if (asyncGroups.isLoading) {
       return const Center(child: CircularProgressIndicator());
     }
 
-    if (asyncCompleted.hasError) {
+    if (asyncGroups.hasError) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(32),
@@ -40,7 +52,7 @@ class CompletedReviewStep extends ConsumerWidget {
               Icon(Icons.error_outline, size: 48, color: Colors.red[300]),
               const SizedBox(height: 16),
               const Text(
-                'Could not load completed tasks',
+                "Could not load today's summary",
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
                 textAlign: TextAlign.center,
               ),
@@ -50,12 +62,17 @@ class CompletedReviewStep extends ConsumerWidget {
       );
     }
 
-    final completed = asyncCompleted.asData!.value;
+    final groups = asyncGroups.asData!.value;
 
-    if (completed.isEmpty) {
-      return const _EmptyCompleted();
+    if (groups.isEmpty) {
+      return const _EmptySettled();
     }
 
+    // Estimate / actual / accuracy fold over the **completed** group only:
+    // an accuracy figure across work that is not finished means nothing.
+    final completed = groups[SessionSettlement.done] ?? const <Todo>[];
+    final settledCount =
+        groups.values.fold<int>(0, (sum, items) => sum + items.length);
     final totalEstimated =
         completed.fold<int>(0, (sum, t) => sum + (t.timeEstimate ?? 0));
     final totalActual = completed.fold<int>(
@@ -64,6 +81,7 @@ class CompletedReviewStep extends ConsumerWidget {
     return Column(
       children: [
         _SummaryBar(
+          settledCount: settledCount,
           completedCount: completed.length,
           totalEstimated: totalEstimated,
           totalActual: totalActual,
@@ -77,13 +95,25 @@ class CompletedReviewStep extends ConsumerWidget {
               physics: const ClampingScrollPhysics(),
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
               children: [
-                _SectionLabel(
-                    'COMPLETED TODAY (${completed.length})'),
-                const SizedBox(height: 8),
-                ...completed.map((t) => _CompletedTaskCard(
-                      todo: t,
-                      loggedMinutes: loggedMinutes[t.id] ?? 0,
-                    )),
+                for (final entry in groups.entries) ...[
+                  _SectionLabel(_labelFor(entry.key, entry.value.length)),
+                  // The one group with a downstream consequence says so on
+                  // screen — that is what makes its Disposition *implicit*
+                  // rather than silent.
+                  if (entry.key == SessionSettlement.next) ...[
+                    const SizedBox(height: 4),
+                    const _GroupNote(
+                      'These carry over to your next session.',
+                    ),
+                  ],
+                  const SizedBox(height: 8),
+                  ...entry.value.map((t) => _SettledTaskCard(
+                        todo: t,
+                        settlement: entry.key,
+                        loggedMinutes: loggedMinutes[t.id] ?? 0,
+                      )),
+                  const SizedBox(height: 20),
+                ],
               ],
             ),
           ),
@@ -93,8 +123,8 @@ class CompletedReviewStep extends ConsumerWidget {
   }
 }
 
-class _EmptyCompleted extends StatelessWidget {
-  const _EmptyCompleted();
+class _EmptySettled extends StatelessWidget {
+  const _EmptySettled();
 
   @override
   Widget build(BuildContext context) {
@@ -108,7 +138,7 @@ class _EmptyCompleted extends StatelessWidget {
                 size: 56, color: Colors.grey[300]),
             const SizedBox(height: 16),
             Text(
-              'No completed tasks today',
+              'Nothing resolved yet today',
               style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.w500,
@@ -117,7 +147,7 @@ class _EmptyCompleted extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              'Tasks you complete during the day will appear here.',
+              'Tasks you finish or answer for during the day will appear here.',
               style: TextStyle(fontSize: 13, color: Colors.grey[400]),
               textAlign: TextAlign.center,
             ),
@@ -128,13 +158,31 @@ class _EmptyCompleted extends StatelessWidget {
   }
 }
 
+class _GroupNote extends StatelessWidget {
+  const _GroupNote(this.text);
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      text,
+      style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+    );
+  }
+}
+
 class _SummaryBar extends StatelessWidget {
   const _SummaryBar({
+    required this.settledCount,
     required this.completedCount,
     required this.totalEstimated,
     required this.totalActual,
   });
 
+  /// Everything the user resolved today, across every group.
+  final int settledCount;
+
+  /// The Completion subset — the only one the time fold is meaningful over.
   final int completedCount;
   final int totalEstimated;
   final int totalActual;
@@ -152,6 +200,14 @@ class _SummaryBar extends StatelessWidget {
         spacing: 12,
         runSpacing: 8,
         children: [
+          // "Settled", not "Resolved": the step-1 card already spends
+          // "resolution" on Disposition, and CONTEXT.md § Disposition lists
+          // Resolution under _Avoid_.
+          _StatChip(
+            label: 'Settled',
+            value: '$settledCount',
+            color: const Color(0xFF1E3A5F),
+          ),
           _StatChip(
             label: 'Done',
             value: '$completedCount',
@@ -228,34 +284,56 @@ class _StatChip extends StatelessWidget {
   }
 }
 
-class _CompletedTaskCard extends StatelessWidget {
-  const _CompletedTaskCard({required this.todo, required this.loggedMinutes});
+class _SettledTaskCard extends StatelessWidget {
+  const _SettledTaskCard({
+    required this.todo,
+    required this.settlement,
+    required this.loggedMinutes,
+  });
 
   final Todo todo;
 
+  /// How this Outcome settled — it decides the card's treatment. The green
+  /// completion card belongs to [SessionSettlement.done] alone: painting a
+  /// waiting / re-planned / deferred item in completion green would recreate
+  /// the Action/Outcome conflation this work exists to remove.
+  final SessionSettlement settlement;
+
   /// Minutes summed from this Outcome's `time_logs` rows; 0 when it has none.
   final int loggedMinutes;
+
+  static const _completionGreen = Color(0xFF16A34A);
+  static const _neutralGrey = Color(0xFF6B7280);
 
   @override
   Widget build(BuildContext context) {
     final estimated = todo.timeEstimate;
     final actual = loggedMinutes;
     final hasTimeData = estimated != null || actual > 0;
+    final isDone = settlement == SessionSettlement.done;
+    final icon = switch (settlement) {
+      SessionSettlement.done => Icons.check_circle,
+      SessionSettlement.next => Icons.east_rounded,
+      SessionSettlement.waitingFor => Icons.hourglass_empty_rounded,
+      SessionSettlement.someday => Icons.star_border,
+    };
 
     return Card(
       elevation: 0,
       margin: const EdgeInsets.only(bottom: 8),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: const BorderSide(color: Color(0xFFD1FAE5)),
+        side: BorderSide(
+          color: isDone ? const Color(0xFFD1FAE5) : const Color(0xFFE5E7EB),
+        ),
       ),
-      color: const Color(0xFFF0FDF4),
+      color: isDone ? const Color(0xFFF0FDF4) : Colors.white,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(
           children: [
-            const Icon(Icons.check_circle,
-                size: 20, color: Color(0xFF16A34A)),
+            Icon(icon,
+                size: 20, color: isDone ? _completionGreen : _neutralGrey),
             const SizedBox(width: 12),
             Expanded(
               child: Column(

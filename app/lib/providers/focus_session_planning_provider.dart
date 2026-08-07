@@ -19,6 +19,7 @@ library;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../database/daos/focus_session_dao.dart' show SessionSettlement;
 import '../database/gtd_database.dart';
 import '../models/action_draft.dart';
 import '../models/ritual.dart';
@@ -32,6 +33,7 @@ import 'database_provider.dart';
 import 'synced_preferences_provider.dart';
 
 export '../database/gtd_database.dart' show Todo, FocusSession, Tag;
+export '../database/daos/focus_session_dao.dart' show SessionSettlement;
 
 // ---------------------------------------------------------------------------
 // Date helpers
@@ -162,6 +164,19 @@ final activeSessionProvider = StreamProvider<FocusSession?>((ref) {
 final activeSessionTasksProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
   return db.focusSessionDao.watchActiveSessionTasks();
+});
+
+/// Stream of the open session's **Settled** Outcomes, keyed by Outcome id and
+/// valued by how each settled (issue #693). Absent from the map means *not
+/// Settled*; the map is empty when no session is open.
+///
+/// The single definition of the signal — Evening Shutdown imports this rather
+/// than re-deriving it, so the Now screen and the summary can never disagree
+/// about what the user has already answered for.
+final activeSessionSettlementsProvider =
+    StreamProvider<Map<String, SessionSettlement>>((ref) {
+  final db = ref.watch(databaseProvider);
+  return db.focusSessionDao.watchActiveSessionSettlements();
 });
 
 /// True iff the user is in an open [FocusSession] that carries at least one

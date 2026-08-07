@@ -18,7 +18,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
-import 'package:jeeves/screens/shutdown/steps/completed_review_step.dart';
+import 'package:jeeves/screens/shutdown/steps/settled_review_step.dart';
 import 'package:jeeves/screens/shutdown/steps/unfinished_tasks_step.dart';
 
 import '../../helpers/settle.dart';
@@ -112,7 +112,7 @@ void main() {
         minutes: 10);
     await db.todoDao.markDone('t1');
 
-    final (widget, container) = _host(db, const CompletedReviewStep());
+    final (widget, container) = _host(db, const SettledReviewStep());
     addTearDown(container.dispose);
     await tester.pumpWidget(widget);
     await settleWithRealAsync(tester);

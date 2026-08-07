@@ -3,6 +3,8 @@
 /// [FocusSessionDao] (post-#185).
 library;
 
+import 'dart:async';
+
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -12,6 +14,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/evening_shutdown_provider.dart';
+import 'package:jeeves/providers/focus_session_planning_provider.dart'
+    show activeSessionSettlementsProvider;
 import 'package:jeeves/services/notification_service.dart';
 import '../test_helpers.dart';
 
@@ -42,6 +46,22 @@ ProviderContainer _container(GtdDatabase db) => ProviderContainer(
       ],
     );
 
+/// As [_container], but with the Settlement stream under the test's control so
+/// it can hold the map back while the review-surface stream emits.
+ProviderContainer _containerWithSettlements(
+  GtdDatabase db,
+  Stream<Map<String, SessionSettlement>> settlements,
+) =>
+    ProviderContainer(
+      overrides: [
+        databaseProvider.overrideWithValue(db),
+        notificationServiceProvider
+            .overrideWithValue(StubNotificationService()),
+        eveningShutdownProvider.overrideWith(() => _StubShutdownNotifier()),
+        activeSessionSettlementsProvider.overrideWith((_) => settlements),
+      ],
+    );
+
 Future<String> _insertTodo(
   GtdDatabase db, {
   required String id,
@@ -67,6 +87,135 @@ Future<String> _openSessionWith(
   List<String> taskIds,
 ) =>
     db.focusSessionDao.openSession(userId: _uid, taskIds: taskIds);
+
+final _settledAt = DateTime.utc(2026, 5, 1, 10);
+
+/// Stages the two facts that make [taskId] **Settled** under arm (b): an Action
+/// of the Outcome completed inside [sessionId] (evidenced by a
+/// session-attributed TimeLog naming it), and a re-clarification stamp at or
+/// after that completion.
+Future<void> _settleInSession(
+  GtdDatabase db, {
+  required String sessionId,
+  required String taskId,
+}) async {
+  await db.into(db.actions).insert(ActionsCompanion(
+        id: Value('act-$taskId'),
+        outcomeId: Value(taskId),
+        userId: const Value(_uid),
+        actionText: const Value('the finished move'),
+        role: const Value('done'),
+        doneAt: Value(_settledAt),
+        createdAt: Value(_settledAt.subtract(const Duration(hours: 1))),
+      ));
+  await db.into(db.timeLogs).insert(TimeLogsCompanion(
+        id: Value('tl-act-$taskId'),
+        userId: const Value(_uid),
+        taskId: Value(taskId),
+        actionId: Value('act-$taskId'),
+        startedAt: Value(
+            _settledAt.subtract(const Duration(minutes: 25)).toIso8601String()),
+        endedAt: Value(_settledAt.toIso8601String()),
+        focusSessionId: Value(sessionId),
+      ));
+  await (db.update(db.todos)..where((t) => t.id.equals(taskId))).write(
+    TodosCompanion(
+      lastClarifiedAt: Value(_settledAt.add(const Duration(seconds: 5))),
+    ),
+  );
+}
+
+/// Gives [taskId] a current Action, so it buckets as `next`.
+Future<void> _seedNextMove(GtdDatabase db, String taskId) =>
+    db.into(db.actions).insert(ActionsCompanion(
+          id: Value('cur-$taskId'),
+          outcomeId: Value(taskId),
+          userId: const Value(_uid),
+          actionText: const Value('the next move'),
+          role: const Value('current'),
+          createdAt: Value(_settledAt.add(const Duration(minutes: 1))),
+        ));
+
+/// Gives [taskId] a person Tag and no current Action, so it buckets as
+/// `waitingFor`.
+Future<void> _delegate(GtdDatabase db, String taskId) async {
+  await db.into(db.tags).insert(
+        const TagsCompanion(
+          id: Value('tag-person'),
+          name: Value('Trixy'),
+          type: Value('person'),
+          userId: Value(_uid),
+        ),
+        mode: InsertMode.insertOrReplace,
+      );
+  await db.into(db.todoTags).insert(TodoTagsCompanion(
+        id: Value('tt-$taskId'),
+        todoId: Value(taskId),
+        tagId: const Value('tag-person'),
+        userId: const Value(_uid),
+      ));
+}
+
+const _rivalSessionId = 'rival';
+final _rivalStartedAt = DateTime.utc(2026, 5, 2, 9);
+
+/// Lands an open FocusSession the way a pull lands one: straight into the
+/// table, past `openSession`'s guard — which is the *sole* enforcement of the
+/// single-open-session invariant (ADR-0020), so two open rows is a reachable
+/// state rather than a contrived one.
+Future<void> _projectOpenSession(
+  GtdDatabase db, {
+  required String id,
+  required DateTime startedAt,
+}) =>
+    db.into(db.focusSessions).insert(FocusSessionsCompanion(
+          id: Value(id),
+          userId: const Value(_uid),
+          startedAt: Value(startedAt.toUtc().toIso8601String()),
+          endedAt: const Value(null),
+        ));
+
+/// Makes the active-session winner change *between* two awaits, deterministically.
+///
+/// `closeDay` picks the session to close, then reads the Settlements it will
+/// commit. Between those two reads a pull can land a rival open session with a
+/// later `started_at`, which wins every subsequent active-session read. Wall
+/// clock cannot schedule a write into that window; intercepting the executor
+/// can — the write lands the moment the active-session read answers, and
+/// nothing else about the database is faked.
+class _RivalSessionInGap extends QueryInterceptor {
+  _RivalSessionInGap(this.landRival);
+
+  /// Projects the rival session row. Runs at most once.
+  final Future<void> Function() landRival;
+
+  /// Set immediately before the call under test: the fixture's own reads of
+  /// `focus_sessions` must not spend the fault.
+  bool armed = false;
+
+  /// How many times the rival actually landed, so a test can assert the gap was
+  /// reached rather than passing because the interleave never happened.
+  int firedCount = 0;
+
+  @override
+  Future<List<Map<String, Object?>>> runSelect(
+    QueryExecutor executor,
+    String statement,
+    List<Object?> args,
+  ) async {
+    final rows = await super.runSelect(executor, statement, args);
+    // The active-session read is the one select that names focus_sessions
+    // without joining todos; the Settlement read that follows names both.
+    if (armed &&
+        statement.contains('focus_sessions') &&
+        !statement.contains('todos')) {
+      armed = false;
+      firedCount++;
+      await landRival();
+    }
+    return rows;
+  }
+}
 
 void main() {
   setUpAll(configureSqliteForTests);
@@ -214,8 +363,9 @@ void main() {
 
     // ---- Stream providers ----------------------------------------------------
 
-    test('completedTodayProvider emits done tasks in the active session',
-        () async {
+    test(
+        'sessionSettlementGroupsProvider groups the day\'s Settled Outcomes '
+        'and omits the empty buckets', () async {
       await _insertTodo(db,
           id: 't_done',
           doneAt: DateTime.now().toUtc().toIso8601String());
@@ -230,13 +380,14 @@ void main() {
       expect(raw.map((t) => t.id), containsAll(['t_done', 't_open']));
 
       // Subscribe explicitly so the StreamProvider has a listener.
-      final sub = container.listen<AsyncValue<List<Todo>>>(
-        completedTodayProvider, (_, _) {});
-      final completed =
-          await container.read(completedTodayProvider.future)
-              .timeout(const Duration(seconds: 5));
+      final sub = container.listen(sessionSettlementGroupsProvider, (_, _) {});
+      final groups = await container
+          .read(sessionSettlementGroupsProvider.future)
+          .timeout(const Duration(seconds: 5));
       sub.close();
-      expect(completed.map((t) => t.id), equals(['t_done']));
+      expect(groups.keys, equals([SessionSettlement.done]),
+          reason: 'only the completed group has members');
+      expect(groups[SessionSettlement.done]!.map((t) => t.id), ['t_done']);
     });
 
     test(
@@ -299,6 +450,350 @@ void main() {
       final rollover =
           await db.focusSessionDao.getLastClosedSessionRolloverTaskIds();
       expect(rollover, contains('off1'));
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Settlement consumption (#694)
+  // ---------------------------------------------------------------------------
+
+  group('Evening Shutdown consumes the Settlement signal', () {
+    late GtdDatabase db;
+    late ProviderContainer container;
+
+    setUp(() {
+      db = GtdDatabase(NativeDatabase.memory());
+      container = _container(db);
+    });
+
+    tearDown(() async {
+      container.dispose();
+      await db.close();
+    });
+
+    /// A session where one Outcome settled into each bucket, plus one the user
+    /// never touched.
+    Future<String> stageOneOfEach() async {
+      await _insertTodo(db,
+          id: 'done1', doneAt: DateTime.now().toUtc().toIso8601String());
+      await _insertTodo(db, id: 'next1');
+      await _insertTodo(db, id: 'wait1');
+      await _insertTodo(db, id: 'some1', intent: 'maybe');
+      await _insertTodo(db, id: 'open1');
+      final sessionId = await _openSessionWith(
+          db, ['done1', 'next1', 'wait1', 'some1', 'open1']);
+
+      await _settleInSession(db, sessionId: sessionId, taskId: 'next1');
+      await _seedNextMove(db, 'next1');
+      await _settleInSession(db, sessionId: sessionId, taskId: 'wait1');
+      await _delegate(db, 'wait1');
+      await _settleInSession(db, sessionId: sessionId, taskId: 'some1');
+      return sessionId;
+    }
+
+    test('the summary groups every Settled Outcome, in render order (AC1–AC3)',
+        () async {
+      await stageOneOfEach();
+
+      final sub = container.listen(sessionSettlementGroupsProvider, (_, _) {});
+      final groups = await container
+          .read(sessionSettlementGroupsProvider.future)
+          .timeout(const Duration(seconds: 5));
+      sub.close();
+
+      expect(groups.keys, orderedEquals(sessionSettlementRenderOrder));
+      expect(groups[SessionSettlement.done]!.map((t) => t.id), ['done1']);
+      expect(groups[SessionSettlement.next]!.map((t) => t.id), ['next1']);
+      expect(groups[SessionSettlement.waitingFor]!.map((t) => t.id), ['wait1']);
+      expect(groups[SessionSettlement.someday]!.map((t) => t.id), ['some1']);
+      expect(
+        groups.values.expand((g) => g).map((t) => t.id),
+        isNot(contains('open1')),
+        reason: 'an untouched Outcome settled nothing',
+      );
+    });
+
+    test(
+        'neither consumer reads a not-yet-emitted settlement map as '
+        '"nothing Settled"', () async {
+      await stageOneOfEach();
+
+      // A settlement stream this test controls, so the review-surface stream
+      // can emit first — the ordering the two independent Drift watches make
+      // reachable in the app.
+      final settlements =
+          StreamController<Map<String, SessionSettlement>>.broadcast();
+      addTearDown(settlements.close);
+      final gated = _containerWithSettlements(db, settlements.stream);
+      addTearDown(gated.dispose);
+
+      final groupsSub = gated.listen(sessionSettlementGroupsProvider, (_, _) {});
+      final unfinishedSub = gated.listen<AsyncValue<List<Todo>>>(
+          unfinishedSelectedTodayProvider, (_, _) {});
+      // The review surface is ready and would emit; only the settlement map
+      // is outstanding.
+      await db.focusSessionDao
+          .watchActiveSessionReviewSurface()
+          .first
+          .timeout(const Duration(seconds: 5));
+      await pumpEventQueue();
+
+      expect(
+        gated.read(sessionSettlementGroupsProvider).hasValue,
+        isFalse,
+        reason: 'an empty-groups AsyncData renders "nothing resolved today" '
+            'over a day that resolved four things',
+      );
+      expect(
+        gated.read(unfinishedSelectedTodayProvider).hasValue,
+        isFalse,
+        reason: 'a first emission here counts every Settled Outcome as '
+            'unfinished work',
+      );
+
+      settlements.add(await db.focusSessionDao.getActiveSessionSettlements());
+
+      final groups = await gated
+          .read(sessionSettlementGroupsProvider.future)
+          .timeout(const Duration(seconds: 5));
+      expect(groups.keys, orderedEquals(sessionSettlementRenderOrder));
+      final unfinished = await gated
+          .read(unfinishedSelectedTodayProvider.future)
+          .timeout(const Duration(seconds: 5));
+      expect(unfinished.map((t) => t.id), ['open1']);
+
+      groupsSub.close();
+      unfinishedSub.close();
+    });
+
+    test('the disposition step only presents unhandled work (AC4/AC5)',
+        () async {
+      await stageOneOfEach();
+
+      final sub = container.listen<AsyncValue<List<Todo>>>(
+          unfinishedSelectedTodayProvider, (_, _) {});
+      final unfinished = await container
+          .read(unfinishedSelectedTodayProvider.future)
+          .timeout(const Duration(seconds: 5));
+      sub.close();
+
+      expect(unfinished.map((t) => t.id), ['open1']);
+    });
+
+    test('loadUnfinishedSnapshot — the list the step actually iterates — '
+        'excludes Settled Outcomes', () async {
+      await stageOneOfEach();
+
+      await container
+          .read(eveningShutdownProvider.notifier)
+          .loadUnfinishedSnapshot();
+
+      expect(
+        container
+            .read(eveningShutdownProvider)
+            .unfinishedNav
+            .items!
+            .map((t) => t.id),
+        ['open1'],
+      );
+    });
+
+    test(
+        'closeDay mints the implicit Dispositions: next → rollover, '
+        'waitingFor / someday → leave', () async {
+      final sessionId = await stageOneOfEach();
+
+      final notifier = container.read(eveningShutdownProvider.notifier);
+      await notifier.loadUnfinishedSnapshot();
+      notifier.returnToNext('open1');
+      await notifier.closeDay();
+
+      final rollover =
+          await db.focusSessionDao.getLastClosedSessionRolloverTaskIds();
+      expect(rollover, ['next1'],
+          reason: '"more work later" is what tomorrow expects to see');
+
+      final planRows = await (db.select(db.focusSessionTasks)
+            ..where((fst) => fst.focusSessionId.equals(sessionId)))
+          .get();
+      final byTask = {for (final r in planRows) r.taskId: r.disposition};
+      expect(byTask['next1'], 'rollover');
+      expect(byTask['wait1'], 'leave');
+      expect(byTask['some1'], 'leave');
+    });
+
+    test(
+        'a done-Settled Outcome gets no Disposition in either home — '
+        'reviewAndCloseSession leaves that filter to its caller', () async {
+      final sessionId = await stageOneOfEach();
+
+      final notifier = container.read(eveningShutdownProvider.notifier);
+      await notifier.loadUnfinishedSnapshot();
+      notifier.returnToNext('open1');
+      await notifier.closeDay();
+
+      final planRow = await (db.select(db.focusSessionTasks)
+            ..where((fst) =>
+                fst.focusSessionId.equals(sessionId) &
+                fst.taskId.equals('done1')))
+          .getSingle();
+      expect(planRow.disposition, isNull,
+          reason: 'Completed Outcomes need no Disposition (CONTEXT.md)');
+
+      final offPlan = await (db.select(db.focusSessionDispositions)
+            ..where((d) => d.taskId.equals('done1')))
+          .get();
+      expect(offPlan, isEmpty);
+    });
+
+    test(
+        'a someday-Settled Outcome takes `leave`, not `maybe` — its Intent was '
+        'already set by the verdict and must not be re-stamped at close time',
+        () async {
+      await _insertTodo(db, id: 'some1', intent: 'maybe');
+      final sessionId = await _openSessionWith(db, ['some1']);
+      await _settleInSession(db, sessionId: sessionId, taskId: 'some1');
+      final stampBefore = (await db.todoDao.getTodo('some1'))!.lastClarifiedAt;
+
+      await container.read(eveningShutdownProvider.notifier).closeDay();
+
+      final after = await db.todoDao.getTodo('some1');
+      expect(after!.intent, 'maybe');
+      expect(after.lastClarifiedAt, stampBefore,
+          reason: 'the stamp belongs to the moment the user decided');
+    });
+
+    test('an off-Plan Settled Outcome lands its Disposition in the second '
+        'home (ADR-0016) and still rolls over', () async {
+      await _insertTodo(db, id: 'plan1');
+      await _insertTodo(db, id: 'off1');
+      final sessionId = await _openSessionWith(db, ['plan1']);
+      await _settleInSession(db, sessionId: sessionId, taskId: 'off1');
+      await _seedNextMove(db, 'off1');
+
+      final notifier = container.read(eveningShutdownProvider.notifier);
+      await notifier.loadUnfinishedSnapshot();
+      notifier.returnToNext('plan1');
+      await notifier.closeDay();
+
+      final offPlan = await (db.select(db.focusSessionDispositions)
+            ..where((d) => d.taskId.equals('off1')))
+          .getSingle();
+      expect(offPlan.disposition, 'rollover');
+      expect(offPlan.focusSessionId, sessionId);
+      expect(
+        await db.focusSessionDao.getLastClosedSessionRolloverTaskIds(),
+        contains('off1'),
+      );
+    });
+
+    test('an explicit tap beats the implied Disposition', () async {
+      await _insertTodo(db, id: 'next1');
+      final sessionId = await _openSessionWith(db, ['next1']);
+      await _settleInSession(db, sessionId: sessionId, taskId: 'next1');
+      await _seedNextMove(db, 'next1');
+
+      // The user reaches it anyway (it settled after the snapshot froze) and
+      // chooses Someday. Their choice must win.
+      final notifier = container.read(eveningShutdownProvider.notifier);
+      notifier.deferTask('next1');
+      await notifier.closeDay();
+
+      expect(await db.focusSessionDao.getLastClosedSessionRolloverTaskIds(),
+          isEmpty);
+      final row = await db.todoDao.getTodo('next1');
+      expect(row!.intent, 'maybe');
+    });
+
+    test('a second closeDay writes nothing — there is no open session left',
+        () async {
+      await _insertTodo(db, id: 'next1');
+      final sessionId = await _openSessionWith(db, ['next1']);
+      await _settleInSession(db, sessionId: sessionId, taskId: 'next1');
+      await _seedNextMove(db, 'next1');
+
+      final notifier = container.read(eveningShutdownProvider.notifier);
+      await notifier.closeDay();
+      final after = await db.select(db.focusSessionTasks).get();
+
+      await notifier.closeDay();
+      expect(await db.select(db.focusSessionTasks).get(), equals(after));
+      expect(await db.select(db.focusSessionDispositions).get(), isEmpty);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // closeDay commits against the session it selected
+  // ---------------------------------------------------------------------------
+
+  group('closeDay derives the implied Dispositions from the session it closes',
+      () {
+    late GtdDatabase db;
+    late ProviderContainer container;
+    late _RivalSessionInGap gap;
+
+    setUp(() {
+      gap = _RivalSessionInGap(() => _projectOpenSession(
+            db,
+            id: _rivalSessionId,
+            startedAt: _rivalStartedAt,
+          ));
+      db = GtdDatabase(NativeDatabase.memory().interceptWith(gap));
+      container = _container(db);
+    });
+
+    tearDown(() async {
+      container.dispose();
+      await db.close();
+    });
+
+    test(
+        'a rival session winning the active-session race mid-close changes '
+        'nothing about what is committed', () async {
+      // On the closing session's Plan and Settled *in it* — so it owes an
+      // implied `rollover`, the record tomorrow's pre-selection reads.
+      await _insertTodo(db, id: 'mine');
+      // Also on the closing session's Plan — so a Disposition for it would be
+      // accepted by the Review-surface filter — but its only settlement
+      // evidence belongs to the rival session. The closing session never saw
+      // it resolve, so it must take no implied Disposition here.
+      await _insertTodo(db, id: 'theirs');
+
+      final sessionId = await db.focusSessionDao.openSession(
+        userId: _uid,
+        taskIds: ['mine', 'theirs'],
+        now: DateTime.utc(2026, 5, 1, 9),
+      );
+      await _settleInSession(db, sessionId: sessionId, taskId: 'mine');
+      await _seedNextMove(db, 'mine');
+      await _settleInSession(db, sessionId: _rivalSessionId, taskId: 'theirs');
+      await _delegate(db, 'theirs');
+
+      // Arm only now: every earlier read of focus_sessions belongs to the
+      // fixture, and the gap being asserted is the one inside closeDay.
+      gap.armed = true;
+      await container.read(eveningShutdownProvider.notifier).closeDay();
+
+      expect(gap.firedCount, 1,
+          reason: 'the rival must actually have landed in the gap, or this '
+              'test proves nothing');
+      final rival = await (db.select(db.focusSessions)
+            ..where((s) => s.id.equals(_rivalSessionId)))
+          .getSingle();
+      expect(rival.endedAt, isNull,
+          reason: 'closeDay closed the session it selected, not the winner');
+
+      final planRows = await (db.select(db.focusSessionTasks)
+            ..where((fst) => fst.focusSessionId.equals(sessionId)))
+          .get();
+      final byTask = {for (final r in planRows) r.taskId: r.disposition};
+
+      expect(byTask['mine'], 'rollover',
+          reason: 'the closing session\'s own next-Settled Outcome still '
+              'carries over; deriving from the rival would drop it');
+      expect(byTask['theirs'], isNull,
+          reason: 'a Settlement reached in another session must not mint a '
+              'Disposition against this one');
     });
   });
 

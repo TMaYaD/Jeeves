@@ -5,10 +5,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../providers/evening_shutdown_provider.dart';
 
-/// Step 1 of the shutdown ritual: resolve each unfinished task one at a time.
+/// Step 1 of the shutdown ritual: resolve each **unhandled** task one at a
+/// time.
 ///
 /// Uses a fixed snapshot loaded at step start, navigated by an integer index.
-/// For every task that was planned but not completed today, the user must
+/// The snapshot holds only Outcomes with no resolution yet — anything the user
+/// already Settled during the session was answered for then, and appears in the
+/// summary rather than here (#694). For every remaining task, the user must
 /// choose one of three dispositions:
 /// - Roll Over to Tomorrow → preselects the task for tomorrow's plan.
 /// - Return to Next Actions → clears the daily selection; task reappears in
@@ -55,8 +58,11 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
           children: [
             Icon(Icons.check_circle_outline, size: 56, color: Colors.grey[300]),
             const SizedBox(height: 16),
+            // Not "All tasks completed": the list can be empty because
+            // everything Settled to a non-done verdict, which is not the same
+            // claim at all.
             Text(
-              'All tasks completed today!',
+              'Nothing left to resolve.',
               style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.w600,

@@ -27,6 +27,17 @@ String focusSessionDispositionIdFor(String sessionId, String taskId) => uuid.v5(
       'jeeves://focus_session_disposition/$sessionId/$taskId',
     );
 
+/// How an Outcome **Settled** in a FocusSession — one bucket per Settled
+/// Outcome, assigned by the ladder in
+/// [FocusSessionDao.watchActiveSessionSettlements].
+///
+/// This is a **presentation ordering** for the Evening Shutdown summary, not a
+/// statement about GTD List membership. Next and Waiting For overlap by design
+/// (`TodoDao.watchNext`), so a mutually-exclusive bucket could never equal List
+/// membership — and nothing here needs it to. Settling writes nothing, so an
+/// Outcome's Lists are exactly what its verdict left them.
+enum SessionSettlement { done, next, waitingFor, someday }
+
 @DriftAccessor(tables: [
   FocusSessions,
   FocusSessionTasks,
@@ -34,6 +45,8 @@ String focusSessionDispositionIdFor(String sessionId, String taskId) => uuid.v5(
   TimeLogs,
   Todos,
   Actions,
+  TodoTags,
+  Tags,
 ])
 class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
     with _$FocusSessionDaoMixin {
@@ -779,5 +792,194 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       readsFrom: {focusSessionTasks, timeLogs, todos, attachedDatabase.actions},
     ).get();
     return rows.map((r) => todos.map(r.data)).toList();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Settlement (issue #693) — derived, never stored
+  // ---------------------------------------------------------------------------
+
+  /// The per-row **settlement anchor**: the latest completion of one of this
+  /// Outcome's Actions *within the FocusSession named by [sessionIdSql]*,
+  /// evidenced by a TimeLog attributed to that session.
+  ///
+  /// Attribution is by session id, never a wall-clock window: sessions are
+  /// calendar-independent and may span days (ADR-0020), so a
+  /// `started_at`-to-now range would be the wrong test.
+  static String _settlementAnchorSql(String sessionIdSql) => '''
+(SELECT MAX(anchor_a.done_at)
+   FROM actions anchor_a
+   JOIN time_logs anchor_tl ON anchor_tl.action_id = anchor_a.id
+  WHERE anchor_a.outcome_id = t.id
+    AND anchor_a.role = 'done'
+    AND anchor_tl.focus_session_id = $sessionIdSql)''';
+
+  /// Outcome id → its [SessionSettlement] bucket, over the Review surface of
+  /// the session named by [sessionIdSql]. Absent from the result == **not
+  /// Settled**.
+  ///
+  /// One body, two bindings: [_activeSessionIdSql] for the "whatever is open
+  /// right now" readers, and a bound parameter for the reader that already
+  /// holds the id of the session it means. The predicate must not fork.
+  ///
+  /// **Settled** — an Outcome on that FocusSession's Review surface whose
+  /// engagement in the session has reached a verdict. Either
+  ///
+  /// * **(a)** its Completion is recorded (`todos.done_at IS NOT NULL`), or
+  /// * **(b)** an Action of the Outcome was completed **within this
+  ///   FocusSession** ([_settlementAnchorSql]) and the Outcome has been
+  ///   re-clarified at or after that completion.
+  ///
+  /// (b) is the session-scoped negation of **Stale** (CONTEXT.md § GTD Core),
+  /// matching `TodoDao._needsReviewWhere`'s Action-termination arm — so a row
+  /// that is Settled is by construction not Stale, and the two predicates can
+  /// never disagree about the same Outcome on the same morning. The looser
+  /// reading ("the Action was completed") would settle a row the user never
+  /// answered for.
+  ///
+  /// The bucket ladder, in order: Completion → `done`; `intent = 'maybe'` →
+  /// `someday`; a current Action exists → `next`; a person-typed Tag exists →
+  /// `waitingFor`; otherwise `next`. Rung 3 sits ahead of rung 4 deliberately:
+  /// a re-planned Outcome that already carried a person Tag reads as `next`,
+  /// because the user gave it a next move. See [SessionSettlement] for why the
+  /// ladder is not a claim about List membership.
+  ///
+  /// Two shapes deliberately never settle. A **dismissed** re-clarify sheet
+  /// writes nothing, so the Outcome still owes a re-clarification and belongs
+  /// in Evening Shutdown's disposition step. And an **Actionless** Outcome
+  /// cannot settle under (b) at all — `TimeLogDao`'s resolver records
+  /// `action_id = NULL` when nothing is `current`, and
+  /// `ActionDao.applyCompleteCurrentAction` no-ops, so no verdict produces an
+  /// anchor; arm (a) still catches it if the user marks the Outcome done.
+  ///
+  /// Both timestamps are TEXT: `storeDateTimeAsText: true` on [GtdDatabase]
+  /// makes every `DateTimeColumn` a TEXT column, so `actions.done_at` and
+  /// `todos.last_clarified_at` share a storage class however they were written
+  /// — a Drift `DateTime` companion or one of the raw `encodeInstant` binds —
+  /// and SQLite's INTEGER-before-TEXT ordering never applies. What is *not*
+  /// uniform is precision: a companion write keeps microseconds, while the raw
+  /// binds and every sync round-trip are millisecond-truncated, so two values
+  /// inside the same millisecond can compare inverted in either direction
+  /// (`'…789Z' > '…789012Z'`). Unreachable through the sheet, which is the
+  /// whole of the guarantee: the completion and the verdict are seconds apart,
+  /// so the sub-millisecond ordering never decides a verdict.
+  static String _settlementsSql(String sessionIdSql) => '''
+SELECT t.id AS todo_id,
+       CASE
+         WHEN t.done_at IS NOT NULL THEN 'done'
+         WHEN t.intent = 'maybe' THEN 'someday'
+         WHEN EXISTS (SELECT 1 FROM actions cur_a
+                       WHERE cur_a.outcome_id = t.id
+                         AND cur_a.role = 'current') THEN 'next'
+         WHEN EXISTS (SELECT 1 FROM todo_tags ptt
+                        JOIN tags ptg ON ptg.id = ptt.tag_id
+                       WHERE ptt.todo_id = t.id
+                         AND ptg.type = 'person') THEN 'waiting_for'
+         ELSE 'next'
+       END AS settlement
+  FROM todos t
+ WHERE t.id IN (
+         SELECT fst.task_id FROM focus_session_tasks fst
+          WHERE fst.focus_session_id = $sessionIdSql
+          UNION
+         SELECT tl.task_id FROM time_logs tl
+          WHERE tl.focus_session_id = $sessionIdSql
+       )
+   AND (
+         t.done_at IS NOT NULL
+         OR (${_settlementAnchorSql(sessionIdSql)} IS NOT NULL
+             AND t.last_clarified_at IS NOT NULL
+             AND t.last_clarified_at >= ${_settlementAnchorSql(sessionIdSql)})
+       )''';
+
+  /// [_settlementsSql] bound to whichever session is open at read time.
+  static final String _activeSessionSettlementsSql =
+      _settlementsSql(_activeSessionIdSql);
+
+  /// [_settlementsSql] bound to a caller-supplied session id. `?1` is repeated
+  /// throughout the body, so the statement still takes exactly one variable.
+  static final String _sessionSettlementsSql = _settlementsSql('?1');
+
+  /// The tables every Settlement read observes. `focusSessions` is in the set
+  /// for the active-session bindings; the session-scoped one names no session
+  /// row, so for it this is a harmless superset (only `watch()` consults it).
+  Set<ResultSetImplementation<dynamic, dynamic>> get _settlementReadsFrom => {
+        focusSessions,
+        focusSessionTasks,
+        timeLogs,
+        todos,
+        actions,
+        todoTags,
+        tags,
+      };
+
+  /// Reactive Settlement map for the currently open session. Emits an empty map
+  /// when no session is open.
+  ///
+  /// Person-tag writes fire `notifyTodosViewWrite(includeTodoTags: true)`, so
+  /// the `waitingFor` rung re-emits (ADR-0010).
+  Stream<Map<String, SessionSettlement>> watchActiveSessionSettlements() {
+    return customSelect(
+      _activeSessionSettlementsSql,
+      variables: [],
+      readsFrom: _settlementReadsFrom,
+    ).watch().map(_settlementsFromRows);
+  }
+
+  /// One-shot sibling of [watchActiveSessionSettlements], sharing its SQL.
+  ///
+  /// Not redundant: awaiting a live Drift `watch().first` from a widget-driven
+  /// path never delivers its first event and blocks the isolate outright
+  /// (docs/TESTING.md § Frontend), and `EveningShutdownNotifier` reads
+  /// Settlements from exactly such a path.
+  ///
+  /// Re-resolves "the active session" at call time, so it belongs only to
+  /// readers whose *whole* answer is about whatever is open now. A caller that
+  /// already holds a session id — one that is about to write against it — wants
+  /// [getSettlementsForSession] instead: two open sessions is a reachable sync
+  /// state (see [openSessionWinnerFirstSql]) and the winner can change between
+  /// two awaits.
+  Future<Map<String, SessionSettlement>> getActiveSessionSettlements() async {
+    final rows = await customSelect(
+      _activeSessionSettlementsSql,
+      variables: [],
+      readsFrom: _settlementReadsFrom,
+    ).get();
+    return _settlementsFromRows(rows);
+  }
+
+  /// [getActiveSessionSettlements] pinned to [sessionId] instead of to
+  /// whichever session happens to be open when the query runs.
+  ///
+  /// Same predicate, same buckets — only the session binding differs. This is
+  /// the form for a caller that reads Settlements and then *writes* against a
+  /// session it selected earlier: the active-session winner can change between
+  /// the two awaits, and committing one session's implied Dispositions against
+  /// another session's id would drop a required `rollover` and mint a
+  /// Disposition for work the closing session never saw.
+  Future<Map<String, SessionSettlement>> getSettlementsForSession(
+    String sessionId,
+  ) async {
+    final rows = await customSelect(
+      _sessionSettlementsSql,
+      variables: [Variable<String>(sessionId)],
+      readsFrom: _settlementReadsFrom,
+    ).get();
+    return _settlementsFromRows(rows);
+  }
+
+  static Map<String, SessionSettlement> _settlementsFromRows(
+    List<QueryRow> rows,
+  ) {
+    final settlements = <String, SessionSettlement>{};
+    for (final row in rows) {
+      settlements[row.read<String>('todo_id')] =
+          switch (row.read<String>('settlement')) {
+        'done' => SessionSettlement.done,
+        'someday' => SessionSettlement.someday,
+        'waiting_for' => SessionSettlement.waitingFor,
+        _ => SessionSettlement.next,
+      };
+    }
+    return settlements;
   }
 }
