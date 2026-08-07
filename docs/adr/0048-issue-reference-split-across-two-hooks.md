@@ -61,8 +61,8 @@ safe-direction ways, both because the append moved onto a hook that cannot see
   is not given a second: `main` recorded `fix: follow-up to (#500) (#605)`, the shared
   contract now records `fix: follow-up to (#500)`.
 
-Both are the safe direction — a correct-or-absent reference, never a doubled or corrupted
-subject — and consistent with the user story. Making them byte-identical would require
+Both are the safe direction — the subject ends with at most one trailing reference, never a
+doubled or corrupted one — and consistent with the user story. Making them byte-identical would require
 relaying `$COMMIT_SOURCE` from `prepare-commit-msg` through `.git/` state into `commit-msg`;
 that was rejected as adding a cross-hook invariant the codebase's hook comments consistently
 avoid, and the trade is recorded here so it is not re-litigated.
