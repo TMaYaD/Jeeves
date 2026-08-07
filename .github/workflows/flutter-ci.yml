@@ -131,8 +131,11 @@ jobs:
   # SDK download each run, then the tool warm/precache, a ~/.pub-cache
   # partial-restore fetch, and a no-op build_runner + trivial analyze/test
   # driven through the hook. Measured: ~1m33s, against ~5m29s for `analyze` in
-  # the same run — so by the formula above it adds ~0 to PR wall-clock (it
-  # finishes well inside the analyze job's window), at the cost of one runner-job.
+  # the same run. When an `app/**` change also runs `analyze`, this finishes
+  # well inside its window and adds ~0 to PR wall-clock. For a hook-only change
+  # `analyze` is skipped (it is gated on `app`), so this job is on the critical
+  # path and can extend PR wall-clock by its own runtime. Either way: one
+  # runner-job of compute.
   hook-real-sdk:
     name: Pre-commit hook — real SDK
     needs: android-build-changes
