@@ -146,7 +146,7 @@ Daily Planning, Focus execution, Evening Shutdown and the Weekly Review are one
 shape, not four features. A **Ceremony** is a stepped performance with a
 lifecycle — not-started, in-progress, terminated as either completed or
 abandoned — driven by a shared wizard shell in `app/lib/widgets/ceremony/`, with
-one provider per ceremony holding its state.
+one provider per ceremony holding its state. The Nudge, Trigger and Cadence machinery is mapped in [CEREMONIES.md](CEREMONIES.md).
 
 A **Ritual** is a Ceremony with a cadence overlay: a Trigger decides when its
 **Nudge** surfaces. One hygiene rule is centralised at the Nudge level rather
@@ -185,6 +185,7 @@ stores stub out on web and throw, which is honest rather than a gap.
 |---|---|
 | What does this word mean? | [CONTEXT.md](../CONTEXT.md) |
 | How does sync work in detail? | [SYNC.md](SYNC.md) |
+| How do Nudges and Rituals fire? | [CEREMONIES.md](CEREMONIES.md) |
 | Why is it like this? | [docs/adr/](adr/) |
 | What are we building, and why that? | [REQUIREMENTS.md](REQUIREMENTS.md) |
 | What should it look like? | [DESIGN.md](DESIGN.md) |

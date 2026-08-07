@@ -34,6 +34,7 @@ VOCABULARY_CEILING = 10_000  # the core words the project is thought in
 CEILINGS: dict[str, int] = {
     "CONTEXT.md": VOCABULARY_CEILING,
     "docs/ARCHITECTURE.md": ARCHITECTURE_CEILING,
+    "docs/CEREMONIES.md": DESIGN_DOC_CEILING,
     "docs/DESIGN.md": DESIGN_DOC_CEILING,
     "docs/SYNC.md": DESIGN_DOC_CEILING,
     "docs/TESTING.md": DESIGN_DOC_CEILING,
