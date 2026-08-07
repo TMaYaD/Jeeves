@@ -209,6 +209,8 @@ A map that no longer fits in one sitting has stopped being a map, whatever it co
 
 The numbers live in [`tools/check_doc_size.py`](tools/check_doc_size.py), which is their single source of truth; run `make docs-size` to see where every doc stands. A design doc is allowed slightly more than `ARCHITECTURE.md`: it covers less ground at higher fidelity and needs the room for it. Genuinely tabular reference data — device coordinates, matrices — is exempt, because a word count is the wrong instrument for a table.
 
+**Not every document is a map.** A **register** — `TESTING.md`'s harness traps, `DESIGN.md`'s components — is an enumeration whose length tracks an inventory out in the world rather than the scale of something being drawn. It grows when the inventory grows, and cutting it deletes an entry someone needs rather than zooming out. Registers still get a ceiling, set from the inventory with headroom. Reach for this only when a document genuinely enumerates; "it feels long" is not a register.
+
 Several docs were far above their ceiling when it was adopted, so enforcement is a **ratchet**: a doc over its ceiling may only shrink. Nothing gets worse from today, cleanup is never blocked, and the ceiling takes over the moment the doc drops under it.
 
 ### Maintenance

@@ -8,6 +8,10 @@ ceilings; AGENTS.md points here rather than restating the numbers.
 Design docs sit slightly above ARCHITECTURE.md: they cover less ground at higher
 fidelity, so they are allowed a little more room for it.
 
+Not every document is a map. TESTING.md and DESIGN.md are registers — a list of
+harness traps, a list of components — whose length tracks an inventory rather
+than a scale, so they get ceilings set from that inventory instead.
+
 Enforcement is a ratchet, because the ceilings were adopted while several docs
 were far above them. A doc under its ceiling may change freely up to it. A doc
 over its ceiling may only shrink — so nothing gets worse from today, cleanup is
@@ -26,19 +30,31 @@ import sys
 from pathlib import Path
 
 # --- the ceilings -----------------------------------------------------------
+#
+# Maps are bounded by what fits in one sitting, whatever their scale.
 
 ARCHITECTURE_CEILING = 3_000  # the country map: regions and the roads between
 DESIGN_DOC_CEILING = 3_500  # city maps: one region, canals and watersheds
 VOCABULARY_CEILING = 10_000  # the core words the project is thought in
 
+# Two documents are registers rather than maps, and a map's ceiling is the wrong
+# instrument for them. A register is an enumeration whose length tracks an
+# inventory out in the world, not the scale of the thing being drawn: it grows
+# when the inventory grows, and cutting it deletes an entry someone needs rather
+# than zooming out. They still get a ceiling — an unbounded document is how this
+# started — but one set from the inventory, with headroom.
+
+TEST_REGISTER_CEILING = 14_000  # strategy, plus the harness traps that keep biting
+DESIGN_SYSTEM_CEILING = 6_000  # tokens, components and surfaces, one entry each
+
 CEILINGS: dict[str, int] = {
     "CONTEXT.md": VOCABULARY_CEILING,
     "docs/ARCHITECTURE.md": ARCHITECTURE_CEILING,
     "docs/CEREMONIES.md": DESIGN_DOC_CEILING,
-    "docs/DESIGN.md": DESIGN_DOC_CEILING,
     "docs/SYNC.md": DESIGN_DOC_CEILING,
-    "docs/TESTING.md": DESIGN_DOC_CEILING,
     "docs/BACKEND_GUIDELINES.md": DESIGN_DOC_CEILING,
+    "docs/DESIGN.md": DESIGN_SYSTEM_CEILING,
+    "docs/TESTING.md": TEST_REGISTER_CEILING,
 }
 
 # --- counting ---------------------------------------------------------------
