@@ -122,9 +122,9 @@ def main():
     rollover_title = today_titles[0]
     print(f"will roll over: {rollover_title}")
 
-    # If only one task is selected, promote one PENDING REVIEW item so
+    # If only one task is selected, promote one UP NEXT item so
     # we have at least 2 tasks in today's plan (goal pre-condition).
-    if d(descriptionContains="PENDING REVIEW").exists and \
+    if d(descriptionContains="UP NEXT").exists and \
        d(descriptionContains="Select for today").exists:
         d(descriptionContains="Select for today").click()
         time.sleep(0.5)
@@ -184,7 +184,7 @@ def main():
         if cd.startswith("TODAY'S PLAN"):
             saw_today = True
             continue
-        if cd.startswith("PENDING REVIEW") or cd.startswith("LATER"):
+        if cd.startswith("UP NEXT") or cd.startswith("SKIPPED"):
             saw_today = False
             continue
         if saw_today and cd.startswith("Triage_test_"):
