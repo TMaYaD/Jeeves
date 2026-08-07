@@ -1,0 +1,207 @@
+/// The **Settled** journey (#693, #694), end to end over a real store.
+///
+/// A user works a Focus session, finishes a task's current Action, and gives it
+/// a verdict other than "achieved". From that moment the task is handled *for
+/// this session*: it strikes off on the Now screen, it is not offered as the
+/// next task up, Evening Shutdown does not ask about it again, and it appears
+/// in the day's summary under the verdict it was given.
+///
+/// Every write here goes through the production seams the re-clarify sheet
+/// itself commits — `ClarificationService.completeCurrentAction` for the Done,
+/// `clarifyToOutcome` for the verdict — so the journey is evidence about the
+/// real flow rather than about a fixture. Per docs/TESTING.md the store is
+/// staged in `setUp`, never inside a `testWidgets` body.
+library;
+
+import 'package:drift/drift.dart' hide isNull, isNotNull;
+import 'package:drift/native.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'package:jeeves/database/daos/focus_session_dao.dart'
+    show SessionSettlement;
+import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/todo.dart' show RoutingKind;
+import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/screens/active_focus_screen.dart' show focusNextTask;
+import 'package:jeeves/screens/focus_screen.dart';
+import 'package:jeeves/services/clarification_service.dart';
+import 'package:jeeves/services/notification_service.dart';
+
+import '../helpers/settle.dart';
+import '../test_helpers.dart';
+
+const _userId = 'local';
+
+Future<void> _insertOutcome(
+  GtdDatabase db, {
+  required String id,
+  required String title,
+}) async {
+  final now = DateTime.now();
+  await db.into(db.todos).insert(TodosCompanion(
+        id: Value(id),
+        title: Value(title),
+        clarified: const Value(true),
+        intent: const Value('next'),
+        userId: const Value(_userId),
+        createdAt: Value(now),
+        updatedAt: Value(now),
+      ));
+  await seedCurrentAction(db,
+      outcomeId: id, text: 'work on $title', userId: _userId);
+}
+
+/// Renders the real Now screen over [db] — no provider is stubbed except the
+/// database itself, so the Settlement signal is read live from the store.
+Widget _nowScreen(GtdDatabase db) {
+  final router = GoRouter(
+    initialLocation: '/focus',
+    routes: [
+      GoRoute(path: '/focus', builder: (_, _) => const FocusScreen()),
+      GoRoute(
+        path: '/focus-session-planning',
+        builder: (_, _) => const Scaffold(body: Text('planning')),
+      ),
+      GoRoute(
+        path: '/focus/active',
+        builder: (_, _) => const Scaffold(body: Text('active')),
+      ),
+    ],
+  );
+  return ProviderScope(
+    overrides: [
+      databaseProvider.overrideWithValue(db),
+      notificationServiceProvider.overrideWithValue(StubNotificationService()),
+    ],
+    child: MaterialApp.router(routerConfig: router),
+  );
+}
+
+void main() {
+  setUpAll(configureSqliteForTests);
+
+  group('a task resolved to "more work later" is Settled for the session', () {
+    late GtdDatabase db;
+    late ClarificationService clarification;
+
+    setUp(() async {
+      SharedPreferences.setMockInitialValues({});
+      db = GtdDatabase(NativeDatabase.memory());
+      clarification = DaoClarificationService(db);
+
+      await _insertOutcome(db, id: 'resolved', title: 'Draft the proposal');
+      await _insertOutcome(db, id: 'untouched', title: 'Book the venue');
+      final sessionId = await db.focusSessionDao
+          .openSession(userId: _userId, taskIds: ['resolved', 'untouched']);
+
+      // Engage it: a session-attributed TimeLog against its current Action.
+      await db.focusSessionDao
+          .setCurrentTask(sessionId: sessionId, taskId: 'resolved');
+      // Focus "Done" — completes the *Action*, stamps nothing on the Outcome.
+      await clarification.completeCurrentAction('resolved');
+      // …then the verdict the re-clarify sheet takes: "More to do…".
+      await clarification.clarifyToOutcome(
+        'resolved',
+        to: RoutingKind.nextAction,
+        actionText: 'send it to Trixy for review',
+        userId: _userId,
+      );
+    });
+
+    tearDown(() async => db.close());
+
+    test('the store reports it Settled as next, and the other task not at all',
+        () async {
+      expect(
+        await db.focusSessionDao.getActiveSessionSettlements(),
+        {'resolved': SessionSettlement.next},
+      );
+    });
+
+    test('its Outcome is not achieved — Settlement is not Completion',
+        () async {
+      final row = await db.todoDao.getTodo('resolved');
+      expect(row?.doneAt, isNull);
+    });
+
+    test('it still sits on its normal GTD List outside the session (AC5)',
+        () async {
+      final next = await db.todoDao.watchNext().first;
+      expect(next.map((t) => t.id), contains('resolved'));
+    });
+
+    test('it is not offered as the next task up (AC2)', () async {
+      final tasks = await db.focusSessionDao.getReviewSurface(
+        (await db.focusSessionDao.getActiveSession())!.id,
+      );
+      final settlements =
+          await db.focusSessionDao.getActiveSessionSettlements();
+      expect(
+        focusNextTask(
+          sessionTasks: tasks,
+          completedTodoId: 'resolved',
+          settlements: settlements,
+        )?.id,
+        'untouched',
+      );
+    });
+
+    testWidgets('it is struck off on the Now screen, with no Start (AC1)',
+        (tester) async {
+      await tester.pumpWidget(_nowScreen(db));
+      await settleWithRealAsync(tester);
+
+      final struck = tester.widget<Text>(find.text('Draft the proposal'));
+      expect(struck.style?.decoration, TextDecoration.lineThrough);
+      final live = tester.widget<Text>(find.text('Book the venue'));
+      expect(live.style?.decoration, isNot(TextDecoration.lineThrough));
+      expect(find.text('Start'), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+    });
+  });
+
+  group('a blank "More to do" save (blocked on #691)', () {
+    late GtdDatabase db;
+    late ClarificationService clarification;
+
+    setUp(() async {
+      SharedPreferences.setMockInitialValues({});
+      db = GtdDatabase(NativeDatabase.memory());
+      clarification = DaoClarificationService(db);
+
+      await _insertOutcome(db, id: 'blank', title: 'Chase the invoice');
+      final sessionId = await db.focusSessionDao
+          .openSession(userId: _userId, taskIds: ['blank']);
+      await db.focusSessionDao
+          .setCurrentTask(sessionId: sessionId, taskId: 'blank');
+      await clarification.completeCurrentAction('blank');
+      // The blank save: today `_nextWithDialog` skips the write entirely, so
+      // nothing is committed even though the user answered the sheet.
+    });
+
+    tearDown(() async => db.close());
+
+    test(
+      'the row settles as next even though the dialog was saved empty',
+      () async {
+        expect(
+          await db.focusSessionDao.getActiveSessionSettlements(),
+          {'blank': SessionSettlement.next},
+        );
+      },
+      // #691 makes the blank save commit — a title-as-action fallback plus the
+      // `last_clarified_at` stamp `applyRouting` always writes. Until it lands
+      // the save writes nothing, so there is no clarify stamp at or after the
+      // Action completion and the row correctly refuses to settle. The gap is
+      // pre-existing, not introduced here; weakening the Settled definition to
+      // paper over it is the wrong fix, so the case is skipped instead.
+      skip: 'blocked on #691 — blank "More to do" save writes nothing today',
+    );
+  });
+}

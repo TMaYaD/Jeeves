@@ -306,6 +306,10 @@ The router's `redirect` callback does two things, and **both are negative: it tu
 
 `/focus` is unconditionally accessible from the drawer (entry labelled "Now" — the execution home's user-facing title; internal identifiers stay Focus, see CONTEXT.md); daily planning is entered explicitly via the "Plan the Day" button on the Focus screen or the amber `FocusSessionPlanningBanner` in `AppShell`. `/focus/active` is reached from the execution home's Start buttons and from the task detail screen's "Start focus" affordance, which engages the task with or without an open session (see `FocusModeNotifier`).
 
+**The Now screen strikes off by Settlement, not Completion.** A row is struck through and stops offering Start once its Outcome is **Settled** in the open session — completed, *or* an Action of it finished in-session and the Outcome re-clarified afterwards to any verdict (`FocusSessionDao.watchActiveSessionSettlements`, [ADR-0048](./adr/0048-session-settlement-is-derived.md)). The filled check glyph stays reserved for Completion; a Settled-but-unachieved row gets an outline one, because borrowing the completion glyph would recreate the Action/Outcome conflation. `ActiveFocusScreen`'s advance-to-next pick skips Settled tasks for the same reason (`focusNextTask`).
+
+The footer call-to-action is three-way (`focusCalloutKindFor`): every task achieved → **End Session**, which closes the session directly; every task Settled but not all done → **Begin Evening Shutdown**, emphasised; anything outstanding → the same, unemphasised. Only the all-achieved case reaches `closeSession`, deliberately — `closeSession` is not a Disposition commit point, so routing an all-Settled day there would drop every implied `rollover` and skip the grouped summary on exactly the days it exists for.
+
 ### Top-level routes outside the ShellRoute
 
 | Route | Screen | Purpose |
@@ -409,7 +413,7 @@ Key methods:
 - The task currently being focused (`current_task_id`).
 - Which tasks are on today's plan (via the `FocusSessionTasks` junction table).
 
-`FocusSessionTasks` (`focus_session_id`, `task_id`, `position`, `disposition`) lists the ordered tasks selected during the planning ritual. The `disposition` column records the user's per-task choice made during session review (see below); `NULL` while the session is open or for done tasks.
+`FocusSessionTasks` (`focus_session_id`, `task_id`, `position`, `disposition`) lists the ordered tasks selected during the planning ritual. The `disposition` column records where the task stood at session review — the user's own choice, or one implied by an in-session Settlement (see Evening Shutdown Ritual below); `NULL` while the session is open and for done tasks.
 
 Accessed via `FocusSessionDao` (in `database/daos/focus_session_dao.dart`):
 - `openSession(userId, taskIds)` — opens a new session with the given task list. Sessions never auto-close (ADR-0020): if one is already open, this **throws `StateError`** — the caller must have the user close it via Evening Shutdown first. This throw is the sole enforcement of the single-open-session invariant. A schema constraint would not be enough on its own: reduced state converges without consulting one, so two devices can each open a session offline and the invariant has to be repairable rather than merely declared.
@@ -421,6 +425,9 @@ Accessed via `FocusSessionDao` (in `database/daos/focus_session_dao.dart`):
 - `setTaskDisposition(sessionId, taskId, disposition)` — writes a single `disposition` value; throws `StateError` if the task is not in the session.
 - `reviewAndCloseSession(sessionId, dispositions, now?)` — atomic commit for session review: writes all disposition values, updates `intent = 'maybe'` for each `'maybe'` task, closes open `TimeLog`, closes session.
 - `getLastClosedSessionRolloverTaskIds(userId)` — returns `task_id` values with `disposition = 'rollover'` from the most recently closed session.
+- `watchActiveSessionSettlements()` / `getActiveSessionSettlements()` — the open session's **Settled** Outcomes as `id → SessionSettlement`, absence meaning *not Settled* ([ADR-0048](./adr/0048-session-settlement-is-derived.md), CONTEXT.md § Engagement). Both share one SQL constant; the one-shot exists because awaiting a live Drift `watch().first` from a widget-driven path never returns (docs/TESTING.md § Frontend) and `EveningShutdownNotifier.closeDay` reads from exactly such a path. Nothing is stored: the query joins Completion, the Outcome's `role='done'` Actions, the `time_logs` rows attributing them to *this* session, `last_clarified_at`, `intent` and the person-Tag join, so `TodoTags` and `Tags` are in the `@DriftAccessor` list even though the DAO never writes them. The bucket ladder (`done` → `someday` → current Action → person Tag → `next`) is a presentation ordering for the Review summary, not List membership.
+
+**Settlement is what the execution and review surfaces both read.** `activeSessionSettlementsProvider` (`providers/focus_session_planning_provider.dart`) is the single definition; the Now screen watches it for strike-off, `ActiveFocusScreen` reads it for the advance-to-next pick, and the Evening Shutdown providers import it rather than re-deriving, so the four surfaces cannot disagree about what the user has already answered for.
 
 ### FocusSessionReview (`screens/review/`, `providers/focus_session_review_provider.dart`)
 

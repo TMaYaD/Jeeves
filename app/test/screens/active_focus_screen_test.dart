@@ -160,6 +160,14 @@ Widget _harness(
           .overrideWith(sprintTimer ?? _IdleSprintTimerNotifier.new),
       taskDetailTodoProvider(todo.id).overrideWith((_) => Stream.value(todo)),
       activeSessionTasksProvider.overrideWith((_) => Stream.value([todo])),
+      // Mandatory, not a nicety: `_onComplete` reads this provider's future,
+      // and an un-overridden read reaches a live Drift `watch()` from a widget
+      // test — which never delivers its first event and hangs the run for its
+      // full ten-minute timeout rather than failing (docs/TESTING.md
+      // § Frontend). `Stream.value` is the documented override shape.
+      activeSessionSettlementsProvider.overrideWith(
+        (_) => Stream.value(const <String, SessionSettlement>{}),
+      ),
     ],
     child: MaterialApp.router(routerConfig: router),
   );
@@ -333,6 +341,69 @@ void main() {
       // leading action is a `context.go('/focus')`, not a pop (there is
       // nothing above '/active' in this harness's Navigator to pop to).
       expect(find.text('focus-home'), findsOneWidget);
+    });
+  });
+
+  group('focusNextTask — a Settled task is not offered as next up (#693 AC2)',
+      () {
+    Todo todo(String id, {String? doneAt}) => Todo(
+          id: id,
+          title: 'Task $id',
+          createdAt: DateTime.now(),
+          doneAt: doneAt,
+          clarified: true,
+          intent: 'next',
+          userId: _userId,
+        );
+
+    test('picks the first task that is neither the completed one nor done', () {
+      expect(
+        focusNextTask(
+          sessionTasks: [todo('a'), todo('b'), todo('c')],
+          completedTodoId: 'a',
+          settlements: const {},
+        )?.id,
+        'b',
+      );
+    });
+
+    test('skips a task Settled to a non-done verdict', () {
+      expect(
+        focusNextTask(
+          sessionTasks: [todo('a'), todo('b'), todo('c')],
+          completedTodoId: 'a',
+          settlements: const {'b': SessionSettlement.next},
+        )?.id,
+        'c',
+        reason: 'b was resolved this session — handing it back re-presents '
+            'work the user is done with',
+      );
+    });
+
+    test('every remaining task Settled yields no next task', () {
+      expect(
+        focusNextTask(
+          sessionTasks: [todo('a'), todo('b'), todo('c')],
+          completedTodoId: 'a',
+          settlements: const {
+            'b': SessionSettlement.waitingFor,
+            'c': SessionSettlement.someday,
+          },
+        ),
+        isNull,
+      );
+    });
+
+    test('an unsettled task is still offered even after other tasks settle',
+        () {
+      expect(
+        focusNextTask(
+          sessionTasks: [todo('a'), todo('b'), todo('c')],
+          completedTodoId: 'a',
+          settlements: const {'b': SessionSettlement.done},
+        )?.id,
+        'c',
+      );
     });
   });
 

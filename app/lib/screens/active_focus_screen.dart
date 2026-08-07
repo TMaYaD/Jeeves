@@ -9,7 +9,10 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../database/gtd_database.dart' show Todo;
 import '../providers/focus_session_planning_provider.dart'
-    show activeSessionTasksProvider;
+    show
+        SessionSettlement,
+        activeSessionSettlementsProvider,
+        activeSessionTasksProvider;
 import '../providers/database_provider.dart';
 import '../providers/focus_session_provider.dart';
 import '../providers/sprint_timer_provider.dart';
@@ -42,6 +45,30 @@ String focusAdvanceMessage({
       ? 'All done for today!'
       : 'Sprint logged — nothing else planned.';
 }
+
+/// The task the session advances to after a Focus "Done" verdict on
+/// [completedTodoId] — the first Plan member still owed attention.
+///
+/// Extracted for the same reason as [focusAdvanceMessage]: `_onComplete`'s tail
+/// awaits a Riverpod stream-provider future that a fake-clock `pump` cannot get
+/// past, so the decision is pinned here rather than through the screen.
+///
+/// A **Settled** task is skipped (#693 AC2): the user has already answered for
+/// it this session, so re-presenting it as "next up" would hand back work they
+/// are done with. `doneAt` stays as the cheap guard — a Settled done row is in
+/// [settlements] anyway.
+@visibleForTesting
+Todo? focusNextTask({
+  required List<Todo> sessionTasks,
+  required String completedTodoId,
+  required Map<String, SessionSettlement> settlements,
+}) =>
+    sessionTasks
+        .where((t) =>
+            t.id != completedTodoId &&
+            t.doneAt == null &&
+            !settlements.containsKey(t.id))
+        .firstOrNull;
 
 class ActiveFocusScreen extends ConsumerStatefulWidget {
   const ActiveFocusScreen({super.key});
@@ -134,12 +161,17 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
 
     final allSessionTasks = await ref.read(activeSessionTasksProvider.future);
     if (!mounted) return;
+    final settlements =
+        await ref.read(activeSessionSettlementsProvider.future);
+    if (!mounted) return;
 
     // The completed Action's Outcome is excluded by `t.id != todoId` whether or
     // not it was achieved, so the advance-to-next pick is unchanged (AC5).
-    final nextTask = allSessionTasks
-        .where((t) => t.id != todoId && t.doneAt == null)
-        .firstOrNull;
+    final nextTask = focusNextTask(
+      sessionTasks: allSessionTasks,
+      completedTodoId: todoId,
+      settlements: settlements,
+    );
 
     final message = focusAdvanceMessage(nextTask: nextTask, verdict: verdict);
 

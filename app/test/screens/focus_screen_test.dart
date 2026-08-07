@@ -63,6 +63,7 @@ Widget _buildScreen({
   List<Todo> tasks = const [],
   FocusSession? activeSession,
   List<Todo> rolloverTasks = const [],
+  Map<String, SessionSettlement> settlements = const {},
 }) {
   final router = GoRouter(
     initialLocation: '/focus',
@@ -88,6 +89,11 @@ Widget _buildScreen({
       ),
       lastClosedSessionRolloverTasksProvider.overrideWith(
         (_) => Stream.value(rolloverTasks),
+      ),
+      // `Stream.value` is the documented override shape for a StreamProvider
+      // backed by a live Drift watch (docs/TESTING.md § Frontend).
+      activeSessionSettlementsProvider.overrideWith(
+        (_) => Stream.value(settlements),
       ),
       focusSessionPlanningProvider
           .overrideWith(() => _MockFocusSessionPlanningNotifier()),
@@ -201,6 +207,101 @@ void main() {
 
     expect(find.text('End Session'), findsOneWidget);
     expect(find.text('Plan the Day'), findsNothing);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Settlement strike-off (#693)
+  // ---------------------------------------------------------------------------
+
+  testWidgets(
+      'a task Settled to a non-done verdict is struck off and offers no '
+      'Start button (#693 AC1/AC2)', (tester) async {
+    await tester.pumpWidget(_buildScreen(
+      activeSession: _openSession(),
+      tasks: [_todo('t1', 'Resolved task'), _todo('t2', 'Untouched task')],
+      settlements: const {'t1': SessionSettlement.next},
+    ));
+    await tester.pump();
+
+    // Strike-off is the acceptance criterion itself — a state signal on the
+    // row, not a design token — so it is asserted directly.
+    final struck = tester.widget<Text>(find.text('Resolved task'));
+    expect(struck.style?.decoration, TextDecoration.lineThrough);
+    final untouched = tester.widget<Text>(find.text('Untouched task'));
+    expect(untouched.style?.decoration, isNot(TextDecoration.lineThrough));
+
+    // A Settled row is handled for this session: exactly one Start remains,
+    // and it belongs to the untouched task.
+    expect(find.text('Start'), findsOneWidget);
+  });
+
+  testWidgets(
+      'an Outcome-completed task still strikes off as it does today '
+      '(#693 AC4)', (tester) async {
+    final doneAt = DateTime.now().toUtc().toIso8601String();
+    await tester.pumpWidget(_buildScreen(
+      activeSession: _openSession(),
+      tasks: [_todo('t1', 'Achieved task', doneAt: doneAt)],
+      settlements: const {'t1': SessionSettlement.done},
+    ));
+    await tester.pump();
+
+    final struck = tester.widget<Text>(find.text('Achieved task'));
+    expect(struck.style?.decoration, TextDecoration.lineThrough);
+    expect(find.text('Start'), findsNothing);
+  });
+
+  testWidgets(
+      'a session whose Plan is entirely Settled but not all done still routes '
+      'through Evening Shutdown (#693 AC3)', (tester) async {
+    await tester.pumpWidget(_buildScreen(
+      activeSession: _openSession(),
+      tasks: [_todo('t1', 'Waiting task'), _todo('t2', 'Re-planned task')],
+      settlements: const {
+        't1': SessionSettlement.waitingFor,
+        't2': SessionSettlement.next,
+      },
+    ));
+    await tester.pump();
+
+    // The day is finished, but Dispositions still have to be committed —
+    // so the destination is the wizard, and the label says so.
+    expect(find.text('Begin Evening Shutdown'), findsOneWidget);
+    expect(find.text('End Session'), findsNothing);
+  });
+
+  group('focusCalloutKindFor', () {
+    Todo task(String id, {String? doneAt}) => _todo(id, 'Task $id', doneAt: doneAt);
+    final done = DateTime.now().toUtc().toIso8601String();
+
+    test('every task achieved → endSession, the only closeSession state', () {
+      expect(
+        focusCalloutKindFor([task('a', doneAt: done)], const {
+          'a': SessionSettlement.done,
+        }),
+        FocusCalloutKind.endSession,
+      );
+    });
+
+    test('every task Settled, not all done → wrapUp', () {
+      expect(
+        focusCalloutKindFor(
+          [task('a', doneAt: done), task('b')],
+          const {'a': SessionSettlement.done, 'b': SessionSettlement.next},
+        ),
+        FocusCalloutKind.wrapUp,
+      );
+    });
+
+    test('anything outstanding → beginShutdown', () {
+      expect(
+        focusCalloutKindFor(
+          [task('a'), task('b')],
+          const {'a': SessionSettlement.next},
+        ),
+        FocusCalloutKind.beginShutdown,
+      );
+    });
   });
 
   testWidgets(
