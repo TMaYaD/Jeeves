@@ -26,6 +26,8 @@ import 'package:jeeves/database/daos/focus_session_dao.dart'
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/todo.dart' show RoutingKind;
 import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/providers/evening_shutdown_provider.dart'
+    show eveningShutdownProvider, sessionSettlementGroupsProvider;
 import 'package:jeeves/screens/active_focus_screen.dart' show focusNextTask;
 import 'package:jeeves/screens/focus_screen.dart';
 import 'package:jeeves/services/clarification_service.dart';
@@ -163,6 +165,62 @@ void main() {
 
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pumpAndSettle();
+    });
+
+    test('Evening Shutdown does not ask about it again (#694 AC4)', () async {
+      final container = ProviderContainer(overrides: [
+        databaseProvider.overrideWithValue(db),
+        notificationServiceProvider
+            .overrideWithValue(StubNotificationService()),
+      ]);
+      addTearDown(container.dispose);
+
+      await container
+          .read(eveningShutdownProvider.notifier)
+          .loadUnfinishedSnapshot();
+      final snapshot =
+          container.read(eveningShutdownProvider).unfinishedNav.items!;
+      expect(snapshot.map((t) => t.id), ['untouched'],
+          reason: 'the disposition step only presents unhandled work');
+    });
+
+    test('it appears in the day\'s summary under the re-planned group '
+        '(#694 AC3)', () async {
+      final container = ProviderContainer(overrides: [
+        databaseProvider.overrideWithValue(db),
+        notificationServiceProvider
+            .overrideWithValue(StubNotificationService()),
+      ]);
+      addTearDown(container.dispose);
+
+      final sub = container.listen(sessionSettlementGroupsProvider, (_, _) {});
+      final groups = await container
+          .read(sessionSettlementGroupsProvider.future)
+          .timeout(const Duration(seconds: 5));
+      sub.close();
+
+      expect(groups.keys, [SessionSettlement.next]);
+      expect(groups[SessionSettlement.next]!.map((t) => t.id), ['resolved']);
+    });
+
+    test('and it carries over: Close Day mints the implicit rollover', () async {
+      final container = ProviderContainer(overrides: [
+        databaseProvider.overrideWithValue(db),
+        notificationServiceProvider
+            .overrideWithValue(StubNotificationService()),
+      ]);
+      addTearDown(container.dispose);
+
+      final notifier = container.read(eveningShutdownProvider.notifier);
+      await notifier.loadUnfinishedSnapshot();
+      notifier.returnToNext('untouched');
+      await notifier.closeDay();
+
+      final rollover =
+          await db.focusSessionDao.getLastClosedSessionRolloverTaskIds();
+      expect(rollover, contains('resolved'),
+          reason: '"more work later" is exactly what tomorrow expects to see');
+      expect(rollover, isNot(contains('untouched')));
     });
   });
 

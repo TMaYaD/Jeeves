@@ -429,27 +429,16 @@ Accessed via `FocusSessionDao` (in `database/daos/focus_session_dao.dart`):
 
 **Settlement is what the execution and review surfaces both read.** `activeSessionSettlementsProvider` (`providers/focus_session_planning_provider.dart`) is the single definition; the Now screen watches it for strike-off, `ActiveFocusScreen` reads it for the advance-to-next pick, and the Evening Shutdown providers import it rather than re-deriving, so the four surfaces cannot disagree about what the user has already answered for.
 
-### FocusSessionReview (`screens/review/`, `providers/focus_session_review_provider.dart`)
+### Session Review
 
-The session review screen is shown when the user taps "End Session" on `FocusScreen` and at least one task is unfinished. It lets the user assign a per-task disposition to each pending task before the session is formally closed.
+Review is the Evening Shutdown ritual (`/shutdown`); there is no separate review screen. The Now screen's footer routes there for any session with something left to dispose, and calls `closeSession` directly only when every task is achieved — see Focus Mode Execution above.
 
 **Dispositions (`models/review_disposition.dart`):**
 - `rollover` — pre-select for the next planning session (task keeps `intent = 'next'`).
 - `leave` — return to Next Actions without any mutation.
 - `maybe` — defer; `reviewAndCloseSession` writes `intent = 'maybe'` to the todo.
 
-**`FocusSessionReviewState`** (managed by `FocusSessionReviewNotifier`):
-- `sessionTasks` — all tasks that were part of the session.
-- `dispositions` — in-memory `Map<taskId, ReviewDisposition>` for pending tasks.
-- `allPendingReviewed` — true when every pending task has a disposition.
-- `isSubmitting` — true while the async commit is in flight.
-
-**`FocusSessionReviewNotifier`**:
-- `initFromSession(sessionId)` — loads session tasks; called once on screen mount.
-- `setDisposition(taskId, disposition)` — updates the in-memory map.
-- Review is committed by `EveningShutdownNotifier.closeDay` (`providers/evening_shutdown_provider.dart`), which calls `dao.reviewAndCloseSession` to write dispositions and close the session. There is no completion flag: closing the session is what makes the Now screen's planning-done derivation (an open session exists) and the Evening Shutdown Cadence Trigger stand down (ADR-0020). On close it also best-effort cancels today's pending Evening Shutdown notification (the fire is moot with no open session).
-
-**Routing**: `/focus-session-review` is a top-level `GoRoute` outside the `ShellRoute`, accepting the session ID via `GoRouterState.extra`. The `FocusScreen` "End Session" button navigates here when unfinished tasks exist; if all tasks are done it calls `closeSession` directly and navigates to `/inbox`.
+A Disposition is usually the user's own tap in the disposition step, but a **Settled** Outcome takes an implied one at Close Day (see Evening Shutdown Ritual below), so the `disposition` column may hold a value nobody chose. Review is committed by `EveningShutdownNotifier.closeDay` (`providers/evening_shutdown_provider.dart`), which calls `dao.reviewAndCloseSession` to write dispositions and close the session in one transaction. There is no completion flag: closing the session is what makes the Now screen's planning-done derivation (an open session exists) and the Evening Shutdown Cadence Trigger stand down (ADR-0020). On close it also best-effort cancels today's pending Evening Shutdown notification (the fire is moot with no open session).
 
 **Rollover pre-population**: `FocusSessionPlanningNotifier.ensureRolloverPreload()` queries `getLastClosedSessionRolloverTaskIds` and prepends any rollover IDs to `pendingSelectedTaskIds`, so carried-over tasks appear pre-selected in the Plan Summary step; the user can deselect them. It is (re)computed on **every** planning entry — the notifier `build()` microtask (cold start), `reEnterPlanning()` (the sequenced Shutdown → Planning replan, awaited before Close Day routes to the screen), and the planning screen's mount post-frame callback (warm-process replan) — because the notifier builds once per process and never rebuilds, so a build-only preload missed every in-process replan path (#461). The method is idempotent and safe to call repeatedly: it is **skipped while a session is open** (`getActiveSession() != null`), so a mid-day cold start does not drag the previous period's already-consumed rollover IDs into a fresh draft; and its merge adds only IDs that are in neither `pendingSelectedTaskIds` nor `reviewedTaskIds`, so a task the user deliberately skipped or deselected is never resurrected (`undoTaskReview`, which clears both lists, does restore the rollover default on the next entry — by design). It writes no dispositions — carrying a task over stays a user decision.
 
@@ -729,31 +718,35 @@ Ceremony state (banner dismissed, notification skip/snooze) is persisted to both
 
 ## Evening Shutdown Ritual
 
-The shutdown ritual reviews the day's focus session and lets the user assign a per-task disposition to each unfinished task before closing the session.
+The shutdown ritual reports what the user resolved during the day, asks for a Disposition on whatever is still genuinely open, and closes the session. `ShutdownRitualScreen` composes steps 0–1 against the shared `Wizard`; step 2 (Close Day) renders standalone.
+
+- **Step 0 — "Review Your Day"** (`steps/completed_review_step.dart`): the day's **Settled** Outcomes, grouped by how each settled, in the order Done → More work later → Waiting on someone → Deferred to Someday. Empty groups are omitted; the empty state shows when nothing settled. Only the Done group is painted in completion green and only it feeds the estimate/actual/accuracy fold — an accuracy figure across unfinished work means nothing — while the summary bar's Settled count spans every group. The "More work later" group carries its consequence in copy ("These carry over to your next session"), which is what makes its implied Disposition explicit to the user rather than silent.
+- **Step 1 — "Resolve Unfinished"** (`steps/unfinished_tasks_step.dart`): one card at a time over a frozen snapshot, offering **Roll Over** / **Return to Next Actions** / **Defer**. It presents only Outcomes with no resolution yet. The step's identifiers still say "resolution" where they mean **Disposition** — a rename recorded under CONTEXT.md § Engagement's flagged ambiguities.
 
 ### EveningShutdownNotifier (`providers/evening_shutdown_provider.dart`)
 
-A `NotifierProvider<EveningShutdownNotifier, EveningShutdownState>` that drives the shutdown ritual UI (steps 0–2: unfinished tasks → completed summary → confirm close).
+A `NotifierProvider<EveningShutdownNotifier, EveningShutdownState>` driving the ritual's step navigation and in-memory Disposition state.
 
 **State fields on `EveningShutdownState`:**
 - `currentStep: int` — 0-indexed step within the ritual.
-- `dispositions: Map<String, String>` — maps task ID → disposition string (`'rollover'` | `'leave'` | `'maybe'`). Held in memory until `closeDay()` commits.
-- `unfinishedSnapshot: List<Todo>?` — fixed snapshot of unfinished session tasks loaded at step start; `null` until loaded, `[]` if all tasks are done.
-- `unfinishedIndex: int` — points at the task currently being resolved.
+- `dispositions: Map<String, String>` — task ID → disposition string (`'rollover'` | `'leave'` | `'maybe'`). Held in memory until `closeDay()` commits.
+- `unfinishedNav: SnapshotNav<Todo>` — the frozen step-1 list plus its cursor; `items == null` until loaded.
 
 **Snapshot+index navigation** (same pattern as the inbox clarification step):
-- `loadUnfinishedSnapshot()` — idempotent; reads `watchActiveSessionTasks().first`, filters `doneAt == null`, freezes the list. Subsequent calls are no-ops.
-- `nextUnfinishedTask()` — increments `unfinishedIndex`. If the new index would reach `snapshot.length`, calls `advanceStep()` instead so the ritual proceeds automatically.
-- `previousUnfinishedTask()` — decrements index (clamped at 0) and removes the in-memory disposition for the returned-to task so the user can re-choose.
-- `rolloverTask(id)` / `returnToNextActions(id)` / `deferTask(id)` — each calls `_setDisposition` then `nextUnfinishedTask()`.
+- `loadUnfinishedSnapshot()` — idempotent; reads the active session's Review surface and drops both completed Outcomes and Settled ones, via the `getActiveSessionSettlements()` one-shot. **This is the list step 1 actually iterates**, so it, not the stream provider, decides what the user is asked about.
+- `nextUnfinishedTask()` — advances the cursor; on reaching the end calls `advanceStep()` so the ritual proceeds automatically.
+- `previousUnfinishedTask()` — pure navigation, clamped at 0. The in-memory Disposition is *preserved* so the previously-tapped affordance renders on revisit; re-tapping a different one replaces it.
+- `rolloverTask(id)` / `returnToNext(id)` / `deferTask(id)` — each records a Disposition then advances.
 
 **Lifecycle:**
-- `closeDay()` — atomically commits all accumulated dispositions via `FocusSessionDao.reviewAndCloseSession`, persists the completion date to `SharedPreferences`, flips `shutdownCompletionNotifier.value = true`, and resets state.
-- `dismissBannerForToday()` / `skipShutdownToday()` / `snoozeShutdownNotification(minutes)` — banner and notification suppression helpers.
+- `closeDay()` — commits Dispositions and closes the session in one `FocusSessionDao.reviewAndCloseSession` call, then persists the completion date to `SharedPreferences` and to synced preferences, and resets state. There is no completion flag; the closed session is what makes the Now screen and the ES Cadence Trigger stand down (ADR-0020). It also best-effort cancels today's pending ES notification, swallowing platform failures so they cannot abort a shutdown that has already closed the session.
+  - **Implied Dispositions.** Settled Outcomes never reach step 1, so `closeDay` seeds them here: `next → rollover`, `waitingFor | someday → leave`, `done → none` ([ADR-0048](./adr/0048-session-settlement-is-derived.md)). Without it a `next`-Settled Outcome would leave Review with no Disposition and silently lose its rollover. The seed is derived fresh from the store at commit time and merged *under* `state.dispositions`, so an explicit tap always wins. Excluding `done` is a contract, not tidiness: `reviewAndCloseSession` does not filter completed Outcomes itself. It is the commit point because it is the only writer that reaches both Disposition homes (ADR-0016) — a Settled Outcome may be off-Plan — and because a day where *everything* settled never mounts step 1 at all, so its loader could not have done the seeding.
+- `skipShutdownToday()` / `snoozeShutdownNotification(minutes)` — notification suppression helpers.
 
-**Stream providers** driven by the active focus session:
-- `completedTodayProvider` — tasks in the active session with `doneAt != null`.
-- `unfinishedSelectedTodayProvider` — tasks in the active session with `doneAt == null` that have no in-memory disposition yet; used by the banner and other out-of-ritual consumers to show the remaining count.
+**Stream providers** driven by the active focus session's Review surface (Plan ∪ off-Plan engaged):
+- `sessionSettlementGroupsProvider` — the day's Settled Outcomes as `Map<SessionSettlement, List<Todo>>`, in `sessionSettlementRenderOrder`, empty groups absent. Drives step 0.
+- `unfinishedSelectedTodayProvider` — Outcomes with no resolution yet: not completed, not Settled, and carrying no in-memory Disposition. Drives `ShutdownRitualScreen`'s auto-advance and progress, and the remaining-count consumers outside the ritual.
+- `loggedMinutesByOutcomeProvider` — minutes summed from `time_logs` per Outcome; nothing stores a total. Read once per step so the per-card chip and the summary fold cannot disagree.
 
 ## Weekly Review Wizard
 

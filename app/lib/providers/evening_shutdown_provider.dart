@@ -8,8 +8,8 @@
 ///
 /// Public surface:
 /// - Notification skip/snooze helpers used by main.dart on action taps.
-/// - [completedTodayProvider], [unfinishedSelectedTodayProvider] — stream
-///   providers driven by the active focus session's members.
+/// - [sessionSettlementGroupsProvider], [unfinishedSelectedTodayProvider] —
+///   stream providers driven by the active focus session's members.
 /// - [loggedMinutesByOutcomeProvider] — the derived time-spent total the Review
 ///   steps render beside those Outcomes.
 /// - [eveningShutdownProvider] — step / disposition state for the ritual.
@@ -18,17 +18,22 @@ library;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../database/daos/focus_session_dao.dart' show SessionSettlement;
 import '../database/gtd_database.dart';
 import '../models/ritual.dart';
 import '../services/notification_service.dart';
 import '../utils/snapshot_nav.dart';
 import 'database_provider.dart';
-import 'focus_session_planning_provider.dart' show planningToday;
+import 'focus_session_planning_provider.dart'
+    show activeSessionSettlementsProvider, planningToday;
 import 'synced_preferences_provider.dart';
 
 // Re-export Todo so UI consumers (e.g. unfinished_tasks_step.dart) can use
 // the type without taking a direct dependency on the database layer.
 export '../database/gtd_database.dart' show Todo;
+// Same reason: the summary step groups by Settlement and must not import the
+// database layer to name the buckets.
+export '../database/daos/focus_session_dao.dart' show SessionSettlement;
 
 // ---------------------------------------------------------------------------
 // SharedPreferences keys
@@ -127,17 +132,43 @@ class ShutdownSessionDateNotifier extends Notifier<String> {
 // Stream providers — backed by the active focus session
 // ---------------------------------------------------------------------------
 
-/// Outcomes on the active session's Review surface (Plan ∪ off-Plan engaged)
-/// that have been completed (i.e. [Todo.doneAt] is not null).
+/// The order the summary renders Settlement groups in: achieved, then
+/// continuing, then blocked on someone else, then parked.
+///
+/// It also puts the one group with a downstream consequence directly under
+/// Done — `next` is what [EveningShutdownNotifier.closeDay] carries over.
+const sessionSettlementRenderOrder = <SessionSettlement>[
+  SessionSettlement.done,
+  SessionSettlement.next,
+  SessionSettlement.waitingFor,
+  SessionSettlement.someday,
+];
+
+/// The day's **Settled** Outcomes, grouped by how each settled, in
+/// [sessionSettlementRenderOrder]. Empty groups are absent from the map
+/// (#694 AC6), and Dart's insertion-ordered map is what carries the order.
 ///
 /// Reads the union surface, not Plan members only, so an off-Plan Outcome the
-/// user completed during the session still appears in the completed review
-/// (CONTEXT.md § Engagement).
-final completedTodayProvider = StreamProvider<List<Todo>>((ref) {
+/// user resolved during the session still appears (CONTEXT.md § Engagement).
+///
+/// The grouping is by **where the Outcome stands now**, not by the verdict
+/// keystroke — nothing records the keystroke. Move an item from Someday back to
+/// Next later the same day and it changes group; the summary is the day's end
+/// state, which is the right reading (ADR-0048).
+final sessionSettlementGroupsProvider =
+    StreamProvider<Map<SessionSettlement, List<Todo>>>((ref) {
   final db = ref.watch(databaseProvider);
-  return db.focusSessionDao.watchActiveSessionReviewSurface().map(
-        (tasks) => tasks.where((t) => t.doneAt != null).toList(),
-      );
+  final settlements = ref.watch(activeSessionSettlementsProvider).value ??
+      const <String, SessionSettlement>{};
+  return db.focusSessionDao.watchActiveSessionReviewSurface().map((surface) {
+    final groups = <SessionSettlement, List<Todo>>{};
+    for (final bucket in sessionSettlementRenderOrder) {
+      final members =
+          surface.where((t) => settlements[t.id] == bucket).toList();
+      if (members.isNotEmpty) groups[bucket] = members;
+    }
+    return groups;
+  });
 });
 
 /// Minutes logged per Outcome, keyed by Outcome id — the derived time-spent
@@ -156,23 +187,32 @@ final loggedMinutesByOutcomeProvider = StreamProvider<Map<String, int>>((ref) {
 });
 
 /// Outcomes on the active session's Review surface (Plan ∪ off-Plan engaged)
-/// that are still unfinished (no [doneAt]) **and** have not yet been assigned a
-/// shutdown disposition in the current ritual.
+/// with **no resolution yet**: not Settled during the session, and no
+/// shutdown disposition recorded in the current ritual.
 ///
 /// The disposition map is the in-memory state on [eveningShutdownProvider]; it
 /// only persists to the DB when [EveningShutdownNotifier.closeDay] is called.
 /// Filtering here gives the live "remaining tasks" count used by the banner
 /// and other consumers outside the ritual step itself. Reading the union
 /// surface ensures off-Plan engaged Outcomes are surfaced for disposition too.
+///
+/// The Settlement exclusion is #694 AC4: an item the user already resolved in
+/// the session must not be asked about again. The `doneAt == null` clause is
+/// now implied by it (a completed Outcome settles as `done`) and stays only as
+/// the cheap guard.
 final unfinishedSelectedTodayProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
   final dispositions = ref.watch(
     eveningShutdownProvider.select((s) => s.dispositions),
   );
+  final settlements = ref.watch(activeSessionSettlementsProvider).value ??
+      const <String, SessionSettlement>{};
   return db.focusSessionDao.watchActiveSessionReviewSurface().map(
         (tasks) => tasks
             .where((t) =>
-                t.doneAt == null && !dispositions.containsKey(t.id))
+                t.doneAt == null &&
+                !settlements.containsKey(t.id) &&
+                !dispositions.containsKey(t.id))
             .toList(),
       );
 });
@@ -261,14 +301,25 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
   // ---- Unfinished snapshot navigation ----------------------------------------
 
   /// Loads the unfinished-tasks snapshot once. Idempotent: subsequent calls
-  /// are no-ops. Only includes tasks with doneAt == null.
+  /// are no-ops. Only includes Outcomes with **no resolution yet** — not
+  /// completed, and not Settled during the session.
+  ///
+  /// The step iterates this frozen snapshot, not the stream, so this is the
+  /// exclusion that decides what the user is actually asked about (#694 AC4).
+  /// Settlements come from the one-shot read: awaiting a live Drift
+  /// `watch().first` from a widget-driven path never returns
+  /// (docs/TESTING.md § Frontend).
   Future<void> loadUnfinishedSnapshot() async {
     if (state.unfinishedNav.isLoaded || _loadingUnfinishedSnapshot) return;
     _loadingUnfinishedSnapshot = true;
     try {
       final allTasks =
           await _db.focusSessionDao.watchActiveSessionReviewSurface().first;
-      final unfinished = allTasks.where((t) => t.doneAt == null).toList();
+      final settlements =
+          await _db.focusSessionDao.getActiveSessionSettlements();
+      final unfinished = allTasks
+          .where((t) => t.doneAt == null && !settlements.containsKey(t.id))
+          .toList();
       state = state.copyWith(
         unfinishedNav: state.unfinishedNav.withItems(unfinished),
       );
@@ -325,6 +376,36 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
     );
   }
 
+  /// The Dispositions implied by [settlements] — for the Outcomes the user
+  /// therefore never saw in the disposition step.
+  ///
+  /// * `next` → `rollover`: "more work later" is precisely the item the user
+  ///   expects to find waiting tomorrow.
+  /// * `waitingFor` / `someday` → `leave`: neither rolls over, and `leave` is
+  ///   "return to its normal List membership; no special handling", which is
+  ///   exactly what those verdicts already accomplished. Writing *nothing*
+  ///   would drop a record that exists today — every non-completed Review-surface
+  ///   Outcome takes a Disposition (CONTEXT.md § Disposition). Not `maybe` for
+  ///   `someday`: the verdict already set `intent='maybe'`, and a `maybe`
+  ///   Disposition would make `reviewAndCloseSession` re-stamp
+  ///   `last_clarified_at` at close time, dragging it off the moment the user
+  ///   actually decided.
+  /// * `done` → **none**, and this exclusion is load-bearing rather than tidy:
+  ///   `reviewAndCloseSession` does not filter completed Outcomes itself — its
+  ///   doc comment puts that on the caller — so including them here would write
+  ///   Disposition rows for achieved work and contradict CONTEXT.md's
+  ///   "Completed Outcomes need no Disposition".
+  static Map<String, String> _impliedDispositions(
+    Map<String, SessionSettlement> settlements,
+  ) =>
+      {
+        for (final entry in settlements.entries)
+          if (entry.value != SessionSettlement.done)
+            entry.key: entry.value == SessionSettlement.next
+                ? _kDispRollover
+                : _kDispLeave,
+      };
+
   // ---- Notification skip / snooze --------------------------------------------
 
   Future<void> skipShutdownToday() async {
@@ -350,14 +431,35 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
   ///
   /// Tasks not present in [state.dispositions] are left as-is on
   /// [focus_session_tasks] (their disposition column stays at its default).
-  /// Done tasks are filtered out because [FocusSessionDao.reviewAndCloseSession]
-  /// expects callers to do so.
+  ///
+  /// **Settled Outcomes take an implicit Disposition here.** They never reach
+  /// the disposition step (they were resolved in-session), so without this they
+  /// would leave Review with no Disposition at all — and a `next`-Settled item,
+  /// the one the user said "more work later" about, would silently vanish from
+  /// the Now screen's carried-over section and from tomorrow's pre-selection.
+  /// The mapping: `next → rollover`, `waitingFor | someday → leave`,
+  /// `done → none`. See [_impliedDispositions].
+  ///
+  /// This is the commit point because [FocusSessionDao.reviewAndCloseSession] is
+  /// the only writer that routes a Disposition to the correct home per ADR-0016
+  /// — a Settled Outcome may be off-Plan, and `setTaskDisposition` throws for
+  /// exactly that case. Seeding earlier would not work either: the step's own
+  /// loader never runs on a day where *everything* settled, because the wizard
+  /// auto-advances past an empty step 1.
   Future<void> closeDay({DateTime? now}) async {
     final session = await _db.focusSessionDao.getActiveSession();
     if (session != null) {
+      // Derived fresh from the live store at commit time and never stored, so
+      // re-entering an abandoned ritual accumulates nothing and an item that
+      // settled while ES was backgrounded is still caught.
+      final implied = _impliedDispositions(
+        await _db.focusSessionDao.getActiveSessionSettlements(),
+      );
       await _db.focusSessionDao.reviewAndCloseSession(
         sessionId: session.id,
-        dispositions: state.dispositions,
+        // Explicit last: a Disposition the user actually tapped always wins
+        // over a derived one, never the reverse.
+        dispositions: {...implied, ...state.dispositions},
         now: now,
       );
       // No open session remains — today's Evening Shutdown fire is moot.

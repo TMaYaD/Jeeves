@@ -298,13 +298,15 @@ Subdivisions of a TimeLog applying the Pomodoro discipline. A **Sprint** is a ti
 _Avoid_: PomodoroPhase, FocusBlock, WorkBlock
 
 **Disposition**:
-The user's decision in the Review phase for an Outcome that did not complete during the FocusSession. One of three values:
+Where an Outcome that did not complete during the FocusSession stands at the end of it. Usually the user's own decision in the Review phase; on a **Settled** Outcome it is *implied* by the verdict already given in-session, because Review never asks about one. One of three values:
 
 - `rollover` — pre-select this Outcome for the next FocusSession's Planning (user can deselect there). Rendered in UI copy as **"Carried over from last session"** — "last session", not "yesterday", because sessions are calendar-independent and may span days. The code identifier stays `rollover`; the Now screen's carried-over section reads the `rollover` union across both Disposition homes (ADR-0016) from the most recently closed session, shown only while no session is open.
 - `leave` — return to its normal List membership; no special handling.
 - `maybe` — set Intent to `maybe`, moving the Outcome to Someday/Maybe.
 
 A Disposition is recorded per-(FocusSession, Outcome) pair — it is a property of the relationship between the session and the Outcome, not of either standalone. Applied to every non-completed Outcome surfaced in Review (the union of Plan members and off-Plan engaged Outcomes). Completed Outcomes need no Disposition.
+
+**A Disposition may be implied rather than chosen.** A **Settled** Outcome was answered for during the session, so Review shows it in the summary instead of asking again — but it still leaves Review with a Disposition, minted at close from how it settled: `next → rollover` (the user said "more work later"; that is precisely what the next session should offer), `waitingFor | someday → leave` (neither carries over, and their Lists are already where the verdict put them), `done → none`. An explicit choice always wins over an implied one; nothing overrides a Disposition the user actually made. So a future reader of the record may find a `rollover` or `leave` the user never tapped — see ADR-0048.
 _Avoid_: Resolution, Decision, Handling, Action (overloaded)
 
 #### Relationships
@@ -312,7 +314,7 @@ _Avoid_: Resolution, Decision, Handling, Action (overloaded)
 - The **Plan** is a *commitment* set captured during the Planning phase; it does not auto-mutate during Execution. Off-Plan engagement is allowed and attributes to the session, but does not modify the Plan. The Plan-vs-actually-engaged gap is preserved as information — useful for retrospection, coaching, and future AI augmentation.
 - **Focus** may point to any Outcome the user is engaging with, whether or not that Outcome is on the Plan.
 - A **TimeLog** writes attribute to the open FocusSession (if one exists at engagement time) regardless of whether the engaged Outcome is on the Plan. If no FocusSession is open, the TimeLog is ad hoc — no session attribution.
-- The **Review** phase surfaces every Outcome that was either on the Plan or engaged with during the session (the union), so neither off-Plan work nor planned-but-untouched Outcomes slip past disposition.
+- The **Review** phase surfaces every Outcome that was either on the Plan or engaged with during the session (the union), so neither off-Plan work nor planned-but-untouched Outcomes slip past disposition. Review splits that surface by **Settled**: Settled Outcomes are reported (grouped by how they settled) and take an implied **Disposition**; the rest are asked about one at a time.
 - **Settled is session-scoped and changes no List membership.** It is derived from facts already recorded — the Outcome's Completion, its Actions' completions, the TimeLogs attributing them to this session, and `last_clarified_at` — so it is a read with no state of its own, nothing to migrate, and nothing to keep in step across Devices.
 - A **Timebox** belongs to exactly one Plan entry (at most one per entry) and shares the Plan's lifecycle — created or edited during Planning (and adjustable during Execution), never surviving the session. Off-Plan engagement is by definition un-timeboxed. TimeLogs record what actually happened; Timeboxes record what was intended — the two are never reconciled destructively.
 - **An Action may have many TimeLogs** over its lifetime — different engagement intervals on the same Action, possibly across multiple FocusSessions, possibly interspersed with engagement on other Actions within the same FocusSession. An Outcome's TimeLogs are the union of its Actions' TimeLogs.
@@ -322,6 +324,7 @@ _Avoid_: Resolution, Decision, Handling, Action (overloaded)
 
 - "Plan" is polymorphic in Jeeves' vocabulary. The **FocusSession's Plan** (this context) is a List of *Outcomes* selected for one session. An **Outcome's plan** (GTD Core) is its List of *planned Actions* — the user's externalised "what's next" thinking for a single Outcome. Different scopes, same English word; context disambiguates. If the clash bites in code or copy, the per-Outcome notion can be rewritten as "the planned Actions of an Outcome" without losing meaning; the per-session notion is the one that needs the short name.
 - **There is no "pause" in the engagement model.** An earlier implementation surfaced a pause control which was actually an unlabelled "start break" — corrected in #246 / PR #252 (commits a95c7ab, 2efab56, bfc6d66). Residual `pause` / `isPaused` / `resume` references may persist in code, copy, or older docs; treat any such reference as a candidate for removal. The two real intents the misnomer collapsed: *abandon sprint* (Stop) and *take a break* (Start break — a phase transition, not a clock suspension).
+- **"Resolution" is spoken for, and the Review step still says it.** Disposition's `_Avoid_` list rejects Resolution, but the Evening Shutdown step-1 code uses it *to mean Disposition* — `_TaskResolutionCard`, `_ResolutionButton`, the step title "Resolve Unfinished". So "group the summary by resolution" would read in this codebase as "group by Disposition", which is exactly backwards; the summary groups by **Settled**. Renaming those identifiers and that copy to Disposition vocabulary is outstanding.
 - **"Settled" is a homonym across contexts.** In Engagement it is the per-session verdict predicate above. In **Sync Integrity** it describes a quarantined op whose gap claimant arrived, and a conflict that has been decided. Different bounded contexts and no shared code path, so both usages stand — but a reader meeting one after the other should know they are unrelated.
 
 ### Ceremony Framework
