@@ -82,16 +82,24 @@ enum ProcessAction {
 /// - `keep` is an explicit no-op on a [CaptureSubject] in [_keep] — "leave it
 ///   in the Inbox", `clarified_at` stays NULL. **Not** a verdict.
 /// - `reclarify` throws on a [CaptureSubject]; it can never report one.
-/// - `nextActionDialog` does reach [_commit] whenever it notifies (a blank
-///   save now routes under the title-as-action fallback, and the one arm that
-///   writes nothing — a blank phrase over a blank title — returns without
-///   notifying). It is still answered `false` here: no Capture surface enables
-///   the modifier today, so the answer is unexercised, and the asymmetry below
-///   favours the conservative one until one does.
+/// - `nextActionDialog` reaches [_commit] whenever it notifies: the commit is
+///   unconditional (a blank save routes under the title-as-action fallback,
+///   ADR-0049), and the one arm that writes nothing — a blank phrase over a
+///   blank title — returns without notifying at all. A verdict.
 ///
-/// Deliberately conservative on the last two: a false negative leaks a store
-/// entry that a ceremony reset collects, while a false positive throws away
-/// what the user typed. Only one of those is a bug ADR-0023 exists to prevent.
+/// `nextActionDialog` answered `false` until issue #689, and that was right
+/// while it lasted: no Capture surface enabled the modifier, so the answer was
+/// unexercised and the conservative one cost nothing. #689 enables it on the
+/// clarify card and the n-m carve, which makes the answer load-bearing — and
+/// `false` becomes the bug it was guarding against, in reverse.
+/// [ClarifyCard._discardRetainedDraft] would not drop the retained draft for a
+/// Capture that has just left the Inbox, and the card's `dispose` would stash
+/// it straight back, leaking an entry until a ceremony reset.
+///
+/// `keep` stays conservative for the reason the asymmetry names: a false
+/// negative leaks a store entry that a ceremony reset collects, while a false
+/// positive throws away what the user typed on an item they have not finished
+/// clarifying. Only one of those is a bug ADR-0023 exists to prevent.
 ///
 /// Says nothing about the n-m carve, where the same destinations leave the
 /// Capture in the Inbox ([CaptureSubject.completesClarification]): that surface
@@ -104,12 +112,10 @@ extension ProcessActionEndsCaptureClarification on ProcessAction {
         ProcessAction.someday ||
         ProcessAction.done ||
         ProcessAction.trash ||
-        ProcessAction.completeCapture =>
-          true,
-        ProcessAction.keep ||
-        ProcessAction.reclarify ||
+        ProcessAction.completeCapture ||
         ProcessAction.nextActionDialog =>
-          false,
+          true,
+        ProcessAction.keep || ProcessAction.reclarify => false,
       };
 }
 
@@ -248,9 +254,12 @@ class ClarifyDraft {
   ///
   /// The clarify card owns the policy that fills it (the title-as-action
   /// mirror, so a freshly clarified row never lands on the Next list
-  /// actionless); the [ProcessAction.nextActionDialog] modifier overrides its
-  /// phrase when active. Energy and estimate ride along and, on an Actionless
-  /// destination, land on the Outcome columns as draft (D3).
+  /// actionless). On a Capture the [ProcessAction.nextActionDialog] modifier
+  /// both *seeds* its dialog from this phrase and overrides it with whatever
+  /// the user saves — so the mirror is now the proposal and the fallback
+  /// rather than the only path (issue #689). Energy and estimate ride along
+  /// and, on an Actionless destination, land on the Outcome columns as draft
+  /// (D3).
   final ActionDraft? action;
 }
 
@@ -809,14 +818,33 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
   /// (`result?.isEmpty ?? true`, or popping the title on save) silently breaks
   /// it while every other behaviour here stays green.
   Future<void> _nextWithDialog() async {
-    // Edit-existing semantics: prefer the current Action's text so the user
-    // sees what's currently saved. A Capture has none — its Outcome does not
-    // exist yet — so the dialog opens empty.
-    final initial = widget.subject.currentActionText ?? '';
+    // The seed is per-subject, because the two shapes hold their phrase in
+    // different places (issue #689).
+    //
+    // On an Outcome it is edit-existing semantics: the current Action's text,
+    // so the user sees what is currently saved.
+    //
+    // On a Capture there is no Outcome yet, so [ClarifySubject.currentActionText]
+    // is null by contract and seeding from it would open the dialog empty —
+    // making the user retype what the card already says. The proposal lives in
+    // the draft instead ([ClarifyDraft.assemble]'s title mirror), and is read
+    // *here*, at open time, rather than at build time: [CaptureSubject.draft]
+    // is a callback because the card's title lives in a controller that does
+    // not rebuild this bar on every keystroke. Accepting the seed unchanged
+    // reproduces the pre-#689 title-as-action result in one extra tap.
+    final subject = widget.subject;
+    final seed = switch (subject) {
+      OutcomeSubject() => subject.currentActionText ?? '',
+      CaptureSubject(:final draft) => draft().action?.text ?? '',
+    };
     final result = await showNextActionDialog(
       context,
-      initial: initial,
-      taskTitle: widget.subject.title,
+      initial: seed,
+      // Asked of the subject, not inferred from the seed being non-empty: a
+      // Capture's seed is a proposal for an Action that does not exist yet, so
+      // a prefilled field there must still read "Set", not "Update".
+      editingExistingAction: (subject.currentActionText ?? '').isNotEmpty,
+      taskTitle: subject.title,
     );
     if (result == null) return; // user cancelled
     if (!mounted) return;

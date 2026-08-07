@@ -27,6 +27,7 @@ import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/services/clarification_service.dart';
 import 'package:jeeves/widgets/capture_outcomes_section.dart';
 import 'package:jeeves/widgets/clarify_card.dart';
+import 'package:jeeves/widgets/next_action_dialog.dart';
 import 'package:jeeves/widgets/state_surfaces.dart';
 
 import '../test_helpers.dart';
@@ -155,10 +156,32 @@ void main() {
 
   /// Names an Outcome in the form and routes it to Next Action — the gesture
   /// that commits a carve.
-  Future<void> nameAndRoute(WidgetTester tester, String title) async {
+  ///
+  /// Two taps since #689: Next opens [NextActionDialog] here exactly as it
+  /// does on the 1-1 card, because whether the user may state their next
+  /// action must not depend on a display preference (CONTEXT.md — the 1-1 /
+  /// n-m split is a preference over the same model). Passing [actionText]
+  /// types a distinct phrase; leaving it null accepts the seeded title mirror,
+  /// which is what every test here that is about something else wants.
+  Future<void> nameAndRoute(
+    WidgetTester tester,
+    String title, {
+    String? actionText,
+  }) async {
     await tester.enterText(find.byKey(const Key('outcome_title')), title);
     await _pumpFrames(tester);
     await tester.tap(find.text('Next Action'));
+    await _pumpFrames(tester, frames: 10);
+    if (actionText != null) {
+      await tester.enterText(
+        find.descendant(
+          of: find.byType(NextActionDialog),
+          matching: find.byType(TextField),
+        ),
+        actionText,
+      );
+    }
+    await tester.tap(find.text('Save'));
     await _pumpFrames(tester);
   }
 
@@ -359,6 +382,8 @@ void main() {
       await tester.tap(find.text('45m'));
       await _pumpFrames(tester);
       await tester.tap(find.text('Next Action'));
+      await _pumpFrames(tester, frames: 10);
+      await tester.tap(find.text('Save'));
       await _pumpFrames(tester);
 
       // The pickers are on screen in this mode, so what they collect must
@@ -391,10 +416,69 @@ void main() {
       await pumpSection(tester, capture);
 
       await tester.tap(find.text('Next Action'));
+      await _pumpFrames(tester, frames: 10);
+
+      // An Outcome must be nameable; a blank form creates nothing, and the
+      // dialog never opens. This is what makes #691's blank-title stall
+      // unreachable from here, so #689 duplicates no guard against it.
+      expect(find.byType(NextActionDialog), findsNothing);
+      expect(await db.captureDao.outcomeIdsForCapture('c1'), isEmpty);
+    });
+
+    testWidgets('the carve carries the phrase typed into the dialog (#689)',
+        (tester) async {
+      // Whether the user may state their next action is not a display
+      // preference: the n-m carve asks exactly as the 1-1 card does.
+      final capture = await _insertCapture(db, 'c1');
+      await pumpSection(tester, capture);
+
+      await nameAndRoute(tester, 'Car insurance renewal',
+          actionText: 'Call the broker for a quote');
+
+      final id = (await db.captureDao.outcomeIdsForCapture('c1')).single;
+      expect((await db.todoDao.getTodo(id))!.title, 'Car insurance renewal');
+      expect((await db.actionDao.getCurrentAction(id))?.actionText,
+          'Call the broker for a quote');
+    });
+
+    testWidgets('the dialog opens seeded with the Outcome title', (tester) async {
+      final capture = await _insertCapture(db, 'c1');
+      await pumpSection(tester, capture);
+
+      await tester.enterText(
+          find.byKey(const Key('outcome_title')), 'Book the flights');
+      await _pumpFrames(tester);
+      await tester.tap(find.text('Next Action'));
+      await _pumpFrames(tester, frames: 10);
+
+      final field = tester.widget<TextField>(
+        find.descendant(
+          of: find.byType(NextActionDialog),
+          matching: find.byType(TextField),
+        ),
+      );
+      expect(field.controller?.text, 'Book the flights',
+          reason: 'accepting it unchanged keeps the pre-#689 carve');
+      // Nothing exists yet to update.
+      expect(find.text('Set next action'), findsOneWidget);
+    });
+
+    testWidgets('cancelling the dialog carves nothing', (tester) async {
+      final capture = await _insertCapture(db, 'c1');
+      await pumpSection(tester, capture);
+
+      await tester.enterText(
+          find.byKey(const Key('outcome_title')), 'Book the flights');
+      await _pumpFrames(tester);
+      await tester.tap(find.text('Next Action'));
+      await _pumpFrames(tester, frames: 10);
+      await tester.tap(find.text('Cancel'));
       await _pumpFrames(tester);
 
-      // An Outcome must be nameable; a blank form creates nothing.
       expect(await db.captureDao.outcomeIdsForCapture('c1'), isEmpty);
+      // The form is still open with the typing intact, so Cancel is a way
+      // back rather than a way to lose work.
+      expect(find.byKey(const Key('outcome_title')), findsOneWidget);
     });
   });
 
