@@ -206,10 +206,21 @@ append_issue_reference() {
     # what makes the swap atomic and keeps a half-written file from ever being
     # seen. If the awk fails, or the mv fails, the temp is removed so a failed
     # write leaves nothing behind.
+    #
+    # The rename replaces the inode, and mktemp makes the temp 0600, so capture
+    # the target's mode first and restore it after the swap — otherwise the
+    # message file (git's COMMIT_EDITMSG, normally 0644) would be left 0600.
+    # stat's flags differ across GNU/BSD; if neither answers, the mode is left
+    # as-is (harmless — the file is transient and lives in .git).
+    mode=$(stat -c '%a' "$file" 2>/dev/null || stat -f '%Lp' "$file" 2>/dev/null)
     tmp=$(mktemp "$file.XXXXXX") || return 0
     if awk -v ref=" (#${number})" '!d && NF { print $0 ref; d=1; next } { print }' \
         "$file" > "$tmp"; then
-        mv "$tmp" "$file" || rm -f "$tmp"
+        if mv "$tmp" "$file"; then
+            [ -n "$mode" ] && chmod "$mode" "$file" 2>/dev/null
+        else
+            rm -f "$tmp"
+        fi
     else
         rm -f "$tmp"
     fi
