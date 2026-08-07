@@ -20,6 +20,9 @@ import 'package:jeeves/providers/sprint_timer_provider.dart'
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/screens/task_detail/task_detail_screen.dart';
+import 'package:jeeves/sync/collection_codecs.dart' show todosCollection;
+import 'package:jeeves/sync/domain_op_capture.dart'
+    show RecordingDomainOpCapture;
 import 'package:jeeves/widgets/app_title_bar/app_title_bar.dart';
 import 'package:jeeves/widgets/state_surfaces.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -35,17 +38,19 @@ Future<Todo> _insertAt(
   required String id,
   String title = 'Test task',
   String intent = 'next',
+  String? notes,
 }) async {
   final now = DateTime.now();
   await db.customInsert(
-    'INSERT INTO todos (id, title, user_id, created_at, intent) '
-    'VALUES (?, ?, ?, ?, ?)',
+    'INSERT INTO todos (id, title, user_id, created_at, intent, notes) '
+    'VALUES (?, ?, ?, ?, ?, ?)',
     variables: [
       Variable.withString(id),
       Variable.withString(title),
       Variable.withString(_userId),
       Variable.withDateTime(now),
       Variable.withString(intent),
+      Variable<String>(notes),
     ],
   );
   return (await db.todoDao.getTodo(id))!;
@@ -1650,6 +1655,253 @@ void main() {
       expect(abandon.width, greaterThan(0.0),
           reason: 'and is not squeezed to nothing');
       tester.takeException();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // A pending title / notes edit at teardown (issue #533).
+  //
+  // An Outcome's text saves on focus loss (ADR-0023) and `dispose()` backs that
+  // up, exactly as `ClarifyCard` does on its Outcome shape. The route-pop path
+  // saves today *only* because the Navigator hands focus over while the popped
+  // subtree is still mounted, which is framework behaviour this screen does not
+  // own; the backstop puts a floor under it, and its failure mode without one is
+  // a silent lost edit.
+  //
+  // Every assertion reads the **raw** `todos` row rather than `TodoDao.getTodo`,
+  // whose D2 projection COALESCEs the current Action's values over these columns
+  // and would make the assertions unfalsifiable (NOTES.md 2026-07-26).
+  // ---------------------------------------------------------------------------
+  group('TaskDetailScreen — a pending text edit at teardown (#533)', () {
+    late GtdDatabase db;
+    late RecordingDomainOpCapture capture;
+
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+      capture = RecordingDomainOpCapture();
+      db = GtdDatabase(NativeDatabase.memory(), opCapture: capture);
+    });
+    tearDown(() async => db.close());
+
+    Future<Map<String, Object?>> rawRow(String id) async => (await db
+            .customSelect(
+              'SELECT title, notes, updated_at FROM todos WHERE id = ?',
+              variables: [Variable.withString(id)],
+            )
+            .getSingle())
+        .data;
+
+    /// Drops focus and lets the fire-and-forget save reach the database. The
+    /// write is `unawaited`, so it needs a turn of the *real* event loop.
+    Future<void> loseFocus(WidgetTester tester) async {
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pump();
+      await tester.runAsync(() => pumpEventQueue());
+    }
+
+    /// Tears the whole tree down with the field still focused — the shape a
+    /// route pop would have if the Navigator ever stopped handing focus over.
+    Future<void> unmountWhileFocused(WidgetTester tester) async {
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(() => pumpEventQueue());
+    }
+
+    /// Opens the notes editor (the pencil) and waits out the 50ms delayed
+    /// `requestFocus` the screen schedules behind it.
+    Future<void> openNotesEditor(WidgetTester tester) async {
+      final pencil = find.byIcon(Icons.edit_outlined);
+      await tester.ensureVisible(pencil);
+      await tester.pump();
+      await tester.tap(pencil);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    testWidgets('a title edit saves when the field loses focus',
+        (tester) async {
+      final todo = await _insertAt(db, id: 't', title: 'Buy milk');
+      final (widget, router) = _buildScreen(db, 't', initialTodo: todo);
+      await _showTaskDetail(tester, widget, router, 't');
+
+      await tester.enterText(
+          find.byKey(const Key('task_detail_title')), 'Buy oat milk');
+      // Asserted *before* any unmount, or the dispose flush below would make a
+      // working focus-loss trigger and a broken one indistinguishable
+      // (docs/TESTING.md).
+      await loseFocus(tester);
+
+      expect((await rawRow('t'))['title'], 'Buy oat milk');
+    });
+
+    testWidgets('a notes edit saves when the field loses focus',
+        (tester) async {
+      final todo = await _insertAt(db, id: 't', title: 'Buy milk');
+      final (widget, router) = _buildScreen(db, 't', initialTodo: todo);
+      await _showTaskDetail(tester, widget, router, 't');
+
+      await openNotesEditor(tester);
+      await tester.enterText(
+          find.byKey(const Key('task_detail_notes')), 'Ask the barista');
+      await loseFocus(tester);
+
+      expect((await rawRow('t'))['notes'], 'Ask the barista');
+    });
+
+    testWidgets(
+        'a title edit still saves when the screen is torn down with the field '
+        'focused', (tester) async {
+      final todo = await _insertAt(db, id: 't', title: 'Buy milk');
+      final (widget, router) = _buildScreen(db, 't', initialTodo: todo);
+      await _showTaskDetail(tester, widget, router, 't');
+
+      // No focus loss — straight to teardown.
+      await tester.enterText(
+          find.byKey(const Key('task_detail_title')), 'Buy oat milk');
+      await unmountWhileFocused(tester);
+
+      expect((await rawRow('t'))['title'], 'Buy oat milk');
+    });
+
+    testWidgets(
+        'a notes edit still saves when the screen is torn down with the field '
+        'focused', (tester) async {
+      final todo = await _insertAt(db, id: 't', title: 'Buy milk');
+      final (widget, router) = _buildScreen(db, 't', initialTodo: todo);
+      await _showTaskDetail(tester, widget, router, 't');
+
+      await openNotesEditor(tester);
+      await tester.enterText(
+          find.byKey(const Key('task_detail_notes')), 'Ask the barista');
+      await unmountWhileFocused(tester);
+
+      expect((await rawRow('t'))['notes'], 'Ask the barista');
+    });
+
+    // CHARACTERISATION, not a requirement — pins today's behaviour so #705
+    // cannot change it silently.
+    //
+    // `TaskDetailNotifier.updateNotes` passes `notes:` with no `clearNotes`
+    // flag, so emptying the field on this screen stores `''` rather than
+    // nulling the column — diverging from `ActiveFocusScreen` and
+    // `ClarifyCard`. The backstop deliberately routes through the same
+    // `updateNotes` the focus-loss listener uses, inheriting the divergence
+    // rather than manufacturing a disagreement between the screen's two exits.
+    // Fixing #705 must flip this expectation to `isNull`.
+    testWidgets('an emptied notes field flushes as an empty string, not NULL '
+        '(#705)', (tester) async {
+      final todo =
+          await _insertAt(db, id: 't', title: 'Buy milk', notes: 'Ask them');
+      final (widget, router) = _buildScreen(db, 't', initialTodo: todo);
+      await _showTaskDetail(tester, widget, router, 't');
+
+      await openNotesEditor(tester);
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('task_detail_notes')))
+            .controller!
+            .text,
+        'Ask them',
+        reason: 'the seeded notes must reach the field, or clearing it below '
+            'is not a clear',
+      );
+
+      await tester.enterText(find.byKey(const Key('task_detail_notes')), '');
+      await unmountWhileFocused(tester);
+
+      expect((await rawRow('t'))['notes'], '');
+    });
+
+    // The other side of the guard. `TodoDao.updateFields` stamps `updated_at`
+    // unconditionally and `last_clarified_at` on any mutation, and authors a
+    // sync op — so an unconditional flush would restamp clarification and bump
+    // sync arbitration on every exit from a screen the user only looked at.
+    testWidgets('a clean teardown issues no write', (tester) async {
+      final todo = await _insertAt(db, id: 't', title: 'Buy milk');
+      final (widget, router) = _buildScreen(db, 't', initialTodo: todo);
+      await _showTaskDetail(tester, widget, router, 't');
+
+      await unmountWhileFocused(tester);
+
+      // Seeded through raw SQL, so `updated_at` starts NULL: any write at all
+      // would stamp it.
+      expect((await rawRow('t'))['updated_at'], isNull);
+      expect(capture.forCollection(todosCollection), isEmpty);
+    });
+
+    testWidgets('a failing flush is logged rather than thrown into teardown',
+        (tester) async {
+      final todo = await _insertAt(db, id: 't', title: 'Buy milk');
+      final (widget, router) = _buildScreen(db, 't', initialTodo: todo);
+      await _showTaskDetail(tester, widget, router, 't');
+      await tester.enterText(
+          find.byKey(const Key('task_detail_title')), 'Buy oat milk');
+
+      // Closing the database is the one way to fail this write from outside the
+      // screen: it is issued after `dispose()` has already run, so nothing in
+      // the widget tree is left to intercept it.
+      await db.close();
+      await unmountWhileFocused(tester);
+
+      expect(tester.takeException(), isNull);
+    });
+
+    // A write must not outlive its subject. Without the subject-missing latch
+    // the flush fires against a row that is gone, and `TodoDao` authors the sync
+    // op unconditionally — so an op would be authored for a deleted entity.
+    // This is #447's rule (a write only counts if it landed) applied to the site
+    // #447 names; the residual TOCTOU window is #444's.
+    testWidgets('a subject that went missing under the open screen is never '
+        'written to', (tester) async {
+      await _insertAt(db, id: 'gone', title: 'Buy milk');
+      final todo = (await db.todoDao.getTodo('gone'))!;
+      final feed = StreamController<Todo?>.broadcast();
+      addTearDown(feed.close);
+
+      final (widget, router) =
+          _buildScreen(db, 'gone', todoStream: feed.stream);
+      await _showTaskDetail(tester, widget, router, 'gone');
+      feed.add(todo);
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+          find.byKey(const Key('task_detail_title')), 'Buy oat milk');
+      await tester.pump();
+
+      // The row leaves local storage under the open screen. The provider
+      // override decouples the stream from the row, so the row is still there
+      // to prove the negative.
+      feed.add(null);
+      await tester.pumpAndSettle();
+      capture.clear();
+
+      await unmountWhileFocused(tester);
+
+      final row = await rawRow('gone');
+      expect(row['title'], 'Buy milk');
+      expect(row['updated_at'], isNull);
+      // The op-log assertion is the one that survives a future DAO that upserts.
+      expect(capture.forCollection(todosCollection), isEmpty);
+    });
+
+    // CHARACTERISATION — green with and without the dispose flush. The pop path
+    // works because the newly-current route hands focus over while the popped
+    // subtree is still mounted, so the focus-loss listener fires normally. It is
+    // pinned here so a future route-configuration change that removes the
+    // handoff is caught by a test rather than by a user losing work.
+    testWidgets('popping the route with the field focused persists the edit '
+        'and raises nothing', (tester) async {
+      final todo = await _insertAt(db, id: 't', title: 'Buy milk');
+      final (widget, router) = _buildScreen(db, 't', initialTodo: todo);
+      await _showTaskDetail(tester, widget, router, 't');
+
+      await tester.enterText(
+          find.byKey(const Key('task_detail_title')), 'Buy oat milk');
+      router.pop();
+      await tester.pumpAndSettle();
+      await tester.runAsync(() => pumpEventQueue());
+
+      expect((await rawRow('t'))['title'], 'Buy oat milk');
+      expect(tester.takeException(), isNull);
     });
   });
 }
