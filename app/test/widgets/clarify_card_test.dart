@@ -1,10 +1,13 @@
-/// Widget tests for [ClarifyCard]'s routing behaviour (#293 regression).
+/// Widget tests for [ClarifyCard]'s routing behaviour.
 ///
-/// `ClarifyCard` opts out of the default-on `nextActionDialog` modifier
-/// (`except: {nextActionDialog}`) because it supplies the next-action phrase
-/// through the title-as-action coupling instead. Tapping Next must therefore
-/// stay a one-tap route — no dialog — and still leave the Outcome with a
-/// defined current Action.
+/// The `nextActionDialog` opt-out is per-shape (#689). On a **Capture** the
+/// default-on modifier is left in place: the Outcome and its Action are
+/// distinct, so the user gets to say what the physical next step is. The
+/// dialog opens seeded with the title mirror, so accepting it unchanged
+/// reproduces the pre-#689 result and the row is never actionless on Next.
+/// On an **Outcome** the card still excepts it (`if (!_isCapture)`) and Next
+/// stays a one-tap route, with the title-as-action coupling in `_onAfterRoute`
+/// supplying the phrase only while the Outcome is Actionless (#293).
 library;
 
 import 'dart:async';
@@ -211,6 +214,22 @@ Future<void> _scrollAndTap(WidgetTester tester, String label) async {
   await tester.tap(find.text(label));
 }
 
+/// Routes a **Capture** card to Next, accepting the dialog's seeded phrase.
+///
+/// On a Capture, Next is a two-step gesture (#689): the default-on
+/// `nextActionDialog` modifier opens [NextActionDialog] seeded with the title
+/// mirror, and Save commits the route. Saving unedited is the gesture that
+/// reproduces the pre-#689 title-as-action result, which is why every test
+/// here that is *about something else* uses this helper rather than typing a
+/// phrase — those tests' subjects (tags, notes, effort, error paths) must not
+/// silently change what the Action ends up as.
+Future<void> _routeCaptureToNext(WidgetTester tester) async {
+  await _scrollAndTap(tester, 'Next Action');
+  await _pumpFrames(tester, frames: 10);
+  await tester.tap(find.text('Save'));
+  await _pumpFrames(tester);
+}
+
 /// Ids currently in the Inbox, read with a plain select rather than
 /// `CaptureDao.watchInbox().first`. Awaiting a live drift `watch()` inside
 /// `testWidgets` never completes — the test binding owns the clock, so the
@@ -348,14 +367,104 @@ Widget _captureHarness(
 void main() {
   setUpAll(configureSqliteForTests);
 
-  group('ClarifyCard — Next stays a one-tap route (#293)', () {
+  group('ClarifyCard — Next on a Capture asks for the action (#689)', () {
     late GtdDatabase db;
 
     setUp(() => db = _openInMemory());
     tearDown(() async => db.close());
 
-    testWidgets(
-        'tapping Next does not open NextActionDialog and routes immediately',
+    testWidgets('tapping Next opens the dialog seeded with the title',
+        (tester) async {
+      final capture = await _insertCapture(db, id: 'x', title: 'Buy milk');
+      await tester.pumpWidget(_captureHarness(db, capture: capture));
+      await _pumpFrames(tester, frames: 5);
+
+      await _scrollAndTap(tester, 'Next Action');
+      await _pumpFrames(tester, frames: 10);
+
+      expect(find.byType(NextActionDialog), findsOneWidget);
+      final field = tester.widget<TextField>(
+        find.descendant(
+          of: find.byType(NextActionDialog),
+          matching: find.byType(TextField),
+        ),
+      );
+      expect(field.controller?.text, 'Buy milk',
+          reason: 'the seed is the draft mirror, so accepting it as-is keeps '
+              'the pre-#689 result');
+      // A Capture has no Outcome yet, so there is no Action to "update".
+      expect(find.text('Set next action'), findsOneWidget);
+    });
+
+    testWidgets('the typed phrase becomes the new Outcome\'s current Action',
+        (tester) async {
+      // The point of the issue: "car insurance renewal" is the outcome, "call
+      // the broker" is the physical next step, and the user gets to say so.
+      final capture =
+          await _insertCapture(db, id: 'x', title: 'Car insurance renewal');
+      final fired = <ProcessAction>[];
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: capture,
+        onAfterRoute: (action) async => fired.add(action),
+      ));
+      await _pumpFrames(tester, frames: 5);
+
+      await _scrollAndTap(tester, 'Next Action');
+      await _pumpFrames(tester, frames: 10);
+      await tester.enterText(
+        find.descendant(
+          of: find.byType(NextActionDialog),
+          matching: find.byType(TextField),
+        ),
+        'Call the broker for a quote',
+      );
+      await tester.tap(find.text('Save'));
+      await _pumpFrames(tester);
+
+      final outcomeIds = await db.captureDao.outcomeIdsForCapture('x');
+      expect(outcomeIds, hasLength(1));
+      final outcomeId = outcomeIds.single;
+      expect((await db.todoDao.getTodo(outcomeId))?.title,
+          'Car insurance renewal',
+          reason: 'the phrase names the Action, not the Outcome');
+      expect((await db.actionDao.getCurrentAction(outcomeId))?.actionText,
+          'Call the broker for a quote');
+      // The modifier is what routed, so that is what the host is told.
+      expect(fired, [ProcessAction.nextActionDialog]);
+      expect((await db.captureDao.getCapture('x'))!.clarifiedAt, isNotNull);
+      expect(await _inboxIds(db), isEmpty);
+    });
+
+    testWidgets('saving the seed unchanged reproduces the title-as-action row',
+        (tester) async {
+      final capture = await _insertCapture(db, id: 'x', title: 'Buy milk');
+      final fired = <ProcessAction>[];
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: capture,
+        onAfterRoute: (action) async => fired.add(action),
+      ));
+      await _pumpFrames(tester, frames: 5);
+
+      await _routeCaptureToNext(tester);
+
+      // Clarifying a Capture *creates* an Outcome rather than flipping a
+      // column (ADR-0006): exactly one, linked back and routed.
+      final outcomeIds = await db.captureDao.outcomeIdsForCapture('x');
+      expect(outcomeIds, hasLength(1));
+      final row = await db.todoDao.getTodo(outcomeIds.single);
+      expect(row?.intent, 'next');
+      expect(
+          (await db.actionDao.getCurrentAction(outcomeIds.single))?.actionText,
+          'Buy milk',
+          reason: 'the row still never lands on Next actionless');
+      expect((await db.captureDao.getCapture('x'))!.clarifiedAt, isNotNull);
+      expect(await _inboxIds(db), isEmpty);
+      expect(fired, [ProcessAction.nextActionDialog]);
+    });
+
+    testWidgets('cancelling the dialog leaves the Capture in the Inbox',
         (tester) async {
       final capture = await _insertCapture(db, id: 'x', title: 'Buy milk');
       final fired = <ProcessAction>[];
@@ -367,27 +476,62 @@ void main() {
       await _pumpFrames(tester, frames: 5);
 
       await _scrollAndTap(tester, 'Next Action');
+      await _pumpFrames(tester, frames: 10);
+      await tester.tap(find.text('Cancel'));
       await _pumpFrames(tester);
 
-      // Dialog modifier is excepted — no dialog pops.
-      expect(find.byType(NextActionDialog), findsNothing);
-      // The button reports plain `next`, not the dialog modifier.
-      expect(fired, [ProcessAction.next]);
+      // Cancel is not a blank save: nothing is minted, nothing is stamped and
+      // the host is never told to advance (ADR-0049).
+      expect(await db.captureDao.outcomeIdsForCapture('x'), isEmpty);
+      expect((await db.captureDao.getCapture('x'))!.clarifiedAt, isNull);
+      expect(await _inboxIds(db), ['x']);
+      expect(fired, isEmpty);
+    });
 
-      // Clarifying a Capture *creates* an Outcome rather than flipping a
-      // column (ADR-0006): exactly one, linked back and routed.
-      final outcomeIds = await db.captureDao.outcomeIdsForCapture('x');
-      expect(outcomeIds, hasLength(1));
-      final row = await db.todoDao.getTodo(outcomeIds.single);
-      expect(row?.intent, 'next');
-      // Title-as-action coupling still mirrors the title into the phrase so
-      // the row leaves the inbox with a defined action.
-      expect((await db.actionDao.getCurrentAction(outcomeIds.single))
-          ?.actionText,
-          'Buy milk');
-      // And the Capture is stamped, so it leaves the Inbox.
-      expect((await db.captureDao.getCapture('x'))!.clarifiedAt, isNotNull);
-      expect(await _inboxIds(db), isEmpty);
+    testWidgets('with a blank title Next is disabled and opens no dialog',
+        (tester) async {
+      // Why #689 adds no blank-title guard of its own: the arm #691 left
+      // stalling in `_nextWithDialog` is unreachable from this surface, so a
+      // second runtime check would be dead code. The affordance is the guard,
+      // and this is what pins it.
+      final capture = await _insertCapture(db, id: 'x', title: 'Buy milk');
+      await tester.pumpWidget(_captureHarness(db, capture: capture));
+      await _pumpFrames(tester, frames: 5);
+
+      await tester.enterText(find.byKey(const Key('clarify_title')), '   ');
+      await _pumpFrames(tester, frames: 5);
+
+      await _scrollAndTap(tester, 'Next Action');
+      await _pumpFrames(tester, frames: 10);
+
+      expect(find.byType(NextActionDialog), findsNothing);
+      expect(await db.captureDao.outcomeIdsForCapture('x'), isEmpty);
+      expect((await db.captureDao.getCapture('x'))!.clarifiedAt, isNull);
+    });
+
+    testWidgets('on an Outcome Next stays a one-tap route (#293)',
+        (tester) async {
+      // The opt-out survives on the Outcome arm: the title-as-action coupling
+      // in `_onAfterRoute` supplies the phrase there, Actionless-guarded, so
+      // asking again would be redundant on a row that already has an Action
+      // and dangerous on one that does.
+      final todo = await _insertInboxTodo(db, id: 'o1', title: 'Plan party');
+      final fired = <ProcessAction>[];
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        onAfterRoute: (action) async => fired.add(action),
+      ));
+      await _pumpFrames(tester, frames: 5);
+
+      await _scrollAndTap(tester, 'Next Action');
+      await _pumpFrames(tester);
+
+      expect(find.byType(NextActionDialog), findsNothing);
+      expect(fired, [ProcessAction.next]);
+      expect((await db.todoDao.getTodo('o1'))?.intent, 'next');
+      expect((await db.actionDao.getCurrentAction('o1'))?.actionText,
+          'Plan party');
     });
 
     testWidgets('Discard stamps the Capture without creating an Outcome',
@@ -446,8 +590,7 @@ void main() {
       await tester.tap(find.text('@work'));
       await tester.pump();
 
-      await _scrollAndTap(tester, 'Next Action');
-      await _pumpFrames(tester);
+      await _routeCaptureToNext(tester);
 
       final outcomeId =
           (await db.captureDao.outcomeIdsForCapture('racy')).single;
@@ -468,8 +611,7 @@ void main() {
       ));
       await _pumpFrames(tester, frames: 5);
 
-      await _scrollAndTap(tester, 'Next Action');
-      await _pumpFrames(tester);
+      await _routeCaptureToNext(tester);
 
       final outcomeId =
           (await db.captureDao.outcomeIdsForCapture('hinted')).single;
@@ -1147,8 +1289,7 @@ void main() {
           find.byKey(const Key('clarify_title')), 'Buy oat milk');
       await tester.pump();
 
-      await _scrollAndTap(tester, 'Next Action');
-      await _pumpFrames(tester);
+      await _routeCaptureToNext(tester);
 
       final outcomeId = (await db.captureDao.outcomeIdsForCapture('x')).single;
       expect((await _rawTodoRow(db, outcomeId)).title, 'Buy oat milk');
@@ -1289,8 +1430,7 @@ void main() {
       ));
       await _pumpFrames(tester, frames: 5);
 
-      await _scrollAndTap(tester, 'Next Action');
-      await _pumpFrames(tester);
+      await _routeCaptureToNext(tester);
 
       expect(
         find.textContaining('Saved, but finishing up failed'),
@@ -1491,12 +1631,18 @@ void main() {
           reason: 'the entry the verdict has to clear must exist first');
 
       // Forward again, onto the same Capture, and route it.
+      //
+      // Next now reports `nextActionDialog` rather than plain `next` (#689),
+      // which is exactly what makes this the regression test for
+      // `ProcessActionEndsCaptureClarification`. While that extension answered
+      // `false` for the modifier, `_discardRetainedDraft` would return early
+      // here and the `dispose` below would stash the spent draft straight
+      // back — a leak invisible to every other assertion in this file.
       await tester.pumpWidget(
         _captureHarness(db, capture: capture, retention: retention),
       );
       await _pumpFrames(tester, frames: 5);
-      await _scrollAndTap(tester, 'Next Action');
-      await _pumpFrames(tester);
+      await _routeCaptureToNext(tester);
 
       expect(retention.read('x'), isNull,
           reason: 'the verdict spends the draft: the interpretation is on the '

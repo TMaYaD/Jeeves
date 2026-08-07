@@ -405,20 +405,24 @@ void main() {
         ProcessAction.done,
         ProcessAction.trash,
         ProcessAction.completeCapture,
+        // The dialog modifier joined them with #689, which is what first
+        // enabled it on a Capture surface. Whenever it notifies, a route has
+        // landed: the commit is unconditional, and the one arm that writes
+        // nothing (a blank phrase over a blank title) returns without
+        // notifying at all.
+        ProcessAction.nextActionDialog,
       ]) {
         expect(action.endsCaptureClarification, isTrue, reason: '$action');
       }
     });
 
-    test('keep, reclarify and the dialog modifier do not', () {
+    test('keep and reclarify do not', () {
       // `keep` on a Capture is an explicit no-op — the whole point is that the
       // item stays in the Inbox with `clarified_at` NULL. `reclarify` throws
-      // on a Capture, so it can never report one. `nextActionDialog` notifies
-      // even when the dialog came back blank and nothing was written.
+      // on a Capture, so it can never report one.
       for (final action in const [
         ProcessAction.keep,
         ProcessAction.reclarify,
-        ProcessAction.nextActionDialog,
       ]) {
         expect(action.endsCaptureClarification, isFalse, reason: '$action');
       }
@@ -815,6 +819,189 @@ void main() {
       expect(action?.energyLevel, 'high',
           reason: "the card's effort is not dropped by the override");
       expect(action?.timeEstimate, 45);
+    });
+
+    testWidgets('on a Capture the dialog is seeded from the draft (#689)',
+        (tester) async {
+      // `CaptureSubject.currentActionText` is null by contract — no Outcome
+      // exists yet to carry an Action — so seeding from it would open the
+      // dialog empty and make the user retype what the card already says.
+      // The seed comes from the draft instead, which carries
+      // `ClarifyDraft.assemble`'s title mirror. Draft title and Capture title
+      // are deliberately *different* strings here: with both the same the
+      // assertion could not tell the draft from the subject.
+      final capture = await _insertCapture(db, id: 'sd1', title: 'stale row');
+      await tester.pumpWidget(ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: MaterialApp(
+          home: Scaffold(
+            body: ListView(
+              children: [
+                ProcessToHandlers(
+                  subject: CaptureSubject(
+                    capture: capture,
+                    draft: () => const ClarifyDraft(
+                      title: 'Renew car insurance',
+                      action: ActionDraft(text: 'Renew car insurance'),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ));
+
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(NextActionDialog), findsOneWidget);
+      final field = tester.widget<TextField>(
+        find.descendant(
+          of: find.byType(NextActionDialog),
+          matching: find.byType(TextField),
+        ),
+      );
+      expect(field.controller?.text, 'Renew car insurance',
+          reason: 'the seed is the live draft, read at dialog-open time — not '
+              'the Capture row the card was built from');
+    });
+
+    testWidgets('the seed is read when the dialog opens, not at build time',
+        (tester) async {
+      // [CaptureSubject.draft] is a callback precisely because the clarify
+      // card's title lives in a TextEditingController that does not rebuild
+      // the bar on every keystroke. A seed snapshotted at build time would be
+      // whatever the field held when the card first rendered.
+      final capture = await _insertCapture(db, id: 'sd2', title: 'Fragment');
+      var draftText = 'before typing';
+      await tester.pumpWidget(ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: MaterialApp(
+          home: Scaffold(
+            body: ListView(
+              children: [
+                ProcessToHandlers(
+                  subject: CaptureSubject(
+                    capture: capture,
+                    draft: () => ClarifyDraft(
+                      title: draftText,
+                      action: ActionDraft(text: draftText),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ));
+      await tester.pump();
+
+      draftText = 'after typing';
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+
+      final field = tester.widget<TextField>(
+        find.descendant(
+          of: find.byType(NextActionDialog),
+          matching: find.byType(TextField),
+        ),
+      );
+      expect(field.controller?.text, 'after typing');
+    });
+
+    testWidgets('a Capture with no draft Action opens the dialog empty',
+        (tester) async {
+      // A blank title nulls the whole draft Action (ClarifyDraft.assemble), so
+      // there is no proposal to seed. Reachable only past the surfaces' own
+      // blank-title gate, but the seed must not throw on it.
+      final capture = await _insertCapture(db, id: 'sd3', title: 'Fragment');
+      await tester.pumpWidget(ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: MaterialApp(
+          home: Scaffold(
+            body: ListView(
+              children: [
+                ProcessToHandlers(
+                  subject: CaptureSubject(
+                    capture: capture,
+                    draft: () => const ClarifyDraft(title: ''),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ));
+
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+
+      final field = tester.widget<TextField>(
+        find.descendant(
+          of: find.byType(NextActionDialog),
+          matching: find.byType(TextField),
+        ),
+      );
+      expect(field.controller?.text, isEmpty);
+    });
+
+    testWidgets('a Capture reads "Set next action", never "Update" (#689)',
+        (tester) async {
+      // The heading turns on whether an Action already exists, not on whether
+      // the field happens to be full. A Capture's seed is a *proposal*
+      // mirrored from the title for an Action that does not exist yet, so
+      // inferring "Update" from the prefilled field would offer to update
+      // something the user has never written.
+      final capture = await _insertCapture(db, id: 'hd1', title: 'Fragment');
+      await tester.pumpWidget(ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: MaterialApp(
+          home: Scaffold(
+            body: ListView(
+              children: [
+                ProcessToHandlers(
+                  subject: CaptureSubject(
+                    capture: capture,
+                    draft: () => const ClarifyDraft(
+                      title: 'Fragment',
+                      action: ActionDraft(text: 'Fragment'),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ));
+
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Set next action'), findsOneWidget);
+      expect(find.text('Update next action'), findsNothing);
+    });
+
+    testWidgets('an Outcome with a current Action still reads "Update"',
+        (tester) async {
+      final todo = await _insertTodo(db, id: 'hd2');
+      await tester
+          .pumpWidget(_harness(db, todo: todo, currentActionText: 'old'));
+
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Update next action'), findsOneWidget);
+    });
+
+    testWidgets('an Actionless Outcome reads "Set"', (tester) async {
+      final todo = await _insertTodo(db, id: 'hd3');
+      await tester.pumpWidget(_harness(db, todo: todo));
+
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Set next action'), findsOneWidget);
     });
   });
 

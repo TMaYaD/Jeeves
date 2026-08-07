@@ -12,10 +12,21 @@ class NextActionDialog extends StatefulWidget {
     super.key,
     required this.initial,
     required this.taskTitle,
+    required this.editingExistingAction,
   });
 
   final String initial;
   final String taskTitle;
+
+  /// Whether the subject already has a current Action — the one thing that
+  /// decides between "Set next action" and "Update next action".
+  ///
+  /// Asked of the caller rather than inferred from [initial] being empty. The
+  /// two agree on an Outcome, where [initial] *is* the current Action's text.
+  /// They part company on a Capture, whose field is seeded with a *proposal*
+  /// mirrored from the title for an Action that does not exist yet — inferring
+  /// there would offer to "update" something the user has never written.
+  final bool editingExistingAction;
 
   @override
   State<NextActionDialog> createState() => _NextActionDialogState();
@@ -40,7 +51,11 @@ class _NextActionDialogState extends State<NextActionDialog> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return AlertDialog(
-      title: Text(widget.initial.isEmpty ? 'Set next action' : 'Update next action'),
+      title: Text(
+        widget.editingExistingAction
+            ? 'Update next action'
+            : 'Set next action',
+      ),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -89,9 +104,14 @@ Future<String?> showNextActionDialog(
   BuildContext context, {
   required String initial,
   required String taskTitle,
+  required bool editingExistingAction,
 }) {
   return showDialog<String>(
     context: context,
-    builder: (_) => NextActionDialog(initial: initial, taskTitle: taskTitle),
+    builder: (_) => NextActionDialog(
+      initial: initial,
+      taskTitle: taskTitle,
+      editingExistingAction: editingExistingAction,
+    ),
   );
 }

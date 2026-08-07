@@ -16,6 +16,7 @@ import 'package:jeeves/screens/inbox/inbox_clarify_screen.dart';
 import 'package:jeeves/models/todo.dart' show RoutingKind;
 import 'package:jeeves/services/clarification_service.dart';
 import 'package:jeeves/widgets/clarify_shared_widgets.dart';
+import 'package:jeeves/widgets/next_action_dialog.dart';
 import 'package:jeeves/widgets/state_surfaces.dart';
 import '../../test_helpers.dart';
 
@@ -108,6 +109,19 @@ Future<void> _scrollAndTap(WidgetTester tester, String label) async {
   await tester.ensureVisible(find.text(label));
   await tester.pumpAndSettle();
   await tester.tap(find.text(label));
+  await tester.pumpAndSettle();
+}
+
+/// Confirms [NextActionDialog] with whatever phrase it opened seeded with.
+///
+/// The clarify card leaves the default-on `nextActionDialog` modifier on for a
+/// Capture (#689), so Next opens the dialog before anything is written.
+/// Accepting the seed is what reproduces the pre-#689 title-as-action result,
+/// which is what every test below that is *about something else* wants.
+Future<void> _acceptNextActionDialog(WidgetTester tester) async {
+  expect(find.byType(NextActionDialog), findsOneWidget,
+      reason: 'Next on a Capture opens the dialog before it writes anything');
+  await tester.tap(find.text('Save'));
   await tester.pumpAndSettle();
 }
 
@@ -341,6 +355,7 @@ void main() {
 
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
+      await _acceptNextActionDialog(tester);
 
       // Clarifying creates an Outcome rather than flipping a column, and the
       // link back to the Capture is the provenance record (ADR-0006).
@@ -457,6 +472,15 @@ void main() {
       await tester.ensureVisible(find.text('Next Action'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+
+      // The guarded window opens with the *tap*, not with the write:
+      // `_runOnce` latches before [NextActionDialog] is shown, so Skip is
+      // already shut while the user is still typing the phrase.
+      expect(_skipEnabled(tester), isFalse,
+          reason: 'the dialog is inside the guarded window too');
+
+      await tester.tap(find.text('Save'));
       await tester.pump();
 
       // Skip sits outside the action bar, so it does not inherit the bar's
@@ -490,6 +514,8 @@ void main() {
       await tester.ensureVisible(find.text('Next Action'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Save'));
       await tester.pump();
 
       // Capture opens a modal from this route; leaving it live mid-write is the
@@ -528,7 +554,13 @@ void main() {
       await tester.ensureVisible(find.text('Next Action'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Next Action'));
-      await tester.pump();
+      await tester.pumpAndSettle();
+      // Save before driving platform back, or the pop would land on the
+      // dialog — the topmost route — and say nothing about the screen's own
+      // guard. Settle so the dialog is fully gone by the time it is driven.
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      expect(find.byType(NextActionDialog), findsNothing);
 
       // The app-bar button and platform back are separate escapes from Skip;
       // either one popping here leaves the routing verdict landing against a
@@ -571,7 +603,11 @@ void main() {
       await tester.pumpAndSettle();
 
       // An Outcome must be nameable, so the button is disabled and the tap is
-      // a no-op: the Capture stays in the Inbox.
+      // a no-op: the Capture stays in the Inbox, and the dialog never opens.
+      // This is why #689 adds no blank-title guard of its own — the arm #691
+      // left stalling in `_nextWithDialog` is unreachable from this surface,
+      // so a second runtime check would be dead code.
+      expect(find.byType(NextActionDialog), findsNothing);
       expect(await _outcomeOf(db, 'x'), isNull);
       expect((await db.captureDao.getCapture('x'))!.clarifiedAt, isNull);
       expect(find.text('Title is required to process'), findsOneWidget);
@@ -589,6 +625,7 @@ void main() {
 
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
+      await _acceptNextActionDialog(tester);
 
       // Nothing was entered, so nothing may be fabricated into the Outcome.
       final outcome = (await _outcomeOf(db, 'x'))!;
@@ -625,6 +662,7 @@ void main() {
 
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
+      await _acceptNextActionDialog(tester);
 
       // That both grains carry the same pair is what says the card composed
       // one ActionDraft rather than three loose fields: the columns are
@@ -661,6 +699,7 @@ void main() {
 
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
+      await _acceptNextActionDialog(tester);
 
       // The action bar owns the tap handler, so it must report the failure
       // itself — otherwise the write escapes as an unhandled async error and
@@ -741,6 +780,7 @@ void main() {
 
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
+      await _acceptNextActionDialog(tester);
 
       // The save on the way out must carry the row's current title, not the
       // one this screen happened to load with.
@@ -779,6 +819,7 @@ void main() {
 
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
+      await _acceptNextActionDialog(tester);
 
       // The user's clear is an interpretation, so it lands on the Outcome…
       expect((await _outcomeOf(db, 'x'))!.notes, isNull);

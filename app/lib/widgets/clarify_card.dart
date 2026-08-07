@@ -756,9 +756,12 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
         );
         final tags =
             ref.watch(taskTagsProvider(todoId)).asData?.value ?? const <Tag>[];
-        // No current-Action text: this card excepts the `nextActionDialog`
-        // modifier (the title-as-action coupling below supplies the phrase
-        // instead), so nothing here reads it.
+        // No current-Action text: the Outcome arm still excepts the
+        // `nextActionDialog` modifier (the title-as-action coupling in
+        // [_onAfterRoute] supplies the phrase instead), so nothing on this
+        // shape reads it. The Capture arm, which does open the dialog, seeds
+        // it from the draft rather than from here — a Capture has no Outcome
+        // to carry a current Action.
         return _buildBody(context, tags: tags, subject: OutcomeSubject(todo));
       },
     );
@@ -984,10 +987,6 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
         ProcessToHandlers(
           subject: subject,
           disabled: disabled,
-          // Opt out of the default-on `nextActionDialog` modifier: the
-          // clarify card supplies the phrase via the title-as-action
-          // coupling below, so tapping Next should route immediately
-          // rather than popping the dialog.
           // On a Capture, Done is not a clarify-time destination — an Outcome
           // captured already-complete is a contradiction, and completing one
           // belongs on its own surface. Trash stays as the Capture-level
@@ -995,12 +994,18 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
           // *Outcome* keeps Done: there the row exists and finishing it is a
           // real verdict.
           //
-          // Also opt out of the default-on `nextActionDialog` modifier: the
-          // clarify card supplies the phrase via the title-as-action coupling
-          // below, so tapping Next routes immediately rather than popping the
-          // dialog.
+          // The `nextActionDialog` opt-out is the mirror image, and survives
+          // only on the Outcome arm. On a **Capture** the modifier is left on
+          // (issue #689): the Outcome and its Action are distinct, and
+          // "car insurance renewal" is a desired outcome, not a physical next
+          // step. The dialog opens seeded from the title mirror, so accepting
+          // it unchanged still lands the pre-#689 result and the row is never
+          // actionless on Next. On an **Outcome** it stays excepted: the
+          // title-as-action coupling in [_onAfterRoute] supplies the phrase
+          // when the row is Actionless and must not clobber a deliberate one,
+          // so Next here is a one-tap route.
           except: {
-            ProcessAction.nextActionDialog,
+            if (!_isCapture) ProcessAction.nextActionDialog,
             if (_isCapture) ProcessAction.done,
           },
           lastAction: widget.lastAction,
@@ -1068,8 +1073,10 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
         await _saveOutcomeText();
         // Title-as-action coupling: when the user routes to Next or Waiting
         // For from a clarify card, mirror the current title into the Action so
-        // the row leaves with a defined one. With the dialog modifier
-        // excepted, Next reports plain `next`.
+        // the row leaves with a defined one. This whole branch is Outcome-only,
+        // and the Outcome arm still excepts the dialog modifier, so Next
+        // reports plain `next` here. (On a Capture the modifier is on and Next
+        // reports `nextActionDialog`, which never reaches this branch.)
         //
         // Only mirror when the Outcome is Actionless (no `current` Action
         // row); otherwise the user has already written a deliberate phrase and
