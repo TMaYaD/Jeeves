@@ -298,6 +298,15 @@ printf '%s\n' "${EDITOR_SUBJECT}" > "$1"
 EDITOR_SCRIPT
 chmod +x "${EDITOR_REPLACE}"
 
+# A commit.template whose first non-blank line passes the conventional-format
+# regex. Quitting the editor with this pre-filled must still abort: git's own
+# "did not edit the message" check runs AFTER commit-msg, so appending to the
+# template would convince git the user edited it and fabricate a commit from a
+# cancelled one (#679). The subject line is deliberately digit-free so the only
+# thing that could add a number is the hook.
+TEMPLATE_CONVENTIONAL="${WORK}/commit-template-conventional"
+printf 'feat: describe the change\n\n# Explain what and why.\n' > "${TEMPLATE_CONVENTIONAL}"
+
 # Rebase sequence editor: turn the first `pick` into `reword`, portably (no
 # `sed -i`, which is not the same on BSD sed).
 SEQ_REWORD_FIRST="${WORK}/seq-reword-first"
@@ -556,6 +565,26 @@ for hook_shell in ${HOOK_SHELLS}; do
   new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
   commit_with_editor "${EDITOR_REPLACE}" 'just some words'
   assert_nothing_committed "${hook_shell}, non-conventional editor subject"
+
+  # --- commit.template must not defeat quit-to-cancel (#679) ---
+  # A template whose first non-blank line is conventional passes validation, so
+  # only the untouched-template guard keeps the append from mutating the file and
+  # defeating git's "did not edit the message" abort. Without the guard this
+  # records `feat: describe the change (#605)` from a cancelled commit.
+  start_case "template (${hook_shell}): quitting on an untouched commit.template aborts"
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  git -C "${CASE_REPO}" config commit.template "${TEMPLATE_CONVENTIONAL}"
+  commit_with_editor "${EDITOR_QUIT}" ''
+  assert_nothing_committed "${hook_shell}, untouched commit.template + quit"
+
+  # The complement: once the developer actually edits the template, the append
+  # must fire — the guard suppresses only the untouched case, not every commit
+  # made with a template configured.
+  start_case "template (${hook_shell}): editing a commit.template subject still gets the reference"
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  git -C "${CASE_REPO}" config commit.template "${TEMPLATE_CONVENTIONAL}"
+  commit_with_editor "${EDITOR_REPLACE}" 'feat: the real change'
+  assert_subject "${hook_shell}, edited commit.template" 'feat: the real change (#605)'
 
   # --- Validation reads the SUBJECT, not the whole file ---
   start_case "validation (${hook_shell}): a conventional BODY line does not rescue a non-conventional subject"

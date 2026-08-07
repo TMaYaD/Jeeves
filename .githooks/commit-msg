@@ -45,12 +45,18 @@ if ! printf '%s\n' "$subject" | grep -iqE "$commit_regex"; then
     exit 1
 fi
 
-# Everything from here down is the issue-reference append. Reaching it means
-# validation passed, so a comments-only file — the editor quit without saving —
-# has already been rejected above and never gets a fabricated subject. That is
-# how the quit-to-cancel gesture stays intact on this path: the subject read
-# there is one of git's own comment lines, which never matches the
-# conventional-format regex.
+# Everything from here down is the issue-reference append. It must never fabricate
+# a subject out of a commit the user is trying to CANCEL, which git detects two
+# ways on the editor path — and both are honoured before anything is written:
+#
+#   * A comments-only file (quit without saving, no template) fails the
+#     conventional-format validation above and is rejected there — the first
+#     non-blank line is one of git's own comment lines, which never matches.
+#   * An untouched `commit.template` is caught by the guard just below. git's own
+#     "did not edit the message" abort compares the final message to the
+#     template, but that comparison runs AFTER this hook, so appending here would
+#     convince git the user edited it. The guard skips the append when the
+#     message still equals the template, leaving git's abort intact.
 
 # --- 2. Issue reference on the editor path ----------------------------------
 #
@@ -105,6 +111,19 @@ fi
 
 # shellcheck source=.githooks/lib/issue-reference.sh
 . "$lib"
+
+# Guard: an untouched commit.template must still abort a cancelled commit. Both
+# sides go through message_body, so comments, the scissors line and
+# core.commentChar are stripped identically; a relative template path resolves
+# from the repo root, git's cwd for the hook. This lives in commit-msg, not the
+# shared lib: on the -m path prepare-commit-msg has already appended by now, so
+# the message no longer equals the template and a -m subject that happens to
+# match the template text is still (correctly) referenced.
+tmpl=$(git config --path commit.template 2>/dev/null)
+if [ -n "$tmpl" ] && [ -f "$tmpl" ] &&
+    [ "$(message_body "$1")" = "$(message_body "$tmpl")" ]; then
+    exit 0
+fi
 
 # The append is best-effort: exit 0 regardless of its status, so a failed write
 # inside append_issue_reference (e.g. a failed mv) can never reject a commit that
