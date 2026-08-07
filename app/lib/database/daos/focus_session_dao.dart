@@ -851,12 +851,17 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   /// `ActionDao.applyCompleteCurrentAction` no-ops, so no verdict produces an
   /// anchor; arm (a) still catches it if the user marks the Outcome done.
   ///
-  /// Timestamp comparison is lexicographic over two TEXT columns. Local writes
-  /// keep microseconds while sync round-trips are millisecond-truncated, so two
-  /// values inside the same millisecond can compare inverted — unreachable
-  /// through the sheet (the completion and the verdict are seconds apart), and
-  /// the failure direction is the safe one: the row reads as *not* Settled and
-  /// keeps its place in the disposition step.
+  /// Both timestamps are TEXT: `storeDateTimeAsText: true` on [GtdDatabase]
+  /// makes every `DateTimeColumn` a TEXT column, so `actions.done_at` and
+  /// `todos.last_clarified_at` share a storage class however they were written
+  /// — a Drift `DateTime` companion or one of the raw `encodeInstant` binds —
+  /// and SQLite's INTEGER-before-TEXT ordering never applies. What is *not*
+  /// uniform is precision: a companion write keeps microseconds, while the raw
+  /// binds and every sync round-trip are millisecond-truncated, so two values
+  /// inside the same millisecond can compare inverted in either direction
+  /// (`'…789Z' > '…789012Z'`). Unreachable through the sheet, which is the
+  /// whole of the guarantee: the completion and the verdict are seconds apart,
+  /// so the sub-millisecond ordering never decides a verdict.
   static String _settlementsSql(String sessionIdSql) => '''
 SELECT t.id AS todo_id,
        CASE

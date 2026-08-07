@@ -1388,6 +1388,75 @@ void main() {
       expect(await db.focusSessionDao.getActiveSessionSettlements(), isEmpty);
     });
 
+    test(
+        'the anchor and the clarification are the same SQLite storage class, '
+        'whichever write path produced them', () async {
+      await _insertTodo(db, id: 'X', title: 'X');
+      final sessionId = await openWith(['X']);
+      // Anchor: a Drift `DateTime` column write, as `ActionDao` makes it.
+      await completeActionInSession(sessionId, 'X');
+      // Clarification: `reviewAndCloseSession`'s raw `encodeInstant` bind, the
+      // one path that hands SQLite a Dart `String` for this column.
+      await db.focusSessionDao.reviewAndCloseSession(
+        sessionId: sessionId,
+        dispositions: {'X': 'maybe'},
+        now: anchorAt.add(const Duration(seconds: 5)),
+      );
+
+      final row = await db
+          .customSelect(
+            "SELECT typeof(a.done_at) AS anchor_type, "
+            "typeof(t.last_clarified_at) AS clarified_type "
+            "FROM actions a JOIN todos t ON t.id = a.outcome_id "
+            "WHERE a.id = 'act-X'",
+          )
+          .getSingle();
+
+      expect(row.read<String>('anchor_type'), 'text');
+      expect(row.read<String>('clarified_type'), 'text');
+      // `storeDateTimeAsText: true` on GtdDatabase makes every DateTimeColumn a
+      // TEXT column, so `>=` in _settlementsSql is a same-class lexicographic
+      // ISO-8601 comparison. If either side were an INTEGER, SQLite's
+      // storage-class ordering (INTEGER < TEXT) would settle every row with any
+      // non-null clarification — see the earlier/later pair below.
+    });
+
+    test(
+        'a clarification bound as TEXT still orders against the anchor, in '
+        'both directions', () async {
+      await _insertTodo(db, id: 'early', title: 'clarified before the anchor');
+      await _insertTodo(db, id: 'late', title: 'clarified after the anchor');
+      final earlyId = await openWith(['early']);
+      await completeActionInSession(earlyId, 'early');
+      await db.focusSessionDao.reviewAndCloseSession(
+        sessionId: earlyId,
+        dispositions: {'early': 'maybe'},
+        now: anchorAt.subtract(const Duration(hours: 1)),
+      );
+
+      expect(
+        await db.focusSessionDao.getSettlementsForSession(earlyId),
+        isEmpty,
+        reason:
+            'the clarification predates the anchor, so the Outcome still owes '
+            'an answer — a storage-class mismatch would settle it regardless',
+      );
+
+      final lateId = await openWith(['late']);
+      await completeActionInSession(lateId, 'late');
+      await db.focusSessionDao.reviewAndCloseSession(
+        sessionId: lateId,
+        dispositions: {'late': 'maybe'},
+        now: anchorAt.add(const Duration(hours: 1)),
+      );
+
+      expect(
+        await db.focusSessionDao.getSettlementsForSession(lateId),
+        {'late': SessionSettlement.someday},
+        reason: 'the same binding, on the other side of the anchor, settles',
+      );
+    });
+
     test('an off-Plan engaged Outcome settles the same as a Plan member',
         () async {
       await _insertTodo(db, id: 'X', title: 'X'); // Plan member
