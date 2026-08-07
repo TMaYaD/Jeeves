@@ -164,8 +164,7 @@ class FocusSessionTasks extends Table {
 
   /// Per-task disposition chosen during session review, for **Plan members**.
   /// Off-Plan engaged Outcomes have no row here (the Plan never auto-grows —
-  /// ADR-0002); their Dispositions live in [FocusSessionDispositions] instead
-  ///.
+  /// ADR-0002); their Dispositions live in [FocusSessionDispositions] instead.
   /// NULL = not yet reviewed (active session) or done task.
   /// 'rollover' = carry forward to next session's pre-selected list.
   /// 'leave' = return to Next Actions (no mutation on todos).
@@ -184,8 +183,7 @@ class FocusSessionTasks extends Table {
 // focus_session_dispositions
 // ---------------------------------------------------------------------------
 
-/// Durable home for Review-phase Dispositions on **off-Plan engaged** Outcomes
-///.
+/// Durable home for Review-phase Dispositions on **off-Plan engaged** Outcomes.
 ///
 /// Dispositions partition by membership class:
 ///   - A Plan member's Disposition lives on [FocusSessionTasks.disposition]

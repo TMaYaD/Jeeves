@@ -40,7 +40,7 @@ visible =
     (some Trigger is currently firing)
   ∧ (no performance of this Ritual is in progress)    ← in-progress hygiene
   ∧ (snoozed_until is null or now > snoozed_until)
-  ∧ (dismissed_at is earlier than the most recent Trigger firing edge)
+  ∧ (dismissed_at is null or earlier than the most recent Trigger firing edge)
 ```
 
 **Dismiss is scoped to the current firing, not to a window.** It hides the Nudge
@@ -129,12 +129,14 @@ surface show? The queue answers it, one layer above individual Nudges.
 Visible Nudges are ordered by their **Ritual's priority**, hardcoded today:
 
 ```text
-Weekly Review  >  Daily Planning  >  Evening Shutdown
+Weekly Review  >  Evening Shutdown  >  Daily Planning
 ```
 
-Weekly Review ranks highest because it restores the trusted state Daily Planning
-operates on — planning against a stale Next list violates the method. Evening
-Shutdown is temporally last and rarely competes; its position is for completeness.
+Weekly Review ranks highest because it restores the trusted state the other two
+operate on — planning against a stale Next list violates the method. Evening
+Shutdown outranks Daily Planning for the case above: when both fire, the user has
+a stale session open and must close it before opening a new one, so the shutdown
+is the only one of the two they can act on.
 
 Surfaces consume the queue rather than reading Nudges directly:
 

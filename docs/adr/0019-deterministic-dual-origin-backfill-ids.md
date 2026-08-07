@@ -26,7 +26,7 @@ on the Outcome, not on content, so re-running either backfill can never mint a
 second Action for the same Outcome. Every backfilled field derives only from
 replicated Outcome data (`text` verbatim; `energy_level` / `time_estimate`
 copied; `created_at = COALESCE(last_clarified_at, created_at)`), so the two
-origins produce field-identical rows, and the ADR-0015 upsert-on-replay path
+origins produce field-identical rows, and the upsert-on-replay path
 collapses the duplicate upload with zero new reconciliation code. A shared
 cross-language golden vector pins the id equality.
 

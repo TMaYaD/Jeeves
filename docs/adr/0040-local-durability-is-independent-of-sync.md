@@ -7,7 +7,7 @@ Constrains #627.
 
 A Device holds two stores. `jeeves_domain.sqlite` is the domain read model, and
 it is disposable *once enrolled* — the Device's own op log can reproject it,
-which is what the cut-over to a Drift-owned store traded on. `jeeves_sync.sqlite` holds the op log, the
+which is the property the cut-over to a Drift-owned store relied on. `jeeves_sync.sqlite` holds the op log, the
 outbox, the Quarantine, the Integrity Alarms, the control chain and the Prune
 attestations: evidence, plus the only copy of anything authored and not yet
 flushed.

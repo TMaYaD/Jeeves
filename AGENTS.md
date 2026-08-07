@@ -14,6 +14,8 @@ Generic instructions for AI agents. Copy-pasteable to any project.
    - `docs/TESTING.md` - Testing strategy (+ emulator tap coordinates for manual `adb` testing)
    - `docs/DESIGN.md` - Design system
    - `docs/CEREMONIES.md` - Ceremony, Ritual, Nudge, Trigger and Cadence mechanics
+   - `docs/SYNC.md` - Op log, merge strategies and the protocol surface
+   - `docs/BACKEND_GUIDELINES.md` - Server conventions and deployment
 
 3. **Update Requirements:** Whenever the user asks for new requirements, update `docs/REQUIREMENTS.md` for future reference. When new domain concepts arise, update `CONTEXT.md`. Writing an ADR is not part of this loop — they are rare and never self-initiated (see below).
 4. **Re-read specs every 30 minutes** or when uncertain. Requirements drift causes wasted work.
@@ -193,7 +195,8 @@ Keep AGENTS.md generic. Project details go in README.md, CONTEXT.md, and docs/.
 
 - `README.md` — what the project is. Human developers start here.
 - `docs/ARCHITECTURE.md` — the country map. 20,000 ft: the regions, and the roads between them.
-- The design docs (`DESIGN.md`, `SYNC.md`, `CEREMONIES.md`, `TESTING.md`, `BACKEND_GUIDELINES.md`) — city maps. One region at a scale that shows its canals and watersheds. Still maps.
+- The design docs (`SYNC.md`, `CEREMONIES.md`, `BACKEND_GUIDELINES.md`) — city maps. One region at a scale that shows its canals and watersheds. Still maps.
+- `DESIGN.md` and `TESTING.md` — **registers**, not maps. See below.
 - The code — the streets. You walk them; nobody draws them twice.
 
 ### What a doc says, and what it defers

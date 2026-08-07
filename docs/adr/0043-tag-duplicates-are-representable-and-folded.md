@@ -66,7 +66,8 @@ retiring the fold machinery leaves the user staring at two "Alice" rows for ever
 
 Two consequences. The schema change is a one-way v2→v3 recreate, which also
 **gates the one forced re-projection that repairs holes existing devices already
-hold** (the domain store is disposable precisely so this is cheap).
+hold** (on an enrolled Device the domain store is disposable — its own op log
+reprojects it — precisely so this is cheap).
 And dropping the constraint removes a live footgun: `TagDao.upsertTag` uses
 `INSERT OR REPLACE`, which under a `UNIQUE (name, type)` index resolved a name
 collision by *deleting* the other tag row — silently, with foreign-key enforcement

@@ -83,8 +83,9 @@ enum ProcessAction {
 ///   in the Inbox", `clarified_at` stays NULL. **Not** a verdict.
 /// - `reclarify` throws on a [CaptureSubject]; it can never report one.
 /// - `nextActionDialog` reaches [_commit] whenever it notifies: the commit is
-///   unconditional (a blank save routes under the title-as-action fallback,), and the one arm that writes nothing — a blank phrase over a
-///   blank title — returns without notifying at all. A verdict.
+///   unconditional (a blank save routes under the title-as-action fallback),
+///   and the one arm that writes nothing — a blank phrase over a blank title —
+///   returns without notifying at all. A verdict.
 ///
 /// `nextActionDialog` answered `false` until issue #689, and that was right
 /// while it lasted: no Capture surface enabled the modifier, so the answer was

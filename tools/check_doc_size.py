@@ -46,6 +46,7 @@ VOCABULARY_CEILING = 10_000  # the core words the project is thought in
 
 TEST_REGISTER_CEILING = 14_000  # strategy, plus the harness traps that keep biting
 DESIGN_SYSTEM_CEILING = 6_000  # tokens, components and surfaces, one entry each
+REQUIREMENTS_CEILING = 8_000  # epics and their acceptance criteria, one entry each
 
 CEILINGS: dict[str, int] = {
     "CONTEXT.md": VOCABULARY_CEILING,
@@ -55,6 +56,7 @@ CEILINGS: dict[str, int] = {
     "docs/BACKEND_GUIDELINES.md": DESIGN_DOC_CEILING,
     "docs/DESIGN.md": DESIGN_SYSTEM_CEILING,
     "docs/TESTING.md": TEST_REGISTER_CEILING,
+    "docs/REQUIREMENTS.md": REQUIREMENTS_CEILING,
 }
 
 # --- counting ---------------------------------------------------------------
@@ -109,45 +111,51 @@ def main() -> int:
     failures: list[str] = []
     needs_cleanup: list[str] = []
 
-    for path, ceiling in sorted(CEILINGS.items()):
-        full = repo_root / path
-        if not full.exists():
+    for path, ceiling_words in sorted(CEILINGS.items()):
+        document = repo_root / path
+        if not document.exists():
             print(f"  MISSING  {path} — tracked in CEILINGS but not on disk")
             failures.append(path)
             continue
 
-        count = prose_words(full.read_text(encoding="utf-8"))
+        prose_word_count = prose_words(document.read_text(encoding="utf-8"))
 
-        if count <= ceiling:
-            print(f"  ok       {path}: {count:,} / {ceiling:,} words")
+        if prose_word_count <= ceiling_words:
+            print(f"  ok       {path}: {prose_word_count:,} / {ceiling_words:,} words")
             continue
 
-        over = count - ceiling
+        words_over_ceiling = prose_word_count - ceiling_words
         if not args.base:
-            print(f"  OVER     {path}: {count:,} / {ceiling:,} words (+{over:,})")
+            print(
+                f"  OVER     {path}: {prose_word_count:,} / {ceiling_words:,} "
+                f"words (+{words_over_ceiling:,})"
+            )
             needs_cleanup.append(path)
             continue
 
-        before = count_at_ref(path, args.base)
-        if before is None:
+        base_prose_word_count = count_at_ref(path, args.base)
+        if base_prose_word_count is None:
             print(
-                f"  FAIL     {path}: new file at {count:,} words, "
-                f"ceiling {ceiling:,}"
+                f"  FAIL     {path}: new file at {prose_word_count:,} words, "
+                f"ceiling {ceiling_words:,}"
             )
             failures.append(path)
-        elif count > before:
+        elif prose_word_count > base_prose_word_count:
             print(
-                f"  FAIL     {path}: {before:,} -> {count:,} words "
-                f"(+{count - before:,}); already {over:,} over the {ceiling:,} "
-                f"ceiling, so it may only shrink"
+                f"  FAIL     {path}: {base_prose_word_count:,} -> "
+                f"{prose_word_count:,} words "
+                f"(+{prose_word_count - base_prose_word_count:,}); already "
+                f"{words_over_ceiling:,} over the {ceiling_words:,} ceiling, "
+                f"so it may only shrink"
             )
             failures.append(path)
         else:
-            shrunk = before - count
-            note = f"-{shrunk:,} this change" if shrunk else "unchanged"
+            words_removed = base_prose_word_count - prose_word_count
+            note = f"-{words_removed:,} this change" if words_removed else "unchanged"
             print(
-                f"  over     {path}: {count:,} / {ceiling:,} words "
-                f"(+{over:,}, {note}) — cleanup owed, not blocking"
+                f"  over     {path}: {prose_word_count:,} / {ceiling_words:,} "
+                f"words (+{words_over_ceiling:,}, {note}) — cleanup owed, "
+                f"not blocking"
             )
             needs_cleanup.append(path)
 

@@ -68,8 +68,8 @@ class GtdDatabase extends _$GtdDatabase {
   ///
   /// **The scope rides the zone the body runs in** — every effect described
   /// anywhere inside [body], at any nesting depth and across every `await`, is
-  /// filed into *this* scope, and a nested `capturing` is this scope's child
-  ///. That is not a nicety: this method opens its scope as its first
+  /// filed into *this* scope, and a nested `capturing` is this scope's child.
+  /// That is not a nicety: this method opens its scope as its first
   /// synchronous statement while [body] waits behind drift's `ensureOpen`, so two
   /// un-awaited calls always both open before either body runs, and "the scope
   /// begun most recently" would attribute the first caller's writes to the

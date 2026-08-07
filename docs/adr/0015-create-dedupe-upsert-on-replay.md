@@ -2,7 +2,12 @@
 
 ## Status
 
-Accepted.
+Accepted, and **historical since #556**. The connector-facing POST create routes
+this governed no longer exist: the server holds no domain schema and exposes only
+the op log, so there is no route left to dedupe. Kept as the record of why
+same-user replay upserts rather than returning the stored row — the reasoning
+still applies wherever two origins can mint the same id, which is the case
+ADR-0019 rests on.
 
 ## Context
 

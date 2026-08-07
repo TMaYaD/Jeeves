@@ -6,8 +6,7 @@
 /// Every method that writes a `captures` / `capture_outcomes` / `capture_tags`
 /// table directly calls [GtdDatabase.notifyCapturesViewWrite] right after the
 /// write: the Inbox reads across all three, so a write to one has to refresh
-/// watchers naming another, which Drift's per-table invalidation does not do
-///.
+/// watchers naming another, which Drift's per-table invalidation does not do.
 library;
 
 import 'package:drift/drift.dart';

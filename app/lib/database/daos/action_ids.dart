@@ -17,8 +17,8 @@ import 'package:uuid/enums.dart' show Namespace;
 ///
 /// `uuid5(NAMESPACE_URL, "jeeves://action/backfill/<todoId>")` — byte-identical
 /// to the Python `_backfill_action_id_for` in Alembic 0028, so any origin
-/// deriving a backfilled Action mints the **same** row and ADR-0015
-/// upsert-on-replay collapses the duplicate upload. The scheme keys on the
+/// deriving a backfilled Action mints the **same** row, so the two converge
+/// rather than forking. The scheme keys on the
 /// Outcome (not on content), so re-running the backfill can never mint a second
 /// Action for the same Outcome. A shared golden vector pins the cross-language
 /// equality.
