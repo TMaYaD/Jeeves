@@ -9,8 +9,11 @@
 /// Every write here goes through the production seams the re-clarify sheet
 /// itself commits — `ClarificationService.completeCurrentAction` for the Done,
 /// `clarifyToOutcome` for the verdict — so the journey is evidence about the
-/// real flow rather than about a fixture. Per docs/TESTING.md the store is
-/// staged in `setUp`, never inside a `testWidgets` body.
+/// real flow rather than about a fixture. The blank-save group goes one level
+/// further and taps the sheet itself, because there the behaviour under test
+/// lives in the widget (ADR-0049's title-as-action fallback) rather than on the
+/// service. Per docs/TESTING.md the store is staged in `setUp`, never inside a
+/// `testWidgets` body.
 library;
 
 import 'package:drift/drift.dart' hide isNull, isNotNull;
@@ -32,6 +35,7 @@ import 'package:jeeves/screens/active_focus_screen.dart' show focusNextTask;
 import 'package:jeeves/screens/focus_screen.dart';
 import 'package:jeeves/services/clarification_service.dart';
 import 'package:jeeves/services/notification_service.dart';
+import 'package:jeeves/widgets/reclarify_prompt_sheet.dart';
 
 import '../helpers/settle.dart';
 import '../test_helpers.dart';
@@ -224,7 +228,7 @@ void main() {
     });
   });
 
-  group('a blank "More to do" save (blocked on #691)', () {
+  group('a blank "More to do" save settles it just the same', () {
     late GtdDatabase db;
     late ClarificationService clarification;
 
@@ -239,27 +243,61 @@ void main() {
       await db.focusSessionDao
           .setCurrentTask(sessionId: sessionId, taskId: 'blank');
       await clarification.completeCurrentAction('blank');
-      // The blank save: today `_nextWithDialog` skips the write entirely, so
-      // nothing is committed even though the user answered the sheet.
     });
 
     tearDown(() async => db.close());
 
-    test(
-      'the row settles as next even though the dialog was saved empty',
-      () async {
-        expect(
-          await db.focusSessionDao.getActiveSessionSettlements(),
-          {'blank': SessionSettlement.next},
-        );
-      },
-      // #691 makes the blank save commit — a title-as-action fallback plus the
-      // `last_clarified_at` stamp `applyRouting` always writes. Until it lands
-      // the save writes nothing, so there is no clarify stamp at or after the
-      // Action completion and the row correctly refuses to settle. The gap is
-      // pre-existing, not introduced here; weakening the Settled definition to
-      // paper over it is the wrong fix, so the case is skipped instead.
-      skip: 'blocked on #691 — blank "More to do" save writes nothing today',
-    );
+    testWidgets('the row settles as next even though the dialog was saved '
+        'empty (#691)', (tester) async {
+      // The one case in this file driven through the sheet rather than the
+      // service seam: what settles the row is the *title-as-action fallback*
+      // ADR-0049 put inside `ProcessToHandlers._nextWithDialog`, so composing
+      // its writes by hand here would assert nothing about the flow. The user
+      // knows there is more to do and cannot name it; the Outcome's own title
+      // stands in, `applyRouting` stamps `last_clarified_at` at or after the
+      // Action completion, and arm (b) of Settled is satisfied.
+      await _saveMoreToDoBlank(tester, db, (await db.todoDao.getTodo('blank'))!);
+
+      expect(
+        await db.focusSessionDao.getActiveSessionSettlements(),
+        {'blank': SessionSettlement.next},
+      );
+    });
   });
+}
+
+/// Floats the real re-clarify sheet over [db], answers "More to do…", and
+/// saves the next-action dialog without typing anything — the exact taps the
+/// Focus screen's Done button leads to.
+Future<void> _saveMoreToDoBlank(
+  WidgetTester tester,
+  GtdDatabase db,
+  Todo todo,
+) async {
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [databaseProvider.overrideWithValue(db)],
+      child: MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => Center(
+              child: ElevatedButton(
+                onPressed: () => ReclarifyPromptSheet.show(context, todo),
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  await tester.tap(find.text('open'));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text('More to do…'));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text('Save'));
+  await tester.pumpAndSettle();
+
+  await tester.pumpWidget(const SizedBox.shrink());
+  await tester.pumpAndSettle();
 }
