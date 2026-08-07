@@ -139,6 +139,33 @@ The canonical radii scale is the reference design system's tokens (`jeeves.css` 
 ### Spacing
 We maintain a **normal (2)** level of spacing, balancing information density with visual comfort and ease of use.
 
+### Icon vocabulary
+A handful of glyphs carry a fixed meaning across the app. They are reserved: a
+screen that wants one of these meanings uses the glyph, and a screen that wants
+a different meaning uses a different glyph.
+
+*   **`+` / `Icons.add`** — **reserved** for *add to the list or context I am
+    currently looking at*. The genuine sites: add a planned Action and add a
+    context tag on task detail (`task_detail_screen.dart`), carve and merge an
+    Outcome in the clarify surface (`capture_outcomes_section.dart`), and the
+    project and person-tag pickers. Never for capture — capture is global, and a
+    `+` in the title bar reads as "add an item *here*".
+*   **`Icons.move_to_inbox`** (filled) — the global **Capture** action, pinned in
+    the title bar (`capture_action.dart`). The glyph names the destination: a
+    tray with an arrow going into it is Capture → Inbox.
+*   **`Icons.inbox_outlined`** — the **Inbox as a destination**: drawer nav,
+    empty states, and "Captured from" provenance. An action and the place it
+    delivers to must not share a glyph.
+*   **`Icons.bolt` / `Icons.bolt_outlined`** — **energy**, wherever an energy
+    level is shown or set.
+
+The rule that generates these: **in the title bar and drawer, an outlined glyph
+names a place and a filled one names an act** — hence outlined Inbox for the
+destination against filled `move_to_inbox` for the action, and filled
+`Icons.play_arrow_rounded` for task detail's Start focus. Filled-versus-outlined
+is a real signal here because it reads with no colour at all (cf. § Sync health,
+where the same distinction carries meaning independently of hue).
+
 ### Wizard footers — one forward affordance at a time
 The Weekly Review and Daily Planning Ritual footers expose a single forward
 affordance, never two. The footer reserves one fixed-size slot on the right
@@ -312,7 +339,8 @@ Left to right:
     by `AppShell` — the Now route's Re-plan action (shown only while an open
     session carries tasks) is the precedent.
 *   **pinned capture** — the fixed rightmost action slot, reserved for capture.
-    Identical position on every screen that pins it; never overflows. The Inbox
+    Identical position on every screen that pins it; never overflows. It carries
+    the reserved capture glyph, never a plain `+` (§ Icon vocabulary). The Inbox
     is the one screen that suppresses it — its `QuickAddBar` already captures.
 *   **⋮ overflow** — renders **only** when something overflowed, rightmost of
     all.
