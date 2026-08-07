@@ -17,8 +17,8 @@ import '../../../providers/evening_shutdown_provider.dart';
 /// [loggedMinutesByOutcomeProvider] — no Outcome row carries a total. The map is
 /// read once for the whole step and serves both the per-card chip and the
 /// summary bar's fold, so the two can never disagree.
-class CompletedReviewStep extends ConsumerWidget {
-  const CompletedReviewStep({super.key});
+class SettledReviewStep extends ConsumerWidget {
+  const SettledReviewStep({super.key});
 
   /// The heading each group renders under.
   static String _labelFor(SessionSettlement bucket, int count) =>

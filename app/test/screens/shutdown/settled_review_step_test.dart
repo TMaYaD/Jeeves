@@ -12,7 +12,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/providers/evening_shutdown_provider.dart';
-import 'package:jeeves/screens/shutdown/steps/completed_review_step.dart';
+import 'package:jeeves/screens/shutdown/steps/settled_review_step.dart';
 
 import '../../test_helpers.dart';
 
@@ -35,7 +35,7 @@ Widget _step(Map<SessionSettlement, List<Todo>> groups) => ProviderScope(
         ),
       ],
       child: const MaterialApp(
-        home: Scaffold(body: CompletedReviewStep()),
+        home: Scaffold(body: SettledReviewStep()),
       ),
     );
 

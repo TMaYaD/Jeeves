@@ -21,7 +21,7 @@ import '../../providers/evening_shutdown_provider.dart';
 import '../../widgets/ceremony/ceremony_pop_scope.dart';
 import '../../widgets/ceremony/wizard.dart';
 import 'steps/close_day_step.dart';
-import 'steps/completed_review_step.dart';
+import 'steps/settled_review_step.dart';
 import 'steps/unfinished_tasks_step.dart';
 
 class ShutdownRitualScreen extends ConsumerStatefulWidget {
@@ -133,7 +133,7 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
     final steps = <WizardStep>[
       WizardStep(
         title: _stepTitles[0],
-        body: const CompletedReviewStep(),
+        body: const SettledReviewStep(),
         subtitle: 'Step 1 of 2',
         footer: WizardFooter(
           ceremonyId: _ceremonyId,
