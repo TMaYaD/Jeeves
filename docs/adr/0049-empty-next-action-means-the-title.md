@@ -30,10 +30,10 @@ List row offering the user nothing to engage with. That is a model change, not a
 **An empty next-action phrase means the Outcome's title.** When a surface routes an Outcome
 to Next or Waiting For with no phrase supplied, the title stands in — written only while the
 Outcome is **Actionless** (via the atomic `setCurrentActionTextIfActionless`, so a
-deliberate phrase is never clobbered) and skipped only when the title itself is blank. The
-item therefore always resolves and advances; only an explicit **cancel** leaves it
-unresolved, and the two are distinguished by the dialog's return *type* (`null` vs `''`),
-never by emptiness alone.
+deliberate phrase is never clobbered) and skipped only when the title itself is blank. A
+*titled* item therefore always resolves and advances. Two things leave it unresolved: an
+explicit **cancel**, and the blank-titled case below. Cancel and an empty save are
+distinguished by the dialog's return *type* (`null` vs `''`), never by emptiness alone.
 
 Two consequences are deliberate. Clearing an existing phrase and saving does **not** retire
 the Action — the fallback is Actionless-only, and **Abandon** is the affordance for
