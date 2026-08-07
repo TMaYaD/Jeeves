@@ -215,7 +215,7 @@ bool _energyFits(String? taskEnergy, String? dayEnergy) {
 /// Next-action tasks not yet reviewed in today's planning session, filtered
 /// down to the ones whose energy requirement fits the user's self-reported
 /// day-energy. Reactive: changing [FocusSessionPlanningState.energyLevel]
-/// re-evaluates the visible Pending Review list with no imperative state
+/// re-evaluates the visible Up Next list with no imperative state
 /// mutation in between.
 ///
 /// A null day-energy (Energy step not yet visited) means no filtering at
