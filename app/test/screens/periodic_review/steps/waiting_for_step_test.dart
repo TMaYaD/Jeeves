@@ -170,29 +170,39 @@ void main() {
     });
 
     testWidgets(
-        'blank Save records no routing and the wizard stays on the item',
-        (tester) async {
-      await _insertWaitingForTodo(db, id: 'wf1');
+        'blank Save falls back to the title, keeps the person tag, records a '
+        'Next routing, and advances (#691)', (tester) async {
+      await _insertWaitingForTodo(db, id: 'wf1', title: 'Chase the invoice');
       final container = await _enterStep(tester, db);
 
       await tester.tap(find.text('Next Action…'));
       await tester.pumpAndSettle();
-      // Save without typing anything — blank phrase.
+      // Save without typing anything — the title stands in as the action.
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
 
       final state = container.read(periodicReviewProvider);
-      expect(state.waitingForRoutings, isEmpty,
-          reason: 'a blank promotion must not record a routing');
-      expect(state.waitingForNav.index, 0,
-          reason: 'a blank promotion must leave the cursor on the item');
-      expect(state.waitingForNav.isComplete, isFalse);
+      expect(state.waitingForRoutings[0], RoutingKind.nextAction,
+          reason: 'a blank promotion resolves the item like any other');
+      expect(state.waitingForNav.isComplete, isTrue,
+          reason: 'a blank promotion advances the cursor');
 
-      // The DB row is untouched: a blank promotion neither writes a phrase
-      // nor re-routes the item off Waiting For.
+      expect((await db.actionDao.getCurrentAction('wf1'))?.actionText,
+          'Chase the invoice');
+
+      // intent ⊥ delegate: the delegate survives here exactly as it does on
+      // the phrase-backed path.
+      expect(await db.todoDao.getPersonTagIdsForTodo('wf1'),
+          contains('p-trixy'));
+
+      // The row is now legitimately on both Lists — CONTEXT.md's one
+      // deliberate overlap: Next because the Action is doable, Waiting For
+      // because the dependency is real. That also moves it out of the
+      // actionless-AND-PersonBlocked quadrant Next excludes.
       final row = await db.todoDao.getTodo('wf1');
-      expect(await db.actionDao.getCurrentAction('wf1'), isNull);
       expect(row?.intent, 'next');
+      final needsReview = await db.todoDao.getNeedsReview();
+      expect(needsReview.map((t) => t.id), isNot(contains('wf1')));
     });
 
     testWidgets('cancelling the dialog records no routing and does not advance',

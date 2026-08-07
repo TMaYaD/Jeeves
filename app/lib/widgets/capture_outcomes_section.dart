@@ -894,9 +894,6 @@ class _RoutingAndVerdict extends StatelessWidget {
           ProcessAction.waitingFor,
           ProcessAction.someday,
         },
-        // The Outcome field carries the phrase already (see the draft), so
-        // Next routes immediately rather than opening the dialog.
-        ProcessAction.nextActionDialog,
       },
       disabled: {
         if (titleIsBlank) ...{

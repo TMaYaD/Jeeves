@@ -29,6 +29,7 @@ import 'package:jeeves/models/action_draft.dart';
 import 'package:jeeves/widgets/clarify_card.dart';
 import 'package:jeeves/widgets/clarify_shared_widgets.dart';
 import 'package:jeeves/widgets/context_tag_picker.dart';
+import 'package:jeeves/widgets/next_action_dialog.dart';
 import 'package:jeeves/widgets/process_to_handlers.dart';
 import 'package:jeeves/widgets/project_picker.dart';
 
@@ -96,6 +97,20 @@ Future<void> _scrollAndTap(WidgetTester tester, String label) async {
   await tester.ensureVisible(find.text(label));
   await tester.pump(const Duration(milliseconds: 50));
   await tester.tap(find.text(label));
+}
+
+/// Routes a Capture card to Next, accepting the dialog's seeded phrase.
+///
+/// "Does Next open [NextActionDialog]?" is one of the properties held
+/// identical across the three hosts (#689): they all render the same
+/// [ClarifyCard], which leaves the modifier on for a Capture. Saving unedited
+/// accepts the title mirror, so tests about *other* properties keep the
+/// Action they always had.
+Future<void> _routeCaptureToNext(WidgetTester tester) async {
+  await _scrollAndTap(tester, 'Next Action');
+  await _pumpFrames(tester, frames: 10);
+  await tester.tap(find.text('Save'));
+  await _pumpFrames(tester);
 }
 
 /// The real service with its Capture-clarify write parked on [gate], so a test
@@ -232,8 +247,7 @@ void main() {
       );
       await _pumpFrames(tester, frames: 5);
 
-      await _scrollAndTap(tester, 'Next Action');
-      await _pumpFrames(tester);
+      await _routeCaptureToNext(tester);
 
       final outcomeId = (await db.captureDao.outcomeIdsForCapture('x')).single;
       expect(await _joinedTagIds(db, outcomeId), contains('c1'));
@@ -255,8 +269,7 @@ void main() {
       );
       await _pumpFrames(tester, frames: 5);
 
-      await _scrollAndTap(tester, 'Next Action');
-      await _pumpFrames(tester);
+      await _routeCaptureToNext(tester);
 
       final outcomeId = (await db.captureDao.outcomeIdsForCapture('x')).single;
       final joined = await _joinedTagIds(db, outcomeId);
@@ -306,8 +319,7 @@ void main() {
       await tester.tap(find.text('@work'));
       await tester.pump();
 
-      await _scrollAndTap(tester, 'Next Action');
-      await _pumpFrames(tester);
+      await _routeCaptureToNext(tester);
 
       final outcomeId = (await db.captureDao.outcomeIdsForCapture('x')).single;
       expect(await _joinedTagIds(db, outcomeId), contains('c1'));
@@ -431,11 +443,56 @@ void main() {
       expect(reported, [true],
           reason: 'the bar is busy and the host has been told');
 
+      // The dialog is inside the busy window — `_runOnce` latches before it
+      // opens — so the host stays told until the write it collects has landed.
+      await _pumpFrames(tester, frames: 10);
+      await tester.tap(find.text('Save'));
+      await tester.pump();
+      expect(reported, [true]);
+
       gate.complete();
       await _pumpFrames(tester);
 
       expect(reported, [true, false]);
     });
+  });
+
+  // The divergence table's newest row: the three hosts differ in one option
+  // and three slots, and "does Next ask for the next action?" is on neither
+  // list. It is a property of the shared card, so it must hold under every
+  // configuration a host can pick (#689).
+  group('Next opens the dialog under every host configuration', () {
+    for (final tagSection in ClarifyTagSection.values) {
+      testWidgets('$tagSection', (tester) async {
+        final capture = await _insertCapture(db, id: 'x', title: 'Buy milk');
+
+        await tester.pumpWidget(_card(
+          db,
+          capture,
+          tagSection: tagSection,
+          // Only `editablePickers` reads the hint stream; supplying it under
+          // both keeps this loop's two arms otherwise identical.
+          tagHintsStream: tagSection == ClarifyTagSection.editablePickers
+              ? Stream.value(const <Tag>[])
+              : null,
+        ));
+        await _pumpFrames(tester, frames: 5);
+
+        await _scrollAndTap(tester, 'Next Action');
+        await _pumpFrames(tester, frames: 10);
+
+        expect(find.byType(NextActionDialog), findsOneWidget);
+        final field = tester.widget<TextField>(
+          find.descendant(
+            of: find.byType(NextActionDialog),
+            matching: find.byType(TextField),
+          ),
+        );
+        expect(field.controller?.text, 'Buy milk',
+            reason: 'the seed comes from the shared draft, not from the '
+                'option the host picked');
+      });
+    }
   });
 
   group('the body renders no chrome and never pops', () {
@@ -475,8 +532,7 @@ void main() {
       ));
       await _pumpFrames(tester, frames: 5);
 
-      await _scrollAndTap(tester, 'Next Action');
-      await _pumpFrames(tester);
+      await _routeCaptureToNext(tester);
 
       expect(hookCalls, 1);
       // Still mounted: nothing in the body navigated. Asserted on the card

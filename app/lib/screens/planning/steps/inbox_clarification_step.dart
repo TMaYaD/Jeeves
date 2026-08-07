@@ -42,12 +42,13 @@ class InboxClarificationStep extends ConsumerWidget {
       nav: nav,
       routings: routings,
       onAfterRoute: (action) async {
-        // [ClarifyCard] does not include `keep` or the `nextActionDialog`
-        // modifier, so neither action can actually arrive here. The shared
-        // extension returns null for `keep` (no routing recorded) and
-        // collapses `nextActionDialog` onto the `next` route — the same
-        // target it would land on if the modifier ever were enabled at this
-        // surface.
+        // `nextActionDialog` *does* arrive here: [ClarifyCard] leaves the
+        // modifier on for a Capture, so Next opens the dialog and reports the
+        // modifier rather than the plain route (issue #689). The shared
+        // extension collapses it onto `nextAction` — the destination the
+        // routing actually landed on — so the session record is true. `keep`
+        // is the one action that cannot arrive: the card does not include it.
+        // It returns null there, recording no routing.
         final kind = action.toRoutingKind();
         if (kind == null) return;
         ref

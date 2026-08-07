@@ -31,11 +31,11 @@ import '../widgets/reclarify_prompt_sheet.dart';
 ///
 /// "All done for today!" is claimed **only** on a genuine achieved-and-last
 /// verdict. This keys on the achieved verdict specifically ([ProcessAction.done]),
-/// not on any truthy resolution: a blank "More to do" save routes nothing yet
-/// still resolves as [ProcessAction.nextActionDialog], and a real "More to do"
-/// resolves as `nextActionDialog` too — neither achieves the Outcome, so
-/// neither may claim "All done". A `null` verdict (the prompt was dismissed)
-/// is likewise not an achievement.
+/// not on any truthy resolution: every "More to do" save resolves as
+/// [ProcessAction.nextActionDialog] — whether the user typed a phrase or left
+/// it empty and took the title-as-action fallback (ADR-0049) — and neither
+/// achieves the Outcome, so neither may claim "All done". A `null` verdict
+/// (the prompt was dismissed) is likewise not an achievement.
 @visibleForTesting
 String focusAdvanceMessage({
   required Todo? nextTask,

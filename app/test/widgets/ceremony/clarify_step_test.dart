@@ -13,7 +13,7 @@
 ///    loaded.
 library;
 
-import 'package:drift/drift.dart' hide isNull;
+import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -26,6 +26,7 @@ import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/utils/snapshot_nav.dart';
 import 'package:jeeves/widgets/ceremony/clarify_step.dart';
 import 'package:jeeves/widgets/clarify_retention.dart';
+import 'package:jeeves/widgets/process_to_handlers.dart';
 
 import '../../test_helpers.dart';
 
@@ -129,7 +130,12 @@ void main() {
     /// Every provider the inner card reads is fed a single-value stream:
     /// a real drift `watch()` leaves a pending timer behind and hangs
     /// `pumpAndSettle` (docs/TESTING.md).
-    Widget stepAt(int index, ClarifyRetention retention) => ProviderScope(
+    Widget stepAt(
+      int index,
+      ClarifyRetention retention, {
+      Future<void> Function(ProcessAction)? onAfterRoute,
+    }) =>
+        ProviderScope(
           overrides: [
             databaseProvider.overrideWithValue(db),
             for (final id in ['c1', 'c2'])
@@ -151,7 +157,7 @@ void main() {
                 nav: SnapshotNav<String>(items: const ['c1', 'c2'],
                     index: index),
                 routings: const {},
-                onAfterRoute: (_) async {},
+                onAfterRoute: onAfterRoute ?? (_) async {},
                 retention: retention,
               ),
             ),
@@ -220,6 +226,67 @@ void main() {
       await tester.pumpWidget(stepAt(1, retention));
       await pumpFrames(tester);
       expect(titleText(tester), 'Call Bob back');
+    });
+
+    // The host half of #689. `InboxClarificationStep` records a routing and
+    // advances the cursor from this hook, so what the hook says has to be
+    // true of the database: before the dialog reached a Capture surface,
+    // a route that wrote nothing would still have advanced the ceremony and
+    // recorded `nextAction` for an item left sitting in the Inbox.
+    group('the dialog-mediated route reaches the host exactly once', () {
+      Future<void> tapInCard(WidgetTester tester, String label) async {
+        for (var i = 0; i < 15 && find.text(label).evaluate().isEmpty; i++) {
+          await tester.drag(
+              find.byType(Scrollable).first, const Offset(0, -200));
+          await tester.pump(const Duration(milliseconds: 50));
+        }
+        expect(find.text(label), findsOneWidget);
+        await tester.ensureVisible(find.text(label));
+        await tester.pump(const Duration(milliseconds: 50));
+        await tester.tap(find.text(label));
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+
+      testWidgets('Save advances the cursor over a Capture that really left',
+          (tester) async {
+        final fired = <ProcessAction>[];
+        await tester.pumpWidget(stepAt(0, ClarifyRetention(),
+            onAfterRoute: (a) async => fired.add(a)));
+        await pumpFrames(tester);
+
+        await tapInCard(tester, 'Next Action');
+        await pumpFrames(tester);
+        await tapInCard(tester, 'Save');
+        await pumpFrames(tester);
+
+        // One hook, carrying the modifier — which `toRoutingKind()` collapses
+        // onto `nextAction`, the destination that actually landed.
+        expect(fired, [ProcessAction.nextActionDialog]);
+        expect(fired.single.toRoutingKind(), RoutingKind.nextAction);
+        // …and the row the record describes exists.
+        final outcomeIds = await db.captureDao.outcomeIdsForCapture('c1');
+        expect(outcomeIds, hasLength(1));
+        expect((await db.todoDao.getTodo(outcomeIds.single))?.intent, 'next');
+        expect((await db.captureDao.getCapture('c1'))!.clarifiedAt, isNotNull);
+      });
+
+      testWidgets('Cancel neither advances nor records', (tester) async {
+        final fired = <ProcessAction>[];
+        await tester.pumpWidget(stepAt(0, ClarifyRetention(),
+            onAfterRoute: (a) async => fired.add(a)));
+        await pumpFrames(tester);
+
+        await tapInCard(tester, 'Next Action');
+        await pumpFrames(tester);
+        await tapInCard(tester, 'Cancel');
+        await pumpFrames(tester);
+
+        expect(fired, isEmpty,
+            reason: 'cancel leaves the item unresolved (ADR-0049), so the '
+                'ceremony must stay on it');
+        expect(await db.captureDao.outcomeIdsForCapture('c1'), isEmpty);
+        expect((await db.captureDao.getCapture('c1'))!.clarifiedAt, isNull);
+      });
     });
   });
 }

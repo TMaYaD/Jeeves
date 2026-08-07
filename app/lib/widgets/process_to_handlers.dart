@@ -82,12 +82,24 @@ enum ProcessAction {
 /// - `keep` is an explicit no-op on a [CaptureSubject] in [_keep] — "leave it
 ///   in the Inbox", `clarified_at` stays NULL. **Not** a verdict.
 /// - `reclarify` throws on a [CaptureSubject]; it can never report one.
-/// - `nextActionDialog` notifies even when the dialog came back blank and no
-///   write was made ([_nextWithDialog]), so it cannot promise a verdict.
+/// - `nextActionDialog` reaches [_commit] whenever it notifies: the commit is
+///   unconditional (a blank save routes under the title-as-action fallback,
+///   ADR-0049), and the one arm that writes nothing — a blank phrase over a
+///   blank title — returns without notifying at all. A verdict.
 ///
-/// Deliberately conservative on the last two: a false negative leaks a store
-/// entry that a ceremony reset collects, while a false positive throws away
-/// what the user typed. Only one of those is a bug ADR-0023 exists to prevent.
+/// `nextActionDialog` answered `false` until issue #689, and that was right
+/// while it lasted: no Capture surface enabled the modifier, so the answer was
+/// unexercised and the conservative one cost nothing. #689 enables it on the
+/// clarify card and the n-m carve, which makes the answer load-bearing — and
+/// `false` becomes the bug it was guarding against, in reverse.
+/// [ClarifyCard._discardRetainedDraft] would not drop the retained draft for a
+/// Capture that has just left the Inbox, and the card's `dispose` would stash
+/// it straight back, leaking an entry until a ceremony reset.
+///
+/// `keep` stays conservative for the reason the asymmetry names: a false
+/// negative leaks a store entry that a ceremony reset collects, while a false
+/// positive throws away what the user typed on an item they have not finished
+/// clarifying. Only one of those is a bug ADR-0023 exists to prevent.
 ///
 /// Says nothing about the n-m carve, where the same destinations leave the
 /// Capture in the Inbox ([CaptureSubject.completesClarification]): that surface
@@ -100,12 +112,10 @@ extension ProcessActionEndsCaptureClarification on ProcessAction {
         ProcessAction.someday ||
         ProcessAction.done ||
         ProcessAction.trash ||
-        ProcessAction.completeCapture =>
-          true,
-        ProcessAction.keep ||
-        ProcessAction.reclarify ||
+        ProcessAction.completeCapture ||
         ProcessAction.nextActionDialog =>
-          false,
+          true,
+        ProcessAction.keep || ProcessAction.reclarify => false,
       };
 }
 
@@ -244,9 +254,12 @@ class ClarifyDraft {
   ///
   /// The clarify card owns the policy that fills it (the title-as-action
   /// mirror, so a freshly clarified row never lands on the Next list
-  /// actionless); the [ProcessAction.nextActionDialog] modifier overrides its
-  /// phrase when active. Energy and estimate ride along and, on an Actionless
-  /// destination, land on the Outcome columns as draft (D3).
+  /// actionless). On a Capture the [ProcessAction.nextActionDialog] modifier
+  /// both *seeds* its dialog from this phrase and overrides it with whatever
+  /// the user saves — so the mirror is now the proposal and the fallback
+  /// rather than the only path (issue #689). Energy and estimate ride along
+  /// and, on an Actionless destination, land on the Outcome columns as draft
+  /// (D3).
   final ActionDraft? action;
 }
 
@@ -794,26 +807,83 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     await _notifyAfterRoute(ProcessAction.next);
   }
 
+  /// Next + the [ProcessAction.nextActionDialog] modifier, and the one site
+  /// that applies the **title-as-action fallback** (issue #691, ADR-0049).
+  ///
+  /// Cancel and a blank Save are different acts and are kept apart by the
+  /// dialog's *type*: cancel (button, barrier tap, system back) resolves to
+  /// `null`, a blank Save to `''`. The `result == null` early exit below —
+  /// before any write and before [_notifyAfterRoute] — is the whole of the
+  /// "cancel leaves the item unresolved" contract. Collapsing the two
+  /// (`result?.isEmpty ?? true`, or popping the title on save) silently breaks
+  /// it while every other behaviour here stays green.
   Future<void> _nextWithDialog() async {
-    // Edit-existing semantics: prefer the current Action's text so the user
-    // sees what's currently saved. A Capture has none — its Outcome does not
-    // exist yet — so the dialog opens empty.
-    final initial = widget.subject.currentActionText ?? '';
+    // The seed is per-subject, because the two shapes hold their phrase in
+    // different places (issue #689).
+    //
+    // On an Outcome it is edit-existing semantics: the current Action's text,
+    // so the user sees what is currently saved.
+    //
+    // On a Capture there is no Outcome yet, so [ClarifySubject.currentActionText]
+    // is null by contract and seeding from it would open the dialog empty —
+    // making the user retype what the card already says. The proposal lives in
+    // the draft instead ([ClarifyDraft.assemble]'s title mirror), and is read
+    // *here*, at open time, rather than at build time: [CaptureSubject.draft]
+    // is a callback because the card's title lives in a controller that does
+    // not rebuild this bar on every keystroke. Accepting the seed unchanged
+    // reproduces the pre-#689 title-as-action result in one extra tap.
+    final subject = widget.subject;
+    final seed = switch (subject) {
+      OutcomeSubject() => subject.currentActionText ?? '',
+      CaptureSubject(:final draft) => draft().action?.text ?? '',
+    };
     final result = await showNextActionDialog(
       context,
-      initial: initial,
-      taskTitle: widget.subject.title,
+      initial: seed,
+      // Asked of the subject, not inferred from the seed being non-empty: a
+      // Capture's seed is a proposal for an Action that does not exist yet, so
+      // a prefilled field there must still read "Set", not "Update".
+      editingExistingAction: (subject.currentActionText ?? '').isNotEmpty,
+      taskTitle: subject.title,
     );
     if (result == null) return; // user cancelled
     if (!mounted) return;
     if (!await _subjectExists()) return;
-    if (result.isNotEmpty) {
-      // A blank save must not route: promoting to Next with no phrase
-      // would land the item actionless on the Next list — the exact
-      // outcome the dialog modifier exists to prevent. Skip the write but
-      // still notify the callsite so it can react (e.g. clear a stale
-      // action record); its handler re-reads the row and sees the
-      // unchanged value.
+    if (result.isEmpty) {
+      // A blank save means "the title is the action": for a simple Outcome
+      // the title genuinely names the physical next action, so demanding a
+      // distinct phrase adds nothing. Route, then let the title stand in.
+      final title = widget.subject.title.trim();
+      if (title.isEmpty) {
+        // Nothing to stand in as the Action, so stalling is the honest
+        // outcome: routing here would leave the row on Next while Actionless,
+        // and `_needsReviewWhere`'s Actionless branch has no freshness gate —
+        // it would re-surface on the identical review card every day, forever.
+        // Near-unreachable through the UI (the clarify surfaces disable the
+        // routing buttons while the title is blank), but a synced-in row can
+        // carry one.
+        return;
+      }
+      // `actionText: null`, not `''`: a non-null blank *supersedes* the
+      // current Action (#476), which would destroy a deliberate phrase. Null
+      // leaves the Action alone while still writing intent / clarified,
+      // clearing done_at and stamping last_clarified_at.
+      await _commit(RoutingKind.nextAction);
+      if (widget.subject case OutcomeSubject(:final todo)) {
+        // Actionless-guarded, so a phrase the user already wrote survives —
+        // clearing the field is not the affordance for retiring an Action
+        // (Abandon is). One transaction, so a `current` Action landed by sync
+        // between the check and the write cannot be clobbered (#501). The
+        // other window is a throw between the route and this mirror, which
+        // leaves the row on Next + Actionless; it is recoverable (the item
+        // simply re-surfaces at the next review) and is the same two-await
+        // shape `ClarifyCard._onAfterRoute` already ships.
+        await _clarification.mirrorTitleIfActionless(todo.id, title);
+      }
+      // The Capture arm needs nothing here: `_mergedAction(d, null)` returns
+      // the draft's own Action, which already carries `ClarifyDraft.assemble`'s
+      // title mirror, and it is written as the Outcome is minted.
+    } else {
       await _commit(RoutingKind.nextAction, actionText: result);
     }
     await _notifyAfterRoute(ProcessAction.nextActionDialog);
