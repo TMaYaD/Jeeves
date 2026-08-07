@@ -7,7 +7,7 @@
 /// subscribe to drift's `StreamQueryStore` — that store leaves a pending
 /// `markAsClosed` timer behind on widget-tree teardown, tripping
 /// `!timersPending`. The overrides preserve the production filter logic so
-/// task movement between sections (Pending Review ↔ Today's Plan ↔ Skipped)
+/// task movement between sections (Up Next ↔ Today's Plan ↔ Skipped)
 /// still flows through the real focusSessionPlanning state.
 library;
 
@@ -54,7 +54,7 @@ Widget _harness(GtdDatabase db, List<Todo> todos) {
     overrides: [
       databaseProvider.overrideWithValue(db),
       _testTodosProvider.overrideWith((_) => todos),
-      // Pending Review: next-action todos minus anything already reviewed.
+      // Up Next: next-action todos minus anything already reviewed.
       nextForFocusSessionPlanningProvider.overrideWith((ref) {
         final state = ref.watch(focusSessionPlanningProvider);
         final reviewed = {
@@ -200,7 +200,7 @@ void main() {
 
       // Before commit: pending section shows all three, no Today's Plan section.
       // Section labels are rendered upper-cased by [_SectionLabel].
-      expect(find.text('PENDING REVIEW (3)'), findsOneWidget);
+      expect(find.text('UP NEXT (3)'), findsOneWidget);
       expect(find.textContaining('TODAY\'S PLAN'), findsNothing);
 
       await _longPressCard(tester, 'Task one');
@@ -216,7 +216,7 @@ void main() {
 
       // Two tasks moved to Today's Plan, one still pending.
       expect(find.text('TODAY\'S PLAN (2)'), findsOneWidget);
-      expect(find.text('PENDING REVIEW (1)'), findsOneWidget);
+      expect(find.text('UP NEXT (1)'), findsOneWidget);
 
       // Capacity summary reflects the new totals.
       expect(find.textContaining('2 tasks · 1h 15m planned'), findsOneWidget);
@@ -241,7 +241,7 @@ void main() {
 
       expect(find.text('Add to Today'), findsNothing);
       expect(find.textContaining('TODAY\'S PLAN'), findsNothing);
-      expect(find.text('PENDING REVIEW (2)'), findsOneWidget);
+      expect(find.text('UP NEXT (2)'), findsOneWidget);
     });
 
     testWidgets('deselecting the last item auto-exits selection mode',
@@ -303,7 +303,7 @@ void main() {
           .skipTask('t1');
       await tester.pumpAndSettle();
 
-      expect(find.textContaining('PENDING REVIEW'), findsNothing);
+      expect(find.textContaining('UP NEXT'), findsNothing);
       expect(find.text('Add to Today'), findsNothing);
     });
   });

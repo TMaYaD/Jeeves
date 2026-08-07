@@ -7,7 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../database/gtd_database.dart' show Todo;
+import '../database/gtd_database.dart' show GtdDatabase, Todo;
 import '../providers/focus_session_planning_provider.dart'
     show activeSessionTasksProvider;
 import '../providers/database_provider.dart';
@@ -17,6 +17,7 @@ import '../providers/task_detail_provider.dart';
 import '../services/clarification_service.dart';
 import '../services/notification_service.dart';
 import '../widgets/app_title_bar/app_title_bar.dart';
+import '../widgets/async_subject.dart' show SubjectPresence;
 import '../widgets/capture/capture_action.dart';
 import '../widgets/elapsed_timer_widget.dart';
 import '../widgets/process_to_handlers.dart' show ProcessAction;
@@ -433,10 +434,32 @@ class _NotesPageState extends ConsumerState<_NotesPage> {
   Timer? _saveTimer;
   bool _isEditing = false;
 
+  /// The database handle, captured while the element is still mounted so
+  /// [dispose] can issue the pending-notes flush.
+  ///
+  /// `dispose()` cannot reach it through `ref`: `StatefulElement.unmount()`
+  /// marks the element defunct — so `context.mounted` goes false — *before* it
+  /// calls `state.dispose()`, and Riverpod's `ref` asserts on exactly that
+  /// (#529). Every other read here runs while mounted and goes through `ref`.
+  late final GtdDatabase _databaseForDisposeFlush;
+
+  /// The notes as last written (or as the row was read), in the trimmed form
+  /// [_writeNotes] stores. The flush writes only what differs from it —
+  /// [TodoDao.updateFields] stamps `updated_at` and `last_clarified_at` and
+  /// authors a sync op, so an unconditional flush would restamp clarification
+  /// every time the user left the focus screen.
+  String? _baselineNotes;
+
+  /// Latched once local storage has confirmed this Outcome is gone — see where
+  /// it is set in [build].
+  bool _subjectConfirmedMissing = false;
+
   @override
   void initState() {
     super.initState();
+    _databaseForDisposeFlush = ref.read(databaseProvider);
     _ctrl = TextEditingController(text: widget.todo.notes ?? '');
+    _baselineNotes = (widget.todo.notes ?? '').trim();
     _focusNode = FocusNode();
     _focusNode.addListener(() {
       if (!_focusNode.hasFocus && _isEditing) {
@@ -450,9 +473,26 @@ class _NotesPageState extends ConsumerState<_NotesPage> {
   @override
   void dispose() {
     _saveTimer?.cancel();
+    _flushPendingNotes();
     _ctrl.dispose();
     _focusNode.dispose();
     super.dispose();
+  }
+
+  /// The last line of defence for a notes edit still in the field when the page
+  /// goes — including one typed inside the 500ms debounce window the line above
+  /// has just cancelled.
+  ///
+  /// Focus loss and the debounce stay the primary triggers (ADR-0023); this
+  /// only puts a floor under them. No `ref.read` / `ref.watch` in here — see
+  /// [_databaseForDisposeFlush].
+  void _flushPendingNotes() {
+    // A write must not outlive its subject.
+    if (_subjectConfirmedMissing) return;
+    // Snapshot everything before anything is disposed.
+    final text = _ctrl.text.trim();
+    if (text == _baselineNotes) return;
+    unawaited(_writeNotes(_databaseForDisposeFlush, widget.todo.id, text));
   }
 
   void _onChanged() {
@@ -460,9 +500,14 @@ class _NotesPageState extends ConsumerState<_NotesPage> {
     _saveTimer = Timer(const Duration(milliseconds: 500), _save);
   }
 
-  Future<void> _save() async {
-    final db = ref.read(databaseProvider);
-    final text = _ctrl.text.trim();
+  Future<void> _save() =>
+      _writeNotes(ref.read(databaseProvider), widget.todo.id, _ctrl.text.trim());
+
+  /// The one write path, shared by the debounce, the focus-loss save and the
+  /// dispose flush, so the exits cannot drift apart. Takes its database and
+  /// subject id as arguments because [dispose] can supply neither through
+  /// `ref`.
+  Future<void> _writeNotes(GtdDatabase db, String todoId, String text) async {
     try {
       // Route notes edits through the DAO so last_clarified_at is stamped
       // consistently — notes edits are a clarifying micro-act per CONTEXT.md.
@@ -470,11 +515,18 @@ class _NotesPageState extends ConsumerState<_NotesPage> {
       // user check was redundant because this notifier only runs on the
       // current user's own row stream.
       if (text.isEmpty) {
-        await db.todoDao.updateFields(widget.todo.id, clearNotes: true);
+        await db.todoDao.updateFields(todoId, clearNotes: true);
       } else {
-        await db.todoDao.updateFields(widget.todo.id, notes: text);
+        await db.todoDao.updateFields(todoId, notes: text);
       }
-    } catch (_) {}
+      _baselineNotes = text;
+    } catch (e) {
+      // The page may already be gone, so there is no surface left to tell the
+      // user on. Uncaught, a throwing DAO would escape as an unhandled async
+      // error from teardown, which reads as a framework fault rather than a
+      // lost edit.
+      debugPrint('ActiveFocusScreen: notes write failed: $e');
+    }
   }
 
   void _startEditing() {
@@ -493,6 +545,28 @@ class _NotesPageState extends ConsumerState<_NotesPage> {
 
   @override
   Widget build(BuildContext context) {
+    // A write must not outlive its subject (#446 / #447). This page receives
+    // its [Todo] from the parent, so it latches its own signal off the same
+    // provider the parent watches. The parent's null branch swaps the body out
+    // and routes away, so this page is genuinely torn down at the moment the
+    // row goes — an unguarded flush would write to the deleted row on the
+    // ordinary path, not a rare one.
+    //
+    // **Latched, never cleared:** un-latching on a row that comes back is live
+    // re-binding, which #447 puts out of scope (#427). `dispose()` reads the
+    // latch rather than the provider, because reading a provider there is the
+    // #529 trap.
+    //
+    // The window between the last emission and the flush is #444's; the durable
+    // answer is one guard at the write seam, not a latch per surface — #447
+    // should replace this rather than copy it onto the next one.
+    ref.listen<AsyncValue<Todo?>>(
+      taskDetailTodoProvider(widget.todo.id),
+      (previous, next) {
+        if (next.subjectConfirmedMissing) _subjectConfirmedMissing = true;
+      },
+    );
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
       child: Column(

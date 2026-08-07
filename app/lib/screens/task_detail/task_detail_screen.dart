@@ -1,3 +1,5 @@
+import 'dart:async';
+
 // The Drift `Action` row type (issue #475) collides with Material's
 // `Action<Intent>` widget class; this screen uses no Material `Action`, so hide
 // it and keep the domain type.
@@ -38,13 +40,50 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   late FocusNode _titleFocusNode;
   late FocusNode _notesFocusNode;
 
+  /// The writer, captured while the element is still mounted so [dispose] can
+  /// issue the pending-edit flush.
+  ///
+  /// `dispose()` cannot reach it through `ref`: `StatefulElement.unmount()`
+  /// marks the element defunct — so `context.mounted` goes false — *before* it
+  /// calls `state.dispose()`, and Riverpod's `ref` asserts on exactly that
+  /// (#529). Note that `State.mounted` is still **true** in there, because
+  /// `state._element` is nulled only afterwards, so the `mounted` guards on the
+  /// two focus listeners protect nothing during teardown.
+  ///
+  /// The notifier rather than the raw database: [taskDetailNotifierProvider]
+  /// captures `db` and `userId` eagerly and documents that holding it past its
+  /// `autoDispose` ref is safe, so the flush routes through the same
+  /// `updateTitle` / `updateNotes` the listeners use and cannot drift from
+  /// them. Every other read in this State runs while mounted and keeps going
+  /// through `ref` — see [_notifier].
+  late final TaskDetailNotifier _notifierForDisposeFlush;
+
   bool _titleInitialized = false;
   bool _notesInitialized = false;
   bool _isEditingNotes = false;
 
+  /// What the fields were last reconciled against — seeded from the row, or
+  /// written back to it. The flush writes only what differs from them.
+  ///
+  /// Suppressing a redundant write is mandatory, not hygiene: [TodoDao.updateFields]
+  /// stamps `updated_at` unconditionally, stamps `last_clarified_at` on any
+  /// mutation, and authors a sync op, so an unconditional flush would restamp
+  /// clarification and bump sync arbitration on every exit from this screen.
+  ///
+  /// Held in the form the DAO stores: trimmed for the title (`updateTitle`
+  /// trims), raw for the notes (`updateNotes` does not).
+  String? _baselineTitle;
+  String? _baselineNotes;
+
+  /// Latched once local storage has confirmed this Outcome is gone — see where
+  /// it is set in [build].
+  bool _subjectConfirmedMissing = false;
+
   @override
   void initState() {
     super.initState();
+    _notifierForDisposeFlush =
+        ref.read(taskDetailNotifierProvider(widget.todoId));
     _titleController = TextEditingController();
     _notesController = TextEditingController();
 
@@ -53,10 +92,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
 
     _titleFocusNode.addListener(() {
       if (!_titleFocusNode.hasFocus && mounted) {
-        ref
-            .read(taskDetailNotifierProvider(widget.todoId))
-            .updateTitle(_titleController.text)
-            .catchError((e) => debugPrint('Error saving title: $e'));
+        _saveTitle(_titleController.text);
       }
     });
 
@@ -65,21 +101,80 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
         setState(() {
           _isEditingNotes = false;
         });
-        ref
-            .read(taskDetailNotifierProvider(widget.todoId))
-            .updateNotes(_notesController.text)
-            .catchError((e) => debugPrint('Error saving notes: $e'));
+        _saveNotes(_notesController.text);
       }
     });
   }
 
+  /// Writes the title and moves its baseline. The baseline moves as the write
+  /// is *issued*, not when it lands: the flush is a backstop for the case where
+  /// the save trigger never fires, not a retry for one that fired and failed —
+  /// a failure is reported the same way it always was, on the console.
+  void _saveTitle(String title) {
+    _baselineTitle = title.trim();
+    _notifier
+        .updateTitle(title)
+        .catchError((e) => debugPrint('Error saving title: $e'));
+  }
+
+  void _saveNotes(String notes) {
+    _baselineNotes = notes;
+    _notifier
+        .updateNotes(notes)
+        .catchError((e) => debugPrint('Error saving notes: $e'));
+  }
+
   @override
   void dispose() {
+    _flushPendingTextEdits();
     _titleFocusNode.dispose();
     _notesFocusNode.dispose();
     _titleController.dispose();
     _notesController.dispose();
     super.dispose();
+  }
+
+  /// The last line of defence for a title or notes edit still in the field when
+  /// the screen goes.
+  ///
+  /// Focus loss stays the primary trigger (ADR-0023); this only puts a floor
+  /// under it. A route pop saves today because the newly-current route hands
+  /// focus over while the popped subtree is still mounted, so the listener
+  /// fires normally — but that is framework behaviour this screen does not own,
+  /// and its failure mode is a silent, unlogged lost edit.
+  ///
+  /// Deliberately adds no rules of its own: it does exactly what focus loss
+  /// would have done, including writing a blank title and storing an emptied
+  /// notes field as `''` rather than nulling the column (#705). Making the two
+  /// exits disagree would be new, undocumented behaviour.
+  ///
+  /// No `ref.read` / `ref.watch` in here — see [_notifierForDisposeFlush].
+  void _flushPendingTextEdits() {
+    // A write must not outlive its subject.
+    if (_subjectConfirmedMissing) return;
+    final notifier = _notifierForDisposeFlush;
+    // Snapshot the text before anything is disposed. Guarded on the
+    // initialisation latches too: a screen torn down while the subject was
+    // still loading has no controller text worth trusting.
+    if (_titleInitialized) {
+      final title = _titleController.text;
+      if (title.trim() != _baselineTitle) {
+        // Fire-and-forget: the screen is gone, so there is no surface left to
+        // tell the user on — the console is the same sink the focus-loss save
+        // uses. Uncaught, a throwing DAO would escape as an unhandled async
+        // error from teardown, which reads as a framework fault rather than a
+        // lost edit.
+        unawaited(notifier.updateTitle(title).catchError(
+            (Object e) => debugPrint('TaskDetailScreen: title flush failed: $e')));
+      }
+    }
+    if (_notesInitialized) {
+      final notes = _notesController.text;
+      if (notes != _baselineNotes) {
+        unawaited(notifier.updateNotes(notes).catchError(
+            (Object e) => debugPrint('TaskDetailScreen: notes flush failed: $e')));
+      }
+    }
   }
 
   TaskDetailNotifier get _notifier =>
@@ -89,6 +184,25 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   Widget build(BuildContext context) {
     final todoAsync = ref.watch(taskDetailTodoProvider(widget.todoId));
     final tagsAsync = ref.watch(taskTagsProvider(widget.todoId));
+
+    // A write must not outlive its subject (#446 / #447). A plain field write
+    // during build — no `setState`, because it changes nothing about this
+    // build's output: [AsyncSubject] below is already rendering the missing
+    // surface off the same value. `dispose()` reads this latch rather than the
+    // provider, because reading a provider there is the #529 trap.
+    //
+    // **Latched, never cleared.** Un-latching on a row that comes back is live
+    // re-binding, which #447 puts out of scope (#427).
+    //
+    // The two focus listeners need no second guard: while the subject is
+    // missing the fields are unmounted, and a detached [FocusNode] does not
+    // notify, so they are unreachable-while-missing by construction.
+    //
+    // This closes the case where the screen *observed* the deletion; the window
+    // between the last emission and the flush is #444's. The durable answer is
+    // one guard at the write seam, not a latch per surface — #447 should
+    // replace this rather than copy it onto the next one.
+    _subjectConfirmedMissing |= todoAsync.subjectConfirmedMissing;
 
     return GestureDetector(
       onTap: () => FocusScope.of(context).unfocus(),
@@ -119,10 +233,12 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
         dataBuilder: (context, todo) {
           if (!_titleInitialized) {
             _titleController.text = todo.title;
+            _baselineTitle = todo.title.trim();
             _titleInitialized = true;
           }
           if (!_notesInitialized) {
             _notesController.text = todo.notes ?? '';
+            _baselineNotes = todo.notes ?? '';
             _notesInitialized = true;
           }
 
@@ -174,6 +290,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                       const SizedBox(height: 8),
                       // Title TextField (Show-mode styled)
                       TextField(
+                        key: const Key('task_detail_title'),
                         controller: _titleController,
                         focusNode: _titleFocusNode,
                         style: const TextStyle(
@@ -299,6 +416,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                                     const SizedBox(height: 12),
                                     _isEditingNotes
                                         ? TextField(
+                                            key: const Key('task_detail_notes'),
                                             controller: _notesController,
                                             focusNode: _notesFocusNode,
                                             maxLines: null,
@@ -359,7 +477,13 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                                                               }
                                                               final newNotes = lines.join('\n');
                                                               setState(() => _notesController.text = newNotes);
-                                                              _notifier.updateNotes(newNotes).ignore();
+                                                              // Through the same helper the focus-loss
+                                                              // save uses, so the baseline moves with
+                                                              // it: a ticked checkbox is a notes write
+                                                              // like any other, and leaving the
+                                                              // baseline behind would have the dispose
+                                                              // flush restate it.
+                                                              _saveNotes(newNotes);
                                                             },
                                                           ),
                                                         );

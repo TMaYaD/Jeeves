@@ -23,7 +23,7 @@ Flow:
   6. Cold-relaunch the app. The next planning ritual is surfaced
      (focusSessionPlanningCompletion is in-memory only and resets).
   7. Drive through Review Tasks / Energy / Time again until the
-     "Review Next Actions" step is visible.
+     "Build Today's Plan" step is visible.
   8. ASSERT: the rolled-over task title appears under "TODAY'S PLAN"
      (pre-selected via getLastClosedSessionRolloverTaskIds → preloaded
      into pendingSelectedTaskIds).
@@ -55,7 +55,7 @@ def _tap_desc(d, text, timeout=8):
 
 def _drive_planning_to_plan_step(d):
     """Walk the planning ritual from wherever we are up to step 5
-    (Review Next Actions). Marks all review-step tasks "Still relevant",
+    (Build Today's Plan). Marks all review-step tasks "Still relevant",
     accepts default energy=Medium and time=8h."""
     # Step 2: Review Tasks — tap "Still relevant" then "Next" until the
     # review counter empties and the wizard advances.
@@ -108,8 +108,8 @@ def main():
     # ---------------------------------------------------------------
     if _wait_desc(d, "Daily Planning", timeout=2):
         _drive_planning_to_plan_step(d)
-    assert _wait_desc(d, "Review Next Actions", timeout=8), \
-        "did not reach step 5 (Review Next Actions)"
+    assert _wait_desc(d, "Build Today's Plan", timeout=8), \
+        "did not reach step 5 (Build Today's Plan)"
 
     # Capture the first task already in TODAY'S PLAN — this is the one
     # we'll roll over and verify carries forward.
@@ -122,9 +122,9 @@ def main():
     rollover_title = today_titles[0]
     print(f"will roll over: {rollover_title}")
 
-    # If only one task is selected, promote one PENDING REVIEW item so
+    # If only one task is selected, promote one UP NEXT item so
     # we have at least 2 tasks in today's plan (goal pre-condition).
-    if d(descriptionContains="PENDING REVIEW").exists and \
+    if d(descriptionContains="UP NEXT").exists and \
        d(descriptionContains="Select for today").exists:
         d(descriptionContains="Select for today").click()
         time.sleep(0.5)
@@ -168,7 +168,7 @@ def main():
     if _wait_desc(d, "Daily Planning", timeout=8):
         _drive_planning_to_plan_step(d)
 
-    assert _wait_desc(d, "Review Next Actions", timeout=10), \
+    assert _wait_desc(d, "Build Today's Plan", timeout=10), \
         "next planning did not reach step 5"
 
     # ---------------------------------------------------------------
@@ -184,7 +184,7 @@ def main():
         if cd.startswith("TODAY'S PLAN"):
             saw_today = True
             continue
-        if cd.startswith("PENDING REVIEW") or cd.startswith("LATER"):
+        if cd.startswith("UP NEXT") or cd.startswith("SKIPPED"):
             saw_today = False
             continue
         if saw_today and cd.startswith("Triage_test_"):

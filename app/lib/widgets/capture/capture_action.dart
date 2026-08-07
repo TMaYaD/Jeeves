@@ -15,12 +15,18 @@ import 'capture_sheet.dart';
 /// and key. Tapping it opens the stay-open [CaptureSheet]; the capture blue
 /// `#2563EB` marks it as the standing call to action.
 ///
+/// The glyph names capture's *destination* rather than a generic add: a tray
+/// with an arrow going into it is literally Capture → Inbox. A plain `+` is
+/// reserved for add-to-the-current-context actions, and the filled tray keeps
+/// this act distinct from `Icons.inbox_outlined`, the Inbox as a place
+/// (DESIGN.md § Icon vocabulary).
+///
 /// The Inbox is the one screen that suppresses it — its `QuickAddBar` already
 /// serves capture, so `AppShell` passes `null` on `/inbox` (owner ruling). The
 /// [BuildContext] is the one `showCaptureSheet` opens the modal against.
 AppTitleBarAction captureAction(BuildContext context) => AppTitleBarAction(
       key: const Key('capture_action'),
-      icon: Icons.add,
+      icon: Icons.move_to_inbox,
       label: 'Capture',
       color: const Color(0xFF2563EB),
       onPressed: () => showCaptureSheet(context),
