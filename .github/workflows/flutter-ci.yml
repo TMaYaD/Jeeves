@@ -130,8 +130,9 @@ jobs:
   # compute by one runner-job). With cache:false the dominant cost is the full
   # SDK download each run, then the tool warm/precache, a ~/.pub-cache
   # partial-restore fetch, and a no-op build_runner + trivial analyze/test
-  # driven through the hook. Confirm the wall-clock figure on the first green
-  # run and record it here.
+  # driven through the hook. Measured: ~1m33s, against ~5m29s for `analyze` in
+  # the same run — so by the formula above it adds ~0 to PR wall-clock (it
+  # finishes well inside the analyze job's window), at the cost of one runner-job.
   hook-real-sdk:
     name: Pre-commit hook — real SDK
     needs: android-build-changes

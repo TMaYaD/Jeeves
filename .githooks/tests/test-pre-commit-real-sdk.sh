@@ -53,13 +53,14 @@
 # ------------------------------------------------------------------------
 # A green check that cannot go red proves nothing. Against a DISPOSABLE SDK
 # and an unfixed copy of the hook (the `unset` narrowed back into the
-# self-heal subshell), the byte-compare MUST red — both because the leaked
-# GIT_DIR makes the self-heal stamp the worktree revision and because `dart`
-# hits shared.sh's revision mismatch and deletes flutter.version.json with no
-# rewrite. Measured on 3.44.1 against a deliberately-unfixed hook: byte-compare
-# red, commit rejected. If a future pinned SDK does NOT corrupt against the
-# unfixed hook, STOP and escalate (comment on the issue, flag maintainers) —
-# do not ship a green-by-construction check. Run the teeth-proof with:
+# self-heal subshell), the byte-compare MUST red on two independent paths:
+# the leaked GIT_DIR makes the self-heal stamp the worktree revision (#594),
+# and `dart` hits shared.sh's revision mismatch and deletes flutter.version.json
+# with no rewrite. Do not take that on faith — RUN the teeth-proof against a
+# disposable SDK before shipping any change here, and confirm the byte-compare
+# goes red. If a future pinned SDK does NOT corrupt against the unfixed hook,
+# STOP and escalate (comment on the issue, flag maintainers) — do not ship a
+# green-by-construction check. Run the teeth-proof with:
 #   HOOK=/tmp/unfixed-pre-commit \
 #   JEEVES_REAL_SDK=/tmp/throwaway-flutter-clone \
 #   ./.githooks/tests/test-pre-commit-real-sdk.sh
@@ -108,15 +109,25 @@ REAL_PUB_CACHE="${PUB_CACHE:-${REAL_HOME}/.pub-cache}"
 
 # The names git considers repo-local — exactly what the hook unsets, and
 # exactly what would misresolve a Flutter/Dart child to the wrong repository.
-LOCAL_GIT_ENV_VARS=$(git -C "${TESTS_DIR}" rev-parse --local-env-vars 2>/dev/null || true)
+# Fail CLOSED if git cannot produce this list (the call fails, or answers
+# empty): the leak assertion at the end would otherwise iterate over nothing
+# and the job would green vacuously on `sdk_targeted_calls >= 1`. The hook
+# itself fails closed on the identical call (pre-commit:191-199); mirror that.
+if ! LOCAL_GIT_ENV_VARS=$(git -C "${TESTS_DIR}" rev-parse --local-env-vars) ||
+    [ -z "${LOCAL_GIT_ENV_VARS}" ]; then
+  echo "FAIL — could not enumerate git's repo-local env vars" >&2
+  echo "       (\`git rev-parse --local-env-vars\` failed or answered empty); the" >&2
+  echo "       leak assertion cannot be made, so refusing to run — cf." >&2
+  echo "       pre-commit:191-199, which fails closed on the same call." >&2
+  exit 1
+fi
 
 # Defensive: never let a repo-local git env inherited by THIS script misdirect
 # the SDK's own self-resolution during setup. The hook clears its own for the
-# committing child; we clear ours for the setup commands.
-if [ -n "${LOCAL_GIT_ENV_VARS}" ]; then
-  # shellcheck disable=SC2086
-  unset ${LOCAL_GIT_ENV_VARS}
-fi
+# committing child; we clear ours for the setup commands. Guaranteed non-empty
+# by the fail-closed check above.
+# shellcheck disable=SC2086
+unset ${LOCAL_GIT_ENV_VARS}
 
 # ----- Bookkeeping ----------------------------------------------------------
 
@@ -145,7 +156,9 @@ sdk_confirmed_disposable=0     # only repair a SDK we proved is disposable
 # Trap-repair on exit: a clean-env `flutter --version` from inside the SDK
 # regenerates flutter.version.json (and version) even if the run corrupted it,
 # then WORK is removed. Only fires once the SDK has passed the hard-refuse.
-# shellcheck disable=SC2317  # body runs via the EXIT trap, not inline
+# shellcheck disable=SC2317,SC2329  # body runs via the EXIT trap, not inline
+# (SC2317 on <0.11, SC2329 "never invoked" on >=0.11 — disable both so the
+# `--severity=style` CI sweep stays green across shellcheck versions).
 cleanup() {
   if [ "${sdk_confirmed_disposable}" -eq 1 ] && [ -n "${sdk}" ] && [ -x "${sdk}/bin/flutter" ]; then
     ( cd "${sdk}" && ./bin/flutter --version >/dev/null 2>&1 ) || true
@@ -158,6 +171,9 @@ trap cleanup EXIT
 
 # Missing designated SDK: skip locally, fail under CI / REQUIRE_REAL_SDK — a
 # silently skipped real-SDK check is exactly how SDK drift would stay invisible.
+# Same shape as backend/tests/sync/test_ops_author_chain_race_postgres.py, which
+# skips without a Postgres DATABASE_URL but pytest.fail()s under CI for the same
+# reason (a silent skip in CI retires the only coverage unnoticed).
 premise_unmet() {
   local reason="$1"
   if [ -n "${CI:-}" ] || [ -n "${REQUIRE_REAL_SDK:-}" ]; then
@@ -191,7 +207,9 @@ start_case "real-SDK coverage: driving the hook's Flutter path against ${sdk}"
 
 # AC-anchor: the mechanism #644 protects is `git -C "$FLUTTER_ROOT" rev-parse
 # HEAD`. If the designated SDK is not a git checkout, that mechanism has
-# changed — red loudly rather than going vacuously green.
+# changed — red loudly rather than going vacuously green. shared.sh itself bails
+# when `$FLUTTER_ROOT/.git` is absent ("The Flutter directory is not a clone of
+# the GitHub project"), so a usable real SDK necessarily carries one.
 if ! git -C "${sdk}" rev-parse HEAD >/dev/null 2>&1 || [ ! -e "${sdk}/.git" ]; then
   fatal "designated SDK ${sdk} is not a git checkout — the #644 self-resolution mechanism (git -C FLUTTER_ROOT rev-parse HEAD) no longer applies; a release archive keeps its .git for flutter upgrade/channel, so a missing one means the mechanism changed and must be investigated, not skipped"
 fi
@@ -431,15 +449,23 @@ chmod +x "${git_shim_dir}/git"
 # and interfere. A non-executable hook is silently ignored by git (a real risk
 # for a hand-prepared teeth-proof copy), so fail clearly rather than letting the
 # liveness gate report a mysterious "Flutter block never ran".
-if [ ! -x "${HOOK}" ]; then
-  bad "the hook at ${HOOK} is not executable — git would ignore it; run 'chmod +x' on it (teeth-proof copies especially)"
-  report
-fi
 # git resolves a hook symlink against the hooks dir, not this script's cwd, so a
 # relative HOOK (an overridden teeth-proof copy) would install a DANGLING link
 # that git silently ignores — surfacing later as a mysterious "Flutter block
-# never ran". The default HOOK is already absolute; pin an overridden one too.
-hook_abs=$(cd -- "$(dirname -- "${HOOK}")" && printf '%s/%s\n' "$(pwd -P)" "$(basename -- "${HOOK}")")
+# never ran". Resolve to an absolute path FIRST, then validate and symlink that
+# exact path (the default HOOK is already absolute; this pins an overridden one).
+if ! hook_abs=$(cd -- "$(dirname -- "${HOOK}")" 2>/dev/null &&
+    printf '%s/%s\n' "$(pwd -P)" "$(basename -- "${HOOK}")"); then
+  bad "could not resolve the hook path ${HOOK} to an absolute location"
+  report
+fi
+# A non-executable hook is silently ignored by git (a real risk for a
+# hand-prepared teeth-proof copy), so fail clearly rather than letting the
+# liveness gate report a mysterious "Flutter block never ran".
+if [ ! -x "${hook_abs}" ]; then
+  bad "the hook at ${hook_abs} is not executable — git would ignore it; run 'chmod +x' on it (teeth-proof copies especially)"
+  report
+fi
 ln -sf "${hook_abs}" "${main_checkout}/.git/hooks/pre-commit"
 
 # Stage a single app/ file so the diff unambiguously matches the hook's
