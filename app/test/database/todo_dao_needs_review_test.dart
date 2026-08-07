@@ -3,6 +3,7 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/todo.dart' show RoutingKind;
 import '../test_helpers.dart';
 
 const _userId = 'test-user';
@@ -529,6 +530,59 @@ void main() {
       await db.todoDao.setCurrentActionText(id, 'Chase the reply');
 
       expect(await db.todoDao.getNeedsReview(), isEmpty);
+    });
+  });
+
+  group('TodoDao.getNeedsReview — the blank-save resolution (#691)', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    test('routing to Next alone leaves an Actionless Outcome in the queue '
+        'forever — the Actionless branch has no freshness gate', () async {
+      // Why the blank save cannot simply route and leave the row Actionless:
+      // a fresh `last_clarified_at` does not suppress this branch, so the item
+      // would land back on the identical review card at the next planning,
+      // every day. This is the failure mode the title-as-action fallback
+      // exists to avoid.
+      final id = await _insertClarifiedTask(db);
+      expect(await db.todoDao.getNeedsReview(), hasLength(1));
+
+      await db.todoDao.applyRouting(id, to: RoutingKind.nextAction);
+
+      expect((await db.todoDao.getTodo(id))?.lastClarifiedAt, isNotNull);
+      expect(await db.todoDao.getNeedsReview(), hasLength(1),
+          reason: 'a stamp does not clear the Actionless branch');
+    });
+
+    test('route + title mirror takes the Outcome out of the queue', () async {
+      // The composition the blank-save path performs: applyRouting with no
+      // actionText, then the Actionless-guarded title mirror.
+      final id = await _insertClarifiedTask(db);
+      final title = (await db.todoDao.getTodo(id))!.title;
+      expect(await db.todoDao.getNeedsReview(), hasLength(1));
+
+      await db.todoDao.applyRouting(id, to: RoutingKind.nextAction);
+      final wrote =
+          await db.todoDao.setCurrentActionTextIfActionless(id, title);
+
+      expect(wrote, isTrue);
+      expect((await db.actionDao.getCurrentAction(id))?.actionText, title);
+      expect(await db.todoDao.getNeedsReview(), isEmpty,
+          reason: 'the resolved Outcome must not re-arm the review queue');
+    });
+
+    test('the mirror never clobbers a deliberate phrase', () async {
+      final id = await _insertClarifiedTask(db, actionText: 'Book the room');
+      final title = (await db.todoDao.getTodo(id))!.title;
+
+      final wrote =
+          await db.todoDao.setCurrentActionTextIfActionless(id, title);
+
+      expect(wrote, isFalse);
+      expect((await db.actionDao.getCurrentAction(id))?.actionText,
+          'Book the room');
     });
   });
 }

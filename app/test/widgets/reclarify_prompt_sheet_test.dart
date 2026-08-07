@@ -172,8 +172,14 @@ void main() {
     expect(results, [ProcessAction.nextActionDialog]);
   });
 
-  testWidgets('More to do… with a blank save routes nothing', (tester) async {
-    final todo = await _insertTodo(db, id: 'r4');
+  testWidgets('More to do… with a blank save falls back to the title (#691)',
+      (tester) async {
+    // The sheet is a shell around the shared bar, so it inherits the
+    // title-as-action fallback (ADR-0049): the user who knows there is more to
+    // do but cannot name it is not held on the sheet. It matters most here —
+    // completeCurrentAction has just left the Outcome Actionless, which is the
+    // state that re-arms the re-clarification queue with no freshness gate.
+    final todo = await _insertTodo(db, id: 'r4', title: 'Ship the thing');
     final results = await _pumpAndOpen(tester, db, todo: todo);
 
     await tester.tap(find.text('More to do…'));
@@ -182,12 +188,15 @@ void main() {
     await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();
 
-    expect(await db.actionDao.getCurrentAction('r4'), isNull);
+    expect((await db.actionDao.getCurrentAction('r4'))?.actionText,
+        'Ship the thing');
     final row = await db.todoDao.getTodo('r4');
-    expect(row?.doneAt, isNull);
-    expect(row?.lastClarifiedAt, isNull,
-        reason: 'a blank next-action save must not write');
-    // The verdict still resolves as nextActionDialog even though nothing routed.
+    expect(row?.intent, 'next');
+    expect(row?.doneAt, isNull,
+        reason: 'more to do is not an Outcome achievement');
+    expect(row?.lastClarifiedAt, isNotNull);
+    // Still not a `done` verdict — the focus screen keys "All done for today!"
+    // on that specifically, and this resolution must not claim it.
     expect(results, [ProcessAction.nextActionDialog]);
   });
 

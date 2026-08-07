@@ -818,6 +818,230 @@ void main() {
     });
   });
 
+  group('ProcessToHandlers — blank save means the title (#691)', () {
+    // The title-as-action fallback. A blank Save resolves and advances; only
+    // Cancel leaves the item unresolved. The two are distinguished by the
+    // dialog's *type*: Cancel resolves to null, a blank Save to ''. Any
+    // refactor that collapses them (`result?.isEmpty ?? true`) breaks the
+    // cancel contract while leaving every other assertion green, which is why
+    // both are pinned here separately.
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    testWidgets(
+        'blank Save on an Actionless Outcome routes to Next and mirrors the '
+        'title into the current Action', (tester) async {
+      final todo = await _insertTodo(db, id: 'bs1', title: 'Call the dentist');
+      final fired = <ProcessAction>[];
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        onAfterRoute: (a) async => fired.add(a),
+      ));
+
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+
+      final row = await db.todoDao.getTodo('bs1');
+      expect(row?.intent, 'next');
+      expect(row?.clarified, isTrue);
+      expect(row?.lastClarifiedAt, isNotNull);
+      expect((await db.actionDao.getCurrentAction('bs1'))?.actionText,
+          'Call the dentist',
+          reason: 'for a simple Outcome the title *is* the physical action');
+      expect(fired, [ProcessAction.nextActionDialog],
+          reason: 'the hook fires exactly once, and a landed route backs it');
+    });
+
+    testWidgets(
+        'blank Save on an Outcome that already has an Action routes without '
+        'clobbering the phrase', (tester) async {
+      // The fallback is Actionless-only. Clearing the field is not the
+      // affordance for retiring an Action (Abandon is), and the codebase's
+      // standing bias is never to destroy typed text.
+      final todo = await _insertTodo(db, id: 'bs2', title: 'Run the retro');
+      await seedCurrentAction(
+        db,
+        outcomeId: 'bs2',
+        text: 'Book the room',
+        userId: _userId,
+      );
+      final fired = <ProcessAction>[];
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        currentActionText: 'Book the room',
+        onAfterRoute: (a) async => fired.add(a),
+      ));
+
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+      // Clear the prefill, then save.
+      await tester.enterText(
+        find.descendant(
+          of: find.byType(NextActionDialog),
+          matching: find.byType(TextField),
+        ),
+        '',
+      );
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+
+      final row = await db.todoDao.getTodo('bs2');
+      expect(row?.intent, 'next');
+      expect(row?.lastClarifiedAt, isNotNull,
+          reason: 'the route still lands — only the Action is left alone');
+      expect((await db.actionDao.getCurrentAction('bs2'))?.actionText,
+          'Book the room',
+          reason: 'a deliberate phrase survives a blank save');
+      expect(fired, [ProcessAction.nextActionDialog]);
+    });
+
+    testWidgets(
+        'blank Save on a blank-titled Outcome stalls: no route, no Action, '
+        'no hook', (tester) async {
+      // With neither a typed phrase nor a title there is nothing to stand in
+      // as the Action, so routing would manufacture a permanently re-armed
+      // row (the Actionless branch of _needsReviewWhere has no freshness
+      // gate). Stalling is the honest outcome. Near-unreachable through the
+      // UI — the clarify card refuses a blank title and the routing buttons
+      // are disabled — but reachable via a synced-in row.
+      final todo = await _insertTodo(db, id: 'bs3', title: '');
+      final fired = <ProcessAction>[];
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        onAfterRoute: (a) async => fired.add(a),
+      ));
+
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull,
+          reason: 'setCurrentActionTextIfActionless throws on blank text — the '
+              'caller must guard rather than let an ArgumentError escape');
+      final row = await db.todoDao.getTodo('bs3');
+      expect(row?.lastClarifiedAt, isNull, reason: 'no route landed');
+      expect(await db.actionDao.getCurrentAction('bs3'), isNull);
+      expect(fired, isEmpty);
+    });
+
+    testWidgets('Cancel routes nothing and does not fire the hook',
+        (tester) async {
+      final todo = await _insertTodo(db, id: 'bs4', title: 'Call the dentist');
+      final fired = <ProcessAction>[];
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        onAfterRoute: (a) async => fired.add(a),
+      ));
+
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+
+      final row = await db.todoDao.getTodo('bs4');
+      expect(row?.lastClarifiedAt, isNull);
+      expect(await db.actionDao.getCurrentAction('bs4'), isNull);
+      expect(fired, isEmpty,
+          reason: 'cancel is not a blank save — it must leave the item '
+              'unresolved so the callsite does not advance');
+    });
+
+    testWidgets('barrier dismiss behaves as Cancel, not as a blank save',
+        (tester) async {
+      final todo = await _insertTodo(db, id: 'bs5', title: 'Call the dentist');
+      final fired = <ProcessAction>[];
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        onAfterRoute: (a) async => fired.add(a),
+      ));
+
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+      await tester.tapAt(const Offset(10, 10));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(NextActionDialog), findsNothing);
+      expect((await db.todoDao.getTodo('bs5'))?.lastClarifiedAt, isNull);
+      expect(await db.actionDao.getCurrentAction('bs5'), isNull);
+      expect(fired, isEmpty);
+    });
+
+    testWidgets('system back behaves as Cancel, not as a blank save',
+        (tester) async {
+      final todo = await _insertTodo(db, id: 'bs6', title: 'Call the dentist');
+      final fired = <ProcessAction>[];
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        onAfterRoute: (a) async => fired.add(a),
+      ));
+
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+
+      expect(find.byType(NextActionDialog), findsNothing);
+      expect((await db.todoDao.getTodo('bs6'))?.lastClarifiedAt, isNull);
+      expect(await db.actionDao.getCurrentAction('bs6'), isNull);
+      expect(fired, isEmpty);
+    });
+
+    testWidgets(
+        'blank Save on a Capture mints the Outcome carrying the draft mirror',
+        (tester) async {
+      // No Capture surface enables the modifier today, but #689 may. The
+      // Capture arm needs no fallback of its own: ClarifyDraft.assemble
+      // already mirrors the title into the draft's Action, and _mergedAction
+      // keeps it when the dialog returns blank.
+      final capture = await _insertCapture(db, id: 'bs7', title: 'Fragment');
+      final fired = <ProcessAction>[];
+      await tester.pumpWidget(ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: MaterialApp(
+          home: Scaffold(
+            body: ListView(
+              children: [
+                ProcessToHandlers(
+                  subject: CaptureSubject(
+                    capture: capture,
+                    draft: () => const ClarifyDraft(
+                      title: 'Fragment',
+                      action: ActionDraft(text: 'Fragment'),
+                    ),
+                  ),
+                  onAfterRoute: (a) async => fired.add(a),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ));
+
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+
+      final outcomeId =
+          (await db.captureDao.outcomeIdsForCapture('bs7')).single;
+      expect((await db.actionDao.getCurrentAction(outcomeId))?.actionText,
+          'Fragment');
+      expect((await db.todoDao.getTodo(outcomeId))?.intent, 'next');
+      expect(fired, [ProcessAction.nextActionDialog]);
+    });
+  });
+
   group('ProcessToHandlers — person tags survive intent transitions', () {
     // Orthogonality model: the action-axis (intent) and the delegate-axis
     // (person tags) are independent. A delegated task can have any intent

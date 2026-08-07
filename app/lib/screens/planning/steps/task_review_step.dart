@@ -256,21 +256,17 @@ class _ReviewCard extends ConsumerWidget {
             final notifier =
                 ref.read(focusSessionPlanningProvider.notifier);
             if (action == ProcessAction.nextActionDialog) {
-              // A blank save does not route (the widget skips the write),
-              // so the row keeps whatever next action it had — clear the
-              // action record and stay on the same item.
+              // The route has landed by the time this fires — a blank save
+              // falls back to the Outcome's title rather than skipping the
+              // write — so the only job left is to read the phrase back for
+              // the in-session record and advance.
               final current = await ref
                   .read(databaseProvider)
                   .actionDao
                   .getCurrentAction(task.id);
-              final txt = current?.actionText.trim() ?? '';
-              if (txt.isEmpty) {
-                notifier.clearCurrentReviewAction();
-                return;
-              }
               notifier.recordReviewActionAndAdvance(ReviewActionRecord(
                 kind: ReviewActionKind.updateNextAction,
-                actionText: txt,
+                actionText: current?.actionText.trim(),
               ));
               return;
             }
