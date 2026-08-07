@@ -357,6 +357,7 @@ void main() {
 
   group('focusNextTask — a Settled task is not offered as next up (#693 AC2)',
       () {
+    const achievedAt = '2026-05-01T10:00:00.000Z';
     Todo todo(String id, {String? doneAt}) => Todo(
           id: id,
           title: 'Task $id',
@@ -375,6 +376,19 @@ void main() {
           settlements: const {},
         )?.id,
         'b',
+      );
+    });
+
+    test('skips an already-achieved task, with no help from the map', () {
+      expect(
+        focusNextTask(
+          sessionTasks: [todo('a'), todo('b', doneAt: achievedAt), todo('c')],
+          completedTodoId: 'a',
+          settlements: const {},
+        )?.id,
+        'c',
+        reason: 'the doneAt guard has to hold on its own — the settlement map '
+            'is empty until its stream emits',
       );
     });
 

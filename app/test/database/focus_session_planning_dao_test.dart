@@ -1240,6 +1240,42 @@ void main() {
       );
     });
 
+    test(
+        'the watcher re-emits as the verdict moves down the ladder — every '
+        'table it reads is a live dependency', () async {
+      await _insertTodo(db, id: 'X', title: 'X');
+      final sessionId = await openWith(['X']);
+
+      // Subscribed *before* the writes: this is the Now screen's subscription,
+      // which has to strike the row off without re-subscribing. Each write
+      // below is the sole trigger for the transition that follows it, so a
+      // table dropped from `readsFrom` stalls the sequence instead of passing
+      // on a lucky first read.
+      final ladder = expectLater(
+        db.focusSessionDao.watchActiveSessionSettlements(),
+        emitsInOrder([
+          isEmpty,
+          // actions + time_logs: the anchor is a `done` Action carrying a
+          // session-attributed TimeLog, and it lands after the re-clarify.
+          emitsThrough({'X': SessionSettlement.next}),
+          // todo_tags + tags: a person Tag with no current Action.
+          emitsThrough({'X': SessionSettlement.waitingFor}),
+          // actions: a current Action outranks the person Tag.
+          emitsThrough({'X': SessionSettlement.next}),
+          // todos: Intent `maybe` outranks both.
+          emitsThrough({'X': SessionSettlement.someday}),
+        ]),
+      );
+
+      await reclarifyAt('X', anchorAt.add(const Duration(seconds: 5)));
+      await completeActionInSession(sessionId, 'X');
+      await tagPerson('X');
+      await seedCurrent('X');
+      await setIntent('X', 'maybe');
+
+      await ladder.timeout(const Duration(seconds: 10));
+    });
+
     test('intent = maybe wins over a current Action → someday', () async {
       await _insertTodo(db, id: 'X', title: 'X');
       final sessionId = await openWith(['X']);
