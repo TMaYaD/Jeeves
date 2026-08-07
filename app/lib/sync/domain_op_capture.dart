@@ -139,7 +139,7 @@ abstract interface class DomainOpCapture {
   /// to reach write sites that do not exist yet: threading a handle would need a
   /// forgettable optional parameter on `capturing` and on every public DAO
   /// method, and a forgotten one is silently the misattribution this exists to
-  /// prevent (ADR-0042).
+  /// prevent.
   ///
   /// A `null` [scope] **masks**: nothing is ambient inside [body], so a
   /// described effect throws instead of being filed into the enclosing scope.

@@ -16,7 +16,7 @@
 /// the transform — the domain tables — as against the reduced-state side the diff
 /// skip reads. It is not a claim that those tables are on their way out: they are
 /// the domain read model, and they still are now that the read model lives in a
-/// Drift-owned file of its own (ADR-0035). The naming (and the report keys
+/// Drift-owned file of its own. The naming (and the report keys
 /// derived from it) outlived the swap it was meant to be revisited at; renaming
 /// it means renaming the report keys, which is a change of its own.
 ///

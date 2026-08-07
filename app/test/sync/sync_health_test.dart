@@ -30,7 +30,7 @@ void main() {
     });
 
     test('degraded is the actionable count and nothing else', () {
-      // ADR-0044: an accusation standing is not the same as the user being told
+      // an accusation standing is not the same as the user being told
       // something is wrong.
       expect(const SyncHealth().degraded, isFalse);
       expect(

@@ -233,7 +233,7 @@ void main() {
       );
     });
 
-    test('ADR-0011 stays the source of truth for which key gets what', () {
+    test('the registry stays the source of truth for which key gets what', () {
       // The adapter must not fork from the registry: every enum value maps.
       for (final strategy in ConflictStrategy.values) {
         expect(

@@ -31,7 +31,7 @@ abstract interface class AuthProvider {
   /// not a corroborated 401. Only [SessionAbsent] means the user must sign in
   /// again; [SessionUnverified] keeps the device signed in and authoring, because
   /// clearing credentials on an inconclusive answer destroys an enrolled device's
-  /// enrolment and drops the whole session's ops (ADR-0041).
+  /// enrolment and drops the whole session's ops.
   Future<SessionRestoreOutcome> restore();
 }
 

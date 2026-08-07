@@ -1,6 +1,6 @@
 """Tests for Alembic 0029 (time_logs.action_id) — issue #476.
 
-The migration is additive and re-runnable (ADR-0012): it adds a nullable
+The migration is additive and re-runnable: it adds a nullable
 ``action_id`` column plus its index to ``time_logs``, backfills nothing (legacy
 rows keep NULL), and a re-run must no-op rather than crash on a duplicate
 column/index.  All verifiable on SQLite.
@@ -109,7 +109,7 @@ def test_rerun_is_a_noop() -> None:
 
     _apply_0029(engine)
     # Re-running must no-op (column + index guards) rather than crash on a
-    # duplicate column/index — the drift-healing recovery contract (ADR-0012).
+    # duplicate column/index — the drift-healing recovery contract.
     _apply_0029(engine)
 
     assert "action_id" in _columns(engine)

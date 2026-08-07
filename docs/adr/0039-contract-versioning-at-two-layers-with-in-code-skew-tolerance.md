@@ -9,7 +9,7 @@ be arbitrarily old and may never be updated. Nothing in the code tolerates it
 today. `backend/app/main.py:39-41` mounts the health, auth and sync routers with
 no prefix at all, so neither side can state or honour a contract version; the
 only version on the wire is the deploy label `GET /health` reports
-(`backend/app/health/routes.py:10-14`, ADR-0029), and no Dart code reads it.
+(`backend/app/health/routes.py:10-14`), and no Dart code reads it.
 Every sync request model in `backend/app/sync/schemas.py` — `PostOpsRequest` at
 `:82`, `PutKeyWrapsRequest` at `:123`, `MemberRegisterRequest` at `:14` — relies
 on Pydantic v2's default `extra='ignore'`, so a backend older than the client

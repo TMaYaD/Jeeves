@@ -2,7 +2,7 @@
 ///
 /// The client no longer runs a backfill of its own — the Drift v26 backfill
 /// that once called this was deleted with the `todos.next_action_text` column
-/// it read (ADR-0024, issue #525). The derivation stays here, in the DAO layer,
+/// it read (issue #525). The derivation stays here, in the DAO layer,
 /// because it is the contract the **server** backfill (Alembic 0028) mints
 /// against: the golden vector in `action_backfill_id_test.dart` is the client
 /// half of a cross-language equality that ADR-0019 rests on. It also serves as

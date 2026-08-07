@@ -2,7 +2,7 @@
 ///
 /// The Next List rule and the re-clarification predicates answer "does this
 /// Outcome have a current Action?" from the `actions` table. The
-/// `todos.next_action_text` cursor they replaced no longer exists (ADR-0024),
+/// `todos.next_action_text` cursor they replaced no longer exists,
 /// so the parity group that compared the two grains went with it — the
 /// predicates' own behaviour is pinned by `todo_dao_test.dart` (the Next
 /// quadrants) and `todo_dao_needs_review_test.dart` (the re-clarify fixtures).

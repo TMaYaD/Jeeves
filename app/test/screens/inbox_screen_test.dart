@@ -78,7 +78,7 @@ void main() {
 
     testWidgets('items are rendered in the list', (tester) async {
       // The unprocessed-count badge lives in the shared AppShell title bar now
-      // (ADR-0021); it is covered by app_shell_test, not here — this screen
+      //; it is covered by app_shell_test, not here — this screen
       // renders standalone with no title bar.
       final items = [_capture('a', 'Buy milk'), _capture('b', 'Call dentist')];
       await tester.pumpWidget(_buildApp(inboxStream: Stream.value(items)));

@@ -1,5 +1,5 @@
 /// The first open of a fresh domain store rebuilds it from the local op log
-/// (ADR-0035, issue #595).
+/// (issue #595).
 ///
 /// The store swap deletes the PowerSync-era file rather than converting it, so
 /// for an enrolled device the op log is the only thing standing between "new

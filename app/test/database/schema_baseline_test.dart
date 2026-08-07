@@ -4,7 +4,7 @@
 /// carry a PowerSync-managed store forward while its application-visible names
 /// were *views* — `ALTER TABLE` on a view throws, so every step was guarded on
 /// `sqlite_master`, and the guards were most of what was under test. The store is
-/// now a fresh Drift-owned file (ADR-0035) and the ladder has no store to run
+/// now a fresh Drift-owned file and the ladder has no store to run
 /// against, so what is worth pinning is the *shape it produces*: the columns
 /// retired over 28 versions must not come back, and the invariants those versions
 /// established must be present from the first open.
@@ -148,7 +148,7 @@ void main() {
           'daily_selection_date',
           // v8.
           'blocked_by_todo_id',
-          // v28 (issue #525, ADR-0024) — `actions` is the only next-action grain.
+          // v28 (issue #525) — `actions` is the only next-action grain.
           'next_action_text',
           // Dropped by the v2 onUpgrade (issue #604) — time spent is a
           // `SUM(time_logs)` derivation, never a stored cache (ADR-0030).

@@ -1,4 +1,4 @@
-/// ADR-0010 regression test for the Capture tables (issue #184).
+/// View-notify regression test for the Capture tables (issue #184).
 ///
 /// Over the **production topology**: `jeeves_domain.sqlite` on disk through
 /// `sqlite_async`, every synced name a real table Drift created (#595). The
@@ -9,7 +9,7 @@
 /// `capture_tags`, and provenance reads `capture_outcomes`, so a write to one has
 /// to refresh watchers naming another. [GtdDatabase.notifyCapturesViewWrite]
 /// notifies all three as one group, and a new `CaptureDao` write that forgets the
-/// call is the foot-gun ADR-0010 documents.
+/// call is the foot-gun this notify exists for.
 @TestOn('!browser')
 library;
 

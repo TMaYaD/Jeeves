@@ -17,7 +17,7 @@
 /// them. That is not the local branch. The user id is real, so the provider must
 /// build a lifecycle and let it bind, exactly as it does for a verified session;
 /// an offline relaunch that fell into the local branch would settle the seam
-/// silent and drop the whole session's writes (ADR-0041).
+/// silent and drop the whole session's writes.
 @TestOn('!browser')
 library;
 

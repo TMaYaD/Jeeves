@@ -34,7 +34,7 @@ class UserPreferencesDao {
     // The KV entity id policy: `uuid5(workspace_id, key)`, so two devices that
     // create the same preference offline converge as one entity under
     // field-grain merge instead of forking. The `value` field is the one
-    // ADR-0011's Conflict Strategy registry arbitrates.
+    // the Conflict Strategy registry arbitrates.
     //
     // The workspace is the **User-global preferences one**, not the default GTD
     // Workspace: preferences live behind a boundary that no Service is ever

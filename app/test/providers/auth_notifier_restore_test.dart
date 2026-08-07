@@ -14,7 +14,7 @@
 /// `test/sync/offline_relaunch_session_test.dart`, over a stack that assembles.
 /// This file is where the branch table lives, and only that.
 ///
-/// The table (ADR-0041): the arms that clear credentials are a corroborated 401,
+/// The table: the arms that clear credentials are a corroborated 401,
 /// nothing-stored-to-refresh, and an inconclusive answer that leaves no account id
 /// to stay signed in *as* — the torn-secure-store residual of #639, pinned below.
 /// Everything else — a dead socket, a 5xx, a bare 401 from a captive portal, a 200

@@ -240,7 +240,7 @@ void main() {
           reason: 'quarantined *and* accused — never merely skipped (AC-5)');
       // Accused, and reported rather than alarmed: the bytes did not open, so
       // they were not applied, which is the rule working. Nothing of the user's
-      // is stuck behind it (ADR-0044).
+      // is stuck behind it.
       expect(health.clean, isFalse);
       expect(health.degraded, isFalse);
       expect(health.hasSomethingToReport, isTrue);

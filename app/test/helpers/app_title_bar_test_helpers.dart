@@ -8,7 +8,7 @@ export 'package:jeeves/widgets/app_title_bar/app_title_bar.dart'
 
 /// Test finders for `AppTitleBar` actions.
 ///
-/// Where an action renders depends on the width breakpoint (ADR-0021): the
+/// Where an action renders depends on the width breakpoint: the
 /// same action sits in the bar on a wide surface and inside the ⋮ menu on a
 /// narrow one. Screen tests must therefore never `find.byKey` a bar action
 /// directly — they go through these helpers, which look in the bar first and

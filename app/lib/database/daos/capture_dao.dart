@@ -7,7 +7,7 @@
 /// table directly calls [GtdDatabase.notifyCapturesViewWrite] right after the
 /// write: the Inbox reads across all three, so a write to one has to refresh
 /// watchers naming another, which Drift's per-table invalidation does not do
-/// (ADR-0010).
+///.
 library;
 
 import 'package:drift/drift.dart';
@@ -56,7 +56,7 @@ class CarvedOutcome {
   ///
   /// Joined in rather than read off [outcome]: the Action entity is the only
   /// next-action grain (ADR-0001 story 3; the Outcome-column cursor it replaced
-  /// no longer exists, ADR-0024).
+  /// no longer exists).
   final String? currentActionText;
 
   /// Names of the Outcome's Context tags, alphabetical.

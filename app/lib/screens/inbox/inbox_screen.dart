@@ -44,7 +44,7 @@ class _InboxScreenState extends ConsumerState<InboxScreen> {
           children: [
             // Active tag filter strip (shown only when filter is active).
             // The title, drawer, and unprocessed-count badge live in the shared
-            // AppShell title bar (ADR-0021).
+            // AppShell title bar.
             const ActiveFilterBar(),
             // Quick add bar (pill-shaped input)
             Padding(

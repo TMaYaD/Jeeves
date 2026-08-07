@@ -183,7 +183,7 @@ void main() {
       expect(rows, hasLength(2));
       final old = rows.firstWhere((r) => r['id'] == oldId);
       expect(old['role'], 'superseded');
-      // ADR-0018: the terminal time is updated_at; there is no linkage column.
+      // the terminal time is updated_at; there is no linkage column.
       expect(old['updated_at'], _t2.toIso8601String());
       expect(rows.map((r) => r.keys).expand((k) => k),
           isNot(contains('superseded_by_id')));
@@ -215,7 +215,7 @@ void main() {
       final retired = (await _actions(db, 'o1'))
           .firstWhere((r) => r['role'] == 'superseded');
       expect(retired['text'], 'old',
-          reason: 'the replaced Action keeps its text (ADR-0018 history)');
+          reason: 'the replaced Action keeps its text (history is kept)');
     });
   });
 
@@ -247,7 +247,7 @@ void main() {
       expect(await _current(db, 'o1'), isNull);
       expect((await _actions(db, 'o1')).single['role'], 'superseded',
           reason: 'the superseded row is what stops the sweep resurrecting '
-              'the abandoned Action (ADR-0018, ADR-0022)');
+              'the abandoned Action');
       expect((await _actions(db, 'o1')).single['text'], 'old');
     });
 
@@ -702,7 +702,7 @@ void main() {
   });
 
   group('supersedeAndPromote', () {
-    test('retires the current (ADR-0018 terminal time = updated_at) and flips '
+    test('retires the current (terminal time = updated_at) and flips '
         'the planned row up, one stamp', () async {
       await db.actionDao.setCurrentAction('o1', 'old current',
           energyLevel: 'high', timeEstimate: 90, now: _t1);

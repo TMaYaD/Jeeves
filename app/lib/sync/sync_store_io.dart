@@ -16,7 +16,7 @@ import 'sync_database.dart';
 /// The file the op log lives in, beside the domain store and never inside it.
 ///
 /// A separate file, deliberately: the domain store is a projection of this log,
-/// and the store cutover (ADR-0035) deletes and rebuilds a domain store outright.
+/// and the store cutover deletes and rebuilds a domain store outright.
 /// Sharing one file would put the evidence at the mercy of an operation whose
 /// whole premise is that the read model is disposable.
 const String syncStoreFileName = 'jeeves_sync.sqlite';

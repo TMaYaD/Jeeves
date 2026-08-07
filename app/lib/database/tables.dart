@@ -165,7 +165,7 @@ class FocusSessionTasks extends Table {
   /// Per-task disposition chosen during session review, for **Plan members**.
   /// Off-Plan engaged Outcomes have no row here (the Plan never auto-grows —
   /// ADR-0002); their Dispositions live in [FocusSessionDispositions] instead
-  /// (ADR-0016).
+  ///.
   /// NULL = not yet reviewed (active session) or done task.
   /// 'rollover' = carry forward to next session's pre-selected list.
   /// 'leave' = return to Next Actions (no mutation on todos).
@@ -185,7 +185,7 @@ class FocusSessionTasks extends Table {
 // ---------------------------------------------------------------------------
 
 /// Durable home for Review-phase Dispositions on **off-Plan engaged** Outcomes
-/// (ADR-0016).
+///.
 ///
 /// Dispositions partition by membership class:
 ///   - A Plan member's Disposition lives on [FocusSessionTasks.disposition]
@@ -415,7 +415,7 @@ class CaptureTags extends Table {
 /// distinct from the Outcome it belongs to, carrying one of four roles over
 /// its lifetime: `planned` / `current` / `done` / `superseded`.
 ///
-/// Per ADR-0018 a superseded Action carries **no** linkage metadata — no
+/// A superseded Action carries **no** linkage metadata — no
 /// `superseded_by_id`, no dedicated `superseded_at`; a superseded row's
 /// timestamp is read from `updated_at`, and the Outcome's history is the
 /// time-ordered chain of terminated Action rows.
@@ -427,7 +427,7 @@ class CaptureTags extends Table {
 /// renders Actionless until re-clarified. It mints a deterministic uuid5 id
 /// from the Outcome id (see `backfillActionIdFor`, ADR-0019) so no version
 /// skew can duplicate a row. The `todos.next_action_text` cursor it read from
-/// no longer exists (ADR-0024).
+/// no longer exists.
 ///
 /// The `(outcome_id, role)` index is declared rather than left to the query
 /// planner: the "has a current Action" `EXISTS` predicate behind the Next List
@@ -464,7 +464,7 @@ class Actions extends Table {
 
   DateTimeColumn get createdAt => dateTime()();
 
-  /// Client-stamped; a superseded row's timestamp is read from here (ADR-0018).
+  /// Client-stamped; a superseded row's timestamp is read from here.
   DateTimeColumn get updatedAt => dateTime().nullable()();
 
   /// Completion timestamp; non-null once the Action is `done`.

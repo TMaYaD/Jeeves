@@ -47,7 +47,7 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
     // Capture the notifier now so dispose() can call exit() without
     // touching `ref` after the widget has been unmounted.
     _ceremonyNotifier = ref.read(ceremonyInProgressProvider.notifier);
-    // ADR-0009: hold the Nudge while this Ceremony performance is in progress.
+    // hold the Nudge while this Ceremony performance is in progress.
     // Defer `enter()` to the post-frame callback — Riverpod 3.x forbids
     // notifier mutation during the build phase, which initState is part of.
     WidgetsBinding.instance.addPostFrameCallback((_) {

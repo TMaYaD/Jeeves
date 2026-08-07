@@ -91,7 +91,7 @@ enum IntegrityAlarmKind {
   /// on this device (ADR-0040) and the record is simply no longer resumed. There
   /// is no heal, so nothing resolves it, and no dismissal exists to clear it: it
   /// is reported on the sync-health screen and stands. Classified `actionable`
-  /// (ADR-0044), because the User's data really has stopped moving onto the new
+  ///, because the User's data really has stopped moving onto the new
   /// key — the recovery path is still owed.
   epochKeySetUnpublishable('epoch_key_set_unpublishable'),
 

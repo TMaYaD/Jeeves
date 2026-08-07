@@ -154,6 +154,6 @@ backend code (ADR-0026), so schema and sync behaviour move in the same push.
 
 `ci/compute-server-version.sh` derives the version that push injects as
 `SERVER_VERSION`, from the conventional commits since the last `server/` tag
-(ADR-0029). A `!` commit or `BREAKING CHANGE:` footer bumps the inner major.
+A `!` commit or `BREAKING CHANGE:` footer bumps the inner major.
 Its test harness is `ci/tests/test-compute-server-version.sh`, run by Backend
 CI's `infra-shell` job alongside `shellcheck`.

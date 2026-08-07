@@ -1,5 +1,0 @@
-# Supersession without linkage metadata
-
-ADR-0001 ruled supersession-as-a-row with `superseded_at` and `superseded_by_id`. We keep the four-role lifecycle (`planned` / `current` / `done` / `superseded`) but simplify the mechanics: a superseded Action carries no linkage metadata — no `superseded_by_id`, no dedicated `superseded_at`. Editing the current Action's text is an in-place edit (a refinement of the same action), not a supersession; supersession happens only through explicit affordances (Abandon, or re-clarifying to a new or promoted Action without completing the old one). The Outcome's history remains the time-ordered chain of terminated Action rows.
-
-Per-edit supersession rows and successor links are over-engineered mechanics with no present consumer; a timestamp-ordered history chain serves retrospection. If a real need for successor links emerges, adding a column is forward-compatible; ADR-0001's entity promotion otherwise stands. The implementing story must also update CONTEXT.md § Action to match.

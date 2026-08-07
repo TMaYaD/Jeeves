@@ -5,7 +5,7 @@
 // available. All dart:io and path_provider usage is confined here so the rest of
 // the codebase compiles on web.
 //
-// It opens a file Drift owns outright (ADR-0035) and reports whether it had to
+// It opens a file Drift owns outright and reports whether it had to
 // create it. It creates and reads its own files and nothing else's: this path
 // unlinks nothing (issue #673).
 import 'dart:io';

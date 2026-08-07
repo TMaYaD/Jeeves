@@ -115,7 +115,7 @@ async def test_refresh_rejection_carries_both_corroboration_signals(
     FastAPI upgrade, a handler rewrite, a switch to a bare ``Response`` — and every
     client silently degrades to "never signs out", with nothing else failing.  Only
     the shape is asserted, never the wording: clients match on shape too, precisely
-    so a copy edit here cannot flip their sign-out behaviour (ADR-0041, #606).
+    so a copy edit here cannot flip their sign-out behaviour (#606).
     """
     response = await client.post("/session/refresh", json={"refresh_token": "not-a-real-token"})
 

@@ -1,4 +1,4 @@
-"""Tests for Alembic 0030 (drop todos.next_action_text) — issue #525, ADR-0024.
+"""Tests for Alembic 0030 (drop todos.next_action_text) — issue #525.
 
 Four things this migration must get right, all verifiable on SQLite:
 
@@ -13,7 +13,7 @@ Four things this migration must get right, all verifiable on SQLite:
   precedent), so ``alembic upgrade`` heals a mis-stamped version instead of
   crash-looping.
 - ``downgrade()`` restores the *shape* and nothing else: the column comes back
-  nullable and empty.  ADR-0024 accepts that the text is unrecoverable; this
+  nullable and empty.  The drop accepts that the text is unrecoverable; this
   test pins that the downgrade does not pretend otherwise.
 
 Plus one structural check: 0030 chains from 0029 and the revision graph stays
@@ -155,7 +155,7 @@ def test_downgrade_restores_the_shape_but_not_the_text() -> None:
     cols = _todo_columns(engine)
     assert isinstance(cols["next_action_text"]["type"], sa.String)
     assert cols["next_action_text"]["nullable"]
-    # The text is gone for good — ADR-0024's accepted loss, stated in the
+    # The text is gone for good — an accepted loss, stated in the
     # downgrade docstring.  A downgrade that appeared to restore it would be
     # lying about what upgrade() destroyed.
     assert _todo_row(engine)["next_action_text"] is None

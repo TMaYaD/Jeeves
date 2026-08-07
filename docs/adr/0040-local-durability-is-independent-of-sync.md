@@ -7,7 +7,7 @@ Constrains #627.
 
 A Device holds two stores. `jeeves_domain.sqlite` is the domain read model, and
 it is disposable *once enrolled* — the Device's own op log can reproject it,
-which is what ADR-0035 traded on. `jeeves_sync.sqlite` holds the op log, the
+which is what the cut-over to a Drift-owned store traded on. `jeeves_sync.sqlite` holds the op log, the
 outbox, the Quarantine, the Integrity Alarms, the control chain and the Prune
 attestations: evidence, plus the only copy of anything authored and not yet
 flushed.
@@ -15,8 +15,9 @@ flushed.
 The durability hole is a Device that has never enrolled. It has no op log, so
 `rebuildDomainFromOpLog` correctly returns without touching anything
 (`app/lib/sync/domain_rebuild.dart:32-43`) and the domain store is the only copy
-of everything the user has ever written. ADR-0035 discarded exactly such a store
-once, as a one-time destructive exception the user invoked deliberately; #525's
+of everything the user has ever written. The PowerSync-era store was discarded
+exactly that way once, as a one-time destructive exception the user invoked
+deliberately; #525's
 `next_action_text` drop then proceeded under an explicit alpha-window assumption
 that no such Device exists. Neither is a rule, and the second was flagged as not
 being one.
@@ -73,9 +74,9 @@ are the same claim seen from two ends.
 **A change that cannot preserve the data refuses, and leaves the bytes intact for
 a compatible client or recovery tool.**
 Refusing is the correct instinct and is already in the code; what refusal may not
-do is hand the user a destructive instruction as its only way out. ADR-0035's
-exception stands as a one-time, user-invoked event and is explicitly not a
-template for the next drop.
+do is hand the user a destructive instruction as its only way out. That earlier
+drop stands as a one-time, user-invoked event and is explicitly not a template
+for the next one.
 
 ## Trade-off
 
@@ -93,7 +94,7 @@ that must offer a non-destructive route.
 
 **The guarantee is asymmetric between the two stores, and that asymmetry is
 load-bearing.** The domain read model is cheap to rebuild because it is derived;
-the sync store is not, because it is the record. Reading ADR-0035's "disposable
+the sync store is not, because it is the record. Reading "disposable
 by construction" as a property of local storage generally, rather than of a
 projection over an existing log, is the specific mistake this ADR exists to
 prevent. #627 inherits the direct consequence: a pending record for an epoch that

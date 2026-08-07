@@ -163,7 +163,7 @@ void main() {
       await _showTaskDetail(tester, widget, router, 'task1');
 
       // Twice over: the title bar carries the Outcome's read-only identity
-      // (ADR-0021) and the body keeps the editable field.
+      // and the body keeps the editable field.
       expect(find.text('Fix the bug'), findsNWidgets(2));
     });
 
@@ -702,7 +702,7 @@ void main() {
       await _showTaskDetail(tester, widget, router, 'gone');
       feed.add(todo);
       await tester.pumpAndSettle();
-      // Title bar and editable field both carry the title (ADR-0021).
+      // Title bar and editable field both carry the title.
       expect(find.text('Buy milk'), findsNWidgets(2));
 
       // The row leaves local storage. That is the whole signal the screen has.

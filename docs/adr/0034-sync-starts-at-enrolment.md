@@ -50,13 +50,12 @@ function.
 
 Pulling #556's store swap forward was the genuine alternative. It was rejected
 because nothing in this slice needs it: the projector already writes these tables
-correctly (ADR-0010's view-notify discipline exists for exactly that), the reseed
+correctly (the view-notify discipline exists for exactly that), the reseed
 round-trip proved the pipeline over this store, and bolting a write-once store
 rebuild onto the highest-risk change of the cutover trades a bounded, documented
 cost for an unbounded one.
 
 Relates to ADR-0026 (the op log replaces PowerSync), ADR-0028 (the signed control
-plane), ADR-0029 (independent server versioning — this is the change that mints
-`server/v0.1.0`), ADR-0030 (the dead `todos.time_spent_minutes` cache and the
+plane), ADR-0030 (the dead `todos.time_spent_minutes` cache and the
 dead-letter table both park until the prune), and ADR-0025 (the Area-exclusivity
 resolution the transform applies, whose worklist is the next Weekly Review's).

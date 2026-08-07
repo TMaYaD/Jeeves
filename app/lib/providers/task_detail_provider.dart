@@ -322,7 +322,7 @@ class TaskDetailNotifier {
   /// The copy↔model mapping, in one place: the user-facing verb is **Abandon**
   /// (past tense "Abandoned" on a history row), the model role is
   /// `superseded`, and the primitive is [ActionDao.clearCurrentAction] — a
-  /// supersession with no successor, which ADR-0018 gives no linkage metadata,
+  /// supersession with no successor, which carries no linkage metadata,
   /// so its terminal timestamp is the row's `updated_at`.
   ///
   /// Distinct from **Remove**, which hard-deletes an unengaged `planned` row.
@@ -330,7 +330,7 @@ class TaskDetailNotifier {
   /// Unlike completion this *is* a clarifying act, so it stamps
   /// `last_clarified_at`. It writes only `actions` and needs no cursor clear to
   /// guard against resurrection: the `todos.next_action_text` column is gone
-  /// (ADR-0022, ADR-0024) and the startup sweep reads no Outcome column at all.
+  /// and the startup sweep reads no Outcome column at all.
   Future<void> abandonCurrentAction() =>
       _db.actionDao.clearCurrentAction(_todoId);
 

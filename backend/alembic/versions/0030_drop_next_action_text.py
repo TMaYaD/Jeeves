@@ -5,7 +5,7 @@ Revises: 0029
 Create Date: 2026-07-27
 
 ``actions`` has been the only next-action grain since #479 (ADR-0001 story 9,
-ADR-0022).  ADR-0024 reverses ADR-0022's retention-by-abandonment and drops the
+This reverses the earlier retention-by-abandonment and drops the
 column outright; this migration is the Postgres half, and it ships in the same
 change as the SQLAlchemy model, all three Pydantic schemas and the create route.
 That atomicity is load-bearing: if the column disappeared while
@@ -15,7 +15,7 @@ classifies 5xx as retryable, and the upload queue would wedge permanently on
 every device.
 
 **This is a destructive migration**, and AGENTS.md § Data Persistence forbids
-those by default.  ADR-0024 records the owner-authorised exception and scopes
+those by default.  The cursor drop is an owner-authorised exception, scoped
 it: Alembic 0028 already derived every non-blank cursor into an ``actions`` row
 using the same uuid5 the client mints (ADR-0019), so what is discarded here is
 duplicated text, not information.  Nothing should cite this migration as
@@ -24,7 +24,7 @@ precedent without an ADR of its own.
 No sync-rules change accompanies it.  ``by_user_todos`` is
 ``SELECT * FROM todos WHERE user_id = bucket.user_id``, so no rule names the
 column; ``infra/powersync/sync-config.yaml`` is unchanged and PowerSync never
-restarts (ADR-0017 publishes only on a rules *change*).  The ``powersync``
+restarts (published only on a rules *change*).  The ``powersync``
 publication is ``FOR TABLE todos, …`` with no column list, so it needs no
 ``ALTER PUBLICATION`` either.  PowerSync does not replicate DDL: rows already in
 bucket storage keep the orphaned key and the column decays row-by-row as each

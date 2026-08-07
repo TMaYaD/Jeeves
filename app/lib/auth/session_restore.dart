@@ -14,7 +14,7 @@ import 'jwt_utils.dart';
 /// The three answers a session restore can give.
 ///
 /// The distinction that matters is between "there is no session" and "I could not
-/// find out" — see ADR-0041. Only [SessionAbsent] may clear credentials.
+/// find out". Only [SessionAbsent] may clear credentials.
 sealed class SessionRestoreOutcome {
   const SessionRestoreOutcome();
 }

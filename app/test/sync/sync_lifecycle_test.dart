@@ -265,8 +265,8 @@ void main() {
   test('a relaunched device re-mints its member credential and resumes',
       () async {
     final device = await phone(fileBacked: true);
-    // A legacy row — one that predates authoring (PowerSync-era migration data,
-    // ADR-0035). Settle the seam silent so the seed lands in the domain store
+    // A legacy row — one that predates authoring (PowerSync-era migration data).
+    // Settle the seam silent so the seed lands in the domain store
     // without being buffered: the **initial upload**, not the capture buffer, is
     // what authors these, which is exactly the path this test exercises.
     device.capture.unbind();

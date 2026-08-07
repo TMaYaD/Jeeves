@@ -27,7 +27,7 @@
 /// [preferenceConflictRegistry]. That is redundant at runtime — it is what the
 /// key would fall through to anyway — but it records that the strategy was
 /// chosen and reviewed rather than inherited by default, which is the bar
-/// ADR-0011 sets for keys whose arbitration a reader would otherwise have to
+/// the registry sets for keys whose arbitration a reader would otherwise have to
 /// reason about from scratch.
 ///
 /// ## Tombstone invariant (why "server-absent → keep local" is always safe)

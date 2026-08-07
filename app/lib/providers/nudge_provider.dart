@@ -117,7 +117,7 @@ final nudgeVisibleProvider =
   // Defer until synced prefs have loaded — see [nudgePrefsReadyProvider].
   if (!ref.watch(nudgePrefsReadyProvider)) return false;
 
-  // In-progress hygiene — ADR-0009. Hidden regardless of Trigger state.
+  // In-progress hygiene. Hidden regardless of Trigger state.
   if (ref.watch(ceremonyInProgressForProvider(ritual))) return false;
 
   final firingEdge = ref.watch(mostRecentFiringEdgeProvider(ritual));

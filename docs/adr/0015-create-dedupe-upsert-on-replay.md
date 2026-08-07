@@ -56,7 +56,7 @@ download later.
 
 ## Consequences
 
-The interaction with ADR-0011 is benign: the per-key conflict strategies
+The interaction with the per-key preference strategies is benign: they
 arbitrate client-side download reconciliation, while the server POST route is
 already last-arrival for the row it owns; upserting the submitted value on
 replay changes nothing the registry depends on.
@@ -83,6 +83,5 @@ partial order (clock skew), and diverges from the uniform last-arrival model —
 stays the recorded escape hatch if the race proves real in practice, but does not
 gate this decision.
 
-Related: ADR-0006 (capture split), ADR-0011 (user_preferences conflict
-strategies), and the PR #422 permissive-routes discussion
+Related: ADR-0006 (capture split), and the PR #422 permissive-routes discussion
 (https://github.com/TMaYaD/Jeeves/pull/422#discussion_r3602300225).

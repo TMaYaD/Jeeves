@@ -6,7 +6,7 @@ import 'app_title_bar_action.dart';
 export 'action_budget.dart';
 export 'app_title_bar_action.dart';
 
-/// The app's one title bar (ADR-0021, DESIGN.md § App title bar).
+/// The app's one title bar (DESIGN.md § App title bar).
 ///
 /// Mounted in `Scaffold.appBar` on every screen, and configured **entirely by
 /// constructor parameters passed top-down** — deliberately not a provider or

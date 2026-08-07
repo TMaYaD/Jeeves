@@ -1,10 +1,10 @@
-/// ADR-0010 for the projector: a reduced-in row must reach watching queries.
+/// View-notify for the projector: a reduced-in row must reach watching queries.
 ///
 /// Over the **production topology**: `jeeves_domain.sqlite` on disk through
 /// `sqlite_async`, every synced name a real table Drift created (#595). The
 /// PowerSync-view emulation this file used to install went with the engine.
 ///
-/// **The hazard is smaller than it was, and that is worth stating.** ADR-0010's
+/// **The hazard is smaller than it was, and that is worth stating.** the view-notify discipline's
 /// failure mode was that the `SqliteAsyncDriftConnection` bridge named PowerSync's
 /// own *backing* table, never the `todos` view a watcher read, so
 /// a projector write invalidated nothing at all. Over real tables the bridge names
@@ -17,7 +17,7 @@
 /// that reads across tables the write did not touch (asserted by emission counts
 /// in `test/database/action_view_notify_test.dart`), and the window where the
 /// bridge is momentarily silent — observed on the first cold start of a new
-/// planning day (#342), which is the incident ADR-0010 came out of.
+/// planning day (#342), which is the incident the notify came out of.
 ///
 /// It also covers search: no FTS index exists — `search_dao` is a read-only
 /// query over the live tables — so the notify is the whole requirement for a
@@ -253,7 +253,7 @@ void main() {
   test('a projected row is searchable, and the search watcher refreshes',
       () async {
     // No FTS index exists — `search_dao` is a read-only query over the live
-    // tables — so ADR-0010's notify is the *whole* requirement for a projected
+    // tables — so the explicit notify is the *whole* requirement for a projected
     // row to become findable.
     final id = _id('outcome');
     final seen = <List<SearchResult>>[];

@@ -19,7 +19,7 @@
 ///   checking those would make compaction impossible. The exemption is *from
 ///   the guards, not from LWW* — a re-asserted older clock still loses.
 /// - LWW is the *default* rule, not the only one. A field may be governed by a
-///   non-LWW [FieldMergeStrategy] — ADR-0011's Conflict Strategy registry rides
+///   non-LWW [FieldMergeStrategy] — the Conflict Strategy registry rides
 ///   here — and every such strategy must be a join-semilattice so reduction
 ///   stays order-independent (ADR-0030).
 /// - **Which** strategy arbitrates is read from the op and nothing else. A
@@ -60,8 +60,8 @@ class Reducer {
   final int Function() _nowMs;
   final int futureSkewBoundMs;
 
-  /// Which [FieldMergeStrategy] governs each field. The default is ADR-0011's
-  /// registry adapter; every collection but `user_preferences` resolves to LWW.
+  /// Which [FieldMergeStrategy] governs each field. The default is the Conflict
+  /// Strategy registry's adapter; every collection but `user_preferences` resolves to LWW.
   final MergeStrategyRegistry strategies;
 
   /// Apply [payload], or throw [SyncRejection] so the caller quarantines it.

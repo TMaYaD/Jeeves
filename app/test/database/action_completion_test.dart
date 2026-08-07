@@ -26,7 +26,7 @@ final _t3 = DateTime.parse('2026-07-01T12:00:00.000Z');
 /// Seeds a clarified Outcome with a real `current` Action **and** a legacy
 /// cursor value, as a store written by a pre-retirement client would look. The
 /// cursor is seeded purely so the "nothing writes it" assertions below are
-/// observable — production never sets it any more (ADR-0022).
+/// observable — production never sets it any more.
 Future<void> _seedClarifiedOutcome(
   GtdDatabase db, {
   String id = 'o1',

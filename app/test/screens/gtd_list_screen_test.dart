@@ -46,7 +46,7 @@ void main() {
     });
 
     testWidgets('renders the todo titles', (tester) async {
-      // The list title lives in the shared AppShell title bar now (ADR-0021);
+      // The list title lives in the shared AppShell title bar now;
       // this screen renders standalone with no header of its own.
       final items = [
         _todo('a', 'Buy coffee'),

@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/widgets/app_title_bar/action_budget.dart';
 
-/// Pure maths behind the bar's slot allocation (ADR-0021). Deliberately
+/// Pure maths behind the bar's slot allocation. Deliberately
 /// exercised without pumping a widget: the budget is a function of the
 /// breakpoint, never of measured available width, so it is testable as
 /// arithmetic and stays deterministic across devices.

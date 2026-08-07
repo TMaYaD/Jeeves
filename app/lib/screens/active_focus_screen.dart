@@ -33,7 +33,7 @@ import '../widgets/reclarify_prompt_sheet.dart';
 /// verdict. This keys on the achieved verdict specifically ([ProcessAction.done]),
 /// not on any truthy resolution: every "More to do" save resolves as
 /// [ProcessAction.nextActionDialog] — whether the user typed a phrase or left
-/// it empty and took the title-as-action fallback (ADR-0049) — and neither
+/// it empty and took the title-as-action fallback — and neither
 /// achieves the Outcome, so neither may claim "All done". A `null` verdict
 /// (the prompt was dismissed) is likewise not an achievement.
 @visibleForTesting
@@ -325,7 +325,7 @@ class _FocusBodyState extends ConsumerState<_FocusBody>
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         // The back affordance and task title live in the shared title bar
-        // (ADR-0021); the sprint-aware Jeeves banner leads the body.
+        //; the sprint-aware Jeeves banner leads the body.
         const ElapsedTimerWidget(),
         // Carousel: sprint ring (page 0) | notes (page 1)
         Expanded(

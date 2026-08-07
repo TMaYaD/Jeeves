@@ -74,7 +74,7 @@ final Provider<GtdDatabase> databaseProvider = Provider<GtdDatabase>((ref) {
 /// schema.
 ///
 /// **Ordering.** It runs as early as the app can run anything, but it does not
-/// hold the first frame: the projector fires the ADR-0010 view notifies for every
+/// hold the first frame: the projector fires the view notifies for every
 /// collection it touched, so a watcher that attached before the replay finished
 /// still refreshes when it does. Blocking startup on a walk of the whole store to
 /// gain a guarantee the notifies already provide would be the worse trade.

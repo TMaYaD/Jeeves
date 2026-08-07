@@ -15,7 +15,7 @@
 ///   [actionableAlarmCount] and [reportableQuarantineCount] say what that means
 ///   to the User, and only the first of those two turns the indicator red. The
 ///   classification lives in `sync_condition_class.dart` and is persisted
-///   nowhere (ADR-0044).
+///   nowhere.
 /// * [lastSyncedAt] stamps on **pull completion, independent of flush state**.
 ///   The timestamp never claims healthy; a wedged outbox shows through
 ///   [pendingOpCount], and withholding the timestamp would only make a device
@@ -51,7 +51,7 @@ class SyncHealth {
   /// `SyncConditionClass.actionable` — the four kinds that mean something of the
   /// User's is stuck or lost.
   ///
-  /// The only count that turns the indicator red. See ADR-0044 and
+  /// The only count that turns the indicator red. See
   /// `sync_condition_class.dart`.
   final int actionableAlarmCount;
 
@@ -83,7 +83,7 @@ class SyncHealth {
   /// It used to be `unresolvedAlarmCount > 0 || quarantineCount > 0`, which made
   /// a device red for conditions it had handled perfectly and — since almost
   /// nothing can clear an alarm — kept it red for ever. Fourteen of the eighteen
-  /// alarm kinds and every refusal now report instead (ADR-0044).
+  /// alarm kinds and every refusal now report instead.
   ///
   /// Derived for the same reason [clean] is: a stored flag would be free to
   /// disagree with the counts.

@@ -175,7 +175,7 @@ void main() {
   testWidgets('More to do… with a blank save falls back to the title (#691)',
       (tester) async {
     // The sheet is a shell around the shared bar, so it inherits the
-    // title-as-action fallback (ADR-0049): the user who knows there is more to
+    // title-as-action fallback: the user who knows there is more to
     // do but cannot name it is not held on the sheet. It matters most here —
     // completeCurrentAction has just left the Outcome Actionless, which is the
     // state that re-arms the re-clarification queue with no freshness gate.

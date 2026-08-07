@@ -11,7 +11,7 @@
 /// `clarifyToOutcome` for the verdict — so the journey is evidence about the
 /// real flow rather than about a fixture. The blank-save group goes one level
 /// further and taps the sheet itself, because there the behaviour under test
-/// lives in the widget (ADR-0049's title-as-action fallback) rather than on the
+/// lives in the widget (the title-as-action fallback) rather than on the
 /// service. Per docs/TESTING.md the store is staged in `setUp`, never inside a
 /// `testWidgets` body.
 library;
@@ -251,7 +251,7 @@ void main() {
         'empty (#691)', (tester) async {
       // The one case in this file driven through the sheet rather than the
       // service seam: what settles the row is the *title-as-action fallback*
-      // ADR-0049 put inside `ProcessToHandlers._nextWithDialog`, so composing
+      // the title-as-action fallback puts it inside `ProcessToHandlers._nextWithDialog`, so composing
       // its writes by hand here would assert nothing about the flow. The user
       // knows there is more to do and cannot name it; the Outcome's own title
       // stands in, `applyRouting` stamps `last_clarified_at` at or after the

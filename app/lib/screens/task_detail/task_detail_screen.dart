@@ -578,7 +578,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   /// does.
   void _back() => context.pop();
 
-  /// The screen's chrome (ADR-0021). The bar carries the read-only identity of
+  /// The screen's chrome. The bar carries the read-only identity of
   /// the Outcome — project as the overline, title as the title — while the
   /// body keeps the editable title field and project picker.
   AppTitleBar _buildTitleBar(Todo todo, Tag? projectTag) {
@@ -1149,7 +1149,7 @@ class _PlanSectionState extends ConsumerState<_PlanSection> {
   }
 
   /// Abandoning is irreversible — a terminated Action is a record with no
-  /// un-abandon (ADR-0018) — so it goes through the same confirm-sheet idiom as
+  /// un-abandon — so it goes through the same confirm-sheet idiom as
   /// "Replace current action", never a bare tap.
   Future<void> _confirmAbandon(Action current) async {
     await showModalBottomSheet<void>(
@@ -1361,7 +1361,7 @@ class _PlanSectionState extends ConsumerState<_PlanSection> {
 /// **An empty title cannot delete the row.** In edit mode a blank field just
 /// parks the sheet un-confirmable; dismissing discards the edit and the row
 /// keeps the text it had. Removing a planned Action is the row's `×` and
-/// nothing else (ADR-0018).
+/// nothing else.
 class _PlanActionSheet extends StatefulWidget {
   const _PlanActionSheet({this.initial});
 
@@ -1513,7 +1513,7 @@ class _PlanActionSheetState extends State<_PlanActionSheet> {
 /// shows no empty shell.
 ///
 /// **Read-only by construction.** A terminated Action is a record: it cannot be
-/// edited, re-promoted, or deleted (ADR-0018 + ADR-0004). The rows are `Text`
+/// edited, re-promoted, or deleted (ADR-0004). The rows are `Text`
 /// and nothing else — no `IconButton`, no `GestureDetector`, no `TextField` —
 /// so the guarantee is structural rather than a matter of remembering to leave
 /// the affordances off. No successor link is rendered between a superseded
@@ -1606,7 +1606,7 @@ class _ActionHistorySection extends ConsumerWidget {
   /// The verb is the user-facing half of the copy↔model mapping recorded in
   /// CONTEXT.md § Action: "Done" ↔ `role='done'`, "Abandoned" ↔
   /// `role='superseded'`. The date is the terminal timestamp — `done_at` for a
-  /// completion, `updated_at` for a supersession (ADR-0018 gives it no column
+  /// completion, `updated_at` for a supersession (it has no column
   /// of its own), `created_at` for a row carrying neither — rendered local, the
   /// same shape the "Captured from…" section uses.
   static String _terminalLabel(TerminatedAction entry) {

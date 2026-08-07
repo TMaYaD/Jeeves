@@ -97,7 +97,7 @@ def test_0034_drops_exactly_the_mirrored_tables() -> None:
 def test_0034_is_a_noop_when_the_mirror_is_already_gone() -> None:
     """Re-running the release phase against a pruned database must not crash-loop.
 
-    ADR-0012's re-runnable contract: ``alembic upgrade head`` runs on every
+    the re-runnable-migration contract: ``alembic upgrade head`` runs on every
     deploy, and the *second* one meets a database with none of these tables.
     """
     engine = sa.create_engine("sqlite://", poolclass=StaticPool)

@@ -19,7 +19,7 @@ migration:
   (their todo_tags cascade away via the existing FK).
 - Adds all three tables to the powersync publication.
 
-This is a NON-ADDITIVE data-move migration.  Per ADR-0012 the data move runs
+This is a NON-ADDITIVE data-move migration.  The data move runs
 without idempotency guards and fails loud — re-running it after a partial
 apply is a stamp/repair problem, not something to paper over silently.
 
@@ -139,7 +139,7 @@ def upgrade() -> None:
     op.create_index("ix_capture_tags_id", "capture_tags", ["id"], unique=True)
     op.create_index("ix_capture_tags_user_id", "capture_tags", ["user_id"])
 
-    # ── 4. Move the Inbox rows (NO guard — fail loud, ADR-0012) ─────────────
+    # ── 4. Move the Inbox rows (NO guard — fail loud) ─────────────
     # clarified_at stays NULL (they are unclarified — in the Inbox) and
     # updated_at stays NULL.  created_at carries over verbatim.
     op.execute(
