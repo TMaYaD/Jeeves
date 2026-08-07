@@ -36,7 +36,7 @@ Watch for terms nothing else in the glossary is defined in terms of — they are
 
 ### Entry shape
 
-**The term, what it means, and what we never call it.** The banished synonyms are half the value — "an Outcome, never a task or a todo" is what actually converges a conversation. A sentence or two; past roughly 80 words an entry has started describing mechanism rather than fixing a word.
+**The term, what it means, what we never call it, and where the detail lives.** The banished synonyms are half the value — "an Outcome, never a task or a todo" is what actually converges a conversation. CONTEXT.md stands one rung above a glossary: it fixes the word and then *points* at the design doc that describes the thing, rather than describing it here. A sentence or two; past roughly 80 words an entry has started describing mechanism rather than fixing a word.
 
 - **New concepts the user thinks about** → add to the Conceptual tier first, then implement. The model can run ahead of the implementation; that is by design.
 - **Code conflicts with the conceptual model** → log under that context's Flagged ambiguities. It is a punch list, so entries **leave** it: when the mismatch is resolved, delete the entry and fold the result into the term. Never annotate it as resolved and leave it in place.

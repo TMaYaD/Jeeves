@@ -121,6 +121,22 @@ should reach it has to be updated by hand; nothing will fail loudly if it is not
 quarantine count — never a stored status, so a wedged device cannot report itself
 healthy by writing down that it is.
 
+## Refusals
+
+Two things the sync layer will not do, and what happens instead.
+
+**Encryption never turns itself on.** It is a per-Workspace ceremony an owner runs
+with the passphrase, never a deploy and never a migration. A Workspace that has
+not run it stores plaintext content ops, and that is a legible state rather than
+a failure — the epoch floor records when it changed, so no receiver has to guess
+which regime an op was written under.
+
+**A Workspace with a live-granted Service cannot rotate.** A Service holds no
+per-User key-exchange subkey, so there is nothing to wrap the new epoch key to.
+The ceremony refuses before authoring anything rather than publishing a rotation
+that would strand the Service mid-stream. Revoking the Service is the way
+through.
+
 ## What is asserted, and where
 
 - **Merge semantics**: `app/test/sync/merge_strategy_test.dart`, `app/test/services/user_preferences_conflict_test.dart`, and the golden vectors in `spec/sync/reducer_v1_vectors.json` (shared with the server's Python reducer, so a divergence is caught cross-language).

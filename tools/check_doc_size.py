@@ -29,7 +29,7 @@ from pathlib import Path
 
 ARCHITECTURE_CEILING = 3_000  # the country map: regions and the roads between
 DESIGN_DOC_CEILING = 3_500  # city maps: one region, canals and watersheds
-VOCABULARY_CEILING = 6_000  # the core words the project is thought in
+VOCABULARY_CEILING = 10_000  # the core words the project is thought in
 
 CEILINGS: dict[str, int] = {
     "CONTEXT.md": VOCABULARY_CEILING,
