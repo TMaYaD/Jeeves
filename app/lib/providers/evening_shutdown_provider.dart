@@ -482,8 +482,15 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
       // Derived fresh from the live store at commit time and never stored, so
       // re-entering an abandoned ritual accumulates nothing and an item that
       // settled while ES was backgrounded is still caught.
+      //
+      // Scoped to the session this call already selected, not to "whatever is
+      // active now": two open sessions is a reachable sync state (ADR-0020) and
+      // the winner can change between these two awaits. Re-resolving here would
+      // let the map be derived from one session and committed against another —
+      // dropping a `next`-Settled Outcome's `rollover` and offering the closing
+      // session Dispositions belonging to its rival.
       final implied = _impliedDispositions(
-        await _db.focusSessionDao.getActiveSessionSettlements(),
+        await _db.focusSessionDao.getSettlementsForSession(session.id),
       );
       await _db.focusSessionDao.reviewAndCloseSession(
         sessionId: session.id,

@@ -156,6 +156,67 @@ Future<void> _delegate(GtdDatabase db, String taskId) async {
       ));
 }
 
+const _rivalSessionId = 'rival';
+final _rivalStartedAt = DateTime.utc(2026, 5, 2, 9);
+
+/// Lands an open FocusSession the way a pull lands one: straight into the
+/// table, past `openSession`'s guard — which is the *sole* enforcement of the
+/// single-open-session invariant (ADR-0020), so two open rows is a reachable
+/// state rather than a contrived one.
+Future<void> _projectOpenSession(
+  GtdDatabase db, {
+  required String id,
+  required DateTime startedAt,
+}) =>
+    db.into(db.focusSessions).insert(FocusSessionsCompanion(
+          id: Value(id),
+          userId: const Value(_uid),
+          startedAt: Value(startedAt.toUtc().toIso8601String()),
+          endedAt: const Value(null),
+        ));
+
+/// Makes the active-session winner change *between* two awaits, deterministically.
+///
+/// `closeDay` picks the session to close, then reads the Settlements it will
+/// commit. Between those two reads a pull can land a rival open session with a
+/// later `started_at`, which wins every subsequent active-session read. Wall
+/// clock cannot schedule a write into that window; intercepting the executor
+/// can — the write lands the moment the active-session read answers, and
+/// nothing else about the database is faked.
+class _RivalSessionInGap extends QueryInterceptor {
+  _RivalSessionInGap(this.landRival);
+
+  /// Projects the rival session row. Runs at most once.
+  final Future<void> Function() landRival;
+
+  /// Set immediately before the call under test: the fixture's own reads of
+  /// `focus_sessions` must not spend the fault.
+  bool armed = false;
+
+  /// How many times the rival actually landed, so a test can assert the gap was
+  /// reached rather than passing because the interleave never happened.
+  int firedCount = 0;
+
+  @override
+  Future<List<Map<String, Object?>>> runSelect(
+    QueryExecutor executor,
+    String statement,
+    List<Object?> args,
+  ) async {
+    final rows = await super.runSelect(executor, statement, args);
+    // The active-session read is the one select that names focus_sessions
+    // without joining todos; the Settlement read that follows names both.
+    if (armed &&
+        statement.contains('focus_sessions') &&
+        !statement.contains('todos')) {
+      armed = false;
+      firedCount++;
+      await landRival();
+    }
+    return rows;
+  }
+}
+
 void main() {
   setUpAll(configureSqliteForTests);
 
@@ -658,6 +719,81 @@ void main() {
       await notifier.closeDay();
       expect(await db.select(db.focusSessionTasks).get(), equals(after));
       expect(await db.select(db.focusSessionDispositions).get(), isEmpty);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // closeDay commits against the session it selected
+  // ---------------------------------------------------------------------------
+
+  group('closeDay derives the implied Dispositions from the session it closes',
+      () {
+    late GtdDatabase db;
+    late ProviderContainer container;
+    late _RivalSessionInGap gap;
+
+    setUp(() {
+      gap = _RivalSessionInGap(() => _projectOpenSession(
+            db,
+            id: _rivalSessionId,
+            startedAt: _rivalStartedAt,
+          ));
+      db = GtdDatabase(NativeDatabase.memory().interceptWith(gap));
+      container = _container(db);
+    });
+
+    tearDown(() async {
+      container.dispose();
+      await db.close();
+    });
+
+    test(
+        'a rival session winning the active-session race mid-close changes '
+        'nothing about what is committed', () async {
+      // On the closing session's Plan and Settled *in it* — so it owes an
+      // implied `rollover`, the record tomorrow's pre-selection reads.
+      await _insertTodo(db, id: 'mine');
+      // Also on the closing session's Plan — so a Disposition for it would be
+      // accepted by the Review-surface filter — but its only settlement
+      // evidence belongs to the rival session. The closing session never saw
+      // it resolve, so it must take no implied Disposition here.
+      await _insertTodo(db, id: 'theirs');
+
+      final sessionId = await db.focusSessionDao.openSession(
+        userId: _uid,
+        taskIds: ['mine', 'theirs'],
+        now: DateTime.utc(2026, 5, 1, 9),
+      );
+      await _settleInSession(db, sessionId: sessionId, taskId: 'mine');
+      await _seedNextMove(db, 'mine');
+      await _settleInSession(db, sessionId: _rivalSessionId, taskId: 'theirs');
+      await _delegate(db, 'theirs');
+
+      // Arm only now: every earlier read of focus_sessions belongs to the
+      // fixture, and the gap being asserted is the one inside closeDay.
+      gap.armed = true;
+      await container.read(eveningShutdownProvider.notifier).closeDay();
+
+      expect(gap.firedCount, 1,
+          reason: 'the rival must actually have landed in the gap, or this '
+              'test proves nothing');
+      final rival = await (db.select(db.focusSessions)
+            ..where((s) => s.id.equals(_rivalSessionId)))
+          .getSingle();
+      expect(rival.endedAt, isNull,
+          reason: 'closeDay closed the session it selected, not the winner');
+
+      final planRows = await (db.select(db.focusSessionTasks)
+            ..where((fst) => fst.focusSessionId.equals(sessionId)))
+          .get();
+      final byTask = {for (final r in planRows) r.taskId: r.disposition};
+
+      expect(byTask['mine'], 'rollover',
+          reason: 'the closing session\'s own next-Settled Outcome still '
+              'carries over; deriving from the rival would drop it');
+      expect(byTask['theirs'], isNull,
+          reason: 'a Settlement reached in another session must not mint a '
+              'Disposition against this one');
     });
   });
 

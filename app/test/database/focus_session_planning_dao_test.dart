@@ -1457,5 +1457,46 @@ void main() {
       expect(await db.select(db.todos).get(), equals(before),
           reason: 'reading Settlements must never write through');
     });
+
+    test(
+        'getSettlementsForSession answers the session it names, not the '
+        'active-session winner', () async {
+      await _insertTodo(db, id: 'mine', title: 'settled in the named session');
+      await _insertTodo(db, id: 'theirs', title: 'settled in the rival');
+      final sessionId = await openWith(['mine']);
+
+      // A rival open session, landed the way a pull lands one: straight into
+      // the table, past openSession's guard (ADR-0020). Later started_at, so it
+      // is the active-session winner from here on.
+      await db.into(db.focusSessions).insert(FocusSessionsCompanion(
+            id: const Value('rival'),
+            userId: const Value(_userId),
+            startedAt: Value(DateTime(2026, 5, 2, 9).toUtc().toIso8601String()),
+            endedAt: const Value(null),
+          ));
+
+      await completeActionInSession(sessionId, 'mine');
+      await reclarifyAt('mine', anchorAt.add(const Duration(seconds: 5)));
+      await seedCurrent('mine');
+
+      await completeActionInSession('rival', 'theirs');
+      await reclarifyAt('theirs', anchorAt.add(const Duration(seconds: 5)));
+      await seedCurrent('theirs');
+
+      expect(
+        await db.focusSessionDao.getActiveSessionSettlements(),
+        {'theirs': SessionSettlement.next},
+        reason: 'the unscoped read follows the winner, by design',
+      );
+      expect(
+        await db.focusSessionDao.getSettlementsForSession(sessionId),
+        {'mine': SessionSettlement.next},
+        reason: 'the named session, whether or not it is the winner',
+      );
+      expect(
+        await db.focusSessionDao.getSettlementsForSession('rival'),
+        {'theirs': SessionSettlement.next},
+      );
+    });
   });
 }

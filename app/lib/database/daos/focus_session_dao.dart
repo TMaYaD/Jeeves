@@ -799,25 +799,30 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   // ---------------------------------------------------------------------------
 
   /// The per-row **settlement anchor**: the latest completion of one of this
-  /// Outcome's Actions *within the open FocusSession*, evidenced by a TimeLog
-  /// attributed to that session.
+  /// Outcome's Actions *within the FocusSession named by [sessionIdSql]*,
+  /// evidenced by a TimeLog attributed to that session.
   ///
   /// Attribution is by session id, never a wall-clock window: sessions are
   /// calendar-independent and may span days (ADR-0020), so a
   /// `started_at`-to-now range would be the wrong test.
-  static const _settlementAnchorSql = '''
+  static String _settlementAnchorSql(String sessionIdSql) => '''
 (SELECT MAX(anchor_a.done_at)
    FROM actions anchor_a
    JOIN time_logs anchor_tl ON anchor_tl.action_id = anchor_a.id
   WHERE anchor_a.outcome_id = t.id
     AND anchor_a.role = 'done'
-    AND anchor_tl.focus_session_id = $_activeSessionIdSql)''';
+    AND anchor_tl.focus_session_id = $sessionIdSql)''';
 
-  /// Outcome id → its [SessionSettlement] bucket, over the open session's
-  /// Review surface. Absent from the result == **not Settled**.
+  /// Outcome id → its [SessionSettlement] bucket, over the Review surface of
+  /// the session named by [sessionIdSql]. Absent from the result == **not
+  /// Settled**.
   ///
-  /// **Settled** — an Outcome on the open FocusSession's Review surface whose
-  /// engagement in that session has reached a verdict. Either
+  /// One body, two bindings: [_activeSessionIdSql] for the "whatever is open
+  /// right now" readers, and a bound parameter for the reader that already
+  /// holds the id of the session it means. The predicate must not fork.
+  ///
+  /// **Settled** — an Outcome on that FocusSession's Review surface whose
+  /// engagement in the session has reached a verdict. Either
   ///
   /// * **(a)** its Completion is recorded (`todos.done_at IS NOT NULL`), or
   /// * **(b)** an Action of the Outcome was completed **within this
@@ -852,7 +857,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   /// through the sheet (the completion and the verdict are seconds apart), and
   /// the failure direction is the safe one: the row reads as *not* Settled and
   /// keeps its place in the disposition step.
-  static const _activeSessionSettlementsSql = '''
+  static String _settlementsSql(String sessionIdSql) => '''
 SELECT t.id AS todo_id,
        CASE
          WHEN t.done_at IS NOT NULL THEN 'done'
@@ -869,17 +874,38 @@ SELECT t.id AS todo_id,
   FROM todos t
  WHERE t.id IN (
          SELECT fst.task_id FROM focus_session_tasks fst
-          WHERE fst.focus_session_id = $_activeSessionIdSql
+          WHERE fst.focus_session_id = $sessionIdSql
           UNION
          SELECT tl.task_id FROM time_logs tl
-          WHERE tl.focus_session_id = $_activeSessionIdSql
+          WHERE tl.focus_session_id = $sessionIdSql
        )
    AND (
          t.done_at IS NOT NULL
-         OR ($_settlementAnchorSql IS NOT NULL
+         OR (${_settlementAnchorSql(sessionIdSql)} IS NOT NULL
              AND t.last_clarified_at IS NOT NULL
-             AND t.last_clarified_at >= $_settlementAnchorSql)
+             AND t.last_clarified_at >= ${_settlementAnchorSql(sessionIdSql)})
        )''';
+
+  /// [_settlementsSql] bound to whichever session is open at read time.
+  static final String _activeSessionSettlementsSql =
+      _settlementsSql(_activeSessionIdSql);
+
+  /// [_settlementsSql] bound to a caller-supplied session id. `?1` is repeated
+  /// throughout the body, so the statement still takes exactly one variable.
+  static final String _sessionSettlementsSql = _settlementsSql('?1');
+
+  /// The tables every Settlement read observes. `focusSessions` is in the set
+  /// for the active-session bindings; the session-scoped one names no session
+  /// row, so for it this is a harmless superset (only `watch()` consults it).
+  Set<ResultSetImplementation<dynamic, dynamic>> get _settlementReadsFrom => {
+        focusSessions,
+        focusSessionTasks,
+        timeLogs,
+        todos,
+        actions,
+        todoTags,
+        tags,
+      };
 
   /// Reactive Settlement map for the currently open session. Emits an empty map
   /// when no session is open.
@@ -890,15 +916,7 @@ SELECT t.id AS todo_id,
     return customSelect(
       _activeSessionSettlementsSql,
       variables: [],
-      readsFrom: {
-        focusSessions,
-        focusSessionTasks,
-        timeLogs,
-        todos,
-        actions,
-        todoTags,
-        tags,
-      },
+      readsFrom: _settlementReadsFrom,
     ).watch().map(_settlementsFromRows);
   }
 
@@ -906,21 +924,40 @@ SELECT t.id AS todo_id,
   ///
   /// Not redundant: awaiting a live Drift `watch().first` from a widget-driven
   /// path never delivers its first event and blocks the isolate outright
-  /// (docs/TESTING.md § Frontend), and `EveningShutdownNotifier.closeDay` reads
+  /// (docs/TESTING.md § Frontend), and `EveningShutdownNotifier` reads
   /// Settlements from exactly such a path.
+  ///
+  /// Re-resolves "the active session" at call time, so it belongs only to
+  /// readers whose *whole* answer is about whatever is open now. A caller that
+  /// already holds a session id — one that is about to write against it — wants
+  /// [getSettlementsForSession] instead: two open sessions is a reachable sync
+  /// state (see [openSessionWinnerFirstSql]) and the winner can change between
+  /// two awaits.
   Future<Map<String, SessionSettlement>> getActiveSessionSettlements() async {
     final rows = await customSelect(
       _activeSessionSettlementsSql,
       variables: [],
-      readsFrom: {
-        focusSessions,
-        focusSessionTasks,
-        timeLogs,
-        todos,
-        actions,
-        todoTags,
-        tags,
-      },
+      readsFrom: _settlementReadsFrom,
+    ).get();
+    return _settlementsFromRows(rows);
+  }
+
+  /// [getActiveSessionSettlements] pinned to [sessionId] instead of to
+  /// whichever session happens to be open when the query runs.
+  ///
+  /// Same predicate, same buckets — only the session binding differs. This is
+  /// the form for a caller that reads Settlements and then *writes* against a
+  /// session it selected earlier: the active-session winner can change between
+  /// the two awaits, and committing one session's implied Dispositions against
+  /// another session's id would drop a required `rollover` and mint a
+  /// Disposition for work the closing session never saw.
+  Future<Map<String, SessionSettlement>> getSettlementsForSession(
+    String sessionId,
+  ) async {
+    final rows = await customSelect(
+      _sessionSettlementsSql,
+      variables: [Variable<String>(sessionId)],
+      readsFrom: _settlementReadsFrom,
     ).get();
     return _settlementsFromRows(rows);
   }
