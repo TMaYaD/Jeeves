@@ -188,9 +188,9 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
                   const SizedBox(height: 16),
                 ],
 
-                // Pending review
+                // Up Next — the undecided pool
                 if (pendingTasks.isNotEmpty) ...[
-                  _SectionLabel('Pending Review (${pendingTasks.length})'),
+                  _SectionLabel('Up Next (${pendingTasks.length})'),
                   const SizedBox(height: 8),
                   ...pendingTasks.map((t) => _ReviewCard(
                         todo: t,
@@ -207,9 +207,9 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
                   const SizedBox(height: 16),
                 ],
 
-                // Skipped tasks
+                // Skipped
                 if (skippedTasks.isNotEmpty) ...[
-                  _SectionLabel('Skipped Tasks (${skippedTasks.length})'),
+                  _SectionLabel('Skipped (${skippedTasks.length})'),
                   const SizedBox(height: 8),
                   ...skippedTasks.map((t) => _ReviewCard(
                         todo: t,
@@ -228,7 +228,7 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     child: Text(
-                      'No tasks to review!',
+                      'Nothing to plan.',
                       style: TextStyle(fontSize: 14, color: Colors.grey[400]),
                       textAlign: TextAlign.center,
                     ),
@@ -378,7 +378,7 @@ class _CapacityBar extends StatelessWidget {
   }
 }
 
-/// Contextual bar shown above the Pending Review list while multi-select is
+/// Contextual bar shown above the Up Next list while multi-select is
 /// active. Sits inside the step (not the screen-level app bar, which is owned
 /// by [FocusSessionPlanningScreen] and renders step progress).
 class _MultiSelectActionBar extends StatelessWidget {
@@ -493,7 +493,7 @@ class _MultiSelectActionBar extends StatelessWidget {
 /// When [selectionMode] is true, the trailing icon slot is hidden and a
 /// leading checkbox is shown instead; the whole card responds to taps via
 /// [onTapInSelectionMode]. [onLongPress] is the entry point into selection
-/// mode and is only meaningful on Pending Review rows.
+/// mode and is only meaningful on Up Next rows.
 ///
 /// [onPeek] — a plain tap outside selection mode opens the read-only Outcome
 /// peek sheet. Callers pass `null` while multi-select is active so the card

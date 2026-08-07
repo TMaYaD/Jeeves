@@ -1162,9 +1162,9 @@ void main() {
   // re-clarify saves title and notes the way `task_detail_screen` and
   // `active_focus_screen` do: on focus loss (ADR-0023).
   //
-  // `dispose()` backs that up for the case focus loss cannot cover: a route
-  // popped while a field still holds focus tears the focus scope down without
-  // notifying the listener first. It used to open by reading `databaseProvider`
+  // `dispose()` backs that up so the save does not depend on the Navigator
+  // handing focus over on a pop — framework behaviour we do not own, whose
+  // failure mode is a silent lost edit. It used to open by reading `databaseProvider`
   // off `ref`, which never worked \u2014 `StatefulElement.unmount()` marks the
   // element defunct before calling `state.dispose()`, and Riverpod asserts on
   // exactly that, so the write was never issued and the edit was lost with only

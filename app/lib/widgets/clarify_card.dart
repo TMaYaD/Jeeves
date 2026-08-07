@@ -451,9 +451,17 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     if (_isCapture && _initialised && !_verdictReached) {
       widget.retention?.stash(_subjectId, _retainable());
     }
-    // The Outcome shape's last line of defence: leaving the card while a field
-    // still holds focus (a route pop tears the focus scope down without
-    // notifying this listener first) would otherwise drop the edit.
+    // The Outcome shape's last line of defence, for a field that still holds
+    // focus when the card goes. A route pop does notify this listener today —
+    // the newly-current route hands focus over while the popped subtree is
+    // still mounted — but that is framework behaviour we do not own, and its
+    // failure mode is a silent lost edit. `TaskDetailScreen` and
+    // `ActiveFocusScreen` keep the same backstop (#533).
+    //
+    // **Missing the subject guard those two carry (#446 / #447).** With the row
+    // gone from local storage this still flushes, writing to a deleted row and
+    // authoring a sync op for a deleted entity. Deliberately left to #447,
+    // which owns the whole class rather than this one site.
     //
     // A Capture takes no such path — nothing it holds is ever written — so
     // this whole block is Outcome-only, and with it goes the `ref`-in-dispose

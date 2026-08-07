@@ -100,7 +100,7 @@ class AsyncSubject<T extends Object> extends StatelessWidget {
       return const ErrorSurface();
     }
 
-    if (asyncValue.hasValue) {
+    if (asyncValue.subjectConfirmedMissing) {
       return missingBuilder != null
           ? missingBuilder!(context)
           : EmptySurface(
@@ -113,4 +113,20 @@ class AsyncSubject<T extends Object> extends StatelessWidget {
 
     return const LoadingSurface();
   }
+}
+
+/// The one definition of "this subject is gone", shared by the render path and
+/// the write path.
+///
+/// [AsyncSubject] renders the missing surface off it, and a surface holding a
+/// deferred write (`TaskDetailScreen`, `ActiveFocusScreen`'s notes page) latches
+/// it to drop that write rather than land it on a row that no longer exists —
+/// so "a vanished item cannot be routed or written to" holds for a write that
+/// was pending when the row went, not only for one issued after.
+extension SubjectPresence<T extends Object> on AsyncValue<T?> {
+  /// Only a clean `AsyncData(null)`: local storage answered and there is no
+  /// such row. Error before absence, exactly as [AsyncSubject] renders it — a
+  /// failed re-read carrying a previous null is not a delete, and a null that
+  /// has not been answered for yet is still loading.
+  bool get subjectConfirmedMissing => !hasError && hasValue && value == null;
 }

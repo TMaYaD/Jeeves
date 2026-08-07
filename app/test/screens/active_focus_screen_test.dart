@@ -42,6 +42,9 @@ import 'package:jeeves/providers/focus_session_provider.dart';
 import 'package:jeeves/providers/sprint_timer_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/screens/active_focus_screen.dart';
+import 'package:jeeves/sync/collection_codecs.dart' show todosCollection;
+import 'package:jeeves/sync/domain_op_capture.dart'
+    show RecordingDomainOpCapture;
 import 'package:jeeves/widgets/app_title_bar/app_title_bar.dart';
 import 'package:jeeves/widgets/process_to_handlers.dart' show ProcessAction;
 import 'package:jeeves/widgets/reclarify_prompt_sheet.dart';
@@ -120,11 +123,13 @@ Future<Todo> _insertTodo(
   GtdDatabase db, {
   required String id,
   String title = 'Ship the thing',
+  String? notes,
 }) async {
   final now = DateTime.now();
   await db.into(db.todos).insert(TodosCompanion(
         id: Value(id),
         title: Value(title),
+        notes: Value(notes),
         clarified: const Value(true),
         intent: const Value('next'),
         userId: const Value(_userId),
@@ -140,6 +145,11 @@ Widget _harness(
   GtdDatabase db, {
   required Todo todo,
   SprintTimerNotifier Function()? sprintTimer,
+  // Stream feeding `taskDetailTodoProvider` — the screen's live subject
+  // binding. Tests that delete the row underneath the open screen own a
+  // controller here, exactly as a live Drift watch would emit, without leaving
+  // a pending timer behind on dispose.
+  Stream<Todo?>? todoStream,
 }) {
   final router = GoRouter(
     initialLocation: '/active',
@@ -158,7 +168,8 @@ Widget _harness(
       focusModeProvider.overrideWith(() => _ActiveFocusModeNotifier(todo.id)),
       sprintTimerProvider
           .overrideWith(sprintTimer ?? _IdleSprintTimerNotifier.new),
-      taskDetailTodoProvider(todo.id).overrideWith((_) => Stream.value(todo)),
+      taskDetailTodoProvider(todo.id)
+          .overrideWith((_) => todoStream ?? Stream.value(todo)),
       activeSessionTasksProvider.overrideWith((_) => Stream.value([todo])),
       // Mandatory, not a nicety: `_onComplete` reads this provider's future,
       // and an un-overridden read reaches a live Drift `watch()` from a widget
@@ -404,6 +415,175 @@ void main() {
         )?.id,
         'c',
       );
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // A pending notes edit at teardown (issue #533).
+  //
+  // The notes page saves on focus loss and on a 500ms debounce; `dispose()`
+  // used to cancel the debounce and flush nothing, so leaving the screen inside
+  // that window — or with the field still focused — dropped the edit silently.
+  // The backstop is the same shape `TaskDetailScreen` and `ClarifyCard` keep.
+  //
+  // The row is read **raw** rather than through `TodoDao.getTodo`, whose D2
+  // projection COALESCEs the current Action's values over these columns
+  // (NOTES.md 2026-07-26).
+  // ---------------------------------------------------------------------------
+  group('ActiveFocusScreen — a pending notes edit at teardown (#533)', () {
+    late GtdDatabase db;
+    late RecordingDomainOpCapture capture;
+
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+      FlutterLocalNotificationsPlatform.instance = _FakeNotificationsPlatform();
+      TestWidgetsFlutterBinding.ensureInitialized()
+          .defaultBinaryMessenger
+          .setMockMethodCallHandler(_notificationsChannel, (_) async => null);
+      capture = RecordingDomainOpCapture();
+      db = GtdDatabase(NativeDatabase.memory(), opCapture: capture);
+    });
+    tearDown(() async {
+      TestWidgetsFlutterBinding.ensureInitialized()
+          .defaultBinaryMessenger
+          .setMockMethodCallHandler(_notificationsChannel, null);
+      await db.close();
+    });
+
+    Future<Map<String, Object?>> rawRow(String id) async => (await db
+            .customSelect(
+              'SELECT notes, updated_at FROM todos WHERE id = ?',
+              variables: [Variable.withString(id)],
+            )
+            .getSingle())
+        .data;
+
+    /// Moves the carousel to the notes page and opens its editor.
+    ///
+    /// The page change is driven through the [PageController] rather than a
+    /// drag: the sprint ring owns a tap target at the PageView's centre, which
+    /// is exactly where `tester.drag` starts its gesture.
+    Future<void> openNotesEditor(WidgetTester tester) async {
+      tester.widget<PageView>(find.byType(PageView)).controller!.jumpToPage(1);
+      await _pumpFrames(tester, 2);
+      await tester.tap(find.byIcon(Icons.edit_outlined));
+      // Past the 50ms delayed `requestFocus` the page schedules.
+      await _pumpFrames(tester, 2);
+      expect(find.byType(TextField), findsOneWidget,
+          reason: 'the notes editor must actually be open, or the teardown '
+              'assertions below are vacuous');
+    }
+
+    /// Tears the whole tree down with the field still focused and the debounce
+    /// still pending, then lets the fire-and-forget flush reach the database.
+    Future<void> unmountWhileFocused(WidgetTester tester) async {
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(() => pumpEventQueue());
+    }
+
+    testWidgets(
+        'a notes edit still saves when the page is torn down with the field '
+        'focused', (tester) async {
+      final todo = await _insertTodo(db, id: 'o1');
+      await tester.pumpWidget(_harness(db, todo: todo));
+      await _pumpFrames(tester);
+      await openNotesEditor(tester);
+
+      await tester.enterText(find.byType(TextField), 'Ask the barista');
+      await unmountWhileFocused(tester);
+
+      expect((await rawRow('o1'))['notes'], 'Ask the barista');
+    });
+
+    testWidgets('a notes edit typed inside the 500ms debounce window survives '
+        'teardown', (tester) async {
+      final todo = await _insertTodo(db, id: 'o1');
+      await tester.pumpWidget(_harness(db, todo: todo));
+      await _pumpFrames(tester);
+      await openNotesEditor(tester);
+
+      await tester.enterText(find.byType(TextField), 'Half a thought');
+      // Well inside the debounce: the timer `dispose()` cancels has not fired,
+      // so the flush is the only thing that can save this.
+      await tester.pump(const Duration(milliseconds: 200));
+      await unmountWhileFocused(tester);
+
+      expect((await rawRow('o1'))['notes'], 'Half a thought');
+    });
+
+    // The other side of the guard: an unconditional flush would stamp
+    // `updated_at` and `last_clarified_at` and author a sync op every time the
+    // user left the focus screen without touching the notes.
+    testWidgets('a clean teardown issues no write', (tester) async {
+      final todo = await _insertTodo(db, id: 'o1', notes: 'Ask the barista');
+      final seededUpdatedAt = (await rawRow('o1'))['updated_at'];
+      await tester.pumpWidget(_harness(db, todo: todo));
+      await _pumpFrames(tester);
+      await openNotesEditor(tester);
+      capture.clear();
+
+      await unmountWhileFocused(tester);
+
+      final row = await rawRow('o1');
+      expect(row['notes'], 'Ask the barista');
+      expect(row['updated_at'], seededUpdatedAt);
+      expect(capture.forCollection(todosCollection), isEmpty);
+    });
+
+    testWidgets('a failing flush is logged rather than thrown into teardown',
+        (tester) async {
+      final todo = await _insertTodo(db, id: 'o1');
+      await tester.pumpWidget(_harness(db, todo: todo));
+      await _pumpFrames(tester);
+      await openNotesEditor(tester);
+      await tester.enterText(find.byType(TextField), 'Ask the barista');
+
+      // Closing the database is the one way to fail this write from outside the
+      // page: it is issued after `dispose()` has already run.
+      await db.close();
+      await unmountWhileFocused(tester);
+
+      expect(tester.takeException(), isNull);
+    });
+
+    // Two things at once, because on this screen they are the same event.
+    //
+    // 1. The mirror of `task_detail_screen_test`'s subject-missing case: a
+    //    write must not outlive its subject (#446 / #447). It matters *more*
+    //    here — the screen's null branch swaps the body out and routes away, so
+    //    the notes page is genuinely torn down at the moment the row goes, on
+    //    the ordinary path rather than a rare one.
+    // 2. The proof that Riverpod delivers the page's own `ref.listen` callback
+    //    before the parent's `ref.watch` rebuild unmounts it. If that ordering
+    //    did not hold, the latch would still be false here and the flush would
+    //    land on the deleted row — which is exactly what this asserts against.
+    testWidgets('a row that goes missing under the open screen is never '
+        'written to, and authors no op', (tester) async {
+      final todo = await _insertTodo(db, id: 'o1');
+      final seededUpdatedAt = (await rawRow('o1'))['updated_at'];
+      final feed = StreamController<Todo?>.broadcast();
+      addTearDown(feed.close);
+
+      await tester
+          .pumpWidget(_harness(db, todo: todo, todoStream: feed.stream));
+      feed.add(todo);
+      await _pumpFrames(tester);
+      await openNotesEditor(tester);
+      await tester.enterText(find.byType(TextField), 'Ask the barista');
+
+      // The row leaves local storage under the open screen. The provider
+      // override decouples the stream from the row, so the row is still there
+      // to prove the negative.
+      capture.clear();
+      feed.add(null);
+      await _pumpFrames(tester);
+      await unmountWhileFocused(tester);
+
+      final row = await rawRow('o1');
+      expect(row['notes'], isNull);
+      expect(row['updated_at'], seededUpdatedAt);
+      // The op-log assertion is the one that survives a future DAO that upserts.
+      expect(capture.forCollection(todosCollection), isEmpty);
     });
   });
 

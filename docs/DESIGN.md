@@ -139,6 +139,33 @@ The canonical radii scale is the reference design system's tokens (`jeeves.css` 
 ### Spacing
 We maintain a **normal (2)** level of spacing, balancing information density with visual comfort and ease of use.
 
+### Icon vocabulary
+A handful of glyphs carry a fixed meaning across the app. They are reserved: a
+screen that wants one of these meanings uses the glyph, and a screen that wants
+a different meaning uses a different glyph.
+
+*   **`+` / `Icons.add`** — **reserved** for *add to the list or context I am
+    currently looking at*. The genuine sites: add a planned Action and add a
+    context tag on task detail (`task_detail_screen.dart`), carve and merge an
+    Outcome in the clarify surface (`capture_outcomes_section.dart`), and the
+    project and person-tag pickers. Never for capture — capture is global, and a
+    `+` in the title bar reads as "add an item *here*".
+*   **`Icons.move_to_inbox`** (filled) — the global **Capture** action, pinned in
+    the title bar (`capture_action.dart`). The glyph names the destination: a
+    tray with an arrow going into it is Capture → Inbox.
+*   **`Icons.inbox_outlined`** — the **Inbox as a destination**: drawer nav,
+    empty states, and "Captured from" provenance. An action and the place it
+    delivers to must not share a glyph.
+*   **`Icons.bolt` / `Icons.bolt_outlined`** — **energy**, wherever an energy
+    level is shown or set.
+
+The rule that generates these: **in the title bar and drawer, an outlined glyph
+names a place and a filled one names an act** — hence outlined Inbox for the
+destination against filled `move_to_inbox` for the action, and filled
+`Icons.play_arrow_rounded` for task detail's Start focus. Filled-versus-outlined
+is a real signal here because it reads with no colour at all (cf. § Sync health,
+where the same distinction carries meaning independently of hue).
+
 ### Wizard footers — one forward affordance at a time
 The Weekly Review and Daily Planning Ritual footers expose a single forward
 affordance, never two. The footer reserves one fixed-size slot on the right
@@ -312,7 +339,8 @@ Left to right:
     by `AppShell` — the Now route's Re-plan action (shown only while an open
     session carries tasks) is the precedent.
 *   **pinned capture** — the fixed rightmost action slot, reserved for capture.
-    Identical position on every screen that pins it; never overflows. The Inbox
+    Identical position on every screen that pins it; never overflows. It carries
+    the reserved capture glyph, never a plain `+` (§ Icon vocabulary). The Inbox
     is the one screen that suppresses it — its `QuickAddBar` already captures.
 *   **⋮ overflow** — renders **only** when something overflowed, rightmost of
     all.
@@ -362,15 +390,15 @@ which wraps each ceremony screen.
 ### Long-press multi-select
 Lists that surface batchable actions enter a multi-select mode on **long-press**, mirroring the long-press affordance the tag cloud uses for tag management. Once selection mode is active, a **contextual bar** appears immediately above the list (not in the screen-level app bar, which the shared title bar owns) showing the selected count, a per-batch preview where relevant (e.g. total planned time), a "Select all" shortcut, a Clear (×) button, and a primary commit button. Cards in selection mode replace per-row trailing actions with a leading checkbox; tapping a card toggles its membership. Deselecting the last item auto-exits the mode. Each selection toggle fires a light haptic.
 
-This pattern is used on Step 3 (Review Next Actions) of the Daily Planning ritual to add several Pending Review tasks to today's plan in one gesture; the bar there exposes "Add to Today" as the commit button.
+This pattern is used on Step 5 (Build Today's Plan) of the Daily Planning ritual to add several Up Next Outcomes to today's plan in one gesture; the bar there exposes "Add to Today" as the commit button.
 
 ### Capacity bar — two-tone fill
 The Plan Summary capacity bar fills in two segments. Minutes from Outcomes with a real time estimate render in the load-status tone — green (`#16A34A`) at or below 0.8 of available time, amber (`#F59E0B`) up to 1.0, red (`#DC2626`) over — keyed off the *combined* ratio so the warn/over thresholds are unchanged. Minutes contributed by selected Outcomes that carry **no** estimate (counted at the configurable default, see REQUIREMENTS Daily Planning Step 5) render immediately after them as a lighter-blue segment (`#93C5FD`, Tailwind blue-300 — same family as the Daily Planning accent `#2563EB`). The lighter blue marks that provenance; the estimate-less cards themselves look exactly like any other card (no chip). When nothing is counted at the default the bar is a single status-tone fill, unchanged. The bar keeps its 10px height, 4px corner radius, and `#E5E7EB` track.
 
 ### Outcome peek sheet
-On the Daily Planning Plan Summary step, a plain **tap** on any card (Today's Plan, Pending Review, or Skipped) opens the **Outcome peek** — a read-only bottom sheet (`OutcomePeekSheet`, `app/lib/widgets/outcome_peek_sheet.dart`) surfacing the Outcome's fuller context: title, notes, energy, time estimate, due date, and time logged. It is read-only by construction (Text/icon rows only — no fields, pickers, or edit navigation) and writes nothing, so opening or dismissing it never selects, skips, or otherwise mutates the plan; the modal sits over the never-unmounted list, so scroll and selection are preserved on dismiss. Time logged is summed from the `time_logs` table (`TimeLogDao.totalMinutesForTask`); nothing stores a total.
+On the Daily Planning Plan Summary step, a plain **tap** on any card (Today's Plan, Up Next, or Skipped) opens the **Outcome peek** — a read-only bottom sheet (`OutcomePeekSheet`, `app/lib/widgets/outcome_peek_sheet.dart`) surfacing the Outcome's fuller context: title, notes, energy, time estimate, due date, and time logged. It is read-only by construction (Text/icon rows only — no fields, pickers, or edit navigation) and writes nothing, so opening or dismissing it never selects, skips, or otherwise mutates the plan; the modal sits over the never-unmounted list, so scroll and selection are preserved on dismiss. Time logged is summed from the `time_logs` table (`TimeLogDao.totalMinutesForTask`); nothing stores a total.
 
-Tap and long-press are split by mode: **tap peeks, hold selects**. Long-press enters multi-select (above); while multi-select is active, tap reverts to its selection meaning on Pending cards and the peek is unavailable — tap is inert on Today's Plan / Skipped cards, whose action buttons stay fully functional. Exiting multi-select restores tap-to-peek. The sheet follows the 2/4/6 radii scale — 6px top corners (sheet surface), 4px meta chips.
+Tap and long-press are split by mode: **tap peeks, hold selects**. Long-press enters multi-select (above); while multi-select is active, tap reverts to its selection meaning on Up Next cards and the peek is unavailable — tap is inert on Today's Plan / Skipped cards, whose action buttons stay fully functional. Exiting multi-select restores tap-to-peek. The sheet follows the 2/4/6 radii scale — 6px top corners (sheet surface), 4px meta chips.
 
 ### Task-detail Plan section
 The task-detail screen (`/task/:id`) carries a **Plan** section (`_PlanSection`, `app/lib/screens/task_detail/task_detail_screen.dart`) above the Notes area — the Outcome's "what's next" outranks free-text notes. Its anatomy, top to bottom:
