@@ -52,7 +52,7 @@ class _FocusSessionPlanningScreenState
     'Review Tasks',
     'Energy Check-in',
     'Time Check-in',
-    'Review Next Actions',
+    'Build Today\'s Plan',
   ];
 
   /// Bertie-speak proceed label for the intro, drawn once per mount so it
@@ -304,7 +304,7 @@ class _FocusSessionPlanningScreenState
     FocusSessionPlanningState state,
     FocusSessionPlanningNotifier notifier,
   ) {
-    // Energy-based filtering of Pending Review is a reactive selector on
+    // Energy-based filtering of Up Next is a reactive selector on
     // `state.energyLevel` (see `nextForFocusSessionPlanningProvider`);
     // crossing into Time is a plain step advance.
     return WizardStep(

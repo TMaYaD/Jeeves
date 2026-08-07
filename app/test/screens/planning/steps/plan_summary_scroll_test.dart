@@ -1,6 +1,6 @@
 /// Widget tests pinning the Plan Summary list's scroll behaviour (#459).
 ///
-/// Symptom: selecting (picking up) a Pending Review task jumped the whole list
+/// Symptom: selecting (picking up) an Up Next task jumped the whole list
 /// back to the top, while Skip reorganised in place. The cause was a loading
 /// guard that returned a spinner whenever any watched stream was *reloading*,
 /// unmounting the un-keyed `ListView` and discarding its scroll offset. The fix
@@ -85,7 +85,7 @@ Widget _harness(GtdDatabase db, List<Todo> todos) {
     overrides: [
       databaseProvider.overrideWithValue(db),
       _testTodosProvider.overrideWith((_) => todos),
-      // Pending Review: next-action todos minus anything already reviewed.
+      // Up Next: next-action todos minus anything already reviewed.
       nextForFocusSessionPlanningProvider.overrideWith((ref) {
         final state = ref.watch(focusSessionPlanningProvider);
         final reviewed = {
