@@ -18,23 +18,15 @@ someone reasons about the wire from the domain model, and it gets deeper with ev
 collection added. The cost of renaming is paid once; the cost of not renaming is
 paid by every future reader.
 
-Migration is in-app and needs nothing from the user. Reduction is
-collection-generic and only projection is not, so an op naming a retired
-collection still reduces and simply has no typed row to become
-(`domain_projector.dart`) — retiring a name is the path this codebase already
-takes for a collection a build does not know, not a new branch. Ops under the old
-names therefore go inert on upgrade, and a one-time re-author pass — the
-initial-upload walk, which already transforms every domain row into the op fields
-it will carry and authors through the production path, idempotent by diff against
-reduced state — re-mints them under the new vocabulary. Nothing is exported, wiped
-or re-imported; that path exists but requires the user to perform it and is a last
-resort, not the plan.
+**How the existing log is carried across is deliberately not decided here.** The
+standing preference is to rename the ops themselves in a migration, so the
+historical names live in the migration rather than in code that every fresh device
+must carry to replay. What that costs is real and unsettled: the signature covers
+the body and every op names its predecessor's hash, so a rename is a re-sign plus a
+chain rebuild, and the server's log is append-only with no delete route to put a
+rewritten chain into. Choosing between that and a fresh Workspace under a new
+derivation depends on planned server work, and belongs to #715 rather than here.
 
-Two prices are accepted. The old ops stay in the log as dead weight until
-compaction prunes them. And during a mixed-version window a device that has not
-upgraded keeps authoring under the old names, so its writes are invisible to one
-that has, until it upgrades — ordinary contract skew under ADR-0039, bounded by
-the upgrade rather than permanent. Local table and column names are not part of
-this at all: `codec.table` feeds only local SQL while `codec.collection` is the
-wire name, and they are already separate fields, so storage renames are ordinary
-migrations.
+Local table and column names are not part of any of this: `codec.table` feeds only
+local SQL while `codec.collection` is the wire name, and they are already separate
+fields, so storage renames are ordinary migrations.
