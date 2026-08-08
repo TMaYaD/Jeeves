@@ -11,6 +11,26 @@
 COMMIT_MSG_FILE=$1
 COMMIT_SOURCE=$2
 
+# Snapshot the pristine template for commit-msg's untouched-template guard. git
+# hands THIS hook $COMMIT_SOURCE=template for every template spelling — the
+# `commit.template` config, `git commit --template=<f>`, `-t <f>`, and a CLI
+# template overriding a config one — and at this moment the file holds exactly
+# that template, before any editor opens. commit-msg receives none of those
+# signals (not the CLI path, and `git config commit.template` still reports the
+# config value even when --template overrode it), so it reads this snapshot
+# instead. It is rewritten on EVERY invocation — the template content on a
+# template commit, removed otherwise — so commit-msg always sees a snapshot from
+# THIS commit and never a stale one left by an earlier `--no-verify` run (which
+# skips commit-msg but not this hook).
+pristine=$(git rev-parse --git-path COMMIT_TEMPLATE_PRISTINE 2>/dev/null)
+if [ -n "$pristine" ]; then
+    if [ "$COMMIT_SOURCE" = "template" ]; then
+        cat "$COMMIT_MSG_FILE" > "$pristine" 2>/dev/null || rm -f "$pristine"
+    else
+        rm -f "$pristine"
+    fi
+fi
+
 # Guard clause: only ever append to a message git already has in hand.
 #
 # $COMMIT_SOURCE is "message" for `-m`/`-F`, one of "template"/"merge"/

@@ -307,6 +307,14 @@ chmod +x "${EDITOR_REPLACE}"
 TEMPLATE_CONVENTIONAL="${WORK}/commit-template-conventional"
 printf 'feat: describe the change\n\n# Explain what and why.\n' > "${TEMPLATE_CONVENTIONAL}"
 
+# A DIFFERENT conventional template, used as the config template in the
+# config-vs-CLI override case: `commit.template` points here, `--template` points
+# at TEMPLATE_CONVENTIONAL. git loads the CLI one, so a guard that re-reads
+# `git config commit.template` compares against the wrong file and appends. Only
+# a guard fed the template git actually loaded gets this right.
+TEMPLATE_CONVENTIONAL_ALT="${WORK}/commit-template-alt"
+printf 'chore: a different template\n' > "${TEMPLATE_CONVENTIONAL_ALT}"
+
 # Rebase sequence editor: turn the first `pick` into `reword`, portably (no
 # `sed -i`, which is not the same on BSD sed).
 SEQ_REWORD_FIRST="${WORK}/seq-reword-first"
@@ -585,6 +593,35 @@ for hook_shell in ${HOOK_SHELLS}; do
   git -C "${CASE_REPO}" config commit.template "${TEMPLATE_CONVENTIONAL}"
   commit_with_editor "${EDITOR_REPLACE}" 'feat: the real change'
   assert_subject "${hook_shell}, edited commit.template" 'feat: the real change (#605)'
+
+  # The template can also be named on the CLI, which never touches config — a
+  # config-only guard is blind to these. prepare-commit-msg snapshots whatever
+  # git loaded, so all three spellings are caught. (Extra args after the typed
+  # subject go straight to `git commit`.)
+  start_case "template (${hook_shell}): quitting on an untouched --template aborts"
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  commit_with_editor "${EDITOR_QUIT}" '' --template="${TEMPLATE_CONVENTIONAL}"
+  assert_nothing_committed "${hook_shell}, untouched --template + quit"
+
+  start_case "template (${hook_shell}): quitting on an untouched -t aborts"
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  commit_with_editor "${EDITOR_QUIT}" '' -t "${TEMPLATE_CONVENTIONAL}"
+  assert_nothing_committed "${hook_shell}, untouched -t + quit"
+
+  # The override collision: config names one template, --template names another,
+  # git loads the CLI one. A guard re-reading `git config commit.template`
+  # compares against the config file (which the message does NOT equal) and
+  # fabricates the commit; the snapshot guard compares against the loaded one.
+  start_case "template (${hook_shell}): --template overriding commit.template still aborts on quit"
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  git -C "${CASE_REPO}" config commit.template "${TEMPLATE_CONVENTIONAL_ALT}"
+  commit_with_editor "${EDITOR_QUIT}" '' --template="${TEMPLATE_CONVENTIONAL}"
+  assert_nothing_committed "${hook_shell}, config+--template override + quit"
+
+  start_case "template (${hook_shell}): editing a --template subject still gets the reference"
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  commit_with_editor "${EDITOR_REPLACE}" 'feat: cli-templated real change' --template="${TEMPLATE_CONVENTIONAL}"
+  assert_subject "${hook_shell}, edited --template" 'feat: cli-templated real change (#605)'
 
   # --- Validation reads the SUBJECT, not the whole file ---
   start_case "validation (${hook_shell}): a conventional BODY line does not rescue a non-conventional subject"

@@ -52,11 +52,14 @@ fi
 #   * A comments-only file (quit without saving, no template) fails the
 #     conventional-format validation above and is rejected there — the first
 #     non-blank line is one of git's own comment lines, which never matches.
-#   * An untouched `commit.template` is caught by the guard just below. git's own
-#     "did not edit the message" abort compares the final message to the
-#     template, but that comparison runs AFTER this hook, so appending here would
-#     convince git the user edited it. The guard skips the append when the
-#     message still equals the template, leaving git's abort intact.
+#   * An untouched template — under ANY spelling (`commit.template`,
+#     `--template`, `-t`, or a CLI template overriding a config one) — is caught
+#     by the guard just below. git's own "did not edit the message" abort
+#     compares the final message to the template, but that comparison runs AFTER
+#     this hook, so appending here would convince git the user edited it. The
+#     guard skips the append when the message still equals the template
+#     (snapshotted by prepare-commit-msg, the hook git tells the spelling to),
+#     leaving git's abort intact.
 
 # --- 2. Issue reference on the editor path ----------------------------------
 #
@@ -112,17 +115,23 @@ fi
 # shellcheck source=.githooks/lib/issue-reference.sh
 . "$lib"
 
-# Guard: an untouched commit.template must still abort a cancelled commit. Both
-# sides go through message_body, so comments, the scissors line and
-# core.commentChar are stripped identically; a relative template path resolves
-# from the repo root, git's cwd for the hook. This lives in commit-msg, not the
-# shared lib: on the -m path prepare-commit-msg has already appended by now, so
-# the message no longer equals the template and a -m subject that happens to
-# match the template text is still (correctly) referenced.
-tmpl=$(git config --path commit.template 2>/dev/null)
-if [ -n "$tmpl" ] && [ -f "$tmpl" ] &&
-    [ "$(message_body "$1")" = "$(message_body "$tmpl")" ]; then
-    exit 0
+# Guard: an untouched template must still abort a cancelled commit, under any
+# spelling. prepare-commit-msg snapshots the pristine template into
+# COMMIT_TEMPLATE_PRISTINE (it is the hook git tells which template it loaded —
+# config, --template, -t, or a CLI override of a config template); if the message
+# still equals that snapshot, skip the append so git's own "did not edit the
+# message" abort still fires. Both sides go through message_body, so comments,
+# the scissors line and core.commentChar are stripped identically. On the -m path
+# prepare-commit-msg removed the snapshot and already appended, so a -m subject
+# that happens to match the template text is still (correctly) referenced. The
+# snapshot is consumed here so it never lingers into a later commit.
+pristine=$(git rev-parse --git-path COMMIT_TEMPLATE_PRISTINE 2>/dev/null)
+if [ -n "$pristine" ] && [ -f "$pristine" ]; then
+    if [ "$(message_body "$1")" = "$(message_body "$pristine")" ]; then
+        rm -f "$pristine"
+        exit 0
+    fi
+    rm -f "$pristine"
 fi
 
 # The append is best-effort: exit 0 regardless of its status, so a failed write
