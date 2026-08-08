@@ -623,6 +623,23 @@ for hook_shell in ${HOOK_SHELLS}; do
   commit_with_editor "${EDITOR_REPLACE}" 'feat: cli-templated real change' --template="${TEMPLATE_CONVENTIONAL}"
   assert_subject "${hook_shell}, edited --template" 'feat: cli-templated real change (#605)'
 
+  # Durability: the whole cancel-safety rests on prepare-commit-msg clearing the
+  # snapshot UNCONDITIONALLY, so a snapshot leaked by a path that runs prepare but
+  # skips commit-msg cannot outlive its commit. `--no-verify` is exactly such a
+  # path (it skips commit-msg, not prepare), so the first commit here leaves a
+  # stale snapshot of the template. The second is an ORDINARY commit — no template
+  # — whose subject is deliberately the SAME text as the leaked template: only the
+  # unconditional clear stops commit-msg from matching the stale snapshot and
+  # wrongly suppressing the append. A refactor making the clear conditional
+  # records `feat: describe the change` with no reference, and this fails.
+  # (message_body strips TEMPLATE_CONVENTIONAL's comment/blank down to its first
+  # line, which is the subject typed below.)
+  start_case "durability (${hook_shell}): a leaked template snapshot does not suppress a later commit"
+  new_case_repo 'fix/605-converge-duplicate-tags' "${hook_shell}"
+  commit_with_editor "${EDITOR_QUIT}" '' --no-verify --template="${TEMPLATE_CONVENTIONAL}"
+  commit_with_editor "${EDITOR_WRITE}" 'feat: describe the change'
+  assert_subject "${hook_shell}, stale snapshot cleared before next commit" 'feat: describe the change (#605)'
+
   # --- Validation reads the SUBJECT, not the whole file ---
   start_case "validation (${hook_shell}): a conventional BODY line does not rescue a non-conventional subject"
   # Validation greps the first non-blank line, not the whole message, so a
