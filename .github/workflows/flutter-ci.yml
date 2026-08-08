@@ -1,16 +1,76 @@
 name: Flutter CI
 
+# Triggered by app/ changes, and — since #678 — by edits to the pre-commit hook
+# and the real-SDK check that guards it, and to this workflow file. The last is
+# what lets the PR that adds a job actually run it. A hook-only change runs only
+# the real-SDK job (analyze/android-build are gated on `app` below); an app/**
+# or workflow-file change runs everything it is relevant to.
 on:
   push:
     branches: [main]
-    paths: ["app/**"]
+    paths:
+      - "app/**"
+      - ".githooks/pre-commit"
+      - ".githooks/tests/test-pre-commit-real-sdk.sh"
+      - ".github/workflows/flutter-ci.yml"
   pull_request:
     branches: [main]
-    paths: ["app/**"]
+    paths:
+      - "app/**"
+      - ".githooks/pre-commit"
+      - ".githooks/tests/test-pre-commit-real-sdk.sh"
+      - ".github/workflows/flutter-ci.yml"
+
+# Every job here only reads the repository (checkout with persist-credentials:
+# false, build, test), so grant the least-privilege token scope once at the
+# workflow level rather than inheriting the broad default.
+permissions:
+  contents: read
+
+# Cancel a superseded PR run rather than let it hold a runner — the real-SDK job
+# downloads a full uncached SDK, so a stale run is expensive. Pushes to main are
+# left to complete.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Path detector. Named for its original android-build role and kept that name
+  # stable so a required-check name never moves (#678), but it now also gates
+  # the Flutter analyze job and the real-SDK hook check via the `app`/`hook`
+  # outputs — a hook-only change must not spend a full analyze/test.
+  android-build-changes:
+    name: Detect Android-relevant changes
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+      app: ${{ steps.filter.outputs.app }}
+      hook: ${{ steps.filter.outputs.hook }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - 'app/android/**'
+              - 'app/pubspec.yaml'
+              - 'app/pubspec.lock'
+              - 'app/.fvmrc'
+              - '.github/workflows/flutter-ci.yml'
+            app:
+              - 'app/**'
+              - '.github/workflows/flutter-ci.yml'
+            hook:
+              - '.githooks/pre-commit'
+              - '.githooks/tests/test-pre-commit-real-sdk.sh'
+
   analyze:
     name: Analyze & Test
+    needs: android-build-changes
+    if: needs.android-build-changes.outputs.app == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -51,25 +111,77 @@ jobs:
       - run: flutter analyze
       - run: flutter test
 
-  android-build-changes:
-    name: Detect Android-relevant changes
+  # Real-SDK coverage for the pre-commit hook's Flutter path (#678). Lives here,
+  # in the Flutter workflow, rather than the fast SDK-less `Infra & hooks` job
+  # in backend-ci.yml: it needs a real, pinned Flutter SDK so that a change in
+  # the SDK's own launcher scripts cannot silently invalidate the #644
+  # protection while the stub-based suite keeps passing. The stub suite (linted
+  # and run in `Infra & hooks`) stays the fast red/green detector for the hook's
+  # logic; this is the slower real-SDK check alongside it, not a replacement.
+  #
+  # `cache: false` is load-bearing: analyze/android-build use `cache: true`,
+  # which saves the SDK across runs. A corrupted SDK saved and restored later
+  # (the trap cannot beat a cancelled/timed-out job's save) is exactly the
+  # hazard this check exists to catch, so it downloads a FRESH SDK each run and
+  # never saves it. The fresh install is also why the script warms the tool
+  # before snapshotting its baseline.
+  #
+  # Cost (parallel job; PR wall-clock grows by max(0, this_job − analyze_job),
+  # compute by one runner-job). With cache:false the dominant cost is the full
+  # SDK download each run, then the tool warm/precache, a ~/.pub-cache
+  # partial-restore fetch, and a no-op build_runner + trivial analyze/test
+  # driven through the hook. Measured: ~1m33s, against ~5m29s for `analyze` in
+  # the same run. When an `app/**` change also runs `analyze`, this finishes
+  # well inside its window and adds ~0 to PR wall-clock. For a hook-only change
+  # `analyze` is skipped (it is gated on `app`), so this job is on the critical
+  # path and can extend PR wall-clock by its own runtime. Either way: one
+  # runner-job of compute.
+  hook-real-sdk:
+    name: Pre-commit hook — real SDK
+    needs: android-build-changes
+    if: needs.android-build-changes.outputs.app == 'true' || needs.android-build-changes.outputs.hook == 'true'
     runs-on: ubuntu-latest
-    outputs:
-      relevant: ${{ steps.filter.outputs.relevant }}
+    # Bounds the uncached SDK download + warm + commit-driven build_runner well
+    # above its ~2-minute observed runtime, so a hang cannot hold a runner for
+    # the 360-minute default (and bounds the window the exit trap cannot repair).
+    timeout-minutes: 30
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
-        id: filter
+
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
-          filters: |
-            relevant:
-              - 'app/android/**'
-              - 'app/pubspec.yaml'
-              - 'app/pubspec.lock'
-              - 'app/.fvmrc'
-              - '.github/workflows/flutter-ci.yml'
+          flutter-version-file: app/.fvmrc
+          channel: stable
+          # A fresh, disposable, runner-local SDK each run — never saved. See
+          # the job comment above.
+          cache: false
+
+      # Pub cache is a distinct cache from the SDK. This job resolves the
+      # GENERATED fixture's deps (a subset of the app's), so it gets its OWN key
+      # prefix `pub-hook-` rather than sharing android-build's `pub-` exact key:
+      # a shared key would collide — whichever job saved first would win, and
+      # android-build could restore this job's fixture-only cache as an exact
+      # hit. `restore-keys: pub-` still lets it warm partially from any `pub-*`
+      # cache (including android-build's full one), and the fixture pins the
+      # same build_runner the app does, so the overlap is high.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.pub-cache
+          key: pub-hook-${{ hashFiles('app/pubspec.lock') }}
+          restore-keys: pub-
+
+      - name: Real-SDK pre-commit hook coverage
+        env:
+          # A missing/non-git/shared SDK is a hard failure here, not a skip.
+          REQUIRE_REAL_SDK: "1"
+        run: |
+          sdk="$(dirname "$(dirname "$(command -v flutter)")")"
+          echo "Disposable runner-local SDK: ${sdk}"
+          JEEVES_REAL_SDK="${sdk}" PUB_CACHE="${HOME}/.pub-cache" \
+            ./.githooks/tests/test-pre-commit-real-sdk.sh
 
   android-build:
     name: Android Gradle Build
