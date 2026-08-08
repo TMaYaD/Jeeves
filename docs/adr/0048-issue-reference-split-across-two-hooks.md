@@ -41,9 +41,11 @@ The format validation runs **before** the reference logic and needs no library, 
 unreadable or missing lib degrades the *feature* to a non-blocking no-op (a warning on
 stderr, then success) without ever disabling the format check that every push depends on. The
 same ordering keeps quit-to-cancel intact on the editor path: a comments-only quit fails
-validation, and an *untouched* `commit.template` is detected and left unappended so git's own
-"did not edit the message" abort still fires — appending would otherwise fabricate a commit
-from a cancelled one.
+validation, and an *untouched* template — under any spelling (`commit.template`, `--template`,
+`-t`) — is left unappended so git's own "did not edit the message" abort still fires
+(appending would otherwise fabricate a commit from a cancelled one). Because git tells only
+`prepare-commit-msg` which template it loaded, that hook snapshots the pristine template for
+`commit-msg` to compare against.
 
 ## Consequences
 
