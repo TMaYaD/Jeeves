@@ -14,7 +14,7 @@
 ///   completion screen) system back exits the ceremony to the execution
 ///   home screen (`/focus`, user-titled "Now") — never to the launcher.
 ///   Exiting mid-ceremony abandons the performance: the screen's dispose
-///   fires `CeremonyInProgressNotifier.exit()` (ADR-0009), and Triggers
+///   fires `CeremonyInProgressNotifier.exit()`, and Triggers
 ///   treat it as if the performance hadn't happened.
 library;
 

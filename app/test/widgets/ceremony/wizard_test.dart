@@ -436,7 +436,7 @@ void main() {
       expect(find.byType(CaptureSheet), findsNothing);
 
       // Opening/dismissing capture is a modal overlay, never a route push or
-      // step-cursor advance (ADR-0009 hygiene): the wizard is still mounted
+      // step-cursor advance (in-progress hygiene): the wizard is still mounted
       // on the same step it started on.
       expect(find.byType(Wizard), findsOneWidget);
       expect(find.text('Process Inbox'), findsOneWidget);

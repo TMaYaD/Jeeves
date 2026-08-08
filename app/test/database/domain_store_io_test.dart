@@ -1,4 +1,4 @@
-/// The open path at the file level (ADR-0035, issues #595, #673).
+/// The open path at the file level (issues #595, #673).
 ///
 /// The one part no widget or DAO test can reach: whether the store is created,
 /// whether the open can tell that the op log still owes it a replay, and that
@@ -22,7 +22,7 @@ import 'package:jeeves/database/domain_store.dart';
 
 import '../test_helpers.dart';
 
-/// The name the domain read model used before ADR-0035 cut it over, with the
+/// The name the domain read model used before the cut-over, with the
 /// `-wal` and `-shm` sidecars SQLite leaves beside one in WAL mode.
 ///
 /// Spelled out here rather than imported: no production code knows this name any

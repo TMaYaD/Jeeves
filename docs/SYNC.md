@@ -2,11 +2,11 @@
 
 <!-- This document describes the current state of the system. Rewrite sections when they become inaccurate. Do not append change logs. -->
 
-Jeeves is offline-first. Local writes go to the embedded SQLite store immediately, and are replicated between devices by the **op log** — signed ops over the minimal sync server — as soon as the device is enrolled and reachable ([ADR-0026](./adr/0026-minimal-sync-server.md), [ADR-0034](./adr/0034-sync-starts-at-enrolment.md)). This is the only client sync path; there is no replication engine on the device (#595, [ADR-0035](./adr/0035-domain-store-cut-over-by-fresh-file.md)).
+Jeeves is offline-first. Local writes go to the embedded SQLite store immediately, and are replicated between devices by the **op log** — signed ops over the minimal sync server — as soon as the device is enrolled and reachable ([ADR-0026](./adr/0026-minimal-sync-server.md), [ADR-0034](./adr/0034-sync-starts-at-enrolment.md)). This is the only client sync path; there is no replication engine on the device (#595).
 
 This document is about **merge**: how two devices that wrote concurrently end up agreeing, with the focus on the `user_preferences` synced key-value store, whose keys are the ones where blanket last-write-wins is sometimes the wrong answer.
 
-For the transport architecture see [ARCHITECTURE.md § Minimal Sync Server](./ARCHITECTURE.md#minimal-sync-server); for the vocabulary, [CONTEXT.md § Sync](../CONTEXT.md#sync).
+For where this sits in the system see [ARCHITECTURE.md § The sync spine](./ARCHITECTURE.md#the-sync-spine); for the vocabulary, [CONTEXT.md § Sync](../CONTEXT.md#sync).
 
 ## What "conflict" means here
 
@@ -53,7 +53,7 @@ An unregistered key resolves as `lww`, which never *loses* a write: it selects t
 
 ### Explicit registration
 
-`preferenceConflictRegistry` is an exact-match `key → strategy` map consulted **before** the `snoozed_until` suffix rule and before the default, so an entry there always wins. Registering `lww` explicitly is redundant at runtime — the key would fall through to it anyway — but it records that the strategy was chosen and reviewed rather than inherited, which is the bar [ADR-0011](./adr/0011-user-preferences-conflict-resolution.md) sets for a key whose arbitration a reader would otherwise have to re-derive. Keys registered explicitly are marked in the matrix below.
+`preferenceConflictRegistry` is an exact-match `key → strategy` map consulted **before** the `snoozed_until` suffix rule and before the default, so an entry there always wins. Registering `lww` explicitly is redundant at runtime — the key would fall through to it anyway — but it records that the strategy was chosen and reviewed rather than inherited, which is the bar for a key whose arbitration a reader would otherwise have to re-derive. Keys registered explicitly are marked in the matrix below.
 
 ### Strategy selection is per op
 
@@ -84,13 +84,58 @@ Every current key, grouped by family:
 | `planning_notification_snoozed_until`, `shutdown_notification_snoozed_until`, `periodic_review_notification_snoozed_until` | datetime | `maxTimestampValue` | Snooze floor must never regress; un-snooze is a tombstone |
 | *(none today)* | list/set | `setMerge` | Provisioned for future filter/pin selections |
 
-**Snooze arbitration departs deliberately from the blanket LWW default** — see ADR-0011.
+**Snooze arbitration departs deliberately from the blanket LWW default**: between two live values the later *value* wins so a floor never regresses, while a clear is arbitrated against a live value by last-write-wins.
 
 ## Derived identity, and why merge does not need to care about it
 
 Two collections have a domain key that is not their `id` column: `focus_session_tasks` (the `(session, task)` pair) and `user_preferences` (the `(workspace, key)` pair). Their local DAO writes mint a row id of their own, so two devices creating the same logical row would otherwise fork into two entities that never merge.
 
 They do not, because the id is **derived**: `focusSessionTaskIdFor(sessionId, taskId)` and `preferenceEntityId(workspace, key)` (`app/lib/sync/ids.dart`). Every device names the same entity, so the ordinary field-grain merge above applies unchanged, and the projector realigns the local row's `id` onto the derivation when it writes reduced state back (`app/lib/sync/domain_projector.dart`). Junction rows in `todo_tags`, `capture_outcomes` and `capture_tags` follow the same rule through their `*IdFor` helpers.
+
+## Protocol surface
+
+Three things are wire contract rather than implementation detail. Changing any of
+them changes what a peer sees, so each is pinned by a golden vector.
+
+**Value encodings.** A Drift `dateTime` column encodes as an ISO-8601 UTC instant
+truncated — never rounded — to exactly three fractional digits with a trailing
+`Z`. TEXT timestamp columns pass through byte-for-byte as opaque strings. Text,
+int, bool and null pass through as JSON natives. A column that changes its Dart
+type changes its encoding, and that is a protocol change.
+
+**Entity ids.** Normal collections keep client-random UUIDs. Two kinds are
+deterministic, and must be: `user_preferences` derives its id from
+`(workspace, key)`, and junctions derive theirs from their pair. The rule is in
+`app/lib/sync/ids.dart`, and the Tag collection is named there explicitly as one
+that must *not* derive — a Tag's op-log identity is its random `id`, while
+`(name, type)` is only its user-facing identity, which is why duplicates are
+representable and folded rather than prevented
+([ADR-0043](adr/0043-tag-duplicates-are-representable-and-folded.md)).
+
+**No implicit cascades.** The log has no foreign keys, so nothing downstream
+infers that deleting a parent removes its children. Every deletion enumerates its
+own cascade set at capture time. A new child table means every delete path that
+should reach it has to be updated by hand; nothing will fail loudly if it is not.
+
+`SyncHealth.clean` is a derived getter over queue depth, unresolved alarms and
+quarantine count — never a stored status, so a wedged device cannot report itself
+healthy by writing down that it is.
+
+## Refusals
+
+Two things the sync layer will not do, and what happens instead.
+
+**Encryption never turns itself on.** It is a per-Workspace ceremony an owner runs
+with the passphrase, never a deploy and never a migration. A Workspace that has
+not run it stores plaintext content ops, and that is a legible state rather than
+a failure — the epoch floor records when it changed, so no receiver has to guess
+which regime an op was written under.
+
+**A Workspace with a live-granted Service cannot rotate.** A Service holds no
+per-User key-exchange subkey, so there is nothing to wrap the new epoch key to.
+The ceremony refuses before authoring anything rather than publishing a rotation
+that would strand the Service mid-stream. Revoking the Service is the way
+through.
 
 ## What is asserted, and where
 

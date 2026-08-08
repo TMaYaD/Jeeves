@@ -297,7 +297,7 @@ void main() {
       // The deferral, pinned as a fact rather than left as an assumption: a
       // `reported` alarm still counts in `unresolvedAlarmCount`, so a Workspace
       // served one forgery still cannot compact. This slice fixes the indicator,
-      // not the log — see ADR-0044 and #654.
+      // not the log — see #654.
       workspace = await SimWorkspace.create(deviceCount: 1);
       final a = workspace.a;
       await a.authorLocal('mine');

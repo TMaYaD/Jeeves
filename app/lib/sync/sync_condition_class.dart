@@ -21,7 +21,7 @@
 /// dependency runs one way: screens read the class, the sync tier never reads a
 /// sentence.
 ///
-/// See ADR-0044.
+/// See the condition-class taxonomy above.
 library;
 
 import 'chain_verifier.dart';

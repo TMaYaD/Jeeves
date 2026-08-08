@@ -8,7 +8,7 @@
 /// * stamps `Outcome.last_clarified_at` once, through [_stampOutcome] — the
 ///   stamping rule (CONTEXT.md § Clarification: every Action mutation is a
 ///   clarifying micro-act) is encoded here and nowhere else, and
-/// * self-notifies after commit (ADR-0010): the GTD surfaces read across
+/// * self-notifies after commit: the GTD surfaces read across
 ///   `todos`, `actions` and `time_logs`, so a watcher naming one has to hear
 ///   about a write to another — the write path calls
 ///   [GtdDatabase.notifyActionsViewWrite] itself, plus
@@ -22,7 +22,7 @@
 /// `todos` at all, so its `todos` notification cannot be gated on `stamped`
 /// (always false here) and is issued unconditionally instead.
 ///
-/// Per **ADR-0018** supersession carries no linkage metadata: a superseded
+/// Supersession carries no linkage metadata: a superseded
 /// row's terminal timestamp is its `updated_at`, there is no `superseded_by_id`
 /// / `superseded_at`. A text edit of an Action is an *in-place* edit of the
 /// same row (a refinement of the same Action); supersession is an explicit
@@ -35,7 +35,7 @@
 /// **History (story 8, issue #478).** Terminated Actions stay attached to their
 /// Outcome and are read back newest-first by [watchTerminatedActions]. A
 /// terminated row is a record: nothing re-promotes it, edits it, or deletes it
-/// (ADR-0018 + ADR-0004 — the promote primitive refuses any role but
+/// (ADR-0004 — the promote primitive refuses any role but
 /// `planned`), and no successor link exists to render.
 ///
 /// **The planned queue (ADR-0004 story 5, issue #475).** Beyond the 0..1
@@ -53,8 +53,8 @@
 /// (unchanged order writes nothing and does not stamp).
 ///
 /// **The `actions` table is the only grain.** The legacy
-/// `todos.next_action_text` cursor was retired by abandonment (ADR-0022, issue
-/// #479) and then dropped from the schema outright (ADR-0024, issue #525). A
+/// `todos.next_action_text` cursor was retired by abandonment (issue
+/// #479) and then dropped from the schema outright (issue #525). A
 /// future contributor who re-adds an Outcome-column mirror of the current
 /// Action's text, to keep two sides agreeing, would be re-introducing the
 /// second source of truth this model exists to remove.
@@ -87,7 +87,7 @@ part 'action_dao.g.dart';
 /// [stamped] iff `last_clarified_at` was moved on the Outcome, [logChanged] iff
 /// a `time_logs` row was written by the terminal-transition hook (issue #476) —
 /// which the caller uses to fire the TimeLog notification, since the active-log
-/// and time-spent watchers do not name `actions` (ADR-0010).
+/// and time-spent watchers do not name `actions`.
 typedef ActionWriteEffect = ({bool changed, bool stamped, bool logChanged});
 
 const ActionWriteEffect _noEffect =
@@ -139,7 +139,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   /// Compatibility-shaped entry point the legacy one-field surfaces drive:
   /// create the Outcome's `current` Action if none exists, otherwise **edit it
   /// in place** (same row, same identity — a text edit is a refinement, never a
-  /// supersession; ADR-0018). Identical text with no differing metadata is a
+  /// supersession). Identical text with no differing metadata is a
   /// no-op (no write, no stamp, no notify).
   ///
   /// Blank [text] is a caller error here — the legacy one-field shims route a
@@ -200,7 +200,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     _notify(effect);
   }
 
-  /// The explicit-affordance primitive (ADR-0018): flip the Outcome's current
+  /// The explicit-affordance primitive: flip the Outcome's current
   /// Action to `role='superseded'` (no linkage columns — the terminal time is
   /// `updated_at`), then, if [newActionText] is non-blank, mint a fresh
   /// `current` row. Its retire-then-mint transaction is the shape supersession
@@ -259,11 +259,11 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
       // list membership changes when its Action completes, and two watchers
       // list only `{todoTags, tags}` in `readsFrom`, so they would never see an
       // `actions`-only notification. This cannot ride on
-      // [ActionWriteEffect.stamped], which is always false here (ADR-0010).
+      // [ActionWriteEffect.stamped], which is always false here.
       attachedDatabase.notifyTodosViewWrite();
     }
     // Completing the Action closes its open TimeLog (issue #476); the `time_logs`
-    // view needs the same explicit notify as the other views (ADR-0010).
+    // view needs the same explicit notify as the other views.
     if (effect.logChanged) attachedDatabase.notifyTimeLogsViewWrite();
   }
 
@@ -330,7 +330,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   }
 
   /// The "Replace current action" gesture: in one transaction retire the
-  /// Outcome's current Action (`role='superseded'`, ADR-0018 — terminal time is
+  /// Outcome's current Action (`role='superseded'` — terminal time is
   /// `updated_at`, no linkage) and flip the `planned` [actionId] up to
   /// `current`. No-op if the row is gone, already `current`, or not `planned`.
   /// Stamps once.
@@ -375,7 +375,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     if (effect.stamped) attachedDatabase.notifyTodosViewWrite();
     // The terminal-transition hook (issue #476) writes `time_logs` inside the
     // Action transaction, and its watchers do not name `actions` — so they need
-    // the same explicit post-commit notification (ADR-0010).
+    // the same explicit post-commit notification.
     if (effect.logChanged) attachedDatabase.notifyTimeLogsViewWrite();
   }
 
@@ -447,7 +447,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
 
   /// Live view of the Outcome's current Action. Re-emits on any `actions`
   /// write — including one the sync bridge lands from another device, which
-  /// arrives via [GtdDatabase.notifyActionsViewWrite] (ADR-0010).
+  /// arrives via [GtdDatabase.notifyActionsViewWrite].
   Stream<Action?> watchCurrentAction(String outcomeId) {
     return (select(actions)
           ..where((a) =>
@@ -518,8 +518,8 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   /// minutes logged against it.
   ///
   /// The terminal timestamp is `COALESCE(done_at, updated_at, created_at)`: a
-  /// `done` row's is `done_at`, a `superseded` row's is `updated_at` (ADR-0018
-  /// gives supersession no dedicated column), and `created_at` catches a row
+  /// `done` row's is `done_at`, a `superseded` row's is `updated_at`
+  /// (supersession has no dedicated column), and `created_at` catches a row
   /// that carries neither. Ties break on `id ASC`, mirroring
   /// [winnerFirstOrderSql], so two devices render the same order.
   ///
@@ -598,7 +598,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   // notify (the caller notifies after its own commit). Used by the public
   // wrappers above and by TodoDao's writers, for which the `actions` table is
   // the only grain — the `todos.next_action_text` cursor is retired and no
-  // longer exists (ADR-0022, ADR-0024).
+  // longer exists.
   // ---------------------------------------------------------------------------
 
   Future<ActionWriteEffect> applySetCurrentAction(
@@ -834,7 +834,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     // The *abandon* arm — a retirement with nothing to succeed it — writes
     // nothing to `todos` beyond the stamp below. It used to clear the cursor to
     // stop the startup sweep resurrecting the retired Action; the sweep's
-    // cursor-adoption pass is deleted outright (ADR-0022), so nothing reads the
+    // cursor-adoption pass is deleted outright, so nothing reads the
     // cursor to resurrect anything, and the `superseded` row this leaves behind
     // needs no cursor-clear guard at all.
     final didMutate = current != null || hasReplacement;
@@ -875,8 +875,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     // no successor to continue against (CONTEXT.md § Switching Actions).
     final closedLog = await _closeOpenLogFor(current.id, ts);
     // Nothing is written to `todos`: completion must not stamp, and there is
-    // no Outcome-column cursor to clear — it was deleted outright (ADR-0022,
-    // ADR-0024), along with the adoption pass that would have needed guarding. The caller still
+    // no Outcome-column cursor to clear — it was deleted outright, along with the adoption pass that would have needed guarding. The caller still
     // fires the `todos` view notification — see [completeCurrentAction].
     return (changed: true, stamped: false, logChanged: closedLog != null);
   }
@@ -1296,7 +1295,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   }
 
   /// Flip a row to `role='superseded'` with `updated_at = ts` — no linkage
-  /// columns (ADR-0018).
+  /// columns.
   Future<void> _retire(String actionId, DateTime ts) async {
     await (update(actions)..where((a) => a.id.equals(actionId))).write(
       ActionsCompanion(

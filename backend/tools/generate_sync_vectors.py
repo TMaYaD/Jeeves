@@ -2981,7 +2981,7 @@ _JUNCTION_LIVE = {
 }
 
 # Any key ending in `snoozed_until` arbitrates by `max_timestamp_value`
-# (`strategyForKey`, ADR-0011); `spec_set_merge` has no production strategy and
+# (`strategyForKey`); `spec_set_merge` has no production strategy and
 # is pinned through the per-case `strategy_overrides` escape hatch.
 _SNOOZE_KEY = "nudge_snoozed_until"
 _SNOOZE_ENTITY_ID = str(preference_entity_id(WORKSPACE_ID, _SNOOZE_KEY))
@@ -3676,7 +3676,7 @@ def _collection_and_strategy_cases(t: int) -> list[dict[str, Any]]:
         {
             "name": "max_timestamp_value_clear_then_earlier_resnooze_keeps_preclear_floor",
             "note": (
-                "The owned divergence from ADR-0011's pairwise matrix (ADR-0030): "
+                "The owned divergence from the registry's pairwise matrix (ADR-0030): "
                 "the value join is a max over every value ever asserted, so a "
                 "re-snooze carrying an *earlier* value after a clear revives the "
                 "field at the pre-clear floor. The floor never shrinks through a "

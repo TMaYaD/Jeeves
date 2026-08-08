@@ -379,7 +379,7 @@ const Map<String, CollectionCodec> collectionCodecs = {
     identityColumns: ['focus_session_id', 'task_id'],
   ),
   // The KV collection. Its entity id is `preferenceEntityId(workspace, key)`
-  // (the shipped KV policy), and its `value` field is the one the ADR-0011
+  // (the shipped KV policy), and its `value` field is the one the
   // Conflict Strategy registry arbitrates. Identity is the domain key
   // `(user_id, key)` rather than `id`: the DAO now mints the row under the
   // derivation, and locating by the domain key is what still realigns a row a

@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-07-29
-**Context:** ADR-0011 (the per-key Conflict Strategy registry), ADR-0030 (every non-LWW strategy is a join-semilattice). Decided at #553 planning and implemented as its Phase-0 slice, #563, from CodeRabbit finding #69 on PR #561.
+**Context:** the per-key Conflict Strategy registry, and ADR-0030 (every non-LWW strategy is a join-semilattice). Decided at #553 planning and implemented as its Phase-0 slice, #563, from CodeRabbit finding #69 on PR #561.
 
 ## Decision
 

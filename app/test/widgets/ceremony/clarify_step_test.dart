@@ -282,7 +282,7 @@ void main() {
         await pumpFrames(tester);
 
         expect(fired, isEmpty,
-            reason: 'cancel leaves the item unresolved (ADR-0049), so the '
+            reason: 'cancel leaves the item unresolved, so the '
                 'ceremony must stay on it');
         expect(await db.captureDao.outcomeIdsForCapture('c1'), isEmpty);
         expect((await db.captureDao.getCapture('c1'))!.clarifiedAt, isNull);

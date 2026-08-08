@@ -58,7 +58,7 @@ class DomainProjector {
   final CollectionRegistry registry;
   final GtdDatabase domain;
 
-  /// Project every entity in [affected], fire the ADR-0010 view notifies for the
+  /// Project every entity in [affected], fire the view notifies for the
   /// collection groups that changed, and return those groups.
   ///
   /// The returned set is what a batch tail hands [DomainReconciler]: the trigger
@@ -94,7 +94,7 @@ class DomainProjector {
 
   /// Fire the self-notify helper for every collection group in [collections].
   ///
-  /// ADR-0010: these writes go through `customStatement` with no `updates:` set,
+  /// these writes go through `customStatement` with no `updates:` set,
   /// so Drift has nothing to invalidate from, and a watcher that reads across a
   /// group only refreshes once the whole group is notified. Since no FTS index
   /// exists (`search_dao` is a read-only query over the live tables), the notify

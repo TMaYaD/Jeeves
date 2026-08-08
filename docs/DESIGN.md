@@ -289,7 +289,7 @@ deleting a test to do it. See § Sync health.
 ## App title bar
 
 One shared bar carries every screen's chrome (`AppTitleBar`,
-`app/lib/widgets/app_title_bar/`; ruled in [ADR-0021](adr/0021-shared-app-title-bar.md)).
+`app/lib/widgets/app_title_bar/`).
 It is a `PreferredSizeWidget` mounted in `Scaffold.appBar`, configured
 **entirely by constructor parameters passed top-down** — never by a provider or
 `content_for`-style slot written into from below, which during a route
@@ -420,14 +420,14 @@ The task-detail screen (`/task/:id`) carries a **Plan** section (`_PlanSection`,
 ### Task-detail Action history
 Directly under the Plan section, so the whole Action chain — what's next and what came before — reads in one place, the task-detail screen carries the Outcome's **History** (`_ActionHistorySection`, same file). It is an `ExpansionTile` styled like "Captured from…": flat (no dividers), a clock-arrow leading icon, a `History (n actions)` title in the 12px `#6B7280` section voice, **collapsed by default**, and **absent entirely** when the Outcome has terminated no Action — a fresh Outcome, or a pre-epic one whose history predates the `actions` table, shows no empty shell rather than an empty-state string.
 
-Each row is two lines: the Action's text (14px, `#374151`), then a meta line (12px, `#9CA3AF`) reading `Done YYYY-MM-DD` or `Abandoned YYYY-MM-DD`, with ` · 25m` appended when that Action logged time. Zero minutes are omitted, not rendered as `0m`. Rows are newest-first by terminal timestamp. **No successor link is drawn** between an abandoned Action and whatever replaced it — the model stores none (ADR-0018), so the surface invents none.
+Each row is two lines: the Action's text (14px, `#374151`), then a meta line (12px, `#9CA3AF`) reading `Done YYYY-MM-DD` or `Abandoned YYYY-MM-DD`, with ` · 25m` appended when that Action logged time. Zero minutes are omitted, not rendered as `0m`. Rows are newest-first by terminal timestamp. **No successor link is drawn** between an abandoned Action and whatever replaced it — the model stores none, so the surface invents none.
 
 **Read-only by construction.** History rows are `Text` and nothing else: no icon buttons, no tap-to-edit, no drag handles, no remove. A terminated Action is a record, so the absence of affordances is structural rather than a rule to remember — the only tap target in the section is the expander itself.
 
 ### Sync health — report, don't interrupt
 The drawer's sync indicator and the screen behind it (`/sync-health`,
 `app/lib/screens/sync_health/`) hold to three lines, and they are the whole
-behaviour of the surface (ADR-0044).
+behaviour of the surface.
 
 **Reachable** — the indicator is tappable if and only if there is something to
 report: any unresolved integrity alarm, or any unreleased refusal whose reason is

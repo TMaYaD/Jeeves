@@ -4,7 +4,7 @@
 /// A [Wizard] composes a list of [WizardStep]s and owns the chrome that the
 /// three Ceremonies previously open-coded in parallel:
 ///
-/// - The shared [AppTitleBar] (ADR-0021): the ceremony label + icon render as
+/// - The shared [AppTitleBar]: the ceremony label + icon render as
 ///   the bar's overline, the current step title as the bar title, and the
 ///   leading slot is `none` (ceremonies own their own guarded exit).
 /// - The step's segmented progress bar and its narration (subtitle), rendered
@@ -228,7 +228,7 @@ class _WizardState extends State<Wizard> {
         ),
         leading: AppTitleBarLeading.none,
         // Capture is reachable mid-ceremony (#458): the Capture waits in the
-        // Inbox, ceremony state and snapshot cursors untouched (ADR-0009).
+        // Inbox, ceremony state and snapshot cursors untouched.
         pinnedAction: captureAction(context),
       ),
       body: SafeArea(

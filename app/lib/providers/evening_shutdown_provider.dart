@@ -471,7 +471,7 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
   /// `done → none`. See [_impliedDispositions].
   ///
   /// This is the commit point because [FocusSessionDao.reviewAndCloseSession] is
-  /// the only writer that routes a Disposition to the correct home per ADR-0016
+  /// the only writer that routes a Disposition to its correct home
   /// — a Settled Outcome may be off-Plan, and `setTaskDisposition` throws for
   /// exactly that case. Seeding earlier would not work either: the step's own
   /// loader never runs on a day where *everything* settled, because the wizard

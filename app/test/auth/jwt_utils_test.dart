@@ -1,7 +1,7 @@
 /// `allowExpired` relaxes exactly one check, and nothing else.
 ///
 /// It exists so an offline relaunch can recover the account id from a token it
-/// already knows is stale rather than destroy the device's enrolment (ADR-0041).
+/// already knows is stale rather than destroy the device's enrolment.
 /// The risk worth pinning is scope creep: the flag must not start tolerating a
 /// missing `sub` or an undecodable payload, because the id it yields is what
 /// selects this device's local partitions.

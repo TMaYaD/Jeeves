@@ -4,7 +4,7 @@
 
 **ADRs:** [0026 Minimal Sync Server](../adr/0026-minimal-sync-server.md) · [0027 Workspace as partition unit](../adr/0027-workspace-as-partition-unit.md) · [0028 Signed control plane in the log](../adr/0028-signed-control-plane-in-the-log.md) · [0025 Area is exclusive](../adr/0025-area-is-exclusive-label-is-cross-cutting.md)
 
-**Supersedes (on landing):** the PowerSync replication architecture — the **Sync Shape**, **Bucket**, **BackendConnector**, **Dead Letter**, **Sync Token** machinery and the upload contracts in `docs/SYNC.md`. Reframes ADR-0011 and ADR-0015 as client-side concerns; retires ADR-0017. ADR-0025 (Area is exclusive) was decided during this design and stands on its own.
+**Supersedes (on landing):** the PowerSync replication architecture — the **Sync Shape**, **Bucket**, **BackendConnector**, **Dead Letter**, **Sync Token** machinery and the upload contracts in `docs/SYNC.md`. Reframes the per-key preference strategies and create-dedupe-on-replay as client-side concerns; retires the sync-rules mechanism. ADR-0025 (Area is exclusive) was decided during this design and stands on its own.
 
 ## Problem
 

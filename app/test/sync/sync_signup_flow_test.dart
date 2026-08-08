@@ -252,7 +252,7 @@ void main() {
       clock: clock,
     );
     addTearDown(a.close);
-    // Legacy rows — data that predates authoring (PowerSync-era, ADR-0035).
+    // Legacy rows — data that predates authoring (PowerSync-era).
     // Settle the seam silent so the seed lands in the domain store without being
     // buffered: the **initial upload** is what authors these, which is the path
     // this test is about. (A captured pre-enrolment write would instead be

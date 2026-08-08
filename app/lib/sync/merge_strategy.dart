@@ -1,4 +1,4 @@
-/// Per-field merge strategies — ADR-0011's Conflict Strategy registry riding on
+/// Per-field merge strategies — the Conflict Strategy registry riding on
 /// the op-log merge, and the lattice requirement that makes that safe.
 ///
 /// A strategy is a **join-semilattice on (value, clock) pairs**: commutative,
@@ -83,7 +83,7 @@ class LwwMergeStrategy implements FieldMergeStrategy {
 /// plain HLC: a stale-but-later-valued write can never regress an active floor,
 /// a newer clear still silences it, and a later re-snooze revives it.
 ///
-/// **Owned divergence from ADR-0011's pairwise matrix.** Because the value join
+/// **Owned divergence from the registry's pairwise matrix.** Because the value join
 /// is a max over *every value ever asserted*, a clear followed by an
 /// earlier-valued re-snooze revives the field at the pre-clear floor rather
 /// than the smaller re-snoozed value — the floor can never shrink through a
@@ -254,7 +254,7 @@ const String preferenceValueField = 'value';
 /// or the reducer refuses it (`preference_value_without_key`, ADR-0033).
 const String preferenceKeyField = 'key';
 
-/// Maps ADR-0011's registry verdict onto the reducer's strategies.
+/// Maps the registry's verdict onto the reducer's strategies.
 ///
 /// `app/lib/services/user_preferences_conflict.dart` stays the executable
 /// source of truth for *which key gets which strategy*; this is the adapter, so
@@ -280,7 +280,7 @@ class MergeStrategyRegistry {
   });
 
   /// Preference keys whose strategy is fixed here rather than read from
-  /// ADR-0011's registry. Empty in production; the golden-vector runner uses it
+  /// the registry. Empty in production; the golden-vector runner uses it
   /// to pin [setMerge], which is provisioned but has no production key yet.
   final Map<String, FieldMergeStrategy> preferenceKeyOverrides;
 

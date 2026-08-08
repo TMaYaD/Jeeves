@@ -18,7 +18,7 @@ import 'sync_health/sync_health_screen.dart';
 
 /// The shared title-bar title for each of the seven shell list routes, keyed
 /// by [GoRouterState] path. The bar's title is a pure function of route state,
-/// owned above the child screens (ADR-0021) — the children no longer hand-roll
+/// owned above the child screens — the children no longer hand-roll
 /// their own header. "Now" is the user-facing label for `/focus` (epic #35);
 /// the route and internal identifiers stay Focus (CONTEXT.md divergence list).
 const Map<String, String> shellRouteTitles = {

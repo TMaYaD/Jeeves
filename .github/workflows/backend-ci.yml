@@ -81,7 +81,7 @@ jobs:
     # test fails rather than skips when CI is set, so dropping it is loud.
     services:
       postgres:
-        # Tag names the exact version, digest pins the bytes (ADR-0045).
+        # Tag names the exact version, digest pins the bytes.
         # Dependabot does not read workflow service images, so this one is
         # bumped by hand — keep it in step with infra/docker-compose.yml.
         image: postgres:18.4-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15

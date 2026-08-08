@@ -6,7 +6,7 @@
 /// or over one that has not re-minted its credential, would be a green light on
 /// exactly the device that needs a red one.
 ///
-/// **The fixtures below changed meaning under ADR-0044 and are rewritten rather
+/// **The fixtures below changed meaning with the condition-class taxonomy and are rewritten rather
 /// than carried over**: `accused` used to be any standing alarm and is now
 /// specifically an *actionable* one, and a device that merely refused an op is
 /// no longer an error at all. Left as they were, they would have kept passing
@@ -109,7 +109,7 @@ void main() {
 
     test('an op this device refused to apply is worth knowing, not an error', () {
       // The app refused the bytes, which is the fail-closed rule working. The
-      // user gets to read about it; the icon does not go red for it (ADR-0044).
+      // user gets to read about it; the icon does not go red for it.
       expect(
         statusOf(EnrolmentState.enrolled, [refusing]),
         SyncStatus.worthKnowing,

@@ -7,7 +7,7 @@ Create Date: 2026-07-25
 ADR-0001 story 6: a TimeLog now records *which Action* was being engaged, not
 only which Outcome (``task_id`` stays — an Outcome's total time is derived over
 its Actions ∪ the legacy ``action_id IS NULL`` rows by ``task_id``).  This
-migration is **additive** and re-runnable per ADR-0012:
+migration is **additive** and re-runnable:
 
 - ``action_id`` is nullable with ``ON DELETE SET NULL``, not RESTRICT/CASCADE.
   TimeLogs are the user's time data and are never deleted (SYNC.md: "time logs
@@ -27,7 +27,7 @@ crash-looping on DuplicateColumnError.  The index is guarded independently of
 the column so a partially-applied forward run still gets the index on re-run
 (0028 precedent).  ``time_logs`` is already in the ``powersync`` publication, so
 no ``ALTER PUBLICATION`` is needed, and ``by_user_time_logs`` is ``SELECT *`` so
-the sync rules carry the new column without an edit (ADR-0017: CD publishes only
+the sync rules carry the new column without an edit (CD publishes only
 on a rules *change*, and there is none).
 """
 

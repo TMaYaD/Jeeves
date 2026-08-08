@@ -8,7 +8,7 @@
 /// file of its own, created by [MigrationStrategy.onCreate] — the previous store
 /// was PowerSync-managed, its application-visible names were views over
 /// `ps_data__*`, and it is deleted rather than converted (see
-/// `domain_store_io.dart` and ADR-0035). A device whose local op log holds
+/// `domain_store_io.dart`). A device whose local op log holds
 /// reduced state has it projected into the fresh file at first open; a device
 /// without one starts empty.
 ///
@@ -68,8 +68,8 @@ class GtdDatabase extends _$GtdDatabase {
   ///
   /// **The scope rides the zone the body runs in** — every effect described
   /// anywhere inside [body], at any nesting depth and across every `await`, is
-  /// filed into *this* scope, and a nested `capturing` is this scope's child
-  /// (ADR-0042). That is not a nicety: this method opens its scope as its first
+  /// filed into *this* scope, and a nested `capturing` is this scope's child.
+  /// That is not a nicety: this method opens its scope as its first
   /// synchronous statement while [body] waits behind drift's `ensureOpen`, so two
   /// un-awaited calls always both open before either body runs, and "the scope
   /// begun most recently" would attribute the first caller's writes to the
@@ -257,7 +257,7 @@ class GtdDatabase extends _$GtdDatabase {
   /// [includeTodoTags] is set, `todo_tags`) after a write, independent of what
   /// Drift itself would notify.
   ///
-  /// **Still required now the store is Drift's own** (ADR-0010), for two reasons
+  /// **Still required now the store is Drift's own**, for two reasons
   /// that outlive the PowerSync views this was written for:
   ///
   /// 1. **The projector.** Reduced state is written into these tables by
@@ -290,7 +290,7 @@ class GtdDatabase extends _$GtdDatabase {
   /// The [notifyTodosViewWrite] analogue for the Capture tables (issue #184).
   ///
   /// Every [CaptureDao] write calls this right after the write, and the projector
-  /// relies on it for rows reduced in from another device (ADR-0010). All three
+  /// relies on it for rows reduced in from another device. All three
   /// table updates are emitted with a null [UpdateKind] so Inbox, provenance and
   /// tag-hint watchers all refresh regardless of which table was touched;
   /// over-notifying at worst causes a redundant re-query.
@@ -302,7 +302,7 @@ class GtdDatabase extends _$GtdDatabase {
 
   /// The [notifyTodosViewWrite] analogue for `actions` (issue #471).
   ///
-  /// Fired by every [ActionDao] write and by the projector (ADR-0010).
+  /// Fired by every [ActionDao] write and by the projector.
   void notifyActionsViewWrite() => notifyUpdates({
         const TableUpdate('actions'),
       });

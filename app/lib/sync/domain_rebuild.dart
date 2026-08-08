@@ -1,6 +1,6 @@
 /// Rebuild a fresh domain read model from the local op log.
 ///
-/// The domain read model is a projection of reduced state (ADR-0035), so a store
+/// The domain read model is a projection of reduced state, so a store
 /// that has never been projected into gets the walk once — gated on the marker a
 /// completed replay writes rather than on the store's own creation, so a replay
 /// that failed is retried on the next launch (`database/domain_store_io.dart`).

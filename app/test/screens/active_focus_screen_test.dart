@@ -308,7 +308,7 @@ void main() {
     });
   });
 
-  group('ActiveFocusScreen — title bar (ADR-0021)', () {
+  group('ActiveFocusScreen — title bar', () {
     late GtdDatabase db;
     setUp(() {
       SharedPreferences.setMockInitialValues({});
@@ -325,7 +325,7 @@ void main() {
       await db.close();
     });
 
-    // The bar's title is a pure function of the active task (ADR-0021) — the
+    // The bar's title is a pure function of the active task — the
     // screen no longer hand-rolls its own header. And leaving focus is a
     // router `go` back to the execution home, not a `Navigator.pop` (this
     // route was reached by `go`, so a pop would have nothing productive to

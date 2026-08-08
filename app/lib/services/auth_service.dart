@@ -16,7 +16,7 @@ const _kRefreshTokenKey = 'refresh_token';
 /// Four cases rather than a nullable token, because the caller's decision turns
 /// on *which* failure it was: only [SessionRefreshRejected] and
 /// [SessionRefreshTokenAbsent] are authoritative, and only they may cost the
-/// device its stored credentials (ADR-0041). Collapsing a dead socket into the
+/// device its stored credentials. Collapsing a dead socket into the
 /// same answer as a server saying "no" is what #606 was — an offline relaunch
 /// that destroyed an enrolled device's enrolment and silently dropped the whole
 /// session's ops.

@@ -5,3 +5,4 @@ SCRATCHPAD.md
 # linked worktrees don't get one, and .githooks/pre-commit falls back to the
 # main checkout's.
 app/.fvm/
+__pycache__/

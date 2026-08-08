@@ -1,0 +1,51 @@
+name: Docs CI
+
+# Enforces the documentation size ceilings in tools/check_doc_size.py, which is
+# the single source of truth for the numbers (AGENTS.md § Documentation in
+# docs/ explains why they exist).
+#
+# Enforcement is a ratchet rather than a hard gate, because the ceilings were
+# adopted while several docs were far above them: a doc over its ceiling may
+# only shrink. That needs the PR's base commit to compare against, hence
+# fetch-depth: 0 and the pull_request trigger. On main there is nothing to
+# compare to, so the run is a report.
+#
+# The two path lists are duplicated because the GitHub Actions workflow parser
+# does not support YAML anchors. Keep them in sync.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "CONTEXT.md"
+      - "tools/check_doc_size.py"
+      - ".github/workflows/docs-ci.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "CONTEXT.md"
+      - "tools/check_doc_size.py"
+      - ".github/workflows/docs-ci.yml"
+
+jobs:
+  size:
+    name: Doc size ceilings
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check documentation size
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ -n "$BASE_SHA" ]; then
+            python3 tools/check_doc_size.py --base "$BASE_SHA"
+          else
+            python3 tools/check_doc_size.py
+          fi

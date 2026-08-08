@@ -171,8 +171,8 @@ A `SimDevice` is a whole device: a `SyncDatabase` (the convergence substrate), a
 - `workspace_routing_capture_test.dart` — the production capture binding: where an op goes and when none is authored, asserted by reading the **outbox** rather than a spy, since the `workspace_id` a queued envelope carries is the whole claim. It is also the home of the op-*loss* case, for the same reason: a committed domain row whose op an overlapping scope's rollback discarded leaves nothing for a recording double to record — only a missing envelope in a real queue.
 - `collection_round_trip_test.dart` — every collection, DAO write on A → reduce and project on B → the same row, column for column. Plus the dangling-reference cases: a TimeLog outliving its hard-deleted Outcome, a junction arriving before its parent.
 - `merge_strategy_test.dart` — the ADR-0030 laws as laws (commutative, associative, idempotent), not as outcomes. A strategy that passes every vector and fails a law here is one refactor from breaking convergence.
-- `projector_view_notify_test.dart` — ADR-0010 for the projector, per collection group, over the production store topology: a real on-disk sqlite_async database whose synced names are the real tables Drift created. The projector writes through `customStatement` with no `updates:` set, so the notify is what a watcher reading across a collection group depends on.
-- `domain_rebuild_test.dart` — a fresh domain store rebuilt from a real device's op log: reduced state lands, a tombstoned entity does not come back, an empty log leaves an empty store, and a second run produces the same rows (ADR-0035). It also covers the replay tail as a *reconcile* site: a log holding two same-`(name, type)` Tag entities rebuilds into two rows and then folds, and the second rebuild is still a no-op with the reconciler in the loop.
+- `projector_view_notify_test.dart` — view-notify for the projector, per collection group, over the production store topology: a real on-disk sqlite_async database whose synced names are the real tables Drift created. The projector writes through `customStatement` with no `updates:` set, so the notify is what a watcher reading across a collection group depends on.
+- `domain_rebuild_test.dart` — a fresh domain store rebuilt from a real device's op log: reduced state lands, a tombstoned entity does not come back, an empty log leaves an empty store, and a second run produces the same rows. It also covers the replay tail as a *reconcile* site: a log holding two same-`(name, type)` Tag entities rebuilds into two rows and then folds, and the second rebuild is still a no-op with the reconciler in the loop.
 - `tag_convergence_test.dart` — two devices creating the same Tag name offline, end to end. Both reach the **same** state (same surviving id, both assignments on it, both unrelated Outcomes present, reduced state byte-equal), asserted in **both arrival orders** as identical between the two runs rather than merely internally consistent on each. `MIN(id)` must beat reference count — the ranking that would make two concurrent folds tombstone each other's survivor and kill both Tags — a tag hint on the loser must follow the fold into `capture_tags`, and a further sync must author no ops and change no rows. The three-device case is the rehome pass's reason to exist: with `X < Y < Z`, device A folds `Z→Y`, drops offline before pushing, and while offline tags a new Outcome with the tag it believes is live, while B and C fold `Y→X`. That junction is an entity **no other device ever authored**, so nothing tombstones it, and it arrives asserting a tag that is long gone with the group at `COUNT = 1`. **When changing either pass, verify by disabling it and watching this test fail** — the fold alone converges more of the three-device scenario than it looks like it should, because the repointed junctions carry derived ids and a peer passing through the same intermediate state authors and tombstones the same entity.
 - `domain_reconciler_test.dart` — the two passes at unit grain, on the real Drift schema against a recording capture seam: that the schema now represents a duplicate pair at all, the fold's ranking and its idempotence, the **exact op set** it authors (the half that carries the decision to peers, which cross-device row equality cannot see), and the rehome pass's four outcomes — repoint `todo_tags`, repoint `capture_tags`, leave a junction alone when the pair is unrecoverable, and leave it alone when no live tag holds the pair.
 - `providers/domain_store_rebuild_gate_test.dart` — the forced re-projection that repairs a device already holding a hole, over a real on-disk store and a real op log. The trap it pins is that the naive gate is silently inert: `databaseProvider` wraps the executor in `DatabaseConnection.delayed`, so the migration runs on the first *query*, not at construction, and nothing read off the database object beforehand knows an upgrade is coming. Hence the throwaway `SELECT 1` and the await on `GtdDatabase.opened` — a future fed from `beforeOpen`, which drift runs on **every** open, so a launch that migrates nothing resolves it instead of hanging.
@@ -283,7 +283,7 @@ Automated coverage:
   screen offers no founding" — a claim other cases in the file make on purpose.
 - `app/test/screens/enrolment/enrolment_ceremony_status_test.dart` — the state table and the
   failure classification as pure functions.
-- `app/test/router_test.dart` — that **nothing routes the user here** (ADR-0046).
+- `app/test/router_test.dart` — that **nothing routes the user here**.
   `signedInNotEnrolled` and `checking` redirect nothing at all, so a signed-in un-enrolled
   device uses the app normally; `ready` and `signedOut` bounce `/enrolment` back to
   `/inbox`, the router's only remaining move and a negative one. A case that asserted a
@@ -297,14 +297,14 @@ Automated coverage:
   reaches the app, and deliberate navigation to the ceremony still works. `runAsync` is
   load-bearing — the launch waits on real Dio/SQLite/KDF timers that fake time never fires.
 
-**The blind spot these close, and the setup that caused it.** ADR-0046's failure shipped
+**The blind spot these close, and the setup that caused it.** The enrolment-routing failure shipped
 because the state it depended on was one the tests could not produce: every case covering
 an unverified session ran *without* a sync stack, so the enrolment read could not reach a
 store, failed open, and reported an enrolled-looking answer. The combination that mattered
 — unverified session over a store that genuinely says "not enrolled" — was therefore never
 exercised, and the arm looked covered while being untested.
 
-Two standing requirements follow, and neither may be dropped while ADR-0046 stands:
+Two standing requirements follow, and neither may be dropped while enrolment stays opt-in:
 
 - **A session-layer test that omits the sync stack is not evidence about enrolment.** In
   those tests a `ready` means "unreadable", not "enrolled". Any case making a claim about
@@ -321,7 +321,7 @@ Against the compose stack (`podman compose -f infra/docker-compose.yml up -d`) w
 emulator:
 
 1. **Sign up or sign in, then open the ceremony yourself.** Authenticating lands you in the
-   app, not here: nothing routes you to enrolment (ADR-0046). The Workspace ids, the escrow
+   app, not here: nothing routes you to enrolment. The Workspace ids, the escrow
    slot and the Grants all derive from the account, so there is nothing to enrol against
    before authenticating — but taking the next step is your move. Go to **Settings → SYNC →
    Set up sync on this device**. Check the app bar's back arrow works: it is pushed, so
@@ -337,8 +337,8 @@ emulator:
    shows two control ops per Workspace (genesis, then the root-signed owner Grant).
 5. **Re-open the app.** Expect the Inbox. Navigating to `/enrolment` by hand bounces to
    `/inbox`: the gate reads *enrolled*, and there is nothing left for the ceremony to do.
-6. **Relaunch signed in but un-enrolled, with no network** — the regression that motivated
-   ADR-0046. Sign in, back out of the ceremony without founding, kill the app, turn on
+6. **Relaunch signed in but un-enrolled, with no network** — the regression that made
+   enrolment opt-in. Sign in, back out of the ceremony without founding, kill the app, turn on
    airplane mode, relaunch. Expect the **Inbox**, working, with the Settings tile still
    offering enrolment. Landing in the ceremony is the bug: it needs the network the device
    has just failed to reach, and offers no way back to the user's own data.
@@ -359,7 +359,7 @@ lands you in the app.
 
 ## The store cutover (verify on a debug install)
 
-The first open of a build carrying #595 creates `jeeves_domain.sqlite` (ADR-0035). It
+The first open of a build carrying #595 creates `jeeves_domain.sqlite`. It
 **deletes nothing**: the predecessor `jeeves.sqlite` and its `-wal`/`-shm` sidecars are left
 in place (#673). The io-level behaviour — the replay gate (the `jeeves_domain.rebuilt`
 marker, including the retry after a replay that never completed) and the fact that the open
@@ -383,7 +383,7 @@ emulator install**:
    - **Never enrolled, and nothing entered locally yet:** expect it empty. This is the only
      case where empty is the pass. It is a **steady state**, not a staging post — the
      device keeps working local-only, and enrolment is offered in Settings rather than
-     required (ADR-0046).
+     required.
    - **Never enrolled, but carrying local work:** expect that work to **still be there and
      still usable**. A local-only device is a fully functional GTD store; it authors no ops
      because there is nowhere to author them, which says nothing about whether it holds
@@ -391,7 +391,7 @@ emulator install**:
 
    The one loss is at the cutover instant and is bounded to it: a never-enrolled device's
    *pre-cutover* rows lived in `jeeves.sqlite`, which the new build does not read, so they
-   are not carried into `jeeves_domain.sqlite` (ADR-0035, sanctioned once and deliberately).
+   are not carried into `jeeves_domain.sqlite` (sanctioned once and deliberately).
    Everything entered after that launch lives in the new store and stays. If the user later
    enrols, the initial upload carries whatever is in it onto the op log (ADR-0034) — so
    local-only work is never a reason to delay enrolling, and enrolling is never a reason to
@@ -401,7 +401,7 @@ A **release** phone cannot be checked this way at all (`run-as: package not debu
 so it gets behavioural verification only: sign up → land in the **app** → open enrolment
 from Settings → found → the drawer indicator goes green → run the Nirvana import and watch
 the server's op count rise. Signing up landing you anywhere but the app is itself the
-failure (ADR-0046).
+failure.
 
 The op count now covers **every** imported entity — Outcomes, Captures, Tags and both
 junction tables — not just the Tags, so the expected rise is roughly three ops per imported

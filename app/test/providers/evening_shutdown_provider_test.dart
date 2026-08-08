@@ -664,7 +664,7 @@ void main() {
     });
 
     test('an off-Plan Settled Outcome lands its Disposition in the second '
-        'home (ADR-0016) and still rolls over', () async {
+        'home and still rolls over', () async {
       await _insertTodo(db, id: 'plan1');
       await _insertTodo(db, id: 'off1');
       final sessionId = await _openSessionWith(db, ['plan1']);

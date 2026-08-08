@@ -16,7 +16,7 @@ void configureSqliteForTests() {}
 ///
 /// Any fixture that wants an Outcome to *have* a next action must call this.
 /// There is no Outcome column to set instead — the `todos.next_action_text`
-/// cursor was retired (ADR-0022) and then dropped (ADR-0024). A blank or null
+/// cursor was retired and then dropped. A blank or null
 /// [text] seeds nothing, mirroring the blank → Actionless normalisation
 /// `setCurrentActionText` applies.
 ///

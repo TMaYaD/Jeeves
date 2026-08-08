@@ -1,4 +1,4 @@
-/// Slot arithmetic for [AppTitleBar] (ADR-0021).
+/// Slot arithmetic for [AppTitleBar].
 ///
 /// The bar budgets its action buttons by **screen-width breakpoint**, never by
 /// measured available width: a fixed budget is deterministic and unit-testable

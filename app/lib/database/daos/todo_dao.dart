@@ -485,7 +485,7 @@ EXISTS (
     });
     if (actionTerminated) attachedDatabase.notifyActionsViewWrite();
     // Completing the Outcome closes the current Action's open TimeLog (#476);
-    // the `time_logs` view needs the same explicit post-commit notify (ADR-0010).
+    // the `time_logs` view needs the same explicit post-commit notify.
     if (logChanged) attachedDatabase.notifyTimeLogsViewWrite();
     return affected;
   }
@@ -659,7 +659,7 @@ EXISTS (
   ///
   /// This is the **one-field** surface — one phrase in, the `current` Action
   /// out — and it writes only `actions` plus the Outcome's clarification
-  /// stamp; no Outcome column holds a next-action phrase (ADR-0022, ADR-0024).
+  /// stamp; no Outcome column holds a next-action phrase.
   /// A non-blank text sets/edits the `current` Action; a blank text clears it
   /// (the blank→Actionless normalisation, expressed on the Action side as a
   /// supersession with no replacement).
@@ -671,7 +671,7 @@ EXISTS (
         () => _applySetCurrentActionText(todoId, normalized, ts));
     // The GTD lists read across `todos` and `actions`, so a watcher naming one
     // must hear about a write to the other; notify both explicitly rather than
-    // relying on Drift's per-table invalidation (#342, ADR-0010).
+    // relying on Drift's per-table invalidation (#342).
     attachedDatabase.notifyTodosViewWrite();
     attachedDatabase.notifyActionsViewWrite();
     // A blank text supersedes the current Action, closing its open TimeLog
@@ -718,7 +718,7 @@ EXISTS (
       return true;
     });
     if (wrote) {
-      // See [setCurrentActionText]: view writes report changes()==0 (#342, ADR-0010).
+      // See [setCurrentActionText]: view writes report changes()==0 (#342).
       attachedDatabase.notifyTodosViewWrite();
       attachedDatabase.notifyActionsViewWrite();
       if (logChanged) attachedDatabase.notifyTimeLogsViewWrite();
@@ -739,7 +739,7 @@ EXISTS (
   ///
   /// Returns whether a `time_logs` row changed (the blank→supersede path closes
   /// the current Action's open log, issue #476) so the caller can fire the
-  /// TimeLog view notification after commit (ADR-0010).
+  /// TimeLog view notification after commit.
   Future<bool> _applySetCurrentActionText(
       String todoId, String normalized, DateTime ts) async {
     await (update(todos)..where((t) => t.id.equals(todoId)))
@@ -1009,7 +1009,7 @@ AND (
         'updated_at': encodeInstant(ts),
       });
       // Person-tag edits move `todo_tags`, which the Outcome surfaces read
-      // alongside `todos` — so both groups are notified (ADR-0010).
+      // alongside `todos` — so both groups are notified.
       attachedDatabase.notifyTodosViewWrite(includeTodoTags: true);
     });
   }
@@ -1168,7 +1168,7 @@ AND (
       attachedDatabase.notifyActionsViewWrite();
     }
     // A supersede or completion in the cascade closes the current Action's open
-    // TimeLog (#476); `time_logs` is a view too, so notify its watchers (ADR-0010).
+    // TimeLog (#476); `time_logs` is a view too, so notify its watchers.
     if (logChanged) attachedDatabase.notifyTimeLogsViewWrite();
   }
 
@@ -1195,7 +1195,7 @@ AND (
   /// estimate, so both sides always reflect the edit.
   ///
   /// This metadata mirror is unrelated to the dropped `next_action_text`
-  /// cursor (ADR-0022, ADR-0024) and deliberately outlives it.
+  /// cursor and deliberately outlives it.
   ///
   /// To clear a nullable column, pass the matching `clear*` flag (e.g.
   /// `clearTimeEstimate: true`). Passing `null` for the typed parameter is

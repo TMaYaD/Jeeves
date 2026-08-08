@@ -356,7 +356,7 @@ Variable<Object> _bind(FieldKind kind, Object? value) => switch (kind) {
 /// Refresh every domain surface the import may have written. The row writes go
 /// through `customInsert` / `customUpdate` without an `updates:` set (as the
 /// projector's do), so — exactly like a projected row — nothing refreshes until
-/// these ADR-0010 notifies fire.
+/// these view notifies fire.
 void _notifyAllViews(GtdDatabase db) {
   db.notifyTagsViewWrite();
   db.notifyTodosViewWrite(includeTodoTags: true);

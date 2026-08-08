@@ -6,7 +6,7 @@ Two things this migration must get right, both verifiable on SQLite:
   vector), so the server backfill and the Dart client backfill converge on one
   row (ADR-0019). The same constant is asserted in the Dart suite
   (app/test/database/action_backfill_id_test.dart).
-- The data backfill is idempotent (ADR-0012): it mints one current Action per
+- The data backfill is idempotent: it mints one current Action per
   Outcome with a non-blank next_action_text, nothing for blank/whitespace/NULL,
   and a re-run is a no-op (the WHERE NOT EXISTS guard), never a duplicate.
 """
@@ -168,7 +168,7 @@ def test_rerun_repairs_missing_indexes() -> None:
     # Simulate a partially-applied forward run: the table exists but its indexes
     # were never created (or drifted away). Because the index creation is guarded
     # independently of has_table, a re-run must repair both — the migration's
-    # re-runnable recovery contract (ADR-0012).
+    # re-runnable recovery contract.
     with engine.begin() as conn:
         conn.execute(sa.text("DROP INDEX ix_actions_user_id"))
         conn.execute(sa.text("DROP INDEX ix_actions_outcome_id"))

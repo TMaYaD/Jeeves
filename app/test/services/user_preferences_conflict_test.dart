@@ -40,7 +40,7 @@ void main() {
     test('clarify_mode is registered explicitly, not left to the default', () {
       // The lookup below would return lww either way, so assert against the
       // registry itself — the point of the entry is that the strategy was
-      // chosen for this key rather than inherited (ADR-0011, issue #433).
+      // chosen for this key rather than inherited (issue #433).
       expect(preferenceConflictRegistry, contains(kClarifyModePrefKey),
           reason: 'clarify_mode must have an explicit registry entry');
       expect(preferenceConflictRegistry[kClarifyModePrefKey],

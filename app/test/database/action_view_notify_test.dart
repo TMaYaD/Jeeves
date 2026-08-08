@@ -1,4 +1,4 @@
-/// ADR-0010 notify regression for `actions` (issue #472), sibling of
+/// View-notify regression for `actions` (issue #472), sibling of
 /// `clarify_routing_view_notify_test.dart`.
 ///
 /// Over the **production topology**: a `jeeves_domain.sqlite` on disk, opened
@@ -232,7 +232,7 @@ void main() {
   });
 
   test('completeCurrentAction refreshes a time_logs watcher when it '
-      'closes the open log (ADR-0010, issue #476)', () async {
+      'closes the open log (issue #476)', () async {
     await db.actionDao.setCurrentAction('o1', 'call the plumber');
     final current = await db.actionDao.getCurrentAction('o1');
     // Open a stint against the current Action.
@@ -261,7 +261,7 @@ void main() {
     // Completing the Action closes the log from inside an `actions`-grain
     // transaction, and `notifyTimeLogsViewWrite` is fired by the caller after
     // that transaction commits — which is what this watcher refreshes on, rather
-    // than on the async bridge's own invalidation (#342, ADR-0010).
+    // than on the async bridge's own invalidation (#342).
     await db.actionDao.completeCurrentAction('o1');
 
     await _waitUntil(() => openCounts.last == 0);

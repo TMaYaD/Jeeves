@@ -8,7 +8,7 @@ import 'dart:convert';
 /// [allowExpired] is for the one caller that needs the account id out of a token
 /// it already knows is stale: an offline relaunch whose silent refresh was
 /// inconclusive, which keeps the device signed in rather than destroying its
-/// enrolment (ADR-0041, `session_restore.dart`). It relaxes **only** the `exp`
+/// enrolment (`session_restore.dart`). It relaxes **only** the `exp`
 /// check — an undecodable payload or a missing `sub` still yields null.
 ///
 /// It lowers no security bar. Nothing here verifies the token's signature, with

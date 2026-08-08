@@ -44,6 +44,7 @@ WEB_PORT   ?= 8787
         android seeker web macos iphone ios windows linux \
         emulator-android emulator-ios \
         detect-chromium \
+        docs-size \
         clean
 
 help:
@@ -56,6 +57,9 @@ help:
 setup: ## Fetch Flutter packages and run build_runner
 	cd $(APP_DIR) && flutter pub get
 	cd $(APP_DIR) && dart run build_runner build --delete-conflicting-outputs
+
+docs-size: ## Report documentation word counts against their ceilings
+	python3 tools/check_doc_size.py
 
 # -----------------------------------------------------------------------------
 # Backend (podman)

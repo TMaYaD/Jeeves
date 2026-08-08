@@ -121,7 +121,7 @@ void main() {
       expect(
         container.read(ceremonyInProgressProvider),
         isNot(contains(RitualId.dailyPlanning)),
-        reason: 'back-exit abandons the performance (ADR-0009 hygiene)',
+        reason: 'back-exit abandons the performance (in-progress hygiene)',
       );
 
       await _dispose(tester);

@@ -312,7 +312,7 @@ def test_backfill_mints_one_current_action_per_non_blank_cursor(
 
 
 def test_rerunning_upgrade_is_a_no_op(scratch_database: str) -> None:
-    """ADR-0012's re-runnable contract, exercised against real Postgres.
+    """the re-runnable-migration contract, exercised against real Postgres.
 
     A second ``upgrade`` must neither fail nor duplicate backfilled rows — the
     guard 0028 relies on for drift recovery and for runs that land after clients
@@ -343,7 +343,7 @@ def test_0028_backfill_reapplied_over_existing_rows_is_a_no_op(
     revision entirely and the backfill never re-runs.  The only way in is to
     move the *stamp* rather than the schema: rewrite ``alembic_version`` to
     0027 by raw SQL while leaving ``actions`` and every row in it untouched.
-    That is precisely the drift ADR-0012's re-runnable contract exists for — a
+    That is precisely the drift the re-runnable-migration contract exists for — a
     stamp that under-reports what the schema already holds — and it is the
     shape of the production recovery this migration has to survive.
 
@@ -468,7 +468,7 @@ def test_head_drops_every_mirrored_table_and_keeps_the_server_owned_ones(
 
 
 def test_head_is_reached_twice_without_error(scratch_database: str) -> None:
-    """ADR-0012's re-runnable contract across the drop itself.
+    """the re-runnable-migration contract across the drop itself.
 
     The release phase runs ``alembic upgrade head`` on every deploy, and a
     redeploy of the same build runs it against a database already at head.  A

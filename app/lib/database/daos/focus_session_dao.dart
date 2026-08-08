@@ -424,7 +424,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   /// - Each 'maybe' task has its intent updated to 'maybe' on [todos].
   /// - Disposition values are persisted by membership class: Plan members to
   ///   [focus_session_tasks], off-Plan engaged Outcomes to
-  ///   [focus_session_dispositions] (ADR-0016). The Plan never auto-grows from
+  ///   [focus_session_dispositions]. The Plan never auto-grows from
   ///   an off-Plan disposition (ADR-0002).
   /// - The session is closed (ended_at set, current_task_id cleared).
   /// - Any open time log for the session is closed.
@@ -614,12 +614,12 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   /// Returns the task IDs with [disposition] = 'rollover' from the most
   /// recently closed session, across both Disposition homes: Plan members in
   /// [focus_session_tasks] and off-Plan engaged Outcomes in
-  /// [focus_session_dispositions] (ADR-0016). The UNION de-duplicates.
+  /// [focus_session_dispositions]. The UNION de-duplicates.
   ///
   /// Returns an empty list when no closed session exists or none has rollover
   /// tasks.
   /// SQL selecting the rollover task ids of the most recently closed session
-  /// across both Disposition homes (ADR-0016): planned Outcomes carried over in
+  /// across both Disposition homes: planned Outcomes carried over in
   /// [focus_session_tasks] and off-Plan engaged Outcomes in
   /// [focus_session_dispositions]. The UNION de-duplicates. Takes two positional
   /// parameters, both the `'rollover'` disposition literal. Shared by
@@ -916,7 +916,7 @@ SELECT t.id AS todo_id,
   /// when no session is open.
   ///
   /// Person-tag writes fire `notifyTodosViewWrite(includeTodoTags: true)`, so
-  /// the `waitingFor` rung re-emits (ADR-0010).
+  /// the `waitingFor` rung re-emits.
   Stream<Map<String, SessionSettlement>> watchActiveSessionSettlements() {
     return customSelect(
       _activeSessionSettlementsSql,

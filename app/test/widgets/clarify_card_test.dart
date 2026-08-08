@@ -481,7 +481,7 @@ void main() {
       await _pumpFrames(tester);
 
       // Cancel is not a blank save: nothing is minted, nothing is stamped and
-      // the host is never told to advance (ADR-0049).
+      // the host is never told to advance.
       expect(await db.captureDao.outcomeIdsForCapture('x'), isEmpty);
       expect((await db.captureDao.getCapture('x'))!.clarifiedAt, isNull);
       expect(await _inboxIds(db), ['x']);

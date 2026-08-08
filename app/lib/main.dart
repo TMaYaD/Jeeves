@@ -145,7 +145,7 @@ class JeevesApp extends ConsumerWidget {
     // launch after the cutover, or any launch after one that failed part-way.
     // Read first, and before anything that reads the store, so the replay starts
     // as early as the app can start it; it is not awaited (see the provider's own
-    // note on why the ADR-0010 notifies make that safe), and a failure is logged
+    // note on why the view notifies make that safe), and a failure is logged
     // there rather than surfaced here, since there is no UI that could act on it.
     ref.watch(domainStoreRebuildProvider);
 

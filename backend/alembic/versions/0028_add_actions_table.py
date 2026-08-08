@@ -10,13 +10,13 @@ any read/write path depends on it (epic #470).  This migration is **additive**
 so re-entering it never duplicates or overwrites:
 
 Re-runnability is bounded, and no longer general.  The backfill in step 2 reads
-``todos.next_action_text``, which **0030 drops** (issue #525, ADR-0024).  So
+``todos.next_action_text``, which **0030 drops** (issue #525).  So
 0028 is re-runnable only while that column still exists — i.e. within a single
 0027 → head run, where 0028 precedes 0030.  Once the chain has reached 0030,
 rewinding ``alembic_version`` and re-entering 0028 raises
 ``UndefinedColumnError`` rather than no-opping, so it is **not** available as
-the ADR-0012 drift-recovery move (which is in any case a deliberate human
-``alembic stamp``, never an automatic one).  ADR-0024 makes this a one-time
+the drift-recovery move (which is in any case a deliberate human
+``alembic stamp``, never an automatic one).  The cursor drop makes this a one-time
 migration with no successor pass: rows written after it are not covered, and
 nothing has written the cursor since #479.  The ordering constraint is pinned
 by ``test_0028_backfill_reapplied_over_existing_rows_is_a_no_op`` in
@@ -26,7 +26,7 @@ backfill at 0028 — before 0030 — for exactly this reason.
 The guards themselves:
 
 1. Schema (guarded): create ``actions`` when it does not already exist
-   (``inspector.has_table`` — 0024/ADR-0012 discipline).  ``ix_actions_user_id``
+   (``inspector.has_table`` — 0024 discipline).  ``ix_actions_user_id``
    / ``ix_actions_outcome_id`` are then checked **independently** of the table
    guard (against ``get_indexes``), so a store where the table exists but an
    index was never created — a partially-applied forward run — still gets the
@@ -130,7 +130,7 @@ def upgrade() -> None:
     # Indexes are checked independently of the table guard: a drifted store
     # where `actions` exists but an index was never created (a partially-applied
     # forward run) still gets repaired on re-run, honouring the migration's
-    # re-runnable recovery contract (ADR-0012). Each is created only when absent
+    # re-runnable recovery contract. Each is created only when absent
     # so a clean re-run is a no-op.
     existing_indexes = {index["name"] for index in sa.inspect(bind).get_indexes("actions")}
     if "ix_actions_user_id" not in existing_indexes:

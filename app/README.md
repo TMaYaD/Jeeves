@@ -63,7 +63,7 @@ lib/
 
 **State management:** Riverpod  
 **Local storage:** Drift over two SQLite files — `jeeves_domain.sqlite` (the domain read model) and `jeeves_sync.sqlite` (the op log)  
-**Sync:** the op log, activated at enrolment (docs/SYNC.md, ADR-0026, ADR-0034, ADR-0035)
+**Sync:** the op log, activated at enrolment (docs/SYNC.md, ADR-0026, ADR-0034)
 
 ## Platform channels
 

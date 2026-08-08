@@ -10,7 +10,7 @@ Field-grain last-write-wins is order-independent for free: "apply iff the
 incoming HLC is strictly greater" gives the same reduced state whatever order
 the ops arrive in, which is what lets a device bootstrap by replaying the log
 from zero and get byte-identical state to a device that has been online all
-along. ADR-0011 introduced a per-key Conflict Strategy registry for
+along. A per-key Conflict Strategy registry arbitrates
 `user_preferences` — a snooze floor arbitrates by the later *value*, not the
 later write — and #550 plugs that registry into the op-log reducer. The moment a
 field stops being plain LWW, order-independence stops being free and becomes
@@ -40,7 +40,7 @@ for unparseable values is not associative (three writes reduce differently
 depending on which pair meets first), and a clock-based tie-break makes the
 value join depend on the clock join, which is the same failure by another route.
 
-This carries **one deliberate divergence from ADR-0011's pairwise matrix**:
+This carries **one deliberate divergence from the registry's pairwise matrix**:
 because the value max ranges over every value ever asserted, a clear followed by
 an **earlier-valued** re-snooze revives the field at the pre-clear floor rather
 than the smaller re-snoozed value. The floor can never shrink through a clear.
@@ -61,7 +61,7 @@ from reduction (recomputing it would buy nondeterminism, the open-log-at-`now()`
 term, for a column nothing reads) and never travelled on the wire.
 
 The right end state for such a column is to drop it, not to keep excluding it,
-and that is what #604 did once Drift owned the schema (ADR-0035): the column is
+and that is what #604 did once Drift owned the schema: the column is
 gone, and time-spent lives only as a `time_logs` derivation. While the column
 still existed the projector had to satisfy its NOT NULL on insert (a projected
 row that omitted it read back null and threw on the first plain `select(todos)`,
@@ -79,7 +79,7 @@ value is unparseable" cannot be expressed, because it is not associative. Where
 a rule genuinely needs write-order semantics, the answer is a different field
 (or a different entity), not a non-lattice strategy.
 
-This references ADR-0011 and reframes its client-side arbitration onto the op
+This reframes the registry's client-side arbitration onto the op
 log without superseding it: the registry remains the executable source of truth
 for which key gets which strategy, and `app/lib/sync/merge_strategy.dart` is a
 thin adapter onto it.

@@ -2,7 +2,7 @@
 /// (the user has opened the Ceremony but not yet completed or abandoned it).
 ///
 /// Used by the Nudge module to enforce the centralised in-progress hygiene
-/// rule (ADR-0009): while any Ceremony performance of a Ritual is in progress,
+/// rule: while any Ceremony performance of a Ritual is in progress,
 /// the Ritual's Nudge is hidden regardless of Trigger state.
 ///
 /// State is in-memory only — a Ceremony in progress is a per-device, per-app-
