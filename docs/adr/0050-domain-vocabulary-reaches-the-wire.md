@@ -18,12 +18,23 @@ someone reasons about the wire from the domain model, and it gets deeper with ev
 collection added. The cost of renaming is paid once; the cost of not renaming is
 paid by every future reader.
 
-The accepted price is that existing op-log history cannot be reinterpreted under
-the new names. A device already authoring on the op log takes **export → upgrade →
-wipe → import**: because an import authors an op per row through the same seam
-every DAO writes through (ADR-0047), every row is re-authored under the new
-vocabulary. That preserves everything the user has, and discards that device's op
-history — which is evidence, not data, and is the honest thing to spend here rather
-than a permanent branch. Local table and column names are not part of this cost:
-`codec.table` feeds only local SQL while `codec.collection` is the wire name, and
-they are already separate fields, so storage renames are ordinary migrations.
+Migration is in-app and needs nothing from the user. Reduction is
+collection-generic and only projection is not, so an op naming a retired
+collection still reduces and simply has no typed row to become
+(`domain_projector.dart`) — retiring a name is the path this codebase already
+takes for a collection a build does not know, not a new branch. Ops under the old
+names therefore go inert on upgrade, and a one-time re-author pass — the
+initial-upload walk, which already transforms every domain row into the op fields
+it will carry and authors through the production path, idempotent by diff against
+reduced state — re-mints them under the new vocabulary. Nothing is exported, wiped
+or re-imported; that path exists but requires the user to perform it and is a last
+resort, not the plan.
+
+Two prices are accepted. The old ops stay in the log as dead weight until
+compaction prunes them. And during a mixed-version window a device that has not
+upgraded keeps authoring under the old names, so its writes are invisible to one
+that has, until it upgrades — ordinary contract skew under ADR-0039, bounded by
+the upgrade rather than permanent. Local table and column names are not part of
+this at all: `codec.table` feeds only local SQL while `codec.collection` is the
+wire name, and they are already separate fields, so storage renames are ordinary
+migrations.
