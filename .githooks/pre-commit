@@ -281,7 +281,7 @@ if git diff --cached --name-only | grep -q "^app/"; then
 
     if [ "${codegen_needed}" = yes ]; then
         echo ">> Running build_runner..."
-        if ! dart run build_runner build --delete-conflicting-outputs; then
+        if ! dart run build_runner build; then
             echo "❌ build_runner failed! Please fix code generation errors."
             exit 1
         fi
