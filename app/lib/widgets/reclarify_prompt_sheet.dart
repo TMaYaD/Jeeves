@@ -13,10 +13,11 @@
 /// The verdict surface is the canonical [ProcessToHandlers] bar over an
 /// [OutcomeSubject], with `trash` excluded — leaving exactly the four ruled
 /// verdicts: **Outcome achieved** (records the Outcome's Completion),
-/// **More to do…** (opens [NextActionDialog], which offers the Outcome's
-/// planned queue for one-tap promotion, or an empty field to name a new Action
-/// when there is no queue — issue #723), **Waiting on someone…**, and **Defer
-/// to Someday**. The writes are owned by [ProcessToHandlers] /
+/// **More to do…** (opens [NextActionDialog]: when the Outcome has a planned
+/// queue it offers those Actions for one-tap promotion *and* a field to name a
+/// new one; with no queue it is the plain text field — issue #723), **Waiting
+/// on someone…**, and **Defer to Someday**. The writes are owned by
+/// [ProcessToHandlers] /
 /// [ClarificationService]; this widget is only the sheet shell.
 ///
 /// Dismissing the sheet (barrier tap / swipe) resolves to `null` and writes
