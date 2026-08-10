@@ -10,8 +10,8 @@ We follow a strict Test-Driven Development (TDD) cycle in a Top-Down approach. T
 
 ### Testing Hierarchy
 
-1. **Write E2E Tests First**
-   Start with end-to-end (E2E) tests that verify complete user journeys. E2E tests validate that all pieces of the system work together from the user's perspective.
+1. **Write Journey Tests First**
+   Start in `test/integration/`, which is the outermost tier that executes here: a journey test drives the real route against a real database, headless, in the ordinary `flutter test` run.
    - *Workflow:* Write test that exercises the full user flow → Test fails → Implement.
 
 2. **Write Integration Tests Second**
@@ -19,6 +19,8 @@ We follow a strict Test-Driven Development (TDD) cycle in a Top-Down approach. T
 
 3. **Write Unit Tests Third**
    Test pure business logic, utilities, and parsers in complete isolation.
+
+**There is no on-device tier, deliberately.** `integration_test/` — Flutter's device-backed harness — was removed in [#713](https://github.com/TMaYaD/Jeeves/issues/713): nothing ran it, no CI job had ever been wired to it, and it had drifted so far from the app that it could not pass. A directory that looks like end-to-end coverage but cannot execute is worse than none, because plans get written against it. On-device verification is a **manual** activity here — see § Manual testing on the Android emulator below — and packaging is covered by the Gradle build in CI, not by a test. If you want the on-device tier back, wire a CI job to it in the same change; leaving it runnable-in-principle is how the last one rotted.
 
 ### Implementation Workflow
 
@@ -60,8 +62,8 @@ Why these tiers exist, and the measurements behind them: [#440](https://github.c
 
 ### Frontend (Flutter)
 
-- **Framework**: `flutter_test`.
-- **E2E/Integration**: Flutter Integration Tests for on-device testing.
+- **Framework**: `flutter_test`. There is no `integration_test` dependency — see the Testing Hierarchy above.
+- **Journey**: `test/integration/`, driving a real route against a real database, headless and in the ordinary run.
 - **Unit/Widget**: Widget tests and standard Dart unit tests for Riverpod providers and logic.
 - **A live Drift `watch()` reached from a widget test hangs the run.** Drift's `StreamQueryStore` keeps a pending timer alive, and the test binding owns the clock, so `pumpAndSettle` never settles: it spins until its 10-minute default timeout, which looks like an infinite hang rather than a failure. Two shapes to avoid:
   - *Awaiting a stream directly* (`await db.captureDao.watchInbox().first`) — the first event is never delivered and the isolate blocks so hard the per-test timeout can't fire. Read with a plain `select` instead.
