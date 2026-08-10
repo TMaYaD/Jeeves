@@ -13,11 +13,11 @@
 /// The verdict surface is the canonical [ProcessToHandlers] bar over an
 /// [OutcomeSubject], with `trash` excluded — leaving exactly the four ruled
 /// verdicts: **Outcome achieved** (records the Outcome's Completion),
-/// **More to do…** (opens [NextActionDialog] empty — the current Action's
-/// cursor was already cleared by `completeCurrentAction`), **Waiting on
-/// someone…**, and **Defer to Someday**. The writes are owned by
-/// [ProcessToHandlers] / [ClarificationService]; this widget is only the sheet
-/// shell.
+/// **More to do…** (opens [NextActionDialog], which offers the Outcome's
+/// planned queue for one-tap promotion, or an empty field to name a new Action
+/// when there is no queue — issue #723), **Waiting on someone…**, and **Defer
+/// to Someday**. The writes are owned by [ProcessToHandlers] /
+/// [ClarificationService]; this widget is only the sheet shell.
 ///
 /// Dismissing the sheet (barrier tap / swipe) resolves to `null` and writes
 /// nothing: the Outcome stays Actionless and un-stamped, so it surfaces in the
@@ -96,8 +96,10 @@ class ReclarifyPromptSheet extends StatelessWidget {
               const SizedBox(height: 16),
               // The canonical verdict bar, minus Trash. `nextActionDialog`
               // stays on (default), and no `currentActionText` is passed, so
-              // "More to do…" opens the next-action dialog empty — the cursor
-              // was already cleared by `completeCurrentAction`.
+              // "More to do…" opens the next-action dialog with no prefilled
+              // phrase — but it offers the Outcome's planned queue for one-tap
+              // promotion when there is one (issue #723). The current Action's
+              // cursor was already cleared by `completeCurrentAction`.
               ProcessToHandlers(
                 subject: OutcomeSubject(todo),
                 except: const {ProcessAction.trash},

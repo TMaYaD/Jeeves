@@ -72,7 +72,9 @@ Future<void> _enterReviewStep(WidgetTester tester, GtdDatabase db) async {
 }
 
 Future<void> _openNextActionDialog(WidgetTester tester) async {
-  await tester.tap(find.text('Update next action…'));
+  // Every task here is Actionless, so the state-aware label reads "Set…"
+  // rather than "Update…" (#723).
+  await tester.tap(find.text('Set next action…'));
   await tester.pumpAndSettle();
   expect(find.byType(NextActionDialog), findsOneWidget);
 }
@@ -208,6 +210,70 @@ void main() {
           'Look up the surgery number',
           reason: 'a typed phrase always wins over the title fallback');
       expect((await db.todoDao.getTodo('r1'))?.intent, 'next');
+    });
+  });
+
+  group('TaskReviewStep — planned queue at re-clarification (#723)', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    testWidgets(
+        'an Actionless card labels the Next button "Set next action…", not '
+        '"Update"', (tester) async {
+      await _insertActionlessTask(
+        db,
+        id: 'r1',
+        title: 'Call the dentist',
+        createdAt: DateTime.now().toUtc(),
+      );
+      await _enterReviewStep(tester, db);
+
+      expect(find.text('Set next action…'), findsOneWidget,
+          reason: 'an Actionless card is *setting* the first Action');
+      expect(find.text('Update next action…'), findsNothing);
+    });
+
+    testWidgets(
+        'promoting a queued planned Action makes it current, routes to Next, '
+        'and advances', (tester) async {
+      final base = DateTime.now().toUtc().subtract(const Duration(days: 1));
+      await _insertActionlessTask(
+        db,
+        id: 'r1',
+        title: 'Draft the report',
+        createdAt: base,
+      );
+      await seedPlannedAction(
+        db,
+        outcomeId: 'r1',
+        text: 'Outline the sections',
+        userId: _userId,
+        id: 'rp1',
+        position: 0,
+      );
+      await _insertActionlessTask(
+        db,
+        id: 'r2',
+        title: 'Book the venue',
+        createdAt: base.add(const Duration(minutes: 1)),
+      );
+      await _enterReviewStep(tester, db);
+      expect(find.text('Draft the report'), findsOneWidget);
+
+      await tester.tap(find.text('Set next action…'));
+      await tester.pumpAndSettle();
+      expect(find.text('Outline the sections'), findsOneWidget);
+      await tester.tap(find.text('Outline the sections'));
+      await tester.pumpAndSettle();
+
+      expect((await db.actionDao.getCurrentAction('r1'))?.actionText,
+          'Outline the sections');
+      expect(await db.actionDao.getPlannedActions('r1'), isEmpty);
+      expect((await db.todoDao.getTodo('r1'))?.intent, 'next');
+      // Advanced past the resolved item to the next review card.
+      expect(find.text('Book the venue'), findsOneWidget);
     });
   });
 }

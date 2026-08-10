@@ -187,6 +187,31 @@ abstract class ClarificationService {
   /// pre-seed the Waiting For person picker inside the clarify flow.
   Future<Set<String>> getPersonTagIds(String id);
 
+  /// The Outcome's `planned` queue (ADR-0004 story 5), in queue order. Loaded
+  /// by the clarify surfaces at dialog-open time so they can offer the queue
+  /// for one-tap promotion instead of only a blank field (issue #723). An
+  /// Actionless queue-less Outcome returns an empty list — the pre-#723 path.
+  Future<List<Action>> getPlannedActions(String id);
+
+  /// The Outcome's current Action, or null when it is Actionless. Re-read
+  /// *after* a promote by [_nextWithDialog] to gate the routing commit: a
+  /// planned row that vanished between the dialog snapshot and the tap promotes
+  /// nothing, and routing a still-Actionless Outcome to Next would strand it on
+  /// a review card with no freshness gate.
+  Future<Action?> getCurrentAction(String id);
+
+  /// Promote the `planned` Action [actionId] to `current` (ADR-0004 story 5).
+  /// Refuses when a current Action already exists — callers replace via
+  /// [supersedeAndPromote]. No-op if the row is gone or is not `planned`.
+  /// Stamps `last_clarified_at`, so promoting stays an **explicit clarifying
+  /// act, never automatic** (ADR-0004) by construction.
+  Future<void> promotePlannedAction(String actionId);
+
+  /// The "Replace current action" gesture: retire the Outcome's current Action
+  /// and promote the `planned` [actionId] to `current` in one act (ADR-0004
+  /// story 5). No-op if the row is gone or is not `planned`. Stamps.
+  Future<void> supersedeAndPromote(String actionId);
+
   /// Commits a routing verdict: the clarify subject leaves the flow in the
   /// state [to] expresses (see [TodoDao.applyRouting] for the exact
   /// clarified / intent / done_at column matrix). Stamps
@@ -507,6 +532,22 @@ class DaoClarificationService implements ClarificationService {
   @override
   Future<Set<String>> getPersonTagIds(String id) =>
       _db.todoDao.getPersonTagIdsForTodo(id);
+
+  @override
+  Future<List<Action>> getPlannedActions(String id) =>
+      _db.actionDao.getPlannedActions(id);
+
+  @override
+  Future<Action?> getCurrentAction(String id) =>
+      _db.actionDao.getCurrentAction(id);
+
+  @override
+  Future<void> promotePlannedAction(String actionId) =>
+      _db.actionDao.promotePlannedAction(actionId);
+
+  @override
+  Future<void> supersedeAndPromote(String actionId) =>
+      _db.actionDao.supersedeAndPromote(actionId);
 
   @override
   Future<void> clarifyToOutcome(

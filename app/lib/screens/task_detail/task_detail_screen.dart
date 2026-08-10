@@ -22,6 +22,7 @@ import '../../widgets/clarify_shared_widgets.dart';
 import '../../widgets/context_tag_picker.dart';
 import '../../widgets/meta_chip.dart';
 import '../../widgets/project_picker.dart';
+import '../../widgets/replace_current_action_sheet.dart';
 import '../../widgets/tag_list.dart';
 import '../../widgets/task_status_row.dart';
 
@@ -987,44 +988,17 @@ class _PlanSectionState extends ConsumerState<_PlanSection> {
     required Action current,
     required Action planned,
   }) async {
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Colors.white,
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Replace current action?',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 16),
-              _sheetLine('Current', current.actionText, _muted),
-              const SizedBox(height: 8),
-              _sheetLine('New', planned.actionText, _ink),
-              const SizedBox(height: 24),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton(
-                  key: const Key('plan_replace_confirm'),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFF2563EB),
-                  ),
-                  onPressed: () {
-                    _notifier.supersedeAndPromote(planned.id).ignore();
-                    Navigator.pop(ctx);
-                  },
-                  child: const Text('Replace current action'),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
+    // The shared confirm returns the verdict; this surface keeps its inline,
+    // no-snackbar write idiom (`.ignore()`), unlike the re-clarify surfaces
+    // which await the write inside a boundary (see [showReplaceCurrentActionSheet]).
+    final confirmed = await showReplaceCurrentActionSheet(
+      context,
+      currentText: current.actionText,
+      newText: planned.actionText,
     );
+    if (confirmed) {
+      _notifier.supersedeAndPromote(planned.id).ignore();
+    }
   }
 
   Widget _sheetLine(String label, String text, Color color) => Column(

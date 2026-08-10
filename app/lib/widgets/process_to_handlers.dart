@@ -12,7 +12,10 @@
 library;
 
 import 'package:flutter/foundation.dart' show setEquals;
-import 'package:flutter/material.dart';
+// `Action` is the Drift Action entity here (the planned queue), not Flutter's
+// shortcuts/actions class — hidden so the two don't collide (as in
+// task_detail_screen.dart).
+import 'package:flutter/material.dart' hide Action;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/gtd_database.dart';
@@ -25,6 +28,7 @@ import 'capture/capture_action.dart';
 import 'clarify_card.dart';
 import 'next_action_dialog.dart';
 import 'person_tag_picker.dart';
+import 'replace_current_action_sheet.dart';
 
 export '../models/todo.dart' show RoutingKind;
 
@@ -82,10 +86,11 @@ enum ProcessAction {
 /// - `keep` is an explicit no-op on a [CaptureSubject] in [_keep] — "leave it
 ///   in the Inbox", `clarified_at` stays NULL. **Not** a verdict.
 /// - `reclarify` throws on a [CaptureSubject]; it can never report one.
-/// - `nextActionDialog` reaches [_commit] whenever it notifies: the commit is
-///   unconditional (a blank save routes under the title-as-action fallback),
-///   and the one arm that writes nothing — a blank phrase over a blank title —
-///   returns without notifying at all. A verdict.
+/// - `nextActionDialog` reaches [_commit] whenever it notifies. Its arms that
+///   write nothing all return **without** notifying: cancel, a blank phrase
+///   over a blank title, a promote whose planned row has vanished, and a
+///   declined replace confirm. Every arm that notifies has committed a route.
+///   A verdict.
 ///
 /// `nextActionDialog` answered `false` until issue #689, and that was right
 /// while it lasted: no Capture surface enabled the modifier, so the answer was
@@ -107,28 +112,27 @@ enum ProcessAction {
 /// bar, and the card is given only its two genuine verdicts.
 extension ProcessActionEndsCaptureClarification on ProcessAction {
   bool get endsCaptureClarification => switch (this) {
-        ProcessAction.next ||
-        ProcessAction.waitingFor ||
-        ProcessAction.someday ||
-        ProcessAction.done ||
-        ProcessAction.trash ||
-        ProcessAction.completeCapture ||
-        ProcessAction.nextActionDialog =>
-          true,
-        ProcessAction.keep || ProcessAction.reclarify => false,
-      };
+    ProcessAction.next ||
+    ProcessAction.waitingFor ||
+    ProcessAction.someday ||
+    ProcessAction.done ||
+    ProcessAction.trash ||
+    ProcessAction.completeCapture ||
+    ProcessAction.nextActionDialog => true,
+    ProcessAction.keep || ProcessAction.reclarify => false,
+  };
 }
 
 /// Co-located translation: callsites holding a [RoutingKind] from a session
 /// record convert at the read site so the widget never sees [RoutingKind].
 extension RoutingKindToProcessAction on RoutingKind {
   ProcessAction toProcessAction() => switch (this) {
-        RoutingKind.nextAction => ProcessAction.next,
-        RoutingKind.waitingFor => ProcessAction.waitingFor,
-        RoutingKind.maybe => ProcessAction.someday,
-        RoutingKind.done => ProcessAction.done,
-        RoutingKind.trash => ProcessAction.trash,
-      };
+    RoutingKind.nextAction => ProcessAction.next,
+    RoutingKind.waitingFor => ProcessAction.waitingFor,
+    RoutingKind.maybe => ProcessAction.someday,
+    RoutingKind.done => ProcessAction.done,
+    RoutingKind.trash => ProcessAction.trash,
+  };
 }
 
 /// Inverse of [RoutingKindToProcessAction]. Callsites that need to persist a
@@ -144,18 +148,16 @@ extension RoutingKindToProcessAction on RoutingKind {
 /// Outcomes it leaves behind carry their own, already applied.
 extension ProcessActionToRoutingKind on ProcessAction {
   RoutingKind? toRoutingKind() => switch (this) {
-        ProcessAction.next ||
-        ProcessAction.nextActionDialog =>
-          RoutingKind.nextAction,
-        ProcessAction.waitingFor => RoutingKind.waitingFor,
-        ProcessAction.someday => RoutingKind.maybe,
-        ProcessAction.done => RoutingKind.done,
-        ProcessAction.trash => RoutingKind.trash,
-        ProcessAction.keep ||
-        ProcessAction.reclarify ||
-        ProcessAction.completeCapture =>
-          null,
-      };
+    ProcessAction.next ||
+    ProcessAction.nextActionDialog => RoutingKind.nextAction,
+    ProcessAction.waitingFor => RoutingKind.waitingFor,
+    ProcessAction.someday => RoutingKind.maybe,
+    ProcessAction.done => RoutingKind.done,
+    ProcessAction.trash => RoutingKind.trash,
+    ProcessAction.keep ||
+    ProcessAction.reclarify ||
+    ProcessAction.completeCapture => null,
+  };
 }
 
 /// What a clarify card has collected for a Capture, across both grains.
@@ -451,6 +453,7 @@ class ProcessToHandlers extends ConsumerStatefulWidget {
     this.lastAction,
     this.onAfterRoute,
     this.onProcessingChanged,
+    this.liveTitle,
   });
 
   /// The Capture or Outcome this bar clarifies — selects the write path.
@@ -516,6 +519,18 @@ class ProcessToHandlers extends ConsumerStatefulWidget {
   /// guard their own `setState` with a `mounted` check.**
   final ValueChanged<bool>? onProcessingChanged;
 
+  /// Live title source for a host that edits an [OutcomeSubject]'s title in an
+  /// **unsaved** controller (the re-clarify [ClarifyCard]).
+  ///
+  /// [subject.title] is the DB row, and a `TextEditingController` edit does not
+  /// rebuild the subject — so an edited-but-unsaved title would otherwise show
+  /// stale in [NextActionDialog] and, worse, be the value a blank-save mirrors
+  /// as the current Action. Awaited at the top of [_nextWithDialog]; the result
+  /// feeds both the dialog display and the blank-save title fallback. Every
+  /// other host leaves this null and falls back to [subject.title], which is
+  /// never stale there.
+  final Future<String?> Function()? liveTitle;
+
   @override
   ConsumerState<ProcessToHandlers> createState() => _ProcessToHandlersState();
 }
@@ -546,10 +561,9 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
 
   /// The default actions plus [ProcessToHandlers.include], minus
   /// [ProcessToHandlers.except]. Includes `nextActionDialog` when active.
-  Set<ProcessAction> _computeResolvedActions() => <ProcessAction>{
-        ..._kDefaultActions,
-        ...widget.include,
-      }..removeAll(widget.except);
+  Set<ProcessAction> _computeResolvedActions() =>
+      <ProcessAction>{..._kDefaultActions, ...widget.include}
+        ..removeAll(widget.except);
 
   /// Renderable buttons: the resolved set minus modifier-only actions.
   /// `nextActionDialog` never renders its own button. Returns a fresh copy so
@@ -605,9 +619,9 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
 
   void _report(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   /// The canonical label for [a] against the current subject — the
@@ -655,10 +669,9 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
   /// advances the snapshot cursor and records a routing record) for a row that
   /// no longer exists would leave a phantom behind.
   Future<bool> _subjectExists() => switch (widget.subject) {
-        OutcomeSubject(:final todo) => _clarification.exists(todo.id),
-        CaptureSubject(:final capture) =>
-          _clarification.captureExists(capture.id),
-      };
+    OutcomeSubject(:final todo) => _clarification.exists(todo.id),
+    CaptureSubject(:final capture) => _clarification.captureExists(capture.id),
+  };
 
   /// Commits the routing verdict [to] against the subject.
   ///
@@ -807,32 +820,43 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     await _notifyAfterRoute(ProcessAction.next);
   }
 
-  /// Next + the [ProcessAction.nextActionDialog] modifier, and the one site
-  /// that applies the **title-as-action fallback** (issue #691).
+  /// Next + the [ProcessAction.nextActionDialog] modifier: the site that offers
+  /// the Outcome's planned queue (issue #723), promotes a chosen one, and — for
+  /// a new phrase — applies the **title-as-action fallback** (issue #691).
   ///
-  /// Cancel and a blank Save are different acts and are kept apart by the
-  /// dialog's *type*: cancel (button, barrier tap, system back) resolves to
-  /// `null`, a blank Save to `''`. The `result == null` early exit below —
-  /// before any write and before [_notifyAfterRoute] — is the whole of the
-  /// "cancel leaves the item unresolved" contract. Collapsing the two
-  /// (`result?.isEmpty ?? true`, or popping the title on save) silently breaks
-  /// it while every other behaviour here stays green.
+  /// The dialog's *type* keeps three outcomes apart. Cancel resolves to `null`
+  /// (button, barrier tap, system back) and exits before any write or
+  /// [_notifyAfterRoute] — the whole of "cancel leaves the item unresolved".
+  /// [NextActionPhrase] carries a typed phrase (an empty one is the blank-save
+  /// fallback). [NextActionPromote] carries the id of an already-queued planned
+  /// Action to promote. Every arm that notifies has committed a route; the arms
+  /// that write nothing (cancel, blank phrase over a blank title, a promote
+  /// whose row vanished, a declined replace confirm) return without notifying.
   Future<void> _nextWithDialog() async {
-    // The seed is per-subject, because the two shapes hold their phrase in
-    // different places (issue #689).
-    //
-    // On an Outcome it is edit-existing semantics: the current Action's text,
-    // so the user sees what is currently saved.
-    //
-    // On a Capture there is no Outcome yet, so [ClarifySubject.currentActionText]
-    // is null by contract and seeding from it would open the dialog empty —
-    // making the user retype what the card already says. The proposal lives in
-    // the draft instead ([ClarifyDraft.assemble]'s title mirror), and is read
-    // *here*, at open time, rather than at build time: [CaptureSubject.draft]
-    // is a callback because the card's title lives in a controller that does
-    // not rebuild this bar on every keystroke. Accepting the seed unchanged
-    // reproduces the pre-#689 title-as-action result in one extra tap.
     final subject = widget.subject;
+
+    // The live title for a host whose title is edited in an unsaved controller
+    // (ClarifyCard), else the subject's DB title. Read up front so both the
+    // dialog display and the blank-save fallback use the edited value — the
+    // mirror is Actionless-guarded, so it cannot be corrected after the fact
+    // (issue #723 §6).
+    final title = (await widget.liveTitle?.call()) ?? subject.title;
+    if (!mounted) return;
+
+    // The planned queue is offered for one-tap promotion. Loaded only for an
+    // Outcome: a Capture has no Outcome yet, so no queue (ADR-0006).
+    final planned = switch (subject) {
+      OutcomeSubject(:final todo) => await _clarification.getPlannedActions(
+        todo.id,
+      ),
+      CaptureSubject() => const <Action>[],
+    };
+    if (!mounted) return;
+
+    // The seed is per-subject, because the two shapes hold their phrase in
+    // different places (issue #689). On an Outcome it is the current Action's
+    // text (edit-existing). On a Capture there is no Outcome yet, so the
+    // proposal lives in the draft's title mirror, read here at open time.
     final seed = switch (subject) {
       OutcomeSubject() => subject.currentActionText ?? '',
       CaptureSubject(:final draft) => draft().action?.text ?? '',
@@ -844,48 +868,110 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
       // Capture's seed is a proposal for an Action that does not exist yet, so
       // a prefilled field there must still read "Set", not "Update".
       editingExistingAction: (subject.currentActionText ?? '').isNotEmpty,
-      taskTitle: subject.title,
+      taskTitle: title,
+      plannedActions: [for (final a in planned) (id: a.id, text: a.actionText)],
     );
     if (result == null) return; // user cancelled
     if (!mounted) return;
     if (!await _subjectExists()) return;
-    if (result.isEmpty) {
-      // A blank save means "the title is the action": for a simple Outcome
-      // the title genuinely names the physical next action, so demanding a
-      // distinct phrase adds nothing. Route, then let the title stand in.
-      final title = widget.subject.title.trim();
-      if (title.isEmpty) {
-        // Nothing to stand in as the Action, so stalling is the honest
-        // outcome: routing here would leave the row on Next while Actionless,
-        // and `_needsReviewWhere`'s Actionless branch has no freshness gate —
-        // it would re-surface on the identical review card every day, forever.
-        // Near-unreachable through the UI (the clarify surfaces disable the
-        // routing buttons while the title is blank), but a synced-in row can
-        // carry one.
-        return;
-      }
-      // `actionText: null`, not `''`: a non-null blank *supersedes* the
-      // current Action (#476), which would destroy a deliberate phrase. Null
-      // leaves the Action alone while still writing intent / clarified,
-      // clearing done_at and stamping last_clarified_at.
-      await _commit(RoutingKind.nextAction);
-      if (widget.subject case OutcomeSubject(:final todo)) {
-        // Actionless-guarded, so a phrase the user already wrote survives —
-        // clearing the field is not the affordance for retiring an Action
-        // (Abandon is). One transaction, so a `current` Action landed by sync
-        // between the check and the write cannot be clobbered (#501). The
-        // other window is a throw between the route and this mirror, which
-        // leaves the row on Next + Actionless; it is recoverable (the item
-        // simply re-surfaces at the next review) and is the same two-await
-        // shape `ClarifyCard._onAfterRoute` already ships.
-        await _clarification.mirrorTitleIfActionless(todo.id, title);
-      }
-      // The Capture arm needs nothing here: `_mergedAction(d, null)` returns
-      // the draft's own Action, which already carries `ClarifyDraft.assemble`'s
-      // title mirror, and it is written as the Outcome is minted.
-    } else {
-      await _commit(RoutingKind.nextAction, actionText: result);
+
+    switch (result) {
+      case NextActionPromote(:final actionId):
+        await _promoteFromQueue(actionId, planned);
+      case NextActionPhrase(text: final phrase) when phrase.isEmpty:
+        await _blankSaveFallback(title.trim());
+      case NextActionPhrase(text: final phrase):
+        await _commit(RoutingKind.nextAction, actionText: phrase);
+        await _notifyAfterRoute(ProcessAction.nextActionDialog);
     }
+  }
+
+  /// The blank-save title-as-action fallback: route to Next and let the
+  /// Outcome's [title] stand in as its current Action (issue #691).
+  Future<void> _blankSaveFallback(String title) async {
+    if (title.isEmpty) {
+      // Nothing to stand in as the Action, so stalling is the honest outcome:
+      // routing here would leave the row on Next while Actionless, and
+      // `_needsReviewWhere`'s Actionless branch has no freshness gate — it
+      // would re-surface on the identical review card every day, forever.
+      // Near-unreachable through the UI (the clarify surfaces disable the
+      // routing buttons while the title is blank), but a synced-in row can
+      // carry one.
+      return;
+    }
+    // `actionText: null`, not `''`: a non-null blank *supersedes* the current
+    // Action (#476), which would destroy a deliberate phrase. Null leaves the
+    // Action alone while still writing intent / clarified, clearing done_at and
+    // stamping last_clarified_at.
+    await _commit(RoutingKind.nextAction);
+    if (widget.subject case OutcomeSubject(:final todo)) {
+      // Actionless-guarded, so a phrase the user already wrote survives, and so
+      // does a queue the user saw and declined (the planned rows are untouched
+      // — issue #723 keeps this fallback rather than auto-promoting the head,
+      // which ADR-0004 forbids). One transaction, so a `current` Action landed
+      // by sync between the check and the write cannot be clobbered (#501).
+      await _clarification.mirrorTitleIfActionless(todo.id, title);
+    }
+    // The Capture arm needs nothing here: `_mergedAction(d, null)` returns the
+    // draft's own Action, which already carries the title mirror, written as
+    // the Outcome is minted.
+    await _notifyAfterRoute(ProcessAction.nextActionDialog);
+  }
+
+  /// Promote the chosen planned [actionId] to `current` and route the Outcome
+  /// to Next (issue #723).
+  ///
+  /// The promote/supersede primitives touch only `actions` + stamp; the
+  /// `_commit(nextAction)` leg is what writes `intent='next'`, `clarified`,
+  /// `done_at=null` (with `actionText: null`, so the just-promoted Action is
+  /// left untouched — `applyRouting.touchesAction` needs a non-null phrase).
+  /// Without it a Someday/Maybe promote would flip a planned row up while the
+  /// Outcome stayed on Someday.
+  Future<void> _promoteFromQueue(String actionId, List<Action> planned) async {
+    // Only an Outcome can have a queue; the dialog never returns a promote for
+    // a Capture (its queue is always empty), so this is defensively no-op there.
+    if (widget.subject is! OutcomeSubject) return;
+    final outcomeId = widget.subject.id;
+
+    // Load the current Action fresh: the queue snapshot is from dialog-open
+    // time, and a `current` may have synced in since.
+    final current = await _clarification.getCurrentAction(outcomeId);
+    if (current == null) {
+      await _clarification.promotePlannedAction(actionId);
+      // No-op guard (issue #723 §2). A planned row removed on another device
+      // between the snapshot and the tap promotes nothing; a `_commit` here
+      // would strand a still-Actionless Outcome on Next, where the freshness-
+      // gate-less review predicate re-surfaces it forever. Re-read and commit
+      // only when a current Action now exists — else leave the item untouched
+      // (recoverable; the user can retry).
+      final promoted = await _clarification.getCurrentAction(outcomeId);
+      if (promoted == null) return;
+      await _commit(RoutingKind.nextAction);
+      await _notifyAfterRoute(ProcessAction.nextActionDialog);
+      return;
+    }
+
+    // A current Action exists: replacing it is an explicit act, so it routes
+    // through the shared "Replace current action" confirm rather than a silent
+    // supersede.
+    if (!mounted) return;
+    final chosen = planned.where((a) => a.id == actionId);
+    final confirmed = await showReplaceCurrentActionSheet(
+      context,
+      currentText: current.actionText,
+      newText: chosen.isEmpty ? '' : chosen.first.actionText,
+    );
+    if (!confirmed || !mounted) return; // declined — item unresolved, no notify
+    // Re-check after the sheet closes, as the post-dialog guard above does: the
+    // Outcome may have been hard-deleted while the confirm was open, and going
+    // on to supersede / route / notify would advance the cursor over a phantom.
+    if (!await _subjectExists()) return;
+    // `applySupersedeAndPromote` early-returns before retiring the incumbent if
+    // the planned row vanished, so a no-op here leaves the current Action
+    // intact — `_commit(nextAction)` then routes an Outcome that still has a
+    // current, which is benign (a redundant re-route + stamp).
+    await _clarification.supersedeAndPromote(actionId);
+    await _commit(RoutingKind.nextAction);
     await _notifyAfterRoute(ProcessAction.nextActionDialog);
   }
 
@@ -894,8 +980,8 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     // its Outcome does not exist yet (ADR-0006).
     final assigned = switch (widget.subject) {
       OutcomeSubject(:final todo) => await _clarification.getPersonTagIds(
-          todo.id,
-        ),
+        todo.id,
+      ),
       CaptureSubject() => const <String>{},
     };
     if (!mounted) return;
@@ -955,7 +1041,8 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
               icon: _kDefaultIcons[ordered[i]]!,
               color: _kDefaultColors[ordered[i]]!,
               enabled: !_processing && !widget.disabled.contains(ordered[i]),
-              isPreviouslySelected: widget.lastAction == ordered[i] ||
+              isPreviouslySelected:
+                  widget.lastAction == ordered[i] ||
                   // Tapping Next with the dialog modifier records
                   // `nextActionDialog` in callsite state; highlight Next.
                   (ordered[i] == ProcessAction.next &&
@@ -1008,15 +1095,16 @@ class _ActionButton extends StatelessWidget {
       ),
       style: OutlinedButton.styleFrom(
         foregroundColor: color,
-        backgroundColor:
-            isPreviouslySelected ? color.withValues(alpha: 0.08) : null,
+        backgroundColor: isPreviouslySelected
+            ? color.withValues(alpha: 0.08)
+            : null,
         side: BorderSide(
           color: color.withValues(
             alpha: !enabled
                 ? 0.2
                 : isPreviouslySelected
-                    ? 0.85
-                    : 0.4,
+                ? 0.85
+                : 0.4,
           ),
           width: isPreviouslySelected ? 1.5 : 1.0,
         ),

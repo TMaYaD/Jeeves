@@ -1622,4 +1622,212 @@ void main() {
           reason: 'back-out must stamp lastClarifiedAt like a Keep tap');
     });
   });
+
+  group('ProcessToHandlers — the dialog offers the planned queue (#723)', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    Future<void> seedQueue(String outcomeId) async {
+      await seedPlannedAction(db,
+          outcomeId: outcomeId,
+          text: 'Step one',
+          userId: _userId,
+          id: 'p1',
+          position: 0);
+      await seedPlannedAction(db,
+          outcomeId: outcomeId,
+          text: 'Step two',
+          userId: _userId,
+          id: 'p2',
+          position: 1);
+    }
+
+    Future<void> openDialog(WidgetTester tester) async {
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+      expect(find.byType(NextActionDialog), findsOneWidget);
+    }
+
+    testWidgets('an empty queue renders no promote rows (byte-identical dialog)',
+        (tester) async {
+      final todo = await _insertTodo(db, id: 'q0');
+      await tester.pumpWidget(_harness(db, todo: todo));
+
+      await openDialog(tester);
+      expect(find.byKey(const Key('next_action_promote_p1')), findsNothing);
+      expect(find.text('Step one'), findsNothing);
+    });
+
+    testWidgets(
+        'promoting a planned Action on an Actionless Outcome makes it current '
+        'and routes to Next', (tester) async {
+      final todo = await _insertTodo(db, id: 'q1');
+      await seedQueue('q1');
+      final fired = <ProcessAction>[];
+      await tester.pumpWidget(
+          _harness(db, todo: todo, onAfterRoute: (a) async => fired.add(a)));
+
+      await openDialog(tester);
+      expect(find.text('Step one'), findsOneWidget);
+      expect(find.text('Step two'), findsOneWidget);
+
+      await tester.tap(find.text('Step one'));
+      await tester.pumpAndSettle();
+
+      expect((await db.actionDao.getCurrentAction('q1'))?.actionText,
+          'Step one');
+      expect((await db.actionDao.getPlannedActions('q1')).map((a) => a.actionText),
+          ['Step two'], reason: 'the un-chosen planned row stays planned');
+      expect((await db.todoDao.getTodo('q1'))?.intent, 'next');
+      expect((await db.todoDao.getTodo('q1'))?.lastClarifiedAt, isNotNull);
+      expect(fired, [ProcessAction.nextActionDialog]);
+    });
+
+    testWidgets(
+        'a promote whose planned row vanished writes no route and leaves the '
+        'Outcome Actionless (no-op guard)', (tester) async {
+      final todo = await _insertTodo(db, id: 'q2');
+      await seedQueue('q2');
+      final fired = <ProcessAction>[];
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        clarificationService: _NoOpPromoteClarificationService(db),
+        onAfterRoute: (a) async => fired.add(a),
+      ));
+
+      await openDialog(tester);
+      await tester.tap(find.text('Step one'));
+      await tester.pumpAndSettle();
+
+      // The promote no-oped, so no current Action exists — the guard must stop
+      // `_commit` from stranding a still-Actionless Outcome on Next.
+      expect(await db.actionDao.getCurrentAction('q2'), isNull);
+      expect((await db.todoDao.getTodo('q2'))?.lastClarifiedAt, isNull,
+          reason: 'no route landed, so nothing stamped');
+      expect(fired, isEmpty);
+    });
+
+    testWidgets(
+        'promoting over a current Action opens the Replace confirm; confirming '
+        'supersedes and promotes', (tester) async {
+      final todo = await _insertTodo(db, id: 'q3');
+      await seedCurrentAction(
+          db, outcomeId: 'q3', text: 'do it', userId: _userId);
+      await seedQueue('q3');
+      final fired = <ProcessAction>[];
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        currentActionText: 'do it',
+        onAfterRoute: (a) async => fired.add(a),
+      ));
+
+      await openDialog(tester);
+      await tester.tap(find.text('Step one'));
+      await tester.pumpAndSettle();
+
+      // The shared "Replace current action" confirm — not a silent supersede.
+      expect(find.byKey(const Key('plan_replace_confirm')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('plan_replace_confirm')));
+      await tester.pumpAndSettle();
+
+      expect((await db.actionDao.getCurrentAction('q3'))?.actionText,
+          'Step one');
+      expect((await db.actionDao.getPlannedActions('q3')).map((a) => a.actionText),
+          ['Step two'], reason: 'only the chosen row is promoted');
+      // The incumbent Action is retired, not deleted (supersede, not remove).
+      expect((await db.actionDao.getTerminatedActions('q3')).map((t) => t.action.actionText),
+          contains('do it'));
+      expect((await db.todoDao.getTodo('q3'))?.intent, 'next');
+      expect(fired, [ProcessAction.nextActionDialog]);
+    });
+
+    testWidgets('declining the Replace confirm writes nothing and does not '
+        'notify', (tester) async {
+      final todo = await _insertTodo(db, id: 'q4');
+      await seedCurrentAction(
+          db, outcomeId: 'q4', text: 'do it', userId: _userId);
+      await seedQueue('q4');
+      final fired = <ProcessAction>[];
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        currentActionText: 'do it',
+        onAfterRoute: (a) async => fired.add(a),
+      ));
+
+      await openDialog(tester);
+      await tester.tap(find.text('Step one'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('plan_replace_confirm')), findsOneWidget);
+
+      // System back dismisses the confirm sheet — a declined replace.
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+
+      expect((await db.actionDao.getCurrentAction('q4'))?.actionText, 'do it',
+          reason: 'the incumbent Action survives a declined replace');
+      expect((await db.actionDao.getPlannedActions('q4')).map((a) => a.actionText),
+          ['Step one', 'Step two']);
+      expect(fired, isEmpty,
+          reason: 'a declined confirm leaves the item unresolved');
+    });
+
+    testWidgets('a blank Save with a queue mirrors the title and leaves the '
+        'planned rows untouched', (tester) async {
+      final todo = await _insertTodo(db, id: 'q5', title: 'Ship it');
+      await seedQueue('q5');
+      final fired = <ProcessAction>[];
+      await tester.pumpWidget(
+          _harness(db, todo: todo, onAfterRoute: (a) async => fired.add(a)));
+
+      await openDialog(tester);
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+
+      // The fallback still fires — the user saw the queue and declined it — but
+      // it is no longer the *only* thing standing between them: the queue is
+      // intact (#723 keeps the fallback rather than auto-promoting the head).
+      expect((await db.actionDao.getCurrentAction('q5'))?.actionText, 'Ship it');
+      expect((await db.actionDao.getPlannedActions('q5')).map((a) => a.actionText),
+          ['Step one', 'Step two']);
+      expect(fired, [ProcessAction.nextActionDialog]);
+    });
+
+    testWidgets('a Capture never loads or offers a queue', (tester) async {
+      final capture = await _insertCapture(db, id: 'qc', title: 'Fragment');
+      await tester.pumpWidget(ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: MaterialApp(
+          home: Scaffold(
+            body: ListView(
+              children: [
+                ProcessToHandlers(
+                  subject: CaptureSubject(
+                    capture: capture,
+                    draft: () => const ClarifyDraft(title: 'Fragment'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ));
+
+      await openDialog(tester);
+      expect(find.byKey(const Key('next_action_promote_p1')), findsNothing);
+    });
+  });
+}
+
+/// A [ClarificationService] whose promote is a silent no-op — the planned row
+/// vanished (synced away) between the dialog snapshot and the tap.
+class _NoOpPromoteClarificationService extends DaoClarificationService {
+  _NoOpPromoteClarificationService(super.db);
+
+  @override
+  Future<void> promotePlannedAction(String actionId) async {}
 }
