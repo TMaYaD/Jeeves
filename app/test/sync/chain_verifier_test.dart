@@ -385,11 +385,18 @@ void main() {
 
   group('the release scan', () {
     test('a deep reorder heals in one flat loop, with no nested scans', () async {
-      // 200 ops served newest-first: every one but the last is a gap on arrival,
-      // and the last unlocks all 199 of them. A scan that re-entered itself from
+      // 50 ops served newest-first: every one but the last is a gap on arrival,
+      // and the last unlocks all 49 of them. A scan that re-entered itself from
       // `_receive` would still converge — but it would raise the reordered alarm
       // once per nesting level, so the occurrence count is what pins the shape.
-      const opCount = 200;
+      //
+      // Sized down from 200, where this was the second-slowest test in the
+      // suite at 74% of the per-test budget on the Pi agent host (#440). The
+      // cost is linear in the op count and the discriminating power is not:
+      // occurrenceCount is 1 for a flat scan and N-1 for a nested one at every
+      // N, so 49 separates them exactly as unambiguously as 199 did. What the
+      // larger number bought was reassurance about depth, not detection.
+      const opCount = 50;
       final workspace = await SimWorkspace.create();
       addTearDown(workspace.close);
       final author = await AuthorFixture.create(
