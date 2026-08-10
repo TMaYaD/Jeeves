@@ -66,8 +66,8 @@ Most reasoning is disposable — re-derivable from the code by whoever next need
 
 Follow this order strictly:
 
-### 1. Write E2E Tests First
-Start with end-to-end tests that verify complete user journeys.
+### 1. Write Journey Tests First
+Start at the **outermost tier that actually executes in this project**, and drive a complete user journey through it — the real route, against real storage.
 
 ```
 Before building a feature:
@@ -75,6 +75,8 @@ Before building a feature:
 → Test fails (feature doesn't exist)
 → Now implement
 ```
+
+"Outermost that executes" is the operative constraint, not "outermost imaginable". A tier that needs a device, an emulator, or a service nobody runs is not the top of the pyramid — it is a directory that looks like coverage. Check the project's testing doc for which tier that is and start there. Specifying a step nobody can run produces unverifiable work: the next person either writes assertions that never execute, or has to notice the trap and route around it.
 
 ### 2. Write Integration Tests Second
 Test component interactions at boundaries.
