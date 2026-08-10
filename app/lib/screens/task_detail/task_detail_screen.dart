@@ -988,6 +988,10 @@ class _PlanSectionState extends ConsumerState<_PlanSection> {
     required Action current,
     required Action planned,
   }) async {
+    // Captured before the await: reading the autoDispose provider afterwards
+    // can outlive the ref if the detail State unmounts while the sheet is open
+    // (same reason as [_openActionSheet]).
+    final notifier = _notifier;
     // The shared confirm returns the verdict; this surface keeps its inline,
     // no-snackbar write idiom (`.ignore()`), unlike the re-clarify surfaces
     // which await the write inside a boundary (see [showReplaceCurrentActionSheet]).
@@ -997,7 +1001,7 @@ class _PlanSectionState extends ConsumerState<_PlanSection> {
       newText: planned.actionText,
     );
     if (confirmed) {
-      _notifier.supersedeAndPromote(planned.id).ignore();
+      notifier.supersedeAndPromote(planned.id).ignore();
     }
   }
 
