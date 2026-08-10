@@ -222,10 +222,63 @@ if git diff --cached --name-only | grep -q "^app/"; then
         )
     fi
 
-    echo ">> Running build_runner..."
-    if ! dart run build_runner build --delete-conflicting-outputs; then
-        echo "❌ build_runner failed! Please fix code generation errors."
-        exit 1
+    # build_runner is paid on every app/ commit even when nothing it reads has
+    # changed. Measured: ~10s warm on a dev Mac, 236s cold on the Pi agent host
+    # (833 outputs) — the latter being what a fresh worktree or an SDK bump
+    # costs, and well over #440's original ~30s estimate. Skip it when no input
+    # is newer than the last successful run. The stamp lives under .dart_tool/,
+    # which is gitignored, so it is per-checkout and a fresh worktree always
+    # builds rather than trusting a stamp it did not write.
+    codegen_stamp=".dart_tool/jeeves-codegen.stamp"
+    codegen_needed=yes
+
+    if [ -f "${codegen_stamp}" ]; then
+        # Two deliberate choices in the expression below.
+        #
+        # Generated outputs are EXCLUDED. The stamp is written after the build,
+        # so they are normally older than it — but an interrupted build can
+        # leave one newer, and counting them would wedge the check into
+        # rebuilding on every commit forever.
+        #
+        # Directories are INCLUDED. A deleted file leaves behind no mtime to
+        # notice, but removing it bumps its parent directory — and deletion is
+        # exactly the case that must rebuild, because the orphaned .g.dart next
+        # to it still declares `part of` a source that is gone, which fails
+        # analyze.
+        stale_input=$(find lib test \
+            \( -type d -o \
+               \( -name '*.dart' ! -name '*.g.dart' ! -name '*.freezed.dart' \) \) \
+            -newer "${codegen_stamp}" -print 2>/dev/null | head -n 1)
+
+        if [ -z "${stale_input}" ]; then
+            stale_input=$(find . -maxdepth 1 \
+                \( -name 'pubspec.yaml' -o -name 'pubspec.lock' \) \
+                -newer "${codegen_stamp}" -print 2>/dev/null | head -n 1)
+        fi
+
+        [ -z "${stale_input}" ] && codegen_needed=no
+    fi
+
+    # A stamp is not evidence the outputs are still there. Codegen is
+    # gitignored, so `flutter clean`, a prune, or a fresh clone can leave the
+    # stamp with nothing beside it — and skipping on that basis hands analyze
+    # a tree that cannot compile. Verified by looking for any generated file
+    # rather than one named path, so it survives codegen targets coming and
+    # going.
+    if [ "${codegen_needed}" = no ] &&
+        [ -z "$(find lib -name '*.g.dart' -print 2>/dev/null | head -n 1)" ]; then
+        codegen_needed=yes
+    fi
+
+    if [ "${codegen_needed}" = yes ]; then
+        echo ">> Running build_runner..."
+        if ! dart run build_runner build --delete-conflicting-outputs; then
+            echo "❌ build_runner failed! Please fix code generation errors."
+            exit 1
+        fi
+        mkdir -p .dart_tool && : > "${codegen_stamp}"
+    else
+        echo ">> build_runner: no codegen input changed since the last run, skipping."
     fi
 
     echo ">> Running flutter analyze..."

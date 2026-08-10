@@ -598,6 +598,93 @@ else
   ok "hook stopped before build_runner (no partial state)"
 fi
 
+# ----- #440: the codegen stamp -----------------------------------------------
+#
+# build_runner used to run on every app/ commit regardless — ~30s warm, and 236s
+# cold on the Pi agent host. It is now conditional, and "conditional" is exactly
+# the kind of change that goes wrong silently: a cache that never invalidates
+# hands analyze a stale tree and blames the wrong thing. Every case below
+# asserts on the EFFECT — did a dart child actually spawn? — rather than on the
+# hook's console prose.
+
+# Marks codegen as up to date: a stamp, plus the generated output whose absence
+# the hook treats as proof the stamp is lying.
+mark_codegen_fresh() {
+  local target_repo="$1"
+  mkdir -p "${target_repo}/app/.dart_tool"
+  printf '// generated\n' > "${target_repo}/app/lib/foo.g.dart"
+  # Stamp last, so it is newer than every input the hook compares against.
+  sleep 1
+  : > "${target_repo}/app/.dart_tool/jeeves-codegen.stamp"
+}
+
+dart_ran() { [ -f "${SDK}/.probe/dart-git-env.txt" ]; }
+
+start_case "#440 codegen stamp: a fresh stamp skips build_runner entirely"
+new_fake_sdk
+new_repo
+# Stage BEFORE marking fresh, so the stamp is newer than the staged edit and
+# the hook has a genuine reason to skip. Staging afterwards would make the
+# source newer and the skip would never be reached.
+stage_app_change "${REPO}"
+mark_codegen_fresh "${REPO}"
+run_hook "${REPO}"
+if [ "${RC}" -eq 0 ]; then ok "hook exits 0"; else bad "hook exited ${RC}: ${OUT}"; fi
+if dart_ran; then
+  bad "build_runner ran despite an up-to-date stamp — the cache does nothing"
+else
+  ok "build_runner was skipped (no dart child was spawned)"
+fi
+
+start_case "#440 codegen stamp: a source newer than the stamp forces a rebuild"
+new_fake_sdk
+new_repo
+mark_codegen_fresh "${REPO}"
+sleep 1
+stage_app_change "${REPO}"   # touches app/lib/foo.dart, now newer than the stamp
+run_hook "${REPO}"
+if dart_ran; then
+  ok "build_runner ran because an input changed after the stamp"
+else
+  bad "build_runner was skipped despite a source newer than the stamp — stale codegen would reach analyze: ${OUT}"
+fi
+
+start_case "#440 codegen stamp: a deleted source forces a rebuild (mtime lives on the directory)"
+new_fake_sdk
+new_repo
+printf '// doomed\n' > "${REPO}/app/lib/doomed.dart"
+git -C "${REPO}" add -A
+git -C "${REPO}" commit -q -m 'add a second source'
+mark_codegen_fresh "${REPO}"
+sleep 1
+# A deletion leaves no file whose mtime could betray it — only the parent
+# directory changes. The orphaned foo.g.dart still says `part of` a source
+# that is gone, so skipping here would hand analyze a tree that cannot build.
+rm "${REPO}/app/lib/doomed.dart"
+git -C "${REPO}" add -A
+run_hook "${REPO}"
+if dart_ran; then
+  ok "build_runner ran after a source was deleted"
+else
+  bad "a deleted source did not invalidate the stamp — orphaned .g.dart would break analyze: ${OUT}"
+fi
+
+start_case "#440 codegen stamp: a stamp with no generated output still rebuilds"
+new_fake_sdk
+new_repo
+stage_app_change "${REPO}"
+mark_codegen_fresh "${REPO}"
+# What `flutter clean`, a prune, or a fresh clone leaves behind: codegen is
+# gitignored, so the outputs vanish while the stamp survives. Trusting the
+# stamp here hands analyze a tree with no generated sources at all.
+rm "${REPO}/app/lib/foo.g.dart"
+run_hook "${REPO}"
+if dart_ran; then
+  ok "build_runner ran because the generated outputs were gone"
+else
+  bad "hook trusted a stamp whose outputs had been deleted: ${OUT}"
+fi
+
 # The unset is only as good as the list it is handed, and that list comes from a
 # command that can fail. The empty-but-successful variant is the one a status
 # check alone cannot see: `unset $local_git_env_vars` degrades to a bare `unset`

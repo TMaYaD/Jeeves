@@ -473,6 +473,19 @@ ln -sf "${hook_abs}" "${main_checkout}/.git/hooks/pre-commit"
 printf '\n// edited by the real-SDK check\n' >> "${commit_wt}/app/lib/${FIXTURE_PACKAGE_NAME}.dart"
 git -C "${commit_wt}" add "app/lib/${FIXTURE_PACKAGE_NAME}.dart"
 
+# The liveness assertion below turns on the hook actually invoking `dart`, and
+# since #440 the hook skips build_runner when its codegen stamp is newer than
+# every input. A stamp should not exist in a worktree this suite just created,
+# but "should not" is not an assertion — and if one ever did, build_runner
+# would be skipped, `dart` would never run, and the corruption path this whole
+# file exists to exercise would go untested. Remove it rather than assume.
+rm -f "${commit_wt}/app/.dart_tool/jeeves-codegen.stamp"
+
+# The staged file is app/lib/<pkg>.dart and the fixture carries a matching
+# app/test/<pkg>_test.dart, so the hook's targeted selection resolves to it and
+# `flutter test` still runs against a real SDK. Renaming either file without
+# the other would silently drop that coverage.
+
 # `env -i` so every GIT_* the probes see was exported by git itself, not
 # inherited from this suite. GIT_EXEC_PATH points git's own exec-path at the
 # shim dir (see above), so the `git` git prepends to the hook's PATH — and the
@@ -515,6 +528,12 @@ if printf '%s' "${commit_out}" | grep -qF 'Flutter app files modified'; then
 else
   bad "liveness: the Flutter block never ran — the survival assertions below would be vacuous: ${commit_out}"
 fi
+#    build_runner is the only `dart` invocation in the hook, and since #440 it
+#    is conditional on the codegen stamp — which is why the stamp is removed
+#    before the commit above. A skip here is not a cosmetic difference: `dart`
+#    is the launcher that validates its tool cache against the SDK revision and
+#    deletes flutter.version.json when they disagree (#644), so without it the
+#    survival assertions below are checking a path nothing walked.
 if printf '%s' "${commit_out}" | grep -qF 'Running build_runner'; then
   ok "liveness: the hook reached the dart invocation past the unset (build_runner)"
 else
