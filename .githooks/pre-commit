@@ -116,7 +116,16 @@ fi
 # Check if Flutter app files changed
 if git diff --cached --name-only | grep -q "^app/"; then
     echo "=> 🐦 Flutter app files modified. Running checks..."
-    
+
+    # Capture the staged paths HERE, while git still resolves this repo. The
+    # Flutter section below unsets git's repo-local environment, and the
+    # warning above that unset is the whole reason this line is not further
+    # down next to the code that consumes it (#440).
+    #
+    # Deletions are filtered out: a removed test file is not a test target,
+    # and a removed source file has no counterpart left to run.
+    staged_app_paths=$(git diff --cached --name-only --diff-filter=d | grep '^app/')
+
     cd app || exit 1
 
     # Resolve Flutter. FVM symlink wins so the hook always uses the version
@@ -287,10 +296,81 @@ if git diff --cached --name-only | grep -q "^app/"; then
         exit 1
     fi
 
-    echo ">> Running flutter test..."
-    if ! flutter test; then
-        echo "❌ flutter test failed! Please fix failing tests."
-        exit 1
+    # ----- Test tier ------------------------------------------------------
+    # The hook runs the tests covering the staged changes, not the whole
+    # suite. A full local pass costs ~7 minutes on the Pi agent host — long
+    # enough that a slow run and a hung one are indistinguishable, and long
+    # enough to consume an entire agent turn before reaching any real work
+    # (#428, #429, both died that way). CI runs the full suite on every PR
+    # (.github/workflows/flutter-ci.yml), so that is the enforcement point;
+    # this tier exists to catch the obvious break at the moment you make it.
+    #
+    # The trade-off is deliberate and worth naming: editing a widely-depended
+    # -on file runs only ITS test, not its dependents. CI covers the rest.
+    # Set JEEVES_FULL_TESTS=1 to run the whole suite locally anyway.
+    #
+    # Flutter defaults --concurrency to (cores - 2), which on the 4-core agent
+    # host is 2. JEEVES_TEST_CONCURRENCY overrides it per host; see
+    # docs/TESTING.md § Test tiers.
+    concurrency_flag=""
+    if [ -n "${JEEVES_TEST_CONCURRENCY:-}" ]; then
+        concurrency_flag="--concurrency=${JEEVES_TEST_CONCURRENCY}"
+    fi
+
+    test_targets=""
+    add_test_target() {
+        case " ${test_targets} " in
+            *" $1 "*) ;;
+            *) test_targets="${test_targets} $1" ;;
+        esac
+    }
+
+    # Fed by heredoc rather than a pipe so add_test_target's writes survive:
+    # a `... | while read` loop runs in a subshell and would discard them.
+    while IFS= read -r staged_path; do
+        [ -n "${staged_path}" ] || continue
+        app_relative_path=${staged_path#app/}
+        case "${app_relative_path}" in
+            test/*_test.dart)
+                [ -f "${app_relative_path}" ] && add_test_target "${app_relative_path}"
+                ;;
+            lib/*.dart)
+                source_basename=$(basename "${app_relative_path}" .dart)
+                matched_tests=$(find test -name "${source_basename}_test.dart" \
+                    -print 2>/dev/null)
+                # Word-splitting is intentional: every candidate is a find
+                # match for *_test.dart under app/test, and no Dart source
+                # filename in this repo carries a space or a newline.
+                # shellcheck disable=SC2086
+                for matched_test in ${matched_tests}; do
+                    add_test_target "${matched_test}"
+                done
+                ;;
+        esac
+    done <<STAGED_PATHS
+${staged_app_paths}
+STAGED_PATHS
+
+    if [ -n "${JEEVES_FULL_TESTS:-}" ]; then
+        echo ">> Running flutter test (full suite — JEEVES_FULL_TESTS is set)..."
+        # shellcheck disable=SC2086
+        if ! flutter test ${concurrency_flag}; then
+            echo "❌ flutter test failed! Please fix failing tests."
+            exit 1
+        fi
+    elif [ -n "${test_targets}" ]; then
+        echo ">> Running flutter test on the files covering your staged changes:"
+        for selected_test in ${test_targets}; do
+            echo "     ${selected_test}"
+        done
+        # shellcheck disable=SC2086
+        if ! flutter test ${concurrency_flag} ${test_targets}; then
+            echo "❌ flutter test failed! Please fix failing tests."
+            exit 1
+        fi
+    else
+        echo ">> No test file matches the staged changes — skipping flutter test."
+        echo "   CI runs the full suite on the PR."
     fi
     
     cd ..

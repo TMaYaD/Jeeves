@@ -31,8 +31,30 @@ We follow a strict Test-Driven Development (TDD) cycle in a Top-Down approach. T
 
 - **Test Real Behavior Only**: Avoid mocking system components whenever possible. Test code as it would run in production. If a component is too complex to test without excessive mocking, it should be redesigned.
 - **Tests verify behaviour, not styling choices.** Never assert on visual styling — corner radii, colors, fonts, sizes, spacing, or exact copy. A styling assert either restates a shared design token (proves nothing) or hardcodes a value that fires on every deliberate design tweak (a change-detector, not a guard). Design decisions live in `docs/DESIGN.md` and are enforced by construction — shared widgets and tokens — not by tests. Asserting on a widget's *presence*, *state*, or *wiring* is behaviour; asserting on how it is painted is not.
-- **Automation First**: Linter, analyzer, and the full test suite must pass locally before any commits are pushed.
+- **Automation First**: Linter and analyzer pass locally before anything is pushed; the full suite passes in CI on every PR (see Test tiers below).
 - **No Unverified Work**: Code is considered incomplete until it has corresponding automated tests demonstrating its correctness.
+
+## Test tiers
+
+Two tiers with different jobs. The hook catches the obvious break at the moment you make it; CI proves the suite.
+
+| Tier | What runs | Where |
+|---|---|---|
+| **Fast** | `build_runner` (skipped when no codegen input changed), `flutter analyze`, and only the Flutter tests covering the staged changes. Backend keeps its whole `pytest` — it costs seconds. | `.githooks/pre-commit`, every commit |
+| **Full** | Both suites, entire | CI, every PR — `flutter-ci.yml`, `backend-ci.yml` |
+
+**CI is the enforcement point.** Nothing reaches `main` without a full pass, so a commit is allowed to be locally under-tested.
+
+**Selection is by filename.** A staged `lib/foo.dart` runs `test/**/foo_test.dart`; a staged `test/**/*_test.dart` runs itself; no match runs nothing and says so. The gap is deliberate and worth knowing: editing a widely-depended-on file runs *its* test, not its dependents'. Run the full suite yourself before opening a PR when that matters — a shared DAO, a base widget, a test helper.
+
+**Two environment overrides:**
+
+- `JEEVES_FULL_TESTS=1` — run the whole Flutter suite in the hook anyway.
+- `JEEVES_TEST_CONCURRENCY=N` — override `flutter test --concurrency`. Flutter defaults to `cores - 2`, which on the 4-core agent host is 2; **3 is the measured optimum there**, worth about 15%, with 4 indistinguishable from it. Do not go higher: at 6 the suite is *slower* and starts timing out tests that pass at every lower setting, because the contention is for CPU, not memory — free RAM never dropped below 3.6 GB of 7.8 GB at any level.
+
+**The codegen skip is stamp-based**: `app/.dart_tool/jeeves-codegen.stamp`, gitignored, so a fresh worktree always builds. It rebuilds whenever a Dart source, a directory under `lib`/`test`, or a pubspec is newer than the stamp — directories included because a *deletion* leaves no file mtime behind, and an orphaned `.g.dart` fails analyze. It also rebuilds when the generated outputs are absent despite a valid stamp, which is what `flutter clean` and a fresh clone both leave behind.
+
+Why these tiers exist, and the measurements behind them: [#440](https://github.com/TMaYaD/Jeeves/issues/440).
 
 ## Stack-Specific Testing
 
