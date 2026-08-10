@@ -23,20 +23,20 @@ dependencies:
   meta: ^1.17.0
 
   # Local storage (offline-first)
-  drift: ^2.34.0
+  drift: ^2.34.3
   # Bridges Drift to a sqlite_async connection, which is what the domain store
   # (`database/domain_store_io.dart`) is opened over: one shared connection with
   # a proper write lock, and an update stream that names the tables a write
   # touched so live queries refresh.
   drift_sqlite_async: ^0.3.1
   # Imported directly for `SqliteDatabase` in the domain store's open path.
-  sqlite_async: ^0.14.0
+  sqlite_async: ^0.14.4
   sqlite3_flutter_libs: ^0.6.0+eol
   path_provider: ^2.1.6
   path: ^1.9.0
 
   # HTTP / API
-  dio: ^5.10.0
+  dio: ^5.11.0
   retrofit: ^4.9.2
   # The op-log sync stack's realtime signal socket (dio does not speak
   # WebSocket).
@@ -53,7 +53,7 @@ dependencies:
   # Held at 14.0.2: geolocator 14.0.3 pulls package_info_plus 10 -> win32 ^6,
   # which conflicts with file_picker 11.x (win32 ^5.9). Unblocks once we move
   # to file_picker 12 stable. See .github/dependabot.yml.
-  geolocator: ^14.0.2
+  geolocator: ^14.0.3
   geocoding: ^5.0.0
 
   # Voice / Speech
@@ -63,7 +63,7 @@ dependencies:
   # (calls backend AI endpoint via api_service)
 
   # Navigation
-  go_router: ^17.3.0
+  go_router: ^17.4.0
 
   # Local key-value persistence (planning ritual state)
   shared_preferences: ^2.3.3
@@ -73,7 +73,7 @@ dependencies:
   # deprecates `withData`/`bytes` (used in screens/import_screen.dart), which
   # `flutter analyze` treats as fatal infos. See the Dependabot ignore rule in
   # .github/dependabot.yml — it lets 12.0.0 through once it ships stable.
-  file_picker: ^11.0.0
+  file_picker: ^12.0.0-beta.7
 
   # Encrypted token storage (JWT)
   flutter_secure_storage: ^10.3.1
@@ -87,11 +87,11 @@ dependencies:
   # lib/sync/, and already in the graph under flutter, so declaring it adds no
   # resolution risk and only makes the import honest.
   collection: ^1.19.0
-  uuid: ^4.4.0
+  uuid: ^4.6.0
   freezed_annotation: ^3.1.0
   json_annotation: ^4.12.0
   intl: ^0.20.3
-  flutter_markdown_plus: ^1.0.7
+  flutter_markdown_plus: ^1.0.12
   url_launcher: ^6.3.0
 
   # Minimal Sync Server envelope signing (lib/sync/): Ed25519 over the v1 op
@@ -114,12 +114,12 @@ dev_dependencies:
     sdk: flutter
   fake_async: ^1.3.3
   flutter_lints: ^6.0.0
-  build_runner: ^2.15.0
+  build_runner: ^2.15.1
   freezed: ^3.2.5
-  json_serializable: ^6.13.1
+  json_serializable: ^6.14.1
   riverpod_generator: ^4.0.4
   drift_dev: ^2.32.0
-  retrofit_generator: ^10.2.6
+  retrofit_generator: ^10.2.8
   # Icon generation: flavored configs live in flutter_launcher_icons-<flavor>.yaml
   # at app/ root (per-flavor is the format flutter_launcher_icons supports; see
   # https://pub.dev/packages/flutter_launcher_icons). Regenerate with:
