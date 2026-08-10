@@ -1688,23 +1688,28 @@ void main() {
     testWidgets(
         'a promote whose planned row vanished writes no route and leaves the '
         'Outcome Actionless (no-op guard)', (tester) async {
-      final todo = await _insertTodo(db, id: 'q2');
+      // Seeded on Someday so a committed route (→ Next) would be detectable —
+      // proving the guard suppressed `_commit`, not merely that no Action landed.
+      final todo = await _insertTodo(db, id: 'q2', intent: 'maybe');
       await seedQueue('q2');
       final fired = <ProcessAction>[];
-      await tester.pumpWidget(_harness(
-        db,
-        todo: todo,
-        clarificationService: _NoOpPromoteClarificationService(db),
-        onAfterRoute: (a) async => fired.add(a),
-      ));
+      await tester.pumpWidget(
+          _harness(db, todo: todo, onAfterRoute: (a) async => fired.add(a)));
 
       await openDialog(tester);
+      // The chosen planned row vanishes (synced away) between the dialog's
+      // snapshot and the tap: a raw row delete, as the sync bridge lands one —
+      // so the real `promotePlannedAction` no-ops against a missing row rather
+      // than a stubbed service standing in for it.
+      await (db.delete(db.actions)..where((a) => a.id.equals('p1'))).go();
       await tester.tap(find.text('Step one'));
       await tester.pumpAndSettle();
 
       // The promote no-oped, so no current Action exists — the guard must stop
       // `_commit` from stranding a still-Actionless Outcome on Next.
       expect(await db.actionDao.getCurrentAction('q2'), isNull);
+      expect((await db.todoDao.getTodo('q2'))?.intent, 'maybe',
+          reason: 'no route committed, so the Outcome stays on Someday');
       expect((await db.todoDao.getTodo('q2'))?.lastClarifiedAt, isNull,
           reason: 'no route landed, so nothing stamped');
       expect(fired, isEmpty);
@@ -1747,7 +1752,9 @@ void main() {
 
     testWidgets('declining the Replace confirm writes nothing and does not '
         'notify', (tester) async {
-      final todo = await _insertTodo(db, id: 'q4');
+      // On Someday, with a current Action and a queue — so a committed route
+      // would be visible as `intent='next'`.
+      final todo = await _insertTodo(db, id: 'q4', intent: 'maybe');
       await seedCurrentAction(
           db, outcomeId: 'q4', text: 'do it', userId: _userId);
       await seedQueue('q4');
@@ -1772,6 +1779,10 @@ void main() {
           reason: 'the incumbent Action survives a declined replace');
       expect((await db.actionDao.getPlannedActions('q4')).map((a) => a.actionText),
           ['Step one', 'Step two']);
+      expect((await db.todoDao.getTodo('q4'))?.intent, 'maybe',
+          reason: 'a declined replace commits no route');
+      expect((await db.todoDao.getTodo('q4'))?.lastClarifiedAt, isNull,
+          reason: 'a declined replace stamps nothing');
       expect(fired, isEmpty,
           reason: 'a declined confirm leaves the item unresolved');
     });
@@ -1823,11 +1834,3 @@ void main() {
   });
 }
 
-/// A [ClarificationService] whose promote is a silent no-op — the planned row
-/// vanished (synced away) between the dialog snapshot and the tap.
-class _NoOpPromoteClarificationService extends DaoClarificationService {
-  _NoOpPromoteClarificationService(super.db);
-
-  @override
-  Future<void> promotePlannedAction(String actionId) async {}
-}
