@@ -29,7 +29,7 @@ CI will reject PRs built against a different version.
 
 ```bash
 fvm flutter pub get   # or: flutter pub get
-fvm flutter pub run build_runner build --delete-conflicting-outputs
+fvm flutter pub run build_runner build
 ```
 
 ## Run

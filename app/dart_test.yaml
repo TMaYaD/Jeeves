@@ -1,0 +1,24 @@
+# Per-test timeout for the whole Flutter suite.
+#
+# Dart's default is 30s — a number nobody here chose, calibrated for fast
+# hardware. The Pi agent host runs this suite at roughly 7-11x the dev-Mac wall
+# clock, so a test that is comfortable in single digits locally sits in the
+# twenties there: full_day_convergence_test's journey measures 2s on an M1 Mac
+# and 22.6s on the Pi. A test at 75% of its budget does not fail honestly when
+# it breaks — it fails when the box happens to be busy, on the one machine CI
+# never looks at (#440).
+#
+# 60s is chosen rather than defaulted: a shade over twice the measured worst
+# case on the slowest machine the suite runs on, and still inside the minute
+# that keeps a genuine hang attributable. Raising it further trades that away.
+#
+# Deliberately ONE number for the suite rather than per-test `Timeout.factor`
+# exceptions. A per-test escape hatch drifts upward each time a slower host
+# appears and hides which tests are actually near the line, whereas a single
+# budget makes "this test needs more than everything else" a visible claim.
+# When a test genuinely outgrows this, make it do less work — see
+# docs/TESTING.md for the two that were fixed that way.
+#
+# Note this cannot rescue a hung isolate. A test blocked on real I/O inside
+# `FakeAsync` never lets any timeout fire, whatever it is set to.
+timeout: 60s

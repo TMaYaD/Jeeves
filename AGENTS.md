@@ -111,8 +111,9 @@ Run full test suite before considering work complete.
 
 ### Quality
 - Run linter/analyzer before commits
-- Run full test suite before commits
-- Run full test suite before commits
+- **Per commit, run the fast tier**: the analyzer plus the tests covering the staged changes. The pre-commit hook does this for you.
+- **CI is the enforcement point for the full suite**, on every PR. A commit is allowed to be locally under-tested; a merge is not.
+- **Run the full suite yourself before opening a PR** when the change's blast radius outruns its staged files — a shared DAO, a base widget, a test helper. The fast tier runs a file's own test, not its dependents'.
 - No incomplete or unverified work
 
 ### Data Persistence

@@ -264,7 +264,7 @@ jobs:
 
       - run: flutter pub get
       - run: dart run flutter_launcher_icons
-      - run: dart run build_runner build --delete-conflicting-outputs
+      - run: dart run build_runner build
       - run: flutter build apk --release --flavor production
       - run: flutter build appbundle --release --flavor production
 
@@ -370,7 +370,7 @@ jobs:
 
       - run: flutter pub get
       - run: dart run flutter_launcher_icons
-      - run: dart run build_runner build --delete-conflicting-outputs
+      - run: dart run build_runner build
       # Seeker targets the Solana dApp Store, which distributes APKs (not AABs)
       # and expects Sign-In With Solana as the identity mechanism. Reuse the
       # production flavor and flip the auth mode at compile time.
@@ -423,7 +423,7 @@ jobs:
           sed -i "s/^version: .*/version: ${{ needs.version.outputs.pubspec_version }}/" pubspec.yaml
 
       - run: flutter pub get
-      - run: dart run build_runner build --delete-conflicting-outputs
+      - run: dart run build_runner build
       - run: flutter build web --release
 
       - name: Archive web build

@@ -107,7 +107,7 @@ jobs:
             exit 1
           fi
 
-      - run: dart run build_runner build --delete-conflicting-outputs
+      - run: dart run build_runner build
       - run: flutter analyze
       - run: flutter test
 
@@ -224,7 +224,7 @@ jobs:
           restore-keys: gradle-
 
       - run: flutter pub get
-      - run: dart run build_runner build --delete-conflicting-outputs
+      - run: dart run build_runner build
 
       # Exercises the full Gradle/AGP/Kotlin plugin chain so toolchain-incompatible
       # version bumps (e.g. Dependabot AGP majors) fail this PR check instead of

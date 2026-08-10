@@ -512,30 +512,54 @@ void main() {
       SyncRejectionReason.badRootSignature,
     };
     await workspace.syncAll();
-    // Every device this loop enrols grants itself, so the set of legitimate
-    // grantees grows as it runs. Accumulating them is what keeps the assertion
-    // below about *strangers* rather than about a count.
+
+    // One receiver judges the whole family. A fresh enrolment per vector was
+    // never the point — it was the only way to read `quarantined()`, which
+    // returns every row the device holds rather than the latest, as "what this
+    // vector produced". Diffing the rows by id says that directly, for one
+    // ceremony instead of eighteen.
+    //
+    // It also asserts something the per-vector version could not. Each fresh
+    // device synced the whole log, so by vector N it held the refusals of
+    // 1..N-1 too — and since `strongerRefusals` is accepted for *any* vector,
+    // an earlier vector's refusal could satisfy a later vector's assertion.
+    // Judging each vector on the rows it actually added removes that, and
+    // proves refusing a hostile op leaves the receiver fit to judge the next.
+    final device = await SimDevice.create(
+      label: 'X',
+      userId: _specUserId,
+      server: workspace.server,
+      clock: workspace.clock,
+      passphrase: workspace.passphrase,
+    );
+    addTearDown(device.close);
+
+    // Every member a Grant in the view is allowed to name: the Workspace's own
+    // devices, plus this receiver, which grants itself on enrolment.
     final enrolledMembers = {
       for (final peer in workspace.devices) peer.identity.memberId,
+      device.identity.memberId,
     };
+
+    // Diffed by row id, not by reason. The reasons repeat across the family —
+    // three vectors pin `malformed_control_payload` alone, two more pin
+    // `cert_workspace_mismatch` — so a difference taken over reasons would come
+    // back empty on every repeat and pass an assertion that examined nothing.
+    final seenQuarantineIds = <int>{};
+
     final document = envelopeVectors();
     for (final vector in vectorList(document, 'negative_control_vectors')) {
-      final device = await SimDevice.create(
-        label: 'X',
-        userId: _specUserId,
-        server: workspace.server,
-        clock: workspace.clock,
-        passphrase: workspace.passphrase,
-      );
-      addTearDown(device.close);
       workspace.server.injectUnchecked(
         workspace.workspaceId,
         _fromHex(vector['envelope_hex'] as String),
       );
       await device.sync();
-      final refusals = (await device.client.quarantined())
-          .map((row) => SyncRejectionReason.byCode(row.reason))
-          .toSet();
+      final refusals = <SyncRejectionReason>{};
+      for (final row in await device.client.quarantined()) {
+        if (seenQuarantineIds.add(row.id)) {
+          refusals.add(SyncRejectionReason.byCode(row.reason));
+        }
+      }
       expect(
         refusals.any((reason) =>
             reason.code == vector['reason'] || strongerRefusals.contains(reason)),
@@ -546,9 +570,8 @@ void main() {
       // Whatever the reason, nothing was applied: the whole family fails closed.
       // Asserted by *identity* rather than by a count — a count would pass if one
       // Grant were swapped for another. Every Grant this device holds must name
-      // one of the Workspace's own devices, so a vector's synthetic grantee
+      // a member of the fixed set above, so a vector's synthetic grantee
       // entering the view would show up here.
-      enrolledMembers.add(device.identity.memberId);
       for (final grant in await device.client.grants()) {
         expect(
           enrolledMembers,

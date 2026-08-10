@@ -93,6 +93,11 @@ case "$1" in
     ;;
   test)
     env | grep '^GIT_' | sort > "$sdk_root/.probe/flutter-test-git-env.txt"
+    # Record the selection the hook passed, so a case can assert WHICH tests
+    # ran and not merely that the child was reached. An empty file means the
+    # hook asked for the whole suite.
+    shift
+    printf '%s\n' "$@" > "$sdk_root/.probe/flutter-test-args.txt"
     ;;
 esac
 exit 0
@@ -187,12 +192,17 @@ REPO_SEQ=0
 new_repo() {
   REPO_SEQ=$((REPO_SEQ + 1))
   REPO="${WORK}/main-checkout-${REPO_SEQ}"
-  mkdir -p "${REPO}/app/lib"
+  mkdir -p "${REPO}/app/lib" "${REPO}/app/test"
   git -C "${REPO}" init -q -b main
   git -C "${REPO}" config user.email 'jeeves@example.invalid'
   git -C "${REPO}" config user.name 'Jeeves Dev'
   git -C "${REPO}" config commit.gpgsign false
   printf '// seed\n' > "${REPO}/app/lib/foo.dart"
+  # The counterpart test for lib/foo.dart, which stage_app_change edits. The
+  # hook runs only the tests covering the staged change (#440), so without a
+  # file this resolves to, `flutter test` would never be invoked and every
+  # assertion below that probes the test child would fail as "never ran".
+  printf '// seed test\n' > "${REPO}/app/test/foo_test.dart"
   git -C "${REPO}" add -A
   git -C "${REPO}" commit -q -m 'seed jeeves repo'
 
@@ -596,6 +606,183 @@ if printf '%s' "${OUT}" | grep -q 'Running build_runner'; then
   bad "hook attempted build_runner despite having no SDK (partial state)"
 else
   ok "hook stopped before build_runner (no partial state)"
+fi
+
+# ----- #440: the codegen stamp and the test tier -----------------------------
+#
+# Two costs the hook used to pay unconditionally on every app/ commit: a ~30s
+# build_runner even when nothing it reads had changed, and a full ~7min test
+# suite on the Pi agent host. Both are now conditional, and "conditional" is
+# precisely the kind of change that goes wrong silently — a cache that never
+# invalidates, or a selection that quietly runs nothing at all and reports
+# success. Every case below asserts on the EFFECT (did dart run? which test
+# paths were passed?) rather than on the hook's own console prose.
+
+# Marks codegen as up to date: a stamp, plus the generated output whose absence
+# the hook treats as proof the stamp is lying.
+mark_codegen_fresh() {
+  local target_repo="$1"
+  mkdir -p "${target_repo}/app/.dart_tool"
+  printf '// generated\n' > "${target_repo}/app/lib/foo.g.dart"
+  # Stamp last, so it is newer than every input the hook compares against.
+  sleep 1
+  : > "${target_repo}/app/.dart_tool/jeeves-codegen.stamp"
+}
+
+dart_ran() { [ -f "${SDK}/.probe/dart-git-env.txt" ]; }
+
+# Prints the test paths the hook selected, space-separated; empty if the whole
+# suite was requested; the literal "NOTRUN" if flutter test was never invoked.
+selected_tests() {
+  if [ ! -f "${SDK}/.probe/flutter-test-args.txt" ]; then
+    printf 'NOTRUN'
+    return
+  fi
+  grep -v -- '^--' "${SDK}/.probe/flutter-test-args.txt" | tr '\n' ' ' | sed 's/ *$//'
+}
+
+start_case "#440 codegen stamp: a fresh stamp skips build_runner entirely"
+new_fake_sdk
+new_repo
+# Stage BEFORE marking fresh, so the stamp is newer than the staged edit and
+# the hook has a genuine reason to skip. Staging afterwards would make the
+# source newer and the skip would never be reached.
+stage_app_change "${REPO}"
+mark_codegen_fresh "${REPO}"
+run_hook "${REPO}"
+if [ "${RC}" -eq 0 ]; then ok "hook exits 0"; else bad "hook exited ${RC}: ${OUT}"; fi
+if dart_ran; then
+  bad "build_runner ran despite an up-to-date stamp — the cache does nothing"
+else
+  ok "build_runner was skipped (no dart child was spawned)"
+fi
+
+start_case "#440 codegen stamp: a source newer than the stamp forces a rebuild"
+new_fake_sdk
+new_repo
+mark_codegen_fresh "${REPO}"
+sleep 1
+stage_app_change "${REPO}"   # touches app/lib/foo.dart, now newer than the stamp
+run_hook "${REPO}"
+if dart_ran; then
+  ok "build_runner ran because an input changed after the stamp"
+else
+  bad "build_runner was skipped despite a source newer than the stamp — stale codegen would reach analyze: ${OUT}"
+fi
+
+start_case "#440 codegen stamp: a deleted source forces a rebuild (mtime lives on the directory)"
+new_fake_sdk
+new_repo
+printf '// doomed\n' > "${REPO}/app/lib/doomed.dart"
+git -C "${REPO}" add -A
+git -C "${REPO}" commit -q -m 'add a second source'
+mark_codegen_fresh "${REPO}"
+sleep 1
+# A deletion leaves no file whose mtime could betray it — only the parent
+# directory changes. The orphaned foo.g.dart still says `part of` a source
+# that is gone, so skipping here would hand analyze a tree that cannot build.
+rm "${REPO}/app/lib/doomed.dart"
+git -C "${REPO}" add -A
+run_hook "${REPO}"
+if dart_ran; then
+  ok "build_runner ran after a source was deleted"
+else
+  bad "a deleted source did not invalidate the stamp — orphaned .g.dart would break analyze: ${OUT}"
+fi
+
+start_case "#440 codegen stamp: a stamp with no generated output still rebuilds"
+new_fake_sdk
+new_repo
+stage_app_change "${REPO}"
+mark_codegen_fresh "${REPO}"
+# What `flutter clean`, a prune, or a fresh clone leaves behind: codegen is
+# gitignored, so the outputs vanish while the stamp survives. Trusting the
+# stamp here hands analyze a tree with no generated sources at all.
+rm "${REPO}/app/lib/foo.g.dart"
+run_hook "${REPO}"
+if dart_ran; then
+  ok "build_runner ran because the generated outputs were gone"
+else
+  bad "hook trusted a stamp whose outputs had been deleted: ${OUT}"
+fi
+
+start_case "#440 test tier: a staged lib/ source runs only its counterpart test"
+new_fake_sdk
+new_repo
+printf '// unrelated\n' > "${REPO}/app/test/bar_test.dart"
+git -C "${REPO}" add -A
+git -C "${REPO}" commit -q -m 'add an unrelated test'
+stage_app_change "${REPO}"   # edits app/lib/foo.dart
+run_hook "${REPO}"
+if [ "${RC}" -eq 0 ]; then ok "hook exits 0"; else bad "hook exited ${RC}: ${OUT}"; fi
+case "$(selected_tests)" in
+  'test/foo_test.dart')
+    ok "selected exactly the counterpart test (test/foo_test.dart)" ;;
+  NOTRUN)
+    bad "flutter test was never invoked for a staged source that HAS a counterpart test" ;;
+  '')
+    bad "hook asked for the whole suite — the fast tier is not selecting anything" ;;
+  *)
+    bad "unexpected selection: $(selected_tests)" ;;
+esac
+
+start_case "#440 test tier: a staged test file is run directly"
+new_fake_sdk
+new_repo
+printf '// edited\n' >> "${REPO}/app/test/foo_test.dart"
+git -C "${REPO}" add -A
+run_hook "${REPO}"
+if [ "$(selected_tests)" = 'test/foo_test.dart' ]; then
+  ok "the staged test file was selected"
+else
+  bad "expected test/foo_test.dart, got: $(selected_tests)"
+fi
+
+start_case "#440 test tier: a source with no counterpart test skips flutter test, and still succeeds"
+new_fake_sdk
+new_repo
+printf '// no test covers this\n' > "${REPO}/app/lib/orphan.dart"
+git -C "${REPO}" add -A
+run_hook "${REPO}"
+# Exiting 0 here is the deliberate call: CI runs the full suite on the PR, so a
+# local gap is not a reason to block the commit. It must be SAID, though —
+# a silent skip is indistinguishable from a passing run.
+if [ "${RC}" -eq 0 ]; then ok "hook exits 0"; else bad "hook exited ${RC}: ${OUT}"; fi
+if [ "$(selected_tests)" = NOTRUN ]; then
+  ok "flutter test was not invoked when nothing matched"
+else
+  bad "expected no test run, got selection: $(selected_tests)"
+fi
+if printf '%s' "${OUT}" | grep -qF 'No test file matches'; then
+  ok "the skip is announced rather than silent"
+else
+  bad "the hook skipped tests without saying so: ${OUT}"
+fi
+
+start_case "#440 test tier: JEEVES_FULL_TESTS=1 runs the whole suite"
+new_fake_sdk
+new_repo
+stage_app_change "${REPO}"
+export JEEVES_FULL_TESTS=1
+run_hook "${REPO}"
+unset JEEVES_FULL_TESTS
+if [ "$(selected_tests)" = '' ]; then
+  ok "no paths were passed — the full suite was requested"
+else
+  bad "expected the whole suite, got selection: $(selected_tests)"
+fi
+
+start_case "#440 test tier: JEEVES_TEST_CONCURRENCY reaches flutter test"
+new_fake_sdk
+new_repo
+stage_app_change "${REPO}"
+export JEEVES_TEST_CONCURRENCY=4
+run_hook "${REPO}"
+unset JEEVES_TEST_CONCURRENCY
+if grep -qx -- '--concurrency=4' "${SDK}/.probe/flutter-test-args.txt" 2>/dev/null; then
+  ok "the concurrency override was passed through"
+else
+  bad "--concurrency=4 never reached flutter test: $(cat "${SDK}/.probe/flutter-test-args.txt" 2>/dev/null)"
 fi
 
 # The unset is only as good as the list it is handed, and that list comes from a

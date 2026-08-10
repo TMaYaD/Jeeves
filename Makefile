@@ -56,7 +56,7 @@ help:
 
 setup: ## Fetch Flutter packages and run build_runner
 	cd $(APP_DIR) && flutter pub get
-	cd $(APP_DIR) && dart run build_runner build --delete-conflicting-outputs
+	cd $(APP_DIR) && dart run build_runner build
 
 docs-size: ## Report documentation word counts against their ceilings
 	python3 tools/check_doc_size.py
