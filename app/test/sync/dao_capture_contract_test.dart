@@ -351,6 +351,32 @@ void main() {
       expect(only(todosCollection).fields['energy_level'], 'low');
     });
 
+    test('a seeded promote captures the drafted effort on the actions op, not '
+        'just the todos mirror', () async {
+      final id = await seedOutcome();
+      // A draft on the Actionless Outcome, then a planned row with no estimates.
+      await db.todoDao.updateFields(id, energyLevel: 'low', timeEstimate: 5);
+      await db.actionDao.addPlannedAction(id, 'no effort', now: _ts);
+      final plannedId = only(actionsCollection).entityId;
+      capture.clear();
+
+      await db.actionDao.promotePlannedAction(plannedId, now: _ts);
+
+      // The seed lands on the promoted Action, so the actions op must describe
+      // it — a peer replaying only the todos mirror would leave the Action bare.
+      final actionOp = capture
+          .forCollection(actionsCollection)
+          .firstWhere((op) => op.entityId == plannedId);
+      expect(actionOp.fields['role'], 'current');
+      expect(actionOp.fields['energy_level'], 'low');
+      expect(actionOp.fields['time_estimate'], 5);
+      final todoOp = capture
+          .forCollection(todosCollection)
+          .firstWhere((op) => op.entityId == id);
+      expect(todoOp.fields['energy_level'], 'low');
+      expect(todoOp.fields['time_estimate'], 5);
+    });
+
     test('supersede closes the open log and reopens against the successor',
         () async {
       final id = await seedOutcome();

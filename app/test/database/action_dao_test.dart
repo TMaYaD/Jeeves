@@ -634,8 +634,12 @@ void main() {
       expect(cols.time, 30);
     });
 
-    test('a promoted row with no metadata mirrors NULL, not the stale column '
-        'values', () async {
+    test('a promoted row with no metadata seeds from the Outcome draft (D3) — '
+        'onto the Action and the mirror alike', () async {
+      // On an Actionless Outcome these columns are the draft the user typed with
+      // no Action to carry it — not a stale mirror. Promotion is a creation
+      // path, so it seeds the promoted Action from the draft (matching
+      // applySetCurrentAction's birth rule) instead of NULLing it away.
       await (db.update(db.todos)..where((t) => t.id.equals('o1'))).write(
         const TodosCompanion(
           energyLevel: Value('low'),
@@ -648,9 +652,61 @@ void main() {
       await db.actionDao.promotePlannedAction(id, now: _t2);
 
       final cols = await _todoColumns(db, 'o1');
-      expect(cols.energy, isNull,
-          reason: 'no inheritance — D2 must not resurrect a stale value');
-      expect(cols.time, isNull);
+      expect(cols.energy, 'low',
+          reason: 'the D3 draft seeds the promotion, it is not erased');
+      expect(cols.time, 5);
+      // The seeded draft lands on the promoted Action too, so D1 holds — the
+      // column value is not a mirror of something the current Action lacks.
+      final cur = await _current(db, 'o1');
+      expect(cur!['energy_level'], 'low');
+      expect(cur['time_estimate'], 5);
+    });
+
+    test('per-field seeding: an explicit field on the promoted row wins, a '
+        'NULL field seeds from the draft', () async {
+      // The mixed shape is the only one that pins per-field (not whole-row)
+      // seeding: draft low/5, a row carrying energy but no estimate must land
+      // high (explicit) / 5 (seeded) — never high/null, never low/5.
+      await (db.update(db.todos)..where((t) => t.id.equals('o1'))).write(
+        const TodosCompanion(
+          energyLevel: Value('low'),
+          timeEstimate: Value(5),
+        ),
+      );
+      await db.actionDao.addPlannedAction('o1', 'partial effort',
+          energyLevel: 'high', now: _t1);
+      final id = (await _planned(db, 'o1')).single.$1;
+
+      await db.actionDao.promotePlannedAction(id, now: _t2);
+
+      final cur = await _current(db, 'o1');
+      expect(cur!['energy_level'], 'high', reason: 'explicit row value wins');
+      expect(cur['time_estimate'], 5, reason: 'the NULL field seeds the draft');
+      final cols = await _todoColumns(db, 'o1');
+      expect(cols.energy, 'high');
+      expect(cols.time, 5);
+    });
+
+    test('complete then promote a queued row with no estimates inherits the '
+        'finished Action estimate through the draft (#723 flow)', () async {
+      // A sprint: the current Action carries medium/25 (mirrored onto the
+      // columns, D1); a queued planned row has no estimates.
+      await _mirrorColumns(db, 'o1', energy: 'medium', time: 25);
+      await db.actionDao.setCurrentAction('o1', 'the sprint task',
+          energyLevel: 'medium', timeEstimate: 25, now: _t1);
+      await db.actionDao.addPlannedAction('o1', 'next up', now: _t2);
+      final queuedId = (await _planned(db, 'o1')).single.$1;
+
+      // Completion writes nothing to the columns, so they still hold the
+      // finished Action's mirrored medium/25 — the Outcome's draft now.
+      await db.actionDao.completeCurrentAction('o1', now: _t3);
+      await db.actionDao.promotePlannedAction(queuedId, now: _t4);
+
+      final cur = await _current(db, 'o1');
+      expect(cur!['energy_level'], 'medium',
+          reason: 'promoting a no-estimate row inherits the draft');
+      expect(cur['time_estimate'], 25);
+      expect(await _todoColumns(db, 'o1'), (energy: 'medium', time: 25));
     });
 
     test('flips role to current, clears position, mirrors metadata, and stamps',
@@ -667,7 +723,8 @@ void main() {
       expect(cur['position'], isNull);
       expect(await _planned(db, 'o1'), isEmpty);
       // The energy/time mirror is a separate mechanism and deliberately stays:
-      // it is what keeps the D2 read fallback off the replaced Action.
+      // the promoted row carried its own high/30 (no draft to seed here), so the
+      // mirror re-asserts those onto the columns for the D2 read fallback.
       final todo = await db.todoDao.getTodo('o1');
       expect(todo!.energyLevel, 'high');
       expect(todo.timeEstimate, 30);
@@ -737,6 +794,30 @@ void main() {
       expect(await _lastClarified(db, 'o1'), _t3);
     });
 
+    test('on an Actionless Outcome (nothing to retire) it seeds the promoted '
+        'row from the draft, like a plain promote', () async {
+      await (db.update(db.todos)..where((t) => t.id.equals('o1'))).write(
+        const TodosCompanion(
+          energyLevel: Value('medium'),
+          timeEstimate: Value(25),
+        ),
+      );
+      await db.actionDao.addPlannedAction('o1', 'promote me', now: _t1);
+      final plannedId = (await _planned(db, 'o1')).single.$1;
+
+      // No current Action exists, so there is nothing to supersede: the
+      // degenerate case is a creation path and must seed, not NULL the draft.
+      await db.actionDao.supersedeAndPromote(plannedId, now: _t2);
+
+      final cur = await _current(db, 'o1');
+      expect(cur!['id'], plannedId);
+      expect(cur['energy_level'], 'medium',
+          reason: 'the Actionless case seeds the draft; D4 overwrite needs a '
+              'live current to retire');
+      expect(cur['time_estimate'], 25);
+      expect(await _todoColumns(db, 'o1'), (energy: 'medium', time: 25));
+    });
+
     test('idempotent replay: a second call on the now-current row is a no-op',
         () async {
       await db.actionDao.setCurrentAction('o1', 'old', now: _t1);
@@ -789,6 +870,54 @@ void main() {
       expect((await _planned(db, 'o1')).single.$2, 'planned',
           reason: 'a planned row is never demoted');
       expect(await _lastClarified(db, 'o1'), _t1);
+    });
+
+    // Demote is unchanged code, but it leaves the Outcome Actionless with its
+    // draft intact — the same regime complete / abandon leave. The seeding rule
+    // therefore applies evenly across all three terminal transitions; these pin
+    // that a demoted row promotes back with its estimate, however it got there.
+    test('round-trip: demote keeps the estimate, a later promote restores it',
+        () async {
+      await _mirrorColumns(db, 'o1', energy: 'medium', time: 25);
+      await db.actionDao.setCurrentAction('o1', 'demote me',
+          energyLevel: 'medium', timeEstimate: 25, now: _t1);
+      final curId = (await _current(db, 'o1'))!['id'] as String;
+
+      await db.actionDao.demoteCurrentAction(curId, now: _t2);
+      // The demoted row keeps its own metadata (Action-local); the columns keep
+      // the mirror the current Action left behind.
+      expect((await _planned(db, 'o1')).single.$1, curId);
+
+      await db.actionDao.promotePlannedAction(curId, now: _t3);
+
+      final cur = await _current(db, 'o1');
+      expect(cur!['energy_level'], 'medium');
+      expect(cur['time_estimate'], 25);
+      expect(await _todoColumns(db, 'o1'), (energy: 'medium', time: 25));
+    });
+
+    test('clear the demoted row estimates, then promote: the untouched Outcome '
+        'draft re-seeds it', () async {
+      await _mirrorColumns(db, 'o1', energy: 'medium', time: 25);
+      await db.actionDao.setCurrentAction('o1', 'demote me',
+          energyLevel: 'medium', timeEstimate: 25, now: _t1);
+      final curId = (await _current(db, 'o1'))!['id'] as String;
+
+      await db.actionDao.demoteCurrentAction(curId, now: _t2);
+      // A clear on a *planned* row is deliberately Action-local: it nulls the
+      // row but never the Outcome columns, so the draft survives untouched.
+      await db.actionDao.editAction(curId,
+          clearEnergyLevel: true, clearTimeEstimate: true, now: _t3);
+      expect(await _todoColumns(db, 'o1'), (energy: 'medium', time: 25),
+          reason: 'the planned-row clear did not reach the Outcome draft');
+
+      await db.actionDao.promotePlannedAction(curId, now: _t4);
+
+      // Promotion seeds from that surviving draft — the estimate is not lost.
+      final cur = await _current(db, 'o1');
+      expect(cur!['energy_level'], 'medium');
+      expect(cur['time_estimate'], 25);
+      expect(await _todoColumns(db, 'o1'), (energy: 'medium', time: 25));
     });
   });
 
