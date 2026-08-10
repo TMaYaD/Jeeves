@@ -20,7 +20,7 @@ We follow a strict Test-Driven Development (TDD) cycle in a Top-Down approach. T
 3. **Write Unit Tests Third**
    Test pure business logic, utilities, and parsers in complete isolation.
 
-**There is no on-device tier, deliberately.** `integration_test/` — Flutter's device-backed harness — was removed in [#713](https://github.com/TMaYaD/Jeeves/issues/713): nothing ran it, no CI job had ever been wired to it, and it had drifted so far from the app that it could not pass. A directory that looks like end-to-end coverage but cannot execute is worse than none, because plans get written against it. On-device verification is a **manual** activity here — see § Manual testing on the Android emulator below — and packaging is covered by the Gradle build in CI, not by a test. If you want the on-device tier back, wire a CI job to it in the same change; leaving it runnable-in-principle is how the last one rotted.
+**There is no on-device tier.** Flutter's `integration_test/` harness is not part of this project. On-device verification is a **manual** activity here — see § Manual testing on the Android emulator below — and packaging is covered by the Gradle build in CI, not by a test. If the tier ever returns, add its CI job in the same change. The decision and its rationale: [#713](https://github.com/TMaYaD/Jeeves/issues/713).
 
 ### Implementation Workflow
 
