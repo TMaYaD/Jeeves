@@ -1792,7 +1792,9 @@ void main() {
     testWidgets(
         'a current Action swapped under the open confirm is NOT superseded '
         '(expectedCurrentActionId guard)', (tester) async {
-      final todo = await _insertTodo(db, id: 'q6');
+      // On Someday, so a committed route (→ Next) would be detectable — the
+      // default `next` intent would make a spurious `_commit` invisible.
+      final todo = await _insertTodo(db, id: 'q6', intent: 'maybe');
       await seedCurrentAction(
           db, outcomeId: 'q6', text: 'do it', userId: _userId, id: 'cur-old');
       await seedQueue('q6');
@@ -1837,6 +1839,11 @@ void main() {
           ['Step one', 'Step two']);
       expect(await db.actionDao.getTerminatedActions('q6'), isEmpty,
           reason: 'the aborted replace retires nothing');
+      expect((await db.todoDao.getTodo('q6'))?.intent, 'maybe',
+          reason: 'the throw lands before _commit, so the Outcome stays on '
+              'Someday');
+      expect((await db.todoDao.getTodo('q6'))?.lastClarifiedAt, isNull,
+          reason: 'no route landed, so nothing stamped by _commit');
       expect(fired, isEmpty, reason: 'the aborted replace commits no route');
     });
 
