@@ -28,34 +28,39 @@ Future<bool> showReplaceCurrentActionSheet(
   final confirmed = await showModalBottomSheet<bool>(
     context: context,
     backgroundColor: Colors.white,
+    // Long Actions wrap to several lines each; let the sheet grow and scroll
+    // instead of clipping the confirm button under the default height cap.
+    isScrollControlled: true,
     builder: (ctx) => SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Replace current action?',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 16),
-            _sheetLine('Current', currentText, _muted),
-            const SizedBox(height: 8),
-            _sheetLine('New', newText, _ink),
-            const SizedBox(height: 24),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton(
-                key: const Key('plan_replace_confirm'),
-                style: FilledButton.styleFrom(
-                  backgroundColor: const Color(0xFF2563EB),
-                ),
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('Replace current action'),
+      child: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Replace current action?',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
               ),
-            ),
-          ],
+              const SizedBox(height: 16),
+              _sheetLine('Current', currentText, _muted),
+              const SizedBox(height: 8),
+              _sheetLine('New', newText, _ink),
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  key: const Key('plan_replace_confirm'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF2563EB),
+                  ),
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('Replace current action'),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     ),
