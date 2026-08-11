@@ -1656,6 +1656,8 @@ void main() {
       await tester.pumpWidget(_harness(db, todo: todo));
 
       await openDialog(tester);
+      expect(find.text('PLANNED'), findsNothing,
+          reason: 'an empty queue omits the section header, not just the rows');
       expect(find.byKey(const Key('next_action_promote_p1')), findsNothing);
       expect(find.text('Step one'), findsNothing);
     });
