@@ -1838,6 +1838,49 @@ void main() {
       expect(fired, isEmpty, reason: 'the aborted replace commits no route');
     });
 
+    testWidgets(
+        'a confirmed replace whose planned row vanished writes no route and '
+        'leaves the incumbent current (no-op guard)', (tester) async {
+      // On Someday, so a committed route (→ Next) would be detectable — proving
+      // the guard suppressed `_commit`, not merely that the promote no-oped.
+      final todo = await _insertTodo(db, id: 'q7', intent: 'maybe');
+      await seedCurrentAction(
+          db, outcomeId: 'q7', text: 'do it', userId: _userId);
+      await seedQueue('q7');
+      final fired = <ProcessAction>[];
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        currentActionText: 'do it',
+        onAfterRoute: (a) async => fired.add(a),
+      ));
+
+      await openDialog(tester);
+      await tester.tap(find.text('Step one'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('plan_replace_confirm')), findsOneWidget);
+
+      // The chosen planned row is synced away while the confirm is open, so the
+      // real `supersedeAndPromote` no-ops against a missing row (DAO returns
+      // before the `expectedCurrentActionId` check) — the incumbent survives.
+      await (db.delete(db.actions)..where((a) => a.id.equals('p1'))).go();
+      await tester.tap(find.byKey(const Key('plan_replace_confirm')));
+      await tester.pumpAndSettle();
+
+      // Nothing was promoted, so the guard must suppress the route/notify that
+      // would otherwise strand the Outcome on Next with the Action the user
+      // meant to replace still current.
+      expect((await db.actionDao.getCurrentAction('q7'))?.actionText, 'do it',
+          reason: 'the incumbent survives a no-op supersede');
+      expect(await db.actionDao.getTerminatedActions('q7'), isEmpty,
+          reason: 'a no-op supersede retires nothing');
+      expect((await db.todoDao.getTodo('q7'))?.intent, 'maybe',
+          reason: 'no route committed, so the Outcome stays on Someday');
+      expect((await db.todoDao.getTodo('q7'))?.lastClarifiedAt, isNull,
+          reason: 'no route landed, so nothing stamped by _commit');
+      expect(fired, isEmpty);
+    });
+
     testWidgets('a blank Save with a queue mirrors the title and leaves the '
         'planned rows untouched', (tester) async {
       final todo = await _insertTodo(db, id: 'q5', title: 'Ship it');

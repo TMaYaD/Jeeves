@@ -977,6 +977,14 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
       actionId,
       expectedCurrentActionId: current.id,
     );
+    // No-op guard, symmetric to the Actionless branch above: if that vanished-
+    // row no-op happened, the incumbent is still current and routing/notifying
+    // would report a replacement that never landed — on Someday, jumping the
+    // Outcome to Next while keeping the very Action the user meant to replace.
+    // Route only once the chosen row is actually current; else leave the item
+    // unresolved (recoverable; a retry re-reads the fresh queue).
+    final promoted = await _clarification.getCurrentAction(outcomeId);
+    if (promoted == null || promoted.id != actionId) return;
     await _commit(RoutingKind.nextAction);
     await _notifyAfterRoute(ProcessAction.nextActionDialog);
   }
