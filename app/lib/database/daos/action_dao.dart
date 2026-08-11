@@ -625,23 +625,19 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
       // on its columns as draft. When its first `current` Action is born and
       // the caller passes no metadata, seed the birth Action from those draft
       // columns — so the draft lands on the Action for *every* creation path
-      // (clarify `applyRouting`, `setCurrentActionText`,
-      // `setCurrentActionTextIfActionless`) with no signature change. Explicit
-      // args win over the draft.
-      var seededEnergy = energyLevel;
-      var seededTime = timeEstimate;
-      if (seededEnergy == null || seededTime == null) {
-        final outcome =
-            await (select(todos)..where((t) => t.id.equals(outcomeId)))
-                .getSingleOrNull();
-        seededEnergy ??= outcome?.energyLevel;
-        seededTime ??= outcome?.timeEstimate;
-      }
+      // (birth here, promotion in [_promoteRow], the Actionless replacement arm
+      // of [applySupersedeCurrentAction]), through the shared
+      // [_seedMetadataFromDraft]. Explicit args win over the draft.
+      final seeded = await _seedMetadataFromDraft(
+        outcomeId,
+        energyLevel: energyLevel,
+        timeEstimate: timeEstimate,
+      );
       await _insertCurrentAction(
         outcomeId,
         normalized,
-        energyLevel: seededEnergy,
-        timeEstimate: seededTime,
+        energyLevel: seeded.energyLevel,
+        timeEstimate: seeded.timeEstimate,
         ts: ts,
       );
       await _stampOutcome(outcomeId, ts);
@@ -795,31 +791,40 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
       changed = true;
     }
     if (hasReplacement) {
+      // Metadata mirror (ADR-0001 story 7). When a live current Action was just
+      // retired (D4), mirror the *replacement's* `energy_level` /
+      // `time_estimate` onto the Outcome — not the superseded row's: the D2 read
+      // fallback is a per-field COALESCE over these columns, so leaving the
+      // retired Action's estimates behind would resurface them against the fresh
+      // replacement (the inheritance the story forbids). But when there was no
+      // current Action to retire ([current] == null), the columns are the D3
+      // draft the user typed, so this replacement is a *creation* path and
+      // seeds its NULL fields from that draft like a birth Action — mirroring
+      // the seeded values so `todos` and the new Action agree.
+      final seeded = current == null
+          ? await _seedMetadataFromDraft(
+              outcomeId,
+              energyLevel: newEnergyLevel,
+              timeEstimate: newTimeEstimate,
+            )
+          : (energyLevel: newEnergyLevel, timeEstimate: newTimeEstimate);
       final newActionId = await _insertCurrentAction(
         outcomeId,
         newText,
-        energyLevel: newEnergyLevel,
-        timeEstimate: newTimeEstimate,
+        energyLevel: seeded.energyLevel,
+        timeEstimate: seeded.timeEstimate,
         ts: ts,
       );
-      // Metadata mirror (ADR-0001 story 7, D4): mirror the *replacement's*
-      // `energy_level` / `time_estimate` onto the Outcome columns in this same
-      // transaction — not the superseded row's. This is not cursor
-      // bookkeeping: the D2 read fallback is a per-field COALESCE over these
-      // columns, so leaving the retired Action's estimates behind would let
-      // them resurface against the fresh replacement — exactly the inheritance
-      // the story forbids. The superseded row keeps its own frozen values
-      // (history is truthful).
       await (update(todos)..where((t) => t.id.equals(outcomeId))).write(
         TodosCompanion(
-          energyLevel: Value(newEnergyLevel),
-          timeEstimate: Value(newTimeEstimate),
+          energyLevel: Value(seeded.energyLevel),
+          timeEstimate: Value(seeded.timeEstimate),
           updatedAt: Value(ts),
         ),
       );
       _captureOutcome(outcomeId, {
-        'energy_level': newEnergyLevel,
-        'time_estimate': newTimeEstimate,
+        'energy_level': seeded.energyLevel,
+        'time_estimate': seeded.timeEstimate,
         'updated_at': encodeInstant(ts),
       });
       changed = true;
@@ -1008,7 +1013,10 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         'Action; use supersedeAndPromote to replace it',
       );
     }
-    await _promoteRow(row, ts);
+    // Refused above unless the Outcome is Actionless, so this is always a
+    // creation path: the promoted row's NULL fields seed from the D3 draft
+    // rather than overwriting it — matching the birth-Action rule.
+    await _promoteRow(row, ts, seedFromDraft: true);
     await _stampOutcome(row.outcomeId, ts);
     return (changed: true, stamped: true, logChanged: false);
   }
@@ -1029,11 +1037,17 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     // continuation against it so no engagement time is lost.
     TimeLog? closedLog;
     final current = resolved.current;
+    // Bind the regime before the retire below: a live current being replaced
+    // means the columns are its D1 mirror → overwrite them with the promoted
+    // row's values (D4); an Actionless Outcome (nothing to retire) means the
+    // columns are the D3 draft → seed the promoted row's NULLs from it, exactly
+    // like a plain promote.
+    final seedFromDraft = current == null;
     if (current != null) {
       closedLog = await _closeOpenLogFor(current.id, ts);
       await _retire(current.id, ts);
     }
-    await _promoteRow(row, ts);
+    await _promoteRow(row, ts, seedFromDraft: seedFromDraft);
     if (closedLog != null) {
       await _reopenLogAgainst(closed: closedLog, newActionId: row.id, ts: ts);
     }
@@ -1133,34 +1147,98 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     }
   }
 
-  /// Flip [row] to `role='current'` (clearing `position`) and mirror the
-  /// promoted row's `energy_level` / `time_estimate` onto the Outcome so the D2
-  /// read fallback resolves to the newly-current Action rather than the one it
-  /// replaced. Shared by [applyPromotePlannedAction] and
-  /// [applySupersedeAndPromote]; the caller stamps.
-  Future<void> _promoteRow(Action row, DateTime ts) async {
+  /// Coalesce missing effort metadata from the Outcome's D3 draft columns
+  /// (ADR-0001 story 7). On an Actionless Outcome, `todos.energy_level` /
+  /// `time_estimate` hold the effort the user typed with no Action to carry it;
+  /// every *creation* path — birth in [applySetCurrentAction], promotion in
+  /// [_promoteRow], the Actionless replacement arm of
+  /// [applySupersedeCurrentAction] — routes its NULL fields through here so the
+  /// draft lands on the Action being minted instead of being erased. Explicit
+  /// values win: the columns are read only when a field is NULL, and not at all
+  /// when both are already set.
+  Future<({String? energyLevel, int? timeEstimate})> _seedMetadataFromDraft(
+    String outcomeId, {
+    String? energyLevel,
+    int? timeEstimate,
+  }) async {
+    if (energyLevel != null && timeEstimate != null) {
+      return (energyLevel: energyLevel, timeEstimate: timeEstimate);
+    }
+    final outcome = await (select(todos)..where((t) => t.id.equals(outcomeId)))
+        .getSingleOrNull();
+    return (
+      energyLevel: energyLevel ?? outcome?.energyLevel,
+      timeEstimate: timeEstimate ?? outcome?.timeEstimate,
+    );
+  }
+
+  /// Flip [row] to `role='current'` (clearing `position`) and re-establish the
+  /// D1 mirror — write the now-current Action's `energy_level` / `time_estimate`
+  /// onto the Outcome so the D2 read fallback resolves to it. Shared by
+  /// [applyPromotePlannedAction] and [applySupersedeAndPromote]; the caller
+  /// stamps.
+  ///
+  /// [seedFromDraft] decides how a NULL on the promoted row is treated — the
+  /// same `current == null` split [applySetCurrentAction] makes at a birth:
+  ///
+  /// * `true` — the Outcome is Actionless, so its columns are the D3 draft the
+  ///   user typed. Promotion is a creation path, so a NULL field on the row
+  ///   inherits the draft — onto the promoted **Action** (keeping D1 coherent)
+  ///   and the mirror alike — exactly like a birth Action. Explicit row values
+  ///   still win.
+  /// * `false` — a live current Action is being replaced (supersede-and-
+  ///   promote), so the columns are that retiring Action's D1 mirror. Overwrite
+  ///   with the promoted row's own values, NULL included (D4); inheriting would
+  ///   resurface the replaced Action's estimate against its successor.
+  Future<void> _promoteRow(
+    Action row,
+    DateTime ts, {
+    required bool seedFromDraft,
+  }) async {
+    var energyLevel = row.energyLevel;
+    var timeEstimate = row.timeEstimate;
+    if (seedFromDraft) {
+      final seeded = await _seedMetadataFromDraft(
+        row.outcomeId,
+        energyLevel: energyLevel,
+        timeEstimate: timeEstimate,
+      );
+      energyLevel = seeded.energyLevel;
+      timeEstimate = seeded.timeEstimate;
+    }
+    // Only write the Action's effort when seeding actually changed it, so a
+    // plain overwrite promote (or a seed that found no draft) leaves the row's
+    // stored values — and its captured op — untouched.
+    final energyDiffers = energyLevel != row.energyLevel;
+    final timeDiffers = timeEstimate != row.timeEstimate;
     await (update(actions)..where((a) => a.id.equals(row.id))).write(
       ActionsCompanion(
         role: const Value('current'),
         position: const Value(null),
+        energyLevel:
+            energyDiffers ? Value(energyLevel) : const Value.absent(),
+        timeEstimate:
+            timeDiffers ? Value(timeEstimate) : const Value.absent(),
         updatedAt: Value(ts),
       ),
     );
     _captureAction(row.id, {
       'role': 'current',
       'position': null,
+      if (energyDiffers) 'energy_level': energyLevel,
+      if (timeDiffers) 'time_estimate': timeEstimate,
       'updated_at': encodeInstant(ts),
     });
     await (update(todos)..where((t) => t.id.equals(row.outcomeId))).write(
       TodosCompanion(
-        energyLevel: Value(row.energyLevel),
-        timeEstimate: Value(row.timeEstimate),
+        energyLevel: Value(energyLevel),
+        timeEstimate: Value(timeEstimate),
         updatedAt: Value(ts),
       ),
     );
     _captureOutcome(row.outcomeId, {
-      'energy_level': row.energyLevel,
-      'time_estimate': row.timeEstimate,
+      'energy_level': energyLevel,
+      'time_estimate': timeEstimate,
       'updated_at': encodeInstant(ts),
     });
   }

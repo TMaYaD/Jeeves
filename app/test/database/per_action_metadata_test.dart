@@ -174,6 +174,30 @@ void main() {
       expect(todo!.energyLevel, 'high');
       expect(todo.timeEstimate, 90);
     });
+
+    test('the Actionless supersede-with-replacement arm seeds from the draft',
+        () async {
+      // Reachable only from a direct DAO call today (no lib/ caller passes a
+      // replacement here), but it is a creation path all the same: an Actionless
+      // Outcome carrying a draft, replaced by a fresh Action with no metadata,
+      // seeds the draft onto the new Action and its mirror rather than NULLing
+      // them. Pins "every creation path seeds" for the last un-covered arm.
+      await _seedOutcome(db, energyLevel: 'high', timeEstimate: 90);
+      expect(await _current(db, 'o1'), isNull);
+
+      await db.actionDao.supersedeCurrentAction(
+        'o1',
+        newActionText: 'fresh start',
+        now: _t2,
+      );
+
+      final cur = await _current(db, 'o1');
+      expect(cur!.energy, 'high', reason: 'creation path seeds the draft');
+      expect(cur.time, 90);
+      final cols = await _todoColumns(db, 'o1');
+      expect(cols.energy, 'high');
+      expect(cols.time, 90);
+    });
   });
 
   group('D2 — read hydration with fallback', () {
