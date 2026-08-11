@@ -210,7 +210,14 @@ abstract class ClarificationService {
   /// The "Replace current action" gesture: retire the Outcome's current Action
   /// and promote the `planned` [actionId] to `current` in one act (ADR-0004
   /// story 5). No-op if the row is gone or is not `planned`. Stamps.
-  Future<void> supersedeAndPromote(String actionId);
+  ///
+  /// [expectedCurrentActionId] is the id of the current Action the caller showed
+  /// the user in the replace confirm; the write throws rather than retire a
+  /// different one if sync changed the current while the sheet was open (#723).
+  Future<void> supersedeAndPromote(
+    String actionId, {
+    String? expectedCurrentActionId,
+  });
 
   /// Commits a routing verdict: the clarify subject leaves the flow in the
   /// state [to] expresses (see [TodoDao.applyRouting] for the exact
@@ -546,8 +553,14 @@ class DaoClarificationService implements ClarificationService {
       _db.actionDao.promotePlannedAction(actionId);
 
   @override
-  Future<void> supersedeAndPromote(String actionId) =>
-      _db.actionDao.supersedeAndPromote(actionId);
+  Future<void> supersedeAndPromote(
+    String actionId, {
+    String? expectedCurrentActionId,
+  }) =>
+      _db.actionDao.supersedeAndPromote(
+        actionId,
+        expectedCurrentActionId: expectedCurrentActionId,
+      );
 
   @override
   Future<void> clarifyToOutcome(

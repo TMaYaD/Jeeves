@@ -1787,6 +1787,57 @@ void main() {
           reason: 'a declined confirm leaves the item unresolved');
     });
 
+    testWidgets(
+        'a current Action swapped under the open confirm is NOT superseded '
+        '(expectedCurrentActionId guard)', (tester) async {
+      final todo = await _insertTodo(db, id: 'q6');
+      await seedCurrentAction(
+          db, outcomeId: 'q6', text: 'do it', userId: _userId, id: 'cur-old');
+      await seedQueue('q6');
+      final fired = <ProcessAction>[];
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        currentActionText: 'do it',
+        onAfterRoute: (a) async => fired.add(a),
+      ));
+
+      await openDialog(tester);
+      await tester.tap(find.text('Step one'));
+      await tester.pumpAndSettle();
+      // The confirm read 'do it' (cur-old) as the current Action to replace.
+      expect(find.byKey(const Key('plan_replace_confirm')), findsOneWidget);
+
+      // Sync lands a *different* current Action while the confirm is open: the
+      // old current is gone and a new one is installed. Raw writes, as the sync
+      // bridge would.
+      await (db.delete(db.actions)..where((a) => a.id.equals('cur-old'))).go();
+      await db.into(db.actions).insert(ActionsCompanion(
+            id: const Value('cur-new'),
+            outcomeId: const Value('q6'),
+            userId: const Value(_userId),
+            actionText: const Value('do it differently'),
+            role: const Value('current'),
+            createdAt: Value(DateTime.now()),
+          ));
+
+      await tester.tap(find.byKey(const Key('plan_replace_confirm')));
+      await tester.pumpAndSettle();
+
+      // The guard aborts: the synced-in current survives un-retired and the
+      // chosen planned row is NOT promoted. Without expectedCurrentActionId,
+      // 'do it differently' — an Action the user never saw — would be silently
+      // superseded.
+      final current = await db.actionDao.getCurrentAction('q6');
+      expect(current?.id, 'cur-new');
+      expect(current?.actionText, 'do it differently');
+      expect((await db.actionDao.getPlannedActions('q6')).map((a) => a.actionText),
+          ['Step one', 'Step two']);
+      expect(await db.actionDao.getTerminatedActions('q6'), isEmpty,
+          reason: 'the aborted replace retires nothing');
+      expect(fired, isEmpty, reason: 'the aborted replace commits no route');
+    });
+
     testWidgets('a blank Save with a queue mirrors the title and leaves the '
         'planned rows untouched', (tester) async {
       final todo = await _insertTodo(db, id: 'q5', title: 'Ship it');

@@ -303,9 +303,17 @@ class TaskDetailNotifier {
       _db.actionDao.promotePlannedAction(actionId);
 
   /// Replace the current Action with the planned [actionId] (retire-and-promote
-  /// in one act).
-  Future<void> supersedeAndPromote(String actionId) =>
-      _db.actionDao.supersedeAndPromote(actionId);
+  /// in one act). [expectedCurrentActionId] is the current Action the replace
+  /// confirm showed the user; the write throws rather than retire a different
+  /// one if the current changed under the open sheet (#723).
+  Future<void> supersedeAndPromote(
+    String actionId, {
+    String? expectedCurrentActionId,
+  }) =>
+      _db.actionDao.supersedeAndPromote(
+        actionId,
+        expectedCurrentActionId: expectedCurrentActionId,
+      );
 
   /// Demote the current Action [actionId] back to the front of the planned
   /// queue.

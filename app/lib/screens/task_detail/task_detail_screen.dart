@@ -1001,7 +1001,13 @@ class _PlanSectionState extends ConsumerState<_PlanSection> {
       newText: planned.actionText,
     );
     if (confirmed) {
-      notifier.supersedeAndPromote(planned.id).ignore();
+      // Pass the id of the current Action the confirm showed, so the write
+      // aborts rather than retire a different one if sync swapped the current
+      // while the sheet was open (#723). The reactive Plan section then shows
+      // the true state; the `.ignore()` keeps this surface's no-snackbar idiom.
+      notifier
+          .supersedeAndPromote(planned.id, expectedCurrentActionId: current.id)
+          .ignore();
     }
   }
 

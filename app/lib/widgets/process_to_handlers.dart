@@ -967,10 +967,16 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     // on to supersede / route / notify would advance the cursor over a phantom.
     if (!await _subjectExists()) return;
     // `applySupersedeAndPromote` early-returns before retiring the incumbent if
-    // the planned row vanished, so a no-op here leaves the current Action
-    // intact — `_commit(nextAction)` then routes an Outcome that still has a
-    // current, which is benign (a redundant re-route + stamp).
-    await _clarification.supersedeAndPromote(actionId);
+    // the planned row vanished, so a no-op there leaves the current Action
+    // intact. And `expectedCurrentActionId` closes the confirm-time window: if
+    // sync swapped the current Action while the sheet was open, the write throws
+    // rather than retire the Action the user never saw — the throw lands in
+    // `_runOnce` (write-failed snackbar) before `_commit` / notify, so no route
+    // commits and a retry re-reads the fresh current.
+    await _clarification.supersedeAndPromote(
+      actionId,
+      expectedCurrentActionId: current.id,
+    );
     await _commit(RoutingKind.nextAction);
     await _notifyAfterRoute(ProcessAction.nextActionDialog);
   }
