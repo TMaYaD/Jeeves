@@ -1113,6 +1113,50 @@ void main() {
       expect(cols.time, 15);
     });
 
+    testWidgets(
+        'journey: promoting a planned row with no estimates keeps the Outcome '
+        'draft instead of NULLing it', (tester) async {
+      final h = await mountPlan(tester, 'eff3');
+
+      // The user typed an effort estimate on the Actionless Outcome; with no
+      // Action to carry it, it lives on the draft columns (D3).
+      await tester.runAsync(() => db.todoDao
+          .updateFields('eff3', energyLevel: 'low', timeEstimate: 15));
+      await h.refresh();
+      expect((await h.todoColumns()).energy, 'low');
+      expect((await h.todoColumns()).time, 15);
+
+      // Add a planned action leaving both pickers untouched — no estimates.
+      await tester.tap(find.byKey(const Key('plan_add_trigger')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+          find.byKey(const Key('plan_action_text')), 'just do it');
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('plan_action_confirm')));
+      await tester.pumpAndSettle();
+      await h.settleWrite();
+      await h.refresh();
+
+      var rows = await h.plannedRows();
+      expect(rows.single.energyLevel, isNull);
+      expect(rows.single.timeEstimate, isNull);
+      final rowId = rows.single.id;
+      expect(find.byKey(Key('planned_effort_unset_$rowId')), findsOneWidget);
+
+      // Promote it. The draft must survive — on the columns AND on the Action.
+      await tester.tap(find.byKey(Key('plan_promote_$rowId')));
+      await h.settleWrite();
+      await h.refresh();
+
+      final promoted = await h.currentRow();
+      expect(promoted!.energyLevel, 'low',
+          reason: 'promotion seeds the Outcome draft, it does not erase it');
+      expect(promoted.timeEstimate, 15);
+      final cols = await h.todoColumns();
+      expect(cols.energy, 'low');
+      expect(cols.time, 15);
+    });
+
     testWidgets('the edit sheet clears both values when the chips are '
         'deselected', (tester) async {
       final h = await mountPlan(tester, 'eff2');
