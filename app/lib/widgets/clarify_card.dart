@@ -994,23 +994,26 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
           // *Outcome* keeps Done: there the row exists and finishing it is a
           // real verdict.
           //
-          // The `nextActionDialog` opt-out is the mirror image, and survives
-          // only on the Outcome arm. On a **Capture** the modifier is left on
-          // (issue #689): the Outcome and its Action are distinct, and
-          // "car insurance renewal" is a desired outcome, not a physical next
-          // step. The dialog opens seeded from the title mirror, so accepting
-          // it unchanged still lands the pre-#689 result and the row is never
-          // actionless on Next. On an **Outcome** it stays excepted: the
-          // title-as-action coupling in [_onAfterRoute] supplies the phrase
-          // when the row is Actionless and must not clobber a deliberate one,
-          // so Next here is a one-tap route.
+          // The `nextActionDialog` modifier is now on for **both** arms (issue
+          // #723). On a **Capture** it opens seeded from the title mirror. On an
+          // **Outcome** it offers the planned queue for one-tap promotion and,
+          // for a new phrase, applies the title-as-action fallback — the
+          // coupling that used to live in [_onAfterRoute] for Next moved into
+          // the dialog handler ([ProcessToHandlers._nextWithDialog]), so Next
+          // here reports `nextActionDialog` and its title-mirror branch below no
+          // longer fires. Only `waitingFor` still mirrors from [_onAfterRoute].
           except: {
-            if (!_isCapture) ProcessAction.nextActionDialog,
             if (_isCapture) ProcessAction.done,
           },
           lastAction: widget.lastAction,
           onAfterRoute: _onAfterRoute,
           onProcessingChanged: widget.onProcessingChanged,
+          // The Outcome's title is edited in an unsaved controller, so the
+          // dialog must read it live rather than from the (stale) subject row —
+          // both for display and for the blank-save fallback mirror (§6). On a
+          // Capture the subject title is already the live draft, so this only
+          // agrees with it.
+          liveTitle: () async => _titleCtrl?.text.trim(),
         ),
         if (widget.footer != null) ...[
           const SizedBox(height: 20),
@@ -1071,12 +1074,15 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
         // has not fired for an edit made right up to the tap. Save it before
         // yielding — and before the mirror below reads the title.
         await _saveOutcomeText();
-        // Title-as-action coupling: when the user routes to Next or Waiting
-        // For from a clarify card, mirror the current title into the Action so
-        // the row leaves with a defined one. This whole branch is Outcome-only,
-        // and the Outcome arm still excepts the dialog modifier, so Next
-        // reports plain `next` here. (On a Capture the modifier is on and Next
-        // reports `nextActionDialog`, which never reaches this branch.)
+        // Title-as-action coupling for **Waiting For** only. Routing to Waiting
+        // For is intent-only and captures no phrase, so mirror the current
+        // title into the Action here so the row leaves with a defined one.
+        //
+        // Next is no longer handled here: with the dialog modifier on for both
+        // arms (issue #723), Next reports `nextActionDialog`, and its fallback
+        // (title-as-action, seeded from the *live* title) lives inside
+        // [ProcessToHandlers._nextWithDialog]. So this branch fires only for
+        // `waitingFor`.
         //
         // Only mirror when the Outcome is Actionless (no `current` Action
         // row); otherwise the user has already written a deliberate phrase and
@@ -1086,8 +1092,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
         // On a Capture the mirror travels in the draft (see [_draft]) and is
         // applied by clarifyCaptureToOutcome as it creates the Outcome, so
         // there is nothing to write here either.
-        if (action == ProcessAction.next ||
-            action == ProcessAction.waitingFor) {
+        if (action == ProcessAction.waitingFor) {
           final title = _titleCtrl?.text.trim() ?? '';
           if (title.isNotEmpty) {
             // One atomic call: the actionless check and the mirror write share

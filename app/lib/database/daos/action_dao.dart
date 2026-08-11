@@ -334,10 +334,24 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   /// `updated_at`, no linkage) and flip the `planned` [actionId] up to
   /// `current`. No-op if the row is gone, already `current`, or not `planned`.
   /// Stamps once.
-  Future<void> supersedeAndPromote(String actionId, {DateTime? now}) async {
+  ///
+  /// [expectedCurrentActionId] closes the confirm-time race (issue #723): a
+  /// caller that showed the user a *specific* current Action to replace passes
+  /// its id, and the transaction throws [StateError] — retiring nothing — if the
+  /// current Action has since changed (sync landed a different one, or cleared
+  /// it) rather than superseding an Action the user never saw.
+  Future<void> supersedeAndPromote(
+    String actionId, {
+    String? expectedCurrentActionId,
+    DateTime? now,
+  }) async {
     final ts = (now ?? DateTime.now()).toUtc();
     final effect = await attachedDatabase.capturing(
-      () => applySupersedeAndPromote(actionId, ts: ts),
+      () => applySupersedeAndPromote(
+        actionId,
+        expectedCurrentActionId: expectedCurrentActionId,
+        ts: ts,
+      ),
     );
     _notify(effect);
   }
@@ -1023,6 +1037,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
 
   Future<ActionWriteEffect> applySupersedeAndPromote(
     String actionId, {
+    String? expectedCurrentActionId,
     required DateTime ts,
   }) async {
     final row = await (select(actions)..where((a) => a.id.equals(actionId)))
@@ -1030,13 +1045,26 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     if (row == null || row.role != 'planned') return _noEffect;
 
     final resolved = await _resolveCurrentAction(row.outcomeId, ts);
+    final current = resolved.current;
+    // Close-the-window guard (issue #723): a caller that showed the user a
+    // specific current Action to replace passes its id. If sync installed a
+    // different current — or cleared it — while the confirm sheet was open,
+    // retiring `current` would supersede an Action the user never saw, so abort
+    // the whole transaction instead. Mirrors applyPromotePlannedAction
+    // asserting its own (no-current) precondition rather than writing blind.
+    if (expectedCurrentActionId != null &&
+        current?.id != expectedCurrentActionId) {
+      throw StateError(
+        'supersedeAndPromote: current Action changed under the confirm '
+        '(expected $expectedCurrentActionId, found ${current?.id})',
+      );
+    }
     // Terminal-transition TimeLog hook (issue #476, CONTEXT.md § Switching
     // Actions): retiring the current Action here is the same transition as in
     // supersedeCurrentAction, so it closes the retired Action's open log and,
     // because the promoted [row] is the installed successor, reopens a
     // continuation against it so no engagement time is lost.
     TimeLog? closedLog;
-    final current = resolved.current;
     // Bind the regime before the retire below: a live current being replaced
     // means the columns are its D1 mirror → overwrite them with the promoted
     // row's values (D4); an Actionless Outcome (nothing to retire) means the

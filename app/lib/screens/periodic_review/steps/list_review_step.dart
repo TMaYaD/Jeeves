@@ -133,7 +133,10 @@ class ListReviewStep<T extends Todo> extends ConsumerWidget {
 
   /// Optional per-item current-Action text, from the step's snapshot of
   /// `actions` (ADR-0001 story 3). Prefills the "Update next action" dialog
-  /// with what is actually recorded; null leaves the dialog empty.
+  /// with what is actually recorded; null leaves the field empty. Either way
+  /// the dialog also offers the Outcome's planned queue for one-tap promotion
+  /// (issue #723) — a promote here routes the item to Next and moves it off
+  /// this list.
   final String? Function(T todo)? currentActionTextFor;
 
   /// Optional person-tag lookup keyed by todo. Returns the delegate chip

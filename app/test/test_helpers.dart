@@ -42,6 +42,40 @@ Future<void> seedCurrentAction(
       ));
 }
 
+/// Seeds a `planned` Action row for [outcomeId] — one entry of the Outcome's
+/// planned queue (ADR-0004 story 5).
+///
+/// Unlike a call to `ActionDao.addPlannedAction`, this bypasses the stamping
+/// primitive so a fixture can control `created_at`/`updated_at` — pass an
+/// explicit earlier [now] to prove that a later promotion moves
+/// `last_clarified_at` strictly forward rather than merely leaving it non-null.
+/// [id] and [position] let a fixture seed a deterministic queue order.
+Future<void> seedPlannedAction(
+  GtdDatabase db, {
+  required String outcomeId,
+  required String text,
+  required String userId,
+  required String id,
+  required int position,
+  String? energyLevel,
+  int? timeEstimate,
+  DateTime? now,
+}) async {
+  final ts = now ?? DateTime.now();
+  await db.into(db.actions).insert(ActionsCompanion(
+        id: Value(id),
+        outcomeId: Value(outcomeId),
+        userId: Value(userId),
+        actionText: Value(text),
+        role: const Value('planned'),
+        position: Value(position),
+        energyLevel: Value(energyLevel),
+        timeEstimate: Value(timeEstimate),
+        createdAt: Value(ts),
+        updatedAt: Value(ts),
+      ));
+}
+
 /// No-ops the platform-channel notification calls made by ritual providers
 /// (`startDay` / `closeDay` skip today's reminder on close). Unit and widget
 /// tests wire this in via `notificationServiceProvider.overrideWithValue(...)`

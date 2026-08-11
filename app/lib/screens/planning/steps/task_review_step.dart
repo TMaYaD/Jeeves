@@ -249,7 +249,13 @@ class _ReviewCard extends ConsumerWidget {
           labels: {
             ProcessAction.keep:
                 isWaitingFor ? 'Still waiting' : 'Still relevant',
-            ProcessAction.next: 'Update next action…',
+            // "Update" only when there is a current Action to update; an
+            // Actionless card is *setting* the first one. Matches the dialog's
+            // own "Update next action" / "Set next action" split.
+            ProcessAction.next: (currentActionText != null &&
+                    currentActionText!.trim().isNotEmpty)
+                ? 'Update next action…'
+                : 'Set next action…',
           },
           lastAction: _toProcessAction(previousAction?.kind),
           onAfterRoute: (action) async {

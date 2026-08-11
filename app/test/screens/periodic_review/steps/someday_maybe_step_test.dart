@@ -132,6 +132,42 @@ void main() {
       expect(state.somedayNav.isComplete, isTrue);
     });
 
+    testWidgets(
+        'promoting a queued planned Action routes the item to Next (the '
+        '_commit leg), makes it current, records nextAction, and advances '
+        '(#723)', (tester) async {
+      await _insertSomedayTodo(db, id: 'sm2');
+      // A planned Action queued on the Someday item, no current Action.
+      await seedPlannedAction(
+        db,
+        outcomeId: 'sm2',
+        text: 'Draft the first section',
+        userId: _userId,
+        id: 'sp1',
+        position: 0,
+      );
+      final container = await _enterStep(tester, db);
+
+      await tester.tap(find.text('Next Action…'));
+      await tester.pumpAndSettle();
+      // The queue is offered; promote it.
+      expect(find.text('Draft the first section'), findsOneWidget);
+      await tester.tap(find.text('Draft the first section'));
+      await tester.pumpAndSettle();
+
+      final row = await db.todoDao.getTodo('sm2');
+      // The `_commit(nextAction)` leg is what moves the Outcome off Someday —
+      // without it a promote would flip the planned row to current while the
+      // item stayed on `maybe`. This assertion is what fails if it is skipped.
+      expect(row?.intent, 'next');
+      expect((await db.actionDao.getCurrentAction('sm2'))?.actionText,
+          'Draft the first section');
+      expect(await db.actionDao.getPlannedActions('sm2'), isEmpty);
+
+      final state = container.read(periodicReviewProvider);
+      expect(state.somedayRoutings[0], RoutingKind.nextAction);
+      expect(state.somedayNav.isComplete, isTrue);
+    });
   });
 
   group('SomedayMaybeStep — Done route (#457)', () {

@@ -509,12 +509,13 @@ void main() {
       expect((await db.captureDao.getCapture('x'))!.clarifiedAt, isNull);
     });
 
-    testWidgets('on an Outcome Next stays a one-tap route (#293)',
-        (tester) async {
-      // The opt-out survives on the Outcome arm: the title-as-action coupling
-      // in `_onAfterRoute` supplies the phrase there, Actionless-guarded, so
-      // asking again would be redundant on a row that already has an Action
-      // and dangerous on one that does.
+    testWidgets(
+        'on an Outcome Next opens the dialog; a blank Save keeps the '
+        'title-as-action mirror (#723)', (tester) async {
+      // #723 turns the dialog modifier on for the Outcome arm too, so the
+      // planned queue can be offered here. With no queue, a blank Save still
+      // reproduces the title-as-action fallback — the row never lands on Next
+      // Actionless — now sourced from the live title inside the dialog handler.
       final todo = await _insertInboxTodo(db, id: 'o1', title: 'Plan party');
       final fired = <ProcessAction>[];
       await tester.pumpWidget(_harness(
@@ -525,10 +526,13 @@ void main() {
       await _pumpFrames(tester, frames: 5);
 
       await _scrollAndTap(tester, 'Next Action');
+      await _pumpFrames(tester, frames: 10);
+      expect(find.byType(NextActionDialog), findsOneWidget);
+
+      await tester.tap(find.text('Save'));
       await _pumpFrames(tester);
 
-      expect(find.byType(NextActionDialog), findsNothing);
-      expect(fired, [ProcessAction.next]);
+      expect(fired, [ProcessAction.nextActionDialog]);
       expect((await db.todoDao.getTodo('o1'))?.intent, 'next');
       expect((await db.actionDao.getCurrentAction('o1'))?.actionText,
           'Plan party');
@@ -660,6 +664,11 @@ void main() {
 
       await _tapNextAction(tester);
       await tester.pumpAndSettle();
+      // #723: the Outcome arm now opens the dialog on Next. A blank Save routes
+      // and applies the title-as-action fallback — but the fallback is
+      // Actionless-guarded, so the deliberate phrase survives.
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
 
       // The Action grain is what the mirror guard consults and what every read
       // surface renders, so it is the assertion that pins the behaviour.
@@ -693,6 +702,10 @@ void main() {
       await tester.pumpAndSettle();
 
       await _tapNextAction(tester);
+      await tester.pumpAndSettle();
+      // #723: the Outcome arm now opens the dialog on Next; a blank Save applies
+      // the title-as-action fallback to the Actionless row.
+      await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
 
       expect((await db.actionDao.getCurrentAction('rc-mirror-2'))?.actionText,
