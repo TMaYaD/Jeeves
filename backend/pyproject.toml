@@ -10,7 +10,20 @@ name = "jeeves-backend"
 # docs/BACKEND_GUIDELINES.md, "Server versioning & releases".
 version = "0.0.0"
 description = "Jeeves — FastAPI backend"
-requires-python = ">=3.12"
+# The single source of truth for the interpreter, and a band rather than a
+# floor.  Everything else derives from it: ruff infers `target-version` from
+# the floor, mypy defaults to the interpreter uv resolves out of the band, and
+# .github/workflows/backend-ci.yml leaves setup-uv's `python-version` unset so
+# CI resolves it the same way.  None of them carries its own copy.
+#
+# The ceiling is what makes backend/Dockerfile answerable to this file.  Dokku
+# builds that image on deploy, so its `FROM` line is what production runs, and
+# `pip install -e .` refuses an interpreter outside this band — a base-image
+# bump past the ceiling fails the build instead of shipping an untested
+# interpreter.  Dependabot walked the tag to 3.15.0rc1 and prod ran a release
+# candidate for three weeks precisely because nothing said no.  Widening this
+# to `<3.16` is how a Python minor upgrade is taken, deliberately, in one edit.
+requires-python = ">=3.14,<3.15"
 
 dependencies = [
     "fastapi>=0.111.0",
@@ -60,7 +73,7 @@ required-version = "==0.12.0"
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+# No `target-version`: ruff infers it from `requires-python` above.
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
@@ -72,7 +85,8 @@ known-first-party = ["app"]
 extend-immutable-calls = ["Depends", "fastapi.Depends", "fastapi.params.Depends"]
 
 [tool.mypy]
-python_version = "3.12"
+# No `python_version`: mypy checks against whichever interpreter it runs on,
+# and `uv run` supplies one from the `requires-python` band above.
 strict = true
 
 [tool.pytest.ini_options]

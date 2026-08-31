@@ -15,7 +15,7 @@ from app.sync.routes import router as sync_router
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # Startup
     yield
     # Shutdown

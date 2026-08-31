@@ -41,11 +41,17 @@ jobs:
       # the action at backend/ so its cache key is keyed on backend/uv.lock —
       # and so the deliberately-unset `version` input falls back to
       # `[tool.uv] required-version` in backend/pyproject.toml, which is where
-      # uv's own version is pinned.  Both knobs stay in backend config.
+      # uv's own version is pinned.
+      #
+      # `python-version` is deliberately unset for the same reason.  Setting it
+      # only exports UV_PYTHON; leaving it alone lets uv resolve the interpreter
+      # from `requires-python` in backend/pyproject.toml, so CI type-checks and
+      # tests on the same interpreter band backend/Dockerfile ships.  It used to
+      # say "3.12" while production ran 3.15.0rc1, and neither number was
+      # answerable to the other.  Every knob stays in backend config.
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           working-directory: backend
-          python-version: "3.12"
           enable-cache: true
       # A named check, so drift between pyproject.toml and uv.lock fails as
       # "lockfile out of date" instead of surfacing as a resolution error in
@@ -104,7 +110,6 @@ jobs:
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           working-directory: backend
-          python-version: "3.12"
           enable-cache: true
       - run: uv sync --locked --extra dev
       - run: uv run python -m app.migrate

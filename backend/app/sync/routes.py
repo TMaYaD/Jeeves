@@ -2275,7 +2275,7 @@ async def signal_socket(
             websocket.receive_text(),
             timeout=settings.signal_auth_frame_deadline_seconds,
         )
-    except (TimeoutError, WebSocketDisconnect, KeyError):
+    except TimeoutError, WebSocketDisconnect, KeyError:
         # No auth frame in time, a close instead of one, or a binary frame where
         # text was required — all the same protocol violation.
         await _close_quietly(websocket, SIGNAL_CLOSE_PROTOCOL_ERROR)
@@ -2327,7 +2327,7 @@ async def signal_socket(
         try:
             await websocket.send_text("")
             await _pump_signals(websocket, subscription, reader)
-        except (WebSocketDisconnect, RuntimeError):
+        except WebSocketDisconnect, RuntimeError:
             # The peer went away mid-send; nothing left to do but stop.
             pass
         finally:

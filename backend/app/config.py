@@ -54,14 +54,14 @@ class Settings(BaseSettings):
     bcrypt_rounds: int = 12
 
     @model_validator(mode="after")
-    def _normalize_database_url(self) -> "Settings":
+    def _normalize_database_url(self) -> Settings:
         scheme, _, rest = self.database_url.partition("://")
         if scheme == "postgres" or scheme == "postgresql":
             self.database_url = f"postgresql+asyncpg://{rest}"
         return self
 
     @model_validator(mode="after")
-    def _validate_server_version(self) -> "Settings":
+    def _validate_server_version(self) -> Settings:
         if not _VERSION_SHAPED.match(self.server_version):
             raise ValueError(
                 f"SERVER_VERSION must be 0.X.Y or 0.X.Y.Z, optionally with a "
@@ -70,7 +70,7 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _validate_secret_key(self) -> "Settings":
+    def _validate_secret_key(self) -> Settings:
         if self.secret_key == "insecure-dev-key":
             if self.env not in ("development", "test"):
                 raise ValueError(f"SECRET_KEY must be explicitly set when APP_ENV={self.env!r}")
@@ -80,7 +80,7 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _validate_bcrypt_rounds(self) -> "Settings":
+    def _validate_bcrypt_rounds(self) -> Settings:
         # bcrypt.gensalt() only accepts 4–31 and raises ValueError otherwise;
         # validate here so a misconfiguration fails at startup rather than on
         # the first password hash. Production must not run below the default 12.

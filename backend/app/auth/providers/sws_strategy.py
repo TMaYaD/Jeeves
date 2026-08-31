@@ -88,7 +88,7 @@ async def verify_sws(
         vk = VerifyKey(base58.b58decode(public_key_b58))
         sig = base64.b64decode(signature_b64)
         vk.verify(message, sig)
-    except (BadSignatureError, Exception):
+    except BadSignatureError, Exception:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Signature invalid",
