@@ -865,7 +865,7 @@ def sign_revoke_certificate(cert_bytes: bytes, signing_key: SigningKey) -> bytes
 def _verify(signing_input: bytes, signature: bytes, public_key: bytes) -> bool:
     try:
         VerifyKey(public_key).verify(signing_input, signature)
-    except (BadSignatureError, ValueError):
+    except BadSignatureError, ValueError:
         return False
     return True
 
