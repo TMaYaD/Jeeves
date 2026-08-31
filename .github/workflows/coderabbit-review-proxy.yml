@@ -1,0 +1,28 @@
+name: CodeRabbit Review Proxy
+
+# Hourly sweep that adapts CodeRabbit's comment-based review state into real PR
+# review verdicts, and re-triggers reviews once its hourly rate-limit window
+# has passed. Only PRs where one of the proxy accounts is assigned as reviewer
+# are touched. Logic lives in LoonyBin/actions/coderabbit-review-proxy.
+
+on:
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: coderabbit-review-proxy
+  cancel-in-progress: false
+
+permissions: {} # the proxy acts via the tokens below, not GITHUB_TOKEN
+
+jobs:
+  sweep:
+    name: Sweep open PRs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: LoonyBin/actions/coderabbit-review-proxy@main
+        with:
+          primary-token: ${{ secrets.CODERABBIT_PROXY_TOKEN_PRIMARY }}
+          fallback-token: ${{ secrets.CODERABBIT_PROXY_TOKEN_FALLBACK }}
+          hourly-quota: ${{ vars.CODERABBIT_HOURLY_QUOTA || '3' }}
