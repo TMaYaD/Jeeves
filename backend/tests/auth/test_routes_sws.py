@@ -107,3 +107,62 @@ async def test_sws_login_missing_nonce_returns_401(
         },
     )
     assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_sws_login_malformed_public_key_returns_401(client: AsyncClient) -> None:
+    """A public key that is not base58 at all is a bad credential, not a server fault."""
+    malformed_public_key = "not-a-valid-base58-key!!"
+
+    challenge = await client.post("/auth/sws/challenge", json={"public_key": malformed_public_key})
+    nonce = challenge.json()["nonce"]
+
+    response = await client.post(
+        "/auth/sws",
+        json={
+            "public_key": malformed_public_key,
+            "signature": base64.b64encode(b"\x00" * 64).decode(),
+            "nonce": nonce,
+        },
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_sws_login_wrong_length_public_key_returns_401(client: AsyncClient) -> None:
+    """Valid base58 that decodes to something other than 32 bytes is still a bad credential."""
+    short_public_key = _b58encode(b"\x01" * 16)
+
+    challenge = await client.post("/auth/sws/challenge", json={"public_key": short_public_key})
+    nonce = challenge.json()["nonce"]
+
+    response = await client.post(
+        "/auth/sws",
+        json={
+            "public_key": short_public_key,
+            "signature": base64.b64encode(b"\x00" * 64).decode(),
+            "nonce": nonce,
+        },
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_sws_login_malformed_signature_returns_401(
+    client: AsyncClient, signing_key: SigningKey
+) -> None:
+    """A signature that is not decodable base64 is a bad credential."""
+    public_key_b58 = _b58encode(bytes(signing_key.verify_key))
+
+    challenge = await client.post("/auth/sws/challenge", json={"public_key": public_key_b58})
+    nonce = challenge.json()["nonce"]
+
+    response = await client.post(
+        "/auth/sws",
+        json={
+            "public_key": public_key_b58,
+            "signature": "!!!not-base64!!!",
+            "nonce": nonce,
+        },
+    )
+    assert response.status_code == 401
