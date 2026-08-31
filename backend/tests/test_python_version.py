@@ -66,8 +66,18 @@ def test_dockerfile_base_image_satisfies_requires_python() -> None:
 
 def test_test_run_interpreter_satisfies_requires_python() -> None:
     band = _requires_python()
+    # Release level first, and separately. `sys.version_info[:3]` drops
+    # `releaselevel`, so 3.14.0rc1 would arrive below as a plain `3.14.0` and
+    # sail through the band — the very hole this file exists to close, reopened
+    # on the CI side instead of the image side. The band means supported stable
+    # interpreters; a prerelease is never one, whatever its numbers say.
+    assert sys.version_info.releaselevel == "final", (
+        f"This test run is on a prerelease interpreter — Python "
+        f"{sys.version.split()[0]}, releaselevel {sys.version_info.releaselevel!r}. "
+        f"CI and production run final releases only."
+    )
     running = Version(".".join(str(part) for part in sys.version_info[:3]))
-    assert band.contains(running, prereleases=True), (
+    assert band.contains(running), (
         f"This test run is on Python {running}, outside `requires-python = {str(band)!r}`. "
         f"CI type-checks and tests on the interpreter uv resolves from that band, so a "
         f"mismatch here means the suite is not covering what production runs."
