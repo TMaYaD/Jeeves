@@ -30,7 +30,7 @@ dependencies:
   # touched so live queries refresh.
   drift_sqlite_async: ^0.3.1
   # Imported directly for `SqliteDatabase` in the domain store's open path.
-  sqlite_async: ^0.14.4
+  sqlite_async: ^0.14.5
   sqlite3_flutter_libs: ^0.6.0+eol
   path_provider: ^2.1.6
   path: ^1.9.0
@@ -100,7 +100,7 @@ dependencies:
   # every other database failure by SQLite's extended result code, so it imports
   # the exception type directly. Already in the graph under drift, so making it
   # direct adds no resolution risk.
-  sqlite3: ^3.3.3
+  sqlite3: ^3.5.2
 
 dev_dependencies:
   flutter_test:
