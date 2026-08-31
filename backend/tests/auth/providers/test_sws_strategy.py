@@ -125,3 +125,69 @@ async def test_replay_attack_raises_401(
         await verify_sws(db, redis, public_key_b58, sig, nonce)
 
     assert exc_info.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_malformed_base58_public_key_raises_401(db: AsyncSession, redis: Redis) -> None:
+    """`base58.b58decode` raises ValueError on non-alphabet input — a bad credential."""
+    malformed_public_key = "not-a-valid-base58-key!!"
+    nonce, _ = await _make_challenge(redis, malformed_public_key)
+    sig = base64.b64encode(b"\x00" * 64).decode()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await verify_sws(db, redis, malformed_public_key, sig, nonce)
+
+    assert exc_info.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_wrong_length_public_key_raises_401(db: AsyncSession, redis: Redis) -> None:
+    """`VerifyKey` raises nacl's ValueError unless the key decodes to exactly 32 bytes."""
+    short_public_key = _b58encode(b"\x01" * 16)
+    nonce, _ = await _make_challenge(redis, short_public_key)
+    sig = base64.b64encode(b"\x00" * 64).decode()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await verify_sws(db, redis, short_public_key, sig, nonce)
+
+    assert exc_info.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_malformed_base64_signature_raises_401(
+    db: AsyncSession, redis: Redis, signing_key: SigningKey
+) -> None:
+    """`base64.b64decode` raises binascii.Error (a ValueError) on undecodable input."""
+    public_key_b58 = _b58encode(bytes(signing_key.verify_key))
+    nonce, _ = await _make_challenge(redis, public_key_b58)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await verify_sws(db, redis, public_key_b58, "!!!not-base64!!!", nonce)
+
+    assert exc_info.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_unexpected_internal_error_is_not_converted_to_401(
+    db: AsyncSession,
+    redis: Redis,
+    signing_key: SigningKey,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bug inside the verification block must surface as a 500, not "Signature invalid".
+
+    Reporting an internal fault as a bad credential sends the client off chasing
+    its wallet, hides the fault from error tracking, and — with ``from None`` —
+    throws away the traceback that would explain it.
+    """
+    public_key_b58 = _b58encode(bytes(signing_key.verify_key))
+    nonce, issued_at = await _make_challenge(redis, public_key_b58)
+    signature_b64 = _sign_message(signing_key, public_key_b58, nonce, issued_at)
+
+    def _boom(_key: bytes) -> object:
+        raise RuntimeError("simulated internal failure")
+
+    monkeypatch.setattr("app.auth.providers.sws_strategy.VerifyKey", _boom)
+
+    with pytest.raises(RuntimeError, match="simulated internal failure"):
+        await verify_sws(db, redis, public_key_b58, signature_b64, nonce)
