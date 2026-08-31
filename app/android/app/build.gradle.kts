@@ -22,8 +22,17 @@ fun hasKey(key: String) = keystoreProperties.getProperty(key)?.isNotBlank() == t
 
 android {
     namespace = "loonyb.in.jeeves"
-    compileSdk = flutter.compileSdkVersion
+    // Ahead of flutter.compileSdkVersion (36 on Flutter 3.44.1) because
+    // flutter_secure_storage 11 compiles against 37 and AGP 9 enforces the
+    // plugin's floor at checkAarMetadata. Drop back to flutter.compileSdkVersion
+    // once the pinned Flutter defaults to 37 or higher.
+    compileSdk = 37
     ndkVersion = flutter.ndkVersion
+
+    // AGP 9 defaults resValues off; the dev flavor names itself with resValue().
+    buildFeatures {
+        resValues = true
+    }
 
     compileOptions {
         isCoreLibraryDesugaringEnabled = true
@@ -107,7 +116,7 @@ dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
     // Mobile Wallet Adapter client — lets SWS sign-in work with any MWA-compatible
     // Solana wallet app installed on the device (Phantom, Solflare, etc.).
-    implementation("com.solanamobile:mobile-wallet-adapter-clientlib-ktx:2.1.1")
+    implementation("com.solanamobile:mobile-wallet-adapter-clientlib-ktx:2.2.0")
 }
 
 flutter {
