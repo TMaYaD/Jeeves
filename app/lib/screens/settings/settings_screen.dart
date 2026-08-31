@@ -245,14 +245,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final messenger = ScaffoldMessenger.of(context);
     try {
       final json = await ref.read(exportServiceProvider).buildJson();
-      final path = await FilePicker.saveFile(
+      final savedUri = await FilePicker.saveFile(
         dialogTitle: 'Export data',
         fileName: _exportFileName(),
         type: FileType.custom,
         allowedExtensions: const ['json'],
         bytes: Uint8List.fromList(utf8.encode(json)),
       );
-      if (path != null && messenger.mounted) {
+      if (savedUri != null && messenger.mounted) {
         messenger.showSnackBar(
           const SnackBar(content: Text('Data exported')),
         );

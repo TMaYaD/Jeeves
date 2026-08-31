@@ -93,16 +93,6 @@ updates:
     groups:
       app-flutter:
         update-types: [minor, patch]
-    ignore:
-      # file_picker 12.x is still pre-release (12.0.0-beta.x). The beta
-      # deprecates `withData`/`bytes`, which lib/screens/import_screen.dart
-      # uses and which `flutter analyze` reports as fatal infos — so the beta
-      # breaks CI. Skip only the 12.0.0 pre-releases; the lower `-0` bound
-      # opts pre-releases in and `<12.0.0` stops at (but excludes) stable, so
-      # Dependabot will still raise 12.0.0 once it ships — as an individual
-      # major PR — letting us migrate off the deprecated API deliberately.
-      - dependency-name: "file_picker"
-        versions: [">=12.0.0-0 <12.0.0"]
 
   # ---------------------------------------------------------------------------
   # Android side of the Flutter app (app/android/build.gradle.kts).
