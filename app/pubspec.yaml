@@ -69,7 +69,7 @@ dependencies:
   file_picker: ^12.0.0
 
   # Encrypted token storage (JWT)
-  flutter_secure_storage: ^10.3.1
+  flutter_secure_storage: ^11.0.0
 
   # Brand / SVG
   flutter_svg: ^2.3.0
