@@ -18,12 +18,12 @@ dependencies:
     sdk: flutter
 
   # State management
-  flutter_riverpod: ^3.3.1
-  riverpod_annotation: ^4.0.2
+  flutter_riverpod: ^3.4.3
+  riverpod_annotation: ^4.0.7
   meta: ^1.17.0
 
   # Local storage (offline-first)
-  drift: ^2.34.3
+  drift: ^2.34.4
   # Bridges Drift to a sqlite_async connection, which is what the domain store
   # (`database/domain_store_io.dart`) is opened over: one shared connection with
   # a proper write lock, and an update stream that names the tables a write
@@ -36,7 +36,7 @@ dependencies:
   path: ^1.9.0
 
   # HTTP / API
-  dio: ^5.11.0
+  dio: ^5.11.1
   retrofit: ^4.10.0
   # The op-log sync stack's realtime signal socket (dio does not speak
   # WebSocket).
@@ -66,7 +66,7 @@ dependencies:
   shared_preferences: ^2.3.3
 
   # File import
-  file_picker: ^12.1.2
+  file_picker: ^12.2.0
 
   # Encrypted token storage (JWT)
   flutter_secure_storage: ^11.0.0
@@ -108,11 +108,11 @@ dev_dependencies:
   fake_async: ^1.3.3
   flutter_lints: ^6.0.0
   build_runner: ^2.15.1
-  freezed: ^3.2.5
+  freezed: ^4.0.0-dev.3
   json_serializable: ^6.14.1
-  riverpod_generator: ^4.0.4
-  drift_dev: ^2.32.0
-  retrofit_generator: ^10.2.8
+  riverpod_generator: ^4.0.9
+  drift_dev: ^2.34.6
+  retrofit_generator: ^10.2.9
   # Icon generation: flavored configs live in flutter_launcher_icons-<flavor>.yaml
   # at app/ root (per-flavor is the format flutter_launcher_icons supports; see
   # https://pub.dev/packages/flutter_launcher_icons). Regenerate with:
