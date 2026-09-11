@@ -7,7 +7,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/import/jeeves_export.dart';
 import 'package:jeeves/import/nirvana_local_import.dart';
+import 'package:jeeves/import/nirvana_parser.dart' show ParseError;
 import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/providers/import_provider.dart';
 import 'package:jeeves/services/export_service.dart';
 import 'package:jeeves/sync/domain_op_capture.dart'
     show NoopDomainOpCapture, RecordingDomainOpCapture;
@@ -411,12 +413,246 @@ void main() {
       // The valid Outcome landed; the unlocatable junction did not.
       expect(await db.select(db.todos).get(), hasLength(1));
       expect(await db.select(db.todoTags).get(), isEmpty);
-      // importedCount counts only the Outcome that was actually written.
+      // importedCount counts only the Outcome that was actually written, and
+      // the junction is reported as skipped rather than vanishing silently.
       expect(result.importedCount, 1);
+      expect(result.skippedCount, 1);
       // The op log asserts the Outcome but never the skipped junction.
       final authored = recorder.keys.toSet();
       expect(authored, contains('todos/todo-x'));
       expect(authored.any((k) => k.startsWith('todo_tags/')), isFalse);
+    });
+  });
+
+  group('a file this build cannot fully read is refused', () {
+    // The migration these files exist for is one-shot, so the failure that
+    // matters is not an error — it is an import that reports success over a
+    // smaller database. Every case here asserts both halves: it throws, and it
+    // wrote nothing.
+
+    /// An otherwise-valid one-Outcome export, with [envelope] under the
+    /// version key and [extra] merged into its collections.
+    String exportWith({
+      Object? envelope = jeevesExportVersion,
+      Map<String, Object?> extra = const {},
+    }) =>
+        jsonEncode({
+          jeevesExportEnvelopeKey: envelope,
+          jeevesExportCollectionsKey: {
+            'todos': [
+              {
+                'id': 'todo-x',
+                'title': 'Keep me',
+                'created_at': '2026-07-28T05:00:00.000Z',
+                'user_id': _userId,
+                'intent': 'next',
+                'clarified': true,
+              }
+            ],
+            ...extra,
+          },
+        });
+
+    /// Import [json] into a fresh recording store, expecting a [ParseError]
+    /// whose message contains [messageContains], and assert that nothing was
+    /// written and no op authored.
+    Future<void> expectRefusal(String json, String messageContains) async {
+      final recorder = RecordingDomainOpCapture();
+      final db = _openInMemory(recorder: recorder);
+      addTearDown(db.close);
+
+      await expectLater(
+        importJeevesExport(content: json, userId: _userId, db: db),
+        throwsA(isA<ParseError>().having(
+          (e) => e.message,
+          'message',
+          contains(messageContains),
+        )),
+      );
+
+      // Refusal is all-or-nothing: the valid Outcome in the file did not land
+      // either, so the user cannot be left holding half a migration.
+      expect(await db.select(db.todos).get(), isEmpty);
+      expect(recorder.keys, isEmpty);
+    }
+
+    test('a collection with no codec and no rename entry — the renamed case',
+        () async {
+      // Exactly the #715/#716 shape in reverse: a key this build has never
+      // heard of, carrying rows. Walking this build's name list would have
+      // skipped it as if the collection were empty.
+      await expectRefusal(
+        exportWith(extra: {
+          'outcomes': [
+            {'id': 'o-1', 'title': 'Would have vanished', 'user_id': _userId}
+          ],
+        }),
+        'outcomes',
+      );
+    });
+
+    test('every unplaceable collection is named, not just the first', () async {
+      await expectRefusal(
+        exportWith(extra: {
+          'outcomes': [
+            {'id': 'o-1', 'user_id': _userId}
+          ],
+          'outcome_tags': [
+            {'id': 'ot-1', 'user_id': _userId}
+          ],
+        }),
+        'outcome_tags, outcomes',
+      );
+    });
+
+    test('a newer format version', () async {
+      await expectRefusal(
+        exportWith(envelope: jeevesExportVersion + 1),
+        'format v${jeevesExportVersion + 1}',
+      );
+    });
+
+    test('a version that is missing, non-numeric, or nonsense', () async {
+      for (final envelope in <Object?>[null, 'one', true, 0, -1]) {
+        final recorder = RecordingDomainOpCapture();
+        final db = _openInMemory(recorder: recorder);
+        addTearDown(db.close);
+        await expectLater(
+          importJeevesExport(
+              content: exportWith(envelope: envelope),
+              userId: _userId,
+              db: db),
+          throwsA(isA<ParseError>()),
+          reason: 'envelope $envelope must be refused',
+        );
+        expect(await db.select(db.todos).get(), isEmpty,
+            reason: 'envelope $envelope wrote rows anyway');
+      }
+    });
+
+    test('the refusal reaches the user through the import surface', () async {
+      // The whole point is that the user is told. Drive the real entry point
+      // and the real notifier, and assert the message lands in ImportState.
+      final db = _openInMemory();
+      addTearDown(db.close);
+      final container = ProviderContainer(
+        overrides: [databaseProvider.overrideWithValue(db)],
+      );
+      addTearDown(container.dispose);
+
+      final json = exportWith(envelope: jeevesExportVersion + 1);
+      await container.read(importNotifierProvider.notifier).importFile(
+            Uint8List.fromList(utf8.encode(json)),
+            'backup.json',
+            'auto',
+          );
+
+      final state = container.read(importNotifierProvider);
+      expect(state.result, isNull);
+      expect(state.error, contains('format v${jeevesExportVersion + 1}'));
+      expect(await db.select(db.todos).get(), isEmpty);
+    });
+
+    test('an empty unplaceable collection is tolerated, not refused', () async {
+      // Nothing to drop, so refusing would only reject a file written by a
+      // build that carries a collection this one does not.
+      final db = _openInMemory();
+      addTearDown(db.close);
+      final result = await importJeevesExport(
+        content: exportWith(extra: {'outcomes': <Object?>[]}),
+        userId: _userId,
+        db: db,
+      );
+
+      expect(result.importedCount, 1);
+      expect(await db.select(db.todos).get(), hasLength(1));
+    });
+
+    test('a real export is still accepted unchanged', () async {
+      // The guards must not have narrowed what a genuine file may contain.
+      final source = _openInMemory();
+      addTearDown(source.close);
+      await _seed(source);
+      final json = encodeJeevesExportJson(
+          await buildJeevesExport(db: source, userId: _userId));
+
+      final restored = _openInMemory();
+      addTearDown(restored.close);
+      final result =
+          await importJeevesExport(content: json, userId: _userId, db: restored);
+
+      expect(result.importedCount, 2);
+      expect(result.skippedCount, 0);
+    });
+  });
+
+  group('rows the file carried but this device did not keep are counted', () {
+    test('a row with no usable id is skipped and reported', () async {
+      final json = jsonEncode({
+        jeevesExportEnvelopeKey: jeevesExportVersion,
+        jeevesExportCollectionsKey: {
+          'todos': [
+            {
+              'id': 'todo-x',
+              'title': 'Keep me',
+              'created_at': '2026-07-28T05:00:00.000Z',
+              'user_id': _userId,
+              'intent': 'next',
+              'clarified': true,
+            },
+            {'title': 'No id at all', 'user_id': _userId},
+            'not even a row',
+          ],
+        },
+      });
+
+      final db = _openInMemory();
+      addTearDown(db.close);
+      final result =
+          await importJeevesExport(content: json, userId: _userId, db: db);
+
+      expect(result.importedCount, 1);
+      // Previously these two vanished behind a zero skippedCount, so the
+      // summary read as a clean import of a file it had not fully taken.
+      expect(result.skippedCount, 2);
+      expect(await db.select(db.todos).get(), hasLength(1));
+    });
+
+  });
+
+  group('the rename table', () {
+    // The table is empty until the #715/#716 vocabulary rename lands. These
+    // guard its shape so the entries that rename adds cannot be malformed, and
+    // pin the resolver the importer routes every key through.
+
+    test('resolves current names to themselves and strangers to null', () {
+      for (final name in jeevesExportCollections) {
+        expect(resolveJeevesExportCollection(name), name);
+      }
+      expect(resolveJeevesExportCollection('outcomes'), isNull);
+      // A real collection, but never exported — so not placeable from a file.
+      expect(resolveJeevesExportCollection('user_preferences'), isNull);
+      expect(resolveJeevesExportCollection(''), isNull);
+    });
+
+    test('every entry retires a name and targets a live collection', () {
+      jeevesExportCollectionRenames.forEach((oldName, newName) {
+        expect(jeevesExportCollections, contains(newName),
+            reason: '$oldName renames to $newName, which no build carries');
+        expect(jeevesExportCollections, isNot(contains(oldName)),
+            reason: '$oldName is still a live collection, so it is not a '
+                'rename — the entry would shadow the real one');
+        expect(resolveJeevesExportCollection(oldName), newName);
+      });
+    });
+
+    test('a rename is only ever reachable behind a version bump', () {
+      // A renamed key can only appear in a file older than the rename, and the
+      // rename is a breaking change to the keys — so a build that carries
+      // entries must read more than one format version.
+      if (jeevesExportCollectionRenames.isNotEmpty) {
+        expect(jeevesExportVersion, greaterThan(1));
+      }
     });
   });
 
