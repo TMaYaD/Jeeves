@@ -293,31 +293,6 @@ Future<ImportResult> importJeevesExport({
   );
 }
 
-/// Refuse a file whose envelope version this build has no code for.
-///
-/// The version is the one field that says what the rest of the document means,
-/// so reading it is the difference between a guard and a decoration: it was
-/// written on export from the start and never compared on import. A *newer*
-/// file is the dangerous direction — its shapes are unknown here, and the
-/// renames of [jeevesExportCollectionRenames] only run backwards.
-void _checkVersion(Object? raw) {
-  final version = raw is int ? raw : (raw is num ? raw.toInt() : null);
-  if (version == null || version < 1) {
-    throw ParseError(
-      'This export does not say which format it is in '
-      '("$jeevesExportEnvelopeKey": ${raw == null ? 'missing' : '$raw'}), '
-      'so Jeeves cannot safely read it.',
-    );
-  }
-  if (version > jeevesExportVersion) {
-    throw ParseError(
-      'This export is in format v$version, and this version of Jeeves reads '
-      'up to v$jeevesExportVersion. Update Jeeves and import it again — '
-      'nothing was imported.',
-    );
-  }
-}
-
 /// The wire field map to assert for one imported row: exactly the codec's
 /// columns, taking each value verbatim from the export (it is already
 /// wire-encoded), but overriding `user_id` with the importing account's.
