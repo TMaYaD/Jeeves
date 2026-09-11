@@ -45,7 +45,35 @@ import 'nirvana_parser.dart' show ParseError;
 /// The export format version, carried under [jeevesExportEnvelopeKey]. Bumped
 /// only for a breaking change to the on-disk shape; [importJeevesExport] is
 /// tolerant of missing fields, so an additive column change does not need one.
+///
+/// **Renaming a collection is a breaking change and needs a bump**, because the
+/// collection names are the JSON keys: see [jeevesExportCollectionRenames].
 const int jeevesExportVersion = 1;
+
+/// Collection names this build no longer uses, mapped to the name it does.
+///
+/// The collection names *are* the export's JSON keys, so renaming a collection
+/// renames a key and every file written before the rename spells it the old
+/// way. This table is how such a file stays readable: [importJeevesExport]
+/// resolves every key it finds through here before looking up a codec, so an
+/// old spelling lands in the right table instead of being skipped.
+///
+/// A rename therefore lands in three places at once — the codec constant, an
+/// entry here, and a [jeevesExportVersion] bump. Leaving the entry out is the
+/// silent-data-loss case this table exists to make impossible: a key with no
+/// codec and no rename is refused, never dropped.
+const Map<String, String> jeevesExportCollectionRenames = <String, String>{};
+
+/// The collection this build would store [nameInFile] in, or `null` if it does
+/// not recognise the name at all — the inverse of writing the key on export.
+///
+/// A current name resolves to itself; a superseded one resolves through
+/// [jeevesExportCollectionRenames]. `user_preferences` resolves to `null` here
+/// even though it is a real collection, because an export never carries it.
+String? resolveJeevesExportCollection(String nameInFile) {
+  final current = jeevesExportCollectionRenames[nameInFile] ?? nameInFile;
+  return jeevesExportCollections.contains(current) ? current : null;
+}
 
 /// The top-level key whose presence *is* the format discriminator. A Nirvana
 /// JSON export is a bare list, so it decodes to a `List`, never a `Map` carrying
@@ -142,6 +170,12 @@ Map<String, Object?> _encodeRow(CollectionCodec codec, QueryRow row) {
 /// True only for a JSON object carrying the [jeevesExportEnvelopeKey] envelope
 /// and a [jeevesExportCollectionsKey] map. A Nirvana JSON export decodes to a
 /// list; a CSV export is not JSON at all — both are false here.
+///
+/// **The envelope's value is deliberately not judged here.** An export this
+/// build cannot read is still a Jeeves export, and saying so is what routes it
+/// to [importJeevesExport] and its specific refusal. Screening the version out
+/// at detection would drop the file through to the Nirvana parser, which would
+/// fail with an error about the wrong format entirely.
 bool isJeevesExport(String content) {
   final Object? decoded;
   try {
@@ -176,7 +210,26 @@ class _PendingRow {
 ///
 /// The returned [ImportResult] reuses the Nirvana shape so no calling surface
 /// changes: [ImportResult.importedCount] counts the Outcomes imported (the
-/// "tasks" the existing copy speaks of); the other two fields stay zero.
+/// "tasks" the existing copy speaks of), [ImportResult.skippedCount] the rows
+/// the file carried but this device did not keep, and `projectTagsCreated`
+/// stays zero.
+///
+/// **A file this build cannot fully read is refused, never partially
+/// imported.** The migration this format exists for is one-shot, so an import
+/// that reports success over a smaller database is the worst available
+/// outcome — worse than an error the user can act on. Three checks run before
+/// a single row is written, and each throws [ParseError]:
+///
+/// * the [jeevesExportEnvelopeKey] version is missing, not a number, or not a
+///   version that has ever existed;
+/// * that version is newer than [jeevesExportVersion], so the file may carry
+///   shapes this build has no code for;
+/// * the file carries a non-empty collection that resolves to no codec
+///   ([resolveJeevesExportCollection]) — the renamed-collection case.
+///
+/// An *empty* unrecognised collection is tolerated: there is nothing to drop,
+/// so refusing would only punish a file written by a build that added a
+/// collection this one lacks.
 ///
 /// Throws [ParseError] if [content] is not a structurally valid export.
 Future<ImportResult> importJeevesExport({
@@ -193,20 +246,53 @@ Future<ImportResult> importJeevesExport({
   if (decoded is! Map || decoded[jeevesExportCollectionsKey] is! Map) {
     throw const ParseError('Not a Jeeves export');
   }
+  _checkVersion(decoded[jeevesExportEnvelopeKey]);
   final collections = decoded[jeevesExportCollectionsKey] as Map;
+
+  // Resolve the file's own keys — not this build's name list — so a key this
+  // build cannot place is seen rather than passed over. Walking the build's
+  // list instead is what made a renamed collection indistinguishable from an
+  // empty one.
+  final rowsByCollection = <String, List<Object?>>{};
+  final unreadable = <String>[];
+  for (final entry in collections.entries) {
+    final key = entry.key;
+    final rows = entry.value;
+    final resolved = key is String ? resolveJeevesExportCollection(key) : null;
+    if (resolved == null) {
+      // Nothing to lose in an empty one; a non-empty one would be dropped.
+      if (rows is List && rows.isNotEmpty) unreadable.add('$key');
+      continue;
+    }
+    if (rows is List) rowsByCollection[resolved] = rows;
+  }
+  if (unreadable.isNotEmpty) {
+    unreadable.sort();
+    throw ParseError(
+      'This export carries data Jeeves cannot place: '
+      '${unreadable.join(', ')}. Nothing was imported — importing would have '
+      'dropped those records silently.',
+    );
+  }
 
   // Flatten into one ordered work list so a fixed-size batch can span a
   // collection boundary the way the Nirvana import's task batches do — the
   // parents-first order is preserved because collections are appended in it.
   final work = <_PendingRow>[];
+  var skippedRowCount = 0;
   for (final name in jeevesExportCollections) {
     final codec = collectionCodecs[name]!;
-    final rows = collections[name];
-    if (rows is! List) continue;
+    final rows = rowsByCollection[name];
+    if (rows == null) continue;
     for (final entry in rows) {
-      if (entry is! Map) continue;
-      final id = entry['id'];
-      if (id is! String) continue;
+      // A row with no usable id cannot be written or located. It is counted
+      // rather than passed over, so the summary never reports a clean import
+      // over a file some of whose rows did not survive it.
+      final id = entry is Map ? entry['id'] : null;
+      if (entry is! Map || id is! String) {
+        skippedRowCount++;
+        continue;
+      }
       work.add(_PendingRow(codec, id, entry));
     }
   }
@@ -221,7 +307,10 @@ Future<ImportResult> importJeevesExport({
         // [_writeRow] cannot locate the row (an unresolvable junction key),
         // it skips both the write and the count, so the op log never asserts a
         // row this device did not keep and importedCount never overstates.
-        if (!await _writeRow(db, row.codec, row.id, fields)) continue;
+        if (!await _writeRow(db, row.codec, row.id, fields)) {
+          skippedRowCount++;
+          continue;
+        }
         // The op that makes this row reach the user's other devices. On an
         // un-enrolled device the seam drops it; on an enrolled one it syncs.
         db.opCapture.write(
@@ -237,9 +326,34 @@ Future<ImportResult> importJeevesExport({
   _notifyAllViews(db);
   return ImportResult(
     importedCount: importedOutcomeCount,
-    skippedCount: 0,
+    skippedCount: skippedRowCount,
     projectTagsCreated: 0,
   );
+}
+
+/// Refuse a file whose envelope version this build has no code for.
+///
+/// The version is the one field that says what the rest of the document means,
+/// so reading it is the difference between a guard and a decoration: it was
+/// written on export from the start and never compared on import. A *newer*
+/// file is the dangerous direction — its shapes are unknown here, and the
+/// renames of [jeevesExportCollectionRenames] only run backwards.
+void _checkVersion(Object? raw) {
+  final version = raw is int ? raw : (raw is num ? raw.toInt() : null);
+  if (version == null || version < 1) {
+    throw ParseError(
+      'This export does not say which format it is in '
+      '("$jeevesExportEnvelopeKey": ${raw == null ? 'missing' : '$raw'}), '
+      'so Jeeves cannot safely read it.',
+    );
+  }
+  if (version > jeevesExportVersion) {
+    throw ParseError(
+      'This export is in format v$version, and this version of Jeeves reads '
+      'up to v$jeevesExportVersion. Update Jeeves and import it again — '
+      'nothing was imported.',
+    );
+  }
 }
 
 /// The wire field map to assert for one imported row: exactly the codec's
