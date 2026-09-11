@@ -175,9 +175,25 @@ flutter pub get && dart run build_runner build --delete-conflicting-outputs
 flutter build apk --profile --split-per-abi --target-platform android-arm64 --flavor dev
 ```
 
-Wall-clock timings from inside the guest are a ceiling, not a benchmark: the
-host is a dual-core i5 that is CPU-oversubscribed, so a busy thread sees a
-fraction of a core.
+### How it compares to GitHub
+
+Same command, same Flutter and JDK, against `pr-apk.yml`'s `build-and-distribute`
+job (which restores Gradle and pub caches, so its APK step is always warm):
+
+| Step | GitHub | VM, cold | VM, warm |
+|------|-------:|---------:|---------:|
+| `flutter pub get` | 5s | 23s | — |
+| `dart run build_runner build` | 45s | 59s | — |
+| `flutter build apk …` | 118s | 3,123s | 110s |
+
+**Warm, the VM matches GitHub.** The 26× gap is cold-cache work — downloading the
+Gradle distribution, resolving dependencies, installing CMake and dexing every
+external library — not throughput, and Dart-side work is only ~1.3× slower even
+cold. So the thing to protect is the Gradle cache and daemon: leave the VM
+running between builds rather than starting clean, and a `flutter clean` costs
+close to an hour. Treat all three columns as ceilings rather than benchmarks
+anyway; the host is a dual-core i5 that is CPU-oversubscribed, so a busy thread
+sees a fraction of a core.
 
 ### Two traps
 
