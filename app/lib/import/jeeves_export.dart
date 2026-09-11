@@ -246,53 +246,18 @@ Future<ImportResult> importJeevesExport({
   if (decoded is! Map || decoded[jeevesExportCollectionsKey] is! Map) {
     throw const ParseError('Not a Jeeves export');
   }
-  _checkVersion(decoded[jeevesExportEnvelopeKey]);
   final collections = decoded[jeevesExportCollectionsKey] as Map;
 
-  // Resolve the file's own keys — not this build's name list — so a key this
-  // build cannot place is seen rather than passed over. Walking the build's
-  // list instead is what made a renamed collection indistinguishable from an
-  // empty one.
-  final rowsByCollection = <String, List<Object?>>{};
-  final unreadable = <String>[];
-  for (final entry in collections.entries) {
-    final key = entry.key;
-    final rows = entry.value;
-    final resolved = key is String ? resolveJeevesExportCollection(key) : null;
-    if (resolved == null) {
-      // Nothing to lose in an empty one; a non-empty one would be dropped.
-      if (rows is List && rows.isNotEmpty) unreadable.add('$key');
-      continue;
-    }
-    if (rows is List) rowsByCollection[resolved] = rows;
-  }
-  if (unreadable.isNotEmpty) {
-    unreadable.sort();
-    throw ParseError(
-      'This export carries data Jeeves cannot place: '
-      '${unreadable.join(', ')}. Nothing was imported — importing would have '
-      'dropped those records silently.',
-    );
-  }
-
-  // Flatten into one ordered work list so a fixed-size batch can span a
-  // collection boundary the way the Nirvana import's task batches do — the
-  // parents-first order is preserved because collections are appended in it.
+  // PRE-FIX BEHAVIOUR, restored to prove the new tests fail without the fix.
   final work = <_PendingRow>[];
-  var skippedRowCount = 0;
   for (final name in jeevesExportCollections) {
     final codec = collectionCodecs[name]!;
-    final rows = rowsByCollection[name];
-    if (rows == null) continue;
+    final rows = collections[name];
+    if (rows is! List) continue;
     for (final entry in rows) {
-      // A row with no usable id cannot be written or located. It is counted
-      // rather than passed over, so the summary never reports a clean import
-      // over a file some of whose rows did not survive it.
-      final id = entry is Map ? entry['id'] : null;
-      if (entry is! Map || id is! String) {
-        skippedRowCount++;
-        continue;
-      }
+      if (entry is! Map) continue;
+      final id = entry['id'];
+      if (id is! String) continue;
       work.add(_PendingRow(codec, id, entry));
     }
   }
@@ -307,10 +272,7 @@ Future<ImportResult> importJeevesExport({
         // [_writeRow] cannot locate the row (an unresolvable junction key),
         // it skips both the write and the count, so the op log never asserts a
         // row this device did not keep and importedCount never overstates.
-        if (!await _writeRow(db, row.codec, row.id, fields)) {
-          skippedRowCount++;
-          continue;
-        }
+        if (!await _writeRow(db, row.codec, row.id, fields)) continue;
         // The op that makes this row reach the user's other devices. On an
         // un-enrolled device the seam drops it; on an enrolled one it syncs.
         db.opCapture.write(
@@ -326,7 +288,7 @@ Future<ImportResult> importJeevesExport({
   _notifyAllViews(db);
   return ImportResult(
     importedCount: importedOutcomeCount,
-    skippedCount: skippedRowCount,
+    skippedCount: 0,
     projectTagsCreated: 0,
   );
 }
