@@ -505,11 +505,61 @@ void main() {
       );
     });
 
+    test('a collection that is not a list of records — a name this build knows',
+        () async {
+      // A recognised key whose value is an object, not an array. The lookup
+      // succeeds and the value is still unusable, so passing over it drops
+      // every record it was meant to carry just as quietly as a rename would.
+      await expectRefusal(
+        exportWith(extra: {
+          'todo_tags': {'id': 'tt-1', 'user_id': _userId},
+        }),
+        'todo_tags',
+      );
+    });
+
+    test('a collection that is not a list of records — a name it does not',
+        () async {
+      // The unrecognised-name path used to test `rows is List && isNotEmpty`,
+      // so a non-list value under an unknown key fell through both guards and
+      // was ignored in silence.
+      await expectRefusal(
+        exportWith(extra: {
+          'outcomes': {'id': 'o-1', 'user_id': _userId},
+        }),
+        'outcomes',
+      );
+    });
+
     test('a newer format version', () async {
       await expectRefusal(
         exportWith(envelope: jeevesExportVersion + 1),
         'format v${jeevesExportVersion + 1}',
       );
+    });
+
+    test('a fractional version is not rounded down into a version we read',
+        () async {
+      // Truncating would read 1.5 as v1 and import a document that is not in
+      // v1 — the guard silently back to being a decoration. A whole-valued
+      // double is refused on the same rule: an export writes the version as an
+      // integer, so anything else is a file we cannot vouch for.
+      for (final envelope in <Object?>[jeevesExportVersion + 0.5, 1.0]) {
+        final recorder = RecordingDomainOpCapture();
+        final db = _openInMemory(recorder: recorder);
+        addTearDown(db.close);
+        await expectLater(
+          importJeevesExport(
+              content: exportWith(envelope: envelope),
+              userId: _userId,
+              db: db),
+          throwsA(isA<ParseError>()),
+          reason: 'envelope $envelope must be refused, not truncated',
+        );
+        expect(await db.select(db.todos).get(), isEmpty,
+            reason: 'envelope $envelope wrote rows anyway');
+        expect(recorder.keys, isEmpty);
+      }
     });
 
     test('a version that is missing, non-numeric, or nonsense', () async {
