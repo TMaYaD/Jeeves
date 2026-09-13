@@ -217,15 +217,17 @@ class _PendingRow {
 /// **A file this build cannot fully read is refused, never partially
 /// imported.** The migration this format exists for is one-shot, so an import
 /// that reports success over a smaller database is the worst available
-/// outcome — worse than an error the user can act on. Three checks run before
+/// outcome — worse than an error the user can act on. Four checks run before
 /// a single row is written, and each throws [ParseError]:
 ///
-/// * the [jeevesExportEnvelopeKey] version is missing, not a number, or not a
+/// * the [jeevesExportEnvelopeKey] version is missing, not an integer, or not a
 ///   version that has ever existed;
 /// * that version is newer than [jeevesExportVersion], so the file may carry
 ///   shapes this build has no code for;
 /// * the file carries a non-empty collection that resolves to no codec
-///   ([resolveJeevesExportCollection]) — the renamed-collection case.
+///   ([resolveJeevesExportCollection]) — the renamed-collection case;
+/// * the file carries a collection whose value is not a list of rows at all,
+///   under any name — its records could not be written either way.
 ///
 /// An *empty* unrecognised collection is tolerated: there is nothing to drop,
 /// so refusing would only punish a file written by a build that added a
@@ -254,24 +256,39 @@ Future<ImportResult> importJeevesExport({
   // list instead is what made a renamed collection indistinguishable from an
   // empty one.
   final rowsByCollection = <String, List<Object?>>{};
-  final unreadable = <String>[];
+  final unplaceable = <String>[];
+  final malformed = <String>[];
   for (final entry in collections.entries) {
     final key = entry.key;
     final rows = entry.value;
+    // A collection is a list of rows. Any other value is not this format, and
+    // whatever it was meant to carry cannot be written — the same silent loss
+    // as an unplaceable name, reached by a different route. Refuse it whether
+    // or not this build recognises the name.
+    if (rows is! List) {
+      malformed.add('$key');
+      continue;
+    }
     final resolved = key is String ? resolveJeevesExportCollection(key) : null;
     if (resolved == null) {
       // Nothing to lose in an empty one; a non-empty one would be dropped.
-      if (rows is List && rows.isNotEmpty) unreadable.add('$key');
+      if (rows.isNotEmpty) unplaceable.add('$key');
       continue;
     }
-    if (rows is List) rowsByCollection[resolved] = rows;
+    rowsByCollection[resolved] = rows;
   }
-  if (unreadable.isNotEmpty) {
-    unreadable.sort();
+  if (unplaceable.isNotEmpty || malformed.isNotEmpty) {
+    unplaceable.sort();
+    malformed.sort();
+    final faults = <String>[
+      if (unplaceable.isNotEmpty)
+        'collections Jeeves cannot place: ${unplaceable.join(', ')}',
+      if (malformed.isNotEmpty)
+        'collections that are not lists of records: ${malformed.join(', ')}',
+    ];
     throw ParseError(
-      'This export carries data Jeeves cannot place: '
-      '${unreadable.join(', ')}. Nothing was imported — importing would have '
-      'dropped those records silently.',
+      'This export carries ${faults.join('; and ')}. Nothing was imported — '
+      'importing would have dropped those records silently.',
     );
   }
 
@@ -338,8 +355,12 @@ Future<ImportResult> importJeevesExport({
 /// written on export from the start and never compared on import. A *newer*
 /// file is the dangerous direction — its shapes are unknown here, and the
 /// renames of [jeevesExportCollectionRenames] only run backwards.
+///
+/// Only an integer counts. Truncating a fractional version would read `1.5` as
+/// v1 and import a document in a format that is not v1 — turning the guard back
+/// into the decoration it was.
 void _checkVersion(Object? raw) {
-  final version = raw is int ? raw : (raw is num ? raw.toInt() : null);
+  final version = raw is int ? raw : null;
   if (version == null || version < 1) {
     throw ParseError(
       'This export does not say which format it is in '
