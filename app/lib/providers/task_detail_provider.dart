@@ -144,10 +144,25 @@ class TaskDetailNotifier {
         title: title.trim(),
       );
 
-  Future<void> updateNotes(String notes) => _db.todoDao.updateFields(
-        _todoId,
-        notes: notes,
-      );
+  /// Writes the notes, nulling the column when the field is emptied.
+  ///
+  /// `null` is "no change" to `TodoDao.updateFields`, so a clear has to travel
+  /// as `clearNotes`: passing `notes: ''` stores `''`, and every
+  /// `notes == null` read then treats that as "has notes" (#528, #705).
+  ///
+  /// Trims, like [updateTitle] and like the two surfaces that already honour
+  /// the contract (`ActiveFocusScreen`, `ClarifyCard`), so whitespace-only
+  /// notes are a clear rather than stored verbatim. All three Outcome-detail
+  /// notes writers — the focus-loss listener, the markdown-checkbox write and
+  /// the `dispose()` backstop — go through here, so they cannot disagree.
+  Future<void> updateNotes(String notes) {
+    final trimmed = notes.trim();
+    return _db.todoDao.updateFields(
+      _todoId,
+      notes: trimmed.isNotEmpty ? trimmed : null,
+      clearNotes: trimmed.isEmpty,
+    );
+  }
 
   Future<void> setEnergyLevel(String level) => _db.todoDao.updateFields(
         _todoId,
