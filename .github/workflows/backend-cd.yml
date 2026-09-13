@@ -131,11 +131,40 @@ jobs:
       # maintainer-set, so this is not closing a live hole; it keeps the whole
       # template-injection class off the shell in the one place it could ever
       # appear in this workflow.
-      - name: Add Dokku host to known hosts
+
+      # The host key is pinned rather than learned with ssh-keyscan at deploy
+      # time.  ssh-keyscan trusts whatever answers on port 22, which makes every
+      # deploy a fresh trust-on-first-use.  DOKKU_HOST_KEY holds the
+      # known_hosts line(s) for DOKKU_HOST; a host public key is not a secret,
+      # so it is a repository variable — visible in logs and in review, which is
+      # what makes a wrong value noticeable.
+      #
+      # Rotating the host or its key means updating DOKKU_HOST_KEY.  See
+      # "Deploy host trust" in docs/BACKEND_GUIDELINES.md.
+      - name: Pin the Dokku host key
         if: steps.freshness.outputs.current == 'true'
         env:
           DOKKU_HOST: ${{ vars.DOKKU_HOST }}
-        run: ssh-keyscan -H "${DOKKU_HOST}" >> ~/.ssh/known_hosts
+          DOKKU_HOST_KEY: ${{ vars.DOKKU_HOST_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DOKKU_HOST" ] || [ -z "$DOKKU_HOST_KEY" ]; then
+            echo "::error::Repository variables DOKKU_HOST and DOKKU_HOST_KEY must both be set. See 'Deploy host trust' in docs/BACKEND_GUIDELINES.md."
+            exit 1
+          fi
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          # Overwrite rather than append: the pinned key is the whole of what
+          # this job is allowed to trust, so anything already there is dropped.
+          printf '%s\n' "$DOKKU_HOST_KEY" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+          # Fail here rather than at push time if the variable does not actually
+          # cover this host — otherwise a mismatched pair reads as a deploy
+          # failure instead of a configuration error.
+          if ! ssh-keygen -F "$DOKKU_HOST" -f "$HOME/.ssh/known_hosts" > /dev/null; then
+            echo "::error::DOKKU_HOST_KEY contains no known_hosts entry for $DOKKU_HOST."
+            exit 1
+          fi
 
       # Dokku builds from a git archive with no `.git`, so the running process
       # cannot derive its own version — it has to be handed one.  This is a
@@ -151,13 +180,22 @@ jobs:
           DOKKU_HOST: ${{ vars.DOKKU_HOST }}
         run: |
           set -euo pipefail
-          ssh -o BatchMode=yes "dokku@${DOKKU_HOST}" \
+          # StrictHostKeyChecking=yes refuses the connection on a mismatch
+          # instead of prompting; GlobalKnownHostsFile=/dev/null means the
+          # runner image's own known_hosts cannot satisfy the check, so the
+          # pinned key is the only thing that can.
+          ssh -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o GlobalKnownHostsFile=/dev/null \
+            "dokku@${DOKKU_HOST}" \
             config:set --no-restart jeeves "SERVER_VERSION=${VERSION}"
 
       - name: Deploy to Dokku
         if: steps.freshness.outputs.current == 'true' && steps.backend-changes.outputs.changed == 'true'
         env:
           DOKKU_HOST: ${{ vars.DOKKU_HOST }}
+          # Same pinning as the step above, applied to the transport git uses.
+          GIT_SSH_COMMAND: ssh -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null
         run: |
           git remote add dokku "ssh://dokku@${DOKKU_HOST}/jeeves"
           git push dokku HEAD:main --force
