@@ -1,0 +1,38 @@
+name: Tools CI
+
+# The host-side scripts in tools/ are stdlib-only and belong to no package, so
+# neither backend-ci nor flutter-ci reaches them. They have real behaviour
+# worth pinning — builder_run.py decides whether a red on the x86_64 builder is
+# readable at all — so they get their own job.
+#
+# `tools/tests` is both the start and the top-level directory: tools/ is not a
+# Python package, and unittest discovery refuses a start directory it cannot
+# import from the top.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "tools/**"
+      - ".github/workflows/tools-ci.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "tools/**"
+      - ".github/workflows/tools-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tools tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run tools tests
+        run: python3 -m unittest discover -s tools/tests -t tools/tests -v
