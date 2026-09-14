@@ -137,7 +137,7 @@ Recovery options, in order of preference:
 ## The `jeeves-builder` Android build VM
 
 A VirtualBox guest on the Mac that runs the Android toolchain the host cannot:
-Ubuntu 24.04, 4 vCPU, 7 GB RAM, Temurin JDK 17 at `~/jdk17`, Android SDK at
+Ubuntu 24.04, 2 vCPU, 6 GB RAM, Temurin JDK 17 at `~/jdk17`, Android SDK at
 `~/Android/sdk`, Flutter at `~/flutter`. Both versions track the pins CI uses —
 `java-version: 17` in the workflows and `app/.fvmrc` for Flutter — so a mismatch
 here means one of those moved.
@@ -145,7 +145,7 @@ here means one of those moved.
 ### Start, stop, reach
 
 ```bash
-VBoxManage startvm jeeves-builder --type headless   # allow ~4 min to boot
+VBoxManage startvm jeeves-builder --type headless   # SSH answers in ~20s
 ssh -i ~/.ssh/id_ed25519 -p 2222 paperclipai@127.0.0.1
 VBoxManage controlvm jeeves-builder acpipowerbutton  # graceful shutdown
 ```
@@ -159,6 +159,34 @@ The guest trusts the host key in `~/.ssh/id_ed25519` because the cloud-init seed
 ISO carries its public half. Regenerating that host key locks the VM out, and
 re-seeding does not fix it: cloud-init skips `users:` for a user that already
 exists, so a replacement key has to be installed from `runcmd`.
+
+### The 2 vCPU / 6 GB caps, and how to change them
+
+Both caps are deliberate, and both are held against a 4-core 16 GB host that the
+agent fleet already oversubscribes. **VirtualBox commits the whole memory cap to
+the host the moment the guest boots, not as the guest grows into it** — a
+freshly-booted guest using 440 MB still costs the host the full cap. So the
+number is not a ceiling the guest might one day reach; it is the rent, paid up
+front, every boot. On a host with 16 GB that is the difference between the VM
+taking a third and taking a half.
+
+Changing either needs the VM genuinely powered off — `savestate` will not do,
+and a running VM refuses:
+
+```bash
+VBoxManage controlvm jeeves-builder acpipowerbutton     # wait for poweroff
+VBoxManage modifyvm jeeves-builder --memory 6144        # or --cpus 2
+VBoxManage startvm jeeves-builder --type headless
+```
+
+To roll back to the previous 8 GB, run the same three lines with `--memory 8192`.
+
+6 GB was sized off a measured build rather than guessed: the full `pr-apk.yml`
+command peaks at **1.6 GB of anonymous memory and 3.4 GB including page cache,
+with no swap**, so an ordinary build has most of a cache's worth of headroom.
+The evidence would support 4 GB; what argues against it is `-Xmx8G` in
+`app/android/gradle.properties`, which lets the Gradle daemon keep growing past
+a 4 GB guest before it collects hard.
 
 ### Build
 
