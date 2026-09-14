@@ -6,6 +6,7 @@ import uuid
 import base58
 from fastapi import HTTPException, status
 from nacl.exceptions import BadSignatureError
+from nacl.exceptions import TypeError as NaclTypeError
 from nacl.signing import VerifyKey
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -84,11 +85,22 @@ async def verify_sws(
     ).encode()
 
     # Step 3: verify ed25519 signature.
+    #
+    # Only bad-credential failures belong in this clause — anything else is a bug
+    # in our own code and must surface as a 500 with its traceback intact, not as
+    # a misleading "Signature invalid" the client would chase back to its wallet.
+    #   BadSignatureError  vk.verify on a forged or corrupt signature.
+    #   ValueError         b58decode on non-alphabet input, b64decode's
+    #                      binascii.Error, and nacl's own ValueError for a key or
+    #                      signature of the wrong length.
+    #   NaclTypeError      VerifyKey on a non-bytes key.  Deliberately nacl's
+    #                      subclass and not the builtin: a plain TypeError raised
+    #                      in here is a bug, not a bad credential.
     try:
         vk = VerifyKey(base58.b58decode(public_key_b58))
         sig = base64.b64decode(signature_b64)
         vk.verify(message, sig)
-    except BadSignatureError, Exception:
+    except BadSignatureError, ValueError, NaclTypeError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Signature invalid",
