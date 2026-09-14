@@ -1821,17 +1821,17 @@ void main() {
       expect((await rawRow('t'))['notes'], 'Ask the barista');
     });
 
-    // CHARACTERISATION, not a requirement — pins today's behaviour so #705
-    // cannot change it silently.
+    // Was a CHARACTERISATION test pinning the `''` write; #705 flipped it to
+    // the requirement it was guarding.
     //
-    // `TaskDetailNotifier.updateNotes` passes `notes:` with no `clearNotes`
-    // flag, so emptying the field on this screen stores `''` rather than
-    // nulling the column — diverging from `ActiveFocusScreen` and
-    // `ClarifyCard`. The backstop deliberately routes through the same
-    // `updateNotes` the focus-loss listener uses, inheriting the divergence
-    // rather than manufacturing a disagreement between the screen's two exits.
-    // Fixing #705 must flip this expectation to `isNull`.
-    testWidgets('an emptied notes field flushes as an empty string, not NULL '
+    // `TaskDetailNotifier.updateNotes` now sends `clearNotes` for an emptied
+    // field, so the backstop nulls the column — and because it deliberately
+    // routes through the same `updateNotes` the focus-loss listener uses, the
+    // screen's two exits still cannot disagree.
+    //
+    // Read raw: `TodoDao.getTodo`'s D2 projection COALESCEs the current
+    // Action's values over the columns, so it cannot tell `''` from NULL here.
+    testWidgets('an emptied notes field flushes as NULL, not an empty string '
         '(#705)', (tester) async {
       final todo =
           await _insertAt(db, id: 't', title: 'Buy milk', notes: 'Ask them');
@@ -1852,7 +1852,81 @@ void main() {
       await tester.enterText(find.byKey(const Key('task_detail_notes')), '');
       await unmountWhileFocused(tester);
 
-      expect((await rawRow('t'))['notes'], '');
+      expect((await rawRow('t'))['notes'], isNull);
+    });
+
+    // The other exit. Focus loss is the primary trigger (ADR-0023), so it gets
+    // its own assertion rather than riding on the teardown backstop's.
+    testWidgets('an emptied notes field nulls the column on focus loss (#705)',
+        (tester) async {
+      final todo =
+          await _insertAt(db, id: 't', title: 'Buy milk', notes: 'Ask them');
+      final (widget, router) = _buildScreen(db, 't', initialTodo: todo);
+      await _showTaskDetail(tester, widget, router, 't');
+
+      await openNotesEditor(tester);
+      await tester.enterText(find.byKey(const Key('task_detail_notes')), '');
+      await loseFocus(tester);
+
+      expect((await rawRow('t'))['notes'], isNull);
+    });
+
+    // #705 decided the trim question the way `updateTitle`, `ActiveFocusScreen`
+    // and `ClarifyCard` already had: whitespace-only is empty. Without the trim
+    // this screen would store `'   '` — a third answer, and one every
+    // `notes == null` read would score as "has notes".
+    testWidgets('whitespace-only notes null the column too (#705)',
+        (tester) async {
+      final todo =
+          await _insertAt(db, id: 't', title: 'Buy milk', notes: 'Ask them');
+      final (widget, router) = _buildScreen(db, 't', initialTodo: todo);
+      await _showTaskDetail(tester, widget, router, 't');
+
+      await openNotesEditor(tester);
+      await tester.enterText(
+          find.byKey(const Key('task_detail_notes')), '   \n  ');
+      await loseFocus(tester);
+
+      expect((await rawRow('t'))['notes'], isNull);
+    });
+
+    // Surrounding whitespace is stripped rather than stored, for the same
+    // reason the title's is: the baseline is held in the form the DAO stores,
+    // so a value that round-trips differently would make the teardown flush
+    // restate every edit.
+    testWidgets('notes are stored trimmed (#705)', (tester) async {
+      final todo = await _insertAt(db, id: 't', title: 'Buy milk');
+      final (widget, router) = _buildScreen(db, 't', initialTodo: todo);
+      await _showTaskDetail(tester, widget, router, 't');
+
+      await openNotesEditor(tester);
+      await tester.enterText(
+          find.byKey(const Key('task_detail_notes')), '  Ask the barista  ');
+      await loseFocus(tester);
+
+      expect((await rawRow('t'))['notes'], 'Ask the barista');
+    });
+
+    // The trimmed baseline must agree with the trimmed write, or the teardown
+    // backstop re-issues an edit focus loss already saved — and
+    // `TodoDao.updateFields` restamps `last_clarified_at` and authors a second
+    // sync op when it does.
+    testWidgets('a notes edit already saved on focus loss is not re-flushed '
+        'at teardown (#705)', (tester) async {
+      final todo = await _insertAt(db, id: 't', title: 'Buy milk');
+      final (widget, router) = _buildScreen(db, 't', initialTodo: todo);
+      await _showTaskDetail(tester, widget, router, 't');
+
+      await openNotesEditor(tester);
+      await tester.enterText(
+          find.byKey(const Key('task_detail_notes')), '  Ask the barista  ');
+      await loseFocus(tester);
+      final writesAfterFocusLoss =
+          capture.forCollection(todosCollection).length;
+
+      await unmountWhileFocused(tester);
+
+      expect(capture.forCollection(todosCollection), hasLength(writesAfterFocusLoss));
     });
 
     // The other side of the guard. `TodoDao.updateFields` stamps `updated_at`

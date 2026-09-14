@@ -71,8 +71,10 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   /// mutation, and authors a sync op, so an unconditional flush would restamp
   /// clarification and bump sync arbitration on every exit from this screen.
   ///
-  /// Held in the form the DAO stores: trimmed for the title (`updateTitle`
-  /// trims), raw for the notes (`updateNotes` does not).
+  /// Held in the form the DAO stores: trimmed for both, because `updateTitle`
+  /// and `updateNotes` both trim (#705). An emptied notes field therefore
+  /// baselines as `''`, which is the same `''` the seed uses for a NULL
+  /// column — so a clear is not re-issued by the flush.
   String? _baselineTitle;
   String? _baselineNotes;
 
@@ -119,7 +121,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   }
 
   void _saveNotes(String notes) {
-    _baselineNotes = notes;
+    _baselineNotes = notes.trim();
     _notifier
         .updateNotes(notes)
         .catchError((e) => debugPrint('Error saving notes: $e'));
@@ -145,9 +147,9 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   /// and its failure mode is a silent, unlogged lost edit.
   ///
   /// Deliberately adds no rules of its own: it does exactly what focus loss
-  /// would have done, including writing a blank title and storing an emptied
-  /// notes field as `''` rather than nulling the column (#705). Making the two
-  /// exits disagree would be new, undocumented behaviour.
+  /// would have done, including writing a blank title and — since #705 —
+  /// nulling the column for an emptied notes field. Making the two exits
+  /// disagree would be new, undocumented behaviour.
   ///
   /// No `ref.read` / `ref.watch` in here — see [_notifierForDisposeFlush].
   void _flushPendingTextEdits() {
@@ -171,7 +173,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     }
     if (_notesInitialized) {
       final notes = _notesController.text;
-      if (notes != _baselineNotes) {
+      if (notes.trim() != _baselineNotes) {
         unawaited(notifier.updateNotes(notes).catchError(
             (Object e) => debugPrint('TaskDetailScreen: notes flush failed: $e')));
       }
@@ -239,7 +241,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
           }
           if (!_notesInitialized) {
             _notesController.text = todo.notes ?? '';
-            _baselineNotes = todo.notes ?? '';
+            _baselineNotes = (todo.notes ?? '').trim();
             _notesInitialized = true;
           }
 
