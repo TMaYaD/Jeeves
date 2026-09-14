@@ -1,7 +1,7 @@
 # Jeeves — Infrastructure
 
-Local development stack using Docker Compose, plus the server-version
-computation Backend CD runs (`ci/`).
+Local development stack using Docker Compose, the server-version computation
+Backend CD runs (`ci/`), and the `jeeves-builder` Android build VM.
 
 ## Services
 
@@ -133,6 +133,90 @@ Recovery options, in order of preference:
    ```bash
    podman compose down -v
    ```
+
+## The `jeeves-builder` Android build VM
+
+A VirtualBox guest on the Mac that runs the Android toolchain the host cannot:
+Ubuntu 24.04, 2 vCPU, 6 GB RAM, Temurin JDK 17 at `~/jdk17`, Android SDK at
+`~/Android/sdk`, Flutter at `~/flutter`. Both versions track the pins CI uses —
+`java-version: 17` in the workflows and `app/.fvmrc` for Flutter — so a mismatch
+here means one of those moved.
+
+### Start, stop, reach
+
+```bash
+VBoxManage startvm jeeves-builder --type headless   # allow ~4 min to boot
+ssh -i ~/.ssh/id_ed25519 -p 2222 paperclipai@127.0.0.1
+VBoxManage controlvm jeeves-builder acpipowerbutton  # graceful shutdown
+```
+
+SSH arrives through a NAT port-forward on host port 2222; there is no other
+route in. `VBoxManage controlvm jeeves-builder savestate` is **not** a stop —
+a saved VM resumes rather than boots, so cloud-init never re-runs and
+`VBoxManage list runningvms` omits it while it sits saved.
+
+The guest trusts the host key in `~/.ssh/id_ed25519` because the cloud-init seed
+ISO carries its public half. Regenerating that host key locks the VM out, and
+re-seeding does not fix it: cloud-init skips `users:` for a user that already
+exists, so a replacement key has to be installed from `runcmd`.
+
+### Build
+
+`~/.jeeves_env` exports `JAVA_HOME`, `ANDROID_HOME`/`ANDROID_SDK_ROOT` and
+`PATH`, and is sourced from both `~/.bashrc` and `~/.profile`. The `.bashrc`
+line sits *above* Ubuntu's non-interactive early-return, so `ssh host '<cmd>'`
+gets the toolchain too — move it below and every non-login command loses `java`.
+
+Then the same command `pr-apk.yml` runs:
+
+```bash
+cd ~/jeeves/app
+flutter pub get && dart run build_runner build --delete-conflicting-outputs
+flutter build apk --profile --split-per-abi --target-platform android-arm64 --flavor dev
+```
+
+### How it compares to GitHub
+
+Same command, same Flutter and JDK, against `pr-apk.yml`'s `build-and-distribute`
+job (which restores Gradle and pub caches, so its APK step is always warm):
+
+| Step | GitHub | VM, cold | VM, warm |
+|------|-------:|---------:|---------:|
+| `flutter pub get` | 5s | 23s | — |
+| `dart run build_runner build` | 45s | 59s | — |
+| `flutter build apk …` | 118s | 3,123s | 110s |
+
+**Warm, the VM matches GitHub.** The 26× gap is cold-cache work — downloading the
+Gradle distribution, resolving dependencies, installing CMake and dexing every
+external library — not throughput, and Dart-side work is only ~1.3× slower even
+cold. So the thing to protect is the Gradle cache and daemon: leave the VM
+running between builds rather than starting clean, and a `flutter clean` costs
+close to an hour. Treat all three columns as ceilings rather than benchmarks
+anyway; the host is a dual-core i5 shared with the agent fleet, and when it
+runs short of memory it swaps, which stops the guest for tens of seconds at a
+time. The guest's own CPU share holds up through that — measured at 92–98% of
+a core with steal time at zero — so a slow timing here says more about what
+else the Mac was doing than about the VM.
+
+### Two traps
+
+**The NIC must stay `virtio`.** The emulated E1000 reset large transfers
+mid-stream, which is what made this VM look unusable — `flutter --version` died
+on its `git fetch --tags`. `VBoxManage modifyvm jeeves-builder --nictype1 virtio`
+fixes it, and needs the VM powered off (port-forward edits do not; adapter
+changes do). When diagnosing a stalled download, check a second host before
+blaming the NIC: `cloud-images.ubuntu.com` throttles to near-zero here while
+`dl.google.com` saturates the link.
+
+**`cmdline-tools/latest` is pinned to 19.0 deliberately.** Revision 23.0
+replaces `sdkmanager` with the new Android CLI, which dropped `--licenses`;
+Flutter still shells out to it and reports "Android license status unknown"
+against an SDK whose licences are fine. 19.0 keeps the real `sdkmanager`, so
+`flutter doctor --android-licenses` works. The newer CLI is kept alongside at
+`cmdline-tools/23.0`.
+
+`flutter doctor` is clean apart from Chrome, which is absent on purpose — this
+guest builds Android, not web.
 
 ## Backend CD
 
