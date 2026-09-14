@@ -1482,7 +1482,7 @@ class SyncClient {
         await _stampRefused(pulled.seq, authorization.reason);
         await _refuse(pulled, authorization, header);
         // The chain head advanced, so a quarantined successor may now be valid.
-        return _releaseChainSuccessors(header.authorMemberId);
+        return await _releaseChainSuccessors(header.authorMemberId);
       }
 
       final affected = <AffectedEntity>{};
