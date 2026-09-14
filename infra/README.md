@@ -137,7 +137,7 @@ Recovery options, in order of preference:
 ## The `jeeves-builder` Android build VM
 
 A VirtualBox guest on the Mac that runs the Android toolchain the host cannot:
-Ubuntu 24.04, 4 vCPU, 7 GB RAM, Temurin JDK 17 at `~/jdk17`, Android SDK at
+Ubuntu 24.04, 2 vCPU, 6 GB RAM, Temurin JDK 17 at `~/jdk17`, Android SDK at
 `~/Android/sdk`, Flutter at `~/flutter`. Both versions track the pins CI uses —
 `java-version: 17` in the workflows and `app/.fvmrc` for Flutter — so a mismatch
 here means one of those moved.
@@ -192,8 +192,11 @@ external library — not throughput, and Dart-side work is only ~1.3× slower ev
 cold. So the thing to protect is the Gradle cache and daemon: leave the VM
 running between builds rather than starting clean, and a `flutter clean` costs
 close to an hour. Treat all three columns as ceilings rather than benchmarks
-anyway; the host is a dual-core i5 that is CPU-oversubscribed, so a busy thread
-sees a fraction of a core.
+anyway; the host is a dual-core i5 shared with the agent fleet, and when it
+runs short of memory it swaps, which stops the guest for tens of seconds at a
+time. The guest's own CPU share holds up through that — measured at 92–98% of
+a core with steal time at zero — so a slow timing here says more about what
+else the Mac was doing than about the VM.
 
 ### Two traps
 
