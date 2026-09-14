@@ -13,14 +13,21 @@ This is the route a builder run goes through; do not `ssh` in and call
   re-check   Measure again when the run finishes. A red from a window that
              degraded mid-flight is reported UNPROVEN, not FAILED.
 
+**It knows nothing about any particular machine, and must not learn.** Which
+account to reach, which port-forward is the way in, which key opens it and
+where the checkout sits in the guest are facts about one Mac, not about this
+project — and this repository is public. They live in a JSON file on the
+machine itself (see `load_config`); a machine that is not a builder host simply
+does not have one. What is in the repo is the mechanism: the lock, the gate,
+and the verdict.
+
 **The probes run on the host, never in the guest, and that is the whole
-design.** Measured in one window on 2026-09-13 with the host's 1-minute load
-average near 100: two busy threads on the guest's 2 vCPUs were granted 96% and
-98% of a core — SANE — while the CPU probe on the host was granted 12% —
-VOID. VirtualBox's long-lived vCPU threads hold a share that a freshly spawned
-host process does not, so a guest-side reading is a false all-clear from a
-window that will still eat the 60s budget in `app/dart_test.yaml`. See LOO-49
-and `docs/TESTING.md` § Frontend (Flutter).
+design.** Measured in one window on 2026-09-13: two busy threads on the guest's
+vCPUs were granted 96% and 98% of a core — SANE — while the CPU probe on the
+host was granted 12% — VOID. VirtualBox's long-lived vCPU threads hold a share
+that a freshly spawned host process does not, so a guest-side reading is a
+false all-clear from a window that will still eat the per-test budget in
+`app/dart_test.yaml`. See LOO-49 and `docs/TESTING.md` § Frontend (Flutter).
 
 **Two resources are gated, not one, because the host starves the guest two
 different ways and each is invisible to the other's probe.**
@@ -29,22 +36,22 @@ different ways and each is invisible to the other's probe.**
   `host_memory_pressure.py` the host is paging, so the guest is waiting on disk
 
 A spin loop with a resident working set never faults, so the CPU probe reads a
-swap storm as SANE; and the 2026-09-13 measurement of a host at load 438 with
-*zero* swapouts shows the converse, so neither probe subsumes the other. Both
-must be SANE for a run to start, and the worst verdict of the two is the one
-the run is judged against. Adding a probe is adding a `--probe` — the contract
-is only the exit code (0 sane, 1 degraded, 2 void).
+swap storm as SANE; and a separately measured window — the host heavily loaded
+but swapping not at all — shows the converse, so neither probe subsumes the
+other. Both must be SANE for a run to start, and the worst verdict of the two is
+the one the run is judged against. Adding a probe is adding a `--probe`; the
+contract is only the exit code (0 sane, 1 degraded, 2 void).
 
 **The lock is taken before the gate**, in that order for two reasons: a queued
 run should not burn a core measuring a window it cannot use yet (the
 measurement is itself contention), and the window a run starts in should have
 been measured after the run ahead of it finished, not before it.
 
-It gates and serialises; it does not ship code. The default command runs
-whatever already sits in the guest's `~/jeeves`, so put your branch there
-first — the wrapper has no opinion about what it is testing.
+It gates and serialises; it does not ship code. The configured command runs
+whatever already sits in the guest's checkout, so put your branch there first —
+the wrapper has no opinion about what it is testing.
 
-    python3 tools/builder_run.py                     # flutter test in the guest
+    python3 tools/builder_run.py                     # the configured command
     python3 tools/builder_run.py --remote-command 'cd ~/jeeves/app && flutter analyze'
     python3 tools/builder_run.py -- <argv...>        # gate an arbitrary command
 
@@ -57,11 +64,13 @@ host was not usable":
     4  NO SANE WINDOW  the deadline passed without one; no test verdict
     5  LOCK BUSY       another builder run held the lock past the deadline
     6  PROBE ERROR     a probe could not be run at all
+    7  NOT CONFIGURED  this machine has no builder config; nothing was run
 """
 
 import argparse
 import errno
 import fcntl
+import json
 import os
 import subprocess
 import sys
@@ -77,20 +86,30 @@ DEFAULT_PROBES = (
     REPO_ROOT / "tools" / "host_memory_pressure.py",
 )
 
-# How to reach the guest. The runbook these come from — start/stop, the NAT
-# port-forward that is the only route in, and why the toolchain is on PATH for
-# a non-interactive `ssh host '<cmd>'` — is infra/README.md § The
-# `jeeves-builder` Android build VM.
-BUILDER_SSH_HOST = "paperclipai@127.0.0.1"
-BUILDER_SSH_PORT = "2222"
-BUILDER_SSH_KEY = "~/.ssh/id_ed25519"
-DEFAULT_REMOTE_COMMAND = "cd ~/jeeves/app && flutter test"
+# Where this machine says what it is. Not a secret and not in the repo — it is
+# per-machine truth, and the repo is shared and public.
+CONFIG_ENV_VAR = "JEEVES_BUILDER_CONFIG"
+DEFAULT_CONFIG_PATH = "~/.jeeves/builder.json"
 
-# One lock for the whole host, outside any worktree, because the runs it
+# A convention this tool defines, identical on every machine, so it stays here:
+# one lock for the whole host, outside any worktree, because the runs it
 # serialises are in different checkouts of the same repo.
 DEFAULT_LOCK_PATH = "~/.jeeves/builder_run.lock"
 
-# `host_cpu_share.py`'s exit codes, which this file only reads.
+# The shape the machine's file is expected to have, shown back to whoever has
+# not written one yet. Placeholders only — filling these in is the machine's
+# job, and the filled-in version never comes back here.
+CONFIG_TEMPLATE = """\
+{
+  "ssh": {
+    "host": "<user>@<host>",
+    "port": "<port>",
+    "identity_file": "~/.ssh/<key>"
+  },
+  "remote_command": "cd <checkout>/app && flutter test"
+}"""
+
+# The probes' exit codes, which this file only reads.
 PROBE_SANE = 0
 PROBE_DEGRADED = 1
 PROBE_VOID = 2
@@ -102,10 +121,15 @@ EXIT_UNPROVEN = 3
 EXIT_NO_SANE_WINDOW = 4
 EXIT_LOCK_BUSY = 5
 EXIT_PROBE_ERROR = 6
+EXIT_NOT_CONFIGURED = 7
 
 
 class ProbeError(RuntimeError):
     """The probe could not be run — a broken harness, not a starved host."""
+
+
+class NotConfigured(RuntimeError):
+    """This machine has not been told what its builder is. Not a verdict."""
 
 
 def say(message):
@@ -113,23 +137,92 @@ def say(message):
     print("[builder-run] {}".format(message), file=sys.stderr, flush=True)
 
 
-def run_probe(probe_path, probe_seconds):
-    """Sample the host's CPU share once. Returns the probe's exit code."""
+def config_path_for(explicit_path=None):
+    """Where to look for this machine's builder config, most specific first."""
+    chosen = explicit_path or os.environ.get(CONFIG_ENV_VAR) or DEFAULT_CONFIG_PATH
+    return Path(chosen).expanduser()
+
+
+def load_config(config_path):
+    """Read the machine's builder config. Returns {} when there is no file.
+
+    Absent is not an error: gating an explicit `-- argv` needs nothing from
+    this file, and that is how the tests and CI drive the wrapper. Present but
+    unreadable *is* an error, because a machine that meant to configure itself
+    and typo'd should hear about it rather than silently fall back.
+    """
+    if not config_path.exists():
+        return {}
+    try:
+        text = config_path.read_text()
+    except OSError as error:
+        raise NotConfigured("could not read {}: {}".format(config_path, error))
+    try:
+        config = json.loads(text)
+    except ValueError as error:
+        raise NotConfigured("{} is not valid JSON: {}".format(config_path, error))
+    if not isinstance(config, dict):
+        raise NotConfigured("{} must hold a JSON object".format(config_path))
+    return config
+
+
+def probe_argv_from(entry):
+    """Normalise one configured probe into an argv list.
+
+    A bare string is a path; a list is a full argv, which is how a machine
+    carries its own calibration — `["tools/host_memory_pressure.py",
+    "--void-mb-per-second", "30"]` — without that number living in the repo.
+    Relative paths resolve against the repo, so a config can name a probe
+    without knowing where the checkout sits.
+    """
+    if isinstance(entry, str):
+        argv = [entry]
+    elif isinstance(entry, (list, tuple)) and entry:
+        argv = [str(part) for part in entry]
+    else:
+        raise NotConfigured(
+            "a probe must be a path or a non-empty argv list, got {!r}".format(entry)
+        )
+    probe_path = Path(argv[0]).expanduser()
+    if not probe_path.is_absolute():
+        probe_path = REPO_ROOT / probe_path
+    return [str(probe_path)] + argv[1:]
+
+
+def resolve_probes(probe_flags, config):
+    """The probes to gate on: `--probe` flags, else the machine's, else both defaults."""
+    if probe_flags:
+        return [probe_argv_from(probe) for probe in probe_flags]
+    configured = config.get("probes")
+    if configured:
+        if not isinstance(configured, (list, tuple)):
+            raise NotConfigured('"probes" must be a list')
+        return [probe_argv_from(probe) for probe in configured]
+    return [probe_argv_from(str(probe)) for probe in DEFAULT_PROBES]
+
+
+def probe_name(probe_argv):
+    """`host_cpu_share.py` — what the narration calls a probe."""
+    return Path(probe_argv[0]).name
+
+
+def run_probe(probe_argv, probe_seconds):
+    """Sample one host resource once. Returns the probe's exit code."""
     try:
         completed = subprocess.run(
-            [sys.executable, str(probe_path), "--seconds", str(probe_seconds)],
+            [sys.executable, *probe_argv, "--seconds", str(probe_seconds)],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
         )
     except OSError as error:
-        raise ProbeError("could not run probe {}: {}".format(probe_path, error))
+        raise ProbeError("could not run probe {}: {}".format(probe_argv[0], error))
 
     output = (completed.stdout or "").strip()
     if completed.returncode not in PROBE_LABELS:
         raise ProbeError(
             "probe {} exited {} (expected 0, 1 or 2): {}".format(
-                probe_path, completed.returncode, output or "<no output>"
+                probe_argv[0], completed.returncode, output or "<no output>"
             )
         )
     if output:
@@ -138,7 +231,7 @@ def run_probe(probe_path, probe_seconds):
     return completed.returncode
 
 
-def run_probes(probe_paths, probe_seconds):
+def run_probes(probes, probe_seconds):
     """Sample every probe once. Returns (worst verdict, [(name, verdict), ...]).
 
     Worst wins: the host is only usable if nothing it needs is short, so a
@@ -148,9 +241,9 @@ def run_probes(probe_paths, probe_seconds):
     sampling itself costs wall clock the deadline is paying for.
     """
     results = []
-    for probe_path in probe_paths:
-        verdict = run_probe(probe_path, probe_seconds)
-        results.append((probe_path.name, verdict))
+    for probe_argv in probes:
+        verdict = run_probe(probe_argv, probe_seconds)
+        results.append((probe_name(probe_argv), verdict))
         if verdict != PROBE_SANE:
             return verdict, results
     return PROBE_SANE, results
@@ -191,14 +284,12 @@ def acquire_lock(lock_path, deadline_monotonic, poll_interval_seconds):
         time.sleep(min(poll_interval_seconds, max(0.0, deadline_monotonic - time.monotonic())))
 
 
-def wait_for_sane_window(
-    probe_paths, probe_seconds, deadline_monotonic, poll_interval_seconds
-):
+def wait_for_sane_window(probes, probe_seconds, deadline_monotonic, poll_interval_seconds):
     """Poll until every host probe reports SANE. Returns True, or False on expiry."""
     attempt = 0
     while True:
         attempt += 1
-        verdict, results = run_probes(probe_paths, probe_seconds)
+        verdict, results = run_probes(probes, probe_seconds)
         if verdict == PROBE_SANE:
             say(
                 "host window is SANE after {} round(s) ({}) — starting the run".format(
@@ -226,19 +317,43 @@ def wait_for_sane_window(
         time.sleep(min(poll_interval_seconds, remaining_seconds))
 
 
-def build_command(args):
-    """The argv to run: an explicit one, or `--remote-command` over ssh."""
+def build_command(args, config, config_path):
+    """The argv to run: an explicit one, or the machine's guest command over ssh.
+
+    Everything the `ssh` branch needs comes from the machine's config, because
+    all of it — account, port-forward, key, checkout path — describes one Mac
+    and this repository is public. With no config there is no guess to make, so
+    the run stops rather than inventing a host.
+    """
     if args.command:
         return args.command
-    return [
-        "ssh",
-        "-i",
-        os.path.expanduser(BUILDER_SSH_KEY),
-        "-p",
-        BUILDER_SSH_PORT,
-        BUILDER_SSH_HOST,
-        args.remote_command,
-    ]
+
+    ssh_config = config.get("ssh") or {}
+    host = ssh_config.get("host")
+    remote_command = args.remote_command or config.get("remote_command")
+    if not host or not remote_command:
+        raise NotConfigured(
+            "this machine has no builder to reach: {} {}.\n"
+            "The config stays on the machine, out of the repo — write it as:\n\n"
+            "{}\n\n"
+            "Point elsewhere with --config or ${}. To gate a command that does "
+            "not need the guest, pass it directly: builder_run.py -- <argv...>".format(
+                config_path,
+                "does not exist" if not config_path.exists() else "names no ssh.host / remote_command",
+                CONFIG_TEMPLATE,
+                CONFIG_ENV_VAR,
+            )
+        )
+
+    command = ["ssh"]
+    identity_file = ssh_config.get("identity_file")
+    if identity_file:
+        command += ["-i", os.path.expanduser(str(identity_file))]
+    port = ssh_config.get("port")
+    if port:
+        command += ["-p", str(port)]
+    command += [host, remote_command]
+    return command
 
 
 def report(command_exit_code, window_after, elapsed_seconds, results_after=()):
@@ -284,7 +399,14 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         description=__doc__.splitlines()[0],
         epilog="Exit codes: 0 pass, 1 failed, 3 unproven, 4 no sane window, "
-        "5 lock busy, 6 probe error.",
+        "5 lock busy, 6 probe error, 7 not configured.",
+    )
+    parser.add_argument(
+        "--config",
+        metavar="PATH",
+        help="this machine's builder config, which names the host to reach and "
+        "may carry its own probe calibration. It is deliberately not in the "
+        "repo. (default: ${} or {})".format(CONFIG_ENV_VAR, DEFAULT_CONFIG_PATH),
     )
     parser.add_argument(
         "--probe",
@@ -319,16 +441,13 @@ def main(argv=None):
     )
     parser.add_argument(
         "--lock-path",
-        default=DEFAULT_LOCK_PATH,
-        help="exclusive lock serialising builder runs (default: {})".format(
-            DEFAULT_LOCK_PATH
-        ),
+        help="exclusive lock serialising builder runs (default: the config's "
+        "lock_path, else {})".format(DEFAULT_LOCK_PATH),
     )
     parser.add_argument(
         "--remote-command",
-        default=DEFAULT_REMOTE_COMMAND,
-        help="shell command to run in the guest when no command is given "
-        "(default: {!r})".format(DEFAULT_REMOTE_COMMAND),
+        help="shell command to run in the guest, overriding the config's "
+        "remote_command",
     )
     parser.add_argument(
         "command",
@@ -340,10 +459,20 @@ def main(argv=None):
     if args.command and args.command[0] == "--":
         args.command = args.command[1:]
 
-    probe_paths = [
-        Path(probe).expanduser() for probe in (args.probes or DEFAULT_PROBES)
-    ]
-    lock_path = Path(args.lock_path).expanduser()
+    config_path = config_path_for(args.config)
+    try:
+        config = load_config(config_path)
+        probes = resolve_probes(args.probes, config)
+        # Resolved before the lock: a machine that cannot say what its builder
+        # is should fail in the first second, not after queueing behind a run.
+        command = build_command(args, config, config_path)
+    except NotConfigured as error:
+        say("not configured: {}".format(error))
+        return EXIT_NOT_CONFIGURED
+
+    lock_path = Path(
+        args.lock_path or config.get("lock_path") or DEFAULT_LOCK_PATH
+    ).expanduser()
     deadline_monotonic = time.monotonic() + args.deadline_seconds
 
     lock_handle = acquire_lock(lock_path, deadline_monotonic, args.poll_interval_seconds)
@@ -357,7 +486,7 @@ def main(argv=None):
     try:
         try:
             if not wait_for_sane_window(
-                probe_paths,
+                probes,
                 args.probe_seconds,
                 deadline_monotonic,
                 args.poll_interval_seconds,
@@ -369,14 +498,13 @@ def main(argv=None):
                 )
                 return EXIT_NO_SANE_WINDOW
 
-            command = build_command(args)
             say("running: {}".format(" ".join(command)))
             started_monotonic = time.monotonic()
             command_exit_code = subprocess.run(command).returncode
             elapsed_seconds = time.monotonic() - started_monotonic
 
             say("re-checking the host window the run just finished in")
-            window_after, results_after = run_probes(probe_paths, args.probe_seconds)
+            window_after, results_after = run_probes(probes, args.probe_seconds)
             return report(
                 command_exit_code, window_after, elapsed_seconds, results_after
             )

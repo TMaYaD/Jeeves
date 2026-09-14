@@ -11,6 +11,8 @@ sequence of codes — the same contract `tools/host_cpu_share.py` offers
     python3 -m unittest discover -s tools/tests -t .
 """
 
+import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -31,6 +33,15 @@ EXIT_FAILED = 1
 EXIT_UNPROVEN = 3
 EXIT_NO_SANE_WINDOW = 4
 EXIT_LOCK_BUSY = 5
+EXIT_NOT_CONFIGURED = 7
+
+
+def load_wrapper_module():
+    """Import builder_run.py by path — `tools/` is not a package."""
+    spec = importlib.util.spec_from_file_location("builder_run", WRAPPER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 # A probe script whose verdict walks a scripted sequence, one step per call,
 # holding the last value once the sequence runs out. It ignores the flags the
@@ -82,6 +93,11 @@ class BuilderRunJourney(unittest.TestCase):
         self.payload_path = self.scratch / "payload.py"
         self.payload_path.write_text(PAYLOAD)
         self.payload_log = self.scratch / "payload.log"
+        # Every run is pointed at a config under this test's scratch, absent
+        # unless the test writes one. Without this a developer's real
+        # ~/.jeeves/builder.json would leak into the run and the suite would
+        # pass or fail by accident of whose machine it is on.
+        self.config_path = self.scratch / "builder.json"
 
     def write_probe(self, name, codes):
         """Install a probe that answers `codes`, one per call. Returns its path."""
@@ -103,6 +119,8 @@ class BuilderRunJourney(unittest.TestCase):
         command = [
             sys.executable,
             str(WRAPPER),
+            "--config",
+            str(self.config_path),
             *probe_args,
             "--lock-path",
             str(self.lock_path),
@@ -302,6 +320,146 @@ class BuilderRunJourney(unittest.TestCase):
         # so a queued run does not burn CPU measuring a window it cannot use.
         self.assertEqual(self.probe_calls(waiter_probe), 0)
         self.assertEqual([event[0] for event in self.payload_events()], ["holder", "holder"])
+
+
+class MachineConfigStaysOffTheRepo(unittest.TestCase):
+    """The repo carries the mechanism; the machine carries which host it is.
+
+    This repository is public, so the builder's account, port-forward, key and
+    checkout path must not be in it. The invariant that keeps them out is that
+    there is no fallback: with nothing configured the wrapper has no host to
+    guess at and says so, rather than reaching for a default someone would
+    later have to fill in here.
+    """
+
+    def setUp(self):
+        self.builder_run = load_wrapper_module()
+        self.scratch = Path(
+            tempfile.mkdtemp(prefix="builder_cfg_", dir=os.environ.get("TMPDIR") or None)
+        )
+        self.config_path = self.scratch / "builder.json"
+
+    def args_for(self, command=(), remote_command=None):
+        """The wrapper's parsed-args surface, as `build_command` reads it."""
+
+        class Args:
+            pass
+
+        args = Args()
+        args.command = list(command)
+        args.remote_command = remote_command
+        return args
+
+    def test_no_config_means_no_host_to_reach_rather_than_a_default(self):
+        with self.assertRaises(self.builder_run.NotConfigured) as caught:
+            self.builder_run.build_command(self.args_for(), {}, self.config_path)
+
+        message = str(caught.exception)
+        self.assertIn(str(self.config_path), message)
+        self.assertIn("does not exist", message)
+        # It tells you the shape to write, in placeholders only — a filled-in
+        # example here would be the very thing this test exists to keep out.
+        self.assertIn("<user>@<host>", message)
+
+    def test_a_config_naming_no_host_is_still_not_configured(self):
+        self.config_path.write_text(json.dumps({"remote_command": "true"}))
+        config = self.builder_run.load_config(self.config_path)
+
+        with self.assertRaises(self.builder_run.NotConfigured):
+            self.builder_run.build_command(self.args_for(), config, self.config_path)
+
+    def test_the_ssh_command_is_assembled_from_the_machines_config(self):
+        self.config_path.write_text(
+            json.dumps(
+                {
+                    "ssh": {
+                        "host": "someone@10.0.0.9",
+                        "port": "2201",
+                        "identity_file": "/keys/builder",
+                    },
+                    "remote_command": "cd ~/checkout/app && flutter test",
+                }
+            )
+        )
+        config = self.builder_run.load_config(self.config_path)
+
+        command = self.builder_run.build_command(self.args_for(), config, self.config_path)
+
+        self.assertEqual(
+            command,
+            [
+                "ssh",
+                "-i",
+                "/keys/builder",
+                "-p",
+                "2201",
+                "someone@10.0.0.9",
+                "cd ~/checkout/app && flutter test",
+            ],
+        )
+
+    def test_an_explicit_command_needs_no_config_at_all(self):
+        """How the suite and CI drive the wrapper: gating something local."""
+        command = self.builder_run.build_command(
+            self.args_for(command=["echo", "hello"]), {}, self.config_path
+        )
+
+        self.assertEqual(command, ["echo", "hello"])
+
+    def test_an_unreadable_config_is_an_error_not_a_silent_fallback(self):
+        """A machine that meant to configure itself and typo'd should hear about it."""
+        self.config_path.write_text("{ not json")
+
+        with self.assertRaises(self.builder_run.NotConfigured) as caught:
+            self.builder_run.load_config(self.config_path)
+
+        self.assertIn("not valid JSON", str(caught.exception))
+
+    def test_probe_calibration_can_live_on_the_machine(self):
+        """Thresholds tuned to one host belong in its config, not in the repo."""
+        config = {
+            "probes": [
+                "tools/host_cpu_share.py",
+                ["tools/host_memory_pressure.py", "--void-mb-per-second", "30"],
+            ]
+        }
+
+        probes = self.builder_run.resolve_probes(None, config)
+
+        self.assertEqual(
+            [Path(probe[0]).name for probe in probes],
+            ["host_cpu_share.py", "host_memory_pressure.py"],
+        )
+        # Relative paths resolve against the repo, so a config can name a probe
+        # without knowing where the checkout sits on that machine.
+        self.assertTrue(Path(probes[0][0]).is_absolute())
+        self.assertEqual(probes[1][1:], ["--void-mb-per-second", "30"])
+
+    def test_a_probe_flag_still_wins_over_the_machines_probes(self):
+        probes = self.builder_run.resolve_probes(
+            ["/tmp/mine.py"], {"probes": ["tools/host_cpu_share.py"]}
+        )
+
+        self.assertEqual(probes, [["/tmp/mine.py"]])
+
+    def test_an_unconfigured_run_exits_seven_without_probing(self):
+        """End to end: nothing is measured and nothing is run."""
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(WRAPPER),
+                "--config",
+                str(self.scratch / "absent.json"),
+                "--deadline-seconds",
+                "0.4",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        self.assertEqual(result.returncode, EXIT_NOT_CONFIGURED, result.stderr)
+        self.assertIn("not configured", result.stderr.lower())
 
 
 if __name__ == "__main__":

@@ -17,24 +17,25 @@ with zero steal while it was visibly stalling: steal counts core contention,
 and here the vCPU is waiting on the *host's* disk, which no guest counter and
 no spin loop can see.
 
-**The measurement behind the thresholds** (fleet Mac, 16 GB, 2026-09-13, LOO-49):
-the host was committed to 17.37 GB resident before the OS — VirtualBox 6.53 GB,
-21 agent processes 5.78 GB, 48 ruby/rspec 2.62 GB, 65 Chrome 1.59 GB — so it
-swapped continuously. Over a 30 s window: 323,432 pages in and 406,817 pages out,
-about **100 MB/s sustained**, with macOS growing the swap file from 5,120 to
-6,144 MB *during* the measurement. Free memory at the start of that window was
-25 MB. A quiet host on the same machine reads **0 pages/s** — this is not a
-noisy signal with a judgement call in the middle, it is off or it is a storm.
+**Why the thresholds sit where they do** (measured during a real storm on the
+builder host, 2026-09-13, LOO-49). A host over-committed enough to swap does not
+produce a gentle signal: sustained traffic through that window ran more than an
+order of magnitude above the VOID line below, while a quiet host on the same
+machine reads **zero** pages per second. There is no ambiguous middle to
+calibrate — paging here is off, or it is a storm — so VOID sits far enough below
+the measured storm to catch it early, DEGRADED at "the host has started trading
+memory for disk at all", and the band between them is deliberately narrow rather
+than a comfortable middle to run in.
 
-So VOID is set at 20 MB/s, a fifth of the measured storm and still far above
-anything a quiet host produces, and DEGRADED at 2 MB/s, which is "the host has
-started trading memory for disk at all". Sustained swapping on a box this
-over-committed does not stay mild for long, so the degraded band is deliberately
-narrow rather than a comfortable middle to run in.
+The defaults are a starting point, not a property of any particular machine. A
+host that needs different numbers passes them, and keeps them in its own
+`builder.json` (see `tools/builder_run.py`) rather than here — the calibration
+belongs to the machine, this file is the mechanism.
 
     python3 tools/host_memory_pressure.py            # 10s sample, prints a verdict
     python3 tools/host_memory_pressure.py --seconds 30
     python3 tools/host_memory_pressure.py --quiet    # exit code only
+    python3 tools/host_memory_pressure.py --void-mb-per-second 30
 
 Exit codes match `host_cpu_share.py` so the two gate identically: 0 sane,
 1 degraded, 2 void. Exit 6 means the measurement could not be taken at all —
@@ -51,10 +52,11 @@ import subprocess
 import sys
 import time
 
-# Combined swapin+swapout traffic, in MB/s. See the module docstring for the
-# storm and the quiet baseline these sit between.
-SWAP_MB_PER_SECOND_DEGRADED = 2.0
-SWAP_MB_PER_SECOND_VOID = 20.0
+# Combined swapin+swapout traffic, in MB/s. Defaults only — see the module
+# docstring for the storm and the quiet baseline these sit between, and for why
+# a machine that wants different numbers carries them itself.
+DEFAULT_SWAP_MB_PER_SECOND_DEGRADED = 2.0
+DEFAULT_SWAP_MB_PER_SECOND_VOID = 20.0
 
 EXIT_SANE = 0
 EXIT_DEGRADED = 1
@@ -135,9 +137,13 @@ def swap_megabytes_per_second(before_text, after_text, elapsed_seconds):
     return (pages * page_size_bytes) / (1024.0 * 1024.0) / elapsed_seconds
 
 
-def verdict_for(megabytes_per_second):
+def verdict_for(
+    megabytes_per_second,
+    degraded_threshold=DEFAULT_SWAP_MB_PER_SECOND_DEGRADED,
+    void_threshold=DEFAULT_SWAP_MB_PER_SECOND_VOID,
+):
     """Map swap traffic onto (exit_code, label, what it means for a red run)."""
-    if megabytes_per_second >= SWAP_MB_PER_SECOND_VOID:
+    if megabytes_per_second >= void_threshold:
         return (
             EXIT_VOID,
             "VOID",
@@ -145,12 +151,12 @@ def verdict_for(megabytes_per_second):
             "enough to stop the guest for tens of seconds at a time, and the "
             "budget fires on whichever test happens to be open.",
         )
-    if megabytes_per_second >= SWAP_MB_PER_SECOND_DEGRADED:
+    if megabytes_per_second >= degraded_threshold:
         return (
             EXIT_DEGRADED,
             "DEGRADED",
             "Treat a red run as unproven. The host has started trading memory "
-            "for disk, and on this machine that rarely stays mild.",
+            "for disk, and that rarely stays mild for long.",
         )
     return (
         EXIT_SANE,
@@ -203,6 +209,20 @@ def main(argv=None):
         action="store_true",
         help="print nothing; communicate through the exit code alone",
     )
+    parser.add_argument(
+        "--degraded-mb-per-second",
+        type=float,
+        default=DEFAULT_SWAP_MB_PER_SECOND_DEGRADED,
+        help="swap traffic at or above which the window is DEGRADED "
+        "(default: {})".format(DEFAULT_SWAP_MB_PER_SECOND_DEGRADED),
+    )
+    parser.add_argument(
+        "--void-mb-per-second",
+        type=float,
+        default=DEFAULT_SWAP_MB_PER_SECOND_VOID,
+        help="swap traffic at or above which the window is VOID "
+        "(default: {})".format(DEFAULT_SWAP_MB_PER_SECOND_VOID),
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -212,7 +232,11 @@ def main(argv=None):
             print("cannot measure host paging: {}".format(error), file=sys.stderr)
         return EXIT_CANNOT_MEASURE
 
-    exit_code, label, guidance = verdict_for(megabytes_per_second)
+    exit_code, label, guidance = verdict_for(
+        megabytes_per_second,
+        args.degraded_mb_per_second,
+        args.void_mb_per_second,
+    )
 
     if not args.quiet:
         swap_usage = read_swap_usage()
