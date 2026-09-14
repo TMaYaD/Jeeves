@@ -8,10 +8,12 @@ budget — trips the 60s budget in `app/dart_test.yaml`. That red says nothing
 about the code, and nothing inside the suite can tell it apart from a real
 failure. This script is the outside measurement that can.
 
-Run it on the builder host, or inside the guest, or both: a starved vCPU
-starves the threads above it, and the guest's wall clock keeps advancing while
-its vCPU is descheduled, so the same cpu-vs-wall ratio shows the loss either
-way.
+Run it on the **host**. Inside a guest it reports the host's contention only by
+accident: measured in one window on the x86_64 builder, two busy threads on the
+guest's 2 vCPUs were granted 96% and 98% of a core — SANE — while this same
+script on the host was granted 12% — VOID. VirtualBox's vCPU threads hold their
+share where a fresh host process does not, so a guest-side reading is a false
+all-clear. Run it in the guest only to rule the guest's *own* load in or out.
 
     python3 tools/host_cpu_share.py            # 10s sample, prints a verdict
     python3 tools/host_cpu_share.py --seconds 30
