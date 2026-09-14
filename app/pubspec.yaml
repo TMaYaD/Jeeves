@@ -23,7 +23,7 @@ dependencies:
   meta: ^1.17.0
 
   # Local storage (offline-first)
-  drift: ^2.34.4
+  drift: ^2.35.0
   # Bridges Drift to a sqlite_async connection, which is what the domain store
   # (`database/domain_store_io.dart`) is opened over: one shared connection with
   # a proper write lock, and an update stream that names the tables a write
