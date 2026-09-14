@@ -6,21 +6,34 @@ This is the route a builder run goes through; do not `ssh` in and call
 
   serialise  Take an exclusive host-side lock, so two builder runs queue
              instead of halving each other's share of an already-short host.
-  gate       Poll `tools/host_cpu_share.py` until it reports SANE, with a
+  gate       Poll the host probes until *every* one reports SANE, with a
              deadline. Past the deadline the run reports "no sane window" and
              exits with no test verdict — a run that never started is better
              signal than a red one nobody can read.
   re-check   Measure again when the run finishes. A red from a window that
              degraded mid-flight is reported UNPROVEN, not FAILED.
 
-**The probe runs on the host, never in the guest, and that is the whole
+**The probes run on the host, never in the guest, and that is the whole
 design.** Measured in one window on 2026-09-13 with the host's 1-minute load
 average near 100: two busy threads on the guest's 2 vCPUs were granted 96% and
-98% of a core — SANE — while this same probe on the host was granted 12% —
+98% of a core — SANE — while the CPU probe on the host was granted 12% —
 VOID. VirtualBox's long-lived vCPU threads hold a share that a freshly spawned
 host process does not, so a guest-side reading is a false all-clear from a
 window that will still eat the 60s budget in `app/dart_test.yaml`. See LOO-49
 and `docs/TESTING.md` § Frontend (Flutter).
+
+**Two resources are gated, not one, because the host starves the guest two
+different ways and each is invisible to the other's probe.**
+
+  `host_cpu_share.py`       the host is not scheduling a fresh process
+  `host_memory_pressure.py` the host is paging, so the guest is waiting on disk
+
+A spin loop with a resident working set never faults, so the CPU probe reads a
+swap storm as SANE; and the 2026-09-13 measurement of a host at load 438 with
+*zero* swapouts shows the converse, so neither probe subsumes the other. Both
+must be SANE for a run to start, and the worst verdict of the two is the one
+the run is judged against. Adding a probe is adding a `--probe` — the contract
+is only the exit code (0 sane, 1 degraded, 2 void).
 
 **The lock is taken before the gate**, in that order for two reasons: a queued
 run should not burn a core measuring a window it cannot use yet (the
@@ -43,7 +56,7 @@ host was not usable":
     3  UNPROVEN        the command failed, but the window degraded: re-run
     4  NO SANE WINDOW  the deadline passed without one; no test verdict
     5  LOCK BUSY       another builder run held the lock past the deadline
-    6  PROBE ERROR     the probe could not be run at all
+    6  PROBE ERROR     a probe could not be run at all
 """
 
 import argparse
@@ -56,7 +69,13 @@ import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_PROBE = REPO_ROOT / "tools" / "host_cpu_share.py"
+# Both are gated, and the order is the order they run in: the CPU probe burns a
+# core for its sample, the memory probe deliberately sleeps through its own, so
+# a host that fails the cheap-to-fail check does not pay for the quiet one.
+DEFAULT_PROBES = (
+    REPO_ROOT / "tools" / "host_cpu_share.py",
+    REPO_ROOT / "tools" / "host_memory_pressure.py",
+)
 
 # How to reach the guest. The runbook these come from — start/stop, the NAT
 # port-forward that is the only route in, and why the toolchain is on PATH for
@@ -119,6 +138,31 @@ def run_probe(probe_path, probe_seconds):
     return completed.returncode
 
 
+def run_probes(probe_paths, probe_seconds):
+    """Sample every probe once. Returns (worst verdict, [(name, verdict), ...]).
+
+    Worst wins: the host is only usable if nothing it needs is short, so a
+    SANE from one resource cannot vote down a VOID from another. Probes run in
+    sequence and the first non-SANE one short-circuits the rest — there is
+    nothing left to learn about a window already known to be unusable, and the
+    sampling itself costs wall clock the deadline is paying for.
+    """
+    results = []
+    for probe_path in probe_paths:
+        verdict = run_probe(probe_path, probe_seconds)
+        results.append((probe_path.name, verdict))
+        if verdict != PROBE_SANE:
+            return verdict, results
+    return PROBE_SANE, results
+
+
+def describe(results):
+    """`host_cpu_share.py SANE, host_memory_pressure.py VOID` — for the narration."""
+    return ", ".join(
+        "{} {}".format(name, PROBE_LABELS[verdict]) for name, verdict in results
+    )
+
+
 def acquire_lock(lock_path, deadline_monotonic, poll_interval_seconds):
     """Take the exclusive builder lock, waiting until the deadline.
 
@@ -147,26 +191,36 @@ def acquire_lock(lock_path, deadline_monotonic, poll_interval_seconds):
         time.sleep(min(poll_interval_seconds, max(0.0, deadline_monotonic - time.monotonic())))
 
 
-def wait_for_sane_window(probe_path, probe_seconds, deadline_monotonic, poll_interval_seconds):
-    """Poll the host probe until it reports SANE. Returns True, or False on expiry."""
+def wait_for_sane_window(
+    probe_paths, probe_seconds, deadline_monotonic, poll_interval_seconds
+):
+    """Poll until every host probe reports SANE. Returns True, or False on expiry."""
     attempt = 0
     while True:
         attempt += 1
-        verdict = run_probe(probe_path, probe_seconds)
+        verdict, results = run_probes(probe_paths, probe_seconds)
         if verdict == PROBE_SANE:
-            say("host window is SANE after {} probe(s) — starting the run".format(attempt))
+            say(
+                "host window is SANE after {} round(s) ({}) — starting the run".format(
+                    attempt, describe(results)
+                )
+            )
             return True
         remaining_seconds = deadline_monotonic - time.monotonic()
         if remaining_seconds <= 0:
             say(
-                "host window is still {} after {} probe(s)".format(
-                    PROBE_LABELS[verdict], attempt
+                "host window is still {} after {} round(s) ({})".format(
+                    PROBE_LABELS[verdict], attempt, describe(results)
                 )
             )
             return False
         say(
-            "host window is {} — waiting {:.0f}s, {:.0f}s left on the deadline".format(
-                PROBE_LABELS[verdict], poll_interval_seconds, remaining_seconds
+            "host window is {} ({}) — waiting {:.0f}s, {:.0f}s left on the "
+            "deadline".format(
+                PROBE_LABELS[verdict],
+                describe(results),
+                poll_interval_seconds,
+                remaining_seconds,
             )
         )
         time.sleep(min(poll_interval_seconds, remaining_seconds))
@@ -187,7 +241,7 @@ def build_command(args):
     ]
 
 
-def report(command_exit_code, window_after, elapsed_seconds):
+def report(command_exit_code, window_after, elapsed_seconds, results_after=()):
     """Turn (what the command said, what the window said afterwards) into a verdict.
 
     A red is only readable if the window held: starvation invents timeouts, and
@@ -196,11 +250,14 @@ def report(command_exit_code, window_after, elapsed_seconds):
     a pass — so a green from a degraded window is still a green, noted.
     """
     label = PROBE_LABELS[window_after]
+    detail = " ({})".format(describe(results_after)) if results_after else ""
     if command_exit_code == 0:
         if window_after != PROBE_SANE:
             say(
-                "the window fell to {} during the run, but the command passed — "
-                "starvation can only invent a failure, never a pass".format(label)
+                "the window fell to {}{} during the run, but the command passed — "
+                "starvation can only invent a failure, never a pass".format(
+                    label, detail
+                )
             )
         say("PASS in {:.0f}s — the command succeeded".format(elapsed_seconds))
         return EXIT_PASS
@@ -208,16 +265,16 @@ def report(command_exit_code, window_after, elapsed_seconds):
     if window_after == PROBE_SANE:
         say(
             "FAILED in {:.0f}s — the command exited {} and the host window held "
-            "at both ends, so the red is about the code".format(
-                elapsed_seconds, command_exit_code
+            "at both ends{}, so the red is about the code".format(
+                elapsed_seconds, command_exit_code, detail
             )
         )
         return EXIT_FAILED
 
     say(
         "UNPROVEN in {:.0f}s — the command exited {}, but the host window fell to "
-        "{} during the run. Do not read this red as a test failure; re-run.".format(
-            elapsed_seconds, command_exit_code, label
+        "{}{} during the run. Do not read this red as a test failure; re-run.".format(
+            elapsed_seconds, command_exit_code, label, detail
         )
     )
     return EXIT_UNPROVEN
@@ -231,9 +288,15 @@ def main(argv=None):
     )
     parser.add_argument(
         "--probe",
-        default=str(DEFAULT_PROBE),
-        help="host CPU-share probe to gate on (default: tools/host_cpu_share.py). "
-        "It runs on this machine — the host — never in the guest.",
+        action="append",
+        dest="probes",
+        metavar="PATH",
+        help="host probe to gate on; repeat to gate on several, and every one "
+        "must report SANE. Any script exiting 0 sane / 1 degraded / 2 void "
+        "will do. They run on this machine — the host — never in the guest. "
+        "(default: {})".format(
+            ", ".join("tools/{}".format(probe.name) for probe in DEFAULT_PROBES)
+        ),
     )
     parser.add_argument(
         "--probe-seconds",
@@ -277,7 +340,9 @@ def main(argv=None):
     if args.command and args.command[0] == "--":
         args.command = args.command[1:]
 
-    probe_path = Path(args.probe).expanduser()
+    probe_paths = [
+        Path(probe).expanduser() for probe in (args.probes or DEFAULT_PROBES)
+    ]
     lock_path = Path(args.lock_path).expanduser()
     deadline_monotonic = time.monotonic() + args.deadline_seconds
 
@@ -292,7 +357,7 @@ def main(argv=None):
     try:
         try:
             if not wait_for_sane_window(
-                probe_path,
+                probe_paths,
                 args.probe_seconds,
                 deadline_monotonic,
                 args.poll_interval_seconds,
@@ -311,8 +376,10 @@ def main(argv=None):
             elapsed_seconds = time.monotonic() - started_monotonic
 
             say("re-checking the host window the run just finished in")
-            window_after = run_probe(probe_path, args.probe_seconds)
-            return report(command_exit_code, window_after, elapsed_seconds)
+            window_after, results_after = run_probes(probe_paths, args.probe_seconds)
+            return report(
+                command_exit_code, window_after, elapsed_seconds, results_after
+            )
         except ProbeError as error:
             say("probe error: {}".format(error))
             return EXIT_PROBE_ERROR

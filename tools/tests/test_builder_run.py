@@ -94,12 +94,16 @@ class BuilderRunJourney(unittest.TestCase):
         calls_path = probe_path.with_suffix(".calls")
         return int(calls_path.read_text()) if calls_path.exists() else 0
 
-    def run_wrapper(self, probe_path, payload_args, extra_args=()):
+    def run_wrapper(self, probes, payload_args, extra_args=()):
+        """Drive the wrapper against one probe, or several that must all be SANE."""
+        probe_paths = [probes] if isinstance(probes, Path) else list(probes)
+        probe_args = []
+        for probe_path in probe_paths:
+            probe_args += ["--probe", str(probe_path)]
         command = [
             sys.executable,
             str(WRAPPER),
-            "--probe",
-            str(probe_path),
+            *probe_args,
             "--lock-path",
             str(self.lock_path),
             "--probe-seconds",
@@ -160,6 +164,61 @@ class BuilderRunJourney(unittest.TestCase):
         self.assertEqual(result.returncode, EXIT_NO_SANE_WINDOW, result.stderr)
         self.assertIn("DEGRADED", result.stderr)
         self.assertEqual(self.payload_events(), [])
+
+    # --- gating on more than one resource ----------------------------------
+
+    def test_one_void_probe_holds_the_run_even_when_the_other_is_sane(self):
+        """The regression this gate exists for: CPU SANE is not an all-clear.
+
+        `host_cpu_share.py` spins over a resident working set, so it never page
+        faults and reads SANE straight through a swap storm — the condition
+        that actually stalls the guest for tens of seconds. If one probe could
+        vote down another, that window would open.
+        """
+        cpu = self.write_probe("cpu_sane", [0])
+        memory = self.write_probe("memory_void", [2])
+
+        result = self.run_wrapper(
+            [cpu, memory], ["starved", 0], extra_args=["--deadline-seconds", "0.4"]
+        )
+
+        self.assertEqual(result.returncode, EXIT_NO_SANE_WINDOW, result.stderr)
+        self.assertIn("memory_void.py VOID", result.stderr)
+        self.assertEqual(self.payload_events(), [])
+
+    def test_a_non_sane_probe_short_circuits_the_probes_after_it(self):
+        """Nothing is left to learn about a window already known to be unusable."""
+        cpu = self.write_probe("cpu_void", [2])
+        memory = self.write_probe("memory_unreached", [0])
+
+        result = self.run_wrapper(
+            [cpu, memory], ["unreached", 0], extra_args=["--deadline-seconds", "0.4"]
+        )
+
+        self.assertEqual(result.returncode, EXIT_NO_SANE_WINDOW, result.stderr)
+        self.assertGreaterEqual(self.probe_calls(cpu), 1)
+        self.assertEqual(self.probe_calls(memory), 0)
+
+    def test_a_run_starts_only_once_every_probe_reports_sane(self):
+        cpu = self.write_probe("cpu_clears", [0])
+        memory = self.write_probe("memory_clears", [2, 0])
+
+        result = self.run_wrapper([cpu, memory], ["both", 0])
+
+        self.assertEqual(result.returncode, EXIT_PASS, result.stderr)
+        self.assertIn("cpu_clears.py SANE, memory_clears.py SANE", result.stderr)
+        self.assertEqual([event[1] for event in self.payload_events()], ["start", "end"])
+
+    def test_a_red_is_unproven_when_the_second_probe_degrades_mid_run(self):
+        """Worst-of decides: the CPU window held, but the host started paging."""
+        cpu = self.write_probe("cpu_held", [0, 0])
+        memory = self.write_probe("memory_fell", [0, 1])
+
+        result = self.run_wrapper([cpu, memory], ["red", 1])
+
+        self.assertEqual(result.returncode, EXIT_UNPROVEN, result.stderr)
+        self.assertIn("UNPROVEN", result.stderr)
+        self.assertIn("memory_fell.py DEGRADED", result.stderr)
 
     # --- the verdict -------------------------------------------------------
 
