@@ -392,6 +392,24 @@ emulator:
 on paper before tapping **Found the Workspace**, and do not leave the screen until it
 lands you in the app.
 
+## The migration dry run (run it on the real file, before the cutover)
+
+Every case in `app/test/import/jeeves_export_test.dart` imports a file the suite wrote
+itself, so the suite can only prove the importer handles documents we thought to write.
+The roundelay migration runs **once**, against a file none of them is. Before the
+cutover, put the real file through the real importer:
+
+```
+cd app && flutter test test/import/real_export_dry_run_test.dart \
+  --dart-define=jeeves_export_file=/path/to/export.json
+```
+
+It imports into a throwaway in-memory store — your own database is never opened — then
+re-exports and compares row for row, ignoring the `user_id` an import deliberately
+rewrites. A refusal prints the message the app would show; a row that did not survive is
+named by collection and id. Without the define it skips, so CI neither needs a file nor
+reports a green it did not earn.
+
 ## The store cutover (verify on a debug install)
 
 The first open of a build carrying #595 creates `jeeves_domain.sqlite`. It
