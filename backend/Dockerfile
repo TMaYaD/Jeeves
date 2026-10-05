@@ -8,7 +8,7 @@
 # for the interpreter: `pip install -e .` below enforces that here at build
 # time, and tests/test_python_version.py enforces it in CI, where this image is
 # never built.
-FROM python:3.14.7-slim@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48aaeba60ae62a8b53525ef6
+FROM python:3.14.7-slim@sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d
 
 WORKDIR /app
 
