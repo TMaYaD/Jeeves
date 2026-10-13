@@ -245,18 +245,18 @@ packages:
     dependency: "direct main"
     description:
       name: drift
-      sha256: e3b6352aa02e60bed6ffc3cc9894c421578dad5fbef21b1f7f57cdc0e4edabcb
+      sha256: ef9598e1785c18db37209e8554fc79aff94632209d384ec98984b9e3184af0f7
       url: "https://pub.dev"
     source: hosted
-    version: "2.35.0"
+    version: "2.35.2"
   drift_dev:
     dependency: "direct dev"
     description:
       name: drift_dev
-      sha256: fbad5c1e3a73820cdb1f32161eb2f40bb5e5f03c0c1a3d236595725aec7efc6d
+      sha256: e0d16aaa21f3408cbe2dd4bfc56c36cea43e53a537e6613b91380c0924b3bd30
       url: "https://pub.dev"
     source: hosted
-    version: "2.35.0"
+    version: "2.35.1"
   drift_sqlite_async:
     dependency: "direct main"
     description:
@@ -269,10 +269,10 @@ packages:
     dependency: transitive
     description:
       name: equatable
-      sha256: "3e0141505477fd8ad55d6eb4e7776d3fe8430be8e497ccb1521370c3f21a3e2b"
+      sha256: ea36e500cbf0ec18361deabca755434f73e42fe53c5130021c7e2d6b5ebe1702
       url: "https://pub.dev"
     source: hosted
-    version: "2.0.8"
+    version: "3.0.0"
   fake_async:
     dependency: "direct dev"
     description:
@@ -434,10 +434,10 @@ packages:
     dependency: "direct main"
     description:
       name: flutter_secure_storage
-      sha256: "15e8c8fe269fdf7d469b23008ab3df521c8b826ed345820532364c31bdebace6"
+      sha256: d4e1fb6b2cb524868929e78dc0282fa000554b22060fb53789dc481c9fc95bb8
       url: "https://pub.dev"
     source: hosted
-    version: "11.0.0"
+    version: "11.2.0"
   flutter_secure_storage_darwin:
     dependency: transitive
     description:
@@ -458,10 +458,10 @@ packages:
     dependency: transitive
     description:
       name: flutter_secure_storage_platform_interface
-      sha256: "8ceea1223bee3c6ac1a22dabd8feefc550e4729b3675de4b5900f55afcb435d6"
+      sha256: "64951127f001f546891c86f414972bf49ef2c4c8a4c92c65f5790cc0c9100045"
       url: "https://pub.dev"
     source: hosted
-    version: "2.0.1"
+    version: "2.1.1"
   flutter_secure_storage_web:
     dependency: transitive
     description:
@@ -495,10 +495,10 @@ packages:
     dependency: "direct main"
     description:
       name: flutter_timezone
-      sha256: "869677426fde92dbe170fb7d2d4929f2a8343c2f5f62f08b0bb64f908630b073"
+      sha256: "7830bc64bef0b003468fc1f58fc3f3faf54817f8cd6e68fa818b306560410d68"
       url: "https://pub.dev"
     source: hosted
-    version: "5.1.0"
+    version: "5.1.1"
   flutter_web_plugins:
     dependency: transitive
     description: flutter
@@ -564,18 +564,18 @@ packages:
     dependency: "direct main"
     description:
       name: geolocator
-      sha256: e146a6d63776582651e97a79cbe459f8e1211b100101fadcd84db83361fa599f
+      sha256: "4e41ad6bc072364ff01822531dac47936c065e5bf8f928f240a25bb51256ada0"
       url: "https://pub.dev"
     source: hosted
-    version: "14.0.3"
+    version: "14.1.1"
   geolocator_android:
     dependency: transitive
     description:
       name: geolocator_android
-      sha256: "86ea1654e4f61ff51466848e91c116b422d6010ea269fda0fbe1af7e9e742ce1"
+      sha256: "1be90ea8aaaf9db8e7816b4fe0387f082ee8b5cf03355912dad90fb0a75717fa"
       url: "https://pub.dev"
     source: hosted
-    version: "5.0.3"
+    version: "5.1.1+1"
   geolocator_apple:
     dependency: transitive
     description:
@@ -596,10 +596,10 @@ packages:
     dependency: transitive
     description:
       name: geolocator_platform_interface
-      sha256: cdb082e4f048b69da244117b7914cc60d2a8897546ffaa4f2529c786ded7aee2
+      sha256: b640b6b687b14c66f51fe1130b1c2e8babbd408e0158052b92006b6675ca77fc
       url: "https://pub.dev"
     source: hosted
-    version: "4.2.8"
+    version: "4.4.0"
   geolocator_web:
     dependency: transitive
     description:
@@ -1068,10 +1068,10 @@ packages:
     dependency: "direct main"
     description:
       name: shared_preferences
-      sha256: c3025c5534b01739267eb7d76959bbc25a6d10f6988e1c2a3036940133dd10bf
+      sha256: "1e85e0dccf5b4a016077fea7dfbb4a7cb39c759ac1596fcf60c06deadb7da91f"
       url: "https://pub.dev"
     source: hosted
-    version: "2.5.5"
+    version: "2.5.6"
   shared_preferences_android:
     dependency: transitive
     description:
@@ -1169,10 +1169,10 @@ packages:
     dependency: "direct main"
     description:
       name: speech_to_text
-      sha256: "75587f7400f485fdf166beacd471549d98fe5d58e634f708916bb65dec05d6a4"
+      sha256: f2fabd017b5cb07f4e06d496b2d4b957e39534bc848f92b1e6acac80a10f4967
       url: "https://pub.dev"
     source: hosted
-    version: "7.4.0"
+    version: "7.5.0"
   speech_to_text_platform_interface:
     dependency: transitive
     description:
@@ -1201,10 +1201,10 @@ packages:
     dependency: transitive
     description:
       name: sqlite3_connection_pool
-      sha256: "8f2df36dc9f0f51ec04506b90848769b5a4538a9f937472147a274910a92e7ee"
+      sha256: d6ba862bd8560f974dfd1ab7a8e679054cdaf08cb016662275ba902737cad7bc
       url: "https://pub.dev"
     source: hosted
-    version: "0.2.9"
+    version: "0.2.12"
   sqlite3_flutter_libs:
     dependency: "direct main"
     description:
@@ -1217,18 +1217,18 @@ packages:
     dependency: transitive
     description:
       name: sqlite3_web
-      sha256: aa6af15ef8bf8551d3a84203e3cbc022990567372e46ef98f91bdb2018fcfb0e
+      sha256: "8c140bd9124c060dd54227c5ccc5e1ce32123ef5d0c2f8cf46820c6c511c6c63"
       url: "https://pub.dev"
     source: hosted
-    version: "0.9.4"
+    version: "0.9.5"
   sqlite_async:
     dependency: "direct main"
     description:
       name: sqlite_async
-      sha256: "40c7d6f660322e4a2b4367ff75b9d5111389441aaa87e44f417420b56e0b0c97"
+      sha256: "1e35687e4053b6f48287e15c97cf6ee556b9770b12a048623e96af7742b3e9db"
       url: "https://pub.dev"
     source: hosted
-    version: "0.14.5"
+    version: "0.14.6"
   sqlparser:
     dependency: transitive
     description:
@@ -1313,10 +1313,10 @@ packages:
     dependency: "direct main"
     description:
       name: url_launcher
-      sha256: f6a7e5c4835bb4e3026a04793a4199ca2d14c739ec378fdfe23fc8075d0439f8
+      sha256: e8cc955c97e06df9879140a1fe301f3d493f01b7c62dec7f46834be31d7e9fda
       url: "https://pub.dev"
     source: hosted
-    version: "6.3.2"
+    version: "6.3.3"
   url_launcher_android:
     dependency: transitive
     description:
