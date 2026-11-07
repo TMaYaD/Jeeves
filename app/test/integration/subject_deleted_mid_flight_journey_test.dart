@@ -124,8 +124,17 @@ void main() {
       await tester.pumpAndSettle();
       await tester.runAsync(() => pumpEventQueue());
 
-      expect(capture.forCollection(todosCollection), isEmpty);
+      expect(capture.recorded, isEmpty);
       expect(await tester.runAsync(() => db.todoDao.getTodo('o1')), isNull);
+      final orphans = await tester.runAsync(() async => [
+            ...await (db.select(db.todoTags)
+                  ..where((t) => t.todoId.equals('o1')))
+                .get(),
+            ...await (db.select(db.actions)
+                  ..where((a) => a.outcomeId.equals('o1')))
+                .get(),
+          ]);
+      expect(orphans, isEmpty);
     });
   });
 }

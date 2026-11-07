@@ -464,19 +464,19 @@ void main() {
     // the write seam finds it gone and writes nothing.
     testWidgets('a row deleted under the open screen is never '
         'written to, and authors no op', (tester) async {
-      final todo = await _insertTodo(db, id: 'o1');
+      final todo = (await tester.runAsync(() => _insertTodo(db, id: 'o1')))!;
 
       await tester.pumpWidget(_harness(db, todo: todo));
       await _pumpFrames(tester);
       await openNotesEditor(tester);
       await tester.enterText(find.byType(TextField), 'Ask the barista');
 
-      await db.todoDao.deleteOutcome('o1');
+      await tester.runAsync(() => db.todoDao.deleteOutcome('o1'));
       capture.clear();
       await _pumpFrames(tester);
       await unmountWhileFocused(tester);
 
-      expect(await db.todoDao.getTodo('o1'), isNull);
+      expect(await tester.runAsync(() => db.todoDao.getTodo('o1')), isNull);
       // The op-log assertion is the one that survives a future DAO that upserts.
       expect(capture.forCollection(todosCollection), isEmpty);
     });
@@ -485,19 +485,19 @@ void main() {
     // timer fires after the delete, with no dispose in sight.
     testWidgets('a pending notes debounce firing after the delete writes '
         'nothing', (tester) async {
-      final todo = await _insertTodo(db, id: 'o1');
+      final todo = (await tester.runAsync(() => _insertTodo(db, id: 'o1')))!;
 
       await tester.pumpWidget(_harness(db, todo: todo));
       await _pumpFrames(tester);
       await openNotesEditor(tester);
       await tester.enterText(find.byType(TextField), 'Ask the barista');
 
-      await db.todoDao.deleteOutcome('o1');
+      await tester.runAsync(() => db.todoDao.deleteOutcome('o1'));
       capture.clear();
       await tester.pump(const Duration(milliseconds: 600));
       await _pumpFrames(tester);
 
-      expect(await db.todoDao.getTodo('o1'), isNull);
+      expect(await tester.runAsync(() => db.todoDao.getTodo('o1')), isNull);
       expect(capture.forCollection(todosCollection), isEmpty);
     });
   });

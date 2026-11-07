@@ -1408,20 +1408,22 @@ void main() {
     // authors no op for the deleted entity.
     testWidgets('a title edit pending when the Outcome is deleted is dropped',
         (tester) async {
-      await db.close();
       final capture = RecordingDomainOpCapture();
-      db = GtdDatabase(NativeDatabase.memory(), opCapture: capture);
-      final todo = await _insertInboxTodo(db, id: 't', title: 'Buy milk');
+      final todo = (await tester.runAsync(() async {
+        await db.close();
+        db = GtdDatabase(NativeDatabase.memory(), opCapture: capture);
+        return _insertInboxTodo(db, id: 't', title: 'Buy milk');
+      }))!;
       await tester.pumpWidget(_harness(db, todo: todo));
       await _pumpFrames(tester, frames: 5);
       await tester.enterText(
           find.byKey(const Key('clarify_title')), 'Buy oat milk');
 
-      await db.todoDao.deleteOutcome('t');
+      await tester.runAsync(() => db.todoDao.deleteOutcome('t'));
       capture.clear();
       await unmountWhileFocused(tester);
 
-      expect(await db.todoDao.getTodo('t'), isNull);
+      expect(await tester.runAsync(() => db.todoDao.getTodo('t')), isNull);
       expect(capture.forCollection(todosCollection), isEmpty);
     });
 
