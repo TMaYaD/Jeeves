@@ -78,10 +78,6 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   String? _baselineTitle;
   String? _baselineNotes;
 
-  /// Latched once local storage has confirmed this Outcome is gone — see where
-  /// it is set in [build].
-  bool _subjectConfirmedMissing = false;
-
   @override
   void initState() {
     super.initState();
@@ -153,8 +149,8 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   ///
   /// No `ref.read` / `ref.watch` in here — see [_notifierForDisposeFlush].
   void _flushPendingTextEdits() {
-    // A write must not outlive its subject.
-    if (_subjectConfirmedMissing) return;
+    // A flush after the Outcome was deleted is dropped by the notifier's
+    // write guard (#447).
     final notifier = _notifierForDisposeFlush;
     // Snapshot the text before anything is disposed. Guarded on the
     // initialisation latches too: a screen torn down while the subject was
@@ -187,25 +183,6 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   Widget build(BuildContext context) {
     final todoAsync = ref.watch(taskDetailTodoProvider(widget.todoId));
     final tagsAsync = ref.watch(taskTagsProvider(widget.todoId));
-
-    // A write must not outlive its subject (#446 / #447). A plain field write
-    // during build — no `setState`, because it changes nothing about this
-    // build's output: [AsyncSubject] below is already rendering the missing
-    // surface off the same value. `dispose()` reads this latch rather than the
-    // provider, because reading a provider there is the #529 trap.
-    //
-    // **Latched, never cleared.** Un-latching on a row that comes back is live
-    // re-binding, which #447 puts out of scope (#427).
-    //
-    // The two focus listeners need no second guard: while the subject is
-    // missing the fields are unmounted, and a detached [FocusNode] does not
-    // notify, so they are unreachable-while-missing by construction.
-    //
-    // This closes the case where the screen *observed* the deletion; the window
-    // between the last emission and the flush is #444's. The durable answer is
-    // one guard at the write seam, not a latch per surface — #447 should
-    // replace this rather than copy it onto the next one.
-    _subjectConfirmedMissing |= todoAsync.subjectConfirmedMissing;
 
     return GestureDetector(
       onTap: () => FocusScope.of(context).unfocus(),

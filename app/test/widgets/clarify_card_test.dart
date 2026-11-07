@@ -25,6 +25,9 @@ import 'package:jeeves/providers/clarify_mode_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
+import 'package:jeeves/sync/collection_codecs.dart' show todosCollection;
+import 'package:jeeves/sync/domain_op_capture.dart'
+    show RecordingDomainOpCapture;
 import 'package:jeeves/widgets/clarify_card.dart';
 import 'package:jeeves/widgets/clarify_retention.dart';
 import 'package:jeeves/widgets/clarify_shared_widgets.dart';
@@ -1398,6 +1401,28 @@ void main() {
       await unmountWhileFocused(tester);
 
       expect((await _rawTodoRow(db, 't')).updatedAt, seededUpdatedAt);
+    });
+
+    // A write must not outlive its subject (#447). The row is really deleted
+    // while an edit is still in the field; the dispose flush finds it gone and
+    // authors no op for the deleted entity.
+    testWidgets('a title edit pending when the Outcome is deleted is dropped',
+        (tester) async {
+      await db.close();
+      final capture = RecordingDomainOpCapture();
+      db = GtdDatabase(NativeDatabase.memory(), opCapture: capture);
+      final todo = await _insertInboxTodo(db, id: 't', title: 'Buy milk');
+      await tester.pumpWidget(_harness(db, todo: todo));
+      await _pumpFrames(tester, frames: 5);
+      await tester.enterText(
+          find.byKey(const Key('clarify_title')), 'Buy oat milk');
+
+      await db.todoDao.deleteOutcome('t');
+      capture.clear();
+      await unmountWhileFocused(tester);
+
+      expect(await db.todoDao.getTodo('t'), isNull);
+      expect(capture.forCollection(todosCollection), isEmpty);
     });
 
     testWidgets('a failing flush is logged rather than thrown into teardown',

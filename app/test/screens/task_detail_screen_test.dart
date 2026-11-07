@@ -1963,40 +1963,28 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
-    // A write must not outlive its subject. Without the subject-missing latch
-    // the flush fires against a row that is gone, and `TodoDao` authors the sync
-    // op unconditionally — so an op would be authored for a deleted entity.
-    // This is #447's rule (a write only counts if it landed) applied to the site
-    // #447 names; the residual TOCTOU window is #444's.
-    testWidgets('a subject that went missing under the open screen is never '
+    // A write must not outlive its subject (#447). The Outcome row is really
+    // deleted from local storage while the screen has an edit pending; the
+    // write seam checks the row inside its own transaction, so the flush neither
+    // writes nor authors an op for the deleted entity.
+    testWidgets('a subject deleted under the open screen is never '
         'written to', (tester) async {
       await _insertAt(db, id: 'gone', title: 'Buy milk');
-      final todo = (await db.todoDao.getTodo('gone'))!;
-      final feed = StreamController<Todo?>.broadcast();
-      addTearDown(feed.close);
 
-      final (widget, router) =
-          _buildScreen(db, 'gone', todoStream: feed.stream);
+      final (widget, router) = _buildScreen(db, 'gone');
       await _showTaskDetail(tester, widget, router, 'gone');
-      feed.add(todo);
-      await tester.pumpAndSettle();
 
       await tester.enterText(
           find.byKey(const Key('task_detail_title')), 'Buy oat milk');
       await tester.pump();
 
-      // The row leaves local storage under the open screen. The provider
-      // override decouples the stream from the row, so the row is still there
-      // to prove the negative.
-      feed.add(null);
-      await tester.pumpAndSettle();
+      await db.todoDao.deleteOutcome('gone');
       capture.clear();
+      await tester.pumpAndSettle();
 
       await unmountWhileFocused(tester);
 
-      final row = await rawRow('gone');
-      expect(row['title'], 'Buy milk');
-      expect(row['updated_at'], isNull);
+      expect(await db.todoDao.getTodo('gone'), isNull);
       // The op-log assertion is the one that survives a future DAO that upserts.
       expect(capture.forCollection(todosCollection), isEmpty);
     });

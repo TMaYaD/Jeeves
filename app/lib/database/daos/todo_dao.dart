@@ -679,6 +679,31 @@ EXISTS (
     if (logChanged) attachedDatabase.notifyTimeLogsViewWrite();
   }
 
+  /// Plain row-exists read (no projection); runs on the caller's transaction.
+  Future<bool> _outcomeRowExists(String todoId) async =>
+      await (selectOnly(todos)
+            ..addColumns([todos.id])
+            ..where(todos.id.equals(todoId)))
+          .getSingleOrNull() !=
+      null;
+
+  /// Runs [write] only if local storage holds Outcome [todoId] when the
+  /// transaction commits. The existence check and [write] share one
+  /// [GtdDatabase.capturing] transaction, so a delete cannot slip between them.
+  /// Returns whether the write landed; a skipped write authors no op and sends
+  /// no view notify. Surfaces use this instead of latching "subject missing"
+  /// themselves (#447).
+  Future<bool> writeIfOutcomePresent(
+    String todoId,
+    Future<void> Function() write,
+  ) {
+    return attachedDatabase.capturing(() async {
+      if (!await _outcomeRowExists(todoId)) return false;
+      await write();
+      return true;
+    });
+  }
+
   /// The **atomic** actionless-mirror primitive (issue #501): check whether the
   /// Outcome is Actionless and — only if it is — write [text] as its next
   /// action, both inside **one** transaction. Returns `true` iff it wrote.
@@ -696,6 +721,10 @@ EXISTS (
   /// post-commit view-notifies. Skip path (a `current` Action exists): no
   /// writes, no stamp, no convergence, no notify.
   ///
+  /// Returns `false` without writing in two skip cases: a `current` Action
+  /// exists, or the Outcome itself is gone (a missing Outcome is not
+  /// Actionless).
+  ///
   /// Blank [text] is a caller error (the mirror only fires with a non-blank
   /// title), mirroring [ActionDao.setCurrentAction]'s contract.
   Future<bool> setCurrentActionTextIfActionless(
@@ -711,6 +740,9 @@ EXISTS (
     }
     var logChanged = false;
     final wrote = await attachedDatabase.capturing(() async {
+      // A deleted Outcome also reads as "no current Action"; without this
+      // check it would be taken for Actionless and get an Action row (#447).
+      if (!await _outcomeRowExists(todoId)) return false;
       final current = await attachedDatabase.actionDao.getCurrentAction(todoId);
       if (current != null) return false;
       // Non-blank text here, so this never supersedes — logChanged stays false.
