@@ -71,7 +71,7 @@ void main() {
           ),
         ],
       );
-      final todo = (await db.todoDao.getTodo('o1'))!;
+      final todo = (await tester.runAsync(() => db.todoDao.getTodo('o1')))!;
       await tester.pumpWidget(ProviderScope(
         overrides: [
           inboxItemsProvider.overrideWith((_) => Stream.value([])),
