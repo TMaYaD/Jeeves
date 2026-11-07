@@ -285,6 +285,37 @@ void main() {
       expect(await db.todoDao.getPersonTagIdsForTodo('t2'), isEmpty);
     });
 
+    testWidgets(
+        'an Outcome deleted while the picker is open writes nothing and '
+        'closes as a cancel', (tester) async {
+      await _insertTodo(db, id: 't6');
+      await _insertPersonTag(db, id: 'alice', name: 'Alice');
+      final observed = _Observed();
+
+      await tester.pumpWidget(_harness(
+        db,
+        observed: observed,
+        todoId: 't6',
+        personTags: [_personTag('alice', 'Alice')],
+      ));
+      await _openPicker(tester);
+      await tester.tap(find.text('Alice'));
+      await tester.pumpAndSettle();
+
+      await tester.runAsync(() => db.todoDao.deleteOutcome('t6'));
+      await _tapDone(tester);
+
+      expect(observed.called, isTrue);
+      expect(observed.result, isNull);
+      expect(find.widgetWithText(FilledButton, 'Done'), findsNothing);
+      expect(find.text('Open caller'), findsOneWidget);
+      expect(find.text('Failed to save. Please try again.'), findsNothing);
+      final orphans = await tester.runAsync(() => (db.select(db.todoTags)
+            ..where((tt) => tt.todoId.equals('t6')))
+          .get());
+      expect(orphans, isEmpty);
+    });
+
     testWidgets('cancelling returns null and writes nothing', (tester) async {
       await _insertTodo(db, id: 't3');
       await _insertPersonTag(db, id: 'alice', name: 'Alice');

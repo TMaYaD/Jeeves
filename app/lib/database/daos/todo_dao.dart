@@ -985,14 +985,23 @@ AND (
   /// the two writes must land together: a stamp that fails after the tag
   /// replacement would leave the new delegate set wearing the old clarified
   /// moment, and the task would sort as if it had never been revisited.
-  Future<void> setPersonTagsAndStamp(
+  ///
+  /// A write against an Outcome counts only if it landed: the Outcome's
+  /// presence is checked inside the transaction, and when it is gone nothing
+  /// is written, no op is authored, no watcher is notified, and this returns
+  /// `false`.
+  Future<bool> setPersonTagsAndStamp(
     String todoId,
     Set<String> targetPersonTagIds,
     String userId, {
     DateTime? now,
   }) async {
     final ts = (now ?? DateTime.now()).toUtc();
-    await attachedDatabase.capturing(() async {
+    return attachedDatabase.capturing(() async {
+      final outcomeRow = await (select(todos)
+            ..where((t) => t.id.equals(todoId)))
+          .getSingleOrNull();
+      if (outcomeRow == null) return false;
       await setPersonTagsForTodo(todoId, targetPersonTagIds, userId);
       // Stamped inline rather than through [stampLastClarifiedAt]: that
       // method notifies view watchers itself, and firing that mid-transaction
@@ -1011,6 +1020,7 @@ AND (
       // Person-tag edits move `todo_tags`, which the Outcome surfaces read
       // alongside `todos` — so both groups are notified.
       attachedDatabase.notifyTodosViewWrite(includeTodoTags: true);
+      return true;
     });
   }
 
