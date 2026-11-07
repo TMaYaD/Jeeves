@@ -64,7 +64,7 @@ void main() {
   // when #525 dropped `todos.next_action_text`. That suite's subject — "no code
   // path writes the cursor" — is subsumed by the column's absence, but its
   // Action-grain halves were the only coverage anywhere for
-  // `setCurrentActionTextIfActionless` (including #501's TOCTOU skip path) and for
+  // `applyRouting`'s `actionTextIfActionless` (including #501's TOCTOU skip path) and for
   // `deleteOutcome`'s cascade onto `actions`, so they live on here, beside the
   // rest of TodoDao's write primitives.
   group('TodoDao — writes against an absent Outcome report false (#444)', () {
@@ -93,11 +93,12 @@ void main() {
       expect(await db.select(db.todoTags).get(), isEmpty);
     });
 
-    test('stampLastClarifiedAt and setCurrentActionTextIfActionless return false',
-        () async {
+    test('stampLastClarifiedAt returns false, and the title-as-action fallback '
+        'mints no Action for a vanished Outcome', () async {
       expect(await db.todoDao.stampLastClarifiedAt('gone'), isFalse);
       expect(
-        await db.todoDao.setCurrentActionTextIfActionless('gone', 'Title'),
+        await db.todoDao.applyRouting('gone',
+            to: RoutingKind.nextAction, actionTextIfActionless: 'Title'),
         isFalse,
       );
       expect(await db.select(db.actions).get(), isEmpty);
@@ -114,7 +115,7 @@ void main() {
     });
   });
 
-  group('TodoDao — setCurrentActionTextIfActionless', () {
+  group('TodoDao — applyRouting actionTextIfActionless', () {
     late GtdDatabase db;
 
     setUp(() => db = _openInMemory());
@@ -123,20 +124,22 @@ void main() {
     final t0 = DateTime.parse('2026-07-01T09:00:00.000Z');
     final t1 = DateTime.parse('2026-07-01T10:00:00.000Z');
 
-    test('the write path mints the current Action and stamps', () async {
+    test('the write path routes, mints the current Action and stamps', () async {
       await _insertTodo(db, id: 'o1', title: 'Outcome o1');
 
-      final wrote = await db.todoDao
-          .setCurrentActionTextIfActionless('o1', 'Book venue', now: t1);
+      await db.todoDao.applyRouting('o1',
+          to: RoutingKind.nextAction,
+          actionTextIfActionless: ' Book venue ',
+          now: t1);
 
-      expect(wrote, isTrue);
       expect((await db.actionDao.getCurrentAction('o1'))?.actionText,
           'Book venue');
-      expect((await db.todoDao.getTodo('o1'))?.lastClarifiedAt, t1,
-          reason: 'the write path still stamps');
+      final row = await db.todoDao.getTodo('o1');
+      expect(row?.intent, 'next');
+      expect(row?.lastClarifiedAt, t1);
     });
 
-    test('the skip path (#501 TOCTOU guard) writes nothing at all', () async {
+    test('the skip path (#501 TOCTOU guard) leaves the Action alone', () async {
       await _insertTodo(db, id: 'o1', title: 'Outcome o1');
       await seedCurrentAction(
         db,
@@ -145,28 +148,61 @@ void main() {
         userId: _userId,
         createdAt: t0,
       );
-      final before = await db.todoDao.getTodo('o1');
 
-      final wrote = await db.todoDao
-          .setCurrentActionTextIfActionless('o1', 'Mirrored title', now: t1);
+      await db.todoDao.applyRouting('o1',
+          to: RoutingKind.waitingFor,
+          actionTextIfActionless: 'Mirrored title',
+          now: t1);
 
-      expect(wrote, isFalse);
       expect((await db.actionDao.getCurrentAction('o1'))?.actionText,
           'deliberate phrase',
           reason: 'a deliberate Action is never overwritten by the mirror');
-      final after = await db.todoDao.getTodo('o1');
-      expect(after?.lastClarifiedAt, before?.lastClarifiedAt,
-          reason: 'the skip path stamps nothing');
-      expect(after?.updatedAt, before?.updatedAt);
+      expect((await db.todoDao.getTodo('o1'))?.intent, 'next',
+          reason: 'the route still lands');
     });
 
-    test('blank text is a caller error', () async {
+    test('caller errors: blank text, with actionText, wrong destination',
+        () async {
       await _insertTodo(db, id: 'o1', title: 'Outcome o1');
 
       expect(
-        () => db.todoDao.setCurrentActionTextIfActionless('o1', '   ', now: t1),
+        () => db.todoDao.applyRouting('o1',
+            to: RoutingKind.nextAction, actionTextIfActionless: '   '),
         throwsArgumentError,
       );
+      expect(
+        () => db.todoDao.applyRouting('o1',
+            to: RoutingKind.nextAction,
+            actionText: 'a',
+            actionTextIfActionless: 'b'),
+        throwsArgumentError,
+      );
+      expect(
+        () => db.todoDao.applyRouting('o1',
+            to: RoutingKind.maybe, actionTextIfActionless: 'b'),
+        throwsArgumentError,
+      );
+    });
+
+    test('a failing Action write rolls the route back (#709)', () async {
+      await _insertTodo(db, id: 'o1', title: 'Outcome o1');
+      final before = await db.todoDao.getTodo('o1');
+      await db.customStatement(
+          "CREATE TRIGGER actions_insert_fails BEFORE INSERT ON actions "
+          "BEGIN SELECT RAISE(ABORT, 'actions is unwritable'); END");
+
+      await expectLater(
+        db.todoDao.applyRouting('o1',
+            to: RoutingKind.nextAction,
+            actionTextIfActionless: 'Book venue',
+            now: t1),
+        throwsA(anything),
+      );
+
+      final after = await db.todoDao.getTodo('o1');
+      expect(after?.intent, before?.intent);
+      expect(after?.lastClarifiedAt, before?.lastClarifiedAt);
+      expect(await db.actionDao.getCurrentAction('o1'), isNull);
     });
   });
 

@@ -74,6 +74,7 @@ class _FailingClarificationService extends DaoClarificationService {
     String id, {
     required RoutingKind to,
     String? actionText,
+    String? actionTextIfActionless,
     Set<String>? personTagIds,
     String? userId,
   }) =>
@@ -1228,7 +1229,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(tester.takeException(), isNull,
-          reason: 'setCurrentActionTextIfActionless throws on blank text — the '
+          reason: 'the fallback throws on blank text — the '
               'caller must guard rather than let an ArgumentError escape');
       final row = await db.todoDao.getTodo('bs3');
       expect(row?.lastClarifiedAt, isNull, reason: 'no route landed');

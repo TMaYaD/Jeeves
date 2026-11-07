@@ -454,6 +454,7 @@ class ProcessToHandlers extends ConsumerStatefulWidget {
     this.onAfterRoute,
     this.onProcessingChanged,
     this.liveTitle,
+    this.titleAsActionOnWaitingFor = false,
   });
 
   /// The Capture or Outcome this bar clarifies — selects the write path.
@@ -530,6 +531,12 @@ class ProcessToHandlers extends ConsumerStatefulWidget {
   /// other host leaves this null and falls back to [subject.title], which is
   /// never stale there.
   final Future<String?> Function()? liveTitle;
+
+  /// Whether routing an Outcome to Waiting For lets its title stand in as the
+  /// current Action while it is Actionless (the title-as-action fallback), in
+  /// the same transaction as the route (#709). Only the ClarifyCard sets this;
+  /// the review-step Waiting For button stays intent-only.
+  final bool titleAsActionOnWaitingFor;
 
   @override
   ConsumerState<ProcessToHandlers> createState() => _ProcessToHandlersState();
@@ -686,6 +693,7 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
   Future<bool> _commit(
     RoutingKind to, {
     String? actionText,
+    String? actionTextIfActionless,
     Set<String>? personTagIds,
   }) async {
     switch (widget.subject) {
@@ -694,6 +702,7 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
           todo.id,
           to: to,
           actionText: actionText,
+          actionTextIfActionless: actionTextIfActionless,
           personTagIds: personTagIds,
           userId: personTagIds != null ? ref.read(currentUserIdProvider) : null,
         );
@@ -923,17 +932,16 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
       return;
     }
     // `actionText: null`, not `''`: a non-null blank *supersedes* the current
-    // Action (#476), which would destroy a deliberate phrase. Null leaves the
-    // Action alone while still writing intent / clarified, clearing done_at and
-    // stamping last_clarified_at.
-    if (!await _commit(RoutingKind.nextAction)) return;
-    if (widget.subject case OutcomeSubject(:final todo)) {
-      // Actionless-guarded, so a phrase the user already wrote survives, and so
-      // does a queue the user saw and declined (the planned rows are untouched
-      // — issue #723 keeps this fallback rather than auto-promoting the head,
-      // which ADR-0004 forbids). One transaction, so a `current` Action landed
-      // by sync between the check and the write cannot be clobbered (#501).
-      await _clarification.mirrorTitleIfActionless(todo.id, title);
+    // Action (#476), which would destroy a deliberate phrase. The fallback is
+    // Actionless-guarded, so a phrase the user already wrote survives, and so
+    // does a queue the user saw and declined (the planned rows are untouched
+    // — issue #723 keeps this fallback rather than auto-promoting the head,
+    // which ADR-0004 forbids). Route and Action share one transaction, so a
+    // failed Action write leaves the row unrouted (#709) and a `current`
+    // Action landed by sync cannot be clobbered (#501). On a Capture the
+    // argument is ignored; the draft already carries the mirror.
+    if (!await _commit(RoutingKind.nextAction, actionTextIfActionless: title)) {
+      return;
     }
     // The Capture arm needs nothing here: `_mergedAction(d, null)` returns the
     // draft's own Action, which already carries the title mirror, written as
@@ -1036,11 +1044,29 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     // No pre-check: the routing write checks the subject inside its own
     // transaction, so confirming into a row that vanished while the picker was
     // open writes nothing and does not notify.
-    // Routing to waitingFor is intent-only — the Action is on the orthogonal
-    // "what's the action?" axis and is not touched here. Callsites that want
-    // to couple a phrase write own it via `onAfterRoute` (or the
-    // `nextActionDialog` modifier when editing an existing phrase).
-    if (!await _commit(RoutingKind.waitingFor, personTagIds: selected)) return;
+    // Routing to waitingFor is intent-only unless the host opts into the
+    // title-as-action fallback below; the Action is otherwise on the
+    // orthogonal "what's the action?" axis (the `nextActionDialog` modifier
+    // edits an existing phrase).
+    // Only the ClarifyCard asks for the title to stand in as the Action; it
+    // travels in the routing transaction so the two cannot diverge (#709). A
+    // Capture carries its mirror in the draft instead.
+    String? fallbackTitle;
+    if (widget.titleAsActionOnWaitingFor &&
+        widget.subject is OutcomeSubject) {
+      final title = ((await widget.liveTitle?.call()) ??
+              widget.subject.title)
+          .trim();
+      if (title.isNotEmpty) fallbackTitle = title;
+      if (!mounted) return;
+    }
+    if (!await _commit(
+      RoutingKind.waitingFor,
+      personTagIds: selected,
+      actionTextIfActionless: fallbackTitle,
+    )) {
+      return;
+    }
     await _notifyAfterRoute(ProcessAction.waitingFor);
   }
 
