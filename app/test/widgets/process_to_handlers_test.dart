@@ -1131,6 +1131,37 @@ void main() {
     });
 
     testWidgets(
+        'blank Save whose Action write fails leaves the route unwritten and '
+        'the item unresolved (#709)', (tester) async {
+      final todo = await _insertTodo(db, id: 'bs709', title: 'Call the dentist');
+      await db.customStatement(
+        'CREATE TRIGGER actions_insert_fails BEFORE INSERT ON actions '
+        "BEGIN SELECT RAISE(ABORT, 'actions is unwritable'); END",
+      );
+      final fired = <ProcessAction>[];
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        onAfterRoute: (a) async => fired.add(a),
+      ));
+
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+
+      final row = await db.todoDao.getTodo('bs709');
+      expect(row?.intent, todo.intent,
+          reason: 'the route and the Action commit together or not at all');
+      expect(row?.lastClarifiedAt, todo.lastClarifiedAt);
+      expect(await db.actionDao.getCurrentAction('bs709'), isNull);
+      expect(find.text('Operation failed. Please try again.'),
+          findsOneWidget);
+      expect(fired, isEmpty,
+          reason: 'the review must not advance past a write that did not land');
+    });
+
+    testWidgets(
         'blank Save on an Outcome that already has an Action routes without '
         'clobbering the phrase', (tester) async {
       // The fallback is Actionless-only. Clearing the field is not the
