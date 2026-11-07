@@ -18,6 +18,8 @@ import 'package:jeeves/services/clarification_service.dart';
 import 'package:jeeves/widgets/clarify_shared_widgets.dart';
 import 'package:jeeves/widgets/next_action_dialog.dart';
 import 'package:jeeves/widgets/state_surfaces.dart';
+import 'package:jeeves/sync/domain_op_capture.dart'
+    show RecordingDomainOpCapture;
 import '../../test_helpers.dart';
 
 GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
@@ -852,25 +854,41 @@ void main() {
     // time: no Outcome is minted and no link row is left behind (#447).
     testWidgets('a destination tapped after the Capture is deleted writes nothing',
         (tester) async {
-      await db.captureDao
-          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
+      final capture = RecordingDomainOpCapture();
+      final recordingDb =
+          GtdDatabase(NativeDatabase.memory(), opCapture: capture);
+      addTearDown(recordingDb.close);
+      await tester.runAsync(() => recordingDb.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk')));
 
-      await tester.pumpWidget(_buildApp(db, 'x', captureFeed: feed));
-      await feed.emitFrom(db, 'x');
+      await tester.pumpWidget(_buildApp(recordingDb, 'x', captureFeed: feed));
+      await tester.runAsync(() => feed.emitFrom(recordingDb, 'x'));
       await tester.pumpAndSettle();
 
-      await (db.delete(db.captures)..where((c) => c.id.equals('x'))).go();
+      await tester.runAsync(() => (recordingDb.delete(recordingDb.captures)
+            ..where((c) => c.id.equals('x')))
+          .go());
+      capture.clear();
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
       if (find.byType(NextActionDialog).evaluate().isNotEmpty) {
         await tester.tap(find.text('Save'));
         await tester.pumpAndSettle();
       }
-      // The refused write may surface as a reported error; it must not land.
-      tester.takeException();
+      await tester.runAsync(() => pumpEventQueue());
+      // The commit refuses a vanished Capture with a StateError; any other
+      // exception is a real failure and must not be swallowed.
+      final error = tester.takeException();
+      expect(error == null || error is StateError, isTrue,
+          reason: 'unexpected exception: $error');
 
-      expect(await db.select(db.todos).get(), isEmpty);
-      expect(await db.select(db.captureOutcomes).get(), isEmpty);
+      final todoRows =
+          await tester.runAsync(() => recordingDb.select(recordingDb.todos).get());
+      final linkRows = await tester
+          .runAsync(() => recordingDb.select(recordingDb.captureOutcomes).get());
+      expect(todoRows, isEmpty);
+      expect(linkRows, isEmpty);
+      expect(capture.recorded, isEmpty);
     });
 
     testWidgets('the missing state offers a way back to the Inbox',
