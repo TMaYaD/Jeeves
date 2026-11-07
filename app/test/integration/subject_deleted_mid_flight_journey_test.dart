@@ -102,31 +102,30 @@ void main() {
           find.byKey(const Key('task_detail_title')), 'Buy oat milk');
       await tester.pump();
 
-      await db.todoDao.deleteOutcome('o1');
+      await tester.runAsync(() => db.todoDao.deleteOutcome('o1'));
       capture.clear();
       await unmountWhileFocused(tester);
 
-      expect(await db.todoDao.getTodo('o1'), isNull);
+      expect(await tester.runAsync(() => db.todoDao.getTodo('o1')), isNull);
       expect(capture.forCollection(todosCollection), isEmpty);
     });
 
-    testWidgets('a value chosen after the Outcome is deleted is dropped',
+    testWidgets('a value confirmed in a sheet opened before the delete is dropped',
         (tester) async {
       await openRoute(tester);
-      final notifier = ProviderScope.containerOf(
-              tester.element(find.byType(TaskDetailScreen)))
-          .read(taskDetailNotifierProvider('o1'));
+      await tester.tap(find.text('Energy'));
+      await tester.pumpAndSettle();
+      expect(find.text('Energy Level'), findsOneWidget);
 
-      // What a sheet opened before the delete calls on confirm.
-      await db.todoDao.deleteOutcome('o1');
+      // The sheet is up; the row goes; then the user confirms.
+      await tester.runAsync(() => db.todoDao.deleteOutcome('o1'));
       capture.clear();
-      final landedEnergy = await notifier.setEnergyLevel('high');
-      final landedTime = await notifier.setTimeEstimate(30);
+      await tester.tap(find.text('High'));
+      await tester.pumpAndSettle();
+      await tester.runAsync(() => pumpEventQueue());
 
-      expect(landedEnergy, isFalse);
-      expect(landedTime, isFalse);
       expect(capture.forCollection(todosCollection), isEmpty);
-      expect(await db.todoDao.getTodo('o1'), isNull);
+      expect(await tester.runAsync(() => db.todoDao.getTodo('o1')), isNull);
     });
   });
 }

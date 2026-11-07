@@ -847,6 +847,32 @@ void main() {
       expect(find.byKey(const Key('clarify_subject_missing')), findsOneWidget);
     });
 
+    // The row goes while the card is still up (no emission has told it yet),
+    // so the tap reaches the routing write. The Capture is refused at commit
+    // time: no Outcome is minted and no link row is left behind (#447).
+    testWidgets('a destination tapped after the Capture is deleted writes nothing',
+        (tester) async {
+      await db.captureDao
+          .insertCapture(_captureCompanion(id: 'x', title: 'Buy milk'));
+
+      await tester.pumpWidget(_buildApp(db, 'x', captureFeed: feed));
+      await feed.emitFrom(db, 'x');
+      await tester.pumpAndSettle();
+
+      await (db.delete(db.captures)..where((c) => c.id.equals('x'))).go();
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+      if (find.byType(NextActionDialog).evaluate().isNotEmpty) {
+        await tester.tap(find.text('Save'));
+        await tester.pumpAndSettle();
+      }
+      // The refused write may surface as a reported error; it must not land.
+      tester.takeException();
+
+      expect(await db.select(db.todos).get(), isEmpty);
+      expect(await db.select(db.captureOutcomes).get(), isEmpty);
+    });
+
     testWidgets('the missing state offers a way back to the Inbox',
         (tester) async {
       await db.captureDao
