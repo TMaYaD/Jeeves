@@ -78,7 +78,7 @@ enum ProcessAction {
 /// Where each answer comes from, in this file:
 ///
 /// - `next`, `waitingFor`, `someday`, `done`, `trash` all reach [_commit]
-///   unconditionally once the subject still exists, and its [CaptureSubject]
+///   unconditionally, notifying only when it reports the write landed, and its [CaptureSubject]
 ///   branch either mints an Outcome and stamps `clarified_at` or discards the
 ///   Capture outright. Verdicts. (`done` is excepted on a Capture card, but it
 ///   is a verdict wherever it is offered.)
@@ -661,13 +661,12 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
   ClarificationService get _clarification =>
       ref.read(clarificationServiceProvider);
 
-  /// Snapshot-based callsites (inbox-clarify, periodic review) can lose a
-  /// row between render and tap — sync or another device may hard-delete it.
-  /// Pre-check existence here rather than reading the write's affected-row
-  /// count: the routing write is a multi-statement transaction whose count says
-  /// nothing about the subject in particular, and firing [onAfterRoute] (which
-  /// advances the snapshot cursor and records a routing record) for a row that
-  /// no longer exists would leave a phantom behind.
+  /// Snapshot read of whether the subject still exists. Used only
+  /// where no write is involved: the navigation guard in [_reclarify]. It is **not** a write guard — the
+  /// row can vanish right after it returns. Routing writes check inside their
+  /// own transaction and report whether they landed ([_commit]), and
+  /// [onAfterRoute] (which advances the snapshot cursor and records a routing
+  /// record) fires only for a write that landed.
   Future<bool> _subjectExists() => switch (widget.subject) {
     OutcomeSubject(:final todo) => _clarification.exists(todo.id),
     CaptureSubject(:final capture) => _clarification.captureExists(capture.id),
@@ -680,14 +679,18 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
   /// it back to the Capture as provenance and stamps `clarified_at` — except
   /// for Trash, which is the zero-Outcome discard: it stamps and creates
   /// nothing (ADR-0006).
-  Future<void> _commit(
+  ///
+  /// Returns whether the write landed. `false` means the subject vanished from
+  /// local storage and nothing was written; callers return without notifying.
+  /// Any other failure still throws to [_runOnce].
+  Future<bool> _commit(
     RoutingKind to, {
     String? actionText,
     Set<String>? personTagIds,
   }) async {
     switch (widget.subject) {
       case OutcomeSubject(:final todo):
-        await _clarification.clarifyToOutcome(
+        return _clarification.clarifyToOutcome(
           todo.id,
           to: to,
           actionText: actionText,
@@ -696,38 +699,54 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
         );
       case CaptureSubject(:final capture, :final draft):
         if (to == RoutingKind.trash) {
-          await _clarification.discardCapture(capture.id);
-          return;
+          return _captureLanded(() => _clarification.discardCapture(capture.id));
         }
         final d = draft();
         if (!(widget.subject as CaptureSubject).completesClarification) {
           // n-m: carve one Outcome out of the Capture and leave the Capture in
           // the Inbox. Same draft, same destination — only the stamp differs
           // (see [CaptureSubject.completesClarification]).
-          await _clarification.carveOutcome(
+          return _captureLanded(
+            () => _clarification.carveOutcome(
+              capture.id,
+              userId: ref.read(currentUserIdProvider),
+              title: d.title,
+              to: to,
+              notes: d.notes,
+              dueDate: d.dueDate,
+              action: _mergedAction(d, actionText),
+              personTagIds: personTagIds,
+              tagIds: d.tagIds,
+            ),
+          );
+        }
+        return _captureLanded(
+          () => _clarification.clarifyCaptureToOutcome(
             capture.id,
+            to: to,
             userId: ref.read(currentUserIdProvider),
             title: d.title,
-            to: to,
             notes: d.notes,
             dueDate: d.dueDate,
             action: _mergedAction(d, actionText),
             personTagIds: personTagIds,
             tagIds: d.tagIds,
-          );
-          return;
-        }
-        await _clarification.clarifyCaptureToOutcome(
-          capture.id,
-          to: to,
-          userId: ref.read(currentUserIdProvider),
-          title: d.title,
-          notes: d.notes,
-          dueDate: d.dueDate,
-          action: _mergedAction(d, actionText),
-          personTagIds: personTagIds,
-          tagIds: d.tagIds,
+          ),
         );
+    }
+  }
+
+  /// Runs a Capture write and reports whether it landed. Capture writes check
+  /// for the Capture inside their transaction and throw
+  /// [CaptureNotFoundError] (rolling back) when it is gone, because the focus
+  /// session's inbox flow relies on that throw; here that one error means "did
+  /// not land". Every other exception propagates.
+  Future<bool> _captureLanded(Future<void> Function() write) async {
+    try {
+      await write();
+      return true;
+    } on CaptureNotFoundError {
+      return false;
     }
   }
 
@@ -744,16 +763,17 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
   }
 
   Future<void> _keep() async {
-    if (!await _subjectExists()) return;
     switch (widget.subject) {
       case OutcomeSubject(:final todo):
-        await _clarification.stampClarified(todo.id);
-      case CaptureSubject():
+        if (!await _clarification.stampClarified(todo.id)) return;
+      case CaptureSubject(:final capture):
         // "Keep" on a Capture means leave it in the Inbox: the clarify act is
         // not complete, so `clarified_at` must stay NULL. Stamping here would
         // clear the item from the Inbox without producing either an Outcome or
         // a discard verdict — the one outcome the split exists to prevent.
-        break;
+        // Nothing is written, so no write can report the Capture gone; this
+        // is the one snapshot read that stands in for it.
+        if (!await _clarification.captureExists(capture.id)) return;
     }
     await _notifyAfterRoute(ProcessAction.keep);
   }
@@ -777,6 +797,9 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
         'ProcessAction.reclarify applies to an Outcome, not a Capture',
       );
     }
+    // Navigation guard, not a write guard: do not open a card on a vanished
+    // Outcome. The inner bar's own routing write decides whether anything
+    // lands, and only a landed write fires its `onAfterRoute`.
     if (!await _subjectExists()) return;
     if (!mounted) return;
     final routed = await Navigator.of(context).push<ProcessAction>(
@@ -809,14 +832,15 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
         'ProcessAction.completeCapture applies to a Capture, not an Outcome',
       );
     }
-    if (!await _subjectExists()) return;
-    await _clarification.completeCaptureClarification(subject.capture.id);
+    final landed = await _captureLanded(
+      () => _clarification.completeCaptureClarification(subject.capture.id),
+    );
+    if (!landed) return;
     await _notifyAfterRoute(ProcessAction.completeCapture);
   }
 
   Future<void> _next() async {
-    if (!await _subjectExists()) return;
-    await _commit(RoutingKind.nextAction);
+    if (!await _commit(RoutingKind.nextAction)) return;
     await _notifyAfterRoute(ProcessAction.next);
   }
 
@@ -873,7 +897,6 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     );
     if (result == null) return; // user cancelled
     if (!mounted) return;
-    if (!await _subjectExists()) return;
 
     switch (result) {
       case NextActionPromote(:final actionId):
@@ -881,7 +904,7 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
       case NextActionPhrase(text: final phrase) when phrase.isEmpty:
         await _blankSaveFallback(title.trim());
       case NextActionPhrase(text: final phrase):
-        await _commit(RoutingKind.nextAction, actionText: phrase);
+        if (!await _commit(RoutingKind.nextAction, actionText: phrase)) return;
         await _notifyAfterRoute(ProcessAction.nextActionDialog);
     }
   }
@@ -903,7 +926,7 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     // Action (#476), which would destroy a deliberate phrase. Null leaves the
     // Action alone while still writing intent / clarified, clearing done_at and
     // stamping last_clarified_at.
-    await _commit(RoutingKind.nextAction);
+    if (!await _commit(RoutingKind.nextAction)) return;
     if (widget.subject case OutcomeSubject(:final todo)) {
       // Actionless-guarded, so a phrase the user already wrote survives, and so
       // does a queue the user saw and declined (the planned rows are untouched
@@ -946,7 +969,7 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
       // (recoverable; the user can retry).
       final promoted = await _clarification.getCurrentAction(outcomeId);
       if (promoted == null) return;
-      await _commit(RoutingKind.nextAction);
+      if (!await _commit(RoutingKind.nextAction)) return;
       await _notifyAfterRoute(ProcessAction.nextActionDialog);
       return;
     }
@@ -962,10 +985,9 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
       newText: chosen.isEmpty ? '' : chosen.first.actionText,
     );
     if (!confirmed || !mounted) return; // declined — item unresolved, no notify
-    // Re-check after the sheet closes, as the post-dialog guard above does: the
-    // Outcome may have been hard-deleted while the confirm was open, and going
-    // on to supersede / route / notify would advance the cursor over a phantom.
-    if (!await _subjectExists()) return;
+    // The Outcome may have been hard-deleted while the confirm was open. Its
+    // planned Actions went with it, so the supersede below is a no-op and the
+    // re-read returns before `_commit`; `_commit` itself gates the notify.
     // `applySupersedeAndPromote` early-returns before retiring the incumbent if
     // the planned row vanished, so a no-op there leaves the current Action
     // intact. And `expectedCurrentActionId` closes the confirm-time window: if
@@ -985,7 +1007,7 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     // unresolved (recoverable; a retry re-reads the fresh queue).
     final promoted = await _clarification.getCurrentAction(outcomeId);
     if (promoted == null || promoted.id != actionId) return;
-    await _commit(RoutingKind.nextAction);
+    if (!await _commit(RoutingKind.nextAction)) return;
     await _notifyAfterRoute(ProcessAction.nextActionDialog);
   }
 
@@ -1011,20 +1033,18 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     );
     if (selected == null || !mounted) return; // user cancelled
 
-    // Checked after the picker closes but before any write: confirming into a
-    // row that has since vanished must leave nothing behind.
-    if (!await _subjectExists()) return;
-
+    // No pre-check: the routing write checks the subject inside its own
+    // transaction, so confirming into a row that vanished while the picker was
+    // open writes nothing and does not notify.
     // Routing to waitingFor is intent-only — the Action is on the orthogonal
     // "what's the action?" axis and is not touched here. Callsites that want
     // to couple a phrase write own it via `onAfterRoute` (or the
     // `nextActionDialog` modifier when editing an existing phrase).
-    await _commit(RoutingKind.waitingFor, personTagIds: selected);
+    if (!await _commit(RoutingKind.waitingFor, personTagIds: selected)) return;
     await _notifyAfterRoute(ProcessAction.waitingFor);
   }
 
   Future<void> _route(ProcessAction action) async {
-    if (!await _subjectExists()) return;
     final to = switch (action) {
       ProcessAction.someday => RoutingKind.maybe,
       ProcessAction.done => RoutingKind.done,
@@ -1034,7 +1054,7 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     // Person tags are orthogonal to intent: a delegated task can become
     // `someday` / `done` / `trash` without losing its delegate. The picker
     // is the only path that mutates person tags.
-    await _commit(to);
+    if (!await _commit(to)) return;
     await _notifyAfterRoute(action);
   }
 
