@@ -1,14 +1,15 @@
 /// Step 2 of the daily planning ritual: Task Review (re-clarification surface).
 ///
 /// Surfaces tasks needing re-clarification one at a time:
-/// - Stale tasks: worked on in a session more recently than last clarified.
+/// - Stale tasks: an Action was completed more recently than last clarified.
 /// - Actionless tasks: no current Action (excluding delegated tasks).
 ///
 /// Context-aware action menu:
 /// - Stale tasks without a delegate show "Still relevant" (stamps
 ///   last_clarified_at, clears stale).
 /// - Stale delegated tasks show "Still waiting" (same write, waiting-for copy).
-/// - Actionless tasks omit "Still relevant" — defining an action is required.
+/// - Actionless tasks also offer "Still relevant": it defers the question for
+///   a review interval rather than answering it.
 library;
 
 import 'package:flutter/material.dart';
@@ -28,21 +29,6 @@ enum ReclarifyHint {
   staleWaitingFor,
 }
 
-/// Returns true when [t]'s session timestamps mark it as stale: a session
-/// closed after the last clarification stamp.
-///
-/// This mirrors only the **session-history** half of `_needsReviewWhere`'s
-/// widened Stale branch. The other half — an Action completed after the last
-/// clarification (ADR-0001 story 4) — is deliberately not mirrored: a
-/// termination-surfaced Outcome is by construction Actionless, and [hintFor]
-/// already renders Actionless as [ReclarifyHint.noNextAction], which is the
-/// accurate, actionable prompt after finishing an Action. Plumbing termination
-/// timestamps into the planning snapshot would buy no better hint.
-bool isStaleReclarification(Todo t) =>
-    t.lastNextActionCompletionAt != null &&
-    (t.lastClarifiedAt == null ||
-        t.lastClarifiedAt!.isBefore(t.lastNextActionCompletionAt!));
-
 /// Mirror of [TodoDao] `_needsReviewWhere`'s actionless predicate: the Outcome
 /// has no `actions` row with `role='current'` (ADR-0001 story 3). Absence of a
 /// [currentActionText] *is* Actionless — the DAO predicate and this hint read
@@ -51,7 +37,8 @@ bool isStaleReclarification(Todo t) =>
 /// [currentActionText], [hasPersonTag] and [isStale] are computed by the caller
 /// (the widget reads the Action text from
 /// [FocusSessionPlanningState.reviewActionTexts], person tags from
-/// `reviewPersonTags`, and stale from [isStaleReclarification]). Keeping the
+/// `reviewPersonTags`, and stale from
+/// `reviewStaleIds`). Keeping the
 /// helper pure makes it trivially unit-testable.
 ReclarifyHint hintFor(
   Todo t, {
@@ -91,7 +78,7 @@ class TaskReviewStep extends ConsumerWidget {
       hint: hintFor(
         task,
         hasPersonTag: personTags.isNotEmpty,
-        isStale: isStaleReclarification(task),
+        isStale: state.reviewStaleIds.contains(task.id),
         currentActionText: currentActionText,
       ),
       personTags: personTags,
@@ -134,7 +121,6 @@ class _ReviewCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final isActionless = hint == ReclarifyHint.noNextAction;
     final isWaitingFor = hint == ReclarifyHint.staleWaitingFor;
-    final showKeep = !isActionless;
 
     final badgeBg = isActionless
         ? const Color(0xFFFEF3C7)
@@ -235,16 +221,16 @@ class _ReviewCard extends ConsumerWidget {
         const SizedBox(height: 28),
 
         // Action buttons — defaults (which include the on-by-default dialog
-        // modifier on Next). Stale tasks add a "keep" variant (label depends
-        // on whether the task is delegated); Actionless tasks omit it because
-        // defining an action is required.
+        // modifier on Next) plus a "keep" variant (label depends on whether the
+        // task is delegated). On an Actionless card "keep" is the explicit
+        // "ask me again after the review interval".
         const _FieldLabel('WHAT DO YOU WANT TO DO?'),
         const SizedBox(height: 12),
 
         ProcessToHandlers(
           subject: OutcomeSubject(task, currentActionText: currentActionText),
           include: {
-            if (showKeep) ProcessAction.keep,
+            ProcessAction.keep,
           },
           labels: {
             ProcessAction.keep:

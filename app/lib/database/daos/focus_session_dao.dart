@@ -437,8 +437,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   }) async {
     final tsInstant = (now ?? DateTime.now()).toUtc();
     final ts = tsInstant.toIso8601String();
-    // `todos.updated_at`, `last_clarified_at` and `last_next_action_completion_at`
-    // are `FieldKind.instant`, so their wire form is the millisecond-truncated
+    // `todos.updated_at` and `last_clarified_at` are `FieldKind.instant`, so their wire form is the millisecond-truncated
     // encoding. Writing the raw microsecond ISO string to the column instead
     // would leave the local row differing from the op until the projector
     // rewrote it. The TEXT timestamp columns below (`focus_sessions.ended_at`,
@@ -544,54 +543,6 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
             },
           );
         }
-      }
-
-      // Stamp last_next_action_completion_at on non-done Outcomes across the
-      // Review surface — Plan members ∪ off-Plan engaged (Outcomes with a
-      // TimeLog for this session). This marks them as "worked on in a session"
-      // for the re-clarification predicate; off-Plan engaged Outcomes were
-      // worked on too, so they earn the stamp.
-      final stampedRows = await customSelect(
-        'SELECT id FROM todos WHERE id IN ('
-        '  SELECT task_id FROM focus_session_tasks '
-        '  WHERE focus_session_id = ?'
-        '  UNION '
-        '  SELECT task_id FROM time_logs '
-        '  WHERE focus_session_id = ?'
-        ') AND done_at IS NULL AND user_id = ?',
-        variables: [
-          Variable(sessionId),
-          Variable(sessionId),
-          Variable(session.userId),
-        ],
-        readsFrom: {todos, focusSessionTasks, timeLogs},
-      ).get();
-      await customUpdate(
-        'UPDATE todos SET last_next_action_completion_at = ? '
-        'WHERE id IN ('
-        '  SELECT task_id FROM focus_session_tasks '
-        '  WHERE focus_session_id = ?'
-        '  UNION '
-        '  SELECT task_id FROM time_logs '
-        '  WHERE focus_session_id = ?'
-        ') AND done_at IS NULL AND user_id = ?',
-        variables: [
-          Variable(tsCanonical),
-          Variable(sessionId),
-          Variable(sessionId),
-          Variable(session.userId),
-        ],
-        updates: {todos},
-        updateKind: UpdateKind.update,
-      );
-      for (final row in stampedRows) {
-        attachedDatabase.opCapture.write(
-          collection: todosCollection,
-          entityId: row.read<String>('id'),
-          fields: {
-            'last_next_action_completion_at': encodeInstant(tsInstant),
-          },
-        );
       }
 
       // Close any open time log for this session.

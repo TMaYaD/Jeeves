@@ -30,6 +30,7 @@ import '../utils/snapshot_nav.dart';
 import 'auth_provider.dart';
 import 'clarify_retention_provider.dart';
 import 'database_provider.dart';
+import 'nudge_triggers.dart' show lastShutdownAnchorProvider;
 import 'synced_preferences_provider.dart';
 
 export '../database/gtd_database.dart' show Todo, FocusSession, Tag;
@@ -289,6 +290,31 @@ final skippedNextForFocusSessionPlanningProvider =
   return db.todoDao.watchTodosById(skippedIds);
 });
 
+/// How many planning periods an Actionless Outcome stays out of the Task
+/// Review queue after it was last clarified.
+const actionlessReviewIntervalDays = 7;
+
+/// The instant before which an Outcome's `last_clarified_at` is old enough for
+/// the Actionless branch of the Task Review queue to ask about it again.
+///
+/// Measured from the start of the current planning period — the most recent
+/// Evening Shutdown anchor (ADR-0020) — stepped back
+/// `actionlessReviewIntervalDays - 1` calendar days, so an Outcome clarified
+/// during Monday's planning surfaces on the next Monday, not the Tuesday
+/// after. The step is a local calendar step, which keeps the wall-clock time
+/// across a DST change. Anything clarified during today's planning is at or
+/// after the period start and so can never resurface within the same period.
+final actionlessReviewCutoffProvider = Provider<DateTime>((ref) {
+  final periodStart = ref.watch(lastShutdownAnchorProvider);
+  return DateTime(
+    periodStart.year,
+    periodStart.month,
+    periodStart.day - (actionlessReviewIntervalDays - 1),
+    periodStart.hour,
+    periodStart.minute,
+  );
+});
+
 /// Item counts feeding the Daily Planning duration-estimate intro (#486).
 ///
 /// Count-only reads that touch no snapshot lifecycle — the inbox and review
@@ -304,7 +330,9 @@ final focusSessionPlanningIntroCountsProvider =
         (ref) async {
   final db = ref.watch(databaseProvider);
   final inbox = await db.captureDao.watchInbox().first;
-  final review = await db.todoDao.getNeedsReview();
+  final review = await db.todoDao.getNeedsReview(
+    actionlessReviewCutoff: ref.watch(actionlessReviewCutoffProvider),
+  );
   return (inboxCount: inbox.length, reviewCount: review.length);
 });
 
@@ -357,6 +385,7 @@ class FocusSessionPlanningState {
     this.reviewActions = const {},
     this.reviewPersonTags = const {},
     this.reviewActionTexts = const {},
+    this.reviewStaleIds = const {},
   });
 
   final int currentStep;
@@ -423,6 +452,11 @@ class FocusSessionPlanningState {
   /// next-action grain (ADR-0001 story 3).
   final Map<String, String> reviewActionTexts;
 
+  /// Ids in [reviewNav.items] that are Stale: an Action of the Outcome was
+  /// completed after it was last clarified. Drives the review card's Stale
+  /// hint.
+  final Set<String> reviewStaleIds;
+
   FocusSessionPlanningState copyWith({
     int? currentStep,
     int? availableMinutes,
@@ -437,6 +471,7 @@ class FocusSessionPlanningState {
     Map<int, ReviewActionRecord>? reviewActions,
     Map<String, List<Tag>>? reviewPersonTags,
     Map<String, String>? reviewActionTexts,
+    Set<String>? reviewStaleIds,
   }) =>
       FocusSessionPlanningState(
         currentStep: currentStep ?? this.currentStep,
@@ -452,6 +487,7 @@ class FocusSessionPlanningState {
         reviewActions: reviewActions ?? this.reviewActions,
         reviewPersonTags: reviewPersonTags ?? this.reviewPersonTags,
         reviewActionTexts: reviewActionTexts ?? this.reviewActionTexts,
+        reviewStaleIds: reviewStaleIds ?? this.reviewStaleIds,
       );
 }
 
@@ -553,7 +589,9 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
         // surface here. The step always renders — an empty snapshot shows the
         // empty-state view and the user clicks Next to advance (CONTEXT.md
         // § Wizard: steps do not auto-skip).
-        final items = await _db.todoDao.getNeedsReview();
+        final items = await _db.todoDao.getNeedsReview(
+          actionlessReviewCutoff: ref.read(actionlessReviewCutoffProvider),
+        );
         if (!ref.mounted) return;
         // Batched person-tag lookup so the stale waiting-for card variant
         // can render delegate names without a per-frame DAO call.
@@ -567,7 +605,14 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
           items.map((t) => t.id).toSet(),
         );
         if (!ref.mounted) return;
+        // Which of them are Stale (an Action finished after the last
+        // clarification) — the same SQL as the queue predicate's Stale branch.
+        final staleIds = await _db.todoDao.getActionTerminationStaleIds(
+          items.map((t) => t.id).toSet(),
+        );
+        if (!ref.mounted) return;
         state = state.copyWith(
+          reviewStaleIds: staleIds,
           reviewNav: SnapshotNav<Todo>(items: items),
           reviewActions: {},
           reviewPersonTags: personTags,
