@@ -117,10 +117,10 @@ class _BlockingNotifier extends TaskDetailNotifier {
   _BlockingNotifier(GtdDatabase db, String todoId)
       : super(db: db, userId: _userId, todoId: todoId);
 
-  final gate = Completer<void>();
+  final gate = Completer<bool>();
 
   @override
-  Future<void> setPersonTags(Set<String> tagIds) => gate.future;
+  Future<bool> setPersonTags(Set<String> tagIds) => gate.future;
 }
 
 /// Counts route pops so a test can assert how many routes came off the stack,
@@ -482,7 +482,7 @@ void main() {
       expect(observed.called, isFalse);
 
       // Releasing the write lets the sheet finish the way it always would.
-      blocking.gate.complete();
+      blocking.gate.complete(true);
       await tester.pumpAndSettle();
 
       expect(find.byType(PersonTagPickerSheet), findsNothing);
