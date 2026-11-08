@@ -491,6 +491,58 @@ void main() {
       );
     });
 
+    test('two spellings of one collection, both with rows, are refused',
+        () async {
+      // A retired name and its current one resolve to the same destination.
+      // Keeping one list would silently overwrite the other.
+      final db = _openInMemory(recorder: RecordingDomainOpCapture());
+      addTearDown(db.close);
+      final json = jsonEncode({
+        jeevesExportEnvelopeKey: jeevesExportVersion,
+        jeevesExportCollectionsKey: {
+          'old_todos': [
+            {'id': 'a', 'title': 'A', 'user_id': _userId}
+          ],
+          'todos': [
+            {'id': 'b', 'title': 'B', 'user_id': _userId}
+          ],
+        },
+      });
+      await expectLater(
+        importJeevesExport(
+          content: json,
+          userId: _userId,
+          db: db,
+          renames: const {'old_todos': 'todos'},
+        ),
+        throwsA(isA<ParseError>().having(
+            (e) => e.message, 'message', contains('old_todos'))),
+      );
+      expect(await db.select(db.todos).get(), isEmpty);
+    });
+
+    test('an empty second spelling does not hide or lose the populated one',
+        () async {
+      final db = _openInMemory(recorder: RecordingDomainOpCapture());
+      addTearDown(db.close);
+      final json = jsonEncode({
+        jeevesExportEnvelopeKey: jeevesExportVersion,
+        jeevesExportCollectionsKey: {
+          'old_todos': [
+            {'id': 'a', 'title': 'A', 'user_id': _userId}
+          ],
+          'todos': <Object?>[],
+        },
+      });
+      final result = await importJeevesExport(
+        content: json,
+        userId: _userId,
+        db: db,
+        renames: const {'old_todos': 'todos'},
+      );
+      expect(result.importedCount, 1);
+    });
+
     test('every unplaceable collection is named, not just the first', () async {
       await expectRefusal(
         exportWith(extra: {

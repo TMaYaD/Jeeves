@@ -70,8 +70,14 @@ const Map<String, String> jeevesExportCollectionRenames = <String, String>{};
 /// A current name resolves to itself; a superseded one resolves through
 /// [jeevesExportCollectionRenames]. `user_preferences` resolves to `null` here
 /// even though it is a real collection, because an export never carries it.
-String? resolveJeevesExportCollection(String nameInFile) {
-  final current = jeevesExportCollectionRenames[nameInFile] ?? nameInFile;
+///
+/// [renames] defaults to the real table; a test passes its own to exercise a
+/// rename before the table has any entry.
+String? resolveJeevesExportCollection(
+  String nameInFile, {
+  Map<String, String> renames = jeevesExportCollectionRenames,
+}) {
+  final current = renames[nameInFile] ?? nameInFile;
   return jeevesExportCollections.contains(current) ? current : null;
 }
 
@@ -238,6 +244,7 @@ Future<ImportResult> importJeevesExport({
   required String content,
   required String userId,
   required GtdDatabase db,
+  Map<String, String> renames = jeevesExportCollectionRenames,
 }) async {
   final Object? decoded;
   try {
@@ -258,6 +265,7 @@ Future<ImportResult> importJeevesExport({
   final rowsByCollection = <String, List<Object?>>{};
   final unplaceable = <String>[];
   final malformed = <String>[];
+  final collided = <String>[];
   for (final entry in collections.entries) {
     final key = entry.key;
     final rows = entry.value;
@@ -269,22 +277,37 @@ Future<ImportResult> importJeevesExport({
       malformed.add('$key');
       continue;
     }
-    final resolved = key is String ? resolveJeevesExportCollection(key) : null;
+    final resolved = key is String
+        ? resolveJeevesExportCollection(key, renames: renames)
+        : null;
     if (resolved == null) {
       // Nothing to lose in an empty one; a non-empty one would be dropped.
       if (rows.isNotEmpty) unplaceable.add('$key');
       continue;
     }
-    rowsByCollection[resolved] = rows;
+    // Two spellings of one collection (a retired name and its current one)
+    // resolve to the same destination. Keeping either list would overwrite the
+    // other and lose its rows with no error, so refuse. An empty list loses
+    // nothing and yields to the non-empty one.
+    final existing = rowsByCollection[resolved];
+    if (existing != null && existing.isNotEmpty && rows.isNotEmpty) {
+      collided.add('$key → $resolved');
+      continue;
+    }
+    if (existing == null || existing.isEmpty) rowsByCollection[resolved] = rows;
   }
-  if (unplaceable.isNotEmpty || malformed.isNotEmpty) {
+  if (unplaceable.isNotEmpty || malformed.isNotEmpty || collided.isNotEmpty) {
     unplaceable.sort();
     malformed.sort();
+    collided.sort();
     final faults = <String>[
       if (unplaceable.isNotEmpty)
         'collections Jeeves cannot place: ${unplaceable.join(', ')}',
       if (malformed.isNotEmpty)
         'collections that are not lists of records: ${malformed.join(', ')}',
+      if (collided.isNotEmpty)
+        'collections that duplicate another spelling of the same collection: '
+            '${collided.join(', ')}',
     ];
     throw ParseError(
       'This export carries ${faults.join('; and ')}. Nothing was imported — '

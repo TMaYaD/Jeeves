@@ -160,13 +160,16 @@ Map<String, Map<String, Map<String, Object?>>> _rowsById({
     final name = resolveJeevesExportCollection('${entry.key}') ?? '${entry.key}';
     final rows = entry.value;
     if (rows is! List) continue;
-    out[name] = {
-      for (final row in rows)
-        if (row is Map && row['id'] is String)
-          row['id'] as String: {
-            for (final field in row.entries) '${field.key}': field.value,
-          },
-    };
+    // Merge, never overwrite: two spellings of one collection must both count,
+    // or the comparison would hide rows the import lost.
+    final merged = out.putIfAbsent(name, () => {});
+    for (final row in rows) {
+      if (row is Map && row['id'] is String) {
+        merged[row['id'] as String] = {
+          for (final field in row.entries) '${field.key}': field.value,
+        };
+      }
+    }
   }
   return out;
 }
