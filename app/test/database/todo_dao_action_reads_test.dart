@@ -41,7 +41,6 @@ Future<String> _seedOutcome(
   bool clarified = true,
   String intent = 'next',
   String? doneAt,
-  DateTime? lastNextActionCompletionAt,
   DateTime? lastClarifiedAt,
   DateTime? createdAt,
 }) async {
@@ -53,7 +52,6 @@ Future<String> _seedOutcome(
         intent: Value(intent),
         doneAt: Value(doneAt),
         createdAt: Value(createdAt ?? _t0),
-        lastNextActionCompletionAt: Value(lastNextActionCompletionAt),
         lastClarifiedAt: Value(lastClarifiedAt),
       ));
   return id;

@@ -4,7 +4,6 @@ import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/screens/planning/steps/task_review_step.dart';
 
 Todo _todo({
-  DateTime? lastNextActionCompletionAt,
   DateTime? lastClarifiedAt,
 }) {
   final now = DateTime.now();
@@ -16,7 +15,6 @@ Todo _todo({
     createdAt: now,
     updatedAt: now,
     userId: 'u',
-    lastNextActionCompletionAt: lastNextActionCompletionAt,
     lastClarifiedAt: lastClarifiedAt,
   );
 }
@@ -137,47 +135,6 @@ void main() {
       expect(
         hintFor(_todo(), hasPersonTag: true, isStale: false),
         ReclarifyHint.noNextAction,
-      );
-    });
-  });
-
-  group('isStaleReclarification', () {
-    test('null lastNextActionCompletionAt → not stale', () {
-      expect(isStaleReclarification(_todo()), isFalse);
-    });
-
-    test(
-        'lastNextActionCompletionAt set, lastClarifiedAt null → stale',
-        () {
-      expect(
-        isStaleReclarification(_todo(
-          lastNextActionCompletionAt: DateTime.now(),
-        )),
-        isTrue,
-      );
-    });
-
-    test('clarified before completion → stale', () {
-      final now = DateTime.now();
-      expect(
-        isStaleReclarification(_todo(
-          lastClarifiedAt: now.subtract(const Duration(hours: 2)),
-          lastNextActionCompletionAt:
-              now.subtract(const Duration(hours: 1)),
-        )),
-        isTrue,
-      );
-    });
-
-    test('clarified after completion → not stale', () {
-      final now = DateTime.now();
-      expect(
-        isStaleReclarification(_todo(
-          lastClarifiedAt: now,
-          lastNextActionCompletionAt:
-              now.subtract(const Duration(hours: 1)),
-        )),
-        isFalse,
       );
     });
   });
