@@ -586,6 +586,12 @@ EXISTS (
     });
   }
 
+  /// Whether the `todos` row [todoId] is present. Called inside a write's
+  /// transaction so the answer cannot go stale before that write lands.
+  Future<bool> _todoRowExists(String todoId) async =>
+      await (select(todos)..where((t) => t.id.equals(todoId))).getSingleOrNull() !=
+      null;
+
   // ---------------------------------------------------------------------------
   // Intent mutations (orthogonal to GTD state)
   // ---------------------------------------------------------------------------
@@ -634,10 +640,15 @@ EXISTS (
   /// timestamp updated). DAO methods that mutate `todos` directly stamp
   /// internally and do not need this helper.
   ///
+  /// Returns `true` iff the Outcome was present and got stamped. The presence
+  /// check runs inside the write's own transaction, so a row hard-deleted
+  /// (e.g. by sync) before the write reports `false` and writes nothing.
+  ///
   /// [now] overrides the timestamp for deterministic testing.
-  Future<void> stampLastClarifiedAt(String todoId, {DateTime? now}) async {
+  Future<bool> stampLastClarifiedAt(String todoId, {DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc();
-    await attachedDatabase.capturing(() async {
+    final landed = await attachedDatabase.capturing(() async {
+      if (!await _todoRowExists(todoId)) return false;
       await (update(todos)..where((t) => t.id.equals(todoId))).write(
           TodosCompanion(
         lastClarifiedAt: Value(ts),
@@ -647,8 +658,10 @@ EXISTS (
         'last_clarified_at': encodeInstant(ts),
         'updated_at': encodeInstant(ts),
       });
-      attachedDatabase.notifyTodosViewWrite();
+      return true;
     });
+    if (landed) attachedDatabase.notifyTodosViewWrite();
+    return landed;
   }
 
   /// Writes the Outcome's `current` Action from a single phrase and stamps
@@ -696,6 +709,9 @@ EXISTS (
   /// post-commit view-notifies. Skip path (a `current` Action exists): no
   /// writes, no stamp, no convergence, no notify.
   ///
+  /// An absent Outcome also returns `false` (checked in the same transaction):
+  /// no Action row is minted for a todo that is not in local storage.
+  ///
   /// Blank [text] is a caller error (the mirror only fires with a non-blank
   /// title), mirroring [ActionDao.setCurrentAction]'s contract.
   Future<bool> setCurrentActionTextIfActionless(
@@ -711,6 +727,7 @@ EXISTS (
     }
     var logChanged = false;
     final wrote = await attachedDatabase.capturing(() async {
+      if (!await _todoRowExists(todoId)) return false;
       final current = await attachedDatabase.actionDao.getCurrentAction(todoId);
       if (current != null) return false;
       // Non-blank text here, so this never supersedes — logChanged stays false.
@@ -1048,7 +1065,12 @@ AND (
   ///
   /// All writes run inside a single transaction so a failure leaves the row
   /// in its prior state.
-  Future<void> applyRouting(
+  ///
+  /// Returns `true` iff the routing landed. The Outcome's presence is checked
+  /// inside that transaction; an absent row (hard-deleted since the caller
+  /// looked) writes nothing — no Action, no person tags, no notifies — and
+  /// returns `false`.
+  Future<bool> applyRouting(
     String todoId, {
     required RoutingKind to,
     String? actionText,
@@ -1066,7 +1088,8 @@ AND (
         actionText != null;
     var actionTerminated = false;
     var logChanged = false;
-    await attachedDatabase.capturing(() async {
+    final landed = await attachedDatabase.capturing(() async {
+      if (!await _todoRowExists(todoId)) return false;
       final captured = switch (to) {
         RoutingKind.nextAction || RoutingKind.waitingFor => <String, Object?>{
             'clarified': true,
@@ -1156,7 +1179,9 @@ AND (
         }
         await setPersonTagsForTodo(todoId, personTagIds, userId);
       }
+      return true;
     });
+    if (!landed) return false;
 
     // Notify explicitly so the Inbox / Next Actions lists refresh even when the
     // write touched a table they do not name — and so they do not depend solely
@@ -1170,6 +1195,7 @@ AND (
     // A supersede or completion in the cascade closes the current Action's open
     // TimeLog (#476); `time_logs` is a view too, so notify its watchers.
     if (logChanged) attachedDatabase.notifyTimeLogsViewWrite();
+    return true;
   }
 
   static String? _normaliseText(String text) {

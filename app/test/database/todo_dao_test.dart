@@ -67,6 +67,53 @@ void main() {
   // `setCurrentActionTextIfActionless` (including #501's TOCTOU skip path) and for
   // `deleteOutcome`'s cascade onto `actions`, so they live on here, beside the
   // rest of TodoDao's write primitives.
+  group('TodoDao — writes against an absent Outcome report false (#444)', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    test('applyRouting writes nothing and returns false', () async {
+      await db.tagDao.upsertTag(TagsCompanion(
+        id: const Value('alice'),
+        name: const Value('Alice'),
+        type: const Value('person'),
+        userId: const Value(_userId),
+      ));
+
+      expect(
+        await db.todoDao.applyRouting('gone',
+            to: RoutingKind.waitingFor,
+            actionText: 'Call Alice',
+            personTagIds: {'alice'},
+            userId: _userId),
+        isFalse,
+      );
+      expect(await db.select(db.actions).get(), isEmpty);
+      expect(await db.select(db.todoTags).get(), isEmpty);
+    });
+
+    test('stampLastClarifiedAt and setCurrentActionTextIfActionless return false',
+        () async {
+      expect(await db.todoDao.stampLastClarifiedAt('gone'), isFalse);
+      expect(
+        await db.todoDao.setCurrentActionTextIfActionless('gone', 'Title'),
+        isFalse,
+      );
+      expect(await db.select(db.actions).get(), isEmpty);
+    });
+
+    test('a present Outcome returns true', () async {
+      await _insertTodo(db, id: 'o1', title: 'Outcome o1');
+
+      expect(
+        await db.todoDao.applyRouting('o1', to: RoutingKind.nextAction),
+        isTrue,
+      );
+      expect(await db.todoDao.stampLastClarifiedAt('o1'), isTrue);
+    });
+  });
+
   group('TodoDao — setCurrentActionTextIfActionless', () {
     late GtdDatabase db;
 
