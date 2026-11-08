@@ -777,6 +777,62 @@ void main() {
   // plan-section streams are hand-cranked off real DAO reads after each gesture
   // (the same pattern the other row streams use, so no live Drift close-timer
   // outlives the test).
+  group('TaskDetailScreen — due date (issue #445)', () {
+    late GtdDatabase db;
+
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+      db = _openInMemory();
+    });
+    tearDown(() async => db.close());
+
+    final dueDate = DateTime(2030, 3, 15);
+
+    Future<Todo> openWithDueDate(WidgetTester tester) async {
+      await _insertAt(db, id: 'due1', title: 'Has a due date');
+      await tester.runAsync(
+          () => db.todoDao.updateFields('due1', dueDate: dueDate));
+      final todo = (await tester.runAsync(() => db.todoDao.getTodo('due1')))!;
+      final (widget, router) = _buildScreen(db, 'due1', initialTodo: todo);
+      await _showTaskDetail(tester, widget, router, 'due1');
+      return todo;
+    }
+
+    Future<DateTime?> storedDueDate(WidgetTester tester) async =>
+        (await tester.runAsync(() => db.todoDao.getTodo('due1')))!.dueDate;
+
+    testWidgets('dismissing the picker leaves the due date unchanged',
+        (tester) async {
+      await openWithDueDate(tester);
+      await tester.scrollUntilVisible(find.text('2030-03-15'), 200,
+          scrollable: find.byType(Scrollable).first);
+      await tester.tap(find.text('2030-03-15'));
+      await tester.pumpAndSettle();
+      expect(find.byType(DatePickerDialog), findsOneWidget);
+
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+
+      expect(find.byType(DatePickerDialog), findsNothing);
+      expect(await storedDueDate(tester), isNotNull);
+    });
+
+    testWidgets('the Clear date affordance clears the due date',
+        (tester) async {
+      await openWithDueDate(tester);
+      await tester.scrollUntilVisible(find.byTooltip('Clear date'), 200,
+          scrollable: find.byType(Scrollable).first);
+      await tester.tap(find.byTooltip('Clear date'));
+      await tester.pump();
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+
+      expect(await storedDueDate(tester), isNull);
+    });
+  });
+
   // ---------------------------------------------------------------------------
   group('TaskDetailScreen — Plan section (issue #475)', () {
     late GtdDatabase db;

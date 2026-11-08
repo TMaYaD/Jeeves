@@ -516,9 +516,26 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                                       iconBg: const Color(0xFFFEF2F2),
                                       iconColor: const Color(0xFFEF4444),
                                       title: 'DUE DATE',
-                                      contentWidget: Text(
-                                        todo.dueDate != null ? todo.dueDate!.toLocal().toString().split(' ')[0] : 'No Date',
-                                        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+                                      contentWidget: Row(
+                                        children: [
+                                          Text(
+                                            todo.dueDate != null ? todo.dueDate!.toLocal().toString().split(' ')[0] : 'No Date',
+                                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+                                          ),
+                                          if (todo.dueDate != null) ...[
+                                            const SizedBox(width: 8),
+                                            // Dismissing the picker returns null, so
+                                            // clearing needs its own affordance.
+                                            InkResponse(
+                                              onTap: _notifier.clearDueDate,
+                                              radius: 16,
+                                              child: Tooltip(
+                                                message: 'Clear date',
+                                                child: Icon(Icons.close, size: 18, color: Colors.grey[400]),
+                                              ),
+                                            ),
+                                          ],
+                                        ],
                                       ),
                                       onTap: () async {
                                         final picked = await showDatePicker(
@@ -533,10 +550,10 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                                             child: child!,
                                           ),
                                         );
+                                        // Null means the picker was dismissed, not
+                                        // "clear the date".
                                         if (picked != null) {
                                           _notifier.setDueDate(picked);
-                                        } else {
-                                          _notifier.clearDueDate();
                                         }
                                       },
                                     ),
