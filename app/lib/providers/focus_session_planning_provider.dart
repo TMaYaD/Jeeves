@@ -29,8 +29,10 @@ import '../services/notification_service.dart';
 import '../utils/snapshot_nav.dart';
 import 'auth_provider.dart';
 import 'clarify_retention_provider.dart';
+import 'clock_provider.dart';
 import 'database_provider.dart';
-import 'nudge_triggers.dart' show lastShutdownAnchorProvider;
+import 'nudge_triggers.dart' show lastAnchorBefore;
+import 'shutdown_settings_provider.dart' show shutdownSettingsProvider;
 import 'synced_preferences_provider.dart';
 
 export '../database/gtd_database.dart' show Todo, FocusSession, Tag;
@@ -298,14 +300,19 @@ const actionlessReviewIntervalDays = 7;
 /// the Actionless branch of the Task Review queue to ask about it again.
 ///
 /// Measured from the start of the current planning period — the most recent
-/// Evening Shutdown anchor (ADR-0020) — stepped back
+/// Evening Shutdown anchor (ADR-0020), computed with the same arithmetic as
+/// `lastShutdownAnchorProvider` but read at the moment of use, so it arms no
+/// wall-clock boundary timer — stepped back
 /// `actionlessReviewIntervalDays - 1` calendar days, so an Outcome clarified
 /// during Monday's planning surfaces on the next Monday, not the Tuesday
 /// after. The step is a local calendar step, which keeps the wall-clock time
 /// across a DST change. Anything clarified during today's planning is at or
 /// after the period start and so can never resurface within the same period.
 final actionlessReviewCutoffProvider = Provider<DateTime>((ref) {
-  final periodStart = ref.watch(lastShutdownAnchorProvider);
+  final now = ref.watch(clockProvider)();
+  final shutdownTime = ref.watch(shutdownSettingsProvider).shutdownTime;
+  final periodStart =
+      lastAnchorBefore(now, shutdownTime.hour, shutdownTime.minute);
   return DateTime(
     periodStart.year,
     periodStart.month,
