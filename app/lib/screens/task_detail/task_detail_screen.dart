@@ -113,14 +113,20 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     _baselineTitle = title.trim();
     _notifier
         .updateTitle(title)
-        .catchError((e) => debugPrint('Error saving title: $e'));
+        .catchError((e) {
+          debugPrint('Error saving title: $e');
+          return false;
+        });
   }
 
   void _saveNotes(String notes) {
     _baselineNotes = notes.trim();
     _notifier
         .updateNotes(notes)
-        .catchError((e) => debugPrint('Error saving notes: $e'));
+        .catchError((e) {
+          debugPrint('Error saving notes: $e');
+          return false;
+        });
   }
 
   @override
@@ -164,14 +170,20 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
         // error from teardown, which reads as a framework fault rather than a
         // lost edit.
         unawaited(notifier.updateTitle(title).catchError(
-            (Object e) => debugPrint('TaskDetailScreen: title flush failed: $e')));
+            (Object e) {
+          debugPrint('TaskDetailScreen: title flush failed: $e');
+          return false;
+        }));
       }
     }
     if (_notesInitialized) {
       final notes = _notesController.text;
       if (notes.trim() != _baselineNotes) {
         unawaited(notifier.updateNotes(notes).catchError(
-            (Object e) => debugPrint('TaskDetailScreen: notes flush failed: $e')));
+            (Object e) {
+          debugPrint('TaskDetailScreen: notes flush failed: $e');
+          return false;
+        }));
       }
     }
   }

@@ -488,8 +488,10 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
               // text save. Without it a throwing DAO escapes as an unhandled
               // async error from teardown, which reads as a framework fault
               // rather than a lost edit.
-              .catchError((Object e) =>
-                  debugPrint('ClarifyCard: dispose flush failed: $e')),
+              .catchError((Object e) {
+                debugPrint('ClarifyCard: dispose flush failed: $e');
+                return false;
+              }),
         );
       }
     }
@@ -581,7 +583,10 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
       ref.read(taskDetailNotifierProvider(_subjectId));
 
   Future<void> _saveAssignProject(String tagId) async {
-    if (!_isCapture) return _tagNotifier.assignProject(tagId);
+    if (!_isCapture) {
+      await _tagNotifier.assignProject(tagId);
+      return;
+    }
     final db = ref.read(databaseProvider);
     final userId = ref.read(currentUserIdProvider);
     await db.captureDao.writeIfCapturePresent(
@@ -591,7 +596,10 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   }
 
   Future<void> _saveClearProject() async {
-    if (!_isCapture) return _tagNotifier.clearProject();
+    if (!_isCapture) {
+      await _tagNotifier.clearProject();
+      return;
+    }
     final db = ref.read(databaseProvider);
     await db.captureDao.writeIfCapturePresent(
       _subjectId,
@@ -600,7 +608,10 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   }
 
   Future<void> _saveAssignContext(String tagId) async {
-    if (!_isCapture) return _tagNotifier.assignContextTag(tagId);
+    if (!_isCapture) {
+      await _tagNotifier.assignContextTag(tagId);
+      return;
+    }
     final db = ref.read(databaseProvider);
     final userId = ref.read(currentUserIdProvider);
     await db.captureDao.writeIfCapturePresent(
@@ -610,7 +621,10 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   }
 
   Future<void> _saveRemoveContext(String tagId) async {
-    if (!_isCapture) return _tagNotifier.removeContextTag(tagId);
+    if (!_isCapture) {
+      await _tagNotifier.removeContextTag(tagId);
+      return;
+    }
     final db = ref.read(databaseProvider);
     await db.captureDao.writeIfCapturePresent(
       _subjectId,

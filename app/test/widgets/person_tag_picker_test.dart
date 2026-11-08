@@ -120,7 +120,10 @@ class _BlockingNotifier extends TaskDetailNotifier {
   final gate = Completer<void>();
 
   @override
-  Future<void> setPersonTags(Set<String> tagIds) => gate.future;
+  Future<bool> setPersonTags(Set<String> tagIds) async {
+    await gate.future;
+    return true;
+  }
 }
 
 /// Counts route pops so a test can assert how many routes came off the stack,

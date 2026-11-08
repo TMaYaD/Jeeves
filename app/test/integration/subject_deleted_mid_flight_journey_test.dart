@@ -10,7 +10,6 @@
 /// (and, for tags and Actions, inserting rows) for the deleted Outcome.
 library;
 
-import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart' hide Intent, Action;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
