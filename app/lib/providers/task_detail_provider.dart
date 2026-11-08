@@ -247,8 +247,9 @@ class TaskDetailNotifier {
   /// last_clarified_at. Both writes share one transaction, so a failure leaves
   /// the delegate set and the timestamp exactly as they were rather than
   /// half-applied — which a per-tag assign/remove loop cannot promise.
-  /// Non-person tags are untouched.
-  Future<void> setPersonTags(Set<String> tagIds) =>
+  /// Non-person tags are untouched. Returns `false` when the Outcome is gone
+  /// from local storage and nothing was written.
+  Future<bool> setPersonTags(Set<String> tagIds) =>
       _db.todoDao.setPersonTagsAndStamp(_todoId, tagIds, _userId);
 
   /// Removes all person-typed tags from this todo and stamps last_clarified_at.
