@@ -337,6 +337,8 @@ Widget _captureHarness(
   // Required whenever a test reaches that body: the real provider is a live
   // drift `watch()` and leaves a pending timer behind on dispose.
   Stream<List<CarvedOutcome>>? carvedOutcomes,
+  // The people the Waiting For picker offers.
+  List<Tag> personTags = const <Tag>[],
 }) {
   return ProviderScope(
     overrides: [
@@ -351,7 +353,7 @@ Widget _captureHarness(
         clarifyModeProvider.overrideWith(() => clarifyMode),
       if (carvedOutcomes != null)
         carvedOutcomesProvider(capture.id).overrideWith((_) => carvedOutcomes),
-      personTagsProvider.overrideWith((_) => Stream.value(const <Tag>[])),
+      personTagsProvider.overrideWith((_) => Stream.value(personTags)),
       contextTagsProvider.overrideWith((_) => Stream.value(contextTags)),
       projectTagsProvider.overrideWith((_) => Stream.value(projectTags)),
     ],
@@ -1925,6 +1927,48 @@ void main() {
           reason: 'the route did not land, so the partial-success text is a lie');
       expect(fired, isEmpty,
           reason: 'the review must not advance past a write that did not land');
+    });
+  });
+
+  group('ClarifyCard — a stored person hint seeds Waiting For (#438)', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    testWidgets(
+        'the hint in capture_tags preselects the picker and the delegate '
+        'lands on the Outcome', (tester) async {
+      final capture = await _insertCapture(db, id: 'ph', title: 'Chase quote');
+      final alice =
+          await _insertTag(db, id: 'alice', name: 'Alice', type: 'person');
+      final bob = await _insertTag(db, id: 'bob', name: 'Bob', type: 'person');
+      await db.captureDao.assignTagHint('ph', 'alice', _userId);
+
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: capture,
+        personTags: [alice, bob],
+        // The hint is read from storage, not injected into a draft.
+        tagHintsStream:
+            Stream.fromFuture(db.captureDao.tagHintsForCapture('ph')),
+      ));
+      await _pumpFrames(tester, frames: 5);
+
+      await _scrollAndTap(tester, 'Waiting For');
+      await _pumpFrames(tester, frames: 10);
+
+      bool checked(String name) => tester
+          .widget<CheckboxListTile>(find.widgetWithText(CheckboxListTile, name))
+          .value!;
+      expect(checked('Alice'), isTrue);
+      expect(checked('Bob'), isFalse);
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Done'));
+      await _pumpFrames(tester);
+
+      final outcomeId = (await db.captureDao.outcomeIdsForCapture('ph')).single;
+      expect(await db.todoDao.getPersonTagIdsForTodo(outcomeId), {'alice'});
     });
   });
 }
