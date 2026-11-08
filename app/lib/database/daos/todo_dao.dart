@@ -334,6 +334,25 @@ EXISTS (
     );
   }
 
+  /// Stream of every active Outcome carrying [projectTagId], whatever its
+  /// Intent (`next` or `maybe`): clarified, not done, not trashed.
+  ///
+  /// Unlike [watchNext] this applies no Next List rule and no context-tag
+  /// filter — a Project's page answers "what is in this project", so a
+  /// someday Outcome or an actionless person-blocked one still shows.
+  Stream<List<Todo>> watchByProject(String projectTagId) {
+    return customSelect(
+      'SELECT ${todoProjectionSql('todos')} FROM todos '
+      'WHERE clarified = 1 AND done_at IS NULL '
+      "AND intent IN ('next', 'maybe') "
+      'AND EXISTS (SELECT 1 FROM todo_tags tt '
+      '            WHERE tt.todo_id = todos.id AND tt.tag_id = ?) '
+      'ORDER BY created_at',
+      variables: [Variable(projectTagId)],
+      readsFrom: {todos, todoTags, actions},
+    ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
+  }
+
   /// Stream of "Waiting For" todos.
   ///
   /// Returns clarified, non-done, intent='next' todos that have at least one

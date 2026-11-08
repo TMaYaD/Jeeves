@@ -22,9 +22,5 @@ class TagFilterNotifier extends Notifier<Set<String>> {
     }
   }
 
-  /// Replaces the whole filter with just [tagId] — a Projects-section tap is
-  /// "show me this project", not "also narrow by this project".
-  void selectOnly(String tagId) => state = {tagId};
-
   void clear() => state = const {};
 }

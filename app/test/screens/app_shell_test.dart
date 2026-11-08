@@ -12,7 +12,6 @@ import 'package:jeeves/providers/focus_session_planning_settings_provider.dart';
 import 'package:jeeves/providers/inbox_provider.dart';
 import 'package:jeeves/providers/gtd_lists_provider.dart';
 import 'package:jeeves/providers/nudge_provider.dart';
-import 'package:jeeves/providers/tag_filter_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/screens/app_shell.dart';
 import 'package:jeeves/widgets/app_title_bar/app_title_bar.dart';
@@ -125,6 +124,11 @@ Widget _buildShellOnly({
                     builder: (_, _) => const Scaffold(body: Text('Next Actions body')),
                   ),
                   GoRoute(
+                    path: '/projects/:id',
+                    builder: (_, state) => Scaffold(
+                        body: Text('Project body ${state.pathParameters['id']}')),
+                  ),
+                  GoRoute(
                     path: '/waiting-for',
                     builder: (_, _) => const Scaffold(body: Text('Waiting For body')),
                   ),
@@ -207,8 +211,9 @@ void main() {
     expect(find.text('PROJECTS'), findsOneWidget);
   });
 
-  testWidgets('tapping a Projects tile filters Next Actions to that project, '
-      'closes the drawer and marks the tile selected', (tester) async {
+  testWidgets('tapping a Projects tile opens that project, closes the drawer, '
+      'titles the bar with its name and marks the tile selected',
+      (tester) async {
     final project = Tag(id: 'p1', name: 'Garden', type: 'project', userId: 'u');
     await tester.pumpWidget(_buildShellOnly(projectTags: [project]));
     await tester.pump();
@@ -220,18 +225,17 @@ void main() {
     await tester.tap(find.text('Garden'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Next Actions body'), findsOneWidget);
+    expect(find.text('Project body p1'), findsOneWidget);
     expect(find.text('Ctrl+K'), findsNothing, reason: 'drawer should close');
-    final container = ProviderScope.containerOf(
-        tester.element(find.text('Next Actions body')));
-    expect(container.read(tagFilterProvider), {'p1'});
+    expect(find.text('Garden'), findsOneWidget,
+        reason: 'title bar shows the project name; the drawer is closed');
 
     await tester.tap(find.byKey(appTitleBarLeadingKey));
     await tester.pumpAndSettle();
     await tester.drag(find.byType(Drawer), const Offset(0, -300));
     await tester.pumpAndSettle();
-    final tile = tester.widget<ListTile>(
-        find.ancestor(of: find.text('Garden'), matching: find.byType(ListTile)));
+    final tile = tester.widget<ListTile>(find.ancestor(
+        of: find.text('Garden').last, matching: find.byType(ListTile)));
     expect(tile.selected, isTrue);
   });
 
