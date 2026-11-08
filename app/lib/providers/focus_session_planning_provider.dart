@@ -312,13 +312,15 @@ const actionlessReviewIntervalDays = 7;
 /// The provider hands out a function, not a value: a value would be computed
 /// once when the provider first builds and then go stale across the Evening
 /// Shutdown boundary in a long-running app. Call the function each time the
-/// cutoff is needed.
+/// cutoff is needed. It reads the clock and the settings live, and the
+/// provider watches nothing, so a settings load never rebuilds its dependents
+/// (a returned `DateTime` was equal across such rebuilds; a fresh closure
+/// would not be).
 final actionlessReviewCutoffProvider = Provider<DateTime Function()>((ref) {
-  final clock = ref.watch(clockProvider);
-  final shutdownTime = ref.watch(shutdownSettingsProvider).shutdownTime;
   return () {
-    final periodStart =
-        lastAnchorBefore(clock(), shutdownTime.hour, shutdownTime.minute);
+    final shutdownTime = ref.read(shutdownSettingsProvider).shutdownTime;
+    final periodStart = lastAnchorBefore(
+        ref.read(clockProvider)(), shutdownTime.hour, shutdownTime.minute);
     return DateTime(
       periodStart.year,
       periodStart.month,
