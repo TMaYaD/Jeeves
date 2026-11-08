@@ -887,12 +887,12 @@ void main() {
       final notifier = container.read(focusSessionPlanningProvider.notifier);
 
       expect(
-          await db.todoDao.getNeedsReview(), hasLength(1));
+          await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), hasLength(1));
 
       await notifier.confirmReviewItemRelevant(id);
 
       expect(
-          await db.todoDao.getNeedsReview(), isEmpty);
+          await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), isEmpty);
       final state = container.read(focusSessionPlanningProvider);
       expect(state.reviewNav.index, 1);
     });
@@ -905,7 +905,7 @@ void main() {
       await notifier.markReviewItemDone(id);
 
       expect(
-          await db.todoDao.getNeedsReview(), isEmpty);
+          await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), isEmpty);
 
       final todo = await db.todoDao.getTodo(id);
       expect(todo?.doneAt, isNotNull);
@@ -922,7 +922,7 @@ void main() {
       await notifier.deferReviewItemToSomeday(id);
 
       expect(
-          await db.todoDao.getNeedsReview(), isEmpty);
+          await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), isEmpty);
 
       final todo = await db.todoDao.getTodo(id);
       expect(todo?.intent, 'maybe');
@@ -939,7 +939,7 @@ void main() {
       await notifier.trashReviewItem(id);
 
       expect(
-          await db.todoDao.getNeedsReview(), isEmpty);
+          await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), isEmpty);
 
       final todo = await db.todoDao.getTodo(id);
       expect(todo?.intent, 'trash');
@@ -958,7 +958,7 @@ void main() {
       await notifier.deferReviewItemToSomeday(id);
 
       expect(
-          await db.todoDao.getNeedsReview(), isEmpty);
+          await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), isEmpty);
 
       final state = container.read(focusSessionPlanningProvider);
       expect(state.reviewNav.index, 1);
@@ -969,11 +969,11 @@ void main() {
       final id = await insertStaleTask();
       final notifier = container.read(focusSessionPlanningProvider.notifier);
 
-      expect(await db.todoDao.getNeedsReview(), hasLength(1));
+      expect(await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), hasLength(1));
 
       await notifier.markReviewItemWaitingFor(id);
 
-      expect(await db.todoDao.getNeedsReview(), isEmpty);
+      expect(await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), isEmpty);
 
       final state = container.read(focusSessionPlanningProvider);
       expect(state.reviewNav.index, 1);
@@ -988,7 +988,7 @@ void main() {
       final id = await insertActionlessTask();
       final notifier = container.read(focusSessionPlanningProvider.notifier);
 
-      expect(await db.todoDao.getNeedsReview(), hasLength(1));
+      expect(await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), hasLength(1));
 
       await notifier.markReviewItemWaitingFor(id);
 

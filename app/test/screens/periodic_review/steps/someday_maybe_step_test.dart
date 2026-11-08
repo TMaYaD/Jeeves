@@ -124,7 +124,7 @@ void main() {
       // The whole point of #293: a phrase-backed promotion does not land
       // the task actionless on the Next list, so it stays out of the daily
       // re-clarification queue.
-      final needsReview = await db.todoDao.getNeedsReview();
+      final needsReview = await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff);
       expect(needsReview.map((t) => t.id), isNot(contains('sm1')));
 
       final state = container.read(periodicReviewProvider);

@@ -98,7 +98,7 @@ Future<String> _attachPersonTag(
 /// `isNeedsReview` / `getNeedsReviewCount` / `watchNeedsReview` wrappers were
 /// dead surface and were removed in #494.
 Future<bool> _isNeedsReview(GtdDatabase db, String id) async =>
-    (await db.todoDao.getNeedsReview()).any((t) => t.id == id);
+    (await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff)).any((t) => t.id == id);
 
 void main() {
   setUpAll(configureSqliteForTests);
@@ -121,7 +121,7 @@ void main() {
         lastNextActionCompletionAt: null,
       );
 
-      final result = await db.todoDao.getNeedsReview();
+      final result = await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff);
       expect(result, isEmpty);
     });
 
@@ -139,7 +139,7 @@ void main() {
         lastNextActionCompletionAt: completedAt,
       );
 
-      final result = await db.todoDao.getNeedsReview();
+      final result = await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff);
       expect(result, hasLength(1));
       expect(result.first.id, id);
       expect(await db.actionDao.getCurrentAction(id), isNotNull,
@@ -160,7 +160,7 @@ void main() {
         lastNextActionCompletionAt: completedAt,
       );
 
-      final result = await db.todoDao.getNeedsReview();
+      final result = await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff);
       expect(result, hasLength(1));
       expect(result.first.id, id);
       expect(await db.actionDao.getCurrentAction(id), isNull,
@@ -194,7 +194,7 @@ void main() {
         userId: Value(_userId),
       ));
 
-      final result = await db.todoDao.getNeedsReview();
+      final result = await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff);
       expect(result.any((t) => t.id == id), isTrue);
     });
 
@@ -212,11 +212,11 @@ void main() {
         lastNextActionCompletionAt: completedAt,
       );
 
-      expect(await db.todoDao.getNeedsReview(), hasLength(1));
+      expect(await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), hasLength(1));
 
       await db.todoDao.stampLastClarifiedAt(id);
 
-      final result = await db.todoDao.getNeedsReview();
+      final result = await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff);
       expect(result, isEmpty);
     });
 
@@ -228,11 +228,11 @@ void main() {
         lastNextActionCompletionAt: null,
       );
 
-      expect(await db.todoDao.getNeedsReview(), hasLength(1));
+      expect(await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), hasLength(1));
 
       await db.todoDao.setCurrentActionText(id,'Draft proposal');
 
-      final result = await db.todoDao.getNeedsReview();
+      final result = await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff);
       expect(result, isEmpty);
     });
 
@@ -241,7 +241,7 @@ void main() {
       final id = await _insertClarifiedTask(db, actionText: null);
       await db.todoDao.markDone(id);
 
-      final result = await db.todoDao.getNeedsReview();
+      final result = await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff);
       expect(result, isEmpty);
     });
 
@@ -254,7 +254,7 @@ void main() {
         updates: {db.todos},
       );
 
-      final result = await db.todoDao.getNeedsReview();
+      final result = await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff);
       expect(result, isEmpty);
     });
 
@@ -269,7 +269,7 @@ void main() {
         createdAt: Value(now),
       ));
 
-      final result = await db.todoDao.getNeedsReview();
+      final result = await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff);
       expect(result, isEmpty);
     });
 
@@ -283,7 +283,7 @@ void main() {
         lastClarifiedAt: null,
       );
 
-      final result = await db.todoDao.getNeedsReview();
+      final result = await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff);
       expect(result, hasLength(1));
       expect(result.first.id, id);
       expect(await db.actionDao.getCurrentAction(id), isNull,
@@ -303,10 +303,10 @@ void main() {
         lastNextActionCompletionAt: completedAt,
       );
 
-      expect(await db.todoDao.getNeedsReview(), hasLength(1));
+      expect(await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), hasLength(1));
       await db.todoDao.markDone(id);
 
-      final result = await db.todoDao.getNeedsReview();
+      final result = await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff);
       expect(result, isEmpty);
     });
 
@@ -322,7 +322,7 @@ void main() {
 
       // After deferring, intent = 'maybe'. The predicate requires intent = 'next',
       // so the task is excluded regardless of the Actionless branch.
-      final result = await db.todoDao.getNeedsReview();
+      final result = await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff);
       expect(result.any((t) => t.id == id), isFalse);
     });
 
@@ -340,11 +340,11 @@ void main() {
         lastNextActionCompletionAt: completedAt,
       );
 
-      expect(await db.todoDao.getNeedsReview(), hasLength(1));
+      expect(await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), hasLength(1));
 
       await db.todoDao.updateFields(id,title: 'Renamed task');
 
-      final result = await db.todoDao.getNeedsReview();
+      final result = await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff);
       expect(result, isEmpty);
     });
 
@@ -352,11 +352,11 @@ void main() {
     test('actionless task is in the queue, leaves after a next action is set', () async {
       final id = await _insertClarifiedTask(db, actionText: null);
 
-      expect((await db.todoDao.getNeedsReview()).any((t) => t.id == id), isTrue);
+      expect((await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff)).any((t) => t.id == id), isTrue);
 
       await db.todoDao.setCurrentActionText(id,'Do something');
 
-      expect((await db.todoDao.getNeedsReview()).any((t) => t.id == id), isFalse);
+      expect((await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff)).any((t) => t.id == id), isFalse);
     });
 
     // ----- Delegated (person-tagged) actionless branch (#289) ----------------
@@ -371,7 +371,7 @@ void main() {
       );
       await _attachPersonTag(db, id);
 
-      final result = await db.todoDao.getNeedsReview();
+      final result = await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff);
       expect(result, isEmpty);
     });
 
@@ -386,7 +386,7 @@ void main() {
       );
       await _attachPersonTag(db, id);
 
-      final result = await db.todoDao.getNeedsReview();
+      final result = await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff);
       expect(result, isEmpty);
     });
 
@@ -406,7 +406,7 @@ void main() {
       );
       await _attachPersonTag(db, id);
 
-      final result = await db.todoDao.getNeedsReview();
+      final result = await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff);
       expect(result, hasLength(1));
       expect(result.first.id, id);
     });
@@ -441,8 +441,8 @@ void main() {
       await _insertAction(db,
           id: 'a-done', outcomeId: id, role: 'done', doneAt: after);
 
-      expect(await db.todoDao.getNeedsReview(), hasLength(1));
-      expect(await db.todoDao.getNeedsReview(), hasLength(1));
+      expect(await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), hasLength(1));
+      expect(await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), hasLength(1));
       expect(await _isNeedsReview(db, id), isTrue);
     });
 
@@ -458,7 +458,7 @@ void main() {
       await _insertAction(db,
           id: 'a-done', outcomeId: id, role: 'done', doneAt: before);
 
-      expect(await db.todoDao.getNeedsReview(), isEmpty);
+      expect(await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), isEmpty);
       expect(await _isNeedsReview(db, id), isFalse);
     });
 
@@ -473,7 +473,7 @@ void main() {
       await _insertAction(db,
           id: 'a-done', outcomeId: id, role: 'done', updatedAt: after);
 
-      expect(await db.todoDao.getNeedsReview(), hasLength(1));
+      expect(await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), hasLength(1));
     });
 
     test('an app-side supersession is not stale — it stamps with the same '
@@ -488,7 +488,7 @@ void main() {
 
       await db.actionDao.clearCurrentAction(id, now: after);
 
-      expect(await db.todoDao.getNeedsReview(), isEmpty,
+      expect(await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), isEmpty,
           reason: 'equality, not `<` — the supersession already clarified');
     });
 
@@ -508,7 +508,7 @@ void main() {
           role: 'superseded',
           updatedAt: after);
 
-      expect(await db.todoDao.getNeedsReview(), isEmpty);
+      expect(await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), isEmpty);
       expect(await _isNeedsReview(db, id), isFalse);
     });
 
@@ -521,15 +521,15 @@ void main() {
         lastNextActionCompletionAt: null,
       );
       await _attachPersonTag(db, id);
-      expect(await db.todoDao.getNeedsReview(), isEmpty);
+      expect(await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), isEmpty);
 
       await db.actionDao.completeCurrentAction(id, now: after);
 
-      expect(await db.todoDao.getNeedsReview(), hasLength(1));
+      expect(await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), hasLength(1));
 
       await db.todoDao.setCurrentActionText(id, 'Chase the reply');
 
-      expect(await db.todoDao.getNeedsReview(), isEmpty);
+      expect(await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), isEmpty);
     });
   });
 
@@ -547,12 +547,12 @@ void main() {
       // every day. This is the failure mode the title-as-action fallback
       // exists to avoid.
       final id = await _insertClarifiedTask(db);
-      expect(await db.todoDao.getNeedsReview(), hasLength(1));
+      expect(await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), hasLength(1));
 
       await db.todoDao.applyRouting(id, to: RoutingKind.nextAction);
 
       expect((await db.todoDao.getTodo(id))?.lastClarifiedAt, isNotNull);
-      expect(await db.todoDao.getNeedsReview(), hasLength(1),
+      expect(await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), hasLength(1),
           reason: 'a stamp does not clear the Actionless branch');
     });
 
@@ -561,13 +561,13 @@ void main() {
       // Actionless-guarded title mirror.
       final id = await _insertClarifiedTask(db);
       final title = (await db.todoDao.getTodo(id))!.title;
-      expect(await db.todoDao.getNeedsReview(), hasLength(1));
+      expect(await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), hasLength(1));
 
       await db.todoDao.applyRouting(id,
           to: RoutingKind.nextAction, actionTextIfActionless: title);
 
       expect((await db.actionDao.getCurrentAction(id))?.actionText, title);
-      expect(await db.todoDao.getNeedsReview(), isEmpty,
+      expect(await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), isEmpty,
           reason: 'the resolved Outcome must not re-arm the review queue');
     });
 

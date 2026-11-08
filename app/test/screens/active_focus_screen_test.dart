@@ -166,7 +166,7 @@ void main() {
       // Actionless + un-stamped ⇒ surfaces in the next DPR's review step. If the
       // user dismisses the prompt (writing nothing — see the sheet test), the
       // Outcome simply stays here for review (AC4).
-      final needsReview = await db.todoDao.getNeedsReview();
+      final needsReview = await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff);
       expect(needsReview.map((t) => t.id), contains('o1'));
     });
 

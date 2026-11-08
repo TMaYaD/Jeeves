@@ -139,13 +139,13 @@ void main() {
       );
 
       await _enterReviewStep(tester, db);
-      expect(await db.todoDao.getNeedsReview(), hasLength(1));
+      expect(await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), hasLength(1));
 
       await _openNextActionDialog(tester);
       await tester.tap(find.text('Save'));
       await tester.pumpAndSettle();
 
-      expect(await db.todoDao.getNeedsReview(), isEmpty,
+      expect(await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), isEmpty,
           reason: 'the Actionless branch of _needsReviewWhere has no freshness '
               'gate, so an item left Actionless would re-surface on the same '
               'card every day — the stall this issue removes');
@@ -173,7 +173,7 @@ void main() {
       expect(row?.lastClarifiedAt, isNull,
           reason: 'cancel writes nothing at all');
       expect(await db.actionDao.getCurrentAction('r1'), isNull);
-      expect(await db.todoDao.getNeedsReview(), hasLength(1));
+      expect(await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), hasLength(1));
     });
 
     testWidgets(

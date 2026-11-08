@@ -33,7 +33,7 @@ final _t2 = DateTime.parse('2026-07-01T11:00:00.000Z');
 /// `isNeedsReview` / `getNeedsReviewCount` wrappers were dead surface and were
 /// removed in #494.
 Future<bool> _isNeedsReview(GtdDatabase db, String id) async =>
-    (await db.todoDao.getNeedsReview()).any((t) => t.id == id);
+    (await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff)).any((t) => t.id == id);
 
 Future<String> _seedOutcome(
   GtdDatabase db,
@@ -350,7 +350,7 @@ void main() {
     await db.actionDao.getCurrentActionTexts({'o1'});
     await db.actionDao.watchCurrentAction('o1').first;
     await db.todoDao.watchNext().first;
-    await db.todoDao.getNeedsReview();
+    await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff);
     await db.captureDao.watchCarvedOutcomes('no-such-capture').first;
 
     final outcome =

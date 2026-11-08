@@ -74,7 +74,7 @@ void main() {
   });
 
   Future<Set<String>> reviewQueueIds() async =>
-      (await db.todoDao.getNeedsReview()).map((t) => t.id).toSet();
+      (await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff)).map((t) => t.id).toSet();
 
   Future<void> closeDayReturningToNext(Iterable<String> ids) async {
     final notifier = container.read(eveningShutdownProvider.notifier);
