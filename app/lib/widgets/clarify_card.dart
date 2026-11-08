@@ -1031,13 +1031,15 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   /// that mode, because in n-m the Capture is provenance and the *Outcome* is
   /// what the fields describe.
   Widget _buildNToM(Capture capture, List<Tag> hints) {
+    final draft = _draft(hints);
     return ListView(
       physics: const ClampingScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
       children: [
         CaptureOutcomesSection(
           capture: capture,
-          tagIds: _draft(hints).tagIds,
+          tagIds: draft.tagIds,
+          personTagHintIds: draft.personTagHintIds,
           onCompleted: _onCaptureCompleted,
         ),
         // The footer survives into n-m unchanged: leaving mid-split is exactly

@@ -85,6 +85,7 @@ class CaptureOutcomesSection extends ConsumerStatefulWidget {
     super.key,
     required this.capture,
     this.tagIds = const {},
+    this.personTagHintIds = const {},
     this.onCompleted,
   });
 
@@ -95,6 +96,10 @@ class CaptureOutcomesSection extends ConsumerStatefulWidget {
   /// Tag hints on the Capture, seeding each new Outcome's tags so a carve
   /// starts where a 1-1 clarification would.
   final Set<String> tagIds;
+
+  /// Person-typed hints on the Capture. Not attached to the carved Outcome;
+  /// they pre-select the Waiting For picker.
+  final Set<String> personTagHintIds;
 
   /// Called after the verdict lands — the host owns the exit (pop the screen,
   /// advance the ceremony cursor).
@@ -267,6 +272,7 @@ class _CaptureOutcomesSectionState
           ? DateTime(_dueDate!.year, _dueDate!.month, _dueDate!.day)
           : null,
       tagIds: widget.tagIds,
+      personTagHintIds: widget.personTagHintIds,
       // Title-as-action: a freshly carved Outcome must not land on the Next
       // list actionless. The effort values ride along on the same draft and
       // land on the Outcome columns whatever the destination (D3).

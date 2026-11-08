@@ -180,6 +180,7 @@ class ClarifyDraft {
     this.notes,
     this.dueDate,
     this.tagIds = const <String>{},
+    this.personTagHintIds = const <String>{},
     this.action,
   });
 
@@ -190,9 +191,10 @@ class ClarifyDraft {
   ///
   /// - **Blank title nulls the whole [action].** A blank phrase beside live
   ///   effort values would claim an Action exists when none does.
-  /// - **Person tags never travel.** Delegation is the orthogonal axis and the
-  ///   Waiting For picker is the only thing that writes it, so a person *hint*
-  ///   on the Capture is dropped rather than seeded onto the Outcome.
+  /// - **Person tags never travel in [tagIds].** Delegation is the orthogonal
+  ///   axis and the Waiting For picker is the only thing that writes it, so a
+  ///   person *hint* on the Capture is kept out of [tagIds] and carried apart
+  ///   in [personTagHintIds], which only pre-selects that picker.
   /// - **[dueDate] is truncated to a calendar day.** The picker collects a
   ///   day; carrying its time component would make "due today" depend on the
   ///   moment the picker happened to open.
@@ -229,6 +231,7 @@ class ClarifyDraft {
         for (final id in draftTagIds ?? {for (final t in hintTags) t.id})
           if (!personHintIds.contains(id)) id,
       },
+      personTagHintIds: personHintIds,
       // Title-as-action coupling: a Capture is by definition a first
       // clarification, so there is no deliberate phrase to clobber and the
       // title always mirrors. applyRouting consumes the phrase only for Next
@@ -251,6 +254,11 @@ class ClarifyDraft {
   /// Non-person tags (context / project) to attach to the new Outcome. Person
   /// tags travel separately — the Waiting For picker supplies them.
   final Set<String> tagIds;
+
+  /// Person-typed tag hints on the Capture. Never attached as plain tags; they
+  /// only seed the Waiting For picker's initial selection, and the delegates
+  /// are written by the routing transaction once the user confirms it.
+  final Set<String> personTagHintIds;
 
   /// The Action the card describes, or null when it describes none.
   ///
@@ -1021,12 +1029,13 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
 
   Future<void> _waitingFor() async {
     // Pre-seed from the existing Outcome's delegates; a Capture has none —
-    // its Outcome does not exist yet (ADR-0006).
+    // its Outcome does not exist yet (ADR-0006) — so it offers the person
+    // hints the user tagged it with instead.
     final assigned = switch (widget.subject) {
       OutcomeSubject(:final todo) => await _clarification.getPersonTagIds(
         todo.id,
       ),
-      CaptureSubject() => const <String>{},
+      CaptureSubject(:final draft) => draft().personTagHintIds,
     };
     if (!mounted) return;
 
