@@ -529,7 +529,12 @@ void main() {
         jeevesExportEnvelopeKey: jeevesExportVersion,
         jeevesExportCollectionsKey: {
           'old_todos': [
-            {'id': 'a', 'title': 'A', 'user_id': _userId}
+            {
+              'id': 'a',
+              'title': 'A',
+              'created_at': '2026-07-28T05:00:00.000Z',
+              'user_id': _userId,
+            }
           ],
           'todos': <Object?>[],
         },

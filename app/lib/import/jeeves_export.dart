@@ -266,6 +266,7 @@ Future<ImportResult> importJeevesExport({
   final unplaceable = <String>[];
   final malformed = <String>[];
   final collided = <String>[];
+  final spellingsByCollection = <String, List<String>>{};
   for (final entry in collections.entries) {
     final key = entry.key;
     final rows = entry.value;
@@ -289,9 +290,11 @@ Future<ImportResult> importJeevesExport({
     // resolve to the same destination. Keeping either list would overwrite the
     // other and lose its rows with no error, so refuse. An empty list loses
     // nothing and yields to the non-empty one.
+    final spellings = spellingsByCollection.putIfAbsent(resolved, () => []);
+    spellings.add('$key');
     final existing = rowsByCollection[resolved];
     if (existing != null && existing.isNotEmpty && rows.isNotEmpty) {
-      collided.add('$key → $resolved');
+      if (!collided.contains(resolved)) collided.add(resolved);
       continue;
     }
     if (existing == null || existing.isEmpty) rowsByCollection[resolved] = rows;
@@ -307,7 +310,10 @@ Future<ImportResult> importJeevesExport({
         'collections that are not lists of records: ${malformed.join(', ')}',
       if (collided.isNotEmpty)
         'collections that duplicate another spelling of the same collection: '
-            '${collided.join(', ')}',
+            '${[
+          for (final name in collided)
+            '$name (${(spellingsByCollection[name]!..sort()).join(' and ')})'
+        ].join(', ')}',
     ];
     throw ParseError(
       'This export carries ${faults.join('; and ')}. Nothing was imported — '
