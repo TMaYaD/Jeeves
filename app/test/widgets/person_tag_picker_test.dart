@@ -308,7 +308,10 @@ void main() {
       expect(observed.called, isTrue);
       expect(observed.result, isNull);
       expect(find.widgetWithText(FilledButton, 'Done'), findsNothing);
-      expect(find.text('Open caller'), findsOneWidget);
+      // A null result keeps the caller page open: it is still the visible
+      // route, and the harness root underneath it is not.
+      expect(observed.callerRouteWasCurrent, isTrue);
+      expect(find.text('Waiting For'), findsOneWidget);
       expect(find.text('Failed to save. Please try again.'), findsNothing);
       final orphans = await tester.runAsync(() => (db.select(db.todoTags)
             ..where((tt) => tt.todoId.equals('t6')))
