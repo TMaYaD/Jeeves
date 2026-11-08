@@ -1402,7 +1402,7 @@ void main() {
 
       // Confirm without re-picking: the picker requires a selection, so this
       // only enables because the hint seeded it.
-      await tester.tap(find.text('Done'));
+      await tester.tap(find.widgetWithText(FilledButton, 'Done'));
       await tester.pumpAndSettle();
 
       final outcomeId =
