@@ -21,7 +21,8 @@ import '../providers/task_detail_provider.dart';
 /// - **Write mode** ([todoId] given) — the subject is an existing Outcome.
 ///   Pre-selects its assigned tags and, on confirm, replaces its person-tag
 ///   set with the selection via [TaskDetailNotifier.setPersonTags] before
-///   returning it.
+///   returning it. If the Outcome is gone from local storage when Done is
+///   tapped, nothing is written and the sheet pops `null`, as for cancel.
 /// - **Selection-only mode** (no [todoId]) — the sheet attaches nothing; the
 ///   caller's own routing write does. Used for an Inbox Capture, whose
 ///   Outcome does not exist yet (ADR-0006: clarifying a Capture *creates* the
@@ -252,11 +253,12 @@ class _PersonTagPickerSheetState extends ConsumerState<PersonTagPickerSheet> {
     final todoId = widget.todoId;
     setState(() => _committing = true);
 
+    var landed = true;
     try {
       if (todoId != null) {
-        await ref.read(taskDetailNotifierProvider(todoId)).setPersonTags(
-              selected,
-            );
+        landed = await ref
+            .read(taskDetailNotifierProvider(todoId))
+            .setPersonTags(selected);
       }
     } catch (e) {
       debugPrint('Failed to save person tags: $e');
@@ -270,12 +272,15 @@ class _PersonTagPickerSheetState extends ConsumerState<PersonTagPickerSheet> {
       return;
     }
 
-    if (mounted) Navigator.pop(context, selected);
+    // The Outcome was deleted while the sheet was open: nothing was written,
+    // so close as a cancel rather than report a selection that did not land.
+    if (mounted) Navigator.pop(context, landed ? selected : null);
   }
 }
 
 /// Shows the [PersonTagPickerSheet] as a modal bottom sheet and returns the
-/// chosen person-tag ids, or `null` if the user cancelled.
+/// chosen person-tag ids, or `null` if the user cancelled or nothing landed
+/// (the Outcome was deleted while the sheet was open).
 ///
 /// The caller performs its own writes and navigation on the result — the
 /// sheet has already closed by the time this future completes. Pass [todoId]

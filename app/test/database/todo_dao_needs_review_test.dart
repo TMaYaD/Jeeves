@@ -557,17 +557,15 @@ void main() {
     });
 
     test('route + title mirror takes the Outcome out of the queue', () async {
-      // The composition the blank-save path performs: applyRouting with no
-      // actionText, then the Actionless-guarded title mirror.
+      // What the blank-save path performs: one applyRouting carrying the
+      // Actionless-guarded title mirror.
       final id = await _insertClarifiedTask(db);
       final title = (await db.todoDao.getTodo(id))!.title;
       expect(await db.todoDao.getNeedsReview(), hasLength(1));
 
-      await db.todoDao.applyRouting(id, to: RoutingKind.nextAction);
-      final wrote =
-          await db.todoDao.setCurrentActionTextIfActionless(id, title);
+      await db.todoDao.applyRouting(id,
+          to: RoutingKind.nextAction, actionTextIfActionless: title);
 
-      expect(wrote, isTrue);
       expect((await db.actionDao.getCurrentAction(id))?.actionText, title);
       expect(await db.todoDao.getNeedsReview(), isEmpty,
           reason: 'the resolved Outcome must not re-arm the review queue');
@@ -577,10 +575,9 @@ void main() {
       final id = await _insertClarifiedTask(db, actionText: 'Book the room');
       final title = (await db.todoDao.getTodo(id))!.title;
 
-      final wrote =
-          await db.todoDao.setCurrentActionTextIfActionless(id, title);
+      await db.todoDao.applyRouting(id,
+          to: RoutingKind.nextAction, actionTextIfActionless: title);
 
-      expect(wrote, isFalse);
       expect((await db.actionDao.getCurrentAction(id))?.actionText,
           'Book the room');
     });

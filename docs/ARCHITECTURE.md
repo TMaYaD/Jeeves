@@ -67,6 +67,13 @@ the capture seam so it can become an op. This is the single most important
 invariant in the client: a domain write that escapes a capturing scope is a write
 that never reaches another device.
 
+**A write only counts if it landed.** A write against an Outcome or Capture
+checks the subject inside its own transaction (`TodoDao.writeIfOutcomePresent`,
+`CaptureDao.writeIfCapturePresent`) and reports whether it ran. Surfaces do not
+latch "subject missing" themselves: a focus-loss save, a dispose flush, a
+debounce timer or a sheet opened before the delete simply finds nothing to write
+to.
+
 **Reads are streams.** Surfaces watch Drift queries and rebuild when the tables
 they name change. A write that mutates a table its own query does not name must
 notify explicitly, or the surface will not refresh.
