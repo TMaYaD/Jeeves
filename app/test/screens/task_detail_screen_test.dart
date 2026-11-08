@@ -1969,9 +1969,9 @@ void main() {
     // writes nor authors an op for the deleted entity.
     testWidgets('a subject deleted under the open screen is never '
         'written to', (tester) async {
-      await _insertAt(db, id: 'gone', title: 'Buy milk');
+      final todo = await _insertAt(db, id: 'gone', title: 'Buy milk');
 
-      final (widget, router) = _buildScreen(db, 'gone');
+      final (widget, router) = _buildScreen(db, 'gone', initialTodo: todo);
       await _showTaskDetail(tester, widget, router, 'gone');
 
       await tester.enterText(
