@@ -933,7 +933,7 @@ void main() {
       expect(
         await db.todoDao.getNeedsReview(
             actionlessReviewCutoff:
-                container.read(actionlessReviewCutoffProvider)),
+                container.read(actionlessReviewCutoffProvider)()),
         isEmpty,
       );
     });
@@ -1524,23 +1524,45 @@ void main() {
       // opened at 18:00 today.
       expect(
         containerAt(DateTime(2026, 7, 15, 20, 0))
-            .read(actionlessReviewCutoffProvider),
+            .read(actionlessReviewCutoffProvider)(),
         DateTime(2026, 7, 9, 18, 0),
       );
       // Planning before the anchor belongs to the period opened yesterday.
       expect(
         containerAt(DateTime(2026, 7, 15, 7, 30))
-            .read(actionlessReviewCutoffProvider),
+            .read(actionlessReviewCutoffProvider)(),
         DateTime(2026, 7, 8, 18, 0),
       );
     });
 
-    test('keeps the wall-clock time across a DST change', () {
+    // The runner's timezone is process-wide, so this does not cross a real DST
+    // transition on CI; it pins the calendar-step arithmetic (the wall-clock
+    // time survives the step) in whatever zone the runner uses.
+    test('keeps the wall-clock time when stepping back whole calendar days',
+        () {
       expect(
         containerAt(DateTime(2026, 11, 4, 20, 0))
-            .read(actionlessReviewCutoffProvider),
+            .read(actionlessReviewCutoffProvider)(),
         DateTime(2026, 10, 29, 18, 0),
       );
+    });
+
+    test('recomputes the cutoff on each call, so a persistent container '
+        'follows the clock across the Evening Shutdown boundary', () {
+      var now = DateTime(2026, 7, 15, 17, 59);
+      final container = ProviderContainer(overrides: [
+        databaseProvider.overrideWithValue(db),
+        clockProvider.overrideWithValue(() => now),
+      ]);
+      addTearDown(container.dispose);
+      final cutoff = container.read(actionlessReviewCutoffProvider);
+
+      expect(cutoff(), DateTime(2026, 7, 8, 18, 0));
+      now = DateTime(2026, 7, 15, 18, 1);
+      expect(cutoff(), DateTime(2026, 7, 9, 18, 0));
+      // A fresh read of the provider hands out the same live function.
+      expect(container.read(actionlessReviewCutoffProvider)(),
+          DateTime(2026, 7, 9, 18, 0));
     });
 
     test('an Actionless Outcome kept on Monday returns on the seventh '
@@ -1557,7 +1579,7 @@ void main() {
 
       Future<bool> surfacesAt(DateTime planningTime) async {
         final cutoff =
-            containerAt(planningTime).read(actionlessReviewCutoffProvider);
+            containerAt(planningTime).read(actionlessReviewCutoffProvider)();
         final queue =
             await db.todoDao.getNeedsReview(actionlessReviewCutoff: cutoff);
         return queue.any((t) => t.id == 'kept');

@@ -308,18 +308,25 @@ const actionlessReviewIntervalDays = 7;
 /// after. The step is a local calendar step, which keeps the wall-clock time
 /// across a DST change. Anything clarified during today's planning is at or
 /// after the period start and so can never resurface within the same period.
-final actionlessReviewCutoffProvider = Provider<DateTime>((ref) {
-  final now = ref.watch(clockProvider)();
+///
+/// The provider hands out a function, not a value: a value would be computed
+/// once when the provider first builds and then go stale across the Evening
+/// Shutdown boundary in a long-running app. Call the function each time the
+/// cutoff is needed.
+final actionlessReviewCutoffProvider = Provider<DateTime Function()>((ref) {
+  final clock = ref.watch(clockProvider);
   final shutdownTime = ref.watch(shutdownSettingsProvider).shutdownTime;
-  final periodStart =
-      lastAnchorBefore(now, shutdownTime.hour, shutdownTime.minute);
-  return DateTime(
-    periodStart.year,
-    periodStart.month,
-    periodStart.day - (actionlessReviewIntervalDays - 1),
-    periodStart.hour,
-    periodStart.minute,
-  );
+  return () {
+    final periodStart =
+        lastAnchorBefore(clock(), shutdownTime.hour, shutdownTime.minute);
+    return DateTime(
+      periodStart.year,
+      periodStart.month,
+      periodStart.day - (actionlessReviewIntervalDays - 1),
+      periodStart.hour,
+      periodStart.minute,
+    );
+  };
 });
 
 /// Item counts feeding the Daily Planning duration-estimate intro (#486).
@@ -338,7 +345,7 @@ final focusSessionPlanningIntroCountsProvider =
   final db = ref.watch(databaseProvider);
   final inbox = await db.captureDao.watchInbox().first;
   final review = await db.todoDao.getNeedsReview(
-    actionlessReviewCutoff: ref.watch(actionlessReviewCutoffProvider),
+    actionlessReviewCutoff: ref.watch(actionlessReviewCutoffProvider)(),
   );
   return (inboxCount: inbox.length, reviewCount: review.length);
 });
@@ -597,7 +604,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
         // empty-state view and the user clicks Next to advance (CONTEXT.md
         // § Wizard: steps do not auto-skip).
         final items = await _db.todoDao.getNeedsReview(
-          actionlessReviewCutoff: ref.read(actionlessReviewCutoffProvider),
+          actionlessReviewCutoff: ref.read(actionlessReviewCutoffProvider)(),
         );
         if (!ref.mounted) return;
         // Batched person-tag lookup so the stale waiting-for card variant
