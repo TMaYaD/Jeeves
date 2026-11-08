@@ -188,8 +188,9 @@ class ClarifyCard extends ConsumerStatefulWidget {
 }
 
 class _ClarifyCardState extends ConsumerState<ClarifyCard> {
-  /// The database handle, captured while the element is still mounted so
-  /// [dispose] can issue the Outcome shape's pending-edit flush.
+  /// The Outcome write seam, captured while the element is still mounted so
+  /// [dispose] can issue the Outcome shape's pending-edit flush. Null on a
+  /// Capture, which flushes nothing.
   ///
   /// `dispose()` cannot reach it through `ref`: `StatefulElement.unmount()`
   /// calls `Element.unmount()` — which marks the element defunct, so
@@ -197,7 +198,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   /// Riverpod's `ref` asserts on exactly that. Reading it there threw on the
   /// flush's first line and the edit was lost (#529). Every other read in this
   /// State runs while mounted and goes through `ref` as usual.
-  late final GtdDatabase _databaseForDisposeFlush;
+  late final TaskDetailNotifier? _notifierForDisposeFlush;
 
   TextEditingController? _titleCtrl;
   TextEditingController? _notesCtrl;
@@ -398,7 +399,9 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   @override
   void initState() {
     super.initState();
-    _databaseForDisposeFlush = ref.read(databaseProvider);
+    _notifierForDisposeFlush = _isCapture
+        ? null
+        : ref.read(taskDetailNotifierProvider(_subjectId));
     if (_isCapture && widget.tagSection == ClarifyTagSection.draftInputOnly) {
       unawaited(_loadOneShotHints());
     }
@@ -458,10 +461,8 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     // failure mode is a silent lost edit. `TaskDetailScreen` and
     // `ActiveFocusScreen` keep the same backstop (#533).
     //
-    // **Missing the subject guard those two carry (#446 / #447).** With the row
-    // gone from local storage this still flushes, writing to a deleted row and
-    // authoring a sync op for a deleted entity. Deliberately left to #447,
-    // which owns the whole class rather than this one site.
+    // With the row gone from local storage the flush is dropped by the
+    // notifier's write guard (#447), not by a latch on this card.
     //
     // A Capture takes no such path — nothing it holds is ever written — so
     // this whole block is Outcome-only, and with it goes the `ref`-in-dispose
@@ -469,7 +470,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     if (!_isCapture) {
       // Snapshot pending edits up-front so the fire-and-forget write below
       // doesn't touch disposed controllers or assign back into a disposed
-      // State. The database handle comes from [_databaseForDisposeFlush]
+      // State. The write seam comes from [_notifierForDisposeFlush]
       // rather than `ref`, which is already unusable by the time this runs —
       // see that field.
       final trimmedTitle = (_titleCtrl?.text ?? '').trim();
@@ -478,15 +479,8 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
           (trimmedTitle != _baselineTitle || trimmedNotes != _baselineNotes);
       if (hasPendingWrite) {
         unawaited(
-          _databaseForDisposeFlush.todoDao
-              .updateFields(
-                _subjectId,
-                title: trimmedTitle,
-                // Same clear-flag contract as [_saveOutcomeText]: an emptied
-                // field nulls the column rather than storing `''`.
-                notes: trimmedNotes.isNotEmpty ? trimmedNotes : null,
-                clearNotes: trimmedNotes.isEmpty,
-              )
+          _notifierForDisposeFlush!
+              .updateTitleAndNotes(trimmedTitle, trimmedNotes)
               // The card is gone, so there is no surface left to tell the user
               // on — a SnackBar needs a context this State no longer has. The
               // console is the only sink, and it is the one
@@ -494,8 +488,10 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
               // text save. Without it a throwing DAO escapes as an unhandled
               // async error from teardown, which reads as a framework fault
               // rather than a lost edit.
-              .catchError((Object e) =>
-                  debugPrint('ClarifyCard: dispose flush failed: $e')),
+              .catchError((Object e) {
+                debugPrint('ClarifyCard: dispose flush failed: $e');
+                return false;
+              }),
         );
       }
     }
@@ -533,12 +529,11 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     // An emptied notes field must null the column, not store `''`: every
     // `notes == null` read treats an empty string as "has notes". `null` is
     // "no change" to the DAO, so clearing has to travel as the clear flag.
-    await ref.read(databaseProvider).todoDao.updateFields(
-          _subjectId,
-          title: trimmedTitle,
-          notes: trimmedNotes.isNotEmpty ? trimmedNotes : null,
-          clearNotes: trimmedNotes.isEmpty,
-        );
+    // The baselines move only if the write landed: a deleted Outcome keeps
+    // them, so nothing mistakes the unsaved text for saved.
+    final landed =
+        await _tagNotifier.updateTitleAndNotes(trimmedTitle, trimmedNotes);
+    if (!landed) return;
     _baselineTitle = trimmedTitle;
     _baselineNotes = trimmedNotes;
   }
@@ -557,34 +552,19 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     // `_baselineEnergy` would drift away from the column and leave the field
     // permanently dirty to `_adoptFromSubject`.
     _baselineEnergy = level;
-    final db = ref.read(databaseProvider);
-    await db.todoDao.updateFields(
-      _subjectId,
-      energyLevel: level,
-      clearEnergyLevel: level == null,
-    );
+    await _tagNotifier.updateEnergyLevel(level);
   }
 
   Future<void> _saveTimeEstimate(int? minutes) async {
     if (_isCapture) return;
     _baselineTimeEstimate = minutes;
-    final db = ref.read(databaseProvider);
-    await db.todoDao.updateFields(
-      _subjectId,
-      timeEstimate: minutes,
-      clearTimeEstimate: minutes == null,
-    );
+    await _tagNotifier.updateTimeEstimate(minutes);
   }
 
   Future<void> _saveDueDate(DateTime? date, {required bool clear}) async {
     if (_isCapture) return;
     _baselineDueDate = date;
-    final db = ref.read(databaseProvider);
-    await db.todoDao.updateFields(
-      _subjectId,
-      dueDate: date,
-      clearDueDate: clear,
-    );
+    await _tagNotifier.updateDueDate(date, clear: clear);
   }
 
   // Tag edits on an Outcome route through [TaskDetailNotifier], which owns the
@@ -603,33 +583,53 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
       ref.read(taskDetailNotifierProvider(_subjectId));
 
   Future<void> _saveAssignProject(String tagId) async {
-    if (!_isCapture) return _tagNotifier.assignProject(tagId);
+    if (!_isCapture) {
+      await _tagNotifier.assignProject(tagId);
+      return;
+    }
     final db = ref.read(databaseProvider);
-    await db.captureDao.assignProjectHint(
+    final userId = ref.read(currentUserIdProvider);
+    await db.captureDao.writeIfCapturePresent(
       _subjectId,
-      tagId,
-      ref.read(currentUserIdProvider),
+      () => db.captureDao.assignProjectHint(_subjectId, tagId, userId),
     );
   }
 
   Future<void> _saveClearProject() async {
-    if (!_isCapture) return _tagNotifier.clearProject();
-    await ref.read(databaseProvider).captureDao.clearProjectHint(_subjectId);
+    if (!_isCapture) {
+      await _tagNotifier.clearProject();
+      return;
+    }
+    final db = ref.read(databaseProvider);
+    await db.captureDao.writeIfCapturePresent(
+      _subjectId,
+      () => db.captureDao.clearProjectHint(_subjectId),
+    );
   }
 
   Future<void> _saveAssignContext(String tagId) async {
-    if (!_isCapture) return _tagNotifier.assignContextTag(tagId);
+    if (!_isCapture) {
+      await _tagNotifier.assignContextTag(tagId);
+      return;
+    }
     final db = ref.read(databaseProvider);
-    await db.captureDao.assignTagHint(
+    final userId = ref.read(currentUserIdProvider);
+    await db.captureDao.writeIfCapturePresent(
       _subjectId,
-      tagId,
-      ref.read(currentUserIdProvider),
+      () => db.captureDao.assignTagHint(_subjectId, tagId, userId),
     );
   }
 
   Future<void> _saveRemoveContext(String tagId) async {
-    if (!_isCapture) return _tagNotifier.removeContextTag(tagId);
-    await ref.read(databaseProvider).captureDao.removeTagHint(_subjectId, tagId);
+    if (!_isCapture) {
+      await _tagNotifier.removeContextTag(tagId);
+      return;
+    }
+    final db = ref.read(databaseProvider);
+    await db.captureDao.writeIfCapturePresent(
+      _subjectId,
+      () => db.captureDao.removeTagHint(_subjectId, tagId),
+    );
   }
 
   // Draft tag bookkeeping — no-ops on an Outcome card, where tag edits are

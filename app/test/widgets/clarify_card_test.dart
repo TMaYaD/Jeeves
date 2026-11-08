@@ -25,6 +25,9 @@ import 'package:jeeves/providers/clarify_mode_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
+import 'package:jeeves/sync/collection_codecs.dart' show todosCollection;
+import 'package:jeeves/sync/domain_op_capture.dart'
+    show RecordingDomainOpCapture;
 import 'package:jeeves/widgets/clarify_card.dart';
 import 'package:jeeves/widgets/clarify_retention.dart';
 import 'package:jeeves/widgets/clarify_shared_widgets.dart';
@@ -1402,6 +1405,30 @@ void main() {
       expect((await _rawTodoRow(db, 't')).updatedAt, seededUpdatedAt);
     });
 
+    // A write must not outlive its subject (#447). The row is really deleted
+    // while an edit is still in the field; the dispose flush finds it gone and
+    // authors no op for the deleted entity.
+    testWidgets('a title edit pending when the Outcome is deleted is dropped',
+        (tester) async {
+      final capture = RecordingDomainOpCapture();
+      final todo = (await tester.runAsync(() async {
+        await db.close();
+        db = GtdDatabase(NativeDatabase.memory(), opCapture: capture);
+        return _insertInboxTodo(db, id: 't', title: 'Buy milk');
+      }))!;
+      await tester.pumpWidget(_harness(db, todo: todo));
+      await _pumpFrames(tester, frames: 5);
+      await tester.enterText(
+          find.byKey(const Key('clarify_title')), 'Buy oat milk');
+
+      await tester.runAsync(() => db.todoDao.deleteOutcome('t'));
+      capture.clear();
+      await unmountWhileFocused(tester);
+
+      expect(await tester.runAsync(() => db.todoDao.getTodo('t')), isNull);
+      expect(capture.forCollection(todosCollection), isEmpty);
+    });
+
     testWidgets('a failing flush is logged rather than thrown into teardown',
         (tester) async {
       // The flush is `unawaited` and runs from `dispose()`, so a throwing DAO
@@ -1778,6 +1805,68 @@ void main() {
       await _pumpFrames(tester, frames: 5);
 
       expect(titleText(tester), 'Buy milk');
+    });
+  });
+
+  // A value chosen in a picker that was opened before the subject went must not
+  // land (#447). The row is really deleted while the modal is up; confirming it
+  // then reaches the write seam, which finds the subject gone.
+  group('ClarifyCard \u2014 a picker open when the subject is deleted', () {
+    late GtdDatabase db;
+    late RecordingDomainOpCapture capture;
+
+    setUp(() {
+      capture = RecordingDomainOpCapture();
+      db = GtdDatabase(NativeDatabase.memory(), opCapture: capture);
+    });
+    tearDown(() async => db.close());
+
+    testWidgets('a due date picked after the Outcome is deleted is dropped',
+        (tester) async {
+      final todo = (await tester
+          .runAsync(() => _insertInboxTodo(db, id: 't', title: 'Buy milk')))!;
+      await tester.pumpWidget(_harness(db, todo: todo));
+      await _pumpFrames(tester, frames: 5);
+
+      await tester.ensureVisible(find.text('Set date'));
+      await tester.tap(find.text('Set date'));
+      await _pumpFrames(tester, frames: 10);
+      expect(find.text('Set due date'), findsOneWidget);
+
+      await tester.runAsync(() => db.todoDao.deleteOutcome('t'));
+      capture.clear();
+      await tester.tap(find.text('OK'));
+      await _pumpFrames(tester, frames: 10);
+      await tester.runAsync(() => pumpEventQueue());
+
+      expect(await tester.runAsync(() => db.todoDao.getTodo('t')), isNull);
+      expect(capture.forCollection(todosCollection), isEmpty);
+    });
+
+    testWidgets('a project picked after the Capture is deleted leaves no hint',
+        (tester) async {
+      final project = (await tester.runAsync(
+          () => _insertTag(db, id: 'p1', name: 'Home', type: 'project')))!;
+      final captured = (await tester
+          .runAsync(() => _insertCapture(db, id: 'x', title: 'Buy milk')))!;
+      await tester.pumpWidget(
+          _captureHarness(db, capture: captured, projectTags: [project]));
+      await _pumpFrames(tester, frames: 5);
+
+      await tester.ensureVisible(find.text('No project'));
+      await tester.tap(find.text('No project'));
+      await _pumpFrames(tester, frames: 10);
+      expect(find.text('Select project'), findsOneWidget);
+
+      await tester.runAsync(
+          () => (db.delete(db.captures)..where((c) => c.id.equals('x'))).go());
+      await tester.tap(find.text('Home'));
+      await _pumpFrames(tester, frames: 10);
+      await tester.runAsync(() => pumpEventQueue());
+
+      final hints =
+          await tester.runAsync(() => db.select(db.captureTags).get());
+      expect(hints, isEmpty);
     });
   });
 

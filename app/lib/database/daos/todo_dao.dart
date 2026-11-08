@@ -692,6 +692,23 @@ EXISTS (
     if (logChanged) attachedDatabase.notifyTimeLogsViewWrite();
   }
 
+  /// Runs [write] only if local storage holds Outcome [todoId] when the
+  /// transaction commits. The existence check and [write] share one
+  /// [GtdDatabase.capturing] transaction, so a delete cannot slip between them.
+  /// Returns whether the write landed; a skipped write authors no op and sends
+  /// no view notify. Surfaces use this instead of latching "subject missing"
+  /// themselves (#447).
+  Future<bool> writeIfOutcomePresent(
+    String todoId,
+    Future<void> Function() write,
+  ) {
+    return attachedDatabase.capturing(() async {
+      if (!await _todoRowExists(todoId)) return false;
+      await write();
+      return true;
+    });
+  }
+
   /// Transaction body of [setCurrentActionText]: the Action write and the
   /// `last_clarified_at` / `updated_at` stamp, encoded once. Runs inside the
   /// caller's transaction; the caller notifies after commit. [normalized] is
