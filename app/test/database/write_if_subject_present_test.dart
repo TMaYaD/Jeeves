@@ -92,22 +92,6 @@ void main() {
     });
   });
 
-  group('TodoDao.setCurrentActionTextIfActionless', () {
-    test('a deleted Outcome is not Actionless: no Action row is inserted',
-        () async {
-      await insertOutcome('o1');
-      await db.todoDao.deleteOutcome('o1');
-      capture.clear();
-
-      final wrote =
-          await db.todoDao.setCurrentActionTextIfActionless('o1', 'Book venue');
-
-      expect(wrote, isFalse);
-      expect(await db.select(db.actions).get(), isEmpty);
-      expect(capture.forCollection(todosCollection), isEmpty);
-    });
-  });
-
   group('CaptureDao.writeIfCapturePresent', () {
     test('runs the tag-hint write when the Capture exists', () async {
       await insertCapture('c1');

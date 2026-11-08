@@ -986,6 +986,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
         const SizedBox(height: 12),
         ProcessToHandlers(
           subject: subject,
+          titleAsActionOnWaitingFor: true,
           disabled: disabled,
           // On a Capture, Done is not a clarify-time destination — an Outcome
           // captured already-complete is a contradiction, and completing one
@@ -1001,7 +1002,8 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
           // coupling that used to live in [_onAfterRoute] for Next moved into
           // the dialog handler ([ProcessToHandlers._nextWithDialog]), so Next
           // here reports `nextActionDialog` and its title-mirror branch below no
-          // longer fires. Only `waitingFor` still mirrors from [_onAfterRoute].
+          // longer fires. Waiting For mirrors inside its routing write
+          // ([ProcessToHandlers.titleAsActionOnWaitingFor]).
           except: {
             if (_isCapture) ProcessAction.done,
           },
@@ -1072,38 +1074,13 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
       try {
         // Tapping a destination does not move focus, so the focus-loss trigger
         // has not fired for an edit made right up to the tap. Save it before
-        // yielding — and before the mirror below reads the title.
+        // yielding.
         await _saveOutcomeText();
-        // Title-as-action coupling for **Waiting For** only. Routing to Waiting
-        // For is intent-only and captures no phrase, so mirror the current
-        // title into the Action here so the row leaves with a defined one.
-        //
-        // Next is no longer handled here: with the dialog modifier on for both
-        // arms (issue #723), Next reports `nextActionDialog`, and its fallback
-        // (title-as-action, seeded from the *live* title) lives inside
-        // [ProcessToHandlers._nextWithDialog]. So this branch fires only for
-        // `waitingFor`.
-        //
-        // Only mirror when the Outcome is Actionless (no `current` Action
-        // row); otherwise the user has already written a deliberate phrase and
-        // we must not clobber it. The Action entity is the evidence, not the
-        // cursor (ADR-0001 story 3).
-        //
-        // On a Capture the mirror travels in the draft (see [_draft]) and is
-        // applied by clarifyCaptureToOutcome as it creates the Outcome, so
-        // there is nothing to write here either.
-        if (action == ProcessAction.waitingFor) {
-          final title = _titleCtrl?.text.trim() ?? '';
-          if (title.isNotEmpty) {
-            // One atomic call: the actionless check and the mirror write share
-            // a transaction, so a `current` Action landed by sync between the
-            // two can no longer be clobbered (issue #501).
-            await ref
-                .read(databaseProvider)
-                .todoDao
-                .setCurrentActionTextIfActionless(_subjectId, title);
-          }
-        }
+        // The title-as-action fallback for Waiting For no longer lives here:
+        // it is part of the routing transaction itself
+        // ([ProcessToHandlers.titleAsActionOnWaitingFor]), so it cannot land
+        // separately from the route (#709). Next's lives in
+        // [ProcessToHandlers._nextWithDialog].
       } catch (_) {
         _report(_kTextSaveFailedMessage);
       }

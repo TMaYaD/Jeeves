@@ -709,59 +709,7 @@ EXISTS (
     });
   }
 
-  /// The **atomic** actionless-mirror primitive (issue #501): check whether the
-  /// Outcome is Actionless and — only if it is — write [text] as its next
-  /// action, both inside **one** transaction. Returns `true` iff it wrote.
-  ///
-  /// The check reads the `current` Action via [ActionDao.getCurrentAction],
-  /// which runs on this transaction's executor (Drift zone routing), so a
-  /// `current` Action landed by sync cannot slip between the check and the
-  /// write. This is the single-call replacement for the read-then-write TOCTOU
-  /// the ClarifyCard title-mirror used to run across two awaits: an Outcome the
-  /// user has already given a deliberate phrase (a `current` Action exists) is
-  /// left untouched, never clobbered by a mirrored title.
-  ///
-  /// Write path: identical to [setCurrentActionText] on an Actionless Outcome —
-  /// the same Action write, stamped with one shared [ts], and the same
-  /// post-commit view-notifies. Skip path (a `current` Action exists): no
-  /// writes, no stamp, no convergence, no notify.
-  ///
-  /// An absent Outcome also returns `false` (checked in the same transaction):
-  /// no Action row is minted for a todo that is not in local storage.
-  ///
-  /// Blank [text] is a caller error (the mirror only fires with a non-blank
-  /// title), mirroring [ActionDao.setCurrentAction]'s contract.
-  Future<bool> setCurrentActionTextIfActionless(
-      String todoId, String text, {DateTime? now}) async {
-    final ts = (now ?? DateTime.now()).toUtc();
-    final normalized = text.trim();
-    if (normalized.isEmpty) {
-      throw ArgumentError.value(
-        text,
-        'text',
-        'setCurrentActionTextIfActionless requires non-blank text',
-      );
-    }
-    var logChanged = false;
-    final wrote = await attachedDatabase.capturing(() async {
-      if (!await _todoRowExists(todoId)) return false;
-      final current = await attachedDatabase.actionDao.getCurrentAction(todoId);
-      if (current != null) return false;
-      // Non-blank text here, so this never supersedes — logChanged stays false.
-      logChanged = await _applySetCurrentActionText(todoId, normalized, ts);
-      return true;
-    });
-    if (wrote) {
-      // See [setCurrentActionText]: view writes report changes()==0 (#342).
-      attachedDatabase.notifyTodosViewWrite();
-      attachedDatabase.notifyActionsViewWrite();
-      if (logChanged) attachedDatabase.notifyTimeLogsViewWrite();
-    }
-    return wrote;
-  }
-
-  /// Transaction body shared by [setCurrentActionText] and
-  /// [setCurrentActionTextIfActionless]: the Action write and the
+  /// Transaction body of [setCurrentActionText]: the Action write and the
   /// `last_clarified_at` / `updated_at` stamp, encoded once. Runs inside the
   /// caller's transaction; the caller notifies after commit. [normalized] is
   /// already trimmed — blank makes the Outcome Actionless (the blank→NULL
@@ -1068,8 +1016,8 @@ AND (
   ///
   /// | `to`         | clarified | intent  | done_at | current Action           |
   /// |--------------|-----------|---------|---------|--------------------------|
-  /// | `nextAction` | true      | 'next'  | clear   | set if `actionText`      |
-  /// | `waitingFor` | true      | 'next'  | clear   | set if `actionText`      |
+  /// | `nextAction` | true      | 'next'  | clear   | set if `actionText`, else set if Actionless and `actionTextIfActionless` |
+  /// | `waitingFor` | true      | 'next'  | clear   | same as `nextAction`     |
   /// | `maybe`      | true      | 'maybe' | clear   | leave                    |
   /// | `done`       | true      | leave   | now     | completed                |
   /// | `trash`      | true      | 'trash' | leave   | leave                    |
@@ -1101,12 +1049,28 @@ AND (
     String todoId, {
     required RoutingKind to,
     String? actionText,
+    String? actionTextIfActionless,
     Set<String>? personTagIds,
     String? userId,
     DateTime? now,
   }) async {
+    if (actionTextIfActionless != null) {
+      if (to != RoutingKind.nextAction && to != RoutingKind.waitingFor) {
+        throw ArgumentError.value(to, 'to',
+            'actionTextIfActionless is only valid for nextAction / waitingFor');
+      }
+      if (actionText != null) {
+        throw ArgumentError(
+            'actionText and actionTextIfActionless are mutually exclusive');
+      }
+      if (actionTextIfActionless.trim().isEmpty) {
+        throw ArgumentError.value(actionTextIfActionless,
+            'actionTextIfActionless', 'requires non-blank text');
+      }
+    }
     final ts = (now ?? DateTime.now()).toUtc();
     final tsIso = ts.toIso8601String();
+    var wroteFallbackAction = false;
     // Only the Next / Waiting For arms carry a next-action phrase, and only
     // when the caller passes one; those are the arms that write the Action row.
     // An absent [actionText] leaves the Action untouched.
@@ -1189,6 +1153,20 @@ AND (
         }
       }
 
+      if (actionTextIfActionless != null) {
+        // Guarded fallback (the title-as-action mirror): in this same
+        // transaction, so a failed Action write rolls the route back (#709).
+        // An existing `current` Action — deliberate or just synced — wins.
+        final current =
+            await attachedDatabase.actionDao.getCurrentAction(todoId);
+        if (current == null) {
+          await attachedDatabase.actionDao.applySetCurrentAction(
+              todoId, actionTextIfActionless.trim(),
+              ts: ts);
+          wroteFallbackAction = true;
+        }
+      }
+
       if (to == RoutingKind.done) {
         // Achieving the Outcome closes the current Action (ADR-0001 story 4) —
         // the same cascade markDone runs, sharing one apply-variant.
@@ -1216,7 +1194,7 @@ AND (
     // start of a new planning day (#342). Person-tag edits also touch
     // `todo_tags`, so refresh those watchers too.
     attachedDatabase.notifyTodosViewWrite(includeTodoTags: personTagIds != null);
-    if (touchesAction || actionTerminated) {
+    if (touchesAction || actionTerminated || wroteFallbackAction) {
       attachedDatabase.notifyActionsViewWrite();
     }
     // A supersede or completion in the cascade closes the current Action's open
