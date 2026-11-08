@@ -276,6 +276,8 @@ Widget _harness(
   // Stream feeding `taskDetailTodoProvider` — the card's live subject binding
   // on the re-clarify surface. Same rationale as `taskTagsStream`.
   Stream<Todo?>? todoStream,
+  // The people the Waiting For picker offers.
+  List<Tag> personTags = const <Tag>[],
 }) {
   return ProviderScope(
     overrides: [
@@ -285,7 +287,7 @@ Widget _harness(
       taskDetailTodoProvider(todo.id).overrideWith(
         (_) => todoStream ?? Stream.value(todo),
       ),
-      personTagsProvider.overrideWith((_) => Stream.value(const <Tag>[])),
+      personTagsProvider.overrideWith((_) => Stream.value(personTags)),
       contextTagsProvider.overrideWith((_) => Stream.value(contextTags)),
       projectTagsProvider.overrideWith((_) => Stream.value(projectTags)),
       taskTagsProvider(todo.id).overrideWith(
@@ -1776,6 +1778,64 @@ void main() {
       await _pumpFrames(tester, frames: 5);
 
       expect(titleText(tester), 'Buy milk');
+    });
+  });
+
+  group('ClarifyCard — Waiting For routes with the title-as-action fallback '
+      'in one transaction (#709)', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    testWidgets(
+        'a failed Action write leaves the route unwritten, shows the failure '
+        'and does not advance the host', (tester) async {
+      final todo = await _insertInboxTodo(db, id: 'wf709', title: 'Chase quote');
+      await db.tagDao.upsertTag(TagsCompanion(
+        id: const Value('alice'),
+        name: const Value('Alice'),
+        type: const Value('person'),
+        userId: const Value(_userId),
+      ));
+      await db.customStatement(
+        'CREATE TRIGGER actions_insert_fails BEFORE INSERT ON actions '
+        "BEGIN SELECT RAISE(ABORT, 'actions is unwritable'); END",
+      );
+      final fired = <ProcessAction>[];
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        personTags: [
+          Tag(
+            id: 'alice',
+            name: 'Alice',
+            type: 'person',
+            userId: _userId,
+          ),
+        ],
+        onAfterRoute: (a) async => fired.add(a),
+      ));
+      await _pumpFrames(tester, frames: 5);
+
+      await _scrollAndTap(tester, 'Waiting For');
+      await _pumpFrames(tester, frames: 10);
+      await tester.tap(find.text('Alice'));
+      await _pumpFrames(tester, frames: 5);
+      await tester.tap(find.widgetWithText(FilledButton, 'Done'));
+      await _pumpFrames(tester);
+
+      final row = await db.todoDao.getTodo('wf709');
+      expect(row?.lastClarifiedAt, todo.lastClarifiedAt,
+          reason: 'the route and the Action commit together or not at all');
+      expect(await db.todoDao.getPersonTagIdsForTodo('wf709'), isEmpty);
+      expect(await db.actionDao.getCurrentAction('wf709'), isNull);
+      expect(find.text('Operation failed. Please try again.'),
+          findsOneWidget);
+      expect(find.textContaining('Routed, but'), findsNothing,
+          reason: 'the route did not land, so the partial-success text is a lie');
+      expect(fired, isEmpty,
+          reason: 'the review must not advance past a write that did not land');
     });
   });
 }
