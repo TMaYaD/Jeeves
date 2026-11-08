@@ -315,6 +315,41 @@ void main() {
               'earns the "worked on" stamp too.');
     });
 
+    group('Stale stamp at close (#704)', () {
+      Future<void> clarifyAt(String id, DateTime at) =>
+          (db.update(db.todos)..where((t) => t.id.equals(id))).write(
+              TodosCompanion(lastClarifiedAt: Value(at.toUtc())));
+
+      Future<Set<String>> needsReviewIds() async =>
+          (await db.todoDao.getNeedsReview()).map((t) => t.id).toSet();
+
+      test(
+          'an Outcome re-clarified during the session is not re-armed Stale '
+          'by the close', () async {
+        await _insertTodo(db, id: 'R', title: 'Re-clarified');
+        await _insertTodo(db, id: 'D', title: 'Dismissed sheet');
+        await _insertTodo(db, id: 'U', title: 'Untouched');
+        final sessionId = await db.focusSessionDao.openSession(
+          userId: _userId,
+          taskIds: ['R', 'D'],
+          now: DateTime(2026, 5, 1, 9, 0),
+        );
+        await clarifyAt('R', DateTime(2026, 5, 1, 11, 0)); // verdict
+        await db.focusSessionDao.reviewAndCloseSession(
+          sessionId: sessionId,
+          dispositions: {'R': 'leave', 'D': 'leave'},
+          now: DateTime(2026, 5, 1, 17, 0),
+        );
+
+        final ids = await needsReviewIds();
+        expect(ids, isNot(contains('R')),
+            reason: 'Re-clarified in-session: not Stale.');
+        expect(ids, contains('D'),
+            reason: 'Not re-clarified: still armed Stale for the next DPR.');
+        expect(ids, isNot(contains('U')));
+      });
+    });
+
     test(
         'a mix of Plan + off-Plan dispositions closes cleanly and routes each '
         'to the correct home', () async {

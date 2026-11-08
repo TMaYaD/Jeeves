@@ -551,36 +551,35 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       // TimeLog for this session). This marks them as "worked on in a session"
       // for the re-clarification predicate; off-Plan engaged Outcomes were
       // worked on too, so they earn the stamp.
+      //
+      // An Outcome re-clarified since the session started (the verdict on the
+      // re-clarify sheet after completing its Action) is by definition not
+      // Stale, and a stamp newer than its last_clarified_at would re-arm the
+      // Stale predicate, so those are skipped.
+      final sessionStartCanonical =
+          encodeInstant(DateTime.parse(session.startedAt).toUtc())!;
+      const stampableWhere = 'WHERE id IN ('
+          '  SELECT task_id FROM focus_session_tasks '
+          '  WHERE focus_session_id = ?'
+          '  UNION '
+          '  SELECT task_id FROM time_logs '
+          '  WHERE focus_session_id = ?'
+          ') AND done_at IS NULL AND user_id = ? '
+          'AND (last_clarified_at IS NULL OR last_clarified_at < ?)';
+      final stampVariables = [
+        Variable(sessionId),
+        Variable(sessionId),
+        Variable(session.userId),
+        Variable(sessionStartCanonical),
+      ];
       final stampedRows = await customSelect(
-        'SELECT id FROM todos WHERE id IN ('
-        '  SELECT task_id FROM focus_session_tasks '
-        '  WHERE focus_session_id = ?'
-        '  UNION '
-        '  SELECT task_id FROM time_logs '
-        '  WHERE focus_session_id = ?'
-        ') AND done_at IS NULL AND user_id = ?',
-        variables: [
-          Variable(sessionId),
-          Variable(sessionId),
-          Variable(session.userId),
-        ],
+        'SELECT id FROM todos $stampableWhere',
+        variables: stampVariables,
         readsFrom: {todos, focusSessionTasks, timeLogs},
       ).get();
       await customUpdate(
-        'UPDATE todos SET last_next_action_completion_at = ? '
-        'WHERE id IN ('
-        '  SELECT task_id FROM focus_session_tasks '
-        '  WHERE focus_session_id = ?'
-        '  UNION '
-        '  SELECT task_id FROM time_logs '
-        '  WHERE focus_session_id = ?'
-        ') AND done_at IS NULL AND user_id = ?',
-        variables: [
-          Variable(tsCanonical),
-          Variable(sessionId),
-          Variable(sessionId),
-          Variable(session.userId),
-        ],
+        'UPDATE todos SET last_next_action_completion_at = ? $stampableWhere',
+        variables: [Variable(tsCanonical), ...stampVariables],
         updates: {todos},
         updateKind: UpdateKind.update,
       );
