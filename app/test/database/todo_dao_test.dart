@@ -6,6 +6,8 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/todo.dart';
+import 'package:jeeves/sync/domain_op_capture.dart'
+    show RecordingDomainOpCapture;
 import '../test_helpers.dart';
 
 GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
@@ -67,6 +69,53 @@ void main() {
   // `setCurrentActionTextIfActionless` (including #501's TOCTOU skip path) and for
   // `deleteOutcome`'s cascade onto `actions`, so they live on here, beside the
   // rest of TodoDao's write primitives.
+  group('TodoDao — writes against an absent Outcome report false (#444)', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    test('applyRouting writes nothing and returns false', () async {
+      await db.tagDao.upsertTag(TagsCompanion(
+        id: const Value('alice'),
+        name: const Value('Alice'),
+        type: const Value('person'),
+        userId: const Value(_userId),
+      ));
+
+      expect(
+        await db.todoDao.applyRouting('gone',
+            to: RoutingKind.waitingFor,
+            actionText: 'Call Alice',
+            personTagIds: {'alice'},
+            userId: _userId),
+        isFalse,
+      );
+      expect(await db.select(db.actions).get(), isEmpty);
+      expect(await db.select(db.todoTags).get(), isEmpty);
+    });
+
+    test('stampLastClarifiedAt and setCurrentActionTextIfActionless return false',
+        () async {
+      expect(await db.todoDao.stampLastClarifiedAt('gone'), isFalse);
+      expect(
+        await db.todoDao.setCurrentActionTextIfActionless('gone', 'Title'),
+        isFalse,
+      );
+      expect(await db.select(db.actions).get(), isEmpty);
+    });
+
+    test('a present Outcome returns true', () async {
+      await _insertTodo(db, id: 'o1', title: 'Outcome o1');
+
+      expect(
+        await db.todoDao.applyRouting('o1', to: RoutingKind.nextAction),
+        isTrue,
+      );
+      expect(await db.todoDao.stampLastClarifiedAt('o1'), isTrue);
+    });
+  });
+
   group('TodoDao — setCurrentActionTextIfActionless', () {
     late GtdDatabase db;
 
@@ -1150,6 +1199,47 @@ void main() {
       expect(after2?.intent, after1?.intent);
       expect(after2?.clarified, after1?.clarified);
       expect(after2?.doneAt, after1?.doneAt);
+    });
+  });
+
+  group('TodoDao — setPersonTagsAndStamp', () {
+    late RecordingDomainOpCapture capture;
+    late GtdDatabase db;
+
+    setUp(() {
+      capture = RecordingDomainOpCapture();
+      db = GtdDatabase(NativeDatabase.memory(), opCapture: capture);
+    });
+    tearDown(() async => db.close());
+
+    test('on an existing Outcome it writes and reports true', () async {
+      await _insertTodo(db, id: 's1', title: 'Task');
+      await _insertPersonTag(db, id: 'alice', name: 'Alice');
+
+      final landed =
+          await db.todoDao.setPersonTagsAndStamp('s1', {'alice'}, _userId);
+
+      expect(landed, isTrue);
+      expect(await db.todoDao.getPersonTagIdsForTodo('s1'), {'alice'});
+      expect((await db.todoDao.getTodo('s1'))!.lastClarifiedAt, isNotNull);
+    });
+
+    test('on a deleted Outcome it writes nothing, records no ops, '
+        'and reports false', () async {
+      await _insertTodo(db, id: 's2', title: 'Task');
+      await _insertPersonTag(db, id: 'alice', name: 'Alice');
+      await db.todoDao.deleteOutcome('s2');
+      capture.clear();
+
+      final landed =
+          await db.todoDao.setPersonTagsAndStamp('s2', {'alice'}, _userId);
+
+      expect(landed, isFalse);
+      final links = await (db.select(db.todoTags)
+            ..where((tt) => tt.todoId.equals('s2')))
+          .get();
+      expect(links, isEmpty);
+      expect(capture.recorded, isEmpty);
     });
   });
 
