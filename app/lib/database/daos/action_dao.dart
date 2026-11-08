@@ -70,7 +70,7 @@
 /// the `apply*` transaction-body variants (package-internal), which run inside
 /// the caller's transaction and defer notification to the caller (so watchers
 /// never re-read pre-commit state) — see `TodoDao.setCurrentActionText` /
-/// `setCurrentActionTextIfActionless` / `applyRouting` / `deleteOutcome`.
+/// `applyRouting` / `deleteOutcome`.
 library;
 
 import 'package:drift/drift.dart';

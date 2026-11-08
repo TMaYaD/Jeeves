@@ -117,10 +117,10 @@ class _BlockingNotifier extends TaskDetailNotifier {
   _BlockingNotifier(GtdDatabase db, String todoId)
       : super(db: db, userId: _userId, todoId: todoId);
 
-  final gate = Completer<void>();
+  final gate = Completer<bool>();
 
   @override
-  Future<void> setPersonTags(Set<String> tagIds) => gate.future;
+  Future<bool> setPersonTags(Set<String> tagIds) => gate.future;
 }
 
 /// Counts route pops so a test can assert how many routes came off the stack,
@@ -283,6 +283,40 @@ void main() {
 
       expect(observed.result, isEmpty);
       expect(await db.todoDao.getPersonTagIdsForTodo('t2'), isEmpty);
+    });
+
+    testWidgets(
+        'an Outcome deleted while the picker is open writes nothing and '
+        'closes as a cancel', (tester) async {
+      await _insertTodo(db, id: 't6');
+      await _insertPersonTag(db, id: 'alice', name: 'Alice');
+      final observed = _Observed();
+
+      await tester.pumpWidget(_harness(
+        db,
+        observed: observed,
+        todoId: 't6',
+        personTags: [_personTag('alice', 'Alice')],
+      ));
+      await _openPicker(tester);
+      await tester.tap(find.text('Alice'));
+      await tester.pumpAndSettle();
+
+      await tester.runAsync(() => db.todoDao.deleteOutcome('t6'));
+      await _tapDone(tester);
+
+      expect(observed.called, isTrue);
+      expect(observed.result, isNull);
+      expect(find.widgetWithText(FilledButton, 'Done'), findsNothing);
+      // A null result keeps the caller page open: it is still the visible
+      // route, and the harness root underneath it is not.
+      expect(observed.callerRouteWasCurrent, isTrue);
+      expect(find.text('Waiting For'), findsOneWidget);
+      expect(find.text('Failed to save. Please try again.'), findsNothing);
+      final orphans = await tester.runAsync(() => (db.select(db.todoTags)
+            ..where((tt) => tt.todoId.equals('t6')))
+          .get());
+      expect(orphans, isEmpty);
     });
 
     testWidgets('cancelling returns null and writes nothing', (tester) async {
@@ -451,7 +485,7 @@ void main() {
       expect(observed.called, isFalse);
 
       // Releasing the write lets the sheet finish the way it always would.
-      blocking.gate.complete();
+      blocking.gate.complete(true);
       await tester.pumpAndSettle();
 
       expect(find.byType(PersonTagPickerSheet), findsNothing);

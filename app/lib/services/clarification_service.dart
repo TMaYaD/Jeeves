@@ -30,17 +30,25 @@ import '../models/action_draft.dart';
 import '../models/todo.dart' show RoutingKind;
 import '../providers/database_provider.dart';
 
+/// Thrown by a Capture write whose Capture is no longer in local storage. The
+/// check runs inside the write's transaction, which the throw rolls back.
+/// Typed so [ProcessToHandlers] can treat a vanished Capture as "did not land"
+/// while every other failure still surfaces; extends [StateError] so callers
+/// that catch that keep working.
+class CaptureNotFoundError extends StateError {
+  CaptureNotFoundError(String captureId) : super('Capture $captureId not found');
+}
+
 /// Interface for every write the clarification UI flows perform, plus the
 /// reads those flows need to guard their writes (row-existence pre-checks,
 /// person-tag pre-seeding for the Waiting For picker).
 abstract class ClarificationService {
-  /// Whether the Capture [captureId] still exists. Capture clarify surfaces
-  /// (standalone inbox-clarify, both ceremonies) load a snapshot of Inbox
-  /// Captures and can lose a row between render and tap — a pull or another
-  /// device may hard-delete it. The routing write is a multi-statement
-  /// transaction whose affected-rows count cannot signal a missing subject;
-  /// callers pre-check here so they don't advance cursors or record phantom
-  /// routings for a vanished Capture.
+  /// Whether the Capture [captureId] still exists right now. Capture clarify
+  /// surfaces load a snapshot of Inbox Captures and can lose a row between
+  /// render and tap — a pull or another device may hard-delete it. This is a
+  /// snapshot read for navigation decisions, **not** a write guard: the row can
+  /// vanish after it returns. Capture writes check inside their own
+  /// transaction and throw [CaptureNotFoundError].
   Future<bool> captureExists(String captureId);
 
   /// Clarifies the Capture [captureId] into a **new** Outcome (ADR-0006:
@@ -175,12 +183,11 @@ abstract class ClarificationService {
   /// Capture still claims.
   Future<void> completeCaptureClarification(String captureId, {DateTime? now});
 
-  /// Whether the clarify subject still exists. Snapshot-based callsites
-  /// (inbox-clarify, periodic review) can lose a row between render and
-  /// tap — a pull or another device may hard-delete it. The routing write is a
-  /// multi-statement transaction whose affected-rows count cannot signal a
-  /// missing subject; callers pre-check here so they don't advance cursors or
-  /// record phantom routings for a vanished row.
+  /// Whether the clarify subject still exists right now. A snapshot read for
+  /// navigation decisions (do not open a card for a vanished row) — **not** a
+  /// write guard: the row can vanish after this returns. Writes report whether
+  /// they landed instead ([clarifyToOutcome], [stampClarified],
+  /// [CaptureNotFoundError]).
   Future<bool> exists(String id);
 
   /// IDs of the person-typed tags currently attached to [id]. Used to
@@ -234,10 +241,20 @@ abstract class ClarificationService {
   /// [personTagIds], when provided, replaces the person-tag set (requires
   /// [userId]); person tags are otherwise never touched — Intent is
   /// orthogonal to delegation.
-  Future<void> clarifyToOutcome(
+  ///
+  /// [actionTextIfActionless] is the **title-as-action fallback** (CONTEXT.md
+  /// § Action): for Next / Waiting For, the text becomes the current Action
+  /// only while the Outcome is Actionless, in the same transaction as the
+  /// route, so a failed Action write leaves the route unapplied (#709).
+  /// Mutually exclusive with [actionText]; must be non-blank.
+  /// Returns whether the routing landed. The Outcome's presence is checked
+  /// inside the write's own transaction; a vanished Outcome writes nothing and
+  /// returns `false`.
+  Future<bool> clarifyToOutcome(
     String id, {
     required RoutingKind to,
     String? actionText,
+    String? actionTextIfActionless,
     Set<String>? personTagIds,
     String? userId,
   });
@@ -259,27 +276,9 @@ abstract class ClarificationService {
   Future<void> completeCurrentAction(String id);
 
   /// The "Keep" / "still relevant" verdict: stamps `last_clarified_at`
-  /// only, leaving every other column untouched.
-  Future<void> stampClarified(String id);
-
-  /// Applies the **title-as-action fallback** to [id]: writes [title] as the
-  /// Outcome's current Action, but **only** while the Outcome is Actionless.
-  /// Returns whether it wrote.
-  ///
-  /// The policy (CONTEXT.md § Action): when a surface routes an Outcome to
-  /// Next or Waiting For and the user supplied no next-action phrase, the
-  /// Outcome's own title stands in — so the row never lands on Next
-  /// Actionless, where it would re-arm the re-clarification queue on every
-  /// subsequent planning pass. Actionless-guarded so a deliberate phrase the
-  /// user already wrote is never clobbered; [title] must be non-blank
-  /// (a blank one has nothing to stand in *as*, and the caller stalls
-  /// instead).
-  ///
-  /// Named on this seam rather than reached for on the DAO so the clarify
-  /// surfaces keep delegating every write here. The check and the write share
-  /// one transaction (issue #501), so a `current` Action landed by sync
-  /// between them cannot be overwritten.
-  Future<bool> mirrorTitleIfActionless(String id, String title);
+  /// only, leaving every other column untouched. Returns whether the stamp
+  /// landed (`false` when the Outcome is no longer in local storage).
+  Future<bool> stampClarified(String id);
 
   /// Persists attribute edits made on a clarify card (title / notes /
   /// energy / time estimate / due date). Passing `null` for a typed
@@ -346,7 +345,7 @@ class DaoClarificationService implements ClarificationService {
       // Outcome and a dangling `capture_outcomes` link (a fatal FK violation on
       // Postgres). The throw rolls the whole transaction back.
       if (await _db.captureDao.getCapture(captureId) == null) {
-        throw StateError('Capture $captureId not found');
+        throw CaptureNotFoundError(captureId);
       }
       // Overwrite: drop any Outcome a prior route of this Capture carved
       // (Ceremony Back → re-tap).
@@ -388,7 +387,7 @@ class DaoClarificationService implements ClarificationService {
       // Require the Capture at commit time (see clarifyCaptureToOutcome): a
       // discard must not silently "succeed" against a row that already vanished.
       if (await _db.captureDao.getCapture(captureId) == null) {
-        throw StateError('Capture $captureId not found');
+        throw CaptureNotFoundError(captureId);
       }
       await _dropOwnOutcomes(captureId);
       await _db.captureDao.stampClarified(captureId, at: now);
@@ -456,7 +455,7 @@ class DaoClarificationService implements ClarificationService {
       // vanished between render and tap must not mint an orphan Outcome behind
       // a dangling link.
       if (await _db.captureDao.getCapture(captureId) == null) {
-        throw StateError('Capture $captureId not found');
+        throw CaptureNotFoundError(captureId);
       }
       // Same load-bearing order as clarifyCaptureToOutcome: columns first so
       // the birth Action can seed from them (D3).
@@ -497,7 +496,7 @@ class DaoClarificationService implements ClarificationService {
   }) async {
     await _db.capturing(() async {
       if (await _db.captureDao.getCapture(captureId) == null) {
-        throw StateError('Capture $captureId not found');
+        throw CaptureNotFoundError(captureId);
       }
       // The Outcome is the *other* side of a snapshot-driven pick, so it can
       // vanish the same way. Guard it too rather than writing a link whose FK
@@ -527,7 +526,7 @@ class DaoClarificationService implements ClarificationService {
   }) async {
     await _db.capturing(() async {
       if (await _db.captureDao.getCapture(captureId) == null) {
-        throw StateError('Capture $captureId not found');
+        throw CaptureNotFoundError(captureId);
       }
       await _db.captureDao.stampClarified(captureId, at: now);
     });
@@ -563,10 +562,11 @@ class DaoClarificationService implements ClarificationService {
       );
 
   @override
-  Future<void> clarifyToOutcome(
+  Future<bool> clarifyToOutcome(
     String id, {
     required RoutingKind to,
     String? actionText,
+    String? actionTextIfActionless,
     Set<String>? personTagIds,
     String? userId,
   }) =>
@@ -574,6 +574,7 @@ class DaoClarificationService implements ClarificationService {
         id,
         to: to,
         actionText: actionText,
+        actionTextIfActionless: actionTextIfActionless,
         personTagIds: personTagIds,
         userId: userId,
       );
@@ -586,12 +587,8 @@ class DaoClarificationService implements ClarificationService {
       _db.actionDao.completeCurrentAction(id);
 
   @override
-  Future<void> stampClarified(String id) =>
+  Future<bool> stampClarified(String id) =>
       _db.todoDao.stampLastClarifiedAt(id);
-
-  @override
-  Future<bool> mirrorTitleIfActionless(String id, String title) =>
-      _db.todoDao.setCurrentActionTextIfActionless(id, title);
 
   @override
   Future<void> updateFields(

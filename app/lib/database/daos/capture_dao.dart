@@ -509,6 +509,21 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
 
   // --- Tag hints ------------------------------------------------------------
 
+  /// Runs [write] only if local storage holds Capture [captureId] when the
+  /// transaction commits. The twin of [TodoDao.writeIfOutcomePresent]: check
+  /// and write share one [GtdDatabase.capturing] transaction, and the result
+  /// says whether the write landed (#447).
+  Future<bool> writeIfCapturePresent(
+    String captureId,
+    Future<void> Function() write,
+  ) {
+    return attachedDatabase.capturing(() async {
+      if (await getCapture(captureId) == null) return false;
+      await write();
+      return true;
+    });
+  }
+
   /// Attach a tag hint to a Capture (idempotent). Tag hints never stamp
   /// anything and are not Organising (issue #184).
   Future<void> assignTagHint(

@@ -70,14 +70,15 @@ class _FailingClarificationService extends DaoClarificationService {
   _FailingClarificationService(super.db);
 
   @override
-  Future<void> clarifyToOutcome(
+  Future<bool> clarifyToOutcome(
     String id, {
     required RoutingKind to,
     String? actionText,
+    String? actionTextIfActionless,
     Set<String>? personTagIds,
     String? userId,
   }) =>
-      Future<void>.error(StateError('write failed'));
+      Future<bool>.error(StateError('write failed'));
 
   // Discarding a Capture is a different method on a different write path, so
   // failing `clarifyToOutcome` alone would leave it uncovered.
@@ -86,18 +87,18 @@ class _FailingClarificationService extends DaoClarificationService {
       Future<void>.error(StateError('write failed'));
 }
 
-/// A [ClarificationService] whose subject disappeared between render and
-/// commit — the snapshot-staleness case [_subjectExists] guards.
-class _VanishedClarificationService extends DaoClarificationService {
-  _VanishedClarificationService(super.db);
+/// A [ClarificationService] whose existence reads always answer "still
+/// there" — the exact #444 window, where a pre-check passes and the row is gone
+/// by the time the write runs. Tests delete the real row; this fake only makes
+/// sure no existence read can mask a write that fails to notice the deletion.
+class _StaleExistsClarificationService extends DaoClarificationService {
+  _StaleExistsClarificationService(super.db);
 
   @override
-  Future<bool> exists(String id) async => false;
+  Future<bool> exists(String id) async => true;
 
-  // `_subjectExists` dispatches on subject kind, so the Capture branch needs
-  // its own stub — overriding `exists` alone leaves it live.
   @override
-  Future<bool> captureExists(String captureId) async => false;
+  Future<bool> captureExists(String captureId) async => true;
 }
 
 Widget _harness(
@@ -161,6 +162,7 @@ Widget _captureHarness(
   Future<void> Function(ProcessAction)? onAfterRoute,
   ClarificationService? clarificationService,
   List<Tag> personTags = const [],
+  Set<ProcessAction> include = const {},
 }) {
   return ProviderScope(
     overrides: [
@@ -178,6 +180,7 @@ Widget _captureHarness(
                 capture: capture,
                 draft: () => ClarifyDraft(title: capture.title),
               ),
+              include: include,
               except: const {ProcessAction.nextActionDialog},
               onAfterRoute: onAfterRoute,
             ),
@@ -567,7 +570,7 @@ void main() {
         db,
         todo: todo,
         personTags: [_personTag('alice', 'Alice')],
-        clarificationService: _VanishedClarificationService(db),
+        clarificationService: _StaleExistsClarificationService(db),
         onAfterRoute: (_) async => afterCount++,
       ));
 
@@ -575,19 +578,22 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Alice'));
       await tester.pumpAndSettle();
+      // The row vanishes while the picker is open.
+      await (db.delete(db.todos)..where((t) => t.id.equals('wf3'))).go();
       await tester.tap(find.widgetWithText(FilledButton, 'Done'));
       await tester.pumpAndSettle();
 
       expect(await db.todoDao.getPersonTagIdsForTodo('wf3'), isEmpty);
-      final row = await db.todoDao.getTodo('wf3');
-      expect(row?.lastClarifiedAt, isNull);
+      expect(await db.select(db.actions).get(), isEmpty);
+      expect(find.byType(SnackBar), findsNothing);
+      expect(await db.todoDao.getTodo('wf3'), isNull);
       expect(afterCount, 0);
     });
 
     testWidgets('a Capture that vanished mid-pick carves no Outcome',
         (tester) async {
-      // The Capture branch of `_subjectExists` routes through `captureExists`,
-      // so it needs its own coverage — the Outcome test above cannot reach it.
+      // The Capture write checks inside its own transaction and throws, which
+      // the bar reads as "did not land"; the Outcome test above cannot reach it.
       final capture = await _insertCapture(db, id: 'wfc3');
       await _insertPersonTag(db, id: 'alice', name: 'Alice');
       var afterCount = 0;
@@ -595,7 +601,7 @@ void main() {
         db,
         capture: capture,
         personTags: [_personTag('alice', 'Alice')],
-        clarificationService: _VanishedClarificationService(db),
+        clarificationService: _StaleExistsClarificationService(db),
         onAfterRoute: (_) async => afterCount++,
       ));
 
@@ -603,12 +609,15 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Alice'));
       await tester.pumpAndSettle();
+      await (db.delete(db.captures)..where((c) => c.id.equals('wfc3'))).go();
       await tester.tap(find.widgetWithText(FilledButton, 'Done'));
       await tester.pumpAndSettle();
 
       expect(await db.select(db.todos).get(), isEmpty);
       expect(await db.select(db.todoTags).get(), isEmpty);
-      expect((await db.captureDao.getCapture('wfc3'))!.clarifiedAt, isNull);
+      expect(await db.select(db.captureOutcomes).get(), isEmpty);
+      expect(find.byType(SnackBar), findsNothing,
+          reason: 'a vanished Capture is a silent skip, not a failed save');
       expect(afterCount, 0);
     });
 
@@ -668,6 +677,84 @@ void main() {
       );
       expect((await db.captureDao.getCapture('wfc2'))!.clarifiedAt, isNotNull);
       expect(afterArg, ProcessAction.waitingFor);
+    });
+  });
+
+  group('ProcessToHandlers — a write that finds its subject gone (#444)', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    testWidgets('Next with the dialog: row deleted while it is open',
+        (tester) async {
+      final todo = await _insertTodo(db, id: 'dl1');
+      var afterCount = 0;
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        clarificationService: _StaleExistsClarificationService(db),
+        onAfterRoute: (_) async => afterCount++,
+      ));
+
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.descendant(
+          of: find.byType(NextActionDialog),
+          matching: find.byType(TextField),
+        ),
+        'Draft proposal',
+      );
+      await (db.delete(db.todos)..where((t) => t.id.equals('dl1'))).go();
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+
+      expect(afterCount, 0);
+      expect(await db.select(db.actions).get(), isEmpty,
+          reason: 'no Action may be minted for an Outcome that is gone');
+      expect(find.byType(SnackBar), findsNothing);
+    });
+
+    testWidgets('Someday on a Capture deleted before the tap', (tester) async {
+      final capture = await _insertCapture(db, id: 'dlc1');
+      var afterCount = 0;
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: capture,
+        clarificationService: _StaleExistsClarificationService(db),
+        onAfterRoute: (_) async => afterCount++,
+      ));
+
+      await (db.delete(db.captures)..where((c) => c.id.equals('dlc1'))).go();
+      await tester.tap(find.text('Someday'));
+      await tester.pumpAndSettle();
+
+      expect(afterCount, 0);
+      expect(await db.select(db.todos).get(), isEmpty);
+      expect(await db.select(db.captureOutcomes).get(), isEmpty);
+      expect(find.byType(SnackBar), findsNothing,
+          reason: 'a vanished Capture is a silent skip, not a failed save');
+    });
+
+    testWidgets('Done with this Capture on a Capture deleted before the tap',
+        (tester) async {
+      final capture = await _insertCapture(db, id: 'dlc2');
+      var afterCount = 0;
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: capture,
+        include: const {ProcessAction.completeCapture},
+        clarificationService: _StaleExistsClarificationService(db),
+        onAfterRoute: (_) async => afterCount++,
+      ));
+
+      await (db.delete(db.captures)..where((c) => c.id.equals('dlc2'))).go();
+      await tester.tap(find.text('Done with this Capture'));
+      await tester.pumpAndSettle();
+
+      expect(afterCount, 0);
+      expect(find.byType(SnackBar), findsNothing);
     });
   });
 
@@ -1045,6 +1132,37 @@ void main() {
     });
 
     testWidgets(
+        'blank Save whose Action write fails leaves the route unwritten and '
+        'the item unresolved (#709)', (tester) async {
+      final todo = await _insertTodo(db, id: 'bs709', title: 'Call the dentist');
+      await db.customStatement(
+        'CREATE TRIGGER actions_insert_fails BEFORE INSERT ON actions '
+        "BEGIN SELECT RAISE(ABORT, 'actions is unwritable'); END",
+      );
+      final fired = <ProcessAction>[];
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        onAfterRoute: (a) async => fired.add(a),
+      ));
+
+      await tester.tap(find.text('Next Action'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+
+      final row = await db.todoDao.getTodo('bs709');
+      expect(row?.intent, todo.intent,
+          reason: 'the route and the Action commit together or not at all');
+      expect(row?.lastClarifiedAt, todo.lastClarifiedAt);
+      expect(await db.actionDao.getCurrentAction('bs709'), isNull);
+      expect(find.text('Operation failed. Please try again.'),
+          findsOneWidget);
+      expect(fired, isEmpty,
+          reason: 'the review must not advance past a write that did not land');
+    });
+
+    testWidgets(
         'blank Save on an Outcome that already has an Action routes without '
         'clobbering the phrase', (tester) async {
       // The fallback is Actionless-only. Clearing the field is not the
@@ -1111,7 +1229,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(tester.takeException(), isNull,
-          reason: 'setCurrentActionTextIfActionless throws on blank text — the '
+          reason: 'the fallback throws on blank text — the '
               'caller must guard rather than let an ArgumentError escape');
       final row = await db.todoDao.getTodo('bs3');
       expect(row?.lastClarifiedAt, isNull, reason: 'no route landed');
