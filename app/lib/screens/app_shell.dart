@@ -7,6 +7,7 @@ import '../providers/focus_session_planning_provider.dart';
 import '../providers/inbox_provider.dart';
 import '../providers/gtd_lists_provider.dart';
 import '../providers/sync_status_provider.dart';
+import '../providers/tag_filter_provider.dart';
 import '../providers/tags_provider.dart';
 import '../widgets/app_title_bar/app_title_bar.dart';
 import '../widgets/capture/capture_action.dart';
@@ -145,6 +146,7 @@ class CustomDrawer extends ConsumerWidget {
         : syncAsync.asData?.value;
 
     final projectTags = ref.watch(projectTagsProvider).asData?.value ?? [];
+    final activeTagIds = ref.watch(tagFilterProvider);
 
     return Drawer(
       backgroundColor: Colors.white,
@@ -238,15 +240,34 @@ class CustomDrawer extends ConsumerWidget {
                   const Divider(height: 1, color: Color(0xFFF3F4F6)),
                   const SizedBox(height: 16),
                   _buildSectionHeader('PROJECTS'),
-                  ...projectTags.map((t) => ListTile(
-                        contentPadding:
-                            const EdgeInsets.symmetric(horizontal: 24),
-                        leading: const Icon(Icons.folder_outlined,
-                            color: Color(0xFF9CA3AF)),
-                        title: Text(t.name,
-                            style: const TextStyle(
-                                fontSize: 14, color: Color(0xFF374151))),
-                      )),
+                  ...projectTags.map((t) {
+                    final isSelected = activeTagIds.contains(t.id) &&
+                        location.startsWith('/next-actions');
+                    return ListTile(
+                      contentPadding:
+                          const EdgeInsets.symmetric(horizontal: 24),
+                      leading: Icon(Icons.folder_outlined,
+                          color: isSelected
+                              ? const Color(0xFF2563EB)
+                              : const Color(0xFF9CA3AF)),
+                      title: Text(t.name,
+                          style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: isSelected
+                                  ? FontWeight.w600
+                                  : FontWeight.normal,
+                              color: isSelected
+                                  ? const Color(0xFF2563EB)
+                                  : const Color(0xFF374151))),
+                      selected: isSelected,
+                      selectedTileColor: const Color(0xFFEFF6FF),
+                      onTap: () {
+                        ref.read(tagFilterProvider.notifier).selectOnly(t.id);
+                        context.go('/next-actions');
+                        Navigator.pop(context);
+                      },
+                    );
+                  }),
                   const SizedBox(height: 8),
                   const Divider(height: 1, color: Color(0xFFF3F4F6)),
                   const SizedBox(height: 8),

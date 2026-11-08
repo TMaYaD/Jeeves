@@ -12,6 +12,7 @@ import 'package:jeeves/providers/focus_session_planning_settings_provider.dart';
 import 'package:jeeves/providers/inbox_provider.dart';
 import 'package:jeeves/providers/gtd_lists_provider.dart';
 import 'package:jeeves/providers/nudge_provider.dart';
+import 'package:jeeves/providers/tag_filter_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/screens/app_shell.dart';
 import 'package:jeeves/widgets/app_title_bar/app_title_bar.dart';
@@ -64,6 +65,7 @@ Widget _buildShellOnly({
   Stream<List<Capture>>? inboxStream,
   VoidCallback? onLogout,
   String initialLocation = '/inbox',
+  List<Tag> projectTags = const [],
   FocusSession? activeSession,
   List<Todo> sessionTasks = const [],
   FocusSessionPlanningSettings planningSettings =
@@ -77,7 +79,7 @@ Widget _buildShellOnly({
       nextProvider.overrideWith((_) => Stream.value([])),
       waitingForProvider.overrideWith((_) => Stream.value([])),
       maybeProvider.overrideWith((_) => Stream.value([])),
-      projectTagsProvider.overrideWith((_) => Stream.value([])),
+      projectTagsProvider.overrideWith((_) => Stream.value(projectTags)),
       contextTagsProvider.overrideWith((_) => Stream.value([])),
       // The Now route's Re-plan page action derives from these two providers
       // (via hasOpenSessionWithTasksProvider). Default them so the derived
@@ -203,6 +205,34 @@ void main() {
     await tester.drag(find.byType(Drawer), const Offset(0, -300));
     await tester.pumpAndSettle();
     expect(find.text('PROJECTS'), findsOneWidget);
+  });
+
+  testWidgets('tapping a Projects tile filters Next Actions to that project, '
+      'closes the drawer and marks the tile selected', (tester) async {
+    final project = Tag(id: 'p1', name: 'Garden', type: 'project', userId: 'u');
+    await tester.pumpWidget(_buildShellOnly(projectTags: [project]));
+    await tester.pump();
+    await tester.tap(find.byKey(appTitleBarLeadingKey));
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(Drawer), const Offset(0, -300));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Garden'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Next Actions body'), findsOneWidget);
+    expect(find.text('Ctrl+K'), findsNothing, reason: 'drawer should close');
+    final container = ProviderScope.containerOf(
+        tester.element(find.text('Next Actions body')));
+    expect(container.read(tagFilterProvider), {'p1'});
+
+    await tester.tap(find.byKey(appTitleBarLeadingKey));
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(Drawer), const Offset(0, -300));
+    await tester.pumpAndSettle();
+    final tile = tester.widget<ListTile>(
+        find.ancestor(of: find.text('Garden'), matching: find.byType(ListTile)));
+    expect(tile.selected, isTrue);
   });
 
   testWidgets('AppShell shows Inbox content by default', (tester) async {
