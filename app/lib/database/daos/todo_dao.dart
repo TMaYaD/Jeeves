@@ -582,10 +582,8 @@ EXISTS (
         'last_clarified_at': encodeInstant(ts),
         'updated_at': encodeInstant(ts),
       });
-      return true;
+      attachedDatabase.notifyTodosViewWrite();
     });
-    if (landed) attachedDatabase.notifyTodosViewWrite();
-    return landed;
   }
 
   /// Whether the `todos` row [todoId] is present. Called inside a write's
@@ -660,8 +658,10 @@ EXISTS (
         'last_clarified_at': encodeInstant(ts),
         'updated_at': encodeInstant(ts),
       });
-      attachedDatabase.notifyTodosViewWrite();
+      return true;
     });
+    if (landed) attachedDatabase.notifyTodosViewWrite();
+    return landed;
   }
 
   /// Writes the Outcome's `current` Action from a single phrase and stamps
