@@ -5,7 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../database/gtd_database.dart';
 import '../../widgets/active_filter_bar.dart';
 import '../../widgets/async_list.dart';
-import '../../widgets/meta_chip.dart';
+import '../../widgets/outcome_row.dart';
 
 /// Shared list screen for all GTD views (Next Actions, Waiting For, etc.).
 ///
@@ -50,64 +50,16 @@ class GtdListScreen extends ConsumerWidget {
                 dataBuilder: (context, items) => ListView.builder(
                   padding: const EdgeInsets.only(top: 8, bottom: 24),
                   itemCount: items.length,
-                  itemBuilder: (_, i) => _GtdListItem(
-                    todo: items[i],
+                  itemBuilder: (_, i) => OutcomeRow(
+                    title: items[i].title,
+                    energyLevel: items[i].energyLevel,
+                    timeEstimateMinutes: items[i].timeEstimate,
+                    dueDate: items[i].dueDate,
                     onTap: () => context.push('/task/${items[i].id}'),
                   ),
                 ),
               ),
             ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Single list item
-// ---------------------------------------------------------------------------
-
-class _GtdListItem extends StatelessWidget {
-  const _GtdListItem({required this.todo, required this.onTap});
-
-  final Todo todo;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    todo.title,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                      color: Color(0xFF1A1A2E),
-                    ),
-                  ),
-                  if (todo.energyLevel != null) ...[
-                    const SizedBox(height: 2),
-                    Text(
-                      {'low', 'medium', 'high'}.contains(todo.energyLevel)
-                          ? '${energyLevelLabel(todo.energyLevel!)} energy'
-                          : energyLevelLabel(todo.energyLevel!),
-                      style: const TextStyle(
-                          fontSize: 12, color: Color(0xFF9CA3AF)),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            const Icon(Icons.chevron_right, color: Color(0xFF9CA3AF)),
           ],
         ),
       ),

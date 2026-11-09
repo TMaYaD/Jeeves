@@ -5,7 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../providers/focus_session_planning_provider.dart';
-import '../../../widgets/meta_chip.dart' show formatMinutesLabel, formatDueDateLabel;
+import '../../../widgets/outcome_row.dart';
 
 class ScheduledReviewStep extends ConsumerWidget {
   const ScheduledReviewStep({super.key});
@@ -72,7 +72,14 @@ class ScheduledReviewStep extends ConsumerWidget {
                 ),
               )
             else
-              ...sortedTasks.map((t) => _TaskRow(todo: t)),
+              ...sortedTasks.map((t) => OutcomeRow(
+                title: t.title,
+                timeEstimateMinutes: t.timeEstimate,
+                dueDate: t.dueDate,
+                framed: true,
+                leading: const Icon(Icons.check_circle_outline,
+                    size: 20, color: Color(0xFF16A34A)),
+              )),
             const SizedBox(height: 48),
             FilledButton(
               onPressed: () => _startDay(context, ref),
@@ -107,52 +114,5 @@ class ScheduledReviewStep extends ConsumerWidget {
       return;
     }
     context.go('/focus');
-  }
-}
-
-class _TaskRow extends StatelessWidget {
-  const _TaskRow({required this.todo});
-  final Todo todo;
-
-  @override
-  Widget build(BuildContext context) {
-    final estimate = todo.timeEstimate;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
-        children: [
-          const Icon(Icons.check_circle_outline,
-              size: 20, color: Color(0xFF16A34A)),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  todo.title,
-                  style: const TextStyle(
-                      fontSize: 15, color: Color(0xFF1A1A2E), fontWeight: FontWeight.w500),
-                ),
-                if (todo.dueDate != null)
-                  Builder(builder: (_) {
-                    return Text(
-                      'Due ${formatDueDateLabel(todo.dueDate!)}',
-                      style: TextStyle(fontSize: 12, color: Colors.grey[500]),
-                    );
-                  }),
-              ],
-            ),
-          ),
-          if (estimate != null)
-            Text(
-              formatMinutesLabel(estimate),
-              style: TextStyle(
-                  fontSize: 13,
-                  color: Colors.grey[500],
-                  fontWeight: FontWeight.w500),
-            ),
-        ],
-      ),
-    );
   }
 }
