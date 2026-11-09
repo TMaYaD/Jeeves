@@ -67,9 +67,10 @@ Future<Todo> _row(WidgetTester tester, GtdDatabase db, String id) async =>
 /// Lets writes land and the live watches re-emit without settling.
 Future<void> _settle(WidgetTester tester) async {
   await tester.runAsync(() => pumpEventQueue());
-  await tester.pump(const Duration(milliseconds: 100));
+  // Long enough for a bottom sheet to finish sliding in (about 250 ms).
+  await tester.pump(const Duration(milliseconds: 400));
   await tester.runAsync(() => pumpEventQueue());
-  await tester.pump(const Duration(milliseconds: 100));
+  await tester.pump(const Duration(milliseconds: 400));
 }
 
 /// Unmounts the tree inside the test body. The binding would otherwise do it
