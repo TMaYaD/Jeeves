@@ -502,7 +502,7 @@ their reasons so that a new surface can reuse the same contract.
 | Representation | Fields and layout | Interaction contract |
 |---|---|---|
 | `OutcomeMetaLine` | Read-only chips, ordered energy · estimate · time logged · due. Unset attributes omitted; the caller supplies the attributes it shows. | No gestures; the containing surface owns the tap target. |
-| `OutcomeRow` | Optional leading slot, title (normal, muted or struck), secondary line, metadata (default `OutcomeMetaLine`), optional trailing slot. Flat or framed with r12 border and h16/v12 padding. | Whole-row tap and long-press callbacks. No ink or chevron when no tap callback exists. |
+| [`OutcomeRow`](../app/lib/widgets/outcome_row.dart) | Optional leading slot, title (normal, muted or struck), secondary line, metadata (default `OutcomeMetaLine`), optional trailing slot. Flat or framed with r12 border and h16/v12 padding. | Whole-row tap and long-press callbacks. No ink or chevron when no tap callback exists. |
 | `OutcomeReviewCard` | Banner (icon, text, tone), people chips, title, current Action, notes, optional metadata and actions. Absent Action and notes are omitted. | Injected `ProcessToHandlers` or resolution buttons. |
 | Outcome detail / `OutcomeAttributeStrip` | Title → editable attribute strip → contexts → people → Plan → notes. Strip uses the metadata order with shared attribute editors. | Each editable chip has an ancestor tap target; logged time stays read-only. |
 
