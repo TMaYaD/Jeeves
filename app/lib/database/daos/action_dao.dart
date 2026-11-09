@@ -455,6 +455,32 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     return row?.read<String?>('id');
   }
 
+  /// [currentActionIdFor], except an Actionless Outcome first gets a `current`
+  /// Action carrying its title (the title-as-action fallback), so a sprint
+  /// started on it is attributed to a real Action that can later be completed
+  /// and settle the row (#711). Runs inside the caller's transaction. Returns
+  /// null only when the Outcome is gone or its title is blank.
+  ///
+  /// Writes the Action only — the Outcome's clarification stamp is untouched,
+  /// since starting a sprint is not a clarifying act. [wroteAction] reports
+  /// whether it minted one, so the caller can notify after commit.
+  static Future<({String? actionId, bool wroteAction})>
+      ensureCurrentActionIdFor(
+    GtdDatabase db,
+    String outcomeId,
+    DateTime ts,
+  ) async {
+    final existing = await currentActionIdFor(db, outcomeId);
+    if (existing != null) return (actionId: existing, wroteAction: false);
+    final outcome = await (db.select(db.todos)
+          ..where((t) => t.id.equals(outcomeId)))
+        .getSingleOrNull();
+    final title = outcome?.title.trim() ?? '';
+    if (title.isEmpty) return (actionId: null, wroteAction: false);
+    final id = await db.actionDao._insertCurrentAction(outcomeId, title, ts: ts);
+    return (actionId: id, wroteAction: true);
+  }
+
   /// The Outcome's current Action, or null when it is Actionless.
   Future<Action?> getCurrentAction(String outcomeId) async =>
       _pickWinner(await _currentActionsFor(outcomeId));

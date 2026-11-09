@@ -32,12 +32,16 @@ class TimeLogDao extends DatabaseAccessor<GtdDatabase>
     DateTime? now,
   }) async {
     final ts = (now ?? DateTime.now()).toUtc();
+    var wroteAction = false;
     await attachedDatabase.capturing(() async {
       // Resolve the Outcome's current Action *inside* the transaction so a
       // concurrent supersede between resolve and insert cannot mis-attribute,
       // and so attributing to a planned/terminated row is impossible by
       // construction — the resolver filters `role = 'current'` (issue #476).
-      final actionId = await ActionDao.currentActionIdFor(this, taskId);
+      final resolved =
+          await ActionDao.ensureCurrentActionIdFor(attachedDatabase, taskId, ts);
+      final actionId = resolved.actionId;
+      wroteAction = resolved.wroteAction;
       // Close any pre-existing open log.
       final stillOpen =
           await (select(timeLogs)..where((t) => t.endedAt.isNull())).get();
@@ -67,6 +71,7 @@ class TimeLogDao extends DatabaseAccessor<GtdDatabase>
         focusSessionId: focusSessionId,
       );
     });
+    if (wroteAction) attachedDatabase.notifyActionsViewWrite();
   }
 
   /// A stint's full field set — the create assertion every peer builds the row
