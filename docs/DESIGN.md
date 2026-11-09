@@ -490,8 +490,9 @@ the screen. The absence is deliberate.
 
 ## Outcome representations
 
-An Outcome uses the contracts below wherever it appears. Attribute vocabulary
-follows [CONTEXT.md](../CONTEXT.md#language); shared labels and chips live in
+The contracts and inventory below define the target mapping for Outcome
+representations; the row, review-card and attribute-strip migrations complete it.
+Attribute vocabulary follows [CONTEXT.md](../CONTEXT.md#language); shared labels and chips live in
 [`meta_chip.dart`](../app/lib/widgets/meta_chip.dart). The inventory maps each
 surface to its representation contract; deliberate differences are listed with
 their reasons so that a new surface can reuse the same contract.
