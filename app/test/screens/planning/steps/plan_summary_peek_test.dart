@@ -331,6 +331,7 @@ void main() {
       await tester.runAsync(() => db.into(db.todos).insert(TodosCompanion(
             id: const Value('t1'),
             title: const Value('Task one'),
+            createdAt: Value(DateTime.now()),
             clarified: const Value(true),
             userId: const Value('local'),
           )));
