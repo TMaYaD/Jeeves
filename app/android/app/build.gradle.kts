@@ -22,7 +22,7 @@ fun hasKey(key: String) = keystoreProperties.getProperty(key)?.isNotBlank() == t
 
 android {
     namespace = "loonyb.in.jeeves"
-    // Ahead of flutter.compileSdkVersion (36 on Flutter 3.44.1) because
+    // Ahead of flutter.compileSdkVersion (36 on Flutter 3.47.2) because
     // flutter_secure_storage 11 compiles against 37 and AGP 9 enforces the
     // plugin's floor at checkAarMetadata. Drop back to flutter.compileSdkVersion
     // once the pinned Flutter defaults to 37 or higher.
