@@ -66,7 +66,7 @@ dependencies:
   shared_preferences: ^2.3.3
 
   # File import
-  file_picker: ^12.2.0
+  file_picker: ^13.1.0
 
   # Encrypted token storage (JWT)
   flutter_secure_storage: ^11.0.0
