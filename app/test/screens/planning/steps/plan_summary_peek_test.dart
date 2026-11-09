@@ -347,7 +347,8 @@ void main() {
           )));
       await _pumpStep(tester, db, _manyTodos(20));
 
-      await tester.scrollUntilVisible(find.text('Task 12'), 120);
+      await tester.scrollUntilVisible(find.text('Task 12'), 120,
+          scrollable: _listScrollable);
       await tester.pumpAndSettle();
       final before = _scrollOffset(tester);
       expect(before, greaterThan(0),
