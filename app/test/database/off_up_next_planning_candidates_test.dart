@@ -83,7 +83,8 @@ void main() {
     expect(await ids(), {'waiting'});
 
     // Without the person tag an actionless Next Outcome is back on Next.
-    await db.customStatement("DELETE FROM todo_tags WHERE todo_id = 'waiting'");
+    await (db.delete(db.todoTags)..where((tt) => tt.todoId.equals('waiting')))
+        .go();
     expect(await ids(), isEmpty);
   });
 }
