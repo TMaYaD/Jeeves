@@ -19,6 +19,9 @@ import '../models/todo.dart' show RoutingKind;
 import '../utils/snapshot_nav.dart';
 import 'clarify_retention_provider.dart';
 import 'database_provider.dart';
+import 'clock_provider.dart';
+import 'periodic_review_ranker.dart';
+import 'synced_preferences_provider.dart';
 import 'periodic_review_settings_provider.dart';
 
 export '../database/gtd_database.dart' show Todo;
@@ -27,6 +30,8 @@ export '../models/todo.dart' show RoutingKind;
 class PeriodicReviewState {
   const PeriodicReviewState({
     this.currentStep = 0,
+    this.sessionStarted = false,
+    this.isFinalSession = true,
     this.inboxNav = const SnapshotNav<String>(),
     this.waitingForNav = const SnapshotNav<Todo>(),
     this.nextNav = const SnapshotNav<Todo>(),
@@ -44,6 +49,8 @@ class PeriodicReviewState {
   });
 
   final int currentStep;
+  final bool sessionStarted;
+  final bool isFinalSession;
 
   /// Snapshot of inbox todo IDs to clarify (oldest-first).
   final SnapshotNav<String> inboxNav;
@@ -82,6 +89,8 @@ class PeriodicReviewState {
 
   PeriodicReviewState copyWith({
     int? currentStep,
+    bool? sessionStarted,
+    bool? isFinalSession,
     SnapshotNav<String>? inboxNav,
     SnapshotNav<Todo>? waitingForNav,
     SnapshotNav<Todo>? nextNav,
@@ -103,6 +112,8 @@ class PeriodicReviewState {
   }) =>
       PeriodicReviewState(
         currentStep: currentStep ?? this.currentStep,
+        sessionStarted: sessionStarted ?? this.sessionStarted,
+        isFinalSession: isFinalSession ?? this.isFinalSession,
         inboxNav: inboxNav ?? this.inboxNav,
         waitingForNav: waitingForNav ?? this.waitingForNav,
         nextNav: nextNav ?? this.nextNav,
@@ -155,6 +166,9 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
   /// step transitions (rapid Next taps, or an auto-skip firing while a slow
   /// snapshot load is still in flight) from racing on [state.currentStep].
   bool _isTransitioning = false;
+  bool _startingSession = false;
+  Future<void>? _allSnapshotsLoad;
+  final Map<String, DateTime> _captureCreatedAtCache = {};
 
   /// Idempotency guards for the per-step snapshot loaders. Prevent duplicate
   /// in-flight reads (post-frame callbacks fire on every rebuild while the
@@ -181,6 +195,7 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
       // Captures with `clarified_at IS NULL` (ADR-0006) — the snapshot holds
       // Capture ids, and the zero-inbox step clarifies each into an Outcome.
       final captures = await _db.captureDao.watchInbox().first;
+      _captureCreatedAtCache.addAll({for (final capture in captures) capture.id: capture.createdAt});
       final ids = captures.reversed.map((c) => c.id).toList();
       state = state.copyWith(inboxNav: state.inboxNav.withItems(ids));
     } catch (e) {
@@ -195,7 +210,8 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
     _loadingWaitingForSnapshot = true;
     state = state.copyWith(clearWaitingForLoadError: true);
     try {
-      final todos = await _db.todoDao.watchPersonTagged().first;
+      await ref.read(syncedPreferencesProvider.future);
+      final todos = _uncovered(await _db.todoDao.watchPersonTagged().first);
       // Batch the person-tag lookup so the card can render delegate names
       // without spawning one DAO call per item.
       final tags = await _db.todoDao
@@ -219,7 +235,8 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
     _loadingNextSnapshot = true;
     state = state.copyWith(clearNextLoadError: true);
     try {
-      final todos = await _db.todoDao.getNextExcludingPersonTagged();
+      await ref.read(syncedPreferencesProvider.future);
+      final todos = _uncovered(await _db.todoDao.getNextExcludingPersonTagged());
       // Batched current-Action lookup so the card renders the concrete
       // commitment without one DAO call per item.
       final actionTexts = await _db.actionDao
@@ -240,7 +257,8 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
     _loadingSomedaySnapshot = true;
     state = state.copyWith(clearSomedayLoadError: true);
     try {
-      final todos = await _db.todoDao.watchMaybe().first;
+      await ref.read(syncedPreferencesProvider.future);
+      final todos = _uncovered(await _db.todoDao.watchMaybe().first);
       final actionTexts = await _db.actionDao
           .getCurrentActionTexts({for (final t in todos) t.id});
       state = state.copyWith(
@@ -259,13 +277,131 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
   /// inbox → maybe) does not surface in a later step (Someday/Maybe) where
   /// the user already decided what to do with it. Each loader is idempotent
   /// so repeat calls are no-ops.
-  Future<void> loadAllSnapshots() async {
+  Future<void> loadAllSnapshots() =>
+      _allSnapshotsLoad ??= _loadAllSnapshots().whenComplete(() => _allSnapshotsLoad = null);
+
+  Future<void> _loadAllSnapshots() async {
+    await ref.read(syncedPreferencesProvider.future);
     await Future.wait<void>([
       loadInboxSnapshot(),
       loadWaitingForSnapshot(),
       loadNextSnapshot(),
       loadSomedaySnapshot(),
     ]);
+  }
+
+  List<Todo> _uncovered(List<Todo> todos) {
+    final opened = ref.read(periodicReviewOpenSinceProvider);
+    if (opened == null) return todos;
+    return todos.where((todo) => todo.lastClarifiedAt == null ||
+        todo.lastClarifiedAt!.isBefore(opened)).toList();
+  }
+
+  Future<List<PeriodicReviewCandidate>> _candidates() async {
+    final outcomes = [
+      ...state.waitingForNav.items!,
+      ...state.nextNav.items!,
+      ...state.somedayNav.items!,
+    ];
+    final ids = outcomes.map((todo) => todo.id).toSet();
+    final planned = await _db.actionDao.getOutcomeIdsWithPlannedActions(ids);
+    final stale = await _db.todoDao.getActionTerminationStaleIds(ids);
+    PeriodicReviewCandidate outcome(Todo todo, PeriodicReviewStepKind step) {
+      final actionless = !state.actionTexts.containsKey(todo.id);
+      return PeriodicReviewCandidate(
+        step: step,
+        id: todo.id,
+        isPlanless: actionless && !planned.contains(todo.id),
+        isStale: stale.contains(todo.id),
+        isActionless: actionless,
+        lastClarifiedAt: todo.lastClarifiedAt,
+        createdAt: todo.createdAt,
+      );
+    }
+    return [
+      for (final id in state.inboxNav.items!)
+        PeriodicReviewCandidate(
+          step: PeriodicReviewStepKind.inbox, id: id,
+          isPlanless: false, isStale: false, isActionless: false,
+          lastClarifiedAt: null, createdAt: _captureCreatedAtCache[id]!,
+        ),
+      for (final todo in state.waitingForNav.items!)
+        outcome(todo, PeriodicReviewStepKind.waitingFor),
+      for (final todo in state.nextNav.items!)
+        outcome(todo, PeriodicReviewStepKind.next),
+      for (final todo in state.somedayNav.items!)
+        outcome(todo, PeriodicReviewStepKind.someday),
+    ];
+  }
+
+  /// Chooses membership once; Back to the intro preserves this session's cursors.
+  Future<void> startSession({int? budgetMinutes}) async {
+    if (_startingSession) return;
+    _startingSession = true;
+    try {
+      if (state.sessionStarted) {
+        await advanceStep();
+        return;
+      }
+      await loadAllSnapshots();
+      if (!state.inboxNav.isLoaded || !state.waitingForNav.isLoaded ||
+          !state.nextNav.isLoaded || !state.somedayNav.isLoaded) {
+        throw StateError('Could not load the review. Please try again.');
+      }
+      final count = state.inboxNav.length + state.waitingForNav.length +
+          state.nextNav.length + state.somedayNav.length;
+      final budget = budgetMinutes == null ? count : weeklyReviewItemBudget(budgetMinutes);
+      if (budgetMinutes != null && budget <= 0) {
+        throw ArgumentError.value(budgetMinutes, 'budgetMinutes');
+      }
+      if (budget < count) {
+        final candidates = await _candidates();
+        final ranked = await ref.read(periodicReviewRankerProvider)
+            .rank(List.unmodifiable(candidates));
+        // The strategy supplies only an ordering. Canonical candidates supply
+        // membership: ignore foreign keys, dedupe, and append any omissions.
+        final validKeys = {for (final candidate in candidates) (candidate.step, candidate.id)};
+        final selected = <(PeriodicReviewStepKind, String)>{};
+        for (final candidate in [...ranked, ...candidates]) {
+          final key = (candidate.step, candidate.id);
+          if (validKeys.contains(key)) selected.add(key);
+          if (selected.length == budget) break;
+        }
+        if (ref.read(periodicReviewOpenSinceProvider) == null) {
+          await syncedPrefs(ref).set(kPeriodicReviewOpenSinceKey,
+              ref.read(clockProvider)().toUtc().toIso8601String());
+        }
+        List<Todo> selectedTodos(List<Todo> todos, PeriodicReviewStepKind step) =>
+            todos.where((todo) => selected.contains((step, todo.id))).toList();
+        state = state.copyWith(
+          inboxNav: state.inboxNav.withItems(state.inboxNav.items!
+              .where((id) => selected.contains((PeriodicReviewStepKind.inbox, id))).toList()),
+          waitingForNav: state.waitingForNav.withItems(selectedTodos(
+              state.waitingForNav.items!, PeriodicReviewStepKind.waitingFor)),
+          nextNav: state.nextNav.withItems(selectedTodos(
+              state.nextNav.items!, PeriodicReviewStepKind.next)),
+          somedayNav: state.somedayNav.withItems(selectedTodos(
+              state.somedayNav.items!, PeriodicReviewStepKind.someday)),
+          isFinalSession: false,
+          sessionStarted: true,
+        );
+      } else {
+        state = state.copyWith(isFinalSession: true, sessionStarted: true);
+      }
+      await advanceStep();
+    } finally {
+      _startingSession = false;
+    }
+  }
+
+  /// Re-read durable progress, including skips and Captures added this session.
+  Future<int> remainingItemCount() async {
+    await ref.read(syncedPreferencesProvider.future);
+    final captures = await _db.captureDao.watchInbox().first;
+    final waiting = _uncovered(await _db.todoDao.watchPersonTagged().first);
+    final next = _uncovered(await _db.todoDao.getNextExcludingPersonTagged());
+    final someday = _uncovered(await _db.todoDao.watchMaybe().first);
+    return captures.length + waiting.length + next.length + someday.length;
   }
 
   // ---------------------------------------------------------------------------
@@ -387,6 +523,12 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
   Future<void> completeReview() async {
     final settings = ref.read(periodicReviewSettingsProvider.notifier);
     await settings.completeReview();
+    await finishSession();
+  }
+
+  /// Ends only this sitting; the durable review remains open.
+  Future<void> finishSession() async {
+    _captureCreatedAtCache.clear();
     _loadingInboxSnapshot = false;
     _loadingWaitingForSnapshot = false;
     _loadingNextSnapshot = false;

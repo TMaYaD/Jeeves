@@ -1,6 +1,6 @@
 /// Final step of the Weekly Review wizard: confirmation screen with stats and
-/// a single Done button. Tapping Done persists the completion timestamp and
-/// returns the user to /inbox.
+/// a single Done button. Done closes this session; only a final session stamps
+/// review completion. Both return the user to /inbox.
 library;
 
 import 'package:flutter/material.dart';
@@ -19,6 +19,16 @@ class SummaryStep extends ConsumerStatefulWidget {
 class _SummaryStepState extends ConsumerState<SummaryStep> {
   bool _completing = false;
   String? _completeError;
+  Future<int>? _remainingItems;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!ref.read(periodicReviewProvider).isFinalSession) {
+      _remainingItems = ref.read(periodicReviewProvider.notifier).remainingItemCount();
+    }
+  }
+
 
   Future<void> _onDone() async {
     if (_completing) return;
@@ -27,7 +37,12 @@ class _SummaryStepState extends ConsumerState<SummaryStep> {
       _completeError = null;
     });
     try {
-      await ref.read(periodicReviewProvider.notifier).completeReview();
+      final notifier = ref.read(periodicReviewProvider.notifier);
+      if (ref.read(periodicReviewProvider).isFinalSession) {
+        await notifier.completeReview();
+      } else {
+        await notifier.finishSession();
+      }
       if (!mounted) return;
       context.go('/inbox');
     } catch (e) {
@@ -70,10 +85,10 @@ class _SummaryStepState extends ConsumerState<SummaryStep> {
           child: Icon(Icons.check_circle, size: 88, color: Color(0xFF059669)),
         ),
         const SizedBox(height: 24),
-        const Center(
+        Center(
           child: Text(
-            'Weekly Review Complete',
-            style: TextStyle(
+            state.isFinalSession ? 'Weekly Review Complete' : 'Session Complete',
+            style: const TextStyle(
               fontSize: 22,
               fontWeight: FontWeight.bold,
               color: Color(0xFF1A1A2E),
@@ -97,6 +112,21 @@ class _SummaryStepState extends ConsumerState<SummaryStep> {
             ],
           ),
         ),
+        if (!state.isFinalSession)
+          FutureBuilder<int>(
+            future: _remainingItems,
+            builder: (context, snapshot) => Padding(
+              padding: const EdgeInsets.only(top: 16),
+              child: Text(
+                snapshot.hasData
+                    ? '${snapshot.data} items still to review'
+                    : snapshot.hasError
+                        ? 'The remaining items will be ready next session.'
+                        : 'Counting remaining items…',
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ),
         const SizedBox(height: 32),
         if (_completeError != null) ...[
           Container(

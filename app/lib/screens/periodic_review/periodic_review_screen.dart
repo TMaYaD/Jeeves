@@ -28,6 +28,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../models/ritual.dart';
 import '../../providers/ceremony_in_progress_provider.dart';
 import '../../providers/periodic_review_provider.dart';
+import '../../providers/periodic_review_ranker.dart';
+import '../../providers/periodic_review_settings_provider.dart';
+import '../../widgets/meta_chip.dart' show formatMinutesLabel;
+import '../../widgets/clarify_shared_widgets.dart';
 import '../../utils/snapshot_nav.dart' show SnapshotNav;
 import '../../widgets/ceremony/ceremony_pop_scope.dart';
 import '../../widgets/ceremony/intro_step.dart';
@@ -49,6 +53,9 @@ class PeriodicReviewScreen extends ConsumerStatefulWidget {
 class _PeriodicReviewScreenState
     extends ConsumerState<PeriodicReviewScreen> {
   late final CeremonyInProgressNotifier _ceremonyNotifier;
+  int? _budgetMinutes;
+  bool _starting = false;
+  String? _startError;
 
   static const _ceremonyId = 'periodic_review';
   static const _accent = Color(0xFF059669);
@@ -208,26 +215,85 @@ class _PeriodicReviewScreenState
         state.nextNav.length +
         state.somedayNav.length;
     final estimate = allLoaded
-        ? IntroEstimateReady(rawMinutes: 2 * itemCount, itemCount: itemCount)
+        ? IntroEstimateReady(rawMinutes: kWeeklyReviewMinutesPerItem * itemCount, itemCount: itemCount)
         : const IntroEstimateLoading();
+
+    final budgets = weeklyReviewBudgetOptions(itemCount);
+    final continuing = ref.watch(periodicReviewOpenSinceProvider) != null;
+    final intro = CeremonyIntroBody(
+      accentColor: _accent,
+      estimate: estimate,
+      bodyPool: continuing ? const [
+        'Let us continue where we left off, sir. I make the remainder {duration}.',
+        'The rest of the estate awaits, sir — {duration}, by my reckoning.',
+      ] : wrIntroBodyPool,
+      lightDayPool: introLightDayPool,
+    );
 
     return WizardStep(
       title: _stepTitles[PeriodicReviewNotifier.kStepIntro],
       // Explicit empty subtitle: the intro is not a numbered step, so the
       // wizard suppresses the "Step N of M" fallback here.
       subtitle: '',
-      body: CeremonyIntroBody(
-        accentColor: _accent,
-        estimate: estimate,
-        bodyPool: wrIntroBodyPool,
-        lightDayPool: introLightDayPool,
-      ),
+      body: budgets.isEmpty && _startError == null
+          ? intro
+          : ListView(
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              children: [
+                intro,
+                if (allLoaded && budgets.isNotEmpty && !state.sessionStarted) ...[
+                  const SizedBox(height: 24),
+                  const Center(child: Text('Time for this session')),
+                  const SizedBox(height: 12),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: Wrap(
+                      alignment: WrapAlignment.center,
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        for (final minutes in budgets)
+                          ClarifyEstimateChip(
+                            label: minutes == 60 ? '1 hour' : '$minutes min',
+                            selected: _budgetMinutes == minutes,
+                            onTap: () {
+                              if (!_starting) setState(() => _budgetMinutes = minutes);
+                            },
+                          ),
+                        ClarifyEstimateChip(
+                          label: 'Everything (${formatMinutesLabel(introDisplayMinutes(
+                              kWeeklyReviewMinutesPerItem * itemCount))})',
+                          selected: _budgetMinutes == null,
+                          onTap: () {
+                            if (!_starting) setState(() => _budgetMinutes = null);
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                if (_startError != null)
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Text(_startError!),
+                  ),
+              ],
+            ),
       footer: WizardFooter(
         ceremonyId: _ceremonyId,
         accentColor: _accent,
         onBack: null,
-        onNext: () => unawaited(notifier.advanceStep()),
-        nextLabel: _introCtaLabel,
+        onNext: _starting ? null : () async {
+          setState(() { _starting = true; _startError = null; });
+          try {
+            await notifier.startSession(budgetMinutes: _budgetMinutes);
+          } catch (error) {
+            if (mounted) setState(() => _startError = error.toString());
+          } finally {
+            if (mounted) setState(() => _starting = false);
+          }
+        },
+        nextLabel: _startError == null ? _introCtaLabel : 'Retry',
       ),
     );
   }

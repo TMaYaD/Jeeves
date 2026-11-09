@@ -213,7 +213,7 @@ light-day pool. Copy is drawn once per performance from a seedable pool (the
 `elapsed_timer_widget.dart` / `onboarding_card.dart` idiom). The proceed
 control rides the standard footer's fixed slot but carries a **Bertie-speak**
 label (`WizardFooter.nextLabel`, e.g. "Right ho", "Tinkerty-tonk") — the user
-answering Jeeves — and is always enabled; the label shrinks-to-fit rather than
+answering Jeeves — and is enabled except while starting a Weekly Review session; the label shrinks-to-fit rather than
 truncate. System back on the intro exits the ceremony (it is the first step);
 back from the first item of the following step returns to the intro.
 
