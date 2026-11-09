@@ -31,6 +31,12 @@ const Map<String, String> shellRouteTitles = {
   '/trash': 'Trash',
 };
 
+/// The Project tag id in a `/projects/:id` location, else null.
+String? projectIdFromLocation(String location) {
+  const prefix = '/projects/';
+  return location.startsWith(prefix) ? location.substring(prefix.length) : null;
+}
+
 /// Intent dispatched by the search keyboard shortcut (Ctrl+K or /).
 class _SearchIntent extends Intent {
   const _SearchIntent();
@@ -51,7 +57,17 @@ class AppShell extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final location = GoRouterState.of(context).uri.path;
-    final title = shellRouteTitles[location] ?? '';
+    final projectId = projectIdFromLocation(location);
+    final projectName = projectId == null
+        ? null
+        : ref
+            .watch(projectTagsProvider)
+            .asData
+            ?.value
+            .where((t) => t.id == projectId)
+            .map((t) => t.name)
+            .firstOrNull;
+    final title = projectName ?? shellRouteTitles[location] ?? '';
 
     // The Inbox route carries the unprocessed-capture count as a typed badge;
     // every other shell route shows none. Null at zero preserves the prior
@@ -246,6 +262,12 @@ class CustomDrawer extends ConsumerWidget {
                         title: Text(t.name,
                             style: const TextStyle(
                                 fontSize: 14, color: Color(0xFF374151))),
+                        selected: location == '/projects/${t.id}',
+                        selectedTileColor: const Color(0xFFEFF6FF),
+                        onTap: () {
+                          context.go('/projects/${t.id}');
+                          Navigator.pop(context);
+                        },
                       )),
                   const SizedBox(height: 8),
                   const Divider(height: 1, color: Color(0xFFF3F4F6)),

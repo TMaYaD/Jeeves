@@ -10,6 +10,7 @@ import 'screens/done/done_screen.dart';
 import 'screens/enrolment/enrolment_ceremony_screen.dart';
 import 'screens/inbox/inbox_screen.dart';
 import 'screens/next/next_screen.dart';
+import 'screens/project/project_screen.dart';
 import 'screens/periodic_review/periodic_review_screen.dart';
 import 'screens/planning/focus_session_planning_screen.dart';
 import 'screens/settings/settings_screen.dart';
@@ -136,6 +137,11 @@ final appRouter = GoRouter(
         GoRoute(
           path: '/next-actions',
           builder: (context, state) => const NextScreen(),
+        ),
+        GoRoute(
+          path: '/projects/:id',
+          builder: (context, state) =>
+              ProjectScreen(projectTagId: state.pathParameters['id']!),
         ),
         GoRoute(
           path: '/waiting-for',

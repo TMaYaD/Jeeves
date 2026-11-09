@@ -64,6 +64,7 @@ Widget _buildShellOnly({
   Stream<List<Capture>>? inboxStream,
   VoidCallback? onLogout,
   String initialLocation = '/inbox',
+  List<Tag> projectTags = const [],
   FocusSession? activeSession,
   List<Todo> sessionTasks = const [],
   FocusSessionPlanningSettings planningSettings =
@@ -77,7 +78,7 @@ Widget _buildShellOnly({
       nextProvider.overrideWith((_) => Stream.value([])),
       waitingForProvider.overrideWith((_) => Stream.value([])),
       maybeProvider.overrideWith((_) => Stream.value([])),
-      projectTagsProvider.overrideWith((_) => Stream.value([])),
+      projectTagsProvider.overrideWith((_) => Stream.value(projectTags)),
       contextTagsProvider.overrideWith((_) => Stream.value([])),
       // The Now route's Re-plan page action derives from these two providers
       // (via hasOpenSessionWithTasksProvider). Default them so the derived
@@ -121,6 +122,11 @@ Widget _buildShellOnly({
                   GoRoute(
                     path: '/next-actions',
                     builder: (_, _) => const Scaffold(body: Text('Next Actions body')),
+                  ),
+                  GoRoute(
+                    path: '/projects/:id',
+                    builder: (_, state) => Scaffold(
+                        body: Text('Project body ${state.pathParameters['id']}')),
                   ),
                   GoRoute(
                     path: '/waiting-for',
@@ -203,6 +209,34 @@ void main() {
     await tester.drag(find.byType(Drawer), const Offset(0, -300));
     await tester.pumpAndSettle();
     expect(find.text('PROJECTS'), findsOneWidget);
+  });
+
+  testWidgets('tapping a Projects tile opens that project, closes the drawer, '
+      'titles the bar with its name and marks the tile selected',
+      (tester) async {
+    final project = Tag(id: 'p1', name: 'Garden', type: 'project', userId: 'u');
+    await tester.pumpWidget(_buildShellOnly(projectTags: [project]));
+    await tester.pump();
+    await tester.tap(find.byKey(appTitleBarLeadingKey));
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(Drawer), const Offset(0, -300));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Garden'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Project body p1'), findsOneWidget);
+    expect(find.text('Ctrl+K'), findsNothing, reason: 'drawer should close');
+    expect(find.text('Garden'), findsOneWidget,
+        reason: 'title bar shows the project name; the drawer is closed');
+
+    await tester.tap(find.byKey(appTitleBarLeadingKey));
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(Drawer), const Offset(0, -300));
+    await tester.pumpAndSettle();
+    final tile = tester.widget<ListTile>(find.ancestor(
+        of: find.text('Garden').last, matching: find.byType(ListTile)));
+    expect(tile.selected, isTrue);
   });
 
   testWidgets('AppShell shows Inbox content by default', (tester) async {
