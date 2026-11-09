@@ -10,6 +10,7 @@ import 'package:jeeves/providers/periodic_review_settings_provider.dart';
 import 'package:jeeves/providers/synced_preferences_provider.dart';
 import 'package:jeeves/screens/periodic_review/periodic_review_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:jeeves/widgets/process_to_handlers.dart';
 
 import '../helpers/periodic_review_test_helpers.dart';
 import '../helpers/settle.dart';
@@ -87,6 +88,44 @@ void main() {
     expect(container.read(periodicReviewProvider).nextNav.length, 12);
   });
 
+  testWidgets('a kept Capture remains pending in an open review after restart',
+      (tester) async {
+    final capture = await tester.runAsync(() async {
+      await container.read(syncedPreferencesProvider.notifier).set(
+        'periodic_review_open_since', DateTime.now().toUtc().toIso8601String());
+      return (db.select(db.captures)..where((c) => c.id.equals('capture')))
+          .getSingle();
+    });
+    var kept = false;
+    // Keep exists on the shared handler, but is not offered by the Inbox card.
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: container,
+      child: MaterialApp(home: Scaffold(body: ProcessToHandlers(
+        subject: CaptureSubject(
+          capture: capture!,
+          draft: () => ClarifyDraft(title: capture.title),
+        ),
+        include: const {ProcessAction.keep},
+        onAfterRoute: (action) async {
+          expect(action, ProcessAction.keep);
+          kept = true;
+        },
+      ))),
+    ));
+    await settleWithRealAsync(tester);
+    await tap(tester, find.text('Keep'));
+    expect(kept, isTrue);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await settleWithRealAsync(tester);
+    container.dispose();
+    await tester.runAsync(() async {
+      container = createPeriodicReviewTestContainer(db);
+      await container.read(syncedPreferencesProvider.future);
+      await container.read(periodicReviewProvider.notifier).loadAllSnapshots();
+    });
+    expect(container.read(periodicReviewProvider).inboxNav.items, ['capture']);
+  });
+
   testWidgets('partial review keeps progress through process death, then '
       'Everything completes the review', (tester) async {
     await tester.pumpWidget(UncontrolledProviderScope(
@@ -103,8 +142,8 @@ void main() {
         {for (var index = 0; index < 6; index++) 'outcome-0$index'});
     expect(selected.waitingForNav.length + selected.somedayNav.length, 0);
 
-    // Keep on a Capture leaves it unprocessed, so it must return next time.
-    await tap(tester, find.text('Keep'));
+    // The Inbox card exposes Skip, not Keep. Either leaves it unprocessed.
+    await tap(tester, find.byKey(const Key('periodic_review_skip')));
     await tap(tester, find.byKey(const Key('periodic_review_next_step')));
     await tap(tester, find.byKey(const Key('periodic_review_next_step')));
     final keptIds = <String>[];
