@@ -208,7 +208,7 @@ focal point sits inside the sentence, not stacked above it. The estimate is an
 approximation: 2 minutes per item to be walked, plus a flat 5 for Daily
 Planning's Energy/Time check-ins and selection (Weekly Review adds no flat),
 rounded up to the nearest 5 and floored at 5 so a zero-item ceremony reads
-"about 5 minutes", never "0". At zero items the copy switches to a shared
+"about 5m", never "0"; durations use the shared `h`/`m` form (`3h 30m`). At zero items the copy switches to a shared
 light-day pool. Copy is drawn once per performance from a seedable pool (the
 `elapsed_timer_widget.dart` / `onboarding_card.dart` idiom). The proceed
 control rides the standard footer's fixed slot but carries a **Bertie-speak**
