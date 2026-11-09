@@ -55,6 +55,35 @@ void main() {
   tearDown(() async => db.close());
 
   testWidgets(
+    'planning peek displays the local due day after storage round trip',
+    (tester) async {
+      final dueDate = DateTime(2030, 3, 15, 23, 30);
+      await tester.runAsync(
+        () => db.todoDao.updateFields('plan-me', dueDate: dueDate.toUtc()),
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [databaseProvider.overrideWithValue(db)],
+          child: const MaterialApp(home: Scaffold(body: PlanSummaryStep())),
+        ),
+      );
+      await _pumpFor(tester);
+      await tester.tap(find.text('Write the report'));
+      await _pumpFor(tester);
+      expect(find.text('Mar 15, 2030'), findsOneWidget);
+      await tester.tap(find.byTooltip('Close'));
+      await _pumpFor(tester);
+      final saved = (await tester.runAsync(
+        () => db.todoDao.getTodo('plan-me'),
+      ))!;
+      expect(saved.dueDate!.toUtc(), dueDate.toUtc());
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(() => pumpEventQueue());
+      await tester.pump(const Duration(milliseconds: 100));
+    },
+  );
+
+  testWidgets(
       'editing in the peek persists, shows on the card and capacity, and '
       'leaves planning state alone', (tester) async {
     tester.view.physicalSize = const Size(800, 1600);

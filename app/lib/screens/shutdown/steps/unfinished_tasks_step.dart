@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../providers/evening_shutdown_provider.dart';
+import '../../../widgets/meta_chip.dart';
 
 /// Step 1 of the shutdown ritual: resolve each **unhandled** task one at a
 /// time.
@@ -161,13 +162,13 @@ class _TaskResolutionCard extends StatelessWidget {
                     if (todo.timeEstimate != null)
                       _Chip(
                         icon: Icons.timer_outlined,
-                        label: 'Est ${_fmt(todo.timeEstimate!)}',
+                        label: 'Est ${formatMinutesLabel(todo.timeEstimate!)}',
                         color: const Color(0xFF2563EB),
                       ),
                     if (loggedMinutes > 0)
                       _Chip(
                         icon: Icons.access_time,
-                        label: '${_fmt(loggedMinutes)} logged',
+                        label: '${formatMinutesLabel(loggedMinutes)} logged',
                         color: const Color(0xFF7C3AED),
                       ),
                   ],
@@ -206,12 +207,6 @@ class _TaskResolutionCard extends StatelessWidget {
         ),
       ],
     );
-  }
-
-  String _fmt(int m) {
-    if (m < 60) return '${m}m';
-    if (m % 60 == 0) return '${m ~/ 60}h';
-    return '${m ~/ 60}h ${m % 60}m';
   }
 }
 

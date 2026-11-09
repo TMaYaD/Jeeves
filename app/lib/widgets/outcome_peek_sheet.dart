@@ -19,7 +19,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart' hide Action;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:intl/intl.dart';
 
 import '../database/gtd_database.dart';
 import '../providers/database_provider.dart';
@@ -296,7 +295,7 @@ class _OutcomePeekSheetState extends ConsumerState<OutcomePeekSheet> {
                                 child: MetaChip(
                                   icon: Icons.event_outlined,
                                   label: dueDate != null
-                                      ? DateFormat('MMM d, y').format(dueDate)
+                                      ? formatDueDateLabel(dueDate)
                                       : 'Due',
                                   color: dueDate != null
                                       ? const Color(0xFFDC2626)

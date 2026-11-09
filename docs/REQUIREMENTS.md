@@ -9,6 +9,7 @@ To build a hybrid productivity application that merges the rigid organizational 
 * **Action over Organization:** The interface must drive the user toward execution, hiding the complexity of the larger GTD inventory during focus phases.
 * **System Integrity is Paramount:** A productivity system fails when the data rots. The app will enforce necessary friction (guardrails) to ensure the user reviews and updates their inventory.
 * **Local-First Performance:** Task capture and execution (timers/state changes) must work flawlessly offline to prevent user frustration.
+* **Consistent Outcome representations:** Surfaces compose shared metadata, row, review-card and detail contracts; deliberate variations are recorded in [DESIGN.md](DESIGN.md#outcome-representations). Due dates use the local calendar day and `MMM d, y`.
 
 ---
 

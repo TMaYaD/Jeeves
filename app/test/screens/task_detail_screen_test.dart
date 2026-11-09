@@ -804,9 +804,9 @@ void main() {
     testWidgets('dismissing the picker leaves the due date unchanged',
         (tester) async {
       await openWithDueDate(tester);
-      await tester.scrollUntilVisible(find.text('2030-03-15'), 200,
+      await tester.scrollUntilVisible(find.text('Mar 15, 2030'), 200,
           scrollable: find.byType(Scrollable).first);
-      await tester.tap(find.text('2030-03-15'));
+      await tester.tap(find.text('Mar 15, 2030'));
       await tester.pumpAndSettle();
       expect(find.byType(DatePickerDialog), findsOneWidget);
 
@@ -1637,7 +1637,7 @@ void main() {
         'hist3',
         initialTodo: todo,
         terminatedActions: <TerminatedAction>[
-          (action: done, loggedMinutes: 25),
+          (action: done, loggedMinutes: 125),
           (action: abandoned, loggedMinutes: 0),
         ],
       );
@@ -1648,7 +1648,7 @@ void main() {
 
       final doneLabel = _localDateLabel(DateTime.utc(2026, 3, 4, 12));
       final abandonedLabel = _localDateLabel(DateTime.utc(2026, 3, 2, 12));
-      expect(find.text('Done $doneLabel · 25m'), findsOneWidget);
+      expect(find.text('Done $doneLabel · 2h 5m'), findsOneWidget);
       expect(find.text('Abandoned $abandonedLabel'), findsOneWidget,
           reason: 'zero logged minutes are omitted, not rendered as 0m');
     });

@@ -5,7 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../providers/focus_session_planning_provider.dart';
-import '../../../widgets/meta_chip.dart' show formatMinutesLabel;
+import '../../../widgets/meta_chip.dart' show formatMinutesLabel, formatDueDateLabel;
 
 class ScheduledReviewStep extends ConsumerWidget {
   const ScheduledReviewStep({super.key});
@@ -135,12 +135,8 @@ class _TaskRow extends StatelessWidget {
                 ),
                 if (todo.dueDate != null)
                   Builder(builder: (_) {
-                    // Storage is UTC; display the user's local calendar day.
-                    final d = todo.dueDate!.toLocal();
                     return Text(
-                      'Due ${d.year}-'
-                      '${d.month.toString().padLeft(2, '0')}-'
-                      '${d.day.toString().padLeft(2, '0')}',
+                      'Due ${formatDueDateLabel(todo.dueDate!)}',
                       style: TextStyle(fontSize: 12, color: Colors.grey[500]),
                     );
                   }),

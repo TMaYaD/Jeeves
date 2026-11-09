@@ -336,7 +336,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                           const SizedBox(width: 8),
                           Expanded(flex: 1, child: _buildAttributeItem(
                             icon: Icons.bolt,
-                            text: todo.energyLevel != null ? '${todo.energyLevel!.substring(0, 1).toUpperCase()}${todo.energyLevel!.substring(1)}' : 'Energy',
+                            text: todo.energyLevel != null ? energyLevelLabel(todo.energyLevel!) : 'Energy',
                             onTap: () => showOutcomeEnergyLevelSheet(context, _notifier, todo.energyLevel),
                           )),
                         ],
@@ -517,7 +517,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                                       contentWidget: Row(
                                         children: [
                                           Text(
-                                            todo.dueDate != null ? todo.dueDate!.toLocal().toString().split(' ')[0] : 'No Date',
+                                            todo.dueDate != null ? formatDueDateLabel(todo.dueDate!) : 'No Date',
                                             style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Color(0xFF374151)),
                                           ),
                                           if (todo.dueDate != null) ...[
@@ -913,7 +913,7 @@ class _ActionHistorySection extends ConsumerWidget {
     final m = at.month.toString().padLeft(2, '0');
     final d = at.day.toString().padLeft(2, '0');
     final minutes =
-        entry.loggedMinutes > 0 ? ' · ${entry.loggedMinutes}m' : '';
+        entry.loggedMinutes > 0 ? ' · ${formatMinutesLabel(entry.loggedMinutes)}' : '';
     return '$verb $y-$m-$d$minutes';
   }
 }
