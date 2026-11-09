@@ -1,6 +1,6 @@
 /// Widget tests for the Outcome peek affordance on the Plan Summary step (#462).
 ///
-/// A plain tap on a card (outside multi-select) opens the read-only
+/// A plain tap on a card (outside multi-select) opens the editable
 /// [OutcomePeekSheet]; the tap never selects/skips/undoes, and dismissal
 /// restores scroll and selection. Inside multi-select, tap keeps its
 /// selection meaning on Pending cards and is inert on Today/Skipped cards —
@@ -16,6 +16,7 @@
 /// the sheet opens.
 library;
 
+import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -24,6 +25,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
+import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/screens/planning/steps/plan_summary_step.dart';
 import 'package:jeeves/widgets/outcome_peek_sheet.dart';
 
@@ -69,6 +71,14 @@ Widget _harness(GtdDatabase db, List<Todo> todos) {
   return ProviderScope(
     overrides: [
       databaseProvider.overrideWithValue(db),
+      // The peek watches its Outcome live; a real Drift watch hangs
+      // pumpAndSettle (TESTING.md), so each row's streams are stubbed.
+      for (final t in todos) ...[
+        taskDetailTodoProvider(t.id).overrideWith((_) => Stream.value(t)),
+        taskTagsProvider(t.id).overrideWith((_) => Stream.value([])),
+        currentActionProvider(t.id).overrideWith((_) => Stream.value(null)),
+        plannedActionsProvider(t.id).overrideWith((_) => Stream.value([])),
+      ],
       _testTodosProvider.overrideWith((_) => todos),
       nextForFocusSessionPlanningProvider.overrideWith((ref) {
         final state = ref.watch(focusSessionPlanningProvider);
@@ -311,6 +321,35 @@ void main() {
       // Scroll offset preserved; nothing selected/skipped by the peek.
       final after = _scrollOffset(tester);
       expect(after, closeTo(before, 1));
+      final state = _planningState(tester);
+      expect(state.reviewedTaskIds, isEmpty);
+      expect(state.pendingSelectedTaskIds, isEmpty);
+    });
+
+    testWidgets('editing in the peek leaves selection and scroll untouched',
+        (tester) async {
+      await tester.runAsync(() => db.into(db.todos).insert(TodosCompanion(
+            id: const Value('t1'),
+            title: const Value('Task one'),
+            clarified: const Value(true),
+            userId: const Value('local'),
+          )));
+      await _pumpStep(tester, db, [_todo(id: 't1', title: 'Task one')]);
+
+      await tester.tap(find.text('Task one'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('outcome_peek_time')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('45m'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+      await tester.runAsync(() => pumpEventQueue());
+
+      final row = await tester.runAsync(() => (db.select(db.todos)
+            ..where((t) => t.id.equals('t1')))
+          .getSingle());
+      expect(row!.timeEstimate, 45);
       final state = _planningState(tester);
       expect(state.reviewedTaskIds, isEmpty);
       expect(state.pendingSelectedTaskIds, isEmpty);
