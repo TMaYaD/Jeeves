@@ -183,8 +183,9 @@ Then, on the guest, the same command `pr-apk.yml` runs:
 
 ```bash
 cd ~/jeeves/app
-flutter pub get && dart run build_runner build --delete-conflicting-outputs
-flutter build apk --profile --split-per-abi --target-platform android-arm64 --flavor dev
+flutter pub get && \
+  dart run build_runner build --delete-conflicting-outputs && \
+  flutter build apk --profile --split-per-abi --target-platform android-arm64 --flavor dev
 ```
 
 ### How it compares to GitHub
