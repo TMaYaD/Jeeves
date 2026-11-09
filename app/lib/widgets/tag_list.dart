@@ -17,6 +17,7 @@ class TagList extends StatelessWidget {
     required this.tags,
     this.selectedIds = const {},
     this.counts,
+    this.fontSizes,
     this.onTap,
     this.onLongPress,
     this.onDismiss,
@@ -32,6 +33,10 @@ class TagList extends StatelessWidget {
 
   /// Optional per-tag count displayed as ` (n)` suffix when > 0.
   final Map<String, int>? counts;
+
+  /// Optional per-tag font size in sp, keyed by tag id; unlisted tags use
+  /// [TagText]'s default.
+  final Map<String, double>? fontSizes;
 
   final void Function(Tag tag)? onTap;
   final void Function(Tag tag)? onLongPress;
@@ -58,6 +63,7 @@ class TagList extends StatelessWidget {
             tag: tag,
             selected: selectedIds.contains(tag.id),
             trailingCount: counts?[tag.id],
+            fontSize: fontSizes?[tag.id] ?? 13,
             onTap: onTap != null ? () => onTap!(tag) : null,
             onLongPress: onLongPress != null ? () => onLongPress!(tag) : null,
             onDismiss: onDismiss != null ? () => onDismiss!(tag) : null,

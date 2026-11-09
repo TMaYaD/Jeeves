@@ -120,6 +120,11 @@ class AppShell extends ConsumerWidget {
         },
         child: Scaffold(
           drawer: const CustomDrawer(),
+          onDrawerChanged: (isOpen) {
+            if (!isOpen) {
+              ref.read(tagCloudDrawerClosedCountProvider.notifier).recordClose();
+            }
+          },
           appBar: AppTitleBar(
             title: title,
             badge: badge,

@@ -1,8 +1,12 @@
+import 'package:drift/drift.dart' show Value;
+import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/screens/common/tag_management_sheet.dart';
 import 'package:jeeves/widgets/tag_text.dart';
 
 import 'package:jeeves/providers/auth_provider.dart';
@@ -171,6 +175,251 @@ void main() {
       await tester.pumpAndSettle();
       expect(
           find.byKey(const Key('tag_cloud_clear_filters')), findsNothing);
+    });
+  });
+
+  group('TagCloud organisation', () {
+    // 20 tags with distinct counts (t00 busiest), staged in the DAO's
+    // name order to prove the widget re-orders by usage itself.
+    List<TagWithCount> twenty() => [
+          for (var i = 0; i < 20; i++)
+            _twc(_tag('t$i', 'tag${i.toString().padLeft(2, '0')}'), 20 - i),
+        ]..sort((a, b) => a.tag.name.compareTo(b.tag.name));
+
+    testWidgets('collapses to 12 with a toggle that expands and collapses',
+        (tester) async {
+      await tester.pumpWidget(_buildShell(contextTagsWithCount: twenty()));
+      await tester.pump();
+      await _openDrawer(tester);
+
+      expect(find.byType(TagText), findsNWidgets(12));
+      expect(find.text('Show 8 more'), findsOneWidget);
+      expect(find.byKey(const Key('tag_chip_t19')), findsNothing);
+
+      await tester.ensureVisible(find.byKey(const Key('tag_cloud_show_more')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('tag_cloud_show_more')));
+      await tester.pumpAndSettle();
+      expect(find.byType(TagText, skipOffstage: false), findsNWidgets(20));
+      expect(find.text('Show fewer'), findsOneWidget);
+
+      await tester.ensureVisible(find.byKey(const Key('tag_cloud_show_more')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('tag_cloud_show_more')));
+      await tester.pumpAndSettle();
+      expect(find.byType(TagText), findsNWidgets(12));
+    });
+
+    testWidgets('find field and toggle are absent at or under the cap',
+        (tester) async {
+      await tester.pumpWidget(_buildShell(
+        contextTagsWithCount: twenty().take(12).toList(),
+      ));
+      await tester.pump();
+      await _openDrawer(tester);
+
+      expect(find.byKey(const Key('tag_cloud_find_field')), findsNothing);
+      expect(find.byKey(const Key('tag_cloud_show_more')), findsNothing);
+    });
+
+    testWidgets(
+        'find journey: narrow, tap, pinned first, field survives few matches',
+        (tester) async {
+      await tester.pumpWidget(_buildShell(contextTagsWithCount: twenty()));
+      await tester.pump();
+      await _openDrawer(tester);
+
+      await tester.enterText(
+          find.byKey(const Key('tag_cloud_find_field')), '@TAG19');
+      await tester.pumpAndSettle();
+      // One match (< 12) — the field must still be there.
+      expect(find.byKey(const Key('tag_cloud_find_field')), findsOneWidget);
+      expect(find.byType(TagText), findsOneWidget);
+      expect(find.byKey(const Key('tag_chip_t19')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('tag_chip_t19')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('tag_cloud_clear_filters')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('tag_cloud_find_clear')));
+      await tester.pumpAndSettle();
+      // Selected low-count tag is now pinned among the 12 visible.
+      expect(find.byKey(const Key('tag_chip_t19')), findsOneWidget);
+      expect(find.byType(TagText), findsNWidgets(12));
+      final firstChip = tester.widget<TagText>(find.byType(TagText).first);
+      expect(firstChip.tag.id, 't19');
+
+      await tester.tap(find.byKey(const Key('tag_cloud_clear_filters')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('tag_cloud_clear_filters')), findsNothing);
+    });
+
+    testWidgets('shows No matches for an unmatched query', (tester) async {
+      await tester.pumpWidget(_buildShell(contextTagsWithCount: twenty()));
+      await tester.pump();
+      await _openDrawer(tester);
+
+      await tester.enterText(
+          find.byKey(const Key('tag_cloud_find_field')), 'zzz');
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('tag_cloud_no_matches')), findsOneWidget);
+    });
+
+    testWidgets('applies size steps by relative count', (tester) async {
+      await tester.pumpWidget(_buildShell(contextTagsWithCount: twenty()));
+      await tester.pump();
+      await _openDrawer(tester);
+
+      TagText chip(String id) =>
+          tester.widget<TagText>(find.byKey(Key('tag_chip_$id')));
+      expect(chip('t0').fontSize, 15);
+      expect(chip('t11').fontSize, 13);
+
+      await tester.ensureVisible(find.byKey(const Key('tag_cloud_show_more')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('tag_cloud_show_more')));
+      await tester.pumpAndSettle();
+      expect(chip('t19').fontSize, 12);
+    });
+
+    testWidgets('long-press opens tag management', (tester) async {
+      final tags = twenty();
+      await tester.pumpWidget(_buildShell(
+        contextTagsWithCount: tags,
+        contextTags: [for (final t in tags) t.tag],
+      ));
+      await tester.pump();
+      await _openDrawer(tester);
+
+      await tester.longPress(find.byKey(const Key('tag_chip_t0')));
+      await tester.pumpAndSettle();
+      expect(find.byType(TagManagementSheet), findsOneWidget);
+    });
+  });
+
+  group('TagCloud drawer close', () {
+    List<TagWithCount> twenty() => [
+          for (var i = 0; i < 20; i++)
+            _twc(_tag('t$i', 'tag${i.toString().padLeft(2, '0')}'), 20 - i),
+        ];
+
+    testWidgets('closing and reopening the drawer resets query and expansion',
+        (tester) async {
+      await tester.pumpWidget(_buildShell(contextTagsWithCount: twenty()));
+      await tester.pump();
+      await _openDrawer(tester);
+
+      await tester.ensureVisible(find.byKey(const Key('tag_cloud_show_more')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('tag_cloud_show_more')));
+      await tester.pumpAndSettle();
+      expect(find.text('Show fewer'), findsOneWidget);
+      await tester.enterText(
+          find.byKey(const Key('tag_cloud_find_field')), 'tag1');
+      await tester.pumpAndSettle();
+      expect(find.byType(TagText), findsNWidgets(10));
+
+      // Close by tapping the scrim, then reopen.
+      await tester.tapAt(const Offset(780, 300));
+      await tester.pumpAndSettle();
+      await _openDrawer(tester);
+
+      final field = tester.widget<TextField>(
+          find.byKey(const Key('tag_cloud_find_field')));
+      expect(field.controller?.text, isEmpty);
+      expect(find.text('Show 8 more'), findsOneWidget);
+      expect(find.byType(TagText), findsNWidgets(12));
+    });
+
+    testWidgets('a query typed while collapsed is cleared on reopen',
+        (tester) async {
+      await tester.pumpWidget(_buildShell(contextTagsWithCount: twenty()));
+      await tester.pump();
+      await _openDrawer(tester);
+
+      await tester.enterText(
+          find.byKey(const Key('tag_cloud_find_field')), 'tag19');
+      await tester.pumpAndSettle();
+      expect(find.byType(TagText), findsNWidgets(1));
+
+      await tester.tapAt(const Offset(780, 300));
+      await tester.pumpAndSettle();
+      await _openDrawer(tester);
+
+      final field = tester.widget<TextField>(
+          find.byKey(const Key('tag_cloud_find_field')));
+      expect(field.controller?.text, isEmpty);
+      expect(find.byType(TagText), findsNWidgets(12));
+    });
+  });
+
+  group('TagCloud journey over a real database', () {
+    late GtdDatabase db;
+    late List<TagWithCount> counted;
+
+    setUp(() async {
+      db = GtdDatabase(NativeDatabase.memory());
+      const userId = 'u1';
+      final now = DateTime.now();
+      for (var k = 0; k < 20; k++) {
+        await db.into(db.todos).insert(TodosCompanion(
+              id: Value('todo$k'),
+              title: Value('todo $k'),
+              clarified: const Value(true),
+              userId: const Value(userId),
+              createdAt: Value(now),
+              updatedAt: Value(now),
+            ));
+      }
+      for (var i = 0; i < 20; i++) {
+        final id = 't$i';
+        await db.tagDao.upsertTag(TagsCompanion(
+          id: Value(id),
+          name: Value('tag${i.toString().padLeft(2, '0')}'),
+          type: const Value('context'),
+          userId: const Value(userId),
+        ));
+        // Tag i is on 20 - i todos, so tag19 is the least used (1).
+        for (var k = 0; k < 20 - i; k++) {
+          await db.tagDao.assignTag('todo$k', id, userId);
+        }
+      }
+      // Staged here, outside FakeAsync: a live drift watch inside the widget
+      // test would hang (docs/TESTING.md).
+      counted = await db.tagDao.watchTagsWithActiveCount('context').first;
+    });
+
+    tearDown(() async => db.close());
+
+    testWidgets('cap, find, select, pin, clear', (tester) async {
+      await tester.pumpWidget(_buildShell(contextTagsWithCount: counted));
+      await tester.pump();
+      await _openDrawer(tester);
+
+      expect(find.byType(TagText), findsNWidgets(12));
+      expect(find.text('Show 8 more'), findsOneWidget);
+      expect(find.byKey(const Key('tag_chip_t19')), findsNothing);
+
+      await tester.enterText(
+          find.byKey(const Key('tag_cloud_find_field')), 'tag19');
+      await tester.pumpAndSettle();
+      expect(find.byType(TagText), findsOneWidget);
+      expect(find.byKey(const Key('tag_chip_t19')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('tag_chip_t19')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('tag_cloud_clear_filters')), findsOneWidget);
+
+      await tester.enterText(
+          find.byKey(const Key('tag_cloud_find_field')), '');
+      await tester.pumpAndSettle();
+      // Selected tag is pinned first although its count is the lowest.
+      final firstTag = tester.widget<TagText>(find.byType(TagText).first);
+      expect(firstTag.tag.name, 'tag19');
+
+      await tester.tap(find.byKey(const Key('tag_cloud_clear_filters')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('tag_cloud_clear_filters')), findsNothing);
     });
   });
 

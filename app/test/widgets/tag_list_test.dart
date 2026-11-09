@@ -28,6 +28,21 @@ void main() {
       expect(find.byType(TagText), findsNothing);
     });
 
+    testWidgets('fontSizes sets per-tag size; unlisted tags keep default',
+        (tester) async {
+      await tester.pumpWidget(_wrap(TagList(
+        tags: [_tag('t1', 'work'), _tag('t2', 'home')],
+        fontSizes: const {'t1': 15},
+      )));
+
+      expect(
+          tester.widget<TagText>(find.byKey(const Key('tag_chip_t1'))).fontSize,
+          15);
+      expect(
+          tester.widget<TagText>(find.byKey(const Key('tag_chip_t2'))).fontSize,
+          13);
+    });
+
     testWidgets('trailing widget is rendered after tags', (tester) async {
       final tags = [_tag('t1', 'work')];
       await tester.pumpWidget(_wrap(TagList(
