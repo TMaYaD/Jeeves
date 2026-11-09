@@ -196,11 +196,15 @@ void main() {
       expect(find.text('Show 8 more'), findsOneWidget);
       expect(find.byKey(const Key('tag_chip_t19')), findsNothing);
 
+      await tester.ensureVisible(find.byKey(const Key('tag_cloud_show_more')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('tag_cloud_show_more')));
       await tester.pumpAndSettle();
       expect(find.byType(TagText, skipOffstage: false), findsNWidgets(20));
       expect(find.text('Show fewer'), findsOneWidget);
 
+      await tester.ensureVisible(find.byKey(const Key('tag_cloud_show_more')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('tag_cloud_show_more')));
       await tester.pumpAndSettle();
       expect(find.byType(TagText), findsNWidgets(12));
@@ -271,6 +275,8 @@ void main() {
       expect(chip('t0').fontSize, 15);
       expect(chip('t11').fontSize, 13);
 
+      await tester.ensureVisible(find.byKey(const Key('tag_cloud_show_more')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('tag_cloud_show_more')));
       await tester.pumpAndSettle();
       expect(chip('t19').fontSize, 12);
@@ -303,6 +309,8 @@ void main() {
       await tester.pump();
       await _openDrawer(tester);
 
+      await tester.ensureVisible(find.byKey(const Key('tag_cloud_show_more')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('tag_cloud_show_more')));
       await tester.pumpAndSettle();
       expect(find.text('Show fewer'), findsOneWidget);
