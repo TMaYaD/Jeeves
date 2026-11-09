@@ -6,7 +6,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../providers/focus_session_planning_provider.dart';
 import '../../../providers/focus_session_planning_settings_provider.dart';
-import '../../../widgets/meta_chip.dart' show formatMinutesLabel, energyLevelLabel;
+import '../../../widgets/meta_chip.dart';
+import '../../../widgets/outcome_row.dart';
 import '../../../widgets/outcome_peek_sheet.dart';
 
 /// Colour of the capacity-bar segment representing minutes counted at the
@@ -217,7 +218,7 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
                 if (!searching && selectedTasks.isNotEmpty) ...[
                   _SectionLabel('Today\'s Plan (${selectedTasks.length})'),
                   const SizedBox(height: 8),
-                  ...selectedTasks.map((t) => _ReviewCard(
+                  ...selectedTasks.map((t) => _planOutcomeRow(
                         todo: t,
                         isSelected: true,
                         onUndo: () => _handleUndo(t),
@@ -233,7 +234,7 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
                 if (!searching && pendingTasks.isNotEmpty) ...[
                   _SectionLabel('Up Next (${pendingTasks.length})'),
                   const SizedBox(height: 8),
-                  ...pendingTasks.map((t) => _ReviewCard(
+                  ...pendingTasks.map((t) => _planOutcomeRow(
                         todo: t,
                         onSelect: () => _handleSelect(t),
                         onSkip: () => _handleSkip(t),
@@ -252,7 +253,7 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
                 if (!searching && skippedTasks.isNotEmpty) ...[
                   _SectionLabel('Skipped (${skippedTasks.length})'),
                   const SizedBox(height: 8),
-                  ...skippedTasks.map((t) => _ReviewCard(
+                  ...skippedTasks.map((t) => _planOutcomeRow(
                         todo: t,
                         isSkipped: true,
                         onSelect: () => _handleSelect(t),
@@ -296,13 +297,13 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
       if (upNextCount > 0) ...[
         _SectionLabel('Up Next ($upNextCount)'),
         const SizedBox(height: 8),
-        ...pending.map((t) => _ReviewCard(
+        ...pending.map((t) => _planOutcomeRow(
               todo: t,
               onSelect: () => _handleSelect(t),
               onSkip: () => _handleSkip(t),
               onPeek: () => OutcomePeekSheet.show(context, t),
             )),
-        ...skipped.map((t) => _ReviewCard(
+        ...skipped.map((t) => _planOutcomeRow(
               todo: t,
               isSkipped: true,
               onSelect: () => _handleSelect(t),
@@ -314,7 +315,7 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
       if (offUpNext.isNotEmpty) ...[
         _SectionLabel('Not in Up Next (${offUpNext.length})'),
         const SizedBox(height: 8),
-        ...offUpNext.map((c) => _ReviewCard(
+        ...offUpNext.map((c) => _planOutcomeRow(
               todo: c.todo,
               offUpNextReason: c.reason,
               onSelect: () => _handleSelect(c.todo),
@@ -579,184 +580,107 @@ class _MultiSelectActionBar extends StatelessWidget {
 /// [onTapInSelectionMode]. [onLongPress] is the entry point into selection
 /// mode and is only meaningful on Up Next rows.
 ///
-/// [onPeek] — a plain tap outside selection mode opens the read-only Outcome
+/// [onPeek] — a plain tap outside selection mode opens the editable Outcome
 /// peek sheet. Callers pass `null` while multi-select is active so the card
 /// carries no gesture params in-mode: on Today's Plan / Skipped rows that
-/// leaves the card with no [GestureDetector] at all (tap inert, rendering and
+/// leaves the row without a gesture handler (tap inert, rendering and
 /// the trailing action buttons untouched); Pending rows keep their in-mode
 /// checkbox-toggle wiring. This is why the peek is gated at the call site
 /// rather than by threading [selectionMode] here — [selectionMode] stays purely
 /// a Pending-card rendering flag.
-class _ReviewCard extends StatelessWidget {
-  const _ReviewCard({
-    required this.todo,
-    this.isSelected = false,
-    this.isSkipped = false,
-    this.onSelect,
-    this.onSkip,
-    this.onUndo,
-    this.selectionMode = false,
-    this.isChecked = false,
-    this.onLongPress,
-    this.onTapInSelectionMode,
-    this.onPeek,
-    this.offUpNextReason,
-  });
-
-  /// Set on rows from outside Up Next: renders the muted card and a chip
-  /// naming the list the Outcome came from.
-  final OffUpNextReason? offUpNextReason;
-
-  final Todo todo;
-  final bool isSelected;
-  final bool isSkipped;
-  final VoidCallback? onSelect;
-  final VoidCallback? onSkip;
-  final VoidCallback? onUndo;
-  final bool selectionMode;
-  final bool isChecked;
-  final VoidCallback? onLongPress;
-  final VoidCallback? onTapInSelectionMode;
-  final VoidCallback? onPeek;
-
-  @override
-  Widget build(BuildContext context) {
-    final textColor = isSkipped ? Colors.grey[500] : const Color(0xFF1A1A2E);
-    final backgroundColor = isSkipped || offUpNextReason != null
+Widget _planOutcomeRow({
+  required Todo todo,
+  bool isSelected = false,
+  bool isSkipped = false,
+  VoidCallback? onSelect,
+  VoidCallback? onSkip,
+  VoidCallback? onUndo,
+  bool selectionMode = false,
+  bool isChecked = false,
+  VoidCallback? onLongPress,
+  VoidCallback? onTapInSelectionMode,
+  VoidCallback? onPeek,
+  OffUpNextReason? offUpNextReason,
+}) {
+  return OutcomeRow(
+    title: todo.title,
+    framed: true,
+    muted: isSkipped,
+    backgroundColor: isSkipped || offUpNextReason != null
         ? const Color(0xFFF9FAFB)
-        : Colors.white;
-
-    final card = Card(
-      elevation: 0,
-      color: backgroundColor,
-      margin: const EdgeInsets.only(bottom: 8),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(
-          color: isSkipped ? const Color(0xFFF3F4F6) : const Color(0xFFE5E7EB),
-        ),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Row(
-          children: [
-            if (selectionMode)
-              Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: Tooltip(
-                  message: 'Select',
-                  child: Checkbox(
-                    value: isChecked,
-                    onChanged: onTapInSelectionMode == null
-                        ? null
-                        : (_) => onTapInSelectionMode!(),
-                    visualDensity: VisualDensity.compact,
-                  ),
-                ),
-              ),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    todo.title,
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w500,
-                      color: textColor,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Wrap(
-                    spacing: 6,
-                    children: [
-                      if (offUpNextReason != null)
-                        _Chip(
-                          icon: Icons.inbox_outlined,
-                          label: offUpNextReason!.label,
-                          color: const Color(0xFF6B7280),
-                        ),
-                      if (todo.timeEstimate != null)
-                        _Chip(
-                          icon: Icons.timer_outlined,
-                          label: formatMinutesLabel(todo.timeEstimate!),
-                          color: isSkipped
-                              ? Colors.grey[400]!
-                              : const Color(0xFF2563EB),
-                        ),
-                      if (todo.energyLevel != null)
-                        _Chip(
-                          icon: Icons.bolt_outlined,
-                          label: energyLevelLabel(todo.energyLevel!),
-                          color: isSkipped
-                              ? Colors.grey[400]!
-                              : const Color(0xFF7C3AED),
-                        ),
-                    ],
-                  ),
-                ],
-              ),
+        : Colors.white,
+    borderColor: isSkipped ? const Color(0xFFF3F4F6) : const Color(0xFFE5E7EB),
+    onTap: selectionMode ? onTapInSelectionMode : onPeek,
+    onLongPress: onLongPress,
+    leading: selectionMode
+        ? Tooltip(
+            message: 'Select',
+            child: Checkbox(
+              value: isChecked,
+              onChanged: onTapInSelectionMode == null
+                  ? null
+                  : (_) => onTapInSelectionMode(),
+              visualDensity: VisualDensity.compact,
             ),
-            if (!selectionMode) ...[
-              const SizedBox(width: 8),
-              // Fixed two-button layout — positions never shift:
-              //   pending  → [select] [skip]
-              //   selected → [undo]   [skip]   ← only left changes
-              //   skipped  → [select] [undo]   ← only right changes
-              SizedBox(
-                width: 80,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    // Left slot: Select (pending/skipped) or Undo-of-select (planned)
-                    if (isSelected && onUndo != null)
-                      _IconBtn(
-                        icon: Icons.undo,
-                        color: const Color(0xFF6B7280),
-                        tooltip: 'Remove from today',
-                        onTap: onUndo!,
-                      )
-                    else if (!isSelected && onSelect != null)
-                      _IconBtn(
-                        icon: Icons.check_circle_outline,
-                        color: const Color(0xFF16A34A),
-                        tooltip: 'Select for today',
-                        onTap: onSelect!,
-                      ),
-                    // Right slot: Skip (pending/planned) or Undo-of-skip (skipped)
-                    if (isSkipped && onUndo != null)
-                      _IconBtn(
-                        icon: Icons.undo,
-                        color: const Color(0xFF6B7280),
-                        tooltip: 'Un-skip',
-                        onTap: onUndo!,
-                      )
-                    else if (!isSkipped && onSkip != null)
-                      _IconBtn(
-                        icon: Icons.remove_circle_outline,
-                        color: const Color(0xFF6B7280),
-                        tooltip: 'Skip for today',
-                        onTap: onSkip!,
-                      ),
-                  ],
-                ),
-              ),
-            ],
-          ],
+          )
+        : null,
+    meta: Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        if (offUpNextReason != null)
+          MetaChip(
+            icon: Icons.inbox_outlined,
+            label: offUpNextReason.label,
+            color: const Color(0xFF6B7280),
+          ),
+        OutcomeMetaLine(
+          energyLevel: todo.energyLevel,
+          timeEstimateMinutes: todo.timeEstimate,
         ),
-      ),
-    );
-
-    if (onLongPress == null && onTapInSelectionMode == null && onPeek == null) {
-      return card;
-    }
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onLongPress: onLongPress,
-      onTap: selectionMode ? onTapInSelectionMode : onPeek,
-      child: card,
-    );
-  }
+      ],
+    ),
+    trailing: selectionMode
+        ? const SizedBox.shrink()
+        : SizedBox(
+            width: 80,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                // Left slot: Select (pending/skipped) or Undo-of-select (planned)
+                if (isSelected && onUndo != null)
+                  _IconBtn(
+                    icon: Icons.undo,
+                    color: const Color(0xFF6B7280),
+                    tooltip: 'Remove from today',
+                    onTap: onUndo,
+                  )
+                else if (!isSelected && onSelect != null)
+                  _IconBtn(
+                    icon: Icons.check_circle_outline,
+                    color: const Color(0xFF16A34A),
+                    tooltip: 'Select for today',
+                    onTap: onSelect,
+                  ),
+                // Right slot: Skip (pending/planned) or Undo-of-skip (skipped)
+                if (isSkipped && onUndo != null)
+                  _IconBtn(
+                    icon: Icons.undo,
+                    color: const Color(0xFF6B7280),
+                    tooltip: 'Un-skip',
+                    onTap: onUndo,
+                  )
+                else if (!isSkipped && onSkip != null)
+                  _IconBtn(
+                    icon: Icons.remove_circle_outline,
+                    color: const Color(0xFF6B7280),
+                    tooltip: 'Skip for today',
+                    onTap: onSkip,
+                  ),
+              ],
+            ),
+          ),
+  );
 }
 
 class _SearchField extends StatelessWidget {
@@ -795,28 +719,6 @@ class _SearchField extends StatelessWidget {
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
         ),
       ),
-    );
-  }
-}
-
-class _Chip extends StatelessWidget {
-  const _Chip({required this.icon, required this.label, required this.color});
-
-  final IconData icon;
-  final String label;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 12, color: color),
-        const SizedBox(width: 2),
-        Text(label,
-            style: TextStyle(
-                fontSize: 12, color: color, fontWeight: FontWeight.w500)),
-      ],
     );
   }
 }
