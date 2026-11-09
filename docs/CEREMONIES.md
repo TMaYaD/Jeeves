@@ -30,6 +30,33 @@ history records only completed performances.
 The current Ceremonies are `focus_session_planning`, `focus_session_review`,
 `periodic_review`, and inbox clarification.
 
+## Weekly Review sessions
+
+The intro offers Everything by default, plus 15, 30 and 60-minute budgets when
+strictly shorter than the full estimate. At two minutes per item, 15 minutes
+selects seven items from one pool across all four steps. Selection preserves the
+existing order within each step. The ranker is replaceable through
+`periodicReviewRankerProvider`.
+
+The first matching priority tier wins: Inbox Captures; Planless Outcomes; Stale
+Outcomes; Actionless Outcomes with planned Actions; remaining Waiting For
+Outcomes; everything else. Someday/Maybe never enters the Planless, Stale or
+Actionless tiers. Within each tier, least-recently-clarified comes first (never
+clarified first), then creation time, then id, ascending.
+
+The first partial session opens a seven-day review period. Outcomes clarified
+since it opened count as covered, including Keep and clarification on other
+surfaces. Captures count only when they leave the Inbox: **Keep on a Capture
+leaves it pending**, so it returns next session. Skip likewise leaves an item
+pending in a partial session. Progress survives process death; the precise
+in-session cursor remains transient.
+
+A partial summary shows the remaining count from current storage and Done ends
+only that sitting. A session containing all remaining items completes the review
+on Done, even with skips, preserving the full-review behaviour. An unfinished
+review expires seven days after opening and starts fresh. Nudge cadence and
+in-progress suppression continue to apply.
+
 ## Nudge visibility
 
 A Nudge's visibility is computed on every read, never stored. Only two facts are

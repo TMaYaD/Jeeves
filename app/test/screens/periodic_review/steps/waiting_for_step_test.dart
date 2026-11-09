@@ -14,6 +14,8 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:jeeves/providers/synced_preferences_provider.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
@@ -64,7 +66,7 @@ Future<String> _insertWaitingForTodo(
   return id;
 }
 
-Widget _harness(
+ProviderContainer _container(
   GtdDatabase db, {
   /// Todo IDs whose todo/tag providers should be overridden with static
   /// streams so the inner ClarifyCard (rendered by the `reclarify` sub-flow)
@@ -73,7 +75,7 @@ Widget _harness(
   /// trips the post-test "Timer is still pending" invariant.
   List<String> reclarifyIds = const [],
 }) {
-  return ProviderScope(
+  return ProviderContainer(
     overrides: [
       databaseProvider.overrideWithValue(db),
       for (final id in reclarifyIds) ...[
@@ -87,9 +89,6 @@ Widget _harness(
         projectTagsProvider.overrideWith((_) => Stream.value(const <Tag>[])),
       ],
     ],
-    child: const MaterialApp(
-      home: Scaffold(body: WaitingForStep()),
-    ),
   );
 }
 
@@ -100,17 +99,24 @@ Future<ProviderContainer> _enterStep(
   GtdDatabase db, {
   List<String> reclarifyIds = const [],
 }) async {
-  await tester.pumpWidget(_harness(db, reclarifyIds: reclarifyIds));
-  final container = ProviderScope.containerOf(
-    tester.element(find.byType(WaitingForStep)),
-  );
-  await container.read(periodicReviewProvider.notifier).loadWaitingForSnapshot();
+  final container = _container(db, reclarifyIds: reclarifyIds);
+  addTearDown(container.dispose);
+  // Preference migration and its Drift subscription need the real event loop.
+  await tester.runAsync(() async {
+    await container.read(syncedPreferencesProvider.future);
+    await container.read(periodicReviewProvider.notifier).loadWaitingForSnapshot();
+  });
+  await tester.pumpWidget(UncontrolledProviderScope(
+    container: container,
+    child: const MaterialApp(home: Scaffold(body: WaitingForStep())),
+  ));
   await tester.pumpAndSettle();
   return container;
 }
 
 void main() {
   setUpAll(configureSqliteForTests);
+  setUp(() => SharedPreferences.setMockInitialValues({}));
 
   group('WaitingForStep — promote to Next captures a phrase (#293)', () {
     late GtdDatabase db;
