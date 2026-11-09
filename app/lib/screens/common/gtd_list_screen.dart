@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../database/gtd_database.dart';
 import '../../widgets/active_filter_bar.dart';
 import '../../widgets/async_list.dart';
+import '../../widgets/meta_chip.dart';
 
 /// Shared list screen for all GTD views (Next Actions, Waiting For, etc.).
 ///
@@ -96,7 +97,9 @@ class _GtdListItem extends StatelessWidget {
                   if (todo.energyLevel != null) ...[
                     const SizedBox(height: 2),
                     Text(
-                      _energyLabel(todo.energyLevel!),
+                      {'low', 'medium', 'high'}.contains(todo.energyLevel)
+                          ? '${energyLevelLabel(todo.energyLevel!)} energy'
+                          : energyLevelLabel(todo.energyLevel!),
                       style: const TextStyle(
                           fontSize: 12, color: Color(0xFF9CA3AF)),
                     ),
@@ -110,11 +113,4 @@ class _GtdListItem extends StatelessWidget {
       ),
     );
   }
-
-  String _energyLabel(String level) => switch (level) {
-        'low' => 'Low energy',
-        'medium' => 'Medium energy',
-        'high' => 'High energy',
-        _ => level,
-      };
 }

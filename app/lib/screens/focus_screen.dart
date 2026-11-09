@@ -10,6 +10,7 @@ import '../providers/focus_settings_provider.dart';
 import '../providers/sprint_timer_provider.dart'
     show findBatchingCandidates, sprintTimerProvider;
 import '../services/notification_service.dart' show notificationServiceProvider;
+import '../widgets/meta_chip.dart';
 
 class FocusScreen extends ConsumerWidget {
   const FocusScreen({super.key});
@@ -311,12 +312,8 @@ class _TaskRow extends ConsumerWidget {
                     if (todo.dueDate != null) ...[
                       const SizedBox(height: 2),
                       Builder(builder: (_) {
-                        // Storage is UTC; display the user's local calendar day.
-                        final d = todo.dueDate!.toLocal();
                         return Text(
-                          'Due ${d.year}-'
-                          '${d.month.toString().padLeft(2, '0')}-'
-                          '${d.day.toString().padLeft(2, '0')}',
+                          'Due ${formatDueDateLabel(todo.dueDate!)}',
                           style: const TextStyle(
                               fontSize: 12, color: Color(0xFF9CA3AF)),
                         );
@@ -327,11 +324,7 @@ class _TaskRow extends ConsumerWidget {
                       Row(
                         children: [
                           Text(
-                            estimate < 60
-                                ? '${estimate}m'
-                                : estimate % 60 == 0
-                                    ? '${estimate ~/ 60}h'
-                                    : '${estimate ~/ 60}h ${estimate % 60}m',
+                            formatMinutesLabel(estimate),
                             style: const TextStyle(
                                 fontSize: 12, color: Color(0xFF9CA3AF)),
                           ),
@@ -556,19 +549,13 @@ class _CarriedOverTaskRow extends StatelessWidget {
           ),
           if (todo.timeEstimate != null)
             Text(
-              _fmt(todo.timeEstimate!),
+              formatMinutesLabel(todo.timeEstimate!),
               style:
                   const TextStyle(fontSize: 12, color: Color(0xFFD1D5DB)),
             ),
         ],
       ),
     );
-  }
-
-  String _fmt(int m) {
-    if (m < 60) return '${m}m';
-    if (m % 60 == 0) return '${m ~/ 60}h';
-    return '${m ~/ 60}h ${m % 60}m';
   }
 }
 

@@ -6,7 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../providers/focus_session_planning_provider.dart';
 import '../../../providers/focus_session_planning_settings_provider.dart';
-import '../../../widgets/meta_chip.dart' show formatMinutesLabel;
+import '../../../widgets/meta_chip.dart' show formatMinutesLabel, energyLevelLabel;
 import '../../../widgets/outcome_peek_sheet.dart';
 
 /// Colour of the capacity-bar segment representing minutes counted at the
@@ -687,7 +687,7 @@ class _ReviewCard extends StatelessWidget {
                       if (todo.energyLevel != null)
                         _Chip(
                           icon: Icons.bolt_outlined,
-                          label: _energyLabel(todo.energyLevel!),
+                          label: energyLevelLabel(todo.energyLevel!),
                           color: isSkipped
                               ? Colors.grey[400]!
                               : const Color(0xFF7C3AED),
@@ -757,13 +757,6 @@ class _ReviewCard extends StatelessWidget {
       child: card,
     );
   }
-
-  String _energyLabel(String level) => switch (level) {
-        'low' => 'Low',
-        'medium' => 'Medium',
-        'high' => 'High',
-        _ => level,
-      };
 }
 
 class _SearchField extends StatelessWidget {

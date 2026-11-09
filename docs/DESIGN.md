@@ -406,7 +406,7 @@ Opening, editing or dismissing never selects, skips or otherwise touches the pic
 Tap and long-press are split by mode: **tap peeks, hold selects**. Long-press enters multi-select (above); while multi-select is active, tap reverts to its selection meaning on Up Next cards and the peek is unavailable — tap is inert on Today's Plan / Skipped cards, whose action buttons stay fully functional. Exiting multi-select restores tap-to-peek. The sheet follows the 2/4/6 radii scale — 6px top corners (sheet surface), 4px meta chips.
 
 ### Task-detail Plan section
-The task-detail screen (`/task/:id`) carries a **Plan** section (`_PlanSection`, `app/lib/screens/task_detail/task_detail_screen.dart`) above the Notes area — the Outcome's "what's next" outranks free-text notes. Its anatomy, top to bottom:
+The task-detail screen (`/task/:id`) carries a **Plan** section (`OutcomePlanSection`, `app/lib/widgets/outcome_plan_section.dart`) above the Notes area — the Outcome's "what's next" outranks free-text notes. Its anatomy, top to bottom:
 
 *   **Section label** — a `PLAN` overline styled like the `NOTES` label (12px, `#9CA3AF`, tracked caps) with a checklist icon.
 *   **Current-action anchor row** — the current Action's text with a leading filled marker and two trailing controls: a down-arrow **"Move to plan"** demote button and an archive-glyph **"Abandon"** button. Both render only when a current Action exists. When the Outcome is **Actionless**, a quiet `No current action` placeholder holds the slot — the empty state that makes promotion meaningful.
@@ -486,3 +486,73 @@ Two copy rules, both asserted by test (`sync_health_copy_test.dart`):
 
 There is **no healthy or empty state copy**, because a healthy device cannot reach
 the screen. The absence is deliberate.
+
+
+## Outcome representations
+
+An Outcome uses the contracts below wherever it appears. Attribute vocabulary
+follows [CONTEXT.md](../CONTEXT.md#language); shared labels and chips live in
+[`meta_chip.dart`](../app/lib/widgets/meta_chip.dart). The inventory maps each
+surface to its representation contract; deliberate differences are listed with
+their reasons so that a new surface can reuse the same contract.
+
+### Component contracts
+
+| Representation | Fields and layout | Interaction contract |
+|---|---|---|
+| `OutcomeMetaLine` | Read-only chips, ordered energy · estimate · time logged · due. Unset attributes omitted; the caller supplies the attributes it shows. | No gestures; the containing surface owns the tap target. |
+| `OutcomeRow` | Optional leading slot, title (normal, muted or struck), secondary line, metadata (default `OutcomeMetaLine`), optional trailing slot. Flat or framed with r12 border and h16/v12 padding. | Whole-row tap and long-press callbacks. No ink or chevron when no tap callback exists. |
+| `OutcomeReviewCard` | Banner (icon, text, tone), people chips, title, current Action, notes, optional metadata and actions. Absent Action and notes are omitted. | Injected `ProcessToHandlers` or resolution buttons. |
+| Outcome detail / `OutcomeAttributeStrip` | Title → editable attribute strip → contexts → people → Plan → notes. Strip uses the metadata order with shared attribute editors. | Each editable chip has an ancestor tap target; logged time stays read-only. |
+
+Energy uses purple `#7C3AED` and `bolt_outlined`; estimate uses blue `#2563EB`
+and `timer_outlined`; logged time uses green `#16A34A` and
+`history_toggle_off_outlined`; due uses red `#DC2626` and `event_outlined`.
+`formatMinutesLabel` renders durations as `45m`, `2h` or `2h 5m`.
+`energyLevelLabel` preserves unknown values. `formatDueDateLabel` converts to
+local time and renders `MMM d, y` (for example, `Nov 9, 2026`).
+
+### Surface inventory
+
+Paths are under `app/lib/`; DPR means Daily Planning and ES means Evening Shutdown.
+
+| Surface / source | Fields | Layout / representation contract | Interactions |
+|---|---|---|---|
+| Task detail — `screens/task_detail/task_detail_screen.dart` | Project, status, title, attributes, contexts, people, Plan, notes, History, reminders, captured-from | Full Outcome detail | Autosave edits; status menu; attribute editors |
+| Peek — `widgets/outcome_peek_sheet.dart` | Title, energy, estimate, logged time, due, contexts, people, Plan, notes | Bottom-sheet Outcome detail | Edit in place; close |
+| Clarify — `widgets/clarify_card.dart` | Title, notes, project, contexts, energy, estimate, due, process-to | Outlined form; shared labels and estimate picker | Capture draft or Outcome autosave; process-to routing |
+| DPR plan summary — `screens/planning/steps/plan_summary_step.dart` | Title, off-Up-Next reason, estimate, energy | Framed `OutcomeRow`, checkbox and selection controls | Peek, long-press selection, Select/Skip/Undo |
+| DPR re-clarify — `screens/planning/steps/task_review_step.dart` | Hint, title, notes, current Action | `OutcomeReviewCard` | `ProcessToHandlers` |
+| DPR scheduled — `screens/planning/steps/scheduled_review_step.dart` | Title, due, estimate | Framed `OutcomeRow` | None |
+| ES settled — `screens/shutdown/steps/settled_review_step.dart` | Settlement icon, title, estimate vs actual | Framed `OutcomeRow` | None |
+| ES disposition — `screens/shutdown/steps/unfinished_tasks_step.dart` | Title, current Action, notes, estimate, logged | `OutcomeReviewCard` | Roll over / Return to Next / Defer |
+| Weekly review — `screens/periodic_review/steps/_review_card.dart` | Banner, people, title, current Action, notes | `OutcomeReviewCard` | Injected `ProcessToHandlers` |
+| Focus — `screens/focus_screen.dart` | Title, due, estimate, sprint count | Flat `OutcomeRow`, trailing Start/status | Open detail; Start/Resume |
+| Focus carried-over — `screens/focus_screen.dart` | Muted title, estimate | Flat `OutcomeRow`, leading icon | None |
+| Search — `screens/search/widgets/search_result_tile.dart` | Title, snippet, match hint, status | Flat `OutcomeRow` | Capture → clarify; Outcome → detail |
+| GTD lists / Project — `screens/common/gtd_list_screen.dart` | Title, energy, estimate, due when set | Flat `OutcomeRow` | Open detail |
+| Waiting For — `screens/waiting_for/waiting_for_screen.dart` | Title, energy, estimate, due when set | Flat `OutcomeRow`, grouped by person | Open detail |
+| Linked Outcomes — `widgets/capture_outcomes_section.dart` | Title, next Action, contexts, Capture provenance count | Framed `OutcomeRow` | Unlink |
+
+### Deliberate variations
+
+| Surface | Difference | Reason |
+|---|---|---|
+| Task detail | Project and status above; History, reminders and captured-from below | The full record lives here. |
+| Peek | No project or status control | Peeking must not change pick-up state. |
+| Clarify | Outlined fields, required title, inline pickers; draft for Captures; routing sets status | Clarification is a form. |
+| Clarify due picker | Today through +365 days | A new deadline is not set in the past. |
+| Waiting For | Person appears in group header | Avoid repeating the person on every row. |
+| Focus | Sprint count beside estimate; settled title struck | Supports engagement and settlement. |
+| Focus carried-over | Muted and read-only | Records yesterday rather than offering work to act on. |
+| Search | Match snippet, hint and status; also includes Captures | Explains why the item matched. |
+| DPR plan summary | Off-Up-Next reason, capacity bar, skipped tone, selection controls | Supports choosing today's Plan. |
+| DPR scheduled | Due-date ordering | Makes deadlines visible first. |
+| ES settled | Estimate-versus-actual ratio colours; zero totals shown as a dash | Estimate accuracy is the purpose of this step. |
+| Linked Outcomes | Context chips and merge provenance; no navigation | The surface edits Capture links. |
+| DPR re-clarify | Hint banner | Explains why the Outcome is queued. |
+| ES disposition | Three resolution buttons with previous choice | Records the unfinished Outcome's disposition. |
+
+`TaskStatusRow` is a status control, and `CaptureListItem` represents Captures;
+neither is an Outcome representation. Blank-title handling and the energy
+picker's per-level colours remain surface-specific.

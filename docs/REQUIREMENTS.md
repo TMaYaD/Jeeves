@@ -6,6 +6,7 @@
 To build a hybrid productivity application that merges the rigid organizational trust of a Getting Things Done (GTD) inventory (e.g., Nirvana) with the focused, day-to-day execution layer of a daily planner and timeboxer (e.g., Sunsama). The system prioritizes immediate execution through Pomodoro constraints and maintains data integrity through forced behavioral guardrails.
 
 ## 2. Core Principles
+* **Consistent Outcome representations:** Surfaces compose shared metadata, row, review-card and detail contracts; deliberate variations are recorded in [DESIGN.md](DESIGN.md#outcome-representations). Due dates use the local calendar day and `MMM d, y`.
 * **Action over Organization:** The interface must drive the user toward execution, hiding the complexity of the larger GTD inventory during focus phases.
 * **System Integrity is Paramount:** A productivity system fails when the data rots. The app will enforce necessary friction (guardrails) to ensure the user reviews and updates their inventory.
 * **Local-First Performance:** Task capture and execution (timers/state changes) must work flawlessly offline to prevent user frustration.

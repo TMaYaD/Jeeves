@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../providers/evening_shutdown_provider.dart';
+import '../../../widgets/meta_chip.dart';
 
 /// Step 0 of the shutdown ritual: the day's **Settled** Outcomes, grouped by
 /// how each settled.
@@ -215,12 +216,12 @@ class _SummaryBar extends StatelessWidget {
           ),
           _StatChip(
             label: 'Estimated',
-            value: _fmtMinutes(totalEstimated),
+            value: totalEstimated == 0 ? '—' : formatMinutesLabel(totalEstimated),
             color: const Color(0xFF2563EB),
           ),
           _StatChip(
             label: 'Actual',
-            value: _fmtMinutes(totalActual),
+            value: totalActual == 0 ? '—' : formatMinutesLabel(totalActual),
             color: const Color(0xFF7C3AED),
           ),
           if (accuracy != null)
@@ -238,13 +239,6 @@ class _SummaryBar extends StatelessWidget {
     if (accuracy >= 80 && accuracy <= 120) return const Color(0xFF16A34A);
     if (accuracy >= 60 && accuracy <= 140) return const Color(0xFFF59E0B);
     return const Color(0xFFDC2626);
-  }
-
-  String _fmtMinutes(int m) {
-    if (m == 0) return '—';
-    if (m < 60) return '${m}m';
-    if (m % 60 == 0) return '${m ~/ 60}h';
-    return '${m ~/ 60}h ${m % 60}m';
   }
 }
 
@@ -376,13 +370,13 @@ class _TimeComparison extends StatelessWidget {
         if (estimated != null)
           _TimeChip(
             icon: Icons.timer_outlined,
-            label: 'Est ${_fmt(estimated!)}',
+            label: 'Est ${formatMinutesLabel(estimated!)}',
             color: const Color(0xFF2563EB),
           ),
         if (actual > 0)
           _TimeChip(
             icon: Icons.access_time,
-            label: 'Actual ${_fmt(actual)}',
+            label: 'Actual ${formatMinutesLabel(actual)}',
             color: _actualColor(estimated, actual),
           ),
       ],
@@ -395,12 +389,6 @@ class _TimeComparison extends StatelessWidget {
     if (ratio <= 1.2) return const Color(0xFF16A34A);
     if (ratio <= 1.5) return const Color(0xFFF59E0B);
     return const Color(0xFFDC2626);
-  }
-
-  String _fmt(int m) {
-    if (m < 60) return '${m}m';
-    if (m % 60 == 0) return '${m ~/ 60}h';
-    return '${m ~/ 60}h ${m % 60}m';
   }
 }
 
