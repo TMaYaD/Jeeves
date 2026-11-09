@@ -18,7 +18,7 @@ import 'replace_current_action_sheet.dart';
 /// action" confirm sheet (supersede-and-promote), never a silent replace. No
 /// SnackBars — every affordance is inline, per the screen's idiom.
 class OutcomePlanSection extends ConsumerStatefulWidget {
-  const OutcomePlanSection({required this.outcomeId});
+  const OutcomePlanSection({super.key, required this.outcomeId});
 
   final String outcomeId;
 
