@@ -7,6 +7,7 @@ library;
 import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
+import 'package:jeeves/widgets/outcome_review_card.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -138,6 +139,7 @@ void main() {
       await _enterReviewStep(tester, db);
 
       expect(find.text('Draft the agenda'), findsOneWidget);
+      expect(find.byType(OutcomeReviewCard), findsOneWidget);
       expect(find.text('Run the retro'), findsOneWidget,
           reason: 'the Action is subtext under the Outcome title, not instead');
       expect(find.text('Updated since last clarified'), findsOneWidget);

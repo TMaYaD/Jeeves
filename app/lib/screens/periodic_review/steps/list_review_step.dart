@@ -4,7 +4,7 @@
 /// Each step iterates one item at a time over a stable [SnapshotNav<Todo>]
 /// loaded when the step opens (per `REQUIREMENTS.md:72`), guards on
 /// load-error / loading / empty, renders the current item via
-/// [ReviewItemCard], and slots in a configured [ProcessToHandlers] action
+/// [OutcomeReviewCard], and slots in a configured [ProcessToHandlers] action
 /// bar. The post-route bookkeeping (record routing -> advance the cursor) is
 /// shaped identically across all three steps; only the slice it writes to
 /// and the action filters differ.
@@ -22,6 +22,7 @@ import '../../../database/gtd_database.dart';
 import '../../../utils/snapshot_nav.dart';
 import '../../../widgets/process_to_handlers.dart';
 import '_review_card.dart';
+import '../../../widgets/outcome_review_card.dart';
 
 /// Copy + iconography for the empty-state surface a list-driven step
 /// renders when its snapshot is empty (or the user has consumed all items).
@@ -51,7 +52,7 @@ class ListReviewEmpty {
 ///   stays active unless the parent puts it in [processExcept] (Next
 ///   Actions does — promoting an already-Next item back to Next is
 ///   nonsensical, so the dialog modifier is inert and removed for clarity).
-/// - [headline] / [subtextFor] / [personTagsFor] feed [ReviewItemCard].
+/// - [headline] / [subtextFor] / [personTagsFor] feed [OutcomeReviewCard].
 /// - [loadErrorTitle] / [emptyState] override the surface copy.
 ///
 /// `T` is generic in the type signature but in practice every callsite is
@@ -169,13 +170,13 @@ class ListReviewStep<T extends Todo> extends ConsumerWidget {
     final index = nav.index;
     final todo = nav.current!;
 
-    return ReviewItemCard(
+    return OutcomeReviewCard(
       key: ValueKey(todo.id),
       todo: todo,
-      headline: headline,
-      subtext: subtextFor?.call(todo),
+      banner: OutcomeReviewBanner(icon: Icons.refresh, text: headline),
+      currentActionText: subtextFor?.call(todo),
       personTags: personTagsFor?.call(todo) ?? const [],
-      process: ProcessToHandlers(
+      actions: ProcessToHandlers(
         subject: OutcomeSubject(
           todo,
           currentActionText: currentActionTextFor?.call(todo),

@@ -16,7 +16,7 @@ import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/periodic_review_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
-import 'package:jeeves/screens/periodic_review/steps/_review_card.dart';
+import 'package:jeeves/widgets/outcome_review_card.dart';
 import 'package:jeeves/screens/periodic_review/steps/next_step.dart';
 import 'package:jeeves/widgets/app_title_bar/app_title_bar.dart';
 import 'package:jeeves/widgets/clarify_card.dart';
@@ -129,8 +129,8 @@ void main() {
       expect(find.text('Repaint the fence'), findsOneWidget);
       // The card must be handed no subtext at all — asserting only the title
       // would pass just as happily with a stale phrase rendered beneath it.
-      final card = tester.widget<ReviewItemCard>(find.byType(ReviewItemCard));
-      expect(card.subtext, isNull);
+      final card = tester.widget<OutcomeReviewCard>(find.byType(OutcomeReviewCard));
+      expect(card.currentActionText, isNull);
     });
   });
 

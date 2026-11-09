@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../providers/evening_shutdown_provider.dart';
 import '../../../widgets/meta_chip.dart';
+import '../../../widgets/outcome_review_card.dart';
+import '../../../providers/task_detail_provider.dart';
 
 /// Step 1 of the shutdown ritual: resolve each **unhandled** task one at a
 /// time.
@@ -46,7 +48,8 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
   @override
   Widget build(BuildContext context) {
     final nav = ref.watch(
-        eveningShutdownProvider.select((s) => s.unfinishedNav));
+      eveningShutdownProvider.select((s) => s.unfinishedNav),
+    );
 
     if (!nav.isLoaded) {
       return const Center(child: CircularProgressIndicator());
@@ -77,135 +80,55 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
 
     final current = nav.current!;
     final notifier = ref.read(eveningShutdownProvider.notifier);
-    final dispositions =
-        ref.watch(eveningShutdownProvider.select((s) => s.dispositions));
+    final dispositions = ref.watch(
+      eveningShutdownProvider.select((s) => s.dispositions),
+    );
     // Derived from time_logs; absent (→ 0) while the first emission is in
     // flight and for an Outcome with no stints.
     final loggedMinutes =
         ref.watch(loggedMinutesByOutcomeProvider).value?[current.id] ?? 0;
 
-    return SingleChildScrollView(
-      physics: const ClampingScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
-      child: _TaskResolutionCard(
-        key: ValueKey(current.id),
-        todo: current,
-        loggedMinutes: loggedMinutes,
-        lastDisposition: dispositions[current.id],
-        onRollOver: () => notifier.rolloverTask(current.id),
-        onReturn: () => notifier.returnToNext(current.id),
-        onDefer: () => notifier.deferTask(current.id),
+    final currentAction = ref.watch(currentActionProvider(current.id)).value;
+    return OutcomeReviewCard(
+      key: ValueKey(current.id),
+      todo: current,
+      currentActionText: currentAction?.actionText,
+      meta: OutcomeMetaLine(
+        timeEstimateMinutes: current.timeEstimate,
+        timeLoggedMinutes: loggedMinutes > 0 ? loggedMinutes : null,
       ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Single-task resolution card
-// ---------------------------------------------------------------------------
-
-class _TaskResolutionCard extends StatelessWidget {
-  const _TaskResolutionCard({
-    super.key,
-    required this.todo,
-    required this.loggedMinutes,
-    required this.onRollOver,
-    required this.onReturn,
-    required this.onDefer,
-    this.lastDisposition,
-  });
-
-  final Todo todo;
-
-  /// Minutes summed from this Outcome's `time_logs` rows; 0 when it has none.
-  final int loggedMinutes;
-
-  final VoidCallback onRollOver;
-  final VoidCallback onReturn;
-  final VoidCallback onDefer;
-
-  /// The currently-recorded in-memory disposition for this task
-  /// ('rollover' | 'leave' | 'maybe'), or null if no choice has been made yet.
-  /// Drives the "previously selected" affordance shown on the matching button.
-  final String? lastDisposition;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Task title + time chips
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFFE5E7EB)),
+      actions: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Vertical resolution buttons
+          _ResolutionButton(
+            label: 'Roll Over to Tomorrow',
+            subtitle: "Add to tomorrow's plan",
+            icon: Icons.center_focus_strong_outlined,
+            color: const Color(0xFF2563EB),
+            onTap: () => notifier.rolloverTask(current.id),
+            isPreviouslySelected: dispositions[current.id] == 'rollover',
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                todo.title,
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF1A1A2E),
-                ),
-              ),
-              if (todo.timeEstimate != null || loggedMinutes > 0) ...[
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 12,
-                  children: [
-                    if (todo.timeEstimate != null)
-                      _Chip(
-                        icon: Icons.timer_outlined,
-                        label: 'Est ${formatMinutesLabel(todo.timeEstimate!)}',
-                        color: const Color(0xFF2563EB),
-                      ),
-                    if (loggedMinutes > 0)
-                      _Chip(
-                        icon: Icons.access_time,
-                        label: '${formatMinutesLabel(loggedMinutes)} logged',
-                        color: const Color(0xFF7C3AED),
-                      ),
-                  ],
-                ),
-              ],
-            ],
+          const SizedBox(height: 10),
+          _ResolutionButton(
+            label: 'Return to Next Actions',
+            subtitle: 'Reappear in a future planning session',
+            icon: Icons.check_circle_outline,
+            color: const Color(0xFF6B7280),
+            onTap: () => notifier.returnToNext(current.id),
+            isPreviouslySelected: dispositions[current.id] == 'leave',
           ),
-        ),
-        const SizedBox(height: 20),
-        // Vertical resolution buttons
-        _ResolutionButton(
-          label: 'Roll Over to Tomorrow',
-          subtitle: "Add to tomorrow's plan",
-          icon: Icons.center_focus_strong_outlined,
-          color: const Color(0xFF2563EB),
-          onTap: onRollOver,
-          isPreviouslySelected: lastDisposition == 'rollover',
-        ),
-        const SizedBox(height: 10),
-        _ResolutionButton(
-          label: 'Return to Next Actions',
-          subtitle: 'Reappear in a future planning session',
-          icon: Icons.check_circle_outline,
-          color: const Color(0xFF6B7280),
-          onTap: onReturn,
-          isPreviouslySelected: lastDisposition == 'leave',
-        ),
-        const SizedBox(height: 10),
-        _ResolutionButton(
-          label: 'Defer until a later day',
-          subtitle: 'Move to Someday / Maybe',
-          icon: Icons.star_border,
-          color: const Color(0xFF6B7280),
-          onTap: onDefer,
-          isPreviouslySelected: lastDisposition == 'maybe',
-        ),
-      ],
+          const SizedBox(height: 10),
+          _ResolutionButton(
+            label: 'Defer until a later day',
+            subtitle: 'Move to Someday / Maybe',
+            icon: Icons.star_border,
+            color: const Color(0xFF6B7280),
+            onTap: () => notifier.deferTask(current.id),
+            isPreviouslySelected: dispositions[current.id] == 'maybe',
+          ),
+        ],
+      ),
     );
   }
 }
@@ -291,32 +214,6 @@ class _ResolutionButton extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Time chip
-// ---------------------------------------------------------------------------
-
-class _Chip extends StatelessWidget {
-  const _Chip({required this.icon, required this.label, required this.color});
-
-  final IconData icon;
-  final String label;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 12, color: color),
-        const SizedBox(width: 3),
-        Text(label,
-            style: TextStyle(
-                fontSize: 12, color: color, fontWeight: FontWeight.w500)),
-      ],
     );
   }
 }

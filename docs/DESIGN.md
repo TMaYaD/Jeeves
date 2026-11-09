@@ -503,7 +503,7 @@ their reasons so that a new surface can reuse the same contract.
 |---|---|---|
 | `OutcomeMetaLine` | Read-only chips, ordered energy · estimate · time logged · due. Unset attributes omitted; the caller supplies the attributes it shows. | No gestures; the containing surface owns the tap target. |
 | [`OutcomeRow`](../app/lib/widgets/outcome_row.dart) | Optional leading slot, title (normal, muted or struck), secondary line, metadata (default `OutcomeMetaLine`), optional trailing slot. Flat or framed with r12 border and h16/v12 padding. | Whole-row tap and long-press callbacks. No ink or chevron when no tap callback exists. |
-| `OutcomeReviewCard` | Banner (icon, text, tone), people chips, title, current Action, notes, optional metadata and actions. Absent Action and notes are omitted. | Injected `ProcessToHandlers` or resolution buttons. |
+| [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Banner (icon, text, tone), people chips, title, current Action, notes, optional metadata and actions. Absent Action and notes are omitted. | Injected `ProcessToHandlers` or resolution buttons. |
 | Outcome detail / `OutcomeAttributeStrip` | Title → editable attribute strip → contexts → people → Plan → notes. Strip uses the metadata order with shared attribute editors. | Each editable chip has an ancestor tap target; logged time stays read-only. |
 
 Energy uses purple `#7C3AED` and `bolt_outlined`; estimate uses blue `#2563EB`
@@ -523,11 +523,11 @@ Paths are under `app/lib/`; DPR means Daily Planning and ES means Evening Shutdo
 | Peek — `widgets/outcome_peek_sheet.dart` | Title, energy, estimate, logged time, due, contexts, people, Plan, notes | Bottom-sheet Outcome detail | Edit in place; close |
 | Clarify — `widgets/clarify_card.dart` | Title, notes, project, contexts, energy, estimate, due, process-to | Outlined form; shared labels and estimate picker | Capture draft or Outcome autosave; process-to routing |
 | DPR plan summary — `screens/planning/steps/plan_summary_step.dart` | Title, off-Up-Next reason, estimate, energy | Framed `OutcomeRow`, checkbox and selection controls | Peek, long-press selection, Select/Skip/Undo |
-| DPR re-clarify — `screens/planning/steps/task_review_step.dart` | Hint, title, notes, current Action | `OutcomeReviewCard` | `ProcessToHandlers` |
+| DPR re-clarify — `screens/planning/steps/task_review_step.dart` | Hint, title, notes, current Action | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | `ProcessToHandlers` |
 | DPR scheduled — `screens/planning/steps/scheduled_review_step.dart` | Title, due, estimate | Framed `OutcomeRow` | None |
 | ES settled — `screens/shutdown/steps/settled_review_step.dart` | Settlement icon, title, estimate vs actual | Framed `OutcomeRow` | None |
-| ES disposition — `screens/shutdown/steps/unfinished_tasks_step.dart` | Title, current Action, notes, estimate, logged | `OutcomeReviewCard` | Roll over / Return to Next / Defer |
-| Weekly review — `screens/periodic_review/steps/_review_card.dart` | Banner, people, title, current Action, notes | `OutcomeReviewCard` | Injected `ProcessToHandlers` |
+| ES disposition — `screens/shutdown/steps/unfinished_tasks_step.dart` | Title, current Action, notes, estimate, logged | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Roll over / Return to Next / Defer |
+| Weekly review — `screens/periodic_review/steps/list_review_step.dart` | Banner, people, title, current Action, notes | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Injected `ProcessToHandlers` |
 | Focus — `screens/focus_screen.dart` | Title, due, estimate, sprint count | Flat `OutcomeRow`, trailing Start/status | Open detail; Start/Resume |
 | Focus carried-over — `screens/focus_screen.dart` | Muted title, estimate | Flat `OutcomeRow`, leading icon | None |
 | Search — `screens/search/widgets/search_result_tile.dart` | Title, snippet, match hint, status | Flat `OutcomeRow` | Capture → clarify; Outcome → detail |
