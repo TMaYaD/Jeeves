@@ -1514,6 +1514,47 @@ void main() {
       expect(await db.focusSessionDao.getActiveSessionSettlements(), isEmpty);
     });
 
+    test(
+        'the title Action carries the draft energy and time the user typed on '
+        'the Actionless Outcome (#711)', () async {
+      await _insertTodo(db, id: 'X', title: 'Write the report');
+      await (db.update(db.todos)..where((t) => t.id.equals('X'))).write(
+          const TodosCompanion(
+              energyLevel: Value('high'), timeEstimate: Value(45)));
+      final sessionId = await openWith(['X']);
+
+      await db.focusSessionDao
+          .setCurrentTask(sessionId: sessionId, taskId: 'X', now: anchorAt);
+
+      final current = await db.actionDao.getCurrentAction('X');
+      expect(current?.energyLevel, 'high');
+      expect(current?.timeEstimate, 45);
+    });
+
+    test(
+        'starting a sprint on an Actionless person-blocked Outcome moves it '
+        'onto Next: the Next stream re-emits once the title Action exists '
+        '(#711)', () async {
+      await _insertTodo(db, id: 'X', title: 'Call Trixy');
+      await tagPerson('X');
+      final sessionId = await openWith(['X']);
+
+      final emissions = <List<String>>[];
+      final subscription = db.todoDao
+          .watchNext()
+          .listen((rows) => emissions.add(rows.map((t) => t.id).toList()));
+      addTearDown(subscription.cancel);
+      await pumpEventQueue();
+      expect(emissions.last, isEmpty,
+          reason: 'Actionless and person-blocked: a pure wait, not on Next');
+
+      await db.focusSessionDao
+          .setCurrentTask(sessionId: sessionId, taskId: 'X', now: anchorAt);
+      await pumpEventQueue();
+
+      expect(emissions.last, ['X']);
+    });
+
     test('an Actionless off-Plan Outcome engaged ad hoc also gets its title',
         () async {
       await _insertTodo(db, id: 'Z', title: 'Off-Plan thing');
