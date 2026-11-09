@@ -387,6 +387,9 @@ every launch path (button, nudge banner, notification deep-link). Implemented
 by `CeremonyPopScope` (`app/lib/widgets/ceremony/ceremony_pop_scope.dart`),
 which wraps each ceremony screen.
 
+### Tag cloud
+The drawer tag cloud has no heading noun. Tags render as `@`-text in three size steps (12 / 13 / 15 sp) by count relative to the busiest visible tag, spaced 12 / 8. Selected tags are pinned first; the collapsed cloud shows 12 tags (never hiding a selected one) with a "Show N more" toggle, and a "Find…" field appears once more tags qualify than the cap.
+
 ### Long-press multi-select
 Lists that surface batchable actions enter a multi-select mode on **long-press**, mirroring the long-press affordance the tag cloud uses for tag management. Once selection mode is active, a **contextual bar** appears immediately above the list (not in the screen-level app bar, which the shared title bar owns) showing the selected count, a per-batch preview where relevant (e.g. total planned time), a "Select all" shortcut, a Clear (×) button, and a primary commit button. Cards in selection mode replace per-row trailing actions with a leading checkbox; tapping a card toggles its membership. Deselecting the last item auto-exits the mode. Each selection toggle fires a light haptic.
 
