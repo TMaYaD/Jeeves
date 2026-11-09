@@ -58,7 +58,8 @@ import '../providers/task_detail_provider.dart';
 import '../services/clarification_service.dart';
 import 'async_list.dart';
 import 'clarify_shared_widgets.dart';
-import 'meta_chip.dart' show formatMinutesLabel;
+import 'outcome_row.dart';
+import 'meta_chip.dart';
 import 'process_to_handlers.dart';
 
 const _labelGray = Color(0xFF9CA3AF);
@@ -353,7 +354,7 @@ class _CaptureOutcomesSectionState
             dataBuilder: (context, items) => Column(
               children: [
                 for (final item in items)
-                  _LinkedOutcomeRow(
+                  _linkedOutcomeRow(
                     key: Key('linked_outcome_${item.outcome.id}'),
                     item: item,
                     enabled: !_busy,
@@ -493,103 +494,48 @@ class _CaptureText extends StatelessWidget {
 
 /// One Outcome the Capture claims: its title, its next action, its Contexts,
 /// and the ✕ that retracts the claim.
-class _LinkedOutcomeRow extends StatelessWidget {
-  const _LinkedOutcomeRow({
-    super.key,
-    required this.item,
-    required this.enabled,
-    required this.onRetract,
-  });
-
-  final CarvedOutcome item;
-  final bool enabled;
-  final VoidCallback onRetract;
-
-  @override
-  Widget build(BuildContext context) {
-    final action = item.currentActionText?.trim();
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
-      decoration: BoxDecoration(
-        color: _surfaceGray,
-        borderRadius: _radiusSurface,
-        border: Border.all(color: _borderGray),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  item.outcome.title,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                  ),
+Widget _linkedOutcomeRow({
+  Key? key,
+  required CarvedOutcome item,
+  required bool enabled,
+  required VoidCallback onRetract,
+}) {
+  final action = item.currentActionText?.trim();
+  return OutcomeRow(
+    key: key,
+    title: item.outcome.title,
+    titleStyle: const TextStyle(fontWeight: FontWeight.w600),
+    framed: true,
+    backgroundColor: _surfaceGray,
+    borderColor: _borderGray,
+    secondary: action != null && action.isNotEmpty
+        ? Text(action, style: const TextStyle(fontSize: 12, color: _textGray))
+        : null,
+    meta: item.contexts.isEmpty && !item.isMerged
+        ? null
+        : Wrap(
+            spacing: 4,
+            runSpacing: 4,
+            children: [
+              for (final name in item.contexts)
+                MetaChip(icon: Icons.tag, label: name, color: _accentBlue),
+              if (item.isMerged)
+                MetaChip(
+                  icon: Icons.merge_type,
+                  label: 'from ${item.captureCount} Captures',
+                  color: _accentBlue,
                 ),
-                if (action != null && action.isNotEmpty) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    action,
-                    style: const TextStyle(fontSize: 12, color: _textGray),
-                  ),
-                ],
-                if (item.contexts.isNotEmpty || item.isMerged) ...[
-                  const SizedBox(height: 4),
-                  Wrap(
-                    spacing: 4,
-                    runSpacing: 4,
-                    children: [
-                      for (final name in item.contexts) _Chip(label: name),
-                      if (item.isMerged)
-                        _Chip(label: 'from ${item.captureCount} Captures'),
-                    ],
-                  ),
-                ],
-              ],
-            ),
+            ],
           ),
-          IconButton(
-            icon: const Icon(Icons.close, size: 18),
-            color: _labelGray,
-            // The ✕ retracts *this Capture's* claim. What that costs depends
-            // on provenance — a merged Outcome is let go of, a session-carved
-            // one ceases to exist — which the label cannot say in two words,
-            // so it names the act rather than the consequence.
-            tooltip: 'Remove from this Capture',
-            onPressed: enabled ? onRetract : null,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _Chip extends StatelessWidget {
-  const _Chip({required this.label});
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: _accentBlue.withValues(alpha: 0.08),
-        borderRadius: _radiusChip,
-      ),
-      child: Text(
-        label,
-        style: const TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.w600,
-          color: _accentBlue,
-        ),
-      ),
-    );
-  }
+    trailing: IconButton(
+      icon: const Icon(Icons.close, size: 18),
+      color: _labelGray,
+      // Retraction removes this Capture's claim; provenance determines whether
+      // the Outcome itself survives. Keep the existing writer and affordance.
+      tooltip: 'Remove from this Capture',
+      onPressed: enabled ? onRetract : null,
+    ),
+  );
 }
 
 /// The call to add another Outcome, which the form replaces in place.
