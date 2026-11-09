@@ -167,7 +167,19 @@ exists, so a replacement key has to be installed from `runcmd`.
 line sits *above* Ubuntu's non-interactive early-return, so `ssh host '<cmd>'`
 gets the toolchain too — move it below and every non-login command loses `java`.
 
-Then the same command `pr-apk.yml` runs:
+The VM holds no GitHub credential and no `.git`; the Mac fetches and pushes and
+the VM only compiles. Sync the Mac's current tree over first, or the build
+compiles whatever was synced last. The excludes keep `.git` out and leave the
+guest's build output and caches alone, so the next build stays warm:
+
+```bash
+rsync -a --delete \
+  --exclude=.git --exclude=build/ --exclude=.dart_tool/ --exclude=.gradle/ \
+  -e 'ssh -p 2222 -i ~/.ssh/id_ed25519' \
+  <mac-jeeves-checkout>/ paperclipai@127.0.0.1:~/jeeves/
+```
+
+Then, on the guest, the same command `pr-apk.yml` runs:
 
 ```bash
 cd ~/jeeves/app
@@ -190,8 +202,9 @@ job (which restores Gradle and pub caches, so its APK step is always warm):
 Gradle distribution, resolving dependencies, installing CMake and dexing every
 external library — not throughput, and Dart-side work is only ~1.3× slower even
 cold. So the thing to protect is the Gradle cache and daemon: leave the VM
-running between builds rather than starting clean, and a `flutter clean` costs
-close to an hour. Treat all three columns as ceilings rather than benchmarks
+running between builds rather than starting clean. The cold column is a first
+build on empty caches, not a measurement of `flutter clean`, which was not timed.
+Treat all three columns as ceilings rather than benchmarks
 anyway; the host is a dual-core i5 shared with the agent fleet, and when it
 runs short of memory it swaps, which stops the guest for tens of seconds at a
 time. The guest's own CPU share holds up through that — measured at 92–98% of
