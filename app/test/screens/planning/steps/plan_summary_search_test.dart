@@ -14,6 +14,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
+import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/screens/planning/steps/plan_summary_step.dart';
 import 'package:jeeves/widgets/outcome_peek_sheet.dart';
 
@@ -51,6 +52,14 @@ Widget _harness(GtdDatabase db) {
   return ProviderScope(
     overrides: [
       databaseProvider.overrideWithValue(db),
+      // The peek watches its Outcome live; a real Drift watch hangs
+      // pumpAndSettle (TESTING.md), so each row's peek streams are stubbed.
+      for (final t in everything) ...[
+        taskDetailTodoProvider(t.id).overrideWith((_) => Stream.value(t)),
+        taskTagsProvider(t.id).overrideWith((_) => Stream.value([])),
+        currentActionProvider(t.id).overrideWith((_) => Stream.value(null)),
+        plannedActionsProvider(t.id).overrideWith((_) => Stream.value([])),
+      ],
       nextForFocusSessionPlanningProvider.overrideWith((ref) {
         final s = ref.watch(focusSessionPlanningProvider);
         final taken = {...s.reviewedTaskIds, ...s.pendingSelectedTaskIds};
