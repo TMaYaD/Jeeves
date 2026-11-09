@@ -269,7 +269,11 @@ void main() {
       TagText chip(String id) =>
           tester.widget<TagText>(find.byKey(Key('tag_chip_$id')));
       expect(chip('t0').fontSize, 15);
-      expect(chip('t11').fontSize, 12);
+      expect(chip('t11').fontSize, 13);
+
+      await tester.tap(find.byKey(const Key('tag_cloud_show_more')));
+      await tester.pumpAndSettle();
+      expect(chip('t19').fontSize, 12);
     });
 
     testWidgets('long-press opens tag management', (tester) async {
@@ -305,7 +309,7 @@ void main() {
       await tester.enterText(
           find.byKey(const Key('tag_cloud_find_field')), 'tag1');
       await tester.pumpAndSettle();
-      expect(find.byType(TagText), findsNWidgets(11));
+      expect(find.byType(TagText), findsNWidgets(10));
 
       // Close by tapping the scrim, then reopen.
       await tester.tapAt(const Offset(780, 300));
