@@ -98,6 +98,21 @@ void main() {
       expect(draft.tagIds, {'c1', 'p1'});
     });
 
+    test('person hints ride separately, whatever the draft set holds', () {
+      final fromHints = _assemble(hintTags: [
+        _tag('c1', 'context'),
+        _tag('per1', 'person'),
+      ]);
+      final fromDraft = _assemble(
+        hintTags: [_tag('per1', 'person')],
+        draftTagIds: <String>{},
+      );
+
+      expect(fromHints.personTagHintIds, {'per1'});
+      expect(fromDraft.personTagHintIds, {'per1'});
+      expect(fromHints.tagIds, isNot(contains('per1')));
+    });
+
     test('a supplied draft set wins over the hints', () {
       // The synchronous draft is what a picker mutates; the hint stream is a
       // frame behind it. Distinct ids on both sides so "wins" is observable.

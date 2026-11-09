@@ -1347,6 +1347,89 @@ void main() {
     });
   });
 
+  group('ProcessToHandlers — Capture person hints seed Waiting For', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    Widget harness(Capture capture, Set<String> personTagHintIds) =>
+        ProviderScope(
+          overrides: [
+            databaseProvider.overrideWithValue(db),
+            personTagsProvider.overrideWith((ref) => Stream.value([
+                  _personTag('alice', 'Alice'),
+                  _personTag('bob', 'Bob'),
+                ])),
+          ],
+          child: MaterialApp(
+            home: Scaffold(
+              body: ListView(
+                children: [
+                  ProcessToHandlers(
+                    subject: CaptureSubject(
+                      capture: capture,
+                      draft: () => ClarifyDraft(
+                        title: capture.title,
+                        personTagHintIds: personTagHintIds,
+                      ),
+                    ),
+                    except: const {ProcessAction.nextActionDialog},
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+
+    testWidgets(
+        'the hinted person is preselected and confirming delegates to them',
+        (tester) async {
+      await _insertPersonTag(db, id: 'alice', name: 'Alice');
+      await _insertPersonTag(db, id: 'bob', name: 'Bob');
+      final capture = await _insertCapture(db, id: 'ph1');
+      await tester.pumpWidget(harness(capture, {'alice'}));
+
+      await tester.tap(find.text('Waiting For'));
+      await tester.pumpAndSettle();
+
+      bool checked(String name) => tester
+          .widget<CheckboxListTile>(
+              find.widgetWithText(CheckboxListTile, name))
+          .value!;
+      expect(checked('Alice'), isTrue);
+      expect(checked('Bob'), isFalse);
+
+      // Confirm without re-picking: the picker requires a selection, so this
+      // only enables because the hint seeded it.
+      await tester.tap(find.widgetWithText(FilledButton, 'Done'));
+      await tester.pumpAndSettle();
+
+      final outcomeId =
+          (await db.captureDao.outcomeIdsForCapture('ph1')).single;
+      expect(await db.todoDao.getPersonTagIdsForTodo(outcomeId), {'alice'});
+      expect((await db.todoDao.getTodo(outcomeId))?.intent, 'next');
+    });
+
+    testWidgets('a Capture with no person hint opens the picker empty',
+        (tester) async {
+      await _insertPersonTag(db, id: 'alice', name: 'Alice');
+      await _insertPersonTag(db, id: 'bob', name: 'Bob');
+      final capture = await _insertCapture(db, id: 'ph2');
+      await tester.pumpWidget(harness(capture, const {}));
+
+      await tester.tap(find.text('Waiting For'));
+      await tester.pumpAndSettle();
+
+      expect(
+          tester
+              .widget<CheckboxListTile>(
+                  find.widgetWithText(CheckboxListTile, 'Alice'))
+              .value,
+          isFalse);
+    });
+  });
+
   group('ProcessToHandlers — person tags survive intent transitions', () {
     // Orthogonality model: the action-axis (intent) and the delegate-axis
     // (person tags) are independent. A delegated task can have any intent
