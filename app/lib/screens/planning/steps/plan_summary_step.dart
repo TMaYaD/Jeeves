@@ -31,6 +31,19 @@ class PlanSummaryStep extends ConsumerStatefulWidget {
 
 class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
   final Set<String> _selectedIds = {};
+  final TextEditingController _searchController = TextEditingController();
+
+  /// Trimmed, lower-cased search text. Lives in widget state: the query
+  /// belongs to this visit of the step.
+  String get _query => _searchController.text.trim().toLowerCase();
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  bool _matchesQuery(Todo t) => t.title.toLowerCase().contains(_query);
 
   bool get _selectionMode => _selectedIds.isNotEmpty;
 
@@ -122,6 +135,19 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
             .fold<int>(0, (sum, t) => sum + (t.timeEstimate ?? defaultEstimate))
         : 0;
 
+    final searching = _query.isNotEmpty;
+    // Watched only while searching, so the default view depends on nothing new.
+    final offUpNext = searching
+        ? ref
+            .watch(offUpNextForFocusSessionPlanningProvider)
+            .where((c) => _matchesQuery(c.todo))
+            .toList()
+        : const <OffUpNextCandidate>[];
+    final matchingPending =
+        searching ? pendingTasks.where(_matchesQuery).toList() : pendingTasks;
+    final matchingSkipped =
+        searching ? skippedTasks.where(_matchesQuery).toList() : skippedTasks;
+
     return Column(
       children: [
         // --- Sticky capacity bar ---
@@ -149,6 +175,13 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
         ),
         const Divider(height: 1, color: Color(0xFFF3F4F6)),
 
+        _SearchField(
+          controller: _searchController,
+          enabled: !_selectionMode,
+          onChanged: (_) => setState(() {}),
+          onClear: () => setState(_searchController.clear),
+        ),
+
         if (_selectionMode)
           _MultiSelectActionBar(
             selectedCount: _selectedIds.length,
@@ -173,8 +206,15 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
               physics: const ClampingScrollPhysics(),
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
               children: [
+                if (searching)
+                  ..._searchResults(
+                    matchingPending,
+                    matchingSkipped,
+                    offUpNext,
+                  ),
+
                 // Today's tasks (selected)
-                if (selectedTasks.isNotEmpty) ...[
+                if (!searching && selectedTasks.isNotEmpty) ...[
                   _SectionLabel('Today\'s Plan (${selectedTasks.length})'),
                   const SizedBox(height: 8),
                   ...selectedTasks.map((t) => _ReviewCard(
@@ -190,7 +230,7 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
                 ],
 
                 // Up Next — the undecided pool
-                if (pendingTasks.isNotEmpty) ...[
+                if (!searching && pendingTasks.isNotEmpty) ...[
                   _SectionLabel('Up Next (${pendingTasks.length})'),
                   const SizedBox(height: 8),
                   ...pendingTasks.map((t) => _ReviewCard(
@@ -209,7 +249,7 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
                 ],
 
                 // Skipped
-                if (skippedTasks.isNotEmpty) ...[
+                if (!searching && skippedTasks.isNotEmpty) ...[
                   _SectionLabel('Skipped (${skippedTasks.length})'),
                   const SizedBox(height: 8),
                   ...skippedTasks.map((t) => _ReviewCard(
@@ -223,7 +263,8 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
                       )),
                 ],
 
-                if (selectedTasks.isEmpty &&
+                if (!searching &&
+                    selectedTasks.isEmpty &&
                     pendingTasks.isEmpty &&
                     skippedTasks.isEmpty)
                   Padding(
@@ -240,6 +281,56 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
         ),
       ],
     );
+  }
+
+  /// The list while a search is active: Up Next matches (then Skipped
+  /// matches), then the visually separate group from outside Up Next. Rows
+  /// carry Select and peek only — no long-press, so no multi-select here.
+  List<Widget> _searchResults(
+    List<Todo> pending,
+    List<Todo> skipped,
+    List<OffUpNextCandidate> offUpNext,
+  ) {
+    final upNextCount = pending.length + skipped.length;
+    return [
+      if (upNextCount > 0) ...[
+        _SectionLabel('Up Next ($upNextCount)'),
+        const SizedBox(height: 8),
+        ...pending.map((t) => _ReviewCard(
+              todo: t,
+              onSelect: () => _handleSelect(t),
+              onSkip: () => _handleSkip(t),
+              onPeek: () => OutcomePeekSheet.show(context, t),
+            )),
+        ...skipped.map((t) => _ReviewCard(
+              todo: t,
+              isSkipped: true,
+              onSelect: () => _handleSelect(t),
+              onUndo: () => _handleUndo(t),
+              onPeek: () => OutcomePeekSheet.show(context, t),
+            )),
+        const SizedBox(height: 16),
+      ],
+      if (offUpNext.isNotEmpty) ...[
+        _SectionLabel('Not in Up Next (${offUpNext.length})'),
+        const SizedBox(height: 8),
+        ...offUpNext.map((c) => _ReviewCard(
+              todo: c.todo,
+              offUpNextReason: c.reason,
+              onSelect: () => _handleSelect(c.todo),
+              onPeek: () => OutcomePeekSheet.show(context, c.todo),
+            )),
+      ],
+      if (upNextCount == 0 && offUpNext.isEmpty)
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          child: Text(
+            'No matches.',
+            style: TextStyle(fontSize: 14, color: Colors.grey[400]),
+            textAlign: TextAlign.center,
+          ),
+        ),
+    ];
   }
 
   void _handleSelect(Todo todo) {
@@ -509,7 +600,12 @@ class _ReviewCard extends StatelessWidget {
     this.onLongPress,
     this.onTapInSelectionMode,
     this.onPeek,
+    this.offUpNextReason,
   });
+
+  /// Set on rows from outside Up Next: renders the muted card and a chip
+  /// naming the list the Outcome came from.
+  final OffUpNextReason? offUpNextReason;
 
   final Todo todo;
   final bool isSelected;
@@ -526,7 +622,9 @@ class _ReviewCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final textColor = isSkipped ? Colors.grey[500] : const Color(0xFF1A1A2E);
-    final backgroundColor = isSkipped ? const Color(0xFFF9FAFB) : Colors.white;
+    final backgroundColor = isSkipped || offUpNextReason != null
+        ? const Color(0xFFF9FAFB)
+        : Colors.white;
 
     final card = Card(
       elevation: 0,
@@ -572,6 +670,12 @@ class _ReviewCard extends StatelessWidget {
                   Wrap(
                     spacing: 6,
                     children: [
+                      if (offUpNextReason != null)
+                        _Chip(
+                          icon: Icons.inbox_outlined,
+                          label: offUpNextReason!.label,
+                          color: const Color(0xFF6B7280),
+                        ),
                       if (todo.timeEstimate != null)
                         _Chip(
                           icon: Icons.timer_outlined,
@@ -660,6 +764,46 @@ class _ReviewCard extends StatelessWidget {
         'high' => 'High',
         _ => level,
       };
+}
+
+class _SearchField extends StatelessWidget {
+  const _SearchField({
+    required this.controller,
+    required this.enabled,
+    required this.onChanged,
+    required this.onClear,
+  });
+
+  final TextEditingController controller;
+  final bool enabled;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: TextField(
+        controller: controller,
+        enabled: enabled,
+        onChanged: onChanged,
+        textInputAction: TextInputAction.search,
+        decoration: InputDecoration(
+          hintText: 'Search tasks',
+          prefixIcon: const Icon(Icons.search, size: 20),
+          suffixIcon: controller.text.isEmpty
+              ? null
+              : IconButton(
+                  icon: const Icon(Icons.clear, size: 20),
+                  tooltip: 'Clear search',
+                  onPressed: enabled ? onClear : null,
+                ),
+          isDense: true,
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+      ),
+    );
+  }
 }
 
 class _Chip extends StatelessWidget {

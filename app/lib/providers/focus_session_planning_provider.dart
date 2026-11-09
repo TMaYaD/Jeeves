@@ -253,6 +253,60 @@ final nextForFocusSessionPlanningProvider =
       .toList());
 });
 
+/// Which list an Outcome offered by the plan-building search came from.
+enum OffUpNextReason {
+  someday('Someday'),
+  waitingFor('Waiting For'),
+  aboveEnergy('Above today\'s energy');
+
+  const OffUpNextReason(this.label);
+  final String label;
+}
+
+/// An Outcome the plan-building search offers outside Up Next, with the list
+/// it came from.
+typedef OffUpNextCandidate = ({Todo todo, OffUpNextReason reason});
+
+final _offUpNextPoolProvider = StreamProvider.autoDispose<List<Todo>>((ref) {
+  return ref.watch(databaseProvider).todoDao.watchOffUpNextPlanningCandidates();
+});
+
+final _allNextPoolProvider = StreamProvider.autoDispose<List<Todo>>((ref) {
+  return ref.watch(databaseProvider).todoDao.watchNext();
+});
+
+/// Outcomes the plan-building search can offer that are not in Up Next:
+/// Someday/Maybe, Waiting-For-only, and Next Outcomes hidden by today's
+/// energy. Already-selected and already-reviewed Outcomes are left out.
+///
+/// Only watch this while a search is active. It is a plain [Provider] over two
+/// auto-disposed streams, with a not-yet-loaded stream counting as empty, so
+/// the first keystroke never shows a spinner.
+final offUpNextForFocusSessionPlanningProvider =
+    Provider.autoDispose<List<OffUpNextCandidate>>((ref) {
+  final planningState = ref.watch(focusSessionPlanningProvider);
+  final taken = {
+    ...planningState.reviewedTaskIds,
+    ...planningState.pendingSelectedTaskIds,
+  };
+  final dayEnergy = planningState.energyLevel;
+  final pool = ref.watch(_offUpNextPoolProvider).value ?? const [];
+  final nextAll = ref.watch(_allNextPoolProvider).value ?? const [];
+  return [
+    for (final t in pool)
+      if (!taken.contains(t.id))
+        (
+          todo: t,
+          reason: t.intent == 'maybe'
+              ? OffUpNextReason.someday
+              : OffUpNextReason.waitingFor,
+        ),
+    for (final t in nextAll)
+      if (!taken.contains(t.id) && !_energyFits(t.energyLevel, dayEnergy))
+        (todo: t, reason: OffUpNextReason.aboveEnergy),
+  ];
+});
+
 /// Tasks selected for today (in-memory pending list, ordered by selection).
 final focusSessionPlanningSelectedTasksProvider =
     StreamProvider<List<Todo>>((ref) {

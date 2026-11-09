@@ -145,6 +145,13 @@ FocusSessionPlanningState _planningState(WidgetTester tester) =>
     ProviderScope.containerOf(tester.element(find.byType(PlanSummaryStep)))
         .read(focusSessionPlanningProvider);
 
+/// The task list's scrollable. The search field's own `Scrollable` makes a
+/// bare `byType(Scrollable)` ambiguous.
+final _listScrollable = find.descendant(
+  of: find.byType(ListView),
+  matching: find.byType(Scrollable),
+);
+
 /// The single scrollable owned by the task [ListView].
 double _scrollOffset(WidgetTester tester) => tester
     .state<ScrollableState>(
@@ -188,7 +195,8 @@ void main() {
       await _pumpStep(tester, db, _manyTodos(20));
 
       const target = 'Task 12';
-      await tester.scrollUntilVisible(find.text(target), 120);
+      await tester.scrollUntilVisible(find.text(target), 120,
+          scrollable: _listScrollable);
       await tester.pumpAndSettle();
 
       final before = _scrollOffset(tester);
@@ -217,7 +225,8 @@ void main() {
       await _pumpStep(tester, db, _manyTodos(20));
 
       const target = 'Task 12';
-      await tester.scrollUntilVisible(find.text(target), 120);
+      await tester.scrollUntilVisible(find.text(target), 120,
+          scrollable: _listScrollable);
       await tester.pumpAndSettle();
 
       final before = _scrollOffset(tester);
@@ -244,7 +253,8 @@ void main() {
 
       const first = 'Task 10';
       const second = 'Task 11';
-      await tester.scrollUntilVisible(find.text(first), 120);
+      await tester.scrollUntilVisible(find.text(first), 120,
+          scrollable: _listScrollable);
       await tester.pumpAndSettle();
 
       // Enter selection mode and pick two adjacent mid-list tasks.

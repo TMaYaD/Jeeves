@@ -131,6 +131,13 @@ FocusSessionPlanningNotifier _planningNotifier(WidgetTester tester) =>
     ProviderScope.containerOf(tester.element(find.byType(PlanSummaryStep)))
         .read(focusSessionPlanningProvider.notifier);
 
+/// The task list's scrollable. The search field's own `Scrollable` makes a
+/// bare `byType(Scrollable)` ambiguous.
+final _listScrollable = find.descendant(
+  of: find.byType(ListView),
+  matching: find.byType(Scrollable),
+);
+
 double _scrollOffset(WidgetTester tester) => tester
     .state<ScrollableState>(
       find.descendant(
@@ -293,7 +300,8 @@ void main() {
       await _pumpStep(tester, db, _manyTodos(20));
 
       const target = 'Task 12';
-      await tester.scrollUntilVisible(find.text(target), 120);
+      await tester.scrollUntilVisible(find.text(target), 120,
+          scrollable: _listScrollable);
       await tester.pumpAndSettle();
 
       final before = _scrollOffset(tester);
