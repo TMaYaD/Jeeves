@@ -358,11 +358,11 @@ void main() {
 
       await tester.tap(find.byKey(const Key('outcome_peek_time')));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('45m'));
+      await tester.tap(find.text('10m'));
       await tester.pumpAndSettle();
       await _drainWrites(tester);
 
-      expect((await _row(tester, db, 'e5')).timeEstimate, 45);
+      expect((await _row(tester, db, 'e5')).timeEstimate, 10);
     });
 
     testWidgets('energy chip sets the energy level', (tester) async {

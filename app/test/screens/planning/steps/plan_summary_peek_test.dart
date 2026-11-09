@@ -340,7 +340,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('outcome_peek_time')));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('45m'));
+      await tester.tap(find.text('10m'));
       await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
@@ -349,7 +349,7 @@ void main() {
       final row = await tester.runAsync(() => (db.select(db.todos)
             ..where((t) => t.id.equals('t1')))
           .getSingle());
-      expect(row!.timeEstimate, 45);
+      expect(row!.timeEstimate, 10);
       final state = _planningState(tester);
       expect(state.reviewedTaskIds, isEmpty);
       expect(state.pendingSelectedTaskIds, isEmpty);
