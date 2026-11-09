@@ -111,6 +111,27 @@ class _OutcomePeekSheetState extends ConsumerState<OutcomePeekSheet> {
     super.dispose();
   }
 
+  /// Adopts a changed stored value for a field the user has not touched: the
+  /// field's trimmed text still equals the last baseline and it has no focus.
+  /// A field with a local edit in flight keeps the user's text.
+  void _reconcileWithRow(Todo? row) {
+    if (row == null) return;
+    final rowTitle = row.title.trim();
+    if (!_titleFocus.hasFocus &&
+        _titleController.text.trim() == _baselineTitle &&
+        rowTitle != _baselineTitle) {
+      _baselineTitle = rowTitle;
+      _titleController.text = row.title;
+    }
+    final rowNotes = (row.notes ?? '').trim();
+    if (!_notesFocus.hasFocus &&
+        _notesController.text.trim() == _baselineNotes &&
+        rowNotes != _baselineNotes) {
+      _baselineNotes = rowNotes;
+      _notesController.text = row.notes ?? '';
+    }
+  }
+
   void _saveTitle() {
     final title = _titleController.text.trim();
     // An emptied title is not a title; keep the stored one.
@@ -136,6 +157,9 @@ class _OutcomePeekSheetState extends ConsumerState<OutcomePeekSheet> {
   Widget build(BuildContext context) {
     final todoId = widget.todo.id;
     final todoAsync = ref.watch(taskDetailTodoProvider(todoId));
+    ref.listen(taskDetailTodoProvider(todoId), (_, next) {
+      _reconcileWithRow(next.asData?.value);
+    });
     final tags = ref.watch(taskTagsProvider(todoId)).asData?.value ??
         const <Tag>[];
     final timeLogged = ref.watch(outcomePeekTimeLoggedProvider(todoId));
