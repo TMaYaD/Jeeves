@@ -265,8 +265,12 @@ jobs:
       - run: flutter pub get
       - run: dart run flutter_launcher_icons
       - run: dart run build_runner build
-      - run: flutter build apk --release --flavor production
-      - run: flutter build appbundle --release --flavor production
+      - run: >-
+          flutter build apk --release --flavor production
+          --dart-define=JEEVES_GIT_SHA=$(git rev-parse --short=7 HEAD)
+      - run: >-
+          flutter build appbundle --release --flavor production
+          --dart-define=JEEVES_GIT_SHA=$(git rev-parse --short=7 HEAD)
 
       - name: Verify APK is signed with the release key
         # apksigner ships with the Android SDK build-tools that flutter-action
@@ -377,6 +381,7 @@ jobs:
       - run: >-
           flutter build apk --release --flavor production
           --dart-define=JEEVES_AUTH_MODE=sws
+          --dart-define=JEEVES_GIT_SHA=$(git rev-parse --short=7 HEAD)
 
       - name: Rename APK for seeker variant
         run: |
@@ -424,7 +429,7 @@ jobs:
 
       - run: flutter pub get
       - run: dart run build_runner build
-      - run: flutter build web --release
+      - run: flutter build web --release --dart-define=JEEVES_GIT_SHA=$(git rev-parse --short=7 HEAD)
 
       - name: Archive web build
         run: tar -czf "../jeeves-web-${{ needs.version.outputs.version }}.tar.gz" web/
