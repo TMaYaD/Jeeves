@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../providers/focus_session_planning_provider.dart';
 import '../../../providers/focus_session_planning_settings_provider.dart';
+import '../../../widgets/meta_chip.dart' show formatMinutesLabel;
 import '../../../widgets/outcome_peek_sheet.dart';
 
 /// Colour of the capacity-bar segment representing minutes counted at the
@@ -261,18 +262,10 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
   }
 
   String _capacitySummary(int count, int totalMinutes, int availableMinutes) {
-    final planned = _formatMinutes(totalMinutes);
-    final available = _formatMinutes(availableMinutes);
+    final planned = formatMinutesLabel(totalMinutes);
+    final available = formatMinutesLabel(availableMinutes);
     return '$count task${count == 1 ? '' : 's'} · $planned planned of $available available';
   }
-}
-
-String _formatMinutes(int minutes) {
-  final h = minutes ~/ 60;
-  final m = minutes % 60;
-  if (h == 0) return '${m}m';
-  if (m == 0) return '${h}h';
-  return '${h}h ${m}m';
 }
 
 // ---------------------------------------------------------------------------
@@ -434,7 +427,7 @@ class _MultiSelectActionBar extends StatelessWidget {
                     ),
                     if (previewMinutes > 0)
                       Text(
-                        '+${_formatMinutes(previewMinutes)} planned',
+                        '+${formatMinutesLabel(previewMinutes)} planned',
                         style: TextStyle(
                           fontSize: 12,
                           color: Colors.grey[600],
@@ -582,7 +575,7 @@ class _ReviewCard extends StatelessWidget {
                       if (todo.timeEstimate != null)
                         _Chip(
                           icon: Icons.timer_outlined,
-                          label: _formatMinutes(todo.timeEstimate!),
+                          label: formatMinutesLabel(todo.timeEstimate!),
                           color: isSkipped
                               ? Colors.grey[400]!
                               : const Color(0xFF2563EB),

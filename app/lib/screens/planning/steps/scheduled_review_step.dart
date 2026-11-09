@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../providers/focus_session_planning_provider.dart';
+import '../../../widgets/meta_chip.dart' show formatMinutesLabel;
 
 class ScheduledReviewStep extends ConsumerWidget {
   const ScheduledReviewStep({super.key});
@@ -148,11 +149,7 @@ class _TaskRow extends StatelessWidget {
           ),
           if (estimate != null)
             Text(
-              estimate < 60
-                  ? '${estimate}m'
-                  : estimate % 60 == 0
-                      ? '${estimate ~/ 60}h'
-                      : '${estimate ~/ 60}h ${estimate % 60}m',
+              formatMinutesLabel(estimate),
               style: TextStyle(
                   fontSize: 13,
                   color: Colors.grey[500],

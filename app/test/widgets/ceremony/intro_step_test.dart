@@ -51,12 +51,15 @@ void main() {
     test('floors at 5 (a zero-item ceremony never reads 0)', () {
       expect(introDisplayMinutes(0), 5);
       expect(introDisplayMinutes(3), 5);
-      expect(introDurationText(0), 'about 5 minutes');
+      expect(introDurationText(0), 'about 5m');
     });
 
-    test('plural/singular grammar', () {
-      expect(introDurationText(21), 'about 25 minutes');
-      expect(introDurationText(0), 'about 5 minutes');
+    test('renders hours and minutes through the shared formatter', () {
+      expect(introDurationText(210), 'about 3h 30m');
+      expect(introDurationText(45), 'about 45m');
+      expect(introDurationText(120), 'about 2h');
+      expect(introDurationText(61), 'about 1h 5m'); // rounds up to 65
+      expect(introDurationText(21), 'about 25m');
     });
   });
 
@@ -71,14 +74,14 @@ void main() {
   });
 
   group('CeremonyIntroBody', () {
-    testWidgets('renders "about N minutes" for a ready estimate', (tester) async {
+    testWidgets('renders "about 25m" for a ready estimate', (tester) async {
       await tester.pumpWidget(_wrap(_body(
         const IntroEstimateReady(rawMinutes: 21, itemCount: 8),
         seed: 1,
       )));
       await tester.pumpAndSettle();
 
-      expect(find.textContaining('about 25 minutes'), findsOneWidget);
+      expect(find.textContaining('about 25m'), findsOneWidget);
     });
 
     testWidgets('the duration run is bold, larger, and in the accent colour',
@@ -91,7 +94,7 @@ void main() {
 
       final span = _durationSpan(tester);
       expect(span, isNotNull, reason: 'the {duration} slot is a styled run');
-      expect(span!.text, 'about 25 minutes');
+      expect(span!.text, 'about 25m');
       expect(span.style!.fontWeight, FontWeight.w700);
       expect(span.style!.color, _accent);
       // Larger than the surrounding sentence (20px base).
@@ -106,8 +109,8 @@ void main() {
       )));
       await tester.pumpAndSettle();
 
-      expect(find.textContaining('about 5 minutes'), findsOneWidget);
-      expect(find.textContaining('0 minutes'), findsNothing);
+      expect(find.textContaining('about 5m'), findsOneWidget);
+      expect(find.textContaining('minutes'), findsNothing);
     });
 
     testWidgets('seeded draw is deterministic across mounts', (tester) async {
@@ -151,7 +154,7 @@ void main() {
 
       final readyText =
           tester.widget<RichText>(find.byType(RichText).last).text.toPlainText();
-      expect(readyText, contains('about 25 minutes'));
+      expect(readyText, contains('about 25m'));
     });
 
     testWidgets('loading estimate shows a quiet placeholder, no duration',
@@ -160,7 +163,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.textContaining('taking stock'), findsOneWidget);
-      expect(find.textContaining('minutes'), findsNothing);
+      expect(find.textContaining('about'), findsNothing);
     });
   });
 }
