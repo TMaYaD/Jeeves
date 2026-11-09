@@ -292,9 +292,12 @@ void main() {
       expect(dispRows.first.read<String>('disposition'), 'maybe');
     });
 
-    test('off-Plan engaged Outcome gets last_next_action_completion_at stamped',
+    test('closing does not stamp last_next_action_completion_at, so an '
+        'off-Plan engaged Outcome does not enter the review queue (#695)',
         () async {
       await _insertTodo(db, id: 'Z', title: 'Z'); // off-Plan engaged
+      await seedCurrentAction(db,
+          outcomeId: 'Z', text: 'work on Z', userId: _userId);
 
       final sessionId = await openSessionWithOffPlanEngagement(
         plan: [],
@@ -309,10 +312,11 @@ void main() {
       final after =
           await (db.select(db.todos)..where((t) => t.id.equals('Z')))
               .getSingle();
-      expect(after.lastNextActionCompletionAt, isNotNull,
-          reason:
-              'An off-Plan engaged Outcome was worked on in the session, so it '
-              'earns the "worked on" stamp too.');
+      expect(after.lastNextActionCompletionAt, isNull,
+          reason: 'the retired column is no longer written');
+      final queue = await db.todoDao
+          .getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff);
+      expect(queue.map((t) => t.id), isNot(contains('Z')));
     });
 
     test(

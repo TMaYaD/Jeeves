@@ -160,7 +160,7 @@ void main() {
 
       // #293: a phrase-backed promotion keeps the task out of the daily
       // re-clarification queue.
-      final needsReview = await db.todoDao.getNeedsReview();
+      final needsReview = await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff);
       expect(needsReview.map((t) => t.id), isNot(contains('wf1')));
 
       final state = container.read(periodicReviewProvider);
@@ -201,7 +201,7 @@ void main() {
       // actionless-AND-PersonBlocked quadrant Next excludes.
       final row = await db.todoDao.getTodo('wf1');
       expect(row?.intent, 'next');
-      final needsReview = await db.todoDao.getNeedsReview();
+      final needsReview = await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff);
       expect(needsReview.map((t) => t.id), isNot(contains('wf1')));
     });
 

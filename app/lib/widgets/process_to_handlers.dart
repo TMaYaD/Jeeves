@@ -923,9 +923,9 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
   Future<void> _blankSaveFallback(String title) async {
     if (title.isEmpty) {
       // Nothing to stand in as the Action, so stalling is the honest outcome:
-      // routing here would leave the row on Next while Actionless, and
-      // `_needsReviewWhere`'s Actionless branch has no freshness gate — it
-      // would re-surface on the identical review card every day, forever.
+      // routing here would leave the row on Next while Actionless, and it
+      // would re-surface on the identical review card each time the Actionless
+      // review interval lapses.
       // Near-unreachable through the UI (the clarify surfaces disable the
       // routing buttons while the title is blank), but a synced-in row can
       // carry one.
@@ -971,10 +971,10 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
       await _clarification.promotePlannedAction(actionId);
       // No-op guard (issue #723 §2). A planned row removed on another device
       // between the snapshot and the tap promotes nothing; a `_commit` here
-      // would strand a still-Actionless Outcome on Next, where the freshness-
-      // gate-less review predicate re-surfaces it forever. Re-read and commit
-      // only when a current Action now exists — else leave the item untouched
-      // (recoverable; the user can retry).
+      // would strand a still-Actionless Outcome on Next, where the review
+      // predicate re-surfaces it once the review interval lapses. Re-read and
+      // commit only when a current Action now exists — else leave the item
+      // untouched (recoverable; the user can retry).
       final promoted = await _clarification.getCurrentAction(outcomeId);
       if (promoted == null) return;
       if (!await _commit(RoutingKind.nextAction)) return;

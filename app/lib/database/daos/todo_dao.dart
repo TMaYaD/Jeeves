@@ -160,9 +160,9 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   /// `energy_level` / `time_estimate` (D2) — leaving UI and providers untouched.
   /// The raw `todos.energy_level` / `time_estimate` columns remain the write
   /// mirror and the Actionless draft store (D1/D3).
-  /// `last_next_action_completion_at` is live — stamped by the focus-session
-  /// close and read by the re-clarification predicate. [t] is the `todos`
-  /// table's SQL alias in the enclosing query.
+  /// `last_next_action_completion_at` is retired (written and read by nothing
+  /// else) but still projected so the column round-trips through sync. [t] is
+  /// the `todos` table's SQL alias in the enclosing query.
   ///
   /// Queries carrying this projection must list `actions` in `readsFrom` so a
   /// synced Action write re-emits their watchers.
@@ -768,14 +768,12 @@ clarified = 1
 AND done_at IS NULL
 AND intent = 'next'
 AND (
-  (last_next_action_completion_at IS NOT NULL
-   AND (last_clarified_at IS NULL
-        OR last_clarified_at < last_next_action_completion_at))
-  OR ($_latestActionTerminationClause IS NOT NULL
+  ($_latestActionTerminationClause IS NOT NULL
       AND (last_clarified_at IS NULL
            OR last_clarified_at < $_latestActionTerminationClause))
   OR (
-    NOT $_hasCurrentActionClause
+    (last_clarified_at IS NULL OR last_clarified_at < ?)
+    AND NOT $_hasCurrentActionClause
     AND NOT EXISTS (
       SELECT 1 FROM todo_tags tt
       JOIN tags tg ON tg.id = tt.tag_id
@@ -836,23 +834,44 @@ AND (
   /// One-shot snapshot of tasks needing re-clarification: Stale or Actionless
   /// per spec.
   ///
-  /// Stale: engaged with more recently than last clarified, read from two
-  /// independent signals. `last_next_action_completion_at` means "worked on in
-  /// a session" and is stamped once, at session close, by the Review surface;
-  /// [_latestActionTerminationClause] means "an Action was completed" and comes
-  /// from the Action rows themselves (ADR-0001 story 4), so completing the
-  /// current Action surfaces the Outcome even when no session ever closed.
+  /// Stale: an Action was completed after the Outcome was last clarified,
+  /// read from the Action rows themselves ([_latestActionTerminationClause],
+  /// ADR-0001 story 4). Nothing else makes an Outcome Stale: a day that closed
+  /// with the Outcome still on the Plan says nothing about it.
   /// Actionless: no current Action row AND not delegated. Delegated tasks
   /// (carrying any person-typed tag) are excluded from the actionless branch —
   /// their cadence belongs to the weekly Waiting For review, not the daily
-  /// re-clarification surface.
-  Future<List<Todo>> getNeedsReview() {
+  /// re-clarification surface. The Actionless branch is time-boxed: an
+  /// Outcome clarified at or after [actionlessReviewCutoff] stays out of it
+  /// (one never clarified is always in). The DAO holds no clock, so the caller
+  /// derives the cutoff from the planning period (`actionlessReviewCutoffProvider`).
+  Future<List<Todo>> getNeedsReview({
+    required DateTime actionlessReviewCutoff,
+  }) {
     return customSelect(
       'SELECT ${todoProjectionSql('todos')} FROM todos '
       'WHERE $_needsReviewWhere ORDER BY created_at',
-      variables: [],
+      variables: [Variable<String>(encodeInstant(actionlessReviewCutoff)!)],
       readsFrom: {todos, todoTags, tags, actions},
     ).get().then((rows) => rows.map((r) => todos.map(r.data)).toList());
+  }
+
+  /// The subset of [ids] that are Stale by Action termination — the same SQL
+  /// as the Stale branch of [getNeedsReview], so the Task Review card's Stale
+  /// hint and the queue's membership cannot drift apart.
+  Future<Set<String>> getActionTerminationStaleIds(Set<String> ids) async {
+    if (ids.isEmpty) return {};
+    final placeholders = List.filled(ids.length, '?').join(', ');
+    final rows = await customSelect(
+      'SELECT todos.id AS id FROM todos '
+      'WHERE todos.id IN ($placeholders) '
+      'AND $_latestActionTerminationClause IS NOT NULL '
+      'AND (last_clarified_at IS NULL '
+      '     OR last_clarified_at < $_latestActionTerminationClause)',
+      variables: [for (final id in ids) Variable<String>(id)],
+      readsFrom: {todos, actions},
+    ).get();
+    return rows.map((r) => r.read<String>('id')).toSet();
   }
 
   /// Returns the IDs of person-typed tags assigned to [todoId].

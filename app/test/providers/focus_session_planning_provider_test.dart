@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/todo.dart' show RoutingKind;
 import 'package:jeeves/providers/clarify_retention_provider.dart';
+import 'package:jeeves/providers/clock_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/services/notification_service.dart';
@@ -853,7 +854,16 @@ void main() {
         clarified: const Value(true),
         createdAt: Value(now),
         lastClarifiedAt: Value(clarifiedAt),
-        lastNextActionCompletionAt: Value(completedAt),
+      ));
+      // Stale means an Action was completed after the last clarification.
+      await db.into(db.actions).insert(ActionsCompanion(
+        id: Value('done-$id'),
+        outcomeId: Value(id),
+        userId: const Value(userId),
+        actionText: const Value('Earlier step'),
+        role: const Value('done'),
+        createdAt: Value(completedAt),
+        doneAt: Value(completedAt),
       ));
       // The Action row is the grain the re-clarify predicate reads
       // (ADR-0001 story 3).
@@ -887,14 +897,45 @@ void main() {
       final notifier = container.read(focusSessionPlanningProvider.notifier);
 
       expect(
-          await db.todoDao.getNeedsReview(), hasLength(1));
+          await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), hasLength(1));
 
       await notifier.confirmReviewItemRelevant(id);
 
       expect(
-          await db.todoDao.getNeedsReview(), isEmpty);
+          await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), isEmpty);
       final state = container.read(focusSessionPlanningProvider);
       expect(state.reviewNav.index, 1);
+    });
+
+    test('advancing into Review Tasks records which snapshot items are Stale',
+        () async {
+      final staleId = await insertStaleTask();
+      final actionlessId = await insertActionlessTask();
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+
+      await notifier.advanceStep(); // intro (0) → Clarify Inbox (1)
+      await notifier.advanceStep(); // Clarify Inbox (1) → Review Tasks (2)
+
+      final state = container.read(focusSessionPlanningProvider);
+      expect(state.reviewNav.items!.map((t) => t.id),
+          containsAll([staleId, actionlessId]));
+      expect(state.reviewStaleIds, {staleId});
+    });
+
+    test('"Still relevant" on an Actionless item leaves it Actionless but '
+        'out of the queue for the review interval', () async {
+      final id = await insertActionlessTask();
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+
+      await notifier.confirmReviewItemRelevant(id);
+
+      expect(await db.actionDao.getCurrentAction(id), isNull);
+      expect(
+        await db.todoDao.getNeedsReview(
+            actionlessReviewCutoff:
+                container.read(actionlessReviewCutoffProvider)()),
+        isEmpty,
+      );
     });
 
     test('markReviewItemDone: task doneAt set; not in result; reviewIndex advances',
@@ -905,7 +946,7 @@ void main() {
       await notifier.markReviewItemDone(id);
 
       expect(
-          await db.todoDao.getNeedsReview(), isEmpty);
+          await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), isEmpty);
 
       final todo = await db.todoDao.getTodo(id);
       expect(todo?.doneAt, isNotNull);
@@ -922,7 +963,7 @@ void main() {
       await notifier.deferReviewItemToSomeday(id);
 
       expect(
-          await db.todoDao.getNeedsReview(), isEmpty);
+          await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), isEmpty);
 
       final todo = await db.todoDao.getTodo(id);
       expect(todo?.intent, 'maybe');
@@ -939,7 +980,7 @@ void main() {
       await notifier.trashReviewItem(id);
 
       expect(
-          await db.todoDao.getNeedsReview(), isEmpty);
+          await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), isEmpty);
 
       final todo = await db.todoDao.getTodo(id);
       expect(todo?.intent, 'trash');
@@ -958,7 +999,7 @@ void main() {
       await notifier.deferReviewItemToSomeday(id);
 
       expect(
-          await db.todoDao.getNeedsReview(), isEmpty);
+          await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), isEmpty);
 
       final state = container.read(focusSessionPlanningProvider);
       expect(state.reviewNav.index, 1);
@@ -969,11 +1010,11 @@ void main() {
       final id = await insertStaleTask();
       final notifier = container.read(focusSessionPlanningProvider.notifier);
 
-      expect(await db.todoDao.getNeedsReview(), hasLength(1));
+      expect(await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), hasLength(1));
 
       await notifier.markReviewItemWaitingFor(id);
 
-      expect(await db.todoDao.getNeedsReview(), isEmpty);
+      expect(await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), isEmpty);
 
       final state = container.read(focusSessionPlanningProvider);
       expect(state.reviewNav.index, 1);
@@ -988,7 +1029,7 @@ void main() {
       final id = await insertActionlessTask();
       final notifier = container.read(focusSessionPlanningProvider.notifier);
 
-      expect(await db.todoDao.getNeedsReview(), hasLength(1));
+      expect(await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff), hasLength(1));
 
       await notifier.markReviewItemWaitingFor(id);
 
@@ -1454,6 +1495,101 @@ void main() {
             'synchronous run after the last await, so overlapping preloads '
             'cannot double-insert a rollover id.',
       );
+    });
+  });
+
+  group('actionlessReviewCutoffProvider', () {
+    const userId = 'local';
+    late GtdDatabase db;
+
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+      db = GtdDatabase(NativeDatabase.memory());
+    });
+
+    tearDown(() async => db.close());
+
+    ProviderContainer containerAt(DateTime now) {
+      final container = ProviderContainer(overrides: [
+        databaseProvider.overrideWithValue(db),
+        clockProvider.overrideWithValue(() => now),
+      ]);
+      addTearDown(container.dispose);
+      return container;
+    }
+
+    test('is the Evening Shutdown anchor opening the current period, stepped '
+        'back interval − 1 calendar days', () {
+      // Default shutdown time is 18:00. After today's anchor, the period
+      // opened at 18:00 today.
+      expect(
+        containerAt(DateTime(2026, 7, 15, 20, 0))
+            .read(actionlessReviewCutoffProvider)(),
+        DateTime(2026, 7, 9, 18, 0),
+      );
+      // Planning before the anchor belongs to the period opened yesterday.
+      expect(
+        containerAt(DateTime(2026, 7, 15, 7, 30))
+            .read(actionlessReviewCutoffProvider)(),
+        DateTime(2026, 7, 8, 18, 0),
+      );
+    });
+
+    // The runner's timezone is process-wide, so this does not cross a real DST
+    // transition on CI; it pins the calendar-step arithmetic (the wall-clock
+    // time survives the step) in whatever zone the runner uses.
+    test('keeps the wall-clock time when stepping back whole calendar days',
+        () {
+      expect(
+        containerAt(DateTime(2026, 11, 4, 20, 0))
+            .read(actionlessReviewCutoffProvider)(),
+        DateTime(2026, 10, 29, 18, 0),
+      );
+    });
+
+    test('recomputes the cutoff on each call, so a persistent container '
+        'follows the clock across the Evening Shutdown boundary', () {
+      var now = DateTime(2026, 7, 15, 17, 59);
+      final container = ProviderContainer(overrides: [
+        databaseProvider.overrideWithValue(db),
+        clockProvider.overrideWithValue(() => now),
+      ]);
+      addTearDown(container.dispose);
+      final cutoff = container.read(actionlessReviewCutoffProvider);
+
+      expect(cutoff(), DateTime(2026, 7, 8, 18, 0));
+      now = DateTime(2026, 7, 15, 18, 1);
+      expect(cutoff(), DateTime(2026, 7, 9, 18, 0));
+      // A fresh read of the provider hands out the same live function.
+      expect(container.read(actionlessReviewCutoffProvider)(),
+          DateTime(2026, 7, 9, 18, 0));
+    });
+
+    test('an Actionless Outcome kept on Monday returns on the seventh '
+        'planning day, not before', () async {
+      final keptAt = DateTime(2026, 7, 6, 8, 15);
+      await db.into(db.todos).insert(TodosCompanion(
+        id: const Value('kept'),
+        title: const Value('Kept Actionless'),
+        userId: const Value(userId),
+        clarified: const Value(true),
+        createdAt: Value(keptAt),
+        lastClarifiedAt: Value(keptAt.toUtc()),
+      ));
+
+      Future<bool> surfacesAt(DateTime planningTime) async {
+        final cutoff =
+            containerAt(planningTime).read(actionlessReviewCutoffProvider)();
+        final queue =
+            await db.todoDao.getNeedsReview(actionlessReviewCutoff: cutoff);
+        return queue.any((t) => t.id == 'kept');
+      }
+
+      for (var day = 7; day <= 12; day++) {
+        expect(await surfacesAt(DateTime(2026, 7, day, 8, 15)), isFalse,
+            reason: 'July $day is inside the interval');
+      }
+      expect(await surfacesAt(DateTime(2026, 7, 13, 8, 15)), isTrue);
     });
   });
 }

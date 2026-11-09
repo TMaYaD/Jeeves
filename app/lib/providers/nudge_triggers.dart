@@ -100,8 +100,10 @@ DateTime _todayAt(DateTime now, int hour, int minute) {
 }
 
 /// The most recent [hour]:[minute] local-time anchor at or before [now] —
-/// today's if it has already passed, otherwise yesterday's.
-DateTime _lastAnchorBefore(DateTime now, int hour, int minute) {
+/// today's if it has already passed, otherwise yesterday's. Public so a caller
+/// that reads the clock at a moment of use (not reactively) can share the
+/// arithmetic without arming [nudgeBoundaryTickProvider]'s timer.
+DateTime lastAnchorBefore(DateTime now, int hour, int minute) {
   final todayAnchor = _todayAt(now, hour, minute);
   if (!now.isBefore(todayAnchor)) return todayAnchor;
   return DateTime(now.year, now.month, now.day - 1, hour, minute);
@@ -130,7 +132,7 @@ final planningAnchorProvider = Provider<DateTime>((ref) {
 final lastShutdownAnchorProvider = Provider<DateTime>((ref) {
   final now = _now(ref);
   final shutdownTime = ref.watch(shutdownSettingsProvider).shutdownTime;
-  return _lastAnchorBefore(now, shutdownTime.hour, shutdownTime.minute);
+  return lastAnchorBefore(now, shutdownTime.hour, shutdownTime.minute);
 });
 
 /// Whether a session qualifies as belonging to the current planning period —
