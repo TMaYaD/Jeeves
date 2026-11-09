@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../database/daos/tag_dao.dart' show TagWithCount;
 import '../../database/gtd_database.dart' show Tag;
 import '../../providers/tag_filter_provider.dart';
 import '../../providers/tags_provider.dart';
@@ -10,6 +9,20 @@ import 'tag_management_sheet.dart';
 
 /// Number of tags the collapsed cloud shows (selected tags are never hidden).
 const int tagCloudCollapsedCap = 12;
+
+/// Bumped by the shell each time the drawer closes. The drawer keeps its
+/// child mounted while closed, so [TagCloud] listens to this to drop its find
+/// query and expansion instead of relying on disposal.
+final tagCloudDrawerClosedCountProvider =
+    NotifierProvider<TagCloudDrawerClosedCount, int>(
+        TagCloudDrawerClosedCount.new);
+
+class TagCloudDrawerClosedCount extends Notifier<int> {
+  @override
+  int build() => 0;
+
+  void recordClose() => state++;
+}
 
 /// What [organiseTagCloud] decided to render.
 class TagCloudLayout {
@@ -108,6 +121,10 @@ class _TagCloudState extends ConsumerState<TagCloud> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<int>(tagCloudDrawerClosedCountProvider, (_, _) {
+      _queryController.clear();
+      if (_expanded) setState(() => _expanded = false);
+    });
     final tagsAsync = ref.watch(contextTagsWithCountProvider);
     final selectedIds = ref.watch(tagFilterProvider);
     final notifier = ref.read(tagFilterProvider.notifier);
