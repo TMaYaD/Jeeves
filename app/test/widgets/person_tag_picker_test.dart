@@ -495,7 +495,7 @@ void main() {
 
   group('PersonTagPickerSheet — adding a person (#688)', () {
     Future<Tag?> findPerson(WidgetTester tester, String name) =>
-        tester.runAsync(() => db.tagDao.findPersonTagByName(name));
+        tester.runAsync<Tag?>(() => db.tagDao.findPersonTagByName(name));
 
     Future<void> search(WidgetTester tester, String text) async {
       await tester.enterText(find.byType(TextField).first, text);

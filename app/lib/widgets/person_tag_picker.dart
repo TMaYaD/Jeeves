@@ -280,7 +280,7 @@ class _PersonTagPickerSheetState extends ConsumerState<PersonTagPickerSheet> {
   }
 
   Future<void> _confirm() async {
-    if (_committing) return;
+    if (_committing || _addingPerson) return;
     // Freeze the selection before the first await: what gets written and what
     // gets returned must be the same set.
     final selected = Set<String>.unmodifiable(_selected);
