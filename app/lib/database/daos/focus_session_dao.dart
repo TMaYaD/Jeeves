@@ -251,6 +251,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
     DateTime? now,
   }) async {
     final ts = (now ?? DateTime.now()).toUtc().toIso8601String();
+    var wroteAction = false;
 
     await attachedDatabase.capturing(() async {
       final session = await (select(focusSessions)
@@ -276,10 +277,15 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       // Open a new time log if a task is being focused, attributing it to the
       // Outcome's current Action resolved inside this transaction (issue #476).
       // A planned/terminated row can never be attributed — the resolver filters
-      // `role = 'current'`; an Actionless Outcome yields NULL, still
-      // task-attributed.
+      // `role = 'current'`. An Actionless Outcome is given its title as the
+      // current Action first (#711), so the log is never action-less.
       if (taskId != null) {
-        final actionId = await ActionDao.currentActionIdFor(this, taskId);
+        // An Actionless Outcome first gets its title as the current Action, so
+        // the sprint can settle the row (#711).
+        final resolved = await ActionDao.ensureCurrentActionIdFor(
+            attachedDatabase, taskId, DateTime.parse(ts));
+        final actionId = resolved.actionId;
+        wroteAction = resolved.wroteAction;
         final logId = uuid.v4();
         await into(timeLogs).insert(TimeLogsCompanion(
           id: Value(logId),
@@ -310,6 +316,10 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
         fields: {'current_task_id': taskId},
       );
     });
+    if (wroteAction) {
+      attachedDatabase.notifyActionsViewWrite();
+      attachedDatabase.notifyTodosViewWrite();
+    }
   }
 
   /// Stream that emits the currently open session, or null.
@@ -794,13 +804,13 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   /// because the user gave it a next move. See [SessionSettlement] for why the
   /// ladder is not a claim about List membership.
   ///
-  /// Two shapes deliberately never settle. A **dismissed** re-clarify sheet
-  /// writes nothing, so the Outcome still owes a re-clarification and belongs
-  /// in Evening Shutdown's disposition step. And an **Actionless** Outcome
-  /// cannot settle under (b) at all — `TimeLogDao`'s resolver records
-  /// `action_id = NULL` when nothing is `current`, and
-  /// `ActionDao.applyCompleteCurrentAction` no-ops, so no verdict produces an
-  /// anchor; arm (a) still catches it if the user marks the Outcome done.
+  /// A **dismissed** re-clarify sheet deliberately never settles: it writes
+  /// nothing, so the Outcome still owes a re-clarification and belongs in
+  /// Evening Shutdown's disposition step. An **Actionless** Outcome does settle
+  /// under (b), because starting a sprint on it first writes its title as the
+  /// `current` Action (`ActionDao.ensureCurrentActionIdFor`), so the log has
+  /// a real Action to complete. Only a legacy log with `action_id = NULL` has
+  /// no anchor.
   ///
   /// Both timestamps are TEXT: `storeDateTimeAsText: true` on [GtdDatabase]
   /// makes every `DateTimeColumn` a TEXT column, so `actions.done_at` and

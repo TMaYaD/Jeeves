@@ -313,8 +313,9 @@ void main() {
       expect(log!.actionId, current!.id);
     });
 
-    test('leaves action_id NULL when the focused task is Actionless (#476)',
-        () async {
+    test(
+        'attributes to a title-as-action current Action when the focused task '
+        'is Actionless (#476, #711)', () async {
       await _insertTodo(db, id: 'task1', title: 'Task 1');
       final sessionId = await db.focusSessionDao.openSession(
         userId: _userId,
@@ -324,8 +325,10 @@ void main() {
       await db.focusSessionDao.setCurrentTask(
           sessionId: sessionId, taskId: 'task1', now: DateTime(2026, 4, 28, 9));
 
+      final current = await db.actionDao.getCurrentAction('task1');
+      expect(current?.actionText, 'Task 1');
       final log = await db.timeLogDao.watchActiveLog().first;
-      expect(log!.actionId, isNull);
+      expect(log!.actionId, current!.id);
     });
 
     test('switching tasks opens the new log against the new task\'s Action',
@@ -1473,13 +1476,109 @@ void main() {
     });
 
     test(
-        'an Actionless engagement never settles under arm (b): the TimeLog '
-        'carries no action_id, so there is no anchor to compare against',
+        'a sprint on an Actionless Plan member settles under arm (b): starting '
+        'it writes the title as the current Action to anchor on (#711)',
         () async {
+      await _insertTodo(db, id: 'X', title: 'Write the report');
+      final sessionId = await openWith(['X']);
+      expect(await db.actionDao.getCurrentAction('X'), isNull);
+
+      final startedAt = DateTime.utc(2026, 5, 1, 10, 0);
+      await db.focusSessionDao
+          .setCurrentTask(sessionId: sessionId, taskId: 'X', now: startedAt);
+
+      final current = await db.actionDao.getCurrentAction('X');
+      expect(current?.actionText, 'Write the report');
+      final log = await db.select(db.timeLogs).getSingle();
+      expect(log.actionId, current!.id);
+
+      await db.actionDao.completeCurrentAction('X',
+          now: startedAt.add(const Duration(minutes: 25)));
+      await reclarifyAt('X', startedAt.add(const Duration(minutes: 26)));
+      await seedCurrent('X');
+
+      expect(await db.focusSessionDao.getActiveSessionSettlements(),
+          {'X': SessionSettlement.next});
+    });
+
+    test(
+        'an Actionless sprint with no verdict yet stays unsettled: the '
+        'predicate still wants the re-clarification', () async {
+      await _insertTodo(db, id: 'X', title: 'Write the report');
+      final sessionId = await openWith(['X']);
+      await db.focusSessionDao.setCurrentTask(
+          sessionId: sessionId, taskId: 'X', now: anchorAt);
+      await db.actionDao.completeCurrentAction('X',
+          now: anchorAt.add(const Duration(minutes: 25)));
+
+      expect(await db.focusSessionDao.getActiveSessionSettlements(), isEmpty);
+    });
+
+    test(
+        'the title Action carries the draft energy and time the user typed on '
+        'the Actionless Outcome (#711)', () async {
+      await _insertTodo(db, id: 'X', title: 'Write the report');
+      await (db.update(db.todos)..where((t) => t.id.equals('X'))).write(
+          const TodosCompanion(
+              energyLevel: Value('high'), timeEstimate: Value(45)));
+      final sessionId = await openWith(['X']);
+
+      await db.focusSessionDao
+          .setCurrentTask(sessionId: sessionId, taskId: 'X', now: anchorAt);
+
+      final current = await db.actionDao.getCurrentAction('X');
+      expect(current?.energyLevel, 'high');
+      expect(current?.timeEstimate, 45);
+    });
+
+    test(
+        'starting a sprint on an Actionless person-blocked Outcome moves it '
+        'onto Next: the Next stream re-emits once the title Action exists '
+        '(#711)', () async {
+      await _insertTodo(db, id: 'X', title: 'Call Trixy');
+      await tagPerson('X');
+      final sessionId = await openWith(['X']);
+
+      final emissions = <List<String>>[];
+      final subscription = db.todoDao
+          .watchNext()
+          .listen((rows) => emissions.add(rows.map((t) => t.id).toList()));
+      addTearDown(subscription.cancel);
+      await pumpEventQueue();
+      expect(emissions.last, isEmpty,
+          reason: 'Actionless and person-blocked: a pure wait, not on Next');
+
+      await db.focusSessionDao
+          .setCurrentTask(sessionId: sessionId, taskId: 'X', now: anchorAt);
+      await pumpEventQueue();
+
+      expect(emissions.last, ['X']);
+    });
+
+    test('an Actionless off-Plan Outcome engaged ad hoc also gets its title',
+        () async {
+      await _insertTodo(db, id: 'Z', title: 'Off-Plan thing');
+      final sessionId = await openWith(['X']);
+      await db.timeLogDao.openLog(
+        taskId: 'Z',
+        userId: _userId,
+        focusSessionId: sessionId,
+        now: anchorAt,
+      );
+      await db.actionDao.completeCurrentAction('Z',
+          now: anchorAt.add(const Duration(minutes: 25)));
+      await reclarifyAt('Z', anchorAt.add(const Duration(minutes: 26)));
+      await seedCurrent('Z');
+
+      expect(await db.focusSessionDao.getActiveSessionSettlements(),
+          {'Z': SessionSettlement.next});
+    });
+
+    test(
+        'a log with no action_id (data from before the title fallback) has '
+        'no anchor, so arm (b) does not settle it', () async {
       await _insertTodo(db, id: 'X', title: 'X');
       final sessionId = await openWith(['X']);
-      // A sprint started on an Actionless Plan member: task-attributed, but
-      // action_id IS NULL (TimeLogDao's resolver finds nothing `current`).
       await db.into(db.timeLogs).insert(TimeLogsCompanion(
             id: const Value('tl-actionless'),
             userId: const Value(_userId),
@@ -1491,8 +1590,7 @@ void main() {
       await seedCurrent('X');
 
       expect(await db.focusSessionDao.getActiveSessionSettlements(), isEmpty,
-          reason:
-              'documented hole: no Action was completed, so nothing settled');
+          reason: 'no Action was completed, so nothing settled');
     });
 
     test(

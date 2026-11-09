@@ -368,13 +368,15 @@ void main() {
           reason: "B's offline stint on the trashed Outcome was destroyed");
 
       // The hard-deleted Outcome is tombstone-dead everywhere, and the TimeLog
-      // against it survives with Outcome-grain attribution — *elsewhere*.
+      // against it survives — *elsewhere*. Its stint began on an Actionless
+      // Outcome, so starting it minted the title Action (#711) and the log is
+      // attributed to that Action rather than left Outcome-grain.
       expect(await store.todoDao.getTodo(_id('throwaway')), isNull);
       final orphanLogs = await (store.select(store.timeLogs)
             ..where((log) => log.taskId.equals(_id('throwaway'))))
           .get();
       expect(orphanLogs, hasLength(1));
-      expect(orphanLogs.single.actionId, isNull);
+      expect(orphanLogs.single.actionId, isNotNull);
 
       // Provenance survived the merge: two Captures claim one Outcome.
       expect(await store.captureDao.captureIdsForOutcome(outcome), hasLength(2));
