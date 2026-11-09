@@ -300,6 +300,30 @@ EXISTS (
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
+  /// Stream of the active Outcomes that sit on Someday/Maybe or on Waiting
+  /// For only — the pool the Daily Planning search offers below its Up Next
+  /// matches.
+  ///
+  /// ```text
+  /// clarified ∧ done_at IS NULL ∧
+  ///   (intent='maybe' ∨ (intent='next' ∧ actionless ∧ PersonBlocked))
+  /// ```
+  ///
+  /// The second branch is exactly the quadrant [watchNext] strips: it is on
+  /// Waiting For and not on Next. Done and trashed Outcomes are excluded by
+  /// `done_at` and by the Intent test; Inbox Captures are not Outcomes and
+  /// never appear here.
+  Stream<List<Todo>> watchOffUpNextPlanningCandidates() {
+    return customSelect(
+      'SELECT ${todoProjectionSql('todos')} FROM todos '
+      "WHERE clarified = 1 AND done_at IS NULL AND ("
+      "intent = 'maybe' OR "
+      "(intent = 'next' AND NOT $_excludeActionlessPersonBlockedClause)) "
+      'ORDER BY created_at',
+      readsFrom: {todos, todoTags, tags, actions},
+    ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
+  }
+
   /// Stream of Outcomes on the Next List.
   ///
   /// The Next List rule is:

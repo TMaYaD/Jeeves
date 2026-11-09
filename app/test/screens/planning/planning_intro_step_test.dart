@@ -108,18 +108,18 @@ void main() {
       await tester.pumpWidget(_screen(db));
       await _settle(tester);
 
-      expect(find.textContaining('about 15 minutes'), findsOneWidget);
+      expect(find.textContaining('about 15m'), findsOneWidget);
 
       await _dispose(tester);
     });
 
-    testWidgets('zero items shows the light-day floor "about 5 minutes", '
+    testWidgets('zero items shows the light-day floor "about 5m", '
         'never "0"', (tester) async {
       await tester.pumpWidget(_screen(db));
       await _settle(tester);
 
-      expect(find.textContaining('about 5 minutes'), findsOneWidget);
-      expect(find.textContaining('0 minutes'), findsNothing);
+      expect(find.textContaining('about 5m'), findsOneWidget);
+      expect(find.textContaining('minutes'), findsNothing);
 
       await _dispose(tester);
     });

@@ -372,14 +372,18 @@ void main() {
       expect(logs.first.actionId, current!.id);
     });
 
-    test('openLog on an Actionless Outcome leaves action_id NULL', () async {
+    test(
+        'openLog on an Actionless Outcome writes the title as its current '
+        'Action and attributes to it (#711)', () async {
       await _insertTodo(db, id: 'task1', title: 'Task 1');
       // No current Action exists.
       await db.timeLogDao
           .openLog(taskId: 'task1', userId: _userId, now: DateTime.now());
 
+      final current = await db.actionDao.getCurrentAction('task1');
+      expect(current?.actionText, 'Task 1');
       final logs = await db.select(db.timeLogs).get();
-      expect(logs.first.actionId, isNull);
+      expect(logs.first.actionId, current!.id);
     });
 
     test('openLog never attributes to a planned or terminated Action',
@@ -389,13 +393,19 @@ void main() {
       await db.actionDao.addPlannedAction('task1', 'later step');
       await db.actionDao.setCurrentAction('task1', 'first step');
       await db.actionDao.clearCurrentAction('task1'); // supersede → no current
+      final before = await db.select(db.actions).get();
 
       await db.timeLogDao
           .openLog(taskId: 'task1', userId: _userId, now: DateTime.now());
 
       final logs = await db.select(db.timeLogs).get();
       // Resolver filters role='current': planned/terminated can never attach.
-      expect(logs.first.actionId, isNull);
+      // The Outcome is Actionless, so the title fallback mints a fresh row.
+      expect(before.map((a) => a.id), isNot(contains(logs.first.actionId)));
+      final attributed = await (db.select(db.actions)
+            ..where((a) => a.id.equals(logs.first.actionId!)))
+          .getSingle();
+      expect(attributed.role, 'current');
     });
 
     test('openLog does not stamp last_clarified_at', () async {
