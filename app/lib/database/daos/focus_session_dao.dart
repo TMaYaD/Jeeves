@@ -190,7 +190,6 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   /// [now] is injectable for deterministic testing.
   Future<void> closeSession({required String sessionId, DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc().toIso8601String();
-    var wroteAction = false;
 
     await attachedDatabase.capturing(() async {
       final session = await (select(focusSessions)
@@ -252,6 +251,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
     DateTime? now,
   }) async {
     final ts = (now ?? DateTime.now()).toUtc().toIso8601String();
+    var wroteAction = false;
 
     await attachedDatabase.capturing(() async {
       final session = await (select(focusSessions)
@@ -316,7 +316,10 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
         fields: {'current_task_id': taskId},
       );
     });
-    if (wroteAction) attachedDatabase.notifyActionsViewWrite();
+    if (wroteAction) {
+      attachedDatabase.notifyActionsViewWrite();
+      attachedDatabase.notifyTodosViewWrite();
+    }
   }
 
   /// Stream that emits the currently open session, or null.

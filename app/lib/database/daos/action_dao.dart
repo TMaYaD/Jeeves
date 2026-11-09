@@ -477,7 +477,16 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         .getSingleOrNull();
     final title = outcome?.title.trim() ?? '';
     if (title.isEmpty) return (actionId: null, wroteAction: false);
-    final id = await db.actionDao._insertCurrentAction(outcomeId, title, ts: ts);
+    // The draft effort the user typed on the Actionless Outcome lands on the
+    // engaged Action, as at every other creation path (ADR-0001 story 7).
+    final seeded = await db.actionDao._seedMetadataFromDraft(outcomeId);
+    final id = await db.actionDao._insertCurrentAction(
+      outcomeId,
+      title,
+      energyLevel: seeded.energyLevel,
+      timeEstimate: seeded.timeEstimate,
+      ts: ts,
+    );
     return (actionId: id, wroteAction: true);
   }
 

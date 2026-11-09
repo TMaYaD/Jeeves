@@ -71,7 +71,10 @@ class TimeLogDao extends DatabaseAccessor<GtdDatabase>
         focusSessionId: focusSessionId,
       );
     });
-    if (wroteAction) attachedDatabase.notifyActionsViewWrite();
+    if (wroteAction) {
+      attachedDatabase.notifyActionsViewWrite();
+      attachedDatabase.notifyTodosViewWrite();
+    }
   }
 
   /// A stint's full field set — the create assertion every peer builds the row
