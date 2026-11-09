@@ -88,7 +88,7 @@ jobs:
       - run: flutter pub get
       - run: dart run flutter_launcher_icons
       - run: dart run build_runner build
-      - run: flutter build apk --profile --split-per-abi --target-platform android-arm64 --flavor dev
+      - run: flutter build apk --profile --split-per-abi --target-platform android-arm64 --flavor dev --dart-define=JEEVES_GIT_SHA=$(git rev-parse --short=7 HEAD)
 
       - name: Compose release notes
         id: notes

@@ -69,6 +69,7 @@ This is acceptable at single-contributor scale. Switch to a release branch (`rel
 
 - `.github/workflows/cd-app.yml` is the source of truth. The `version` job computes `version` and `pubspec_version`; downstream build/publish jobs stamp those into `pubspec.yaml` and produce APK/AAB/web artifacts.
 - The workflow triggers on `workflow_run` of `Flutter CI` on `main` (alpha builds) and on `push` of GA / stage tags (release builds).
+- Every build passes `--dart-define=JEEVES_GIT_SHA=<short sha>`. Settings → About shows `versionName (versionCode) · sha`; a device is on or after a merge when its versionCode is at least that merge's CD run number.
 - GitHub Releases are created only when HEAD carries a GA or stage tag. Mid-stage builds (alphas, post-tag betas/rcs) produce artifacts but no Release entry.
 
 ## Firebase App Distribution channels
