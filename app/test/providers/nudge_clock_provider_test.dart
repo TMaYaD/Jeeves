@@ -50,6 +50,7 @@ void main() {
 
         final container = ProviderContainer(overrides: [
           clockProvider.overrideWithValue(() => now),
+          periodicReviewOpenSinceProvider.overrideWithValue(null),
           periodicReviewLastCompletedProvider.overrideWithValue(last),
         ]);
         addTearDown(container.dispose);
@@ -73,7 +74,8 @@ void main() {
     test('is due immediately when never completed', () {
       final container = ProviderContainer(overrides: [
         clockProvider.overrideWithValue(() => DateTime(2026, 6, 29)),
-        periodicReviewLastCompletedProvider.overrideWithValue(null),
+        periodicReviewOpenSinceProvider.overrideWithValue(null),
+          periodicReviewLastCompletedProvider.overrideWithValue(null),
       ]);
       addTearDown(container.dispose);
       expect(container.read(periodicReviewIsDueProvider), isTrue);

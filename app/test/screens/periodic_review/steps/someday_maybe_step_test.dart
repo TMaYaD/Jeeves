@@ -12,6 +12,8 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:jeeves/providers/synced_preferences_provider.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
@@ -47,7 +49,7 @@ Future<String> _insertSomedayTodo(
   return id;
 }
 
-Widget _harness(
+ProviderContainer _container(
   GtdDatabase db, {
   /// See `waiting_for_step_test.dart` for the rationale — overrides the
   /// todo/tag providers for the listed IDs so the inner ClarifyCard rendered
@@ -55,7 +57,7 @@ Widget _harness(
   /// tag `watch()` queries (whose timers never settle in `pumpAndSettle`).
   List<String> reclarifyIds = const [],
 }) {
-  return ProviderScope(
+  return ProviderContainer(
     overrides: [
       databaseProvider.overrideWithValue(db),
       for (final id in reclarifyIds) ...[
@@ -69,9 +71,6 @@ Widget _harness(
         projectTagsProvider.overrideWith((_) => Stream.value(const <Tag>[])),
       ],
     ],
-    child: const MaterialApp(
-      home: Scaffold(body: SomedayMaybeStep()),
-    ),
   );
 }
 
@@ -80,17 +79,24 @@ Future<ProviderContainer> _enterStep(
   GtdDatabase db, {
   List<String> reclarifyIds = const [],
 }) async {
-  await tester.pumpWidget(_harness(db, reclarifyIds: reclarifyIds));
-  final container = ProviderScope.containerOf(
-    tester.element(find.byType(SomedayMaybeStep)),
-  );
-  await container.read(periodicReviewProvider.notifier).loadSomedaySnapshot();
+  final container = _container(db, reclarifyIds: reclarifyIds);
+  addTearDown(container.dispose);
+  // Preference migration and its Drift subscription need the real event loop.
+  await tester.runAsync(() async {
+    await container.read(syncedPreferencesProvider.future);
+    await container.read(periodicReviewProvider.notifier).loadSomedaySnapshot();
+  });
+  await tester.pumpWidget(UncontrolledProviderScope(
+    container: container,
+    child: const MaterialApp(home: Scaffold(body: SomedayMaybeStep())),
+  ));
   await tester.pumpAndSettle();
   return container;
 }
 
 void main() {
   setUpAll(configureSqliteForTests);
+  setUp(() => SharedPreferences.setMockInitialValues({}));
 
   group('SomedayMaybeStep — promote to Next captures a phrase (#293)', () {
     late GtdDatabase db;

@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -18,6 +20,8 @@ import '../test_helpers.dart';
 
 void main() {
   setUpAll(configureSqliteForTests);
+  late Directory storeDirectory;
+  late File storeFile;
   late GtdDatabase db;
   late ProviderContainer container;
   late GoRouter router;
@@ -25,7 +29,9 @@ void main() {
   // Real storage setup must run outside testWidgets' FakeAsync zone.
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
-    db = GtdDatabase(NativeDatabase.memory());
+    storeDirectory = await Directory.systemTemp.createTemp('weekly-review-');
+    storeFile = File('${storeDirectory.path}/review.sqlite');
+    db = GtdDatabase(NativeDatabase(storeFile));
     container = createPeriodicReviewTestContainer(db);
     await container.read(syncedPreferencesProvider.future);
     final createdAt = DateTime.utc(2026, 1, 1);
@@ -58,11 +64,15 @@ void main() {
     router.dispose();
     container.dispose();
     await db.close();
+    await storeDirectory.delete(recursive: true);
   });
 
   Future<void> tap(WidgetTester tester, Finder finder) async {
     await tester.ensureVisible(finder);
-    await tester.tap(finder);
+    await tester.runAsync(() async {
+      await tester.tap(finder);
+      await pumpEventQueue();
+    });
     await settleWithRealAsync(tester);
   }
 
@@ -117,8 +127,10 @@ void main() {
     expect(kept, isTrue);
     await tester.pumpWidget(const SizedBox.shrink());
     await settleWithRealAsync(tester);
-    container.dispose();
     await tester.runAsync(() async {
+      container.dispose();
+      await db.close();
+      db = GtdDatabase(NativeDatabase(storeFile));
       container = createPeriodicReviewTestContainer(db);
       await container.read(syncedPreferencesProvider.future);
       await container.read(periodicReviewProvider.notifier).loadAllSnapshots();
@@ -159,11 +171,13 @@ void main() {
     expect(container.read(syncedPreferencesProvider).requireValue
         .get<String>('periodic_review_open_since'), isNotNull);
 
-    // A fresh provider container over the same durable store models process death.
+    // Close the database and reopen the persisted file, as after process death.
     await tester.pumpWidget(const SizedBox.shrink());
     await settleWithRealAsync(tester);
-    container.dispose();
     await tester.runAsync(() async {
+      container.dispose();
+      await db.close();
+      db = GtdDatabase(NativeDatabase(storeFile));
       container = createPeriodicReviewTestContainer(db);
       await container.read(syncedPreferencesProvider.future);
       await container.read(periodicReviewProvider.notifier).loadAllSnapshots();
