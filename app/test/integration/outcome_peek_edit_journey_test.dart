@@ -57,6 +57,9 @@ void main() {
   testWidgets(
       'editing in the peek persists, shows on the card and capacity, and '
       'leaves planning state alone', (tester) async {
+    tester.view.physicalSize = const Size(800, 1600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
     await tester.pumpWidget(ProviderScope(
       overrides: [databaseProvider.overrideWithValue(db)],
       child: const MaterialApp(home: Scaffold(body: PlanSummaryStep())),
@@ -112,5 +115,10 @@ void main() {
     final upNextAfter =
         (await tester.runAsync(() => db.todoDao.getTodo('up-next')))!;
     expect(upNextAfter.lastClarifiedAt, upNextBefore.lastClarifiedAt);
+
+    // Unmount inside the body so Drift's stream-close timers fire here.
+    await tester.pumpWidget(const SizedBox());
+    await tester.runAsync(() => pumpEventQueue());
+    await tester.pump(const Duration(milliseconds: 100));
   });
 }

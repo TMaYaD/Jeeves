@@ -72,7 +72,19 @@ Future<void> _settle(WidgetTester tester) async {
   await tester.pump(const Duration(milliseconds: 100));
 }
 
+/// Unmounts the tree inside the test body. The binding would otherwise do it
+/// after the body, where Drift's stream-close timer is left pending.
+Future<void> _unmount(WidgetTester tester) async {
+  await tester.pumpWidget(const SizedBox());
+  await tester.runAsync(() => pumpEventQueue());
+  await tester.pump(const Duration(milliseconds: 100));
+}
+
 Future<void> _open(WidgetTester tester) async {
+  // Tall enough that the sheet's lower controls (Done, Plan) are on screen.
+  tester.view.physicalSize = const Size(800, 1600);
+  tester.view.devicePixelRatio = 1;
+  addTearDown(tester.view.reset);
   await tester.tap(find.text('open'));
   await _settle(tester);
 }
@@ -108,6 +120,7 @@ void main() {
     expect(assigned!.map((r) => r.tagId), ['ctx-home']);
     expect((await _row(tester, db, 'c1')).lastClarifiedAt,
         before.lastClarifiedAt);
+    await _unmount(tester);
   });
 
   testWidgets('choosing a person under Waiting for assigns and stamps',
@@ -135,6 +148,7 @@ void main() {
     expect(ids, {'person-alice'});
     expect((await _row(tester, db, 'p1')).lastClarifiedAt, isNotNull);
     expect(find.text('Nobody'), findsNothing);
+    await _unmount(tester);
   });
 
   testWidgets('the due chip sets a date and the clear control removes it',
@@ -157,6 +171,7 @@ void main() {
 
     expect((await _row(tester, db, 'd1')).dueDate, isNull);
     expect(find.byKey(const Key('outcome_peek_due_clear')), findsNothing);
+    await _unmount(tester);
   });
 
   testWidgets('a Plan edit from the peek adds a planned Action',
@@ -179,6 +194,7 @@ void main() {
         .get());
     expect(actions!.map((a) => a.actionText), ['Call the printer']);
     expect((await _row(tester, db, 'a1')).lastClarifiedAt, isNotNull);
+    await _unmount(tester);
   });
 
   testWidgets('an untouched title and notes follow a later row update',
@@ -197,6 +213,7 @@ void main() {
 
     expect(find.text('Renamed elsewhere'), findsOneWidget);
     expect(find.text('Notes changed elsewhere'), findsOneWidget);
+    await _unmount(tester);
   });
 
   testWidgets('a title being edited is not overwritten by a row update',
@@ -214,5 +231,6 @@ void main() {
 
     expect(find.text('Typing now'), findsOneWidget);
     expect(find.text('Renamed elsewhere'), findsNothing);
+    await _unmount(tester);
   });
 }

@@ -328,16 +328,24 @@ void main() {
 
     testWidgets('editing in the peek leaves selection and scroll untouched',
         (tester) async {
+      // The edit writes through the real database, so the row must exist; the
+      // list itself is the stubbed one.
       await tester.runAsync(() => db.into(db.todos).insert(TodosCompanion(
-            id: const Value('t1'),
-            title: const Value('Task one'),
+            id: const Value('t12'),
+            title: const Value('Task 12'),
             createdAt: Value(DateTime.now()),
             clarified: const Value(true),
             userId: const Value('local'),
           )));
-      await _pumpStep(tester, db, [_todo(id: 't1', title: 'Task one')]);
+      await _pumpStep(tester, db, _manyTodos(20));
 
-      await tester.tap(find.text('Task one'));
+      await tester.scrollUntilVisible(find.text('Task 12'), 120);
+      await tester.pumpAndSettle();
+      final before = _scrollOffset(tester);
+      expect(before, greaterThan(0),
+          reason: 'test must genuinely scroll away from the top');
+
+      await tester.tap(find.text('Task 12'));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('outcome_peek_time')));
       await tester.pumpAndSettle();
@@ -346,11 +354,14 @@ void main() {
       await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();
       await tester.runAsync(() => pumpEventQueue());
+      expect(find.byType(OutcomePeekSheet), findsNothing);
 
       final row = await tester.runAsync(() => (db.select(db.todos)
-            ..where((t) => t.id.equals('t1')))
+            ..where((t) => t.id.equals('t12')))
           .getSingle());
-      expect(row!.timeEstimate, 10);
+      expect(row!.timeEstimate, 10, reason: 'the edit must actually be saved');
+
+      expect(_scrollOffset(tester), closeTo(before, 1));
       final state = _planningState(tester);
       expect(state.reviewedTaskIds, isEmpty);
       expect(state.pendingSelectedTaskIds, isEmpty);
