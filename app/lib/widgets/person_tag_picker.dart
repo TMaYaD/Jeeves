@@ -232,6 +232,7 @@ class _PersonTagPickerSheetState extends ConsumerState<PersonTagPickerSheet> {
                 const SizedBox(width: 8),
                 FilledButton(
                   onPressed: (_committing ||
+                          _addingPerson ||
                           (widget.requireSelection && _selected.isEmpty))
                       ? null
                       : _confirm,

@@ -495,8 +495,7 @@ void main() {
 
   group('PersonTagPickerSheet — adding a person (#688)', () {
     Future<Tag?> findPerson(WidgetTester tester, String name) =>
-        tester.runAsync(() => db.tagDao.findPersonTagByName(name))
-            as Future<Tag?>;
+        tester.runAsync(() => db.tagDao.findPersonTagByName(name));
 
     Future<void> search(WidgetTester tester, String text) async {
       await tester.enterText(find.byType(TextField).first, text);
@@ -525,6 +524,33 @@ void main() {
       expect(bob, isNotNull);
       expect(observed.result, {bob!.id});
       expect(await db.todoDao.getPersonTagIdsForTodo('t1'), {bob.id});
+    });
+
+    testWidgets('Done is inert while an inline add is still pending',
+        (tester) async {
+      final observed = _Observed();
+
+      await tester.pumpWidget(_harness(
+        db,
+        observed: observed,
+        personTags: [_personTag('alice', 'Alice')],
+      ));
+      await _openPicker(tester);
+      await search(tester, 'Bob');
+      await tester.tap(find.text('Add "Bob"'));
+      // No settle: the create is still in flight, so Done must not confirm
+      // the old selection.
+      await tester.tap(find.text('Done'), warnIfMissed: false);
+      await tester.pump();
+      expect(observed.called, isFalse);
+      expect(find.byType(PersonTagPickerSheet), findsOneWidget);
+
+      await tester.pumpAndSettle();
+      await _tapDone(tester);
+
+      final bob = await findPerson(tester, 'Bob');
+      expect(bob, isNotNull);
+      expect(observed.result, {bob!.id});
     });
 
     testWidgets('selection-only: inline add then Done returns the new person',
