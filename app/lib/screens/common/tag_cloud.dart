@@ -123,7 +123,7 @@ class _TagCloudState extends ConsumerState<TagCloud> {
   Widget build(BuildContext context) {
     ref.listen<int>(tagCloudDrawerClosedCountProvider, (_, _) {
       _queryController.clear();
-      if (_expanded) setState(() => _expanded = false);
+      setState(() => _expanded = false);
     });
     final tagsAsync = ref.watch(contextTagsWithCountProvider);
     final selectedIds = ref.watch(tagFilterProvider);

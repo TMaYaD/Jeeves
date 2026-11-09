@@ -301,10 +301,11 @@ void main() {
 
       await tester.tap(find.byKey(const Key('tag_cloud_show_more')));
       await tester.pumpAndSettle();
+      expect(find.text('Show fewer'), findsOneWidget);
       await tester.enterText(
           find.byKey(const Key('tag_cloud_find_field')), 'tag1');
       await tester.pumpAndSettle();
-      expect(find.text('Show fewer'), findsOneWidget);
+      expect(find.byType(TagText), findsNWidgets(11));
 
       // Close by tapping the scrim, then reopen.
       await tester.tapAt(const Offset(780, 300));
@@ -315,6 +316,27 @@ void main() {
           find.byKey(const Key('tag_cloud_find_field')));
       expect(field.controller?.text, isEmpty);
       expect(find.text('Show 8 more'), findsOneWidget);
+      expect(find.byType(TagText), findsNWidgets(12));
+    });
+
+    testWidgets('a query typed while collapsed is cleared on reopen',
+        (tester) async {
+      await tester.pumpWidget(_buildShell(contextTagsWithCount: twenty()));
+      await tester.pump();
+      await _openDrawer(tester);
+
+      await tester.enterText(
+          find.byKey(const Key('tag_cloud_find_field')), 'tag19');
+      await tester.pumpAndSettle();
+      expect(find.byType(TagText), findsNWidgets(1));
+
+      await tester.tapAt(const Offset(780, 300));
+      await tester.pumpAndSettle();
+      await _openDrawer(tester);
+
+      final field = tester.widget<TextField>(
+          find.byKey(const Key('tag_cloud_find_field')));
+      expect(field.controller?.text, isEmpty);
       expect(find.byType(TagText), findsNWidgets(12));
     });
   });
