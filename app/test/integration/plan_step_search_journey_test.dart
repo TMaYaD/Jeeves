@@ -95,7 +95,7 @@ void main() {
     bool Function(List<OffUpNextCandidate>) done,
   ) async {
     final sub = container.listen(
-        offUpNextForFocusSessionPlanningProvider, (_, __) {});
+        offUpNextForFocusSessionPlanningProvider, (_, _) {});
     addTearDown(sub.close);
     for (var i = 0; i < 200; i++) {
       final value = sub.read();

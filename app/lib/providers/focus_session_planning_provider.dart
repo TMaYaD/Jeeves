@@ -290,8 +290,8 @@ final offUpNextForFocusSessionPlanningProvider =
     ...planningState.pendingSelectedTaskIds,
   };
   final dayEnergy = planningState.energyLevel;
-  final pool = ref.watch(_offUpNextPoolProvider).valueOrNull ?? const [];
-  final nextAll = ref.watch(_allNextPoolProvider).valueOrNull ?? const [];
+  final pool = ref.watch(_offUpNextPoolProvider).value ?? const [];
+  final nextAll = ref.watch(_allNextPoolProvider).value ?? const [];
   return [
     for (final t in pool)
       if (!taken.contains(t.id))
