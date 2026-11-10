@@ -50,18 +50,18 @@ abstract interface class SyncPlugin {
   Future<void> start(SyncHost host);
   Future<void> stop();
 
-  /// Changes after [cursor] in the host's change sequence — local writes and
-  /// other plugins' changes alike. The plugin persists the cursor it has
-  /// durably handed off; on start, after a crash, it resumes from there.
-  Future<int> deliver(int cursor, List<SequencedChange> changes);
+  /// The next changes after this plugin's acknowledged position in the host's
+  /// change sequence — local writes and other plugins' changes alike. Returns
+  /// the highest sequence number the plugin has durably handed off.
+  Future<int> deliver(List<SequencedChange> changes);
 
   Stream<PluginHealth> get health;
 }
 ```
 
-The outbound half already exists: `DomainOpCapture` emits one coalesced `(collection, entity_id, fields | tombstone)` per entity per committed transaction, with no Sync type in its signature. The host stamps clocks onto it and appends it to a **durable change sequence** in the same commit that records it in merge state. Nothing is ever pushed into a plugin that it could lose: each plugin reads the sequence from its own cursor, so a crash between commit and hand-off replays rather than drops, and forwarding between plugins is the same read.
+The outbound half already exists: `DomainOpCapture` emits one coalesced `(collection, entity_id, fields | tombstone)` per entity per committed transaction, with no Sync type in its signature. The host stamps clocks onto it and appends it to a **durable change sequence** in the same commit that records it in merge state. **The host owns each plugin's cursor.** It persists, per plugin, the highest sequence number that plugin's `deliver` has acknowledged, and only ever hands it the changes after that. A crash before the acknowledgement is persisted re-delivers rather than drops — harmless, since merge is idempotent — and on `start` the host resumes from the stored position, so a plugin never has to remember where it was. Forwarding between plugins is the same mechanism. The inbound half is the reducer's job generalised from `OpPayload` to `Change`.
 
-**The domain write and its change commit together.** Merge state lives in the sync store, a different file from the domain store, so the two cannot share a transaction. The handoff is therefore a transactional outbox in the domain store: the capture scope writes each coalesced change, already clocked and tombstones included, to a `pending_changes` table in the same transaction as the domain rows. The host drains that table into merge state and the change sequence, and deletes an entry only after the sync store has committed it. A crash anywhere replays the undrained entries; replay is harmless because the clock was stamped once, at capture, and merge is idempotent. This also closes the window that exists today, where a process killed between the domain commit and the op-log write can lose the op. The inbound half is the reducer's job generalised from `OpPayload` to `Change`.
+**The domain write and its change commit together.** Merge state lives in the sync store, a different file from the domain store, so the two cannot share a transaction. The handoff is therefore a transactional outbox in the domain store: the capture scope writes each coalesced change, already clocked and tombstones included, to a `pending_changes` table in the same transaction as the domain rows. The host drains that table into merge state and the change sequence, and deletes an entry only after the sync store has committed it. A crash anywhere replays the undrained entries; replay is harmless because the clock was stamped once, at capture, and merge is idempotent. This also closes the window that exists today, where a process killed between the domain commit and the op-log write can lose the op.
 
 **Clocks are the host's, not the medium's.** Every merged field carries an HLC. A plugin whose medium carries clocks (the op log) passes them through. A plugin whose medium does not — a page someone edited by hand — mints one at the moment it observes the edit. Ties break on a stable device identity; the op-log plugin's member id is one, and the host needs one that exists without enrolment.
 
