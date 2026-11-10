@@ -587,7 +587,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   /// [winnerFirstOrderSql], so two devices render the same order.
   ///
   /// Deliberately *not* shared with `TodoDao`'s Stale predicate, which uses the
-  /// same COALESCE over a different role set — Stale excludes `superseded`
+  /// same COALESCE over a different role set — that predicate excludes `superseded`
   /// (an abandoned Action owes nothing), history includes it. The expressions
   /// look alike and mean different things; unifying them would be a bug.
   ///

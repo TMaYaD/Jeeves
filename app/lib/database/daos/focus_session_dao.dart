@@ -790,9 +790,10 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   ///   FocusSession** ([_settlementAnchorSql]) and the Outcome has been
   ///   re-clarified at or after that completion.
   ///
-  /// (b) is the session-scoped negation of **Stale** (CONTEXT.md § GTD Core),
+  /// (b) is the session-scoped answer to Stale's fourth variant, "unclarified
+  /// since an Action" (CONTEXT.md § Engagement),
   /// matching `TodoDao._needsReviewWhere`'s Action-termination arm — so a row
-  /// that is Settled is by construction not Stale, and the two predicates can
+  /// that is Settled is by construction not unclarified since an Action, and the two predicates can
   /// never disagree about the same Outcome on the same morning. The looser
   /// reading ("the Action was completed") would settle a row the user never
   /// answered for.

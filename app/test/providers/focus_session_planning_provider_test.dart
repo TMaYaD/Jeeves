@@ -919,7 +919,7 @@ void main() {
       final state = container.read(focusSessionPlanningProvider);
       expect(state.reviewNav.items!.map((t) => t.id),
           containsAll([staleId, actionlessId]));
-      expect(state.reviewStaleIds, {staleId});
+      expect(state.reviewUnclarifiedSinceActionIds, {staleId});
     });
 
     test('"Still relevant" on an Actionless item leaves it Actionless but '

@@ -305,14 +305,14 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
     ];
     final ids = outcomes.map((todo) => todo.id).toSet();
     final planned = await _db.actionDao.getOutcomeIdsWithPlannedActions(ids);
-    final stale = await _db.todoDao.getActionTerminationStaleIds(ids);
+    final stale = await _db.todoDao.getUnclarifiedSinceActionIds(ids);
     PeriodicReviewCandidate outcome(Todo todo, PeriodicReviewStepKind step) {
       final actionless = !state.actionTexts.containsKey(todo.id);
       return PeriodicReviewCandidate(
         step: step,
         id: todo.id,
         isPlanless: actionless && !planned.contains(todo.id),
-        isStale: stale.contains(todo.id),
+        isUnclarifiedSinceAction: stale.contains(todo.id),
         isActionless: actionless,
         lastClarifiedAt: todo.lastClarifiedAt,
         createdAt: todo.createdAt,
@@ -322,7 +322,7 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
       for (final id in state.inboxNav.items!)
         PeriodicReviewCandidate(
           step: PeriodicReviewStepKind.inbox, id: id,
-          isPlanless: false, isStale: false, isActionless: false,
+          isPlanless: false, isUnclarifiedSinceAction: false, isActionless: false,
           lastClarifiedAt: null, createdAt: _captureCreatedAtCache[id]!,
         ),
       for (final todo in state.waitingForNav.items!)

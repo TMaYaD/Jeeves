@@ -455,7 +455,7 @@ class FocusSessionPlanningState {
     this.reviewActions = const {},
     this.reviewPersonTags = const {},
     this.reviewActionTexts = const {},
-    this.reviewStaleIds = const {},
+    this.reviewUnclarifiedSinceActionIds = const {},
   });
 
   final int currentStep;
@@ -522,10 +522,10 @@ class FocusSessionPlanningState {
   /// next-action grain (ADR-0001 story 3).
   final Map<String, String> reviewActionTexts;
 
-  /// Ids in [reviewNav.items] that are Stale: an Action of the Outcome was
-  /// completed after it was last clarified. Drives the review card's Stale
-  /// hint.
-  final Set<String> reviewStaleIds;
+  /// Ids in [reviewNav.items] that are unclarified since an Action: an Action
+  /// of the Outcome was completed after it was last clarified. Drives the
+  /// review card's hint.
+  final Set<String> reviewUnclarifiedSinceActionIds;
 
   FocusSessionPlanningState copyWith({
     int? currentStep,
@@ -541,7 +541,7 @@ class FocusSessionPlanningState {
     Map<int, ReviewActionRecord>? reviewActions,
     Map<String, List<Tag>>? reviewPersonTags,
     Map<String, String>? reviewActionTexts,
-    Set<String>? reviewStaleIds,
+    Set<String>? reviewUnclarifiedSinceActionIds,
   }) =>
       FocusSessionPlanningState(
         currentStep: currentStep ?? this.currentStep,
@@ -557,7 +557,7 @@ class FocusSessionPlanningState {
         reviewActions: reviewActions ?? this.reviewActions,
         reviewPersonTags: reviewPersonTags ?? this.reviewPersonTags,
         reviewActionTexts: reviewActionTexts ?? this.reviewActionTexts,
-        reviewStaleIds: reviewStaleIds ?? this.reviewStaleIds,
+        reviewUnclarifiedSinceActionIds: reviewUnclarifiedSinceActionIds ?? this.reviewUnclarifiedSinceActionIds,
       );
 }
 
@@ -675,14 +675,14 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
           items.map((t) => t.id).toSet(),
         );
         if (!ref.mounted) return;
-        // Which of them are Stale (an Action finished after the last
-        // clarification) — the same SQL as the queue predicate's Stale branch.
-        final staleIds = await _db.todoDao.getActionTerminationStaleIds(
+        // Which of them are unclarified since an Action (an Action finished after the last
+        // clarification) — the same SQL as the queue predicate's matching branch.
+        final staleIds = await _db.todoDao.getUnclarifiedSinceActionIds(
           items.map((t) => t.id).toSet(),
         );
         if (!ref.mounted) return;
         state = state.copyWith(
-          reviewStaleIds: staleIds,
+          reviewUnclarifiedSinceActionIds: staleIds,
           reviewNav: SnapshotNav<Todo>(items: items),
           reviewActions: {},
           reviewPersonTags: personTags,
@@ -954,7 +954,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
 
   // ---- Task Review (Step 2) --------------------------------------------------
 
-  /// "Still relevant" — only available for Stale tasks. Routes through
+  /// "Still relevant" — only available for tasks unclarified since an Action. Routes through
   /// [ClarificationService.clarifyToOutcome] so a prior in-session
   /// resolution (markDone / sendToSomeday / trash) is undone in the same
   /// write that stamps `last_clarified_at`.

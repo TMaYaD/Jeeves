@@ -656,7 +656,7 @@ void main() {
       expect(result.map((t) => t.id), [id]);
     });
 
-    test('getActionTerminationStaleIds names only the Action-terminated ones',
+    test('getUnclarifiedSinceActionIds names only the Action-terminated ones',
         () async {
       final stale = await _insertClarifiedTask(db,
           actionText: 'Draft email',
@@ -672,10 +672,10 @@ void main() {
 
       expect(
         await db.todoDao
-            .getActionTerminationStaleIds({stale, reclarified, actionless}),
+            .getUnclarifiedSinceActionIds({stale, reclarified, actionless}),
         {stale},
       );
-      expect(await db.todoDao.getActionTerminationStaleIds({}), isEmpty);
+      expect(await db.todoDao.getUnclarifiedSinceActionIds({}), isEmpty);
     });
   });
 }

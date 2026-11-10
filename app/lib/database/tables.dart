@@ -70,7 +70,7 @@ class Todos extends Table {
   ///
   /// Non-stamping writes include current-Action completion (engagement, not
   /// clarification), TimeLog writes, and Area / Label changes (organising).
-  /// Drives the re-clarification ("Stale") predicate; see todo_dao.dart's
+  /// Drives the "unclarified since an Action" re-clarification predicate; see todo_dao.dart's
   /// _needsReviewWhere.
   DateTimeColumn get lastClarifiedAt => dateTime().nullable()();
 
