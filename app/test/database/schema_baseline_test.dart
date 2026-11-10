@@ -82,16 +82,16 @@ void main() {
   setUpAll(configureSqliteForTests);
 
   group('schema version', () {
-    test('is 3 — two onUpgrade steps behind the fresh baseline', () async {
+    test('is 4 — three onUpgrade steps behind the fresh baseline', () async {
       final db = _openInMemory();
       addTearDown(db.close);
-      expect(db.schemaVersion, 3);
+      expect(db.schemaVersion, 4);
       // A fresh file runs onCreate at the current version, not the ladder.
       expect(
         await db.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        3,
+        4,
       );
     });
   });
@@ -299,7 +299,7 @@ void main() {
       await seed.customStatement('PRAGMA user_version = 1');
       await seed.close();
 
-      // Open 2: Drift sees user_version=1 and schemaVersion=3, so it runs the
+      // Open 2: Drift sees user_version=1 and schemaVersion=4, so it runs the
       // whole ladder — the v2 drop asserted here, and the v3 `tags` recreate the
       // group below owns.
       final upgraded = GtdDatabase(
@@ -311,7 +311,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        3,
+        4,
       );
       expect(await _columnNames(upgraded, 'todos'),
           isNot(contains('time_spent_minutes')),
@@ -438,7 +438,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        3,
+        4,
       );
       expect(await _uniqueConstraintIndexes(upgraded, 'tags'), isEmpty,
           reason: 'v3 drops UNIQUE (name, type)');
@@ -462,6 +462,63 @@ void main() {
         "VALUES ('tag-alice-peer', 'Alice', '#00ff88', 'person', 'u1')",
       );
       expect(await _rows(upgraded, 'tags'), hasLength(3));
+    });
+  });
+
+  group('v4 onUpgrade adds the Stale sweep tables', () {
+    const staleTables = [
+      'focus_session_planning_bypasses',
+      'focus_session_reschedules',
+      'outcome_sweep_decisions',
+    ];
+
+    test('the upgrade creates them and preserves every existing row',
+        () async {
+      final raw = sqlite3.openInMemory();
+      addTearDown(raw.close);
+
+      final seed = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      var seedClosed = false;
+      Future<void> closeSeed() async {
+        if (seedClosed) return;
+        seedClosed = true;
+        await seed.close();
+      }
+
+      addTearDown(closeSeed);
+      // A faithful v3 store: the fresh shape without the three v4 tables.
+      for (final table in staleTables) {
+        await seed.customStatement('DROP TABLE $table');
+      }
+      final createdMs =
+          DateTime.parse('2026-07-30T09:00:00.000Z').millisecondsSinceEpoch;
+      await seed.customStatement(
+        'INSERT INTO todos (id, title, user_id, created_at, intent, clarified) '
+        "VALUES ('t1', 'Renew passport', 'u1', ?, 'next', 1)",
+        [createdMs],
+      );
+      final todosBefore = await _rows(seed, 'todos');
+      await seed.customStatement('PRAGMA user_version = 3');
+      await closeSeed();
+
+      final upgraded = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      addTearDown(upgraded.close);
+
+      expect(
+        await upgraded.customSelect('PRAGMA user_version').getSingle().then(
+              (r) => r.read<int>('user_version'),
+            ),
+        4,
+      );
+      expect(await _objects(upgraded, 'table'), containsAll(staleTables));
+      expect(await _rows(upgraded, 'todos'), todosBefore);
+      for (final table in staleTables) {
+        expect(await _rows(upgraded, table), isEmpty);
+      }
     });
   });
 }

@@ -223,6 +223,67 @@ class FocusSessionDispositions extends Table {
 }
 
 // ---------------------------------------------------------------------------
+// Stale signals (CONTEXT.md § Engagement, Stale)
+// ---------------------------------------------------------------------------
+
+/// A FocusSession's Daily Planning passed an Outcome over **without putting it
+/// on the Plan**: the user tapped Skip on it (`reason = 'skipped'`), or left it
+/// unclarified after an Action finished (`reason = 'unclarified'`). Written by
+/// `FocusSessionDao.openSession`, in the same scope as the Plan, so an abandoned
+/// Planning performance records nothing. One row per (FocusSession, Outcome);
+/// a skip takes precedence over `unclarified`.
+@DataClassName('FocusSessionPlanningBypass')
+class FocusSessionPlanningBypasses extends Table {
+  /// Sync row identifier, derived from the pair
+  /// (`focusSessionPlanningBypassIdFor`).
+  TextColumn get id => text().unique()();
+  TextColumn get focusSessionId => text().references(FocusSessions, #id)();
+  TextColumn get taskId => text().references(Todos, #id)();
+
+  /// `skipped` | `unclarified`.
+  TextColumn get reason => text()();
+  DateTimeColumn get recordedAt => dateTime()();
+  TextColumn get userId => text()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {focusSessionId, taskId};
+}
+
+/// An Outcome's existing due date was moved **later** while the Outcome was on
+/// the Plan of the open FocusSession. One row per (FocusSession, Outcome):
+/// repeated edits collapse onto it and refresh `recorded_at`.
+@DataClassName('FocusSessionReschedule')
+class FocusSessionReschedules extends Table {
+  /// Sync row identifier, derived from the pair
+  /// (`focusSessionRescheduleIdFor`).
+  TextColumn get id => text().unique()();
+  TextColumn get focusSessionId => text().references(FocusSessions, #id)();
+  TextColumn get taskId => text().references(Todos, #id)();
+  DateTimeColumn get recordedAt => dateTime()();
+  TextColumn get userId => text()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {focusSessionId, taskId};
+}
+
+/// The decision log of the Stale sweep: one row per Outcome the user moved to
+/// Someday/Maybe or Trashed from it. An event log, so the id is random. The
+/// latest row for an Outcome is part of its Stale floor.
+@DataClassName('OutcomeSweepDecision')
+class OutcomeSweepDecisions extends Table {
+  TextColumn get id => text().clientDefault(() => uuid.v4())();
+  TextColumn get taskId => text().references(Todos, #id)();
+
+  /// `maybe` | `trash`.
+  TextColumn get decision => text()();
+  DateTimeColumn get decidedAt => dateTime()();
+  TextColumn get userId => text()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {id};
+}
+
+// ---------------------------------------------------------------------------
 // tags
 // ---------------------------------------------------------------------------
 

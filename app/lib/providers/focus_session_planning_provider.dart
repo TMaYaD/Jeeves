@@ -1087,6 +1087,10 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     await _db.focusSessionDao.openSession(
       userId: _userId,
       taskIds: state.pendingSelectedTaskIds,
+      // The Outcomes the user tapped Skip on (the set the skipped list shows).
+      skippedTaskIds: state.reviewedTaskIds
+          .where((id) => !state.pendingSelectedTaskIds.contains(id))
+          .toSet(),
     );
     // A qualifying session now exists — today's DPR fire is moot. Best-effort.
     await ref

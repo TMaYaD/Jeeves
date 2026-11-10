@@ -113,6 +113,9 @@ const List<String> jeevesExportCollections = <String>[
   captureTagsCollection,
   focusSessionTasksCollection,
   focusSessionDispositionsCollection,
+  focusSessionPlanningBypassesCollection,
+  focusSessionReschedulesCollection,
+  outcomeSweepDecisionsCollection,
 ];
 
 // ---------------------------------------------------------------------------

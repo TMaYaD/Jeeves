@@ -20,6 +20,7 @@ import 'package:go_router/go_router.dart';
 import '../../models/ritual.dart';
 import '../../providers/ceremony_in_progress_provider.dart';
 import '../../providers/focus_session_planning_provider.dart';
+import '../../providers/stale_sweep_provider.dart';
 import '../../widgets/ceremony/ceremony_pop_scope.dart';
 import '../../widgets/ceremony/intro_step.dart';
 import '../../widgets/ceremony/wizard.dart';
@@ -29,6 +30,7 @@ import 'steps/inbox_clarification_step.dart';
 import 'steps/plan_summary_step.dart';
 import 'steps/scheduled_review_step.dart';
 import 'steps/task_review_step.dart';
+import 'stale_sweep_interstitial.dart';
 
 class FocusSessionPlanningScreen extends ConsumerStatefulWidget {
   const FocusSessionPlanningScreen({super.key});
@@ -110,6 +112,13 @@ class _FocusSessionPlanningScreenState
     final activeSession = ref.watch(activeSessionProvider);
     if (activeSession.asData?.value != null) {
       return const _SessionOpenInterstitial();
+    }
+
+    // Stale sweep: while any Outcome is Stale, it is decided before the wizard
+    // starts. A read still loading (or failed) falls through to the wizard.
+    final staleOutcomes = ref.watch(staleOutcomesProvider).value;
+    if (staleOutcomes != null && staleOutcomes.isNotEmpty) {
+      return StaleSweepInterstitial(staleOutcomes: staleOutcomes);
     }
 
     final state = ref.watch(focusSessionPlanningProvider);

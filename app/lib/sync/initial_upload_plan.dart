@@ -45,7 +45,10 @@ import 'package:uuid/uuid.dart';
 import '../database/daos/capture_dao.dart'
     show captureOutcomeIdFor, captureTagIdFor;
 import '../database/daos/focus_session_dao.dart'
-    show focusSessionDispositionIdFor;
+    show
+        focusSessionDispositionIdFor,
+        focusSessionPlanningBypassIdFor,
+        focusSessionRescheduleIdFor;
 import '../database/daos/tag_dao.dart' show todoTagIdFor;
 import 'collection_codecs.dart';
 import 'ids.dart';
@@ -97,6 +100,9 @@ const List<String> initialUploadCollectionOrder = [
   captureTagsCollection,
   focusSessionTasksCollection,
   focusSessionDispositionsCollection,
+  focusSessionPlanningBypassesCollection,
+  focusSessionReschedulesCollection,
+  outcomeSweepDecisionsCollection,
   userPreferencesCollection,
 ];
 
@@ -636,6 +642,18 @@ String? initialUploadEntityIdFor({
       return (sessionId == null || taskId == null)
           ? null
           : focusSessionDispositionIdFor(sessionId, taskId);
+    case focusSessionPlanningBypassesCollection:
+      final sessionId = text('focus_session_id');
+      final taskId = text('task_id');
+      return (sessionId == null || taskId == null)
+          ? null
+          : focusSessionPlanningBypassIdFor(sessionId, taskId);
+    case focusSessionReschedulesCollection:
+      final sessionId = text('focus_session_id');
+      final taskId = text('task_id');
+      return (sessionId == null || taskId == null)
+          ? null
+          : focusSessionRescheduleIdFor(sessionId, taskId);
     case userPreferencesCollection:
       final key = text('key');
       return key == null ? null : preferenceEntityId(preferencesWorkspaceId, key);

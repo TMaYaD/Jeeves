@@ -8,6 +8,10 @@ import '../../sync/collection_codecs.dart';
 import '../gtd_database.dart';
 import 'action_dao.dart' show ActionDao;
 import 'capture_dao.dart' show captureOutcomeIdFor;
+import 'focus_session_dao.dart'
+    show
+        focusSessionPlanningBypassIdFor,
+        focusSessionRescheduleIdFor;
 import 'tag_dao.dart' show todoTagIdFor;
 import 'time_log_dao.dart' show TimeLogDao;
 
@@ -610,6 +614,7 @@ EXISTS (
     // op disagreeing.
     final ts = (now ?? DateTime.now()).toUtc();
     await attachedDatabase.capturing(() async {
+      await _recordRescheduleIfMovedLater(id, newDueDate, ts);
       await (update(todos)..where((t) => t.id.equals(id))).write(TodosCompanion(
         // Store UTC so Drift's storeDateTimeAsText path emits a standard
         // ISO-8601 string (no leading-space offset). An offset-bearing spelling
@@ -627,6 +632,61 @@ EXISTS (
       });
       attachedDatabase.notifyTodosViewWrite();
     });
+  }
+
+  /// Stale's signal (c): records that the due date of [todoId] was pushed
+  /// **later** while the Outcome sits on the Plan of the open FocusSession.
+  ///
+  /// Counts only an *existing* due date moved later — a first due date, a clear
+  /// or an earlier date is not a pass-over — and only with a session open and
+  /// the Outcome on its Plan. Lives here, not in a screen, so every edit surface
+  /// (Outcome detail, peek sheet, clarify card) counts the same way. Must run
+  /// inside the caller's capturing scope and **before** the due-date write,
+  /// because it reads the date being replaced.
+  Future<void> _recordRescheduleIfMovedLater(
+    String todoId,
+    DateTime newDueDate,
+    DateTime recordedAt,
+  ) async {
+    final previous = await (select(todos)..where((t) => t.id.equals(todoId)))
+        .getSingleOrNull();
+    final previousDueDate = previous?.dueDate;
+    if (previousDueDate == null || !newDueDate.isAfter(previousDueDate)) return;
+    final db = attachedDatabase;
+    final planRows = await db.customSelect(
+      'SELECT fs.id AS session_id, fs.user_id AS user_id '
+      'FROM focus_sessions fs '
+      'JOIN focus_session_tasks fst ON fst.focus_session_id = fs.id '
+      'WHERE fs.ended_at IS NULL AND fst.task_id = ? '
+      'ORDER BY fs.started_at DESC, fs.id LIMIT 1',
+      variables: [Variable<String>(todoId)],
+      readsFrom: {db.focusSessions, db.focusSessionTasks},
+    ).get();
+    if (planRows.isEmpty) return;
+    final sessionId = planRows.first.read<String>('session_id');
+    final userId = planRows.first.read<String>('user_id');
+    final rescheduleId = focusSessionRescheduleIdFor(sessionId, todoId);
+    final at = recordedAt.toUtc();
+    await db.into(db.focusSessionReschedules).insert(
+          FocusSessionReschedulesCompanion(
+            id: Value(rescheduleId),
+            focusSessionId: Value(sessionId),
+            taskId: Value(todoId),
+            recordedAt: Value(at),
+            userId: Value(userId),
+          ),
+          mode: InsertMode.insertOrReplace,
+        );
+    db.opCapture.write(
+      collection: focusSessionReschedulesCollection,
+      entityId: rescheduleId,
+      fields: {
+        'focus_session_id': sessionId,
+        'task_id': todoId,
+        'recorded_at': encodeInstant(at),
+        'user_id': userId,
+      },
+    );
   }
 
   /// Whether the `todos` row [todoId] is present. Called inside a write's
@@ -913,6 +973,22 @@ AND (
       'AND (last_clarified_at IS NULL '
       '     OR last_clarified_at < $_latestActionTerminationClause)',
       variables: [for (final id in ids) Variable<String>(id)],
+      readsFrom: {todos, actions},
+    ).get();
+    return rows.map((r) => r.read<String>('id')).toSet();
+  }
+
+  /// Every live Next Outcome that is unclarified since an Action — the same SQL
+  /// as [getUnclarifiedSinceActionIds], over all Outcomes rather than a given
+  /// set. Read by `FocusSessionDao.openSession` for Stale's fourth signal.
+  Future<Set<String>> getAllNextUnclarifiedSinceActionIds() async {
+    final rows = await customSelect(
+      'SELECT todos.id AS id FROM todos '
+      "WHERE todos.clarified = 1 AND todos.done_at IS NULL "
+      "AND todos.intent = 'next' "
+      'AND $_latestActionTerminationClause IS NOT NULL '
+      'AND (last_clarified_at IS NULL '
+      '     OR last_clarified_at < $_latestActionTerminationClause)',
       readsFrom: {todos, actions},
     ).get();
     return rows.map((r) => r.read<String>('id')).toSet();
@@ -1366,6 +1442,9 @@ AND (
     };
     var actionTouched = false;
     await attachedDatabase.capturing(() async {
+      if (dueDate != null) {
+        await _recordRescheduleIfMovedLater(todoId, dueDate, ts);
+      }
       await (update(todos)..where((t) => t.id.equals(todoId))).write(companion);
       _captureTodo(todoId, captured);
       if (touchesMetadata) {
@@ -1519,6 +1598,36 @@ AND (
         fields: {'action_id': null},
       );
     }
+    // The Stale sweep's rows about this Outcome go with it: every read of them
+    // joins `todos`, so a survivor could never surface, but it would linger.
+    final db = attachedDatabase;
+    final bypassRows = await (db.select(db.focusSessionPlanningBypasses)
+          ..where((b) => b.taskId.equals(id)))
+        .get();
+    for (final row in bypassRows) {
+      capture.tombstone(
+        collection: focusSessionPlanningBypassesCollection,
+        entityId: focusSessionPlanningBypassIdFor(row.focusSessionId, id),
+      );
+    }
+    final rescheduleRows = await (db.select(db.focusSessionReschedules)
+          ..where((r) => r.taskId.equals(id)))
+        .get();
+    for (final row in rescheduleRows) {
+      capture.tombstone(
+        collection: focusSessionReschedulesCollection,
+        entityId: focusSessionRescheduleIdFor(row.focusSessionId, id),
+      );
+    }
+    final decisionRows = await (db.select(db.outcomeSweepDecisions)
+          ..where((d) => d.taskId.equals(id)))
+        .get();
+    for (final row in decisionRows) {
+      capture.tombstone(
+        collection: outcomeSweepDecisionsCollection,
+        entityId: row.id,
+      );
+    }
     capture.tombstone(collection: todosCollection, entityId: id);
   }
 
@@ -1538,6 +1647,16 @@ AND (
       // `ON DELETE CASCADE` already removed the row; the connector's fatal-4xx
       // path skips those harmlessly (docs/SYNC.md).
       await (delete(actions)..where((a) => a.outcomeId.equals(id))).go();
+      final db = attachedDatabase;
+      await (db.delete(db.focusSessionPlanningBypasses)
+            ..where((b) => b.taskId.equals(id)))
+          .go();
+      await (db.delete(db.focusSessionReschedules)
+            ..where((r) => r.taskId.equals(id)))
+          .go();
+      await (db.delete(db.outcomeSweepDecisions)
+            ..where((d) => d.taskId.equals(id)))
+          .go();
       await (delete(todos)..where((t) => t.id.equals(id))).go();
       attachedDatabase.notifyTodosViewWrite();
       attachedDatabase.notifyActionsViewWrite();

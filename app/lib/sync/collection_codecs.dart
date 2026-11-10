@@ -57,6 +57,10 @@ const String captureOutcomesCollection = 'capture_outcomes';
 const String captureTagsCollection = 'capture_tags';
 const String focusSessionTasksCollection = 'focus_session_tasks';
 const String focusSessionDispositionsCollection = 'focus_session_dispositions';
+const String focusSessionPlanningBypassesCollection =
+    'focus_session_planning_bypasses';
+const String focusSessionReschedulesCollection = 'focus_session_reschedules';
+const String outcomeSweepDecisionsCollection = 'outcome_sweep_decisions';
 const String userPreferencesCollection = 'user_preferences';
 
 /// How a column's SQL value maps to and from its JSON field value.
@@ -377,6 +381,49 @@ const Map<String, CollectionCodec> collectionCodecs = {
     },
     requiredColumns: {'focus_session_id', 'task_id', 'user_id'},
     identityColumns: ['focus_session_id', 'task_id'],
+  ),
+  focusSessionPlanningBypassesCollection: CollectionCodec(
+    collection: focusSessionPlanningBypassesCollection,
+    table: 'focus_session_planning_bypasses',
+    columns: {
+      'focus_session_id': FieldKind.text,
+      'task_id': FieldKind.text,
+      'reason': FieldKind.text,
+      'recorded_at': FieldKind.instant,
+      ..._junctionUserId,
+    },
+    requiredColumns: {
+      'focus_session_id',
+      'task_id',
+      'reason',
+      'recorded_at',
+      'user_id',
+    },
+    identityColumns: ['focus_session_id', 'task_id'],
+  ),
+  focusSessionReschedulesCollection: CollectionCodec(
+    collection: focusSessionReschedulesCollection,
+    table: 'focus_session_reschedules',
+    columns: {
+      'focus_session_id': FieldKind.text,
+      'task_id': FieldKind.text,
+      'recorded_at': FieldKind.instant,
+      ..._junctionUserId,
+    },
+    requiredColumns: {'focus_session_id', 'task_id', 'recorded_at', 'user_id'},
+    identityColumns: ['focus_session_id', 'task_id'],
+  ),
+  outcomeSweepDecisionsCollection: CollectionCodec(
+    collection: outcomeSweepDecisionsCollection,
+    table: 'outcome_sweep_decisions',
+    columns: {
+      'task_id': FieldKind.text,
+      'decision': FieldKind.text,
+      'decided_at': FieldKind.instant,
+      'user_id': FieldKind.text,
+    },
+    requiredColumns: {'task_id', 'decision', 'decided_at', 'user_id'},
+    identityColumns: ['id'],
   ),
   // The KV collection. Its entity id is `preferenceEntityId(workspace, key)`
   // (the shipped KV policy), and its `value` field is the one the
