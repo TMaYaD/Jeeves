@@ -63,6 +63,10 @@ Future<void> _tapJeeves(WidgetTester tester, int times) async {
     find.byKey(const Key('about_jeeves_name')),
     200,
   );
+  // scrollUntilVisible stops once any part of the tile is on screen; the taps
+  // need its centre inside the viewport.
+  await tester.ensureVisible(find.byKey(const Key('about_jeeves_name')));
+  await tester.pumpAndSettle();
   for (var i = 0; i < times; i++) {
     await tester.tap(find.byKey(const Key('about_jeeves_name')));
   }
