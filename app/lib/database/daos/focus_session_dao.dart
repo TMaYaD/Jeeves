@@ -366,6 +366,16 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
     ).watch().map((rows) => rows.first.read<int>('qualifying') == 1);
   }
 
+  /// Latest start across open and closed sessions, for evaluating qualification
+  /// against a future Evening Shutdown anchor. Empty storage emits null.
+  Stream<DateTime?> watchLatestSessionStartedAt() => customSelect(
+        'SELECT MAX(started_at) AS latest_started_at FROM focus_sessions',
+        readsFrom: {focusSessions},
+      ).watchSingle().map((row) {
+        final startedAt = row.readNullable<String>('latest_started_at');
+        return startedAt == null ? null : DateTime.parse(startedAt);
+      });
+
   /// One-shot sibling of [watchQualifyingSessionExists].
   Future<bool> qualifyingSessionExists(DateTime esAnchor) async {
     final anchorIso = esAnchor.toUtc().toIso8601String();
