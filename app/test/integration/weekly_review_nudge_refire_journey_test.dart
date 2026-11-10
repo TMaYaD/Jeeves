@@ -33,6 +33,7 @@ void main() {
   late DateTime now;
   late DateTime firstDue;
   late DateTime nextDue;
+  DateTime Function()? advancingClock;
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
@@ -42,10 +43,11 @@ void main() {
     final today = DateTime.now();
     firstDue = DateTime(today.year, today.month, today.day - 1, 12);
     now = today;
+    advancingClock = null;
     nextDue = firstDue.add(const Duration(days: 7));
     c = ProviderContainer(overrides: [
       databaseProvider.overrideWithValue(db),
-      clockProvider.overrideWithValue(() => now),
+      clockProvider.overrideWithValue(() => advancingClock?.call() ?? now),
       notificationServiceProvider
           .overrideWithValue(StubPeriodicReviewNotificationService()),
     ]);
@@ -65,12 +67,15 @@ void main() {
   });
 
   tearDown(() async {
-    c.dispose();
     await db.close();
   });
 
   testWidgets('dismissed Weekly Review banner returns at the next cadence edge',
       (tester) async {
+    final clockStart = tester.binding.clock.now();
+    final initialNow = now;
+    advancingClock = () =>
+        initialNow.add(tester.binding.clock.now().difference(clockStart));
     try {
       appRouter.go('/inbox');
       await tester.pumpWidget(UncontrolledProviderScope(
@@ -92,12 +97,10 @@ void main() {
       // clock override replacement: only elapsed time may restore the banner.
       final beforeRefire = nextDue.subtract(const Duration(seconds: 1));
       final elapsed = beforeRefire.difference(now);
-      now = beforeRefire;
       await tester.pump(elapsed);
       await _flush(tester);
       expect(banner, findsNothing);
 
-      now = nextDue;
       await tester.pump(const Duration(seconds: 1));
       await _flush(tester);
       expect(banner, findsOneWidget);
@@ -105,6 +108,12 @@ void main() {
           dismissedAt, reason: 'refiring must not clear the persisted dismissal');
     } finally {
       await tester.pumpWidget(const SizedBox.shrink());
+      // Flutter checks pending timers before tearDown. Cancel the boundary
+      // timer now, but let Drift subscription cleanup finish in real async.
+      await tester.runAsync(() async {
+        c.dispose();
+        await pumpEventQueue();
+      });
     }
   });
 }
