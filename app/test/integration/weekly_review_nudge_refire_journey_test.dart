@@ -28,24 +28,28 @@ Future<void> _flush(WidgetTester tester) async {
 void main() {
   setUpAll(configureSqliteForTests);
 
-  testWidgets('dismissed Weekly Review banner returns at the next cadence edge',
-      (tester) async {
+  late GtdDatabase db;
+  late ProviderContainer c;
+  late DateTime now;
+  late DateTime firstDue;
+  late DateTime nextDue;
+
+  setUp(() async {
     SharedPreferences.setMockInitialValues({});
-    final db = GtdDatabase(NativeDatabase.memory());
+    db = GtdDatabase(NativeDatabase.memory());
     // Dismiss uses the real wall clock. Put the first edge just before it,
     // and the next edge at midday so midnight cannot stand in for its timer.
     final today = DateTime.now();
-    final firstDue = DateTime(today.year, today.month, today.day - 1, 12);
-    var now = today;
-    final nextDue = firstDue.add(const Duration(days: 7));
-    final c = ProviderContainer(overrides: [
+    firstDue = DateTime(today.year, today.month, today.day - 1, 12);
+    now = today;
+    nextDue = firstDue.add(const Duration(days: 7));
+    c = ProviderContainer(overrides: [
       databaseProvider.overrideWithValue(db),
       clockProvider.overrideWithValue(() => now),
       notificationServiceProvider
           .overrideWithValue(StubPeriodicReviewNotificationService()),
     ]);
-    try {
-      await tester.runAsync(() async {
+
         await db.captureDao.insertCapture(CapturesCompanion(
           id: const Value('inbox'),
           title: const Value('Review this capture'),
@@ -58,7 +62,16 @@ void main() {
               'periodic_review_last_completed_at',
               firstDue.subtract(const Duration(days: 7)).toIso8601String(),
             );
-      });
+  });
+
+  tearDown(() async {
+    c.dispose();
+    await db.close();
+  });
+
+  testWidgets('dismissed Weekly Review banner returns at the next cadence edge',
+      (tester) async {
+    try {
       appRouter.go('/inbox');
       await tester.pumpWidget(UncontrolledProviderScope(
         container: c,
@@ -92,8 +105,7 @@ void main() {
           dismissedAt, reason: 'refiring must not clear the persisted dismissal');
     } finally {
       await tester.pumpWidget(const SizedBox.shrink());
-      c.dispose();
-      await tester.runAsync(db.close);
+
     }
   });
 }
