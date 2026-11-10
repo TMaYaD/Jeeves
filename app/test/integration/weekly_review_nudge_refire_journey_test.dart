@@ -50,18 +50,18 @@ void main() {
           .overrideWithValue(StubPeriodicReviewNotificationService()),
     ]);
 
-        await db.captureDao.insertCapture(CapturesCompanion(
-          id: const Value('inbox'),
-          title: const Value('Review this capture'),
-          userId: const Value('local'),
-          createdAt: Value(firstDue),
-          updatedAt: Value(firstDue),
-        ));
-        await c.read(syncedPreferencesProvider.future);
-        await c.read(syncedPreferencesProvider.notifier).set(
-              'periodic_review_last_completed_at',
-              firstDue.subtract(const Duration(days: 7)).toIso8601String(),
-            );
+    await db.captureDao.insertCapture(CapturesCompanion(
+      id: const Value('inbox'),
+      title: const Value('Review this capture'),
+      userId: const Value('local'),
+      createdAt: Value(firstDue),
+      updatedAt: Value(firstDue),
+    ));
+    await c.read(syncedPreferencesProvider.future);
+    await c.read(syncedPreferencesProvider.notifier).set(
+          'periodic_review_last_completed_at',
+          firstDue.subtract(const Duration(days: 7)).toIso8601String(),
+        );
   });
 
   tearDown(() async {
@@ -105,7 +105,6 @@ void main() {
           dismissedAt, reason: 'refiring must not clear the persisted dismissal');
     } finally {
       await tester.pumpWidget(const SizedBox.shrink());
-
     }
   });
 }
