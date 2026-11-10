@@ -8,7 +8,6 @@
 /// completed Weekly Review counts, never a partially done review period.
 library;
 
-import 'package:drift/drift.dart' show DateTimeExpressions;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../sync/collection_codecs.dart' show decodeInstant;
