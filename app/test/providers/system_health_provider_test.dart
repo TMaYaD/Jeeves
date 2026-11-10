@@ -54,8 +54,8 @@ void main() {
           .set(_lastCompletedKey, lastCompleted.toIso8601String());
     }
     // Keep the streams live, as the Nudge triggers do in the app.
-    container.listen(unfilteredInboxProvider, (_, __) {});
-    container.listen(neverReviewedBaselineProvider, (_, __) {});
+    container.listen(unfilteredInboxProvider, (_, _) {});
+    container.listen(neverReviewedBaselineProvider, (_, _) {});
     await container.read(unfilteredInboxProvider.future);
     await container.read(neverReviewedBaselineProvider.future);
   }
