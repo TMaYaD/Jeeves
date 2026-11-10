@@ -23,7 +23,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../database/gtd_database.dart';
 import '../providers/database_provider.dart';
 import '../providers/task_detail_provider.dart';
-import 'meta_chip.dart';
+import 'outcome_attribute_strip.dart';
 import 'outcome_attribute_editors.dart';
 import 'outcome_plan_section.dart';
 import 'person_tag_picker.dart';
@@ -249,74 +249,23 @@ class _OutcomePeekSheetState extends ConsumerState<OutcomePeekSheet> {
                           // Meta chips: energy, time estimate, due date are
                           // tappable (the gesture sits on the ancestor, per
                           // MetaChip); time logged is derived and read-only.
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: [
-                              _TapChip(
-                                key: const Key('outcome_peek_energy'),
-                                onTap: () => showOutcomeEnergyLevelSheet(
-                                    context, _notifier, energyLevel),
-                                child: MetaChip(
-                                  icon: Icons.bolt_outlined,
-                                  label: energyLevel != null
-                                      ? energyLevelLabel(energyLevel)
-                                      : 'Energy',
-                                  color: energyLevel != null
-                                      ? const Color(0xFF7C3AED)
-                                      : const Color(0xFF9CA3AF),
-                                ),
-                              ),
-                              _TapChip(
-                                key: const Key('outcome_peek_time'),
-                                onTap: () => showOutcomeTimeEstimateSheet(
-                                    context, _notifier, timeEstimate),
-                                child: MetaChip(
-                                  icon: Icons.timer_outlined,
-                                  label: timeEstimate != null
-                                      ? formatMinutesLabel(timeEstimate)
-                                      : 'Time',
-                                  color: timeEstimate != null
-                                      ? const Color(0xFF2563EB)
-                                      : const Color(0xFF9CA3AF),
-                                ),
-                              ),
-                              _TimeLoggedChip(value: timeLogged),
-                              _TapChip(
-                                key: const Key('outcome_peek_due'),
-                                onTap: () async {
-                                  final picked =
-                                      await pickOutcomeDueDate(context, dueDate);
-                                  // Null is a dismissed picker, not a clear.
-                                  if (picked != null) {
-                                    unawaited(_notifier.setDueDate(picked));
-                                  }
-                                },
-                                child: MetaChip(
-                                  icon: Icons.event_outlined,
-                                  label: dueDate != null
-                                      ? formatDueDateLabel(dueDate)
-                                      : 'Due',
-                                  color: dueDate != null
-                                      ? const Color(0xFFDC2626)
-                                      : const Color(0xFF9CA3AF),
-                                ),
-                              ),
-                              if (dueDate != null)
-                                InkResponse(
-                                  key: const Key('outcome_peek_due_clear'),
-                                  onTap: () => unawaited(_notifier.clearDueDate()),
-                                  radius: 16,
-                                  child: const Tooltip(
-                                    message: 'Clear date',
-                                    child: Padding(
-                                      padding: EdgeInsets.all(4),
-                                      child: Icon(Icons.close,
-                                          size: 16, color: Color(0xFF9CA3AF)),
-                                    ),
-                                  ),
-                                ),
-                            ],
+                          OutcomeAttributeStrip(
+                            keyPrefix: 'outcome_peek',
+                            energyLevel: energyLevel,
+                            timeEstimateMinutes: timeEstimate,
+                            timeLoggedMinutes: timeLogged,
+                            dueDate: dueDate,
+                            onEnergyTap: () => showOutcomeEnergyLevelSheet(
+                                context, _notifier, energyLevel),
+                            onEstimateTap: () => showOutcomeTimeEstimateSheet(
+                                context, _notifier, timeEstimate),
+                            onDueTap: () async {
+                              final picked = await pickOutcomeDueDate(context, dueDate);
+                              if (picked != null) {
+                                unawaited(_notifier.setDueDate(picked));
+                              }
+                            },
+                            onClearDue: () => unawaited(_notifier.clearDueDate()),
                           ),
                           const SizedBox(height: 16),
                           const _FieldLabel('Contexts'),
@@ -408,22 +357,6 @@ class _OutcomePeekSheetState extends ConsumerState<OutcomePeekSheet> {
   }
 }
 
-class _TapChip extends StatelessWidget {
-  const _TapChip({super.key, required this.onTap, required this.child});
-
-  final VoidCallback onTap;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(4),
-      child: child,
-    );
-  }
-}
-
 /// Same copy as the detail screen's missing state: to the user an Outcome that
 /// is gone is gone, whichever surface was showing it.
 class _MissingOutcome extends StatelessWidget {
@@ -449,30 +382,6 @@ class _MissingOutcome extends StatelessWidget {
           TextButton(onPressed: onClose, child: const Text('Close')),
         ],
       ),
-    );
-  }
-}
-
-/// The time-logged chip. Renders a subtle placeholder while the one-shot read
-/// resolves; `0` shows as "no time logged yet".
-class _TimeLoggedChip extends StatelessWidget {
-  const _TimeLoggedChip({required this.value});
-
-  final AsyncValue<int> value;
-
-  @override
-  Widget build(BuildContext context) {
-    const color = Color(0xFF16A34A);
-    final label = value.when(
-      data: (minutes) =>
-          minutes <= 0 ? 'No time logged yet' : formatMinutesLabel(minutes),
-      loading: () => '…',
-      error: (_, _) => '—',
-    );
-    return MetaChip(
-      icon: Icons.history_toggle_off_outlined,
-      label: label,
-      color: color,
     );
   }
 }

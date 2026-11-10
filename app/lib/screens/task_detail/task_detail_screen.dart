@@ -19,6 +19,7 @@ import '../../widgets/capture/capture_action.dart';
 import '../../widgets/async_subject.dart';
 import '../../widgets/meta_chip.dart';
 import '../../widgets/outcome_attribute_editors.dart';
+import '../../widgets/outcome_attribute_strip.dart';
 import '../../widgets/outcome_plan_section.dart';
 import '../../widgets/project_picker.dart';
 import '../../widgets/tag_list.dart';
@@ -278,6 +279,9 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                         ),
                       ),
                       const SizedBox(height: 8),
+                      if (tagsAsync.asData != null)
+                        TaskStatusRow(todo: todo, tags: tags),
+                      const SizedBox(height: 8),
                       // Title TextField (Show-mode styled)
                       TextField(
                         key: const Key('task_detail_title'),
@@ -296,6 +300,23 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                           hintStyle: TextStyle(color: Color(0xFFD1D5DB)),
                         ),
                         maxLines: null,
+                      ),
+                      const SizedBox(height: 16),
+                      OutcomeAttributeStrip(
+                        energyLevel: todo.energyLevel,
+                        timeEstimateMinutes: todo.timeEstimate,
+                        dueDate: todo.dueDate,
+                        onEnergyTap: () => showOutcomeEnergyLevelSheet(
+                            context, _notifier, todo.energyLevel),
+                        onEstimateTap: () => showOutcomeTimeEstimateSheet(
+                            context, _notifier, todo.timeEstimate),
+                        onDueTap: () async {
+                          final picked = await pickOutcomeDueDate(context, todo.dueDate);
+                          if (picked != null) {
+                            unawaited(_notifier.setDueDate(picked));
+                          }
+                        },
+                        onClearDue: () => unawaited(_notifier.clearDueDate()),
                       ),
                       const SizedBox(height: 16),
                       // Context Tags
@@ -318,29 +339,6 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                         ),
                       ),
                       const SizedBox(height: 20),
-                      // Attributes Row (Status, Time, Energy)
-                      Row(
-                        children: [
-                          Expanded(
-                            flex: 2,
-                            child: tagsAsync.asData != null
-                                ? TaskStatusRow(todo: todo, tags: tags)
-                                : const SizedBox.shrink(),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(flex: 1, child: _buildAttributeItem(
-                            icon: Icons.schedule,
-                            text: todo.timeEstimate != null ? formatMinutesLabel(todo.timeEstimate!) : 'Time',
-                            onTap: () => showOutcomeTimeEstimateSheet(context, _notifier, todo.timeEstimate),
-                          )),
-                          const SizedBox(width: 8),
-                          Expanded(flex: 1, child: _buildAttributeItem(
-                            icon: Icons.bolt,
-                            text: todo.energyLevel != null ? energyLevelLabel(todo.energyLevel!) : 'Energy',
-                            onTap: () => showOutcomeEnergyLevelSheet(context, _notifier, todo.energyLevel),
-                          )),
-                        ],
-                      ),
                       const SizedBox(height: 8),
                     ],
                   ),
@@ -357,7 +355,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
                               // Plan + Notes grouped so spaceBetween still pins
-                              // Reminders / Due to the bottom of the viewport.
+                              // Reminders to the bottom of the viewport.
                               Column(
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
@@ -491,7 +489,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                               ),
                                 ],
                               ),
-                              // Reminders, Due Date (at the literal bottom of the viewport or content)
+                              // Reminders and capture provenance (at the literal bottom of the viewport or content)
                               Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
                                 decoration: const BoxDecoration(
@@ -507,43 +505,6 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                                       title: 'REMINDERS',
                                       contentWidget: const Text('Coming Soon', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Color(0xFF9CA3AF))),
                                       onTap: null,
-                                    ),
-                                    const SizedBox(height: 20),
-                                    _buildInfoSection(
-                                      icon: Icons.calendar_today_outlined,
-                                      iconBg: const Color(0xFFFEF2F2),
-                                      iconColor: const Color(0xFFEF4444),
-                                      title: 'DUE DATE',
-                                      contentWidget: Row(
-                                        children: [
-                                          Text(
-                                            todo.dueDate != null ? formatDueDateLabel(todo.dueDate!) : 'No Date',
-                                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Color(0xFF374151)),
-                                          ),
-                                          if (todo.dueDate != null) ...[
-                                            const SizedBox(width: 8),
-                                            // Dismissing the picker returns null, so
-                                            // clearing needs its own affordance.
-                                            InkResponse(
-                                              onTap: _notifier.clearDueDate,
-                                              radius: 16,
-                                              child: Tooltip(
-                                                message: 'Clear date',
-                                                child: Icon(Icons.close, size: 18, color: Colors.grey[400]),
-                                              ),
-                                            ),
-                                          ],
-                                        ],
-                                      ),
-                                      onTap: () async {
-                                        final picked =
-                                            await pickOutcomeDueDate(context, todo.dueDate);
-                                        // Null means the picker was dismissed, not
-                                        // "clear the date".
-                                        if (picked != null) {
-                                          _notifier.setDueDate(picked);
-                                        }
-                                      },
                                     ),
                                     // "Captured from…" provenance — hidden when
                                     // the Outcome has no capture links (issue
@@ -643,29 +604,6 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     }
     await ref.read(focusModeProvider.notifier).startFocus(todo.id);
     if (mounted) context.push('/focus/active');
-  }
-
-  Widget _buildAttributeItem({required IconData icon, required String text, required VoidCallback onTap}) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: Row(
-          children: [
-            Icon(icon, size: 18, color: const Color(0xFF9CA3AF)),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                text,
-                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: Color(0xFF374151)),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
   }
 
   Widget _buildInfoSection({required IconData icon, required Color iconBg, required Color iconColor, required String title, required Widget contentWidget, VoidCallback? onTap}) {

@@ -25,6 +25,7 @@ import 'package:jeeves/sync/domain_op_capture.dart'
     show RecordingDomainOpCapture;
 import 'package:jeeves/widgets/app_title_bar/app_title_bar.dart';
 import 'package:jeeves/widgets/state_surfaces.dart';
+import 'package:jeeves/widgets/clarify_shared_widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../helpers/app_title_bar_test_helpers.dart';
 import '../test_helpers.dart';
@@ -1103,6 +1104,7 @@ void main() {
       await tester.tap(find.byKey(const Key('plan_add_trigger')));
       await tester.pumpAndSettle();
       expect(find.text('Add planned action'), findsWidgets);
+      expect(find.byType(ClarifyEstimatePicker), findsOneWidget);
       await tester.enterText(
           find.byKey(const Key('plan_action_text')), 'draft the brief');
       await tester.pump();

@@ -411,7 +411,7 @@ The task-detail screen (`/task/:id`) carries a **Plan** section (`OutcomePlanSec
 *   **Section label** — a `PLAN` overline styled like the `NOTES` label (12px, `#9CA3AF`, tracked caps) with a checklist icon.
 *   **Current-action anchor row** — the current Action's text with a leading filled marker and two trailing controls: a down-arrow **"Move to plan"** demote button and an archive-glyph **"Abandon"** button. Both render only when a current Action exists. When the Outcome is **Actionless**, a quiet `No current action` placeholder holds the slot — the empty state that makes promotion meaningful.
 *   **Planned queue** — a `ReorderableListView` with per-row explicit drag handles (so taps stay free for the row's own tap target). Each row is two lines: the planned Action text, then its **effort meta line** — an energy chip (`#7C3AED`, bolt glyph) and a time-estimate chip (`#2563EB`, timer glyph), or, when the row carries neither, a quiet `Set` prompt in `#9CA3AF`. Trailing the row are an up-arrow **promote** affordance and a **remove** (×) affordance. Reordering writes the new dense order.
-*   **Planned-action sheet** — tapping anywhere on a planned row's body opens a bottom sheet carrying the Action's phrase and both effort pickers; `+ Add planned action` opens the same sheet empty. It reuses the clarify surfaces' `ClarifyEnergyPicker` and `ClarifyEstimateChip` over the shared `kEstimateOptionsMinutes` ladder, so effort means the same thing wherever it is set. The confirm button (`Add` / `Save`) is disabled while the phrase is blank; dismissal cancels silently, matching the Replace and Abandon sheets. **A blank phrase never deletes a row** — in edit mode it only parks the sheet un-confirmable, and dismissing leaves the row's text as it was. Removing a planned Action is the × and nothing else.
+*   **Planned-action sheet** — tapping anywhere on a planned row's body opens a bottom sheet carrying the Action's phrase and both effort pickers; `+ Add planned action` opens the same sheet empty. It reuses the clarify surfaces' `ClarifyEnergyPicker` and `ClarifyEstimatePicker` over the shared `kEstimateOptionsMinutes` ladder, so effort means the same thing wherever it is set. The confirm button (`Add` / `Save`) is disabled while the phrase is blank; dismissal cancels silently, matching the Replace and Abandon sheets. **A blank phrase never deletes a row** — in edit mode it only parks the sheet un-confirmable, and dismissing leaves the row's text as it was. Removing a planned Action is the × and nothing else.
 *   **Add affordance** — an inline `+ Add planned action` row (primary blue) that opens the sheet. No SnackBars — every affordance is inline.
 
 **The effort chips are read-only by construction**, the same structural guarantee the history rows carry: `MetaChip` contains no gesture, icon button or field, so the row's single tap target is the ancestor covering its whole body. There is exactly one way to change a planned Action's effort, and it is the sheet.
@@ -490,8 +490,7 @@ the screen. The absence is deliberate.
 
 ## Outcome representations
 
-The contracts and inventory below define the target mapping for Outcome
-representations; the row, review-card and attribute-strip migrations complete it.
+The contracts and inventory below map each Outcome surface to its representation.
 Attribute vocabulary follows [CONTEXT.md](../CONTEXT.md#language); shared labels and chips live in
 [`meta_chip.dart`](../app/lib/widgets/meta_chip.dart). The inventory maps each
 surface to its representation contract; deliberate differences are listed with
@@ -504,7 +503,7 @@ their reasons so that a new surface can reuse the same contract.
 | `OutcomeMetaLine` | Read-only chips, ordered energy · estimate · time logged · due. Unset attributes omitted; the caller supplies the attributes it shows. | No gestures; the containing surface owns the tap target. |
 | [`OutcomeRow`](../app/lib/widgets/outcome_row.dart) | Optional leading slot, title (normal, muted or struck), secondary line, metadata (default `OutcomeMetaLine`), optional trailing slot. Flat or framed with r12 border and h16/v12 padding. | Whole-row tap and long-press callbacks. No ink or chevron when no tap callback exists. |
 | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Banner (icon, text, tone), people chips, title, current Action, notes, optional metadata and actions. Absent Action and notes are omitted. | Injected `ProcessToHandlers` or resolution buttons. |
-| Outcome detail / `OutcomeAttributeStrip` | Title → editable attribute strip → contexts → people → Plan → notes. Strip uses the metadata order with shared attribute editors. | Each editable chip has an ancestor tap target; logged time stays read-only. |
+| Outcome detail / [`OutcomeAttributeStrip`](../app/lib/widgets/outcome_attribute_strip.dart) | Title → editable attribute strip → contexts → people → Plan → notes. Strip uses the metadata order with shared attribute editors. | Each editable chip has an ancestor tap target; logged time stays read-only. |
 
 Energy uses purple `#7C3AED` and `bolt_outlined`; estimate uses blue `#2563EB`
 and `timer_outlined`; logged time uses green `#16A34A` and
