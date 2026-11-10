@@ -32,12 +32,14 @@ class OutcomeMetaLine extends StatelessWidget {
     this.timeEstimateMinutes,
     this.timeLoggedMinutes,
     this.dueDate,
+    this.muted = false,
   });
 
   final String? energyLevel;
   final int? timeEstimateMinutes;
   final int? timeLoggedMinutes;
   final DateTime? dueDate;
+  final bool muted;
 
   @override
   Widget build(BuildContext context) => Wrap(
@@ -48,25 +50,25 @@ class OutcomeMetaLine extends StatelessWidget {
         MetaChip(
           icon: Icons.bolt_outlined,
           label: energyLevelLabel(energyLevel!),
-          color: const Color(0xFF7C3AED),
+          color: muted ? const Color(0xFFBDBDBD) : const Color(0xFF7C3AED),
         ),
       if (timeEstimateMinutes != null)
         MetaChip(
           icon: Icons.timer_outlined,
           label: formatMinutesLabel(timeEstimateMinutes!),
-          color: const Color(0xFF2563EB),
+          color: muted ? const Color(0xFFBDBDBD) : const Color(0xFF2563EB),
         ),
       if (timeLoggedMinutes != null)
         MetaChip(
           icon: Icons.history_toggle_off_outlined,
           label: formatMinutesLabel(timeLoggedMinutes!),
-          color: const Color(0xFF16A34A),
+          color: muted ? const Color(0xFFBDBDBD) : const Color(0xFF16A34A),
         ),
       if (dueDate != null)
         MetaChip(
           icon: Icons.event_outlined,
           label: formatDueDateLabel(dueDate!),
-          color: const Color(0xFFDC2626),
+          color: muted ? const Color(0xFFBDBDBD) : const Color(0xFFDC2626),
         ),
     ],
   );

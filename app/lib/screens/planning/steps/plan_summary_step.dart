@@ -635,6 +635,7 @@ Widget _planOutcomeRow({
             color: const Color(0xFF6B7280),
           ),
         OutcomeMetaLine(
+          muted: isSkipped,
           energyLevel: todo.energyLevel,
           timeEstimateMinutes: todo.timeEstimate,
         ),

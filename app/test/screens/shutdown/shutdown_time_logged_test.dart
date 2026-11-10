@@ -12,6 +12,7 @@ library;
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
+import 'package:jeeves/widgets/outcome_review_card.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -144,9 +145,10 @@ void main() {
     await tester.pumpWidget(widget);
     await settleWithRealAsync(tester);
 
-    expect(find.text('1h 30m logged'), findsOneWidget,
+    expect(find.byType(OutcomeReviewCard), findsOneWidget);
+    expect(find.text('1h 30m'), findsOneWidget,
         reason: 'derived from time_logs, formatted h/m');
-    expect(find.text('Est 1h'), findsOneWidget);
+    expect(find.text('1h'), findsOneWidget);
 
     await _dispose(tester);
   });
@@ -162,7 +164,7 @@ void main() {
     await tester.pumpWidget(widget);
     await settleWithRealAsync(tester);
 
-    expect(find.textContaining('logged'), findsNothing);
+    expect(find.byIcon(Icons.history_toggle_off_outlined), findsNothing);
 
     await _dispose(tester);
   });
@@ -202,7 +204,7 @@ void main() {
     await tester.pumpWidget(widget);
     await settleWithRealAsync(tester);
 
-    expect(find.text('35m logged'), findsOneWidget,
+    expect(find.text('35m'), findsOneWidget,
         reason: '20m from the prior session + 15m today (cumulative)');
 
     await _dispose(tester);
