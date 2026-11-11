@@ -51,9 +51,9 @@ void main() {
     final ranked = await ranker.rank(inputs);
     expect(ranked.map((c) => (c.step, c.id)), [
       (PeriodicReviewStepKind.next, 'b'),
-      (PeriodicReviewStepKind.next, 'a'),
       (PeriodicReviewStepKind.waitingFor, 'x'),
       (PeriodicReviewStepKind.someday, 'x'),
+      (PeriodicReviewStepKind.next, 'a'),
     ]);
   });
 
