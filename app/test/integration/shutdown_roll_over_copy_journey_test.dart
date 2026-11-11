@@ -16,7 +16,6 @@ import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
-import 'package:jeeves/providers/evening_shutdown_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/screens/planning/focus_session_planning_screen.dart';
 import 'package:jeeves/screens/shutdown/shutdown_ritual_screen.dart';
@@ -109,19 +108,36 @@ void main() {
     await settleWithRealAsync(tester);
   }
 
-  Future<void> rollOverAndAssertStore(WidgetTester tester, String label) async {
-    await tapText(tester, label);
-    expect(
-      container.read(eveningShutdownProvider).dispositions['passport'],
-      'rollover',
-    );
-    await tester.runAsync(
-      () => container.read(eveningShutdownProvider.notifier).closeDay(),
-    );
+  Future<void> tapNextStep(WidgetTester tester) async {
+    await tester.tap(find.byKey(const Key('shutdown_next_step')));
+    await settleWithRealAsync(tester);
+  }
+
+  /// Taps the real Close Day button once its entrance animation has revealed
+  /// it, then lets the handler's awaits (closeDay, optional re-entry) finish.
+  Future<void> tapCloseDay(WidgetTester tester) async {
+    await tester.pump(const Duration(milliseconds: 1700));
+    await tester.pump();
+    await tester.tap(find.text('Close Day'));
+    // Flush closeDay()'s awaits on the real event loop without letting the
+    // 700ms exit fade finish: it would call the real closeApp() platform hook.
+    for (var i = 0; i < 4; i++) {
+      await tester.runAsync(() => pumpEventQueue());
+      await tester.pump();
+    }
+  }
+
+  Future<void> expectRolledOverAndSessionClosed(WidgetTester tester) async {
     final rolledOver = await tester.runAsync(
       () => db.focusSessionDao.getLastClosedSessionRolloverTaskIds(),
     );
     expect(rolledOver, ['passport']);
+    final active =
+        await tester.runAsync(() => db.focusSessionDao.getActiveSession());
+    expect(active, isNull);
+  }
+
+  Future<void> unmount(WidgetTester tester) async {
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pumpAndSettle();
   }
@@ -131,25 +147,39 @@ void main() {
     await pumpApp(tester, '/focus-session-planning');
     expect(find.text('Close your current session first'), findsOneWidget);
     await tapText(tester, 'Begin Evening Shutdown');
-    container.read(eveningShutdownProvider.notifier).goToStep(1);
-    await settleWithRealAsync(tester);
+    await tapNextStep(tester);
 
     expect(find.text('Roll Over'), findsOneWidget);
+    expect(find.text('Add to your next plan'), findsOneWidget);
     expect(find.text('Roll Over to Tomorrow'), findsNothing);
     expect(find.textContaining('tomorrow', findRichText: true), findsNothing);
     expect(find.textContaining('Tomorrow', findRichText: true), findsNothing);
-    await rollOverAndAssertStore(tester, 'Roll Over');
+
+    // Resolving the last Outcome advances to Close Day on its own.
+    await tapText(tester, 'Roll Over');
+    await tapCloseDay(tester);
+
+    await expectRolledOverAndSessionClosed(tester);
+    expect(container.read(shutdownThenPlanProvider), isFalse);
+    expect(router.state.uri.path, '/focus-session-planning',
+        reason: 'a sequenced shutdown completes back into Daily Planning');
+    await unmount(tester);
   });
 
   testWidgets('same-day shutdown still says "Roll Over to Tomorrow"',
       (tester) async {
     await pumpApp(tester, '/shutdown');
-    container.read(eveningShutdownProvider.notifier).goToStep(1);
-    await settleWithRealAsync(tester);
+    await tapNextStep(tester);
 
     expect(find.text('Roll Over to Tomorrow'), findsOneWidget);
     expect(find.text("Add to tomorrow's plan"), findsOneWidget);
-    await rollOverAndAssertStore(tester, 'Roll Over to Tomorrow');
+    await tapText(tester, 'Roll Over to Tomorrow');
+    await tapCloseDay(tester);
+
+    await expectRolledOverAndSessionClosed(tester);
+    expect(router.state.uri.path, '/shutdown',
+        reason: 'an ordinary shutdown does not route into planning');
+    await unmount(tester);
   });
 
   testWidgets('abandoned sequenced shutdown does not change a later one',
@@ -158,18 +188,24 @@ void main() {
     await tapText(tester, 'Begin Evening Shutdown');
     expect(container.read(shutdownThenPlanProvider), isTrue);
 
-    // Leave the shutdown without finishing it.
-    router.go('/focus');
+    // System back on the Review step abandons the ceremony.
+    await tester.binding.handlePopRoute();
     await settleWithRealAsync(tester);
     expect(find.text('Now'), findsOneWidget);
     expect(container.read(shutdownThenPlanProvider), isFalse);
 
+    // An ordinary shutdown from the Now screen afterwards is a same-day one.
     router.go('/shutdown');
     await settleWithRealAsync(tester);
-    container.read(eveningShutdownProvider.notifier).goToStep(1);
-    await settleWithRealAsync(tester);
+    await tapNextStep(tester);
     expect(find.text('Roll Over to Tomorrow'), findsOneWidget);
-    await tester.pumpWidget(const SizedBox.shrink());
-    await tester.pumpAndSettle();
+    expect(find.text("Add to tomorrow's plan"), findsOneWidget);
+    await tapText(tester, 'Roll Over to Tomorrow');
+    await tapCloseDay(tester);
+
+    await expectRolledOverAndSessionClosed(tester);
+    expect(router.state.uri.path, '/shutdown',
+        reason: 'the abandoned intent must not route this shutdown to planning');
+    await unmount(tester);
   });
 }
