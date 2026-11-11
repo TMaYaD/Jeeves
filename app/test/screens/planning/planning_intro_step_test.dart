@@ -64,7 +64,10 @@ FocusSessionPlanningState _stateOf(WidgetTester tester) {
   return container.read(focusSessionPlanningProvider);
 }
 
-Future<void> _settle(WidgetTester tester) => settleWithRealAsync(tester);
+// Two rounds: the first resolves the Stale sweep read and builds the wizard, the
+// second lets the wizard's own snapshot reads land.
+Future<void> _settle(WidgetTester tester) =>
+    settleWithRealAsync(tester, rounds: 2);
 
 /// Drives the transition into Clarify Inbox in real time while draining its
 /// lazy snapshot load — a plain pumpAndSettle would hang on the spinner.

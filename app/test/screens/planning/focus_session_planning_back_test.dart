@@ -76,7 +76,10 @@ Future<void> _insertInbox(GtdDatabase db, String id) async {
 /// The ritual loads its inbox snapshot through a drift watch-stream, which
 /// only emits inside the real async zone. Drain that queue (no wall-clock
 /// sleep) before settling the frame — see [settleWithRealAsync].
-Future<void> _settle(WidgetTester tester) => settleWithRealAsync(tester);
+// Two rounds: the first resolves the Stale sweep read and builds the wizard, the
+// second lets the wizard's own snapshot reads land.
+Future<void> _settle(WidgetTester tester) =>
+    settleWithRealAsync(tester, rounds: 2);
 
 /// The text the clarify card currently holds in its title field.
 String _titleText(WidgetTester tester) =>
