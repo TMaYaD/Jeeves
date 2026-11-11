@@ -266,8 +266,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       final savedUri = await FilePicker.saveFile(
         dialogTitle: 'Export data',
         fileName: _exportFileName(),
-        type: FileType.custom,
-        allowedExtensions: const ['json'],
         bytes: Uint8List.fromList(utf8.encode(json)),
       );
       if (savedUri != null && messenger.mounted) {
