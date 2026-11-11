@@ -12,6 +12,7 @@ import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/onboarding_provider.dart';
 import 'package:jeeves/screens/inbox/inbox_screen.dart';
 import 'package:path/path.dart' as p;
+import 'package:shared_preferences/shared_preferences.dart';
 import '../test_helpers.dart';
 
 const _fixtures = 'test/fixtures/share_inbox';
@@ -31,6 +32,7 @@ void main() {
   late Directory filesDirectory;
 
   setUp(() async {
+    SharedPreferences.setMockInitialValues({});
     db = GtdDatabase(NativeDatabase.memory());
     filesDirectory = await Directory.systemTemp.createTemp('share_journey');
     final inbox = Directory(p.join(filesDirectory.path, 'share_inbox'))
@@ -54,20 +56,25 @@ void main() {
 
   testWidgets('shared text, URLs and an image land in the Inbox on app open',
       (tester) async {
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          databaseProvider.overrideWithValue(db),
-          hasAnyItemProvider.overrideWith((ref) => Stream.value(true)),
-        ],
-        child: MaterialApp(
-          home: ShareInboxHost(
-            filesDirectoryLoader: () async => filesDirectory,
-            child: const InboxScreen(),
+    // Built inside runAsync so the host's initial drain does its real file I/O
+    // in the real zone rather than the fake-async test zone.
+    await tester.runAsync(() async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            databaseProvider.overrideWithValue(db),
+            hasAnyItemProvider.overrideWith((ref) => Stream.value(true)),
+          ],
+          child: MaterialApp(
+            home: ShareInboxHost(
+              filesDirectoryLoader: () async => filesDirectory,
+              child: const InboxScreen(),
+            ),
           ),
         ),
-      ),
-    );
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+    });
     await _settle(tester);
 
     expect(find.text('Call the plumber about the boiler'), findsOneWidget);

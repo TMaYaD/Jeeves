@@ -121,7 +121,8 @@ String _clipTitle(String title) => title.length <= captureTitleMaxLength
 /// Directory, under the app files directory, the native side queues shares in.
 const String shareInboxDirectoryName = 'share_inbox';
 
-bool _draining = false;
+/// Databases a drain is currently running against.
+final Expando<bool> _draining = Expando<bool>('share inbox drain');
 
 /// Turns every queued share into a raw Capture (plus attachment row) and
 /// deletes its file once the database commit has happened.
@@ -129,14 +130,14 @@ bool _draining = false;
 /// Idempotent: a share whose Capture already exists (id = `shareId`) only has
 /// its file deleted. A file that does not parse, or whose share carries nothing
 /// to capture, is logged and left in place. Returns the number of Captures
-/// created. A second call while one is running returns 0.
+/// created. A second call against the same database while one is running returns 0.
 Future<int> drainShareInbox({
   required GtdDatabase db,
   required Directory filesDirectory,
   required String userId,
 }) async {
-  if (_draining) return 0;
-  _draining = true;
+  if (_draining[db] == true) return 0;
+  _draining[db] = true;
   try {
     final inbox = Directory(p.join(filesDirectory.path, shareInboxDirectoryName));
     if (!await inbox.exists()) return 0;
@@ -194,6 +195,6 @@ Future<int> drainShareInbox({
     }
     return created;
   } finally {
-    _draining = false;
+    _draining[db] = false;
   }
 }
