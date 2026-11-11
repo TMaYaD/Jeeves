@@ -25,6 +25,9 @@ import 'package:jeeves/providers/clarify_mode_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
+import 'package:jeeves/sync/collection_codecs.dart' show todosCollection;
+import 'package:jeeves/sync/domain_op_capture.dart'
+    show RecordingDomainOpCapture;
 import 'package:jeeves/widgets/clarify_card.dart';
 import 'package:jeeves/widgets/clarify_retention.dart';
 import 'package:jeeves/widgets/clarify_shared_widgets.dart';
@@ -276,6 +279,8 @@ Widget _harness(
   // Stream feeding `taskDetailTodoProvider` — the card's live subject binding
   // on the re-clarify surface. Same rationale as `taskTagsStream`.
   Stream<Todo?>? todoStream,
+  // The people the Waiting For picker offers.
+  List<Tag> personTags = const <Tag>[],
 }) {
   return ProviderScope(
     overrides: [
@@ -285,7 +290,7 @@ Widget _harness(
       taskDetailTodoProvider(todo.id).overrideWith(
         (_) => todoStream ?? Stream.value(todo),
       ),
-      personTagsProvider.overrideWith((_) => Stream.value(const <Tag>[])),
+      personTagsProvider.overrideWith((_) => Stream.value(personTags)),
       contextTagsProvider.overrideWith((_) => Stream.value(contextTags)),
       projectTagsProvider.overrideWith((_) => Stream.value(projectTags)),
       taskTagsProvider(todo.id).overrideWith(
@@ -332,6 +337,8 @@ Widget _captureHarness(
   // Required whenever a test reaches that body: the real provider is a live
   // drift `watch()` and leaves a pending timer behind on dispose.
   Stream<List<CarvedOutcome>>? carvedOutcomes,
+  // The people the Waiting For picker offers.
+  List<Tag> personTags = const <Tag>[],
 }) {
   return ProviderScope(
     overrides: [
@@ -346,7 +353,7 @@ Widget _captureHarness(
         clarifyModeProvider.overrideWith(() => clarifyMode),
       if (carvedOutcomes != null)
         carvedOutcomesProvider(capture.id).overrideWith((_) => carvedOutcomes),
-      personTagsProvider.overrideWith((_) => Stream.value(const <Tag>[])),
+      personTagsProvider.overrideWith((_) => Stream.value(personTags)),
       contextTagsProvider.overrideWith((_) => Stream.value(contextTags)),
       projectTagsProvider.overrideWith((_) => Stream.value(projectTags)),
     ],
@@ -1399,6 +1406,30 @@ void main() {
       expect((await _rawTodoRow(db, 't')).updatedAt, seededUpdatedAt);
     });
 
+    // A write must not outlive its subject (#447). The row is really deleted
+    // while an edit is still in the field; the dispose flush finds it gone and
+    // authors no op for the deleted entity.
+    testWidgets('a title edit pending when the Outcome is deleted is dropped',
+        (tester) async {
+      final capture = RecordingDomainOpCapture();
+      final todo = (await tester.runAsync(() async {
+        await db.close();
+        db = GtdDatabase(NativeDatabase.memory(), opCapture: capture);
+        return _insertInboxTodo(db, id: 't', title: 'Buy milk');
+      }))!;
+      await tester.pumpWidget(_harness(db, todo: todo));
+      await _pumpFrames(tester, frames: 5);
+      await tester.enterText(
+          find.byKey(const Key('clarify_title')), 'Buy oat milk');
+
+      await tester.runAsync(() => db.todoDao.deleteOutcome('t'));
+      capture.clear();
+      await unmountWhileFocused(tester);
+
+      expect(await tester.runAsync(() => db.todoDao.getTodo('t')), isNull);
+      expect(capture.forCollection(todosCollection), isEmpty);
+    });
+
     testWidgets('a failing flush is logged rather than thrown into teardown',
         (tester) async {
       // The flush is `unawaited` and runs from `dispose()`, so a throwing DAO
@@ -1775,6 +1806,168 @@ void main() {
       await _pumpFrames(tester, frames: 5);
 
       expect(titleText(tester), 'Buy milk');
+    });
+  });
+
+  // A value chosen in a picker that was opened before the subject went must not
+  // land (#447). The row is really deleted while the modal is up; confirming it
+  // then reaches the write seam, which finds the subject gone.
+  group('ClarifyCard \u2014 a picker open when the subject is deleted', () {
+    late GtdDatabase db;
+    late RecordingDomainOpCapture capture;
+
+    setUp(() {
+      capture = RecordingDomainOpCapture();
+      db = GtdDatabase(NativeDatabase.memory(), opCapture: capture);
+    });
+    tearDown(() async => db.close());
+
+    testWidgets('a due date picked after the Outcome is deleted is dropped',
+        (tester) async {
+      final todo = (await tester
+          .runAsync(() => _insertInboxTodo(db, id: 't', title: 'Buy milk')))!;
+      await tester.pumpWidget(_harness(db, todo: todo));
+      await _pumpFrames(tester, frames: 5);
+
+      await tester.ensureVisible(find.text('Set date'));
+      await tester.tap(find.text('Set date'));
+      await _pumpFrames(tester, frames: 10);
+      expect(find.text('Set due date'), findsOneWidget);
+
+      await tester.runAsync(() => db.todoDao.deleteOutcome('t'));
+      capture.clear();
+      await tester.tap(find.text('OK'));
+      await _pumpFrames(tester, frames: 10);
+      await tester.runAsync(() => pumpEventQueue());
+
+      expect(await tester.runAsync(() => db.todoDao.getTodo('t')), isNull);
+      expect(capture.forCollection(todosCollection), isEmpty);
+    });
+
+    testWidgets('a project picked after the Capture is deleted leaves no hint',
+        (tester) async {
+      final project = (await tester.runAsync(
+          () => _insertTag(db, id: 'p1', name: 'Home', type: 'project')))!;
+      final captured = (await tester
+          .runAsync(() => _insertCapture(db, id: 'x', title: 'Buy milk')))!;
+      await tester.pumpWidget(
+          _captureHarness(db, capture: captured, projectTags: [project]));
+      await _pumpFrames(tester, frames: 5);
+
+      await tester.ensureVisible(find.text('No project'));
+      await tester.tap(find.text('No project'));
+      await _pumpFrames(tester, frames: 10);
+      expect(find.text('Select project'), findsOneWidget);
+
+      await tester.runAsync(
+          () => (db.delete(db.captures)..where((c) => c.id.equals('x'))).go());
+      await tester.tap(find.text('Home'));
+      await _pumpFrames(tester, frames: 10);
+      await tester.runAsync(() => pumpEventQueue());
+
+      final hints =
+          await tester.runAsync(() => db.select(db.captureTags).get());
+      expect(hints, isEmpty);
+    });
+  });
+
+  group('ClarifyCard — Waiting For routes with the title-as-action fallback '
+      'in one transaction (#709)', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    testWidgets(
+        'a failed Action write leaves the route unwritten, shows the failure '
+        'and does not advance the host', (tester) async {
+      final todo = await _insertInboxTodo(db, id: 'wf709', title: 'Chase quote');
+      await db.tagDao.upsertTag(TagsCompanion(
+        id: const Value('alice'),
+        name: const Value('Alice'),
+        type: const Value('person'),
+        userId: const Value(_userId),
+      ));
+      await db.customStatement(
+        'CREATE TRIGGER actions_insert_fails BEFORE INSERT ON actions '
+        "BEGIN SELECT RAISE(ABORT, 'actions is unwritable'); END",
+      );
+      final fired = <ProcessAction>[];
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        personTags: [
+          Tag(
+            id: 'alice',
+            name: 'Alice',
+            type: 'person',
+            userId: _userId,
+          ),
+        ],
+        onAfterRoute: (a) async => fired.add(a),
+      ));
+      await _pumpFrames(tester, frames: 5);
+
+      await _scrollAndTap(tester, 'Waiting For');
+      await _pumpFrames(tester, frames: 10);
+      await tester.tap(find.text('Alice'));
+      await _pumpFrames(tester, frames: 5);
+      await tester.tap(find.widgetWithText(FilledButton, 'Done'));
+      await _pumpFrames(tester);
+
+      final row = await db.todoDao.getTodo('wf709');
+      expect(row?.lastClarifiedAt, todo.lastClarifiedAt,
+          reason: 'the route and the Action commit together or not at all');
+      expect(await db.todoDao.getPersonTagIdsForTodo('wf709'), isEmpty);
+      expect(await db.actionDao.getCurrentAction('wf709'), isNull);
+      expect(find.text('Operation failed. Please try again.'),
+          findsOneWidget);
+      expect(find.textContaining('Routed, but'), findsNothing,
+          reason: 'the route did not land, so the partial-success text is a lie');
+      expect(fired, isEmpty,
+          reason: 'the review must not advance past a write that did not land');
+    });
+  });
+
+  group('ClarifyCard — a stored person hint seeds Waiting For (#438)', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    testWidgets(
+        'the hint in capture_tags preselects the picker and the delegate '
+        'lands on the Outcome', (tester) async {
+      final capture = await _insertCapture(db, id: 'ph', title: 'Chase quote');
+      final alice =
+          await _insertTag(db, id: 'alice', name: 'Alice', type: 'person');
+      final bob = await _insertTag(db, id: 'bob', name: 'Bob', type: 'person');
+      await db.captureDao.assignTagHint('ph', 'alice', _userId);
+
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: capture,
+        personTags: [alice, bob],
+        // The hint is read from storage, not injected into a draft.
+        tagHintsStream:
+            Stream.fromFuture(db.captureDao.tagHintsForCapture('ph')),
+      ));
+      await _pumpFrames(tester, frames: 5);
+
+      await _scrollAndTap(tester, 'Waiting For');
+      await _pumpFrames(tester, frames: 10);
+
+      bool checked(String name) => tester
+          .widget<CheckboxListTile>(find.widgetWithText(CheckboxListTile, name))
+          .value!;
+      expect(checked('Alice'), isTrue);
+      expect(checked('Bob'), isFalse);
+
+      await tester.tap(find.widgetWithText(FilledButton, 'Done'));
+      await _pumpFrames(tester);
+
+      final outcomeId = (await db.captureDao.outcomeIdsForCapture('ph')).single;
+      expect(await db.todoDao.getPersonTagIdsForTodo(outcomeId), {'alice'});
     });
   });
 }

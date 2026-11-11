@@ -10,6 +10,7 @@ import '../../auth/session_gate.dart';
 import '../../models/clarify_mode.dart';
 import '../../models/focus_session_planning_settings.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/build_version_provider.dart';
 import '../../providers/clarify_mode_provider.dart';
 import '../../providers/dev_options_provider.dart';
 import '../../providers/evening_shutdown_provider.dart';
@@ -189,6 +190,21 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     'Offline-first GTD task manager',
                     style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
                   ),
+                  Consumer(
+                    builder: (context, ref, _) {
+                      final buildVersionText =
+                          ref.watch(buildVersionLabelProvider).value;
+                      if (buildVersionText == null) {
+                        return const SizedBox.shrink();
+                      }
+                      return Text(
+                        buildVersionText,
+                        key: const Key('about_build_version'),
+                        style: const TextStyle(
+                            fontSize: 12, color: Color(0xFF9CA3AF)),
+                      );
+                    },
+                  ),
                 ],
               ),
             ),
@@ -248,8 +264,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       final savedUri = await FilePicker.saveFile(
         dialogTitle: 'Export data',
         fileName: _exportFileName(),
-        type: FileType.custom,
-        allowedExtensions: const ['json'],
         bytes: Uint8List.fromList(utf8.encode(json)),
       );
       if (savedUri != null && messenger.mounted) {

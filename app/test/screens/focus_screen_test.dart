@@ -9,6 +9,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:jeeves/widgets/outcome_row.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
@@ -151,6 +152,29 @@ void main() {
     expect(find.text('planning'), findsOneWidget);
   });
 
+  testWidgets('Focus row metadata fits a narrow screen beside Start', (tester) async {
+    await tester.pumpWidget(_buildScreen(
+      activeSession: _openSession(),
+      tasks: [Todo(
+        id: 'long', title: 'Write the report', userId: 'test-user',
+        createdAt: DateTime(2030), intent: 'next',
+        timeEstimate: 125, dueDate: DateTime(2030, 3, 15),
+      )],
+    ));
+    await tester.pump();
+    await tester.pump();
+    // Exercise the actual Focus row without the independent shutdown footer.
+    final row = tester.widget<OutcomeRow>(find.byType(OutcomeRow));
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpWidget(ProviderScope(child: MaterialApp(
+      home: Scaffold(body: SizedBox(width: 272, child: row)),
+    )));
+    expect(find.text('2h 5m'), findsOneWidget);
+    expect(find.textContaining('sprints'), findsOneWidget);
+    expect(find.text('Start'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
       'planning-done derives from an open session: tasks render as today\'s '
       'plan, not carried over (issue #460)', (tester) async {
@@ -164,6 +188,7 @@ void main() {
     ));
     await tester.pump();
 
+    expect(find.byType(OutcomeRow), findsOneWidget);
     expect(find.text('Planned task'), findsOneWidget);
     expect(find.text('CARRIED OVER FROM LAST SESSION'), findsNothing);
     expect(find.text('Old rollover'), findsNothing);
@@ -184,6 +209,7 @@ void main() {
     await tester.pump();
 
     expect(find.text('CARRIED OVER FROM LAST SESSION'), findsOneWidget);
+    expect(find.byType(OutcomeRow), findsOneWidget);
     expect(find.text('Carried task'), findsOneWidget);
     // No session ⇒ the plan CTA, not the shutdown callout.
     expect(find.text('Plan the Day'), findsOneWidget);

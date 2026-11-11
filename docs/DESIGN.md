@@ -6,14 +6,15 @@ This document outlines the core aesthetic and functional principles of our desig
 
 ## Reference design prototypes
 
-Two claude.ai/design projects are the canonical UX references for the execution-layer experience. Epic-level design work extends them; new surfaces must match their design language (and this document's tokens):
+Three design references are canonical for the execution-layer experience. Epic-level design work extends them; new surfaces must match their design language (and this document's tokens):
 
 | Project | Covers |
 |---|---|
 | [Jeeves — Focus Mode](https://claude.ai/design/p/e324ad40-21d8-4572-b90c-5356cc0839ce?file=Focus+Mode.html) | Mobile execution surfaces: Today's Plan list, Focus Mode sprint ring (Monastic / Paced / Instrument variants), sprint-resolution bottom sheet (Complete / Extend / Defer), Break, Task-complete — in light and dark themes, with tag-density options. |
 | [Jeeves — Daily Execution Layer](https://claude.ai/design/p/6a1ed3d8-1b97-4abd-8f45-0315ca69bc07?file=Jeeves+Daily+Execution+Layer.html) | The full desktop day loop (1440px sidebar shell): Morning planning (clarify → energy → selection → estimates) → Agenda → Timebox timeline → Focus → Shutdown (dispositions + journal), plus a mobile companion panel. Also the desktop-layout reference for cross-platform work. |
+| [Jeeves — System Trust guardrails](https://claude.ai/artifact/4cwXKxksQeWFdNesbQvAFQ) | The guardrail surfaces of TMaYaD/Jeeves#45: the Banner's Bertie buttons and swipe dismiss, the Now screen's empty-state nudge, Inbox too full, System Trust in Settings, the Weekly Review's Bypassed step — light and dark. |
 
-Both are accessible via the claude_design MCP (`https://api.anthropic.com/v1/design/mcp`, auth via `/design-login`).
+The first two are accessible via the claude_design MCP (`https://api.anthropic.com/v1/design/mcp`, auth via `/design-login`); the third is a claude.ai Design canvas, shared from its page.
 
 ### Epic-level design precedes stories
 
@@ -208,12 +209,12 @@ focal point sits inside the sentence, not stacked above it. The estimate is an
 approximation: 2 minutes per item to be walked, plus a flat 5 for Daily
 Planning's Energy/Time check-ins and selection (Weekly Review adds no flat),
 rounded up to the nearest 5 and floored at 5 so a zero-item ceremony reads
-"about 5 minutes", never "0". At zero items the copy switches to a shared
+"about 5m", never "0"; durations use the shared `h`/`m` form (`3h 30m`). At zero items the copy switches to a shared
 light-day pool. Copy is drawn once per performance from a seedable pool (the
 `elapsed_timer_widget.dart` / `onboarding_card.dart` idiom). The proceed
 control rides the standard footer's fixed slot but carries a **Bertie-speak**
 label (`WizardFooter.nextLabel`, e.g. "Right ho", "Tinkerty-tonk") — the user
-answering Jeeves — and is always enabled; the label shrinks-to-fit rather than
+answering Jeeves — and is enabled except while starting a Weekly Review session; the label shrinks-to-fit rather than
 truncate. System back on the intro exits the ceremony (it is the first step);
 back from the first item of the following step returns to the intro.
 
@@ -387,6 +388,9 @@ every launch path (button, nudge banner, notification deep-link). Implemented
 by `CeremonyPopScope` (`app/lib/widgets/ceremony/ceremony_pop_scope.dart`),
 which wraps each ceremony screen.
 
+### Tag cloud
+The drawer tag cloud has no heading noun. Tags render as `@`-text in three size steps (12 / 13 / 15 sp) by count relative to the busiest visible tag, spaced 12 / 8. Selected tags are pinned first; the collapsed cloud shows 12 tags (never hiding a selected one) with a "Show N more" toggle, and a "Find…" field appears once more tags qualify than the cap.
+
 ### Long-press multi-select
 Lists that surface batchable actions enter a multi-select mode on **long-press**, mirroring the long-press affordance the tag cloud uses for tag management. Once selection mode is active, a **contextual bar** appears immediately above the list (not in the screen-level app bar, which the shared title bar owns) showing the selected count, a per-batch preview where relevant (e.g. total planned time), a "Select all" shortcut, a Clear (×) button, and a primary commit button. Cards in selection mode replace per-row trailing actions with a leading checkbox; tapping a card toggles its membership. Deselecting the last item auto-exits the mode. Each selection toggle fires a light haptic.
 
@@ -396,12 +400,14 @@ This pattern is used on Step 5 (Build Today's Plan) of the Daily Planning ritual
 The Plan Summary capacity bar fills in two segments. Minutes from Outcomes with a real time estimate render in the load-status tone — green (`#16A34A`) at or below 0.8 of available time, amber (`#F59E0B`) up to 1.0, red (`#DC2626`) over — keyed off the *combined* ratio so the warn/over thresholds are unchanged. Minutes contributed by selected Outcomes that carry **no** estimate (counted at the configurable default, see REQUIREMENTS Daily Planning Step 5) render immediately after them as a lighter-blue segment (`#93C5FD`, Tailwind blue-300 — same family as the Daily Planning accent `#2563EB`). The lighter blue marks that provenance; the estimate-less cards themselves look exactly like any other card (no chip). When nothing is counted at the default the bar is a single status-tone fill, unchanged. The bar keeps its 10px height, 4px corner radius, and `#E5E7EB` track.
 
 ### Outcome peek sheet
-On the Daily Planning Plan Summary step, a plain **tap** on any card (Today's Plan, Up Next, or Skipped) opens the **Outcome peek** — a read-only bottom sheet (`OutcomePeekSheet`, `app/lib/widgets/outcome_peek_sheet.dart`) surfacing the Outcome's fuller context: title, notes, energy, time estimate, due date, and time logged. It is read-only by construction (Text/icon rows only — no fields, pickers, or edit navigation) and writes nothing, so opening or dismissing it never selects, skips, or otherwise mutates the plan; the modal sits over the never-unmounted list, so scroll and selection are preserved on dismiss. Time logged is summed from the `time_logs` table (`TimeLogDao.totalMinutesForTask`); nothing stores a total.
+On the Daily Planning Plan Summary step, a plain **tap** on any card (Today's Plan, Up Next, or Skipped) opens the **Outcome peek** — a bottom sheet (`OutcomePeekSheet`, `app/lib/widgets/outcome_peek_sheet.dart`) that reads as a viewer and edits in place. Title and notes are borderless fields saved on focus loss and flushed on dismissal; energy, time estimate and due date are tappable chips; below them sit the context tags, the Waiting For people and the Plan. The sheet reuses the Task Detail editors (`outcome_attribute_editors.dart`, `outcome_plan_section.dart`) and writes through `TaskDetailNotifier`, so stamping and the deleted-Outcome guard behave as on the detail screen. Time logged stays read-only, summed from `time_logs`. Status changes and project assignment are deliberately not offered, and Areas and Labels have no editor in the app yet.
+
+Opening, editing or dismissing never selects, skips or otherwise touches the pick-up state, and an unedited open writes nothing. An edit can change what Up Next shows — a higher energy than the day's level, or a delegate on an Outcome with no current Action, drops it from the pool — without changing any selection. The modal sits over the never-unmounted list, so scroll and selection are preserved.
 
 Tap and long-press are split by mode: **tap peeks, hold selects**. Long-press enters multi-select (above); while multi-select is active, tap reverts to its selection meaning on Up Next cards and the peek is unavailable — tap is inert on Today's Plan / Skipped cards, whose action buttons stay fully functional. Exiting multi-select restores tap-to-peek. The sheet follows the 2/4/6 radii scale — 6px top corners (sheet surface), 4px meta chips.
 
 ### Task-detail Plan section
-The task-detail screen (`/task/:id`) carries a **Plan** section (`_PlanSection`, `app/lib/screens/task_detail/task_detail_screen.dart`) above the Notes area — the Outcome's "what's next" outranks free-text notes. Its anatomy, top to bottom:
+The task-detail screen (`/task/:id`) carries a **Plan** section (`OutcomePlanSection`, `app/lib/widgets/outcome_plan_section.dart`) above the Notes area — the Outcome's "what's next" outranks free-text notes. Its anatomy, top to bottom:
 
 *   **Section label** — a `PLAN` overline styled like the `NOTES` label (12px, `#9CA3AF`, tracked caps) with a checklist icon.
 *   **Current-action anchor row** — the current Action's text with a leading filled marker and two trailing controls: a down-arrow **"Move to plan"** demote button and an archive-glyph **"Abandon"** button. Both render only when a current Action exists. When the Outcome is **Actionless**, a quiet `No current action` placeholder holds the slot — the empty state that makes promotion meaningful.
@@ -423,6 +429,17 @@ Directly under the Plan section, so the whole Action chain — what's next and w
 Each row is two lines: the Action's text (14px, `#374151`), then a meta line (12px, `#9CA3AF`) reading `Done YYYY-MM-DD` or `Abandoned YYYY-MM-DD`, with ` · 25m` appended when that Action logged time. Zero minutes are omitted, not rendered as `0m`. Rows are newest-first by terminal timestamp. **No successor link is drawn** between an abandoned Action and whatever replaced it — the model stores none, so the surface invents none.
 
 **Read-only by construction.** History rows are `Text` and nothing else: no icon buttons, no tap-to-edit, no drag handles, no remove. A terminated Action is a record, so the absence of affordances is structural rather than a rule to remember — the only tap target in the section is the expander itself.
+
+### Guardrails — nudges, never blocks
+The System Trust surfaces (reference: [Jeeves — System Trust guardrails](https://claude.ai/artifact/4cwXKxksQeWFdNesbQvAFQ); decisions on TMaYaD/Jeeves#45) follow one rule: a guardrail nudges the user back towards the habit and never blocks anything. Three nudges share the Nudge queue's single slot, in priority order **Inbox too full** (more than 50 Captures) → **Weekly Review** (due, or late) → **Daily Planning**; a higher one hides the lower while it is active — not done, not swiped away for the day.
+
+**Banner.** Every Banner's button is Bertie speak (§ Voice), and no Banner has a ✕: the Weekly Review and Daily Planning Banners close for the day with a horizontal swipe, and Inbox too full cannot be closed — it clears the moment the Inbox is at 50 or fewer. The Ritual Banners keep their tints; Inbox too full is the untinted one, ink on white with no pulse and a filled-ink button. Because the button no longer names the ceremony, every Weekly Review first line names the Weekly Review and carries the days late ("The Weekly Review, sir. Three days late."), and the second line is the remedy, always saying a short session counts. A review left unfinished brings the nudge back at once in continue wording ("Push on"). Copy is pooled per § Voice; the pools are on the canvas.
+
+**Now screen.** The Now screen carries no Banner. The head of the queue renders in the Today's Tasks empty state — glyph, the Jeeves pair, one full-width Bertie button in the ritual's accent (ink, `ACCENT_WEEKLY`, `ACCENT_DAILY`) — and nothing while a session with tasks is active. While a nudge other than Daily Planning holds the empty state, the title bar's sun action (the Re-plan slot) opens Daily Planning, so planning is always one tap away.
+
+**System Trust in Settings.** The first section, SYSTEM TRUST, with the combined state as a glyph at the far right of the header row: a filled green tick (`#16A34A`) when all is good, an empty ink ring when something needs attention. Shape carries it, not colour (the § Sync health rule), and amber stays spent. Below, one tappable row per signal states the fact — Captures in the Inbox; last Weekly Review N days ago, or not done yet, counted from the first Capture or Outcome; Outcomes bypassed 3 or more times — each with its own tick or ring, each opening the place to fix it. The bypass threshold setting sits in the same section. No number anywhere.
+
+**Bypassed step.** When at least one Bypassed Outcome is in the session, the Weekly Review gains **Decide Bypassed Outcomes** right after Process Inbox, in the `ReviewItemCard` idiom: the headline says why (bypassed N times in Daily Planning), the card shows title, current Action and notes, and the routing bar offers Someday/Maybe or Trash, with a line that Trash keeps the Outcome restorable. No Skip: the footer is `BackOnlyFooter` until every Outcome is decided. Short sessions rank Bypassed Outcomes with everything else (sort → cut off → group) and the step's completion line says how many wait for a longer session. Daily Planning shows Bypassed Outcomes unmarked.
 
 ### Sync health — report, don't interrupt
 The drawer's sync indicator and the screen behind it (`/sync-health`,
@@ -481,3 +498,74 @@ Two copy rules, both asserted by test (`sync_health_copy_test.dart`):
 
 There is **no healthy or empty state copy**, because a healthy device cannot reach
 the screen. The absence is deliberate.
+
+
+## Outcome representations
+
+The contracts and inventory below define the target mapping for Outcome
+representations; the row, review-card and attribute-strip migrations complete it.
+Attribute vocabulary follows [CONTEXT.md](../CONTEXT.md#language); shared labels and chips live in
+[`meta_chip.dart`](../app/lib/widgets/meta_chip.dart). The inventory maps each
+surface to its representation contract; deliberate differences are listed with
+their reasons so that a new surface can reuse the same contract.
+
+### Component contracts
+
+| Representation | Fields and layout | Interaction contract |
+|---|---|---|
+| `OutcomeMetaLine` | Read-only chips, ordered energy · estimate · time logged · due. Unset attributes omitted; the caller supplies the attributes it shows. | No gestures; the containing surface owns the tap target. |
+| [`OutcomeRow`](../app/lib/widgets/outcome_row.dart) | Optional leading slot, title (normal, muted or struck), secondary line, metadata (default `OutcomeMetaLine`), optional trailing slot. Flat or framed with r12 border and h16/v12 padding. | Whole-row tap and long-press callbacks. No ink or chevron when no tap callback exists. |
+| [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Banner (icon, text, tone), people chips, title, current Action, notes, optional metadata and actions. Absent Action and notes are omitted. | Injected `ProcessToHandlers` or resolution buttons. |
+| Outcome detail / `OutcomeAttributeStrip` | Title → editable attribute strip → contexts → people → Plan → notes. Strip uses the metadata order with shared attribute editors. | Each editable chip has an ancestor tap target; logged time stays read-only. |
+
+Energy uses purple `#7C3AED` and `bolt_outlined`; estimate uses blue `#2563EB`
+and `timer_outlined`; logged time uses green `#16A34A` and
+`history_toggle_off_outlined`; due uses red `#DC2626` and `event_outlined`.
+`formatMinutesLabel` renders durations as `45m`, `2h` or `2h 5m`.
+`energyLevelLabel` preserves unknown values. `formatDueDateLabel` converts to
+local time and renders `MMM d, y` (for example, `Nov 9, 2026`).
+
+### Surface inventory
+
+Paths are under `app/lib/`; DPR means Daily Planning and ES means Evening Shutdown.
+
+| Surface / source | Fields | Layout / representation contract | Interactions |
+|---|---|---|---|
+| Task detail — `screens/task_detail/task_detail_screen.dart` | Project, status, title, attributes, contexts, people, Plan, notes, History, reminders, captured-from | Full Outcome detail | Autosave edits; status menu; attribute editors |
+| Peek — `widgets/outcome_peek_sheet.dart` | Title, energy, estimate, logged time, due, contexts, people, Plan, notes | Bottom-sheet Outcome detail | Edit in place; close |
+| Clarify — `widgets/clarify_card.dart` | Title, notes, project, contexts, energy, estimate, due, process-to | Outlined form; shared labels and estimate picker | Capture draft or Outcome autosave; process-to routing |
+| DPR plan summary — `screens/planning/steps/plan_summary_step.dart` | Title, off-Up-Next reason, estimate, energy | Framed `OutcomeRow`, checkbox and selection controls | Peek, long-press selection, Select/Skip/Undo |
+| DPR re-clarify — `screens/planning/steps/task_review_step.dart` | Hint, title, notes, current Action | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | `ProcessToHandlers` |
+| DPR scheduled — `screens/planning/steps/scheduled_review_step.dart` | Title, due, estimate | Framed `OutcomeRow` | None |
+| ES settled — `screens/shutdown/steps/settled_review_step.dart` | Settlement icon, title, estimate vs actual | Framed `OutcomeRow` | None |
+| ES disposition — `screens/shutdown/steps/unfinished_tasks_step.dart` | Title, current Action, notes, estimate, logged | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Roll over / Return to Next / Defer |
+| Weekly review — `screens/periodic_review/steps/list_review_step.dart` | Banner, people, title, current Action, notes | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Injected `ProcessToHandlers` |
+| Focus — `screens/focus_screen.dart` | Title, due, estimate, sprint count | Flat `OutcomeRow`, trailing Start/status | Open detail; Start/Resume |
+| Focus carried-over — `screens/focus_screen.dart` | Muted title, estimate | Flat `OutcomeRow`, leading icon | None |
+| Search — `screens/search/widgets/search_result_tile.dart` | Title, snippet, match hint, status | Flat `OutcomeRow` | Capture → clarify; Outcome → detail |
+| GTD lists / Project — `screens/common/gtd_list_screen.dart` | Title, energy, estimate, due when set | Flat `OutcomeRow` | Open detail |
+| Waiting For — `screens/waiting_for/waiting_for_screen.dart` | Title, energy, estimate, due when set | Flat `OutcomeRow`, grouped by person | Open detail |
+| Linked Outcomes — `widgets/capture_outcomes_section.dart` | Title, next Action, contexts, Capture provenance count | Framed `OutcomeRow` | Unlink |
+
+### Deliberate variations
+
+| Surface | Difference | Reason |
+|---|---|---|
+| Task detail | Project and status above; History, reminders and captured-from below | The full record lives here. |
+| Peek | No project or status control | Peeking must not change pick-up state. |
+| Clarify | Outlined fields, required title, inline pickers; draft for Captures; routing sets status | Clarification is a form. |
+| Clarify due picker | Today through +365 days | A new deadline is not set in the past. |
+| Waiting For | Person appears in group header | Avoid repeating the person on every row. |
+| Focus | Sprint count beside estimate; settled title struck | Supports engagement and settlement. |
+| Focus carried-over | Muted and read-only | Records yesterday rather than offering work to act on. |
+| Search | Match snippet, hint and status; also includes Captures | Explains why the item matched. |
+| DPR plan summary | Off-Up-Next reason, capacity bar, skipped tone, selection controls | Supports choosing today's Plan. |
+| DPR scheduled | Due-date ordering | Makes deadlines visible first. |
+| ES settled | Estimate-versus-actual ratio colours; zero totals shown as a dash | Estimate accuracy is the purpose of this step. |
+| Linked Outcomes | Context chips and merge provenance; no navigation | The surface edits Capture links. |
+| DPR re-clarify | Hint banner | Explains why the Outcome is queued. |
+| ES disposition | Three resolution buttons with previous choice | Records the unfinished Outcome's disposition. |
+
+`TaskStatusRow` is a status control, and `CaptureListItem` represents Captures;
+neither is an Outcome representation. Blank-title handling and the energy
+picker's per-level colours remain surface-specific.

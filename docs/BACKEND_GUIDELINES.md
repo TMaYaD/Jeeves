@@ -88,6 +88,18 @@ Existing password-based endpoints (`POST /session`, `POST /user`) are unchanged.
 - **Production:** `backend/Procfile` declares `release: python -m app.migrate`. Dokku runs this in a one-off container after each successful build and only promotes the new image to web traffic if the migration exits cleanly — so a failed migration aborts the deploy and prod stays on the previous release.
 - **Local dev exception:** `infra/docker-compose.yml` runs `python -m app.migrate` inline before `uvicorn` for convenience. This is acceptable only for single-instance local dev. An advisory lock in `backend/alembic/env.py` prevents concurrent migration races.
 
+## Deploy host trust
+
+Backend CD reaches the Dokku host over SSH, and it authenticates that host against a **pinned key** rather than learning one at deploy time. Two repository variables carry the pair: `DOKKU_HOST` is the host, and `DOKKU_HOST_KEY` is its `known_hosts` line.
+
+Both are *variables*, not secrets. A host public key is not secret — it is the thing clients are supposed to check against — and holding it as a variable means a wrong or swapped value is visible in review and in the job log, which is exactly when it needs to be noticeable. Secrets are masked, and a masked pin is a pin nobody can audit.
+
+The pinning step overwrites `~/.ssh/known_hosts` rather than appending to it, and every consumer runs with `StrictHostKeyChecking=yes` and `GlobalKnownHostsFile=/dev/null` — so the pinned key is the only key that can satisfy the connection, and a mismatch is refused instead of prompted. The step also fails fast when either variable is unset, or when `DOKKU_HOST_KEY` carries no entry for `DOKKU_HOST`: a mismatched pair is a configuration error and should read as one, not as a deploy that died at the push.
+
+This replaced an `ssh-keyscan` immediately before the push. `ssh-keyscan` trusts whatever answers on port 22, so it is trust-on-first-use repeated on every single deploy — it can only ever confirm that *something* is listening, never that it is the right host.
+
+**Rotating the host or its key means updating `DOKKU_HOST_KEY` in the same change as `DOKKU_HOST`.** Deploys fail closed until it is correct, which is the intended behaviour: a deploy that cannot identify its target should not proceed.
+
 ## Server versioning & releases
 
 The server is versioned independently of the Flutter app. App releases (`docs/RELEASES.md`) neither produce nor consume a server version, and the two live in separate tag namespaces that no pipeline crosses: the app's tag patterns cannot match a server tag, and the server's tag filter cannot match an app tag.

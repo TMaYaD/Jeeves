@@ -76,6 +76,16 @@ void main() {
       final t2 = await _insertTodo(db,
           id: 't2', title: 'Task B');
       await db.todoDao.markDone(t2);
+      // An Inbox Capture carrying the tag as a hint is not an Outcome.
+      final now = DateTime.now();
+      await db.captureDao.insertCapture(CapturesCompanion(
+        id: const Value('c1'),
+        title: const Value('Task C'),
+        userId: const Value(_userId),
+        createdAt: Value(now),
+        updatedAt: Value(now),
+      ));
+      await db.captureDao.assignTagHint('c1', 'ctx1', _userId);
       await _assignTag(db, t1, 'ctx1');
       await _assignTag(db, t2, 'ctx1');
 

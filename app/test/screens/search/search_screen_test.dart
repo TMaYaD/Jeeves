@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:jeeves/widgets/outcome_row.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -248,6 +249,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 400)); // fire debounce
       await tester.pump(); // process stream emissions
 
+      expect(find.byType(OutcomeRow), findsOneWidget);
       expect(find.textContaining('completed tasks'), findsNothing);
     });
   });

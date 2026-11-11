@@ -69,8 +69,8 @@ class Todos extends Table {
   /// _needsReviewWhere.
   DateTimeColumn get lastClarifiedAt => dateTime().nullable()();
 
-  /// When a focus session last closed with this task non-done.
-  /// Stamped by reviewAndCloseSession. Used to detect staleness vs lastClarifiedAt.
+  /// Retired: no code writes it and no predicate reads it. The column is kept
+  /// so existing values keep round-tripping through sync and import.
   DateTimeColumn get lastNextActionCompletionAt => dateTime().nullable()();
 
   @override

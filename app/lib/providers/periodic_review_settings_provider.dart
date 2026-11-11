@@ -20,6 +20,8 @@ import 'focus_session_planning_provider.dart' show planningToday;
 import 'gtd_lists_provider.dart' show Capture, Todo;
 import 'synced_preferences_provider.dart';
 
+const kPeriodicReviewOpenSinceKey = 'periodic_review_open_since';
+
 const _kLastCompletedAtKey = 'periodic_review_last_completed_at';
 const _kBannerEnabledKey = 'periodic_review_banner_enabled';
 const _kNotificationEnabledKey = 'periodic_review_notification_enabled';
@@ -114,9 +116,26 @@ final periodicReviewLastCompletedProvider = Provider<DateTime?>((ref) {
   return DateTime.tryParse(raw);
 });
 
+/// The active review period, closed by completion or seven days after opening.
+final periodicReviewOpenSinceProvider = Provider<DateTime?>((ref) {
+  final raw = ref.watch(syncedPreferencesProvider).asData?.value
+      .get<String>(kPeriodicReviewOpenSinceKey);
+  final opened = raw == null ? null : DateTime.tryParse(raw);
+  if (opened == null) return null;
+  final completed = ref.watch(periodicReviewLastCompletedProvider);
+  if (completed != null && !opened.isAfter(completed)) return null;
+  final now = ref.watch(clockProvider)();
+  final expires = opened.add(const Duration(days: _kCadenceDays));
+  if (!now.isBefore(expires)) return null;
+  final timer = Timer(expires.difference(now), ref.invalidateSelf);
+  ref.onDispose(timer.cancel);
+  return opened;
+});
+
 /// True when the review is due (never completed, or > [_kCadenceDays] old).
 final periodicReviewIsDueProvider = Provider<bool>((ref) {
   final now = ref.watch(clockProvider)();
+  if (ref.watch(periodicReviewOpenSinceProvider) != null) return true;
   final last = ref.watch(periodicReviewLastCompletedProvider);
   if (last == null) return true;
   final due = last.add(const Duration(days: _kCadenceDays));

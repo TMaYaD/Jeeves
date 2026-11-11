@@ -52,7 +52,7 @@ import 'async_subject.dart';
 import 'capture_outcomes_section.dart';
 import 'clarify_retention.dart';
 import 'clarify_shared_widgets.dart';
-import 'meta_chip.dart' show formatMinutesLabel;
+import 'meta_chip.dart' show formatMinutesLabel, formatDueDateLabel;
 import 'context_tag_picker.dart';
 import 'process_to_handlers.dart';
 import 'project_picker.dart';
@@ -188,8 +188,9 @@ class ClarifyCard extends ConsumerStatefulWidget {
 }
 
 class _ClarifyCardState extends ConsumerState<ClarifyCard> {
-  /// The database handle, captured while the element is still mounted so
-  /// [dispose] can issue the Outcome shape's pending-edit flush.
+  /// The Outcome write seam, captured while the element is still mounted so
+  /// [dispose] can issue the Outcome shape's pending-edit flush. Null on a
+  /// Capture, which flushes nothing.
   ///
   /// `dispose()` cannot reach it through `ref`: `StatefulElement.unmount()`
   /// calls `Element.unmount()` — which marks the element defunct, so
@@ -197,7 +198,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   /// Riverpod's `ref` asserts on exactly that. Reading it there threw on the
   /// flush's first line and the edit was lost (#529). Every other read in this
   /// State runs while mounted and goes through `ref` as usual.
-  late final GtdDatabase _databaseForDisposeFlush;
+  late final TaskDetailNotifier? _notifierForDisposeFlush;
 
   TextEditingController? _titleCtrl;
   TextEditingController? _notesCtrl;
@@ -398,7 +399,9 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   @override
   void initState() {
     super.initState();
-    _databaseForDisposeFlush = ref.read(databaseProvider);
+    _notifierForDisposeFlush = _isCapture
+        ? null
+        : ref.read(taskDetailNotifierProvider(_subjectId));
     if (_isCapture && widget.tagSection == ClarifyTagSection.draftInputOnly) {
       unawaited(_loadOneShotHints());
     }
@@ -458,10 +461,8 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     // failure mode is a silent lost edit. `TaskDetailScreen` and
     // `ActiveFocusScreen` keep the same backstop (#533).
     //
-    // **Missing the subject guard those two carry (#446 / #447).** With the row
-    // gone from local storage this still flushes, writing to a deleted row and
-    // authoring a sync op for a deleted entity. Deliberately left to #447,
-    // which owns the whole class rather than this one site.
+    // With the row gone from local storage the flush is dropped by the
+    // notifier's write guard (#447), not by a latch on this card.
     //
     // A Capture takes no such path — nothing it holds is ever written — so
     // this whole block is Outcome-only, and with it goes the `ref`-in-dispose
@@ -469,7 +470,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     if (!_isCapture) {
       // Snapshot pending edits up-front so the fire-and-forget write below
       // doesn't touch disposed controllers or assign back into a disposed
-      // State. The database handle comes from [_databaseForDisposeFlush]
+      // State. The write seam comes from [_notifierForDisposeFlush]
       // rather than `ref`, which is already unusable by the time this runs —
       // see that field.
       final trimmedTitle = (_titleCtrl?.text ?? '').trim();
@@ -478,15 +479,8 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
           (trimmedTitle != _baselineTitle || trimmedNotes != _baselineNotes);
       if (hasPendingWrite) {
         unawaited(
-          _databaseForDisposeFlush.todoDao
-              .updateFields(
-                _subjectId,
-                title: trimmedTitle,
-                // Same clear-flag contract as [_saveOutcomeText]: an emptied
-                // field nulls the column rather than storing `''`.
-                notes: trimmedNotes.isNotEmpty ? trimmedNotes : null,
-                clearNotes: trimmedNotes.isEmpty,
-              )
+          _notifierForDisposeFlush!
+              .updateTitleAndNotes(trimmedTitle, trimmedNotes)
               // The card is gone, so there is no surface left to tell the user
               // on — a SnackBar needs a context this State no longer has. The
               // console is the only sink, and it is the one
@@ -494,8 +488,10 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
               // text save. Without it a throwing DAO escapes as an unhandled
               // async error from teardown, which reads as a framework fault
               // rather than a lost edit.
-              .catchError((Object e) =>
-                  debugPrint('ClarifyCard: dispose flush failed: $e')),
+              .catchError((Object e) {
+                debugPrint('ClarifyCard: dispose flush failed: $e');
+                return false;
+              }),
         );
       }
     }
@@ -533,12 +529,11 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     // An emptied notes field must null the column, not store `''`: every
     // `notes == null` read treats an empty string as "has notes". `null` is
     // "no change" to the DAO, so clearing has to travel as the clear flag.
-    await ref.read(databaseProvider).todoDao.updateFields(
-          _subjectId,
-          title: trimmedTitle,
-          notes: trimmedNotes.isNotEmpty ? trimmedNotes : null,
-          clearNotes: trimmedNotes.isEmpty,
-        );
+    // The baselines move only if the write landed: a deleted Outcome keeps
+    // them, so nothing mistakes the unsaved text for saved.
+    final landed =
+        await _tagNotifier.updateTitleAndNotes(trimmedTitle, trimmedNotes);
+    if (!landed) return;
     _baselineTitle = trimmedTitle;
     _baselineNotes = trimmedNotes;
   }
@@ -557,34 +552,19 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     // `_baselineEnergy` would drift away from the column and leave the field
     // permanently dirty to `_adoptFromSubject`.
     _baselineEnergy = level;
-    final db = ref.read(databaseProvider);
-    await db.todoDao.updateFields(
-      _subjectId,
-      energyLevel: level,
-      clearEnergyLevel: level == null,
-    );
+    await _tagNotifier.updateEnergyLevel(level);
   }
 
   Future<void> _saveTimeEstimate(int? minutes) async {
     if (_isCapture) return;
     _baselineTimeEstimate = minutes;
-    final db = ref.read(databaseProvider);
-    await db.todoDao.updateFields(
-      _subjectId,
-      timeEstimate: minutes,
-      clearTimeEstimate: minutes == null,
-    );
+    await _tagNotifier.updateTimeEstimate(minutes);
   }
 
   Future<void> _saveDueDate(DateTime? date, {required bool clear}) async {
     if (_isCapture) return;
     _baselineDueDate = date;
-    final db = ref.read(databaseProvider);
-    await db.todoDao.updateFields(
-      _subjectId,
-      dueDate: date,
-      clearDueDate: clear,
-    );
+    await _tagNotifier.updateDueDate(date, clear: clear);
   }
 
   // Tag edits on an Outcome route through [TaskDetailNotifier], which owns the
@@ -603,33 +583,53 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
       ref.read(taskDetailNotifierProvider(_subjectId));
 
   Future<void> _saveAssignProject(String tagId) async {
-    if (!_isCapture) return _tagNotifier.assignProject(tagId);
+    if (!_isCapture) {
+      await _tagNotifier.assignProject(tagId);
+      return;
+    }
     final db = ref.read(databaseProvider);
-    await db.captureDao.assignProjectHint(
+    final userId = ref.read(currentUserIdProvider);
+    await db.captureDao.writeIfCapturePresent(
       _subjectId,
-      tagId,
-      ref.read(currentUserIdProvider),
+      () => db.captureDao.assignProjectHint(_subjectId, tagId, userId),
     );
   }
 
   Future<void> _saveClearProject() async {
-    if (!_isCapture) return _tagNotifier.clearProject();
-    await ref.read(databaseProvider).captureDao.clearProjectHint(_subjectId);
+    if (!_isCapture) {
+      await _tagNotifier.clearProject();
+      return;
+    }
+    final db = ref.read(databaseProvider);
+    await db.captureDao.writeIfCapturePresent(
+      _subjectId,
+      () => db.captureDao.clearProjectHint(_subjectId),
+    );
   }
 
   Future<void> _saveAssignContext(String tagId) async {
-    if (!_isCapture) return _tagNotifier.assignContextTag(tagId);
+    if (!_isCapture) {
+      await _tagNotifier.assignContextTag(tagId);
+      return;
+    }
     final db = ref.read(databaseProvider);
-    await db.captureDao.assignTagHint(
+    final userId = ref.read(currentUserIdProvider);
+    await db.captureDao.writeIfCapturePresent(
       _subjectId,
-      tagId,
-      ref.read(currentUserIdProvider),
+      () => db.captureDao.assignTagHint(_subjectId, tagId, userId),
     );
   }
 
   Future<void> _saveRemoveContext(String tagId) async {
-    if (!_isCapture) return _tagNotifier.removeContextTag(tagId);
-    await ref.read(databaseProvider).captureDao.removeTagHint(_subjectId, tagId);
+    if (!_isCapture) {
+      await _tagNotifier.removeContextTag(tagId);
+      return;
+    }
+    final db = ref.read(databaseProvider);
+    await db.captureDao.writeIfCapturePresent(
+      _subjectId,
+      () => db.captureDao.removeTagHint(_subjectId, tagId),
+    );
   }
 
   // Draft tag bookkeeping — no-ops on an Outcome card, where tag edits are
@@ -955,9 +955,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
               icon: const Icon(Icons.calendar_today_outlined, size: 16),
               label: Text(
                 _dueDate != null
-                    ? '${_dueDate!.year}-'
-                        '${_dueDate!.month.toString().padLeft(2, '0')}-'
-                        '${_dueDate!.day.toString().padLeft(2, '0')}'
+                    ? formatDueDateLabel(_dueDate!)
                     : 'Set date',
               ),
               style: OutlinedButton.styleFrom(
@@ -986,6 +984,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
         const SizedBox(height: 12),
         ProcessToHandlers(
           subject: subject,
+          titleAsActionOnWaitingFor: true,
           disabled: disabled,
           // On a Capture, Done is not a clarify-time destination — an Outcome
           // captured already-complete is a contradiction, and completing one
@@ -1001,7 +1000,8 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
           // coupling that used to live in [_onAfterRoute] for Next moved into
           // the dialog handler ([ProcessToHandlers._nextWithDialog]), so Next
           // here reports `nextActionDialog` and its title-mirror branch below no
-          // longer fires. Only `waitingFor` still mirrors from [_onAfterRoute].
+          // longer fires. Waiting For mirrors inside its routing write
+          // ([ProcessToHandlers.titleAsActionOnWaitingFor]).
           except: {
             if (_isCapture) ProcessAction.done,
           },
@@ -1029,13 +1029,15 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   /// that mode, because in n-m the Capture is provenance and the *Outcome* is
   /// what the fields describe.
   Widget _buildNToM(Capture capture, List<Tag> hints) {
+    final draft = _draft(hints);
     return ListView(
       physics: const ClampingScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
       children: [
         CaptureOutcomesSection(
           capture: capture,
-          tagIds: _draft(hints).tagIds,
+          tagIds: draft.tagIds,
+          personTagHintIds: draft.personTagHintIds,
           onCompleted: _onCaptureCompleted,
         ),
         // The footer survives into n-m unchanged: leaving mid-split is exactly
@@ -1072,38 +1074,13 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
       try {
         // Tapping a destination does not move focus, so the focus-loss trigger
         // has not fired for an edit made right up to the tap. Save it before
-        // yielding — and before the mirror below reads the title.
+        // yielding.
         await _saveOutcomeText();
-        // Title-as-action coupling for **Waiting For** only. Routing to Waiting
-        // For is intent-only and captures no phrase, so mirror the current
-        // title into the Action here so the row leaves with a defined one.
-        //
-        // Next is no longer handled here: with the dialog modifier on for both
-        // arms (issue #723), Next reports `nextActionDialog`, and its fallback
-        // (title-as-action, seeded from the *live* title) lives inside
-        // [ProcessToHandlers._nextWithDialog]. So this branch fires only for
-        // `waitingFor`.
-        //
-        // Only mirror when the Outcome is Actionless (no `current` Action
-        // row); otherwise the user has already written a deliberate phrase and
-        // we must not clobber it. The Action entity is the evidence, not the
-        // cursor (ADR-0001 story 3).
-        //
-        // On a Capture the mirror travels in the draft (see [_draft]) and is
-        // applied by clarifyCaptureToOutcome as it creates the Outcome, so
-        // there is nothing to write here either.
-        if (action == ProcessAction.waitingFor) {
-          final title = _titleCtrl?.text.trim() ?? '';
-          if (title.isNotEmpty) {
-            // One atomic call: the actionless check and the mirror write share
-            // a transaction, so a `current` Action landed by sync between the
-            // two can no longer be clobbered (issue #501).
-            await ref
-                .read(databaseProvider)
-                .todoDao
-                .setCurrentActionTextIfActionless(_subjectId, title);
-          }
-        }
+        // The title-as-action fallback for Waiting For no longer lives here:
+        // it is part of the routing transaction itself
+        // ([ProcessToHandlers.titleAsActionOnWaitingFor]), so it cannot land
+        // separately from the route (#709). Next's lives in
+        // [ProcessToHandlers._nextWithDialog].
       } catch (_) {
         _report(_kTextSaveFailedMessage);
       }

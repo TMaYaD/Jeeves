@@ -7,6 +7,7 @@ library;
 import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
+import 'package:jeeves/widgets/outcome_review_card.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -27,7 +28,7 @@ GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
 Future<String> _insertClarifiedTask(
   GtdDatabase db, {
   String? actionText,
-  DateTime? lastNextActionCompletionAt,
+  DateTime? actionTerminatedAt,
   DateTime? lastClarifiedAt,
   String title = 'Task',
 }) async {
@@ -39,9 +40,6 @@ Future<String> _insertClarifiedTask(
     userId: const Value(_userId),
     intent: const Value('next'),
     createdAt: Value(now),
-    lastNextActionCompletionAt: lastNextActionCompletionAt != null
-        ? Value(lastNextActionCompletionAt)
-        : const Value.absent(),
     lastClarifiedAt:
         lastClarifiedAt != null ? Value(lastClarifiedAt) : const Value.absent(),
   ));
@@ -54,6 +52,18 @@ Future<String> _insertClarifiedTask(
     userId: _userId,
     createdAt: now,
   );
+  // A completed Action after `lastClarifiedAt` is what makes the Outcome Stale.
+  if (actionTerminatedAt != null) {
+    await db.into(db.actions).insert(ActionsCompanion(
+          id: Value('done-$id'),
+          outcomeId: Value(id),
+          userId: const Value(_userId),
+          actionText: const Value('earlier step'),
+          role: const Value('done'),
+          createdAt: Value(actionTerminatedAt),
+          doneAt: Value(actionTerminatedAt),
+        ));
+  }
   return id;
 }
 
@@ -120,7 +130,7 @@ void main() {
         actionText: 'Draft the agenda',
         lastClarifiedAt:
             DateTime.now().subtract(_staleTaskClarifiedOffset).toUtc(),
-        lastNextActionCompletionAt:
+        actionTerminatedAt:
             DateTime.now().subtract(_staleTaskCompletedOffset).toUtc(),
         title: 'Run the retro',
       );
@@ -128,6 +138,7 @@ void main() {
       await _enterReviewStep(tester, db);
 
       expect(find.text('Draft the agenda'), findsOneWidget);
+      expect(find.byType(OutcomeReviewCard), findsOneWidget);
       expect(find.text('Run the retro'), findsOneWidget,
           reason: 'the Action is subtext under the Outcome title, not instead');
       expect(find.text('Updated since last clarified'), findsOneWidget);
@@ -169,7 +180,7 @@ void main() {
         db,
         actionText: 'Email Trixy',
         lastClarifiedAt: clarifiedAt,
-        lastNextActionCompletionAt: completedAt,
+        actionTerminatedAt: completedAt,
         title: 'Waiting on Trixy',
       );
       await _attachPersonTag(db, id, name: 'Trixy', tagId: 'p-trixy');
@@ -197,7 +208,7 @@ void main() {
         db,
         actionText: 'Draft email',
         lastClarifiedAt: clarifiedAt,
-        lastNextActionCompletionAt: completedAt,
+        actionTerminatedAt: completedAt,
         title: 'No delegate stale',
       );
 
@@ -209,7 +220,8 @@ void main() {
     });
 
     testWidgets(
-        'actionless non-delegated task omits both keep variants',
+        'actionless non-delegated task offers "Still relevant" to defer the '
+        'question',
         (tester) async {
       await _insertClarifiedTask(
         db,
@@ -219,7 +231,7 @@ void main() {
 
       await _enterReviewStep(tester, db);
 
-      expect(find.text('Still relevant'), findsNothing);
+      expect(find.text('Still relevant'), findsOneWidget);
       expect(find.text('Still waiting'), findsNothing);
       expect(find.text('No next action defined'), findsOneWidget);
     });
@@ -228,7 +240,7 @@ void main() {
         'recently-clarified delegated task is filtered out of the review queue',
         (tester) async {
       // Same shape as the stale-delegated case, but lastClarifiedAt is AFTER
-      // lastNextActionCompletionAt — so the staleness filter must exclude it.
+      // the Action's completion — so the staleness filter must exclude it.
       final completedAt =
           DateTime.now().subtract(_staleTaskCompletedOffset).toUtc();
       final clarifiedAt = DateTime.now().toUtc();
@@ -236,7 +248,7 @@ void main() {
         db,
         actionText: 'Email Trixy',
         lastClarifiedAt: clarifiedAt,
-        lastNextActionCompletionAt: completedAt,
+        actionTerminatedAt: completedAt,
         title: 'Recently re-clarified',
       );
       await _attachPersonTag(db, id, name: 'Trixy', tagId: 'p-trixy');
@@ -262,7 +274,7 @@ void main() {
         db,
         actionText: 'Sync with team',
         lastClarifiedAt: clarifiedAt,
-        lastNextActionCompletionAt: completedAt,
+        actionTerminatedAt: completedAt,
         title: 'Multi-delegate',
       );
       // Tag names are returned ORDER BY name ASC by getPersonTagsForTodos.

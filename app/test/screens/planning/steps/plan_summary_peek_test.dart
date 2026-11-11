@@ -1,6 +1,6 @@
 /// Widget tests for the Outcome peek affordance on the Plan Summary step (#462).
 ///
-/// A plain tap on a card (outside multi-select) opens the read-only
+/// A plain tap on a card (outside multi-select) opens the editable
 /// [OutcomePeekSheet]; the tap never selects/skips/undoes, and dismissal
 /// restores scroll and selection. Inside multi-select, tap keeps its
 /// selection meaning on Pending cards and is inert on Today/Skipped cards —
@@ -16,6 +16,7 @@
 /// the sheet opens.
 library;
 
+import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -24,6 +25,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
+import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/screens/planning/steps/plan_summary_step.dart';
 import 'package:jeeves/widgets/outcome_peek_sheet.dart';
 
@@ -68,6 +70,14 @@ Widget _harness(GtdDatabase db, List<Todo> todos) {
   return ProviderScope(
     overrides: [
       databaseProvider.overrideWithValue(db),
+      // The peek watches its Outcome live; a real Drift watch hangs
+      // pumpAndSettle (TESTING.md), so each row's streams are stubbed.
+      for (final t in todos) ...[
+        taskDetailTodoProvider(t.id).overrideWith((_) => Stream.value(t)),
+        taskTagsProvider(t.id).overrideWith((_) => Stream.value([])),
+        currentActionProvider(t.id).overrideWith((_) => Stream.value(null)),
+        plannedActionsProvider(t.id).overrideWith((_) => Stream.value([])),
+      ],
       _testTodosProvider.overrideWith((_) => todos),
       nextForFocusSessionPlanningProvider.overrideWith((ref) {
         final state = ref.watch(focusSessionPlanningProvider);
@@ -129,6 +139,13 @@ FocusSessionPlanningState _planningState(WidgetTester tester) =>
 FocusSessionPlanningNotifier _planningNotifier(WidgetTester tester) =>
     ProviderScope.containerOf(tester.element(find.byType(PlanSummaryStep)))
         .read(focusSessionPlanningProvider.notifier);
+
+/// The task list's scrollable. The search field's own `Scrollable` makes a
+/// bare `byType(Scrollable)` ambiguous.
+final _listScrollable = find.descendant(
+  of: find.byType(ListView),
+  matching: find.byType(Scrollable),
+);
 
 double _scrollOffset(WidgetTester tester) => tester
     .state<ScrollableState>(
@@ -292,7 +309,8 @@ void main() {
       await _pumpStep(tester, db, _manyTodos(20));
 
       const target = 'Task 12';
-      await tester.scrollUntilVisible(find.text(target), 120);
+      await tester.scrollUntilVisible(find.text(target), 120,
+          scrollable: _listScrollable);
       await tester.pumpAndSettle();
 
       final before = _scrollOffset(tester);
@@ -310,6 +328,47 @@ void main() {
       // Scroll offset preserved; nothing selected/skipped by the peek.
       final after = _scrollOffset(tester);
       expect(after, closeTo(before, 1));
+      final state = _planningState(tester);
+      expect(state.reviewedTaskIds, isEmpty);
+      expect(state.pendingSelectedTaskIds, isEmpty);
+    });
+
+    testWidgets('editing in the peek leaves selection and scroll untouched',
+        (tester) async {
+      // The edit writes through the real database, so the row must exist; the
+      // list itself is the stubbed one.
+      await tester.runAsync(() => db.into(db.todos).insert(TodosCompanion(
+            id: const Value('t12'),
+            title: const Value('Task 12'),
+            createdAt: Value(DateTime.now()),
+            userId: const Value('local'),
+          )));
+      await _pumpStep(tester, db, _manyTodos(20));
+
+      await tester.scrollUntilVisible(find.text('Task 12'), 120,
+          scrollable: _listScrollable);
+      await tester.pumpAndSettle();
+      final before = _scrollOffset(tester);
+      expect(before, greaterThan(0),
+          reason: 'test must genuinely scroll away from the top');
+
+      await tester.tap(find.text('Task 12'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('outcome_peek_time')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('10m'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+      await tester.runAsync(() => pumpEventQueue());
+      expect(find.byType(OutcomePeekSheet), findsNothing);
+
+      final row = await tester.runAsync(() => (db.select(db.todos)
+            ..where((t) => t.id.equals('t12')))
+          .getSingle());
+      expect(row!.timeEstimate, 10, reason: 'the edit must actually be saved');
+
+      expect(_scrollOffset(tester), closeTo(before, 1));
       final state = _planningState(tester);
       expect(state.reviewedTaskIds, isEmpty);
       expect(state.pendingSelectedTaskIds, isEmpty);

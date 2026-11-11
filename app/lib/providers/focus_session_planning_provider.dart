@@ -29,7 +29,10 @@ import '../services/notification_service.dart';
 import '../utils/snapshot_nav.dart';
 import 'auth_provider.dart';
 import 'clarify_retention_provider.dart';
+import 'clock_provider.dart';
 import 'database_provider.dart';
+import 'nudge_triggers.dart' show lastAnchorBefore;
+import 'shutdown_settings_provider.dart' show shutdownSettingsProvider;
 import 'synced_preferences_provider.dart';
 
 export '../database/gtd_database.dart' show Todo, FocusSession, Tag;
@@ -250,6 +253,60 @@ final nextForFocusSessionPlanningProvider =
       .toList());
 });
 
+/// Which list an Outcome offered by the plan-building search came from.
+enum OffUpNextReason {
+  someday('Someday'),
+  waitingFor('Waiting For'),
+  aboveEnergy('Above today\'s energy');
+
+  const OffUpNextReason(this.label);
+  final String label;
+}
+
+/// An Outcome the plan-building search offers outside Up Next, with the list
+/// it came from.
+typedef OffUpNextCandidate = ({Todo todo, OffUpNextReason reason});
+
+final _offUpNextPoolProvider = StreamProvider.autoDispose<List<Todo>>((ref) {
+  return ref.watch(databaseProvider).todoDao.watchOffUpNextPlanningCandidates();
+});
+
+final _allNextPoolProvider = StreamProvider.autoDispose<List<Todo>>((ref) {
+  return ref.watch(databaseProvider).todoDao.watchNext();
+});
+
+/// Outcomes the plan-building search can offer that are not in Up Next:
+/// Someday/Maybe, Waiting-For-only, and Next Outcomes hidden by today's
+/// energy. Already-selected and already-reviewed Outcomes are left out.
+///
+/// Only watch this while a search is active. It is a plain [Provider] over two
+/// auto-disposed streams, with a not-yet-loaded stream counting as empty, so
+/// the first keystroke never shows a spinner.
+final offUpNextForFocusSessionPlanningProvider =
+    Provider.autoDispose<List<OffUpNextCandidate>>((ref) {
+  final planningState = ref.watch(focusSessionPlanningProvider);
+  final taken = {
+    ...planningState.reviewedTaskIds,
+    ...planningState.pendingSelectedTaskIds,
+  };
+  final dayEnergy = planningState.energyLevel;
+  final pool = ref.watch(_offUpNextPoolProvider).value ?? const [];
+  final nextAll = ref.watch(_allNextPoolProvider).value ?? const [];
+  return [
+    for (final t in pool)
+      if (!taken.contains(t.id))
+        (
+          todo: t,
+          reason: t.intent == 'maybe'
+              ? OffUpNextReason.someday
+              : OffUpNextReason.waitingFor,
+        ),
+    for (final t in nextAll)
+      if (!taken.contains(t.id) && !_energyFits(t.energyLevel, dayEnergy))
+        (todo: t, reason: OffUpNextReason.aboveEnergy),
+  ];
+});
+
 /// Tasks selected for today (in-memory pending list, ordered by selection).
 final focusSessionPlanningSelectedTasksProvider =
     StreamProvider<List<Todo>>((ref) {
@@ -289,6 +346,45 @@ final skippedNextForFocusSessionPlanningProvider =
   return db.todoDao.watchTodosById(skippedIds);
 });
 
+/// How many planning periods an Actionless Outcome stays out of the Task
+/// Review queue after it was last clarified.
+const actionlessReviewIntervalDays = 7;
+
+/// The instant before which an Outcome's `last_clarified_at` is old enough for
+/// the Actionless branch of the Task Review queue to ask about it again.
+///
+/// Measured from the start of the current planning period — the most recent
+/// Evening Shutdown anchor (ADR-0020), computed with the same arithmetic as
+/// `lastShutdownAnchorProvider` but read at the moment of use, so it arms no
+/// wall-clock boundary timer — stepped back
+/// `actionlessReviewIntervalDays - 1` calendar days, so an Outcome clarified
+/// during Monday's planning surfaces on the next Monday, not the Tuesday
+/// after. The step is a local calendar step, which keeps the wall-clock time
+/// across a DST change. Anything clarified during today's planning is at or
+/// after the period start and so can never resurface within the same period.
+///
+/// The provider hands out a function, not a value: a value would be computed
+/// once when the provider first builds and then go stale across the Evening
+/// Shutdown boundary in a long-running app. Call the function each time the
+/// cutoff is needed. It reads the clock and the settings live, and the
+/// provider watches nothing, so a settings load never rebuilds its dependents
+/// (a returned `DateTime` was equal across such rebuilds; a fresh closure
+/// would not be).
+final actionlessReviewCutoffProvider = Provider<DateTime Function()>((ref) {
+  return () {
+    final shutdownTime = ref.read(shutdownSettingsProvider).shutdownTime;
+    final periodStart = lastAnchorBefore(
+        ref.read(clockProvider)(), shutdownTime.hour, shutdownTime.minute);
+    return DateTime(
+      periodStart.year,
+      periodStart.month,
+      periodStart.day - (actionlessReviewIntervalDays - 1),
+      periodStart.hour,
+      periodStart.minute,
+    );
+  };
+});
+
 /// Item counts feeding the Daily Planning duration-estimate intro (#486).
 ///
 /// Count-only reads that touch no snapshot lifecycle — the inbox and review
@@ -304,7 +400,9 @@ final focusSessionPlanningIntroCountsProvider =
         (ref) async {
   final db = ref.watch(databaseProvider);
   final inbox = await db.captureDao.watchInbox().first;
-  final review = await db.todoDao.getNeedsReview();
+  final review = await db.todoDao.getNeedsReview(
+    actionlessReviewCutoff: ref.watch(actionlessReviewCutoffProvider)(),
+  );
   return (inboxCount: inbox.length, reviewCount: review.length);
 });
 
@@ -357,6 +455,7 @@ class FocusSessionPlanningState {
     this.reviewActions = const {},
     this.reviewPersonTags = const {},
     this.reviewActionTexts = const {},
+    this.reviewStaleIds = const {},
   });
 
   final int currentStep;
@@ -423,6 +522,11 @@ class FocusSessionPlanningState {
   /// next-action grain (ADR-0001 story 3).
   final Map<String, String> reviewActionTexts;
 
+  /// Ids in [reviewNav.items] that are Stale: an Action of the Outcome was
+  /// completed after it was last clarified. Drives the review card's Stale
+  /// hint.
+  final Set<String> reviewStaleIds;
+
   FocusSessionPlanningState copyWith({
     int? currentStep,
     int? availableMinutes,
@@ -437,6 +541,7 @@ class FocusSessionPlanningState {
     Map<int, ReviewActionRecord>? reviewActions,
     Map<String, List<Tag>>? reviewPersonTags,
     Map<String, String>? reviewActionTexts,
+    Set<String>? reviewStaleIds,
   }) =>
       FocusSessionPlanningState(
         currentStep: currentStep ?? this.currentStep,
@@ -452,6 +557,7 @@ class FocusSessionPlanningState {
         reviewActions: reviewActions ?? this.reviewActions,
         reviewPersonTags: reviewPersonTags ?? this.reviewPersonTags,
         reviewActionTexts: reviewActionTexts ?? this.reviewActionTexts,
+        reviewStaleIds: reviewStaleIds ?? this.reviewStaleIds,
       );
 }
 
@@ -553,7 +659,9 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
         // surface here. The step always renders — an empty snapshot shows the
         // empty-state view and the user clicks Next to advance (CONTEXT.md
         // § Wizard: steps do not auto-skip).
-        final items = await _db.todoDao.getNeedsReview();
+        final items = await _db.todoDao.getNeedsReview(
+          actionlessReviewCutoff: ref.read(actionlessReviewCutoffProvider)(),
+        );
         if (!ref.mounted) return;
         // Batched person-tag lookup so the stale waiting-for card variant
         // can render delegate names without a per-frame DAO call.
@@ -567,7 +675,14 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
           items.map((t) => t.id).toSet(),
         );
         if (!ref.mounted) return;
+        // Which of them are Stale (an Action finished after the last
+        // clarification) — the same SQL as the queue predicate's Stale branch.
+        final staleIds = await _db.todoDao.getActionTerminationStaleIds(
+          items.map((t) => t.id).toSet(),
+        );
+        if (!ref.mounted) return;
         state = state.copyWith(
+          reviewStaleIds: staleIds,
           reviewNav: SnapshotNav<Todo>(items: items),
           reviewActions: {},
           reviewPersonTags: personTags,

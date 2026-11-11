@@ -79,6 +79,25 @@ void main() {
       expect(await service.exists('missing'), isFalse);
     });
 
+    test('clarifyToOutcome and stampClarified report false for a vanished Outcome',
+        () async {
+      expect(
+        await service.clarifyToOutcome('missing',
+            to: RoutingKind.nextAction, actionText: 'Call Alice'),
+        isFalse,
+      );
+      expect(await service.stampClarified('missing'), isFalse);
+      expect(await db.select(db.actions).get(), isEmpty);
+    });
+
+    test('clarifyToOutcome and stampClarified report true when they land',
+        () async {
+      await db.into(db.todos).insert(_capture(id: 'a', title: 'Item'));
+
+      expect(await service.clarifyToOutcome('a', to: RoutingKind.maybe), isTrue);
+      expect(await service.stampClarified('a'), isTrue);
+    });
+
     test('clarifyToOutcome to nextAction routes and stamps', () async {
       await db.into(db.todos).insert(_capture(id: 'a', title: 'Item'));
 
@@ -359,7 +378,7 @@ void main() {
           title: 'Orphan',
           outcomeId: 'o-orphan',
         ),
-        throwsA(isA<StateError>()),
+        throwsA(isA<CaptureNotFoundError>()),
       );
       // The transaction rolled back — no orphan Outcome or link persisted.
       expect(await _rowOrNull(db, 'o-orphan'), isNull);
@@ -465,7 +484,7 @@ void main() {
     test('throws when the Capture is gone', () async {
       await expectLater(
         service.discardCapture('missing'),
-        throwsA(isA<StateError>()),
+        throwsA(isA<CaptureNotFoundError>()),
       );
     });
 

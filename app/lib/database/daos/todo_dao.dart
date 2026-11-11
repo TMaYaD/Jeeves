@@ -158,9 +158,9 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   /// `energy_level` / `time_estimate` (D2) — leaving UI and providers untouched.
   /// The raw `todos.energy_level` / `time_estimate` columns remain the write
   /// mirror and the Actionless draft store (D1/D3).
-  /// `last_next_action_completion_at` is live — stamped by the focus-session
-  /// close and read by the re-clarification predicate. [t] is the `todos`
-  /// table's SQL alias in the enclosing query.
+  /// `last_next_action_completion_at` is retired (written and read by nothing
+  /// else) but still projected so the column round-trips through sync. [t] is
+  /// the `todos` table's SQL alias in the enclosing query.
   ///
   /// Queries carrying this projection must list `actions` in `readsFrom` so a
   /// synced Action write re-emits their watchers.
@@ -297,6 +297,30 @@ EXISTS (
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
+  /// Stream of the active Outcomes that sit on Someday/Maybe or on Waiting
+  /// For only — the pool the Daily Planning search offers below its Up Next
+  /// matches.
+  ///
+  /// ```text
+  /// done_at IS NULL ∧
+  ///   (intent='maybe' ∨ (intent='next' ∧ actionless ∧ PersonBlocked))
+  /// ```
+  ///
+  /// The second branch is exactly the quadrant [watchNext] strips: it is on
+  /// Waiting For and not on Next. Done and trashed Outcomes are excluded by
+  /// `done_at` and by the Intent test; Inbox Captures are not Outcomes and
+  /// never appear here.
+  Stream<List<Todo>> watchOffUpNextPlanningCandidates() {
+    return customSelect(
+      'SELECT ${todoProjectionSql('todos')} FROM todos '
+      "WHERE done_at IS NULL AND ("
+      "intent = 'maybe' OR "
+      "(intent = 'next' AND NOT $_excludeActionlessPersonBlockedClause)) "
+      'ORDER BY created_at',
+      readsFrom: {todos, todoTags, tags, actions},
+    ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
+  }
+
   /// Stream of Outcomes on the Next List.
   ///
   /// The Next List rule is:
@@ -329,6 +353,25 @@ EXISTS (
       tagIds: tagIds,
       excludeActionlessPersonBlocked: true,
     );
+  }
+
+  /// Stream of every active Outcome carrying [projectTagId], whatever its
+  /// Intent (`next` or `maybe`): not done, not trashed.
+  ///
+  /// Unlike [watchNext] this applies no Next List rule and no context-tag
+  /// filter — a Project's page answers "what is in this project", so a
+  /// someday Outcome or an actionless person-blocked one still shows.
+  Stream<List<Todo>> watchByProject(String projectTagId) {
+    return customSelect(
+      'SELECT ${todoProjectionSql('todos')} FROM todos '
+      'WHERE done_at IS NULL '
+      "AND intent IN ('next', 'maybe') "
+      'AND EXISTS (SELECT 1 FROM todo_tags tt '
+      '            WHERE tt.todo_id = todos.id AND tt.tag_id = ?) '
+      'ORDER BY created_at',
+      variables: [Variable(projectTagId)],
+      readsFrom: {todos, todoTags, actions},
+    ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
   /// Stream of "Waiting For" todos.
@@ -579,6 +622,12 @@ EXISTS (
     });
   }
 
+  /// Whether the `todos` row [todoId] is present. Called inside a write's
+  /// transaction so the answer cannot go stale before that write lands.
+  Future<bool> _todoRowExists(String todoId) async =>
+      await (select(todos)..where((t) => t.id.equals(todoId))).getSingleOrNull() !=
+      null;
+
   // ---------------------------------------------------------------------------
   // Intent mutations (orthogonal to GTD state)
   // ---------------------------------------------------------------------------
@@ -627,10 +676,15 @@ EXISTS (
   /// timestamp updated). DAO methods that mutate `todos` directly stamp
   /// internally and do not need this helper.
   ///
+  /// Returns `true` iff the Outcome was present and got stamped. The presence
+  /// check runs inside the write's own transaction, so a row hard-deleted
+  /// (e.g. by sync) before the write reports `false` and writes nothing.
+  ///
   /// [now] overrides the timestamp for deterministic testing.
-  Future<void> stampLastClarifiedAt(String todoId, {DateTime? now}) async {
+  Future<bool> stampLastClarifiedAt(String todoId, {DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc();
-    await attachedDatabase.capturing(() async {
+    final landed = await attachedDatabase.capturing(() async {
+      if (!await _todoRowExists(todoId)) return false;
       await (update(todos)..where((t) => t.id.equals(todoId))).write(
           TodosCompanion(
         lastClarifiedAt: Value(ts),
@@ -640,8 +694,10 @@ EXISTS (
         'last_clarified_at': encodeInstant(ts),
         'updated_at': encodeInstant(ts),
       });
-      attachedDatabase.notifyTodosViewWrite();
+      return true;
     });
+    if (landed) attachedDatabase.notifyTodosViewWrite();
+    return landed;
   }
 
   /// Writes the Outcome's `current` Action from a single phrase and stamps
@@ -672,55 +728,24 @@ EXISTS (
     if (logChanged) attachedDatabase.notifyTimeLogsViewWrite();
   }
 
-  /// The **atomic** actionless-mirror primitive (issue #501): check whether the
-  /// Outcome is Actionless and — only if it is — write [text] as its next
-  /// action, both inside **one** transaction. Returns `true` iff it wrote.
-  ///
-  /// The check reads the `current` Action via [ActionDao.getCurrentAction],
-  /// which runs on this transaction's executor (Drift zone routing), so a
-  /// `current` Action landed by sync cannot slip between the check and the
-  /// write. This is the single-call replacement for the read-then-write TOCTOU
-  /// the ClarifyCard title-mirror used to run across two awaits: an Outcome the
-  /// user has already given a deliberate phrase (a `current` Action exists) is
-  /// left untouched, never clobbered by a mirrored title.
-  ///
-  /// Write path: identical to [setCurrentActionText] on an Actionless Outcome —
-  /// the same Action write, stamped with one shared [ts], and the same
-  /// post-commit view-notifies. Skip path (a `current` Action exists): no
-  /// writes, no stamp, no convergence, no notify.
-  ///
-  /// Blank [text] is a caller error (the mirror only fires with a non-blank
-  /// title), mirroring [ActionDao.setCurrentAction]'s contract.
-  Future<bool> setCurrentActionTextIfActionless(
-      String todoId, String text, {DateTime? now}) async {
-    final ts = (now ?? DateTime.now()).toUtc();
-    final normalized = text.trim();
-    if (normalized.isEmpty) {
-      throw ArgumentError.value(
-        text,
-        'text',
-        'setCurrentActionTextIfActionless requires non-blank text',
-      );
-    }
-    var logChanged = false;
-    final wrote = await attachedDatabase.capturing(() async {
-      final current = await attachedDatabase.actionDao.getCurrentAction(todoId);
-      if (current != null) return false;
-      // Non-blank text here, so this never supersedes — logChanged stays false.
-      logChanged = await _applySetCurrentActionText(todoId, normalized, ts);
+  /// Runs [write] only if local storage holds Outcome [todoId] when the
+  /// transaction commits. The existence check and [write] share one
+  /// [GtdDatabase.capturing] transaction, so a delete cannot slip between them.
+  /// Returns whether the write landed; a skipped write authors no op and sends
+  /// no view notify. Surfaces use this instead of latching "subject missing"
+  /// themselves (#447).
+  Future<bool> writeIfOutcomePresent(
+    String todoId,
+    Future<void> Function() write,
+  ) {
+    return attachedDatabase.capturing(() async {
+      if (!await _todoRowExists(todoId)) return false;
+      await write();
       return true;
     });
-    if (wrote) {
-      // See [setCurrentActionText]: view writes report changes()==0 (#342).
-      attachedDatabase.notifyTodosViewWrite();
-      attachedDatabase.notifyActionsViewWrite();
-      if (logChanged) attachedDatabase.notifyTimeLogsViewWrite();
-    }
-    return wrote;
   }
 
-  /// Transaction body shared by [setCurrentActionText] and
-  /// [setCurrentActionTextIfActionless]: the Action write and the
+  /// Transaction body of [setCurrentActionText]: the Action write and the
   /// `last_clarified_at` / `updated_at` stamp, encoded once. Runs inside the
   /// caller's transaction; the caller notifies after commit. [normalized] is
   /// already trimmed — blank makes the Outcome Actionless (the blank→NULL
@@ -778,14 +803,12 @@ EXISTS (
 done_at IS NULL
 AND intent = 'next'
 AND (
-  (last_next_action_completion_at IS NOT NULL
-   AND (last_clarified_at IS NULL
-        OR last_clarified_at < last_next_action_completion_at))
-  OR ($_latestActionTerminationClause IS NOT NULL
+  ($_latestActionTerminationClause IS NOT NULL
       AND (last_clarified_at IS NULL
            OR last_clarified_at < $_latestActionTerminationClause))
   OR (
-    NOT $_hasCurrentActionClause
+    (last_clarified_at IS NULL OR last_clarified_at < ?)
+    AND NOT $_hasCurrentActionClause
     AND NOT EXISTS (
       SELECT 1 FROM todo_tags tt
       JOIN tags tg ON tg.id = tt.tag_id
@@ -845,23 +868,44 @@ AND (
   /// One-shot snapshot of tasks needing re-clarification: Stale or Actionless
   /// per spec.
   ///
-  /// Stale: engaged with more recently than last clarified, read from two
-  /// independent signals. `last_next_action_completion_at` means "worked on in
-  /// a session" and is stamped once, at session close, by the Review surface;
-  /// [_latestActionTerminationClause] means "an Action was completed" and comes
-  /// from the Action rows themselves (ADR-0001 story 4), so completing the
-  /// current Action surfaces the Outcome even when no session ever closed.
+  /// Stale: an Action was completed after the Outcome was last clarified,
+  /// read from the Action rows themselves ([_latestActionTerminationClause],
+  /// ADR-0001 story 4). Nothing else makes an Outcome Stale: a day that closed
+  /// with the Outcome still on the Plan says nothing about it.
   /// Actionless: no current Action row AND not delegated. Delegated tasks
   /// (carrying any person-typed tag) are excluded from the actionless branch —
   /// their cadence belongs to the weekly Waiting For review, not the daily
-  /// re-clarification surface.
-  Future<List<Todo>> getNeedsReview() {
+  /// re-clarification surface. The Actionless branch is time-boxed: an
+  /// Outcome clarified at or after [actionlessReviewCutoff] stays out of it
+  /// (one never clarified is always in). The DAO holds no clock, so the caller
+  /// derives the cutoff from the planning period (`actionlessReviewCutoffProvider`).
+  Future<List<Todo>> getNeedsReview({
+    required DateTime actionlessReviewCutoff,
+  }) {
     return customSelect(
       'SELECT ${todoProjectionSql('todos')} FROM todos '
       'WHERE $_needsReviewWhere ORDER BY created_at',
-      variables: [],
+      variables: [Variable<String>(encodeInstant(actionlessReviewCutoff)!)],
       readsFrom: {todos, todoTags, tags, actions},
     ).get().then((rows) => rows.map((r) => todos.map(r.data)).toList());
+  }
+
+  /// The subset of [ids] that are Stale by Action termination — the same SQL
+  /// as the Stale branch of [getNeedsReview], so the Task Review card's Stale
+  /// hint and the queue's membership cannot drift apart.
+  Future<Set<String>> getActionTerminationStaleIds(Set<String> ids) async {
+    if (ids.isEmpty) return {};
+    final placeholders = List.filled(ids.length, '?').join(', ');
+    final rows = await customSelect(
+      'SELECT todos.id AS id FROM todos '
+      'WHERE todos.id IN ($placeholders) '
+      'AND $_latestActionTerminationClause IS NOT NULL '
+      'AND (last_clarified_at IS NULL '
+      '     OR last_clarified_at < $_latestActionTerminationClause)',
+      variables: [for (final id in ids) Variable<String>(id)],
+      readsFrom: {todos, actions},
+    ).get();
+    return rows.map((r) => r.read<String>('id')).toSet();
   }
 
   /// Returns the IDs of person-typed tags assigned to [todoId].
@@ -976,14 +1020,23 @@ AND (
   /// the two writes must land together: a stamp that fails after the tag
   /// replacement would leave the new delegate set wearing the old clarified
   /// moment, and the task would sort as if it had never been revisited.
-  Future<void> setPersonTagsAndStamp(
+  ///
+  /// A write against an Outcome counts only if it landed: the Outcome's
+  /// presence is checked inside the transaction, and when it is gone nothing
+  /// is written, no op is authored, no watcher is notified, and this returns
+  /// `false`.
+  Future<bool> setPersonTagsAndStamp(
     String todoId,
     Set<String> targetPersonTagIds,
     String userId, {
     DateTime? now,
   }) async {
     final ts = (now ?? DateTime.now()).toUtc();
-    await attachedDatabase.capturing(() async {
+    return attachedDatabase.capturing(() async {
+      final outcomeRow = await (select(todos)
+            ..where((t) => t.id.equals(todoId)))
+          .getSingleOrNull();
+      if (outcomeRow == null) return false;
       await setPersonTagsForTodo(todoId, targetPersonTagIds, userId);
       // Stamped inline rather than through [stampLastClarifiedAt]: that
       // method notifies view watchers itself, and firing that mid-transaction
@@ -1002,6 +1055,7 @@ AND (
       // Person-tag edits move `todo_tags`, which the Outcome surfaces read
       // alongside `todos` — so both groups are notified.
       attachedDatabase.notifyTodosViewWrite(includeTodoTags: true);
+      return true;
     });
   }
 
@@ -1015,8 +1069,8 @@ AND (
   ///
   /// | `to`         | intent  | done_at | current Action           |
   /// |--------------|---------|---------|--------------------------|
-  /// | `nextAction` | 'next'  | clear   | set if `actionText`      |
-  /// | `waitingFor` | 'next'  | clear   | set if `actionText`      |
+  /// | `nextAction` | 'next'  | clear   | set if `actionText`, else set if Actionless and `actionTextIfActionless` |
+  /// | `waitingFor` | 'next'  | clear   | same as `nextAction`     |
   /// | `maybe`      | 'maybe' | clear   | leave                    |
   /// | `done`       | leave   | now     | completed                |
   /// | `trash`      | 'trash' | leave   | leave                    |
@@ -1039,16 +1093,37 @@ AND (
   ///
   /// All writes run inside a single transaction so a failure leaves the row
   /// in its prior state.
-  Future<void> applyRouting(
+  ///
+  /// Returns `true` iff the routing landed. The Outcome's presence is checked
+  /// inside that transaction; an absent row (hard-deleted since the caller
+  /// looked) writes nothing — no Action, no person tags, no notifies — and
+  /// returns `false`.
+  Future<bool> applyRouting(
     String todoId, {
     required RoutingKind to,
     String? actionText,
+    String? actionTextIfActionless,
     Set<String>? personTagIds,
     String? userId,
     DateTime? now,
   }) async {
+    if (actionTextIfActionless != null) {
+      if (to != RoutingKind.nextAction && to != RoutingKind.waitingFor) {
+        throw ArgumentError.value(to, 'to',
+            'actionTextIfActionless is only valid for nextAction / waitingFor');
+      }
+      if (actionText != null) {
+        throw ArgumentError(
+            'actionText and actionTextIfActionless are mutually exclusive');
+      }
+      if (actionTextIfActionless.trim().isEmpty) {
+        throw ArgumentError.value(actionTextIfActionless,
+            'actionTextIfActionless', 'requires non-blank text');
+      }
+    }
     final ts = (now ?? DateTime.now()).toUtc();
     final tsIso = ts.toIso8601String();
+    var wroteFallbackAction = false;
     // Only the Next / Waiting For arms carry a next-action phrase, and only
     // when the caller passes one; those are the arms that write the Action row.
     // An absent [actionText] leaves the Action untouched.
@@ -1057,7 +1132,8 @@ AND (
         actionText != null;
     var actionTerminated = false;
     var logChanged = false;
-    await attachedDatabase.capturing(() async {
+    final landed = await attachedDatabase.capturing(() async {
+      if (!await _todoRowExists(todoId)) return false;
       final captured = switch (to) {
         RoutingKind.nextAction || RoutingKind.waitingFor => <String, Object?>{
               'intent': 'next',
@@ -1122,6 +1198,20 @@ AND (
         }
       }
 
+      if (actionTextIfActionless != null) {
+        // Guarded fallback (the title-as-action mirror): in this same
+        // transaction, so a failed Action write rolls the route back (#709).
+        // An existing `current` Action — deliberate or just synced — wins.
+        final current =
+            await attachedDatabase.actionDao.getCurrentAction(todoId);
+        if (current == null) {
+          await attachedDatabase.actionDao.applySetCurrentAction(
+              todoId, actionTextIfActionless.trim(),
+              ts: ts);
+          wroteFallbackAction = true;
+        }
+      }
+
       if (to == RoutingKind.done) {
         // Achieving the Outcome closes the current Action (ADR-0001 story 4) —
         // the same cascade markDone runs, sharing one apply-variant.
@@ -1139,7 +1229,9 @@ AND (
         }
         await setPersonTagsForTodo(todoId, personTagIds, userId);
       }
+      return true;
     });
+    if (!landed) return false;
 
     // Notify explicitly so the Inbox / Next Actions lists refresh even when the
     // write touched a table they do not name — and so they do not depend solely
@@ -1147,12 +1239,13 @@ AND (
     // start of a new planning day (#342). Person-tag edits also touch
     // `todo_tags`, so refresh those watchers too.
     attachedDatabase.notifyTodosViewWrite(includeTodoTags: personTagIds != null);
-    if (touchesAction || actionTerminated) {
+    if (touchesAction || actionTerminated || wroteFallbackAction) {
       attachedDatabase.notifyActionsViewWrite();
     }
     // A supersede or completion in the cascade closes the current Action's open
     // TimeLog (#476); `time_logs` is a view too, so notify its watchers.
     if (logChanged) attachedDatabase.notifyTimeLogsViewWrite();
+    return true;
   }
 
   static String? _normaliseText(String text) {

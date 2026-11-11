@@ -777,6 +777,62 @@ void main() {
   // plan-section streams are hand-cranked off real DAO reads after each gesture
   // (the same pattern the other row streams use, so no live Drift close-timer
   // outlives the test).
+  group('TaskDetailScreen — due date (issue #445)', () {
+    late GtdDatabase db;
+
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+      db = _openInMemory();
+    });
+    tearDown(() async => db.close());
+
+    final dueDate = DateTime(2030, 3, 15);
+
+    Future<Todo> openWithDueDate(WidgetTester tester) async {
+      await _insertAt(db, id: 'due1', title: 'Has a due date');
+      await tester.runAsync(
+          () => db.todoDao.updateFields('due1', dueDate: dueDate));
+      final todo = (await tester.runAsync(() => db.todoDao.getTodo('due1')))!;
+      final (widget, router) = _buildScreen(db, 'due1', initialTodo: todo);
+      await _showTaskDetail(tester, widget, router, 'due1');
+      return todo;
+    }
+
+    Future<DateTime?> storedDueDate(WidgetTester tester) async =>
+        (await tester.runAsync(() => db.todoDao.getTodo('due1')))!.dueDate;
+
+    testWidgets('dismissing the picker leaves the due date unchanged',
+        (tester) async {
+      await openWithDueDate(tester);
+      await tester.scrollUntilVisible(find.text('Mar 15, 2030'), 200,
+          scrollable: find.byType(Scrollable).first);
+      await tester.tap(find.text('Mar 15, 2030'));
+      await tester.pumpAndSettle();
+      expect(find.byType(DatePickerDialog), findsOneWidget);
+
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+
+      expect(find.byType(DatePickerDialog), findsNothing);
+      expect(await storedDueDate(tester), isNotNull);
+    });
+
+    testWidgets('the Clear date affordance clears the due date',
+        (tester) async {
+      await openWithDueDate(tester);
+      await tester.scrollUntilVisible(find.byTooltip('Clear date'), 200,
+          scrollable: find.byType(Scrollable).first);
+      await tester.tap(find.byTooltip('Clear date'));
+      await tester.pump();
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+
+      expect(await storedDueDate(tester), isNull);
+    });
+  });
+
   // ---------------------------------------------------------------------------
   group('TaskDetailScreen — Plan section (issue #475)', () {
     late GtdDatabase db;
@@ -1581,7 +1637,7 @@ void main() {
         'hist3',
         initialTodo: todo,
         terminatedActions: <TerminatedAction>[
-          (action: done, loggedMinutes: 25),
+          (action: done, loggedMinutes: 125),
           (action: abandoned, loggedMinutes: 0),
         ],
       );
@@ -1592,7 +1648,7 @@ void main() {
 
       final doneLabel = _localDateLabel(DateTime.utc(2026, 3, 4, 12));
       final abandonedLabel = _localDateLabel(DateTime.utc(2026, 3, 2, 12));
-      expect(find.text('Done $doneLabel · 25m'), findsOneWidget);
+      expect(find.text('Done $doneLabel · 2h 5m'), findsOneWidget);
       expect(find.text('Abandoned $abandonedLabel'), findsOneWidget,
           reason: 'zero logged minutes are omitted, not rendered as 0m');
     });
@@ -1821,17 +1877,17 @@ void main() {
       expect((await rawRow('t'))['notes'], 'Ask the barista');
     });
 
-    // CHARACTERISATION, not a requirement — pins today's behaviour so #705
-    // cannot change it silently.
+    // Was a CHARACTERISATION test pinning the `''` write; #705 flipped it to
+    // the requirement it was guarding.
     //
-    // `TaskDetailNotifier.updateNotes` passes `notes:` with no `clearNotes`
-    // flag, so emptying the field on this screen stores `''` rather than
-    // nulling the column — diverging from `ActiveFocusScreen` and
-    // `ClarifyCard`. The backstop deliberately routes through the same
-    // `updateNotes` the focus-loss listener uses, inheriting the divergence
-    // rather than manufacturing a disagreement between the screen's two exits.
-    // Fixing #705 must flip this expectation to `isNull`.
-    testWidgets('an emptied notes field flushes as an empty string, not NULL '
+    // `TaskDetailNotifier.updateNotes` now sends `clearNotes` for an emptied
+    // field, so the backstop nulls the column — and because it deliberately
+    // routes through the same `updateNotes` the focus-loss listener uses, the
+    // screen's two exits still cannot disagree.
+    //
+    // Read raw: `TodoDao.getTodo`'s D2 projection COALESCEs the current
+    // Action's values over the columns, so it cannot tell `''` from NULL here.
+    testWidgets('an emptied notes field flushes as NULL, not an empty string '
         '(#705)', (tester) async {
       final todo =
           await _insertAt(db, id: 't', title: 'Buy milk', notes: 'Ask them');
@@ -1852,7 +1908,81 @@ void main() {
       await tester.enterText(find.byKey(const Key('task_detail_notes')), '');
       await unmountWhileFocused(tester);
 
-      expect((await rawRow('t'))['notes'], '');
+      expect((await rawRow('t'))['notes'], isNull);
+    });
+
+    // The other exit. Focus loss is the primary trigger (ADR-0023), so it gets
+    // its own assertion rather than riding on the teardown backstop's.
+    testWidgets('an emptied notes field nulls the column on focus loss (#705)',
+        (tester) async {
+      final todo =
+          await _insertAt(db, id: 't', title: 'Buy milk', notes: 'Ask them');
+      final (widget, router) = _buildScreen(db, 't', initialTodo: todo);
+      await _showTaskDetail(tester, widget, router, 't');
+
+      await openNotesEditor(tester);
+      await tester.enterText(find.byKey(const Key('task_detail_notes')), '');
+      await loseFocus(tester);
+
+      expect((await rawRow('t'))['notes'], isNull);
+    });
+
+    // #705 decided the trim question the way `updateTitle`, `ActiveFocusScreen`
+    // and `ClarifyCard` already had: whitespace-only is empty. Without the trim
+    // this screen would store `'   '` — a third answer, and one every
+    // `notes == null` read would score as "has notes".
+    testWidgets('whitespace-only notes null the column too (#705)',
+        (tester) async {
+      final todo =
+          await _insertAt(db, id: 't', title: 'Buy milk', notes: 'Ask them');
+      final (widget, router) = _buildScreen(db, 't', initialTodo: todo);
+      await _showTaskDetail(tester, widget, router, 't');
+
+      await openNotesEditor(tester);
+      await tester.enterText(
+          find.byKey(const Key('task_detail_notes')), '   \n  ');
+      await loseFocus(tester);
+
+      expect((await rawRow('t'))['notes'], isNull);
+    });
+
+    // Surrounding whitespace is stripped rather than stored, for the same
+    // reason the title's is: the baseline is held in the form the DAO stores,
+    // so a value that round-trips differently would make the teardown flush
+    // restate every edit.
+    testWidgets('notes are stored trimmed (#705)', (tester) async {
+      final todo = await _insertAt(db, id: 't', title: 'Buy milk');
+      final (widget, router) = _buildScreen(db, 't', initialTodo: todo);
+      await _showTaskDetail(tester, widget, router, 't');
+
+      await openNotesEditor(tester);
+      await tester.enterText(
+          find.byKey(const Key('task_detail_notes')), '  Ask the barista  ');
+      await loseFocus(tester);
+
+      expect((await rawRow('t'))['notes'], 'Ask the barista');
+    });
+
+    // The trimmed baseline must agree with the trimmed write, or the teardown
+    // backstop re-issues an edit focus loss already saved — and
+    // `TodoDao.updateFields` restamps `last_clarified_at` and authors a second
+    // sync op when it does.
+    testWidgets('a notes edit already saved on focus loss is not re-flushed '
+        'at teardown (#705)', (tester) async {
+      final todo = await _insertAt(db, id: 't', title: 'Buy milk');
+      final (widget, router) = _buildScreen(db, 't', initialTodo: todo);
+      await _showTaskDetail(tester, widget, router, 't');
+
+      await openNotesEditor(tester);
+      await tester.enterText(
+          find.byKey(const Key('task_detail_notes')), '  Ask the barista  ');
+      await loseFocus(tester);
+      final writesAfterFocusLoss =
+          capture.forCollection(todosCollection).length;
+
+      await unmountWhileFocused(tester);
+
+      expect(capture.forCollection(todosCollection), hasLength(writesAfterFocusLoss));
     });
 
     // The other side of the guard. `TodoDao.updateFields` stamps `updated_at`
@@ -1889,40 +2019,28 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
-    // A write must not outlive its subject. Without the subject-missing latch
-    // the flush fires against a row that is gone, and `TodoDao` authors the sync
-    // op unconditionally — so an op would be authored for a deleted entity.
-    // This is #447's rule (a write only counts if it landed) applied to the site
-    // #447 names; the residual TOCTOU window is #444's.
-    testWidgets('a subject that went missing under the open screen is never '
+    // A write must not outlive its subject (#447). The Outcome row is really
+    // deleted from local storage while the screen has an edit pending; the
+    // write seam checks the row inside its own transaction, so the flush neither
+    // writes nor authors an op for the deleted entity.
+    testWidgets('a subject deleted under the open screen is never '
         'written to', (tester) async {
-      await _insertAt(db, id: 'gone', title: 'Buy milk');
-      final todo = (await db.todoDao.getTodo('gone'))!;
-      final feed = StreamController<Todo?>.broadcast();
-      addTearDown(feed.close);
+      final todo = await _insertAt(db, id: 'gone', title: 'Buy milk');
 
-      final (widget, router) =
-          _buildScreen(db, 'gone', todoStream: feed.stream);
+      final (widget, router) = _buildScreen(db, 'gone', initialTodo: todo);
       await _showTaskDetail(tester, widget, router, 'gone');
-      feed.add(todo);
-      await tester.pumpAndSettle();
 
       await tester.enterText(
           find.byKey(const Key('task_detail_title')), 'Buy oat milk');
       await tester.pump();
 
-      // The row leaves local storage under the open screen. The provider
-      // override decouples the stream from the row, so the row is still there
-      // to prove the negative.
-      feed.add(null);
-      await tester.pumpAndSettle();
+      await db.todoDao.deleteOutcome('gone');
       capture.clear();
+      await tester.pumpAndSettle();
 
       await unmountWhileFocused(tester);
 
-      final row = await rawRow('gone');
-      expect(row['title'], 'Buy milk');
-      expect(row['updated_at'], isNull);
+      expect(await db.todoDao.getTodo('gone'), isNull);
       // The op-log assertion is the one that survives a future DAO that upserts.
       expect(capture.forCollection(todosCollection), isEmpty);
     });

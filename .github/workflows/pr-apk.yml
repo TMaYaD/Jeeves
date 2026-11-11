@@ -51,7 +51,7 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
-      - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           distribution: temurin
           java-version: '17'
@@ -88,7 +88,7 @@ jobs:
       - run: flutter pub get
       - run: dart run flutter_launcher_icons
       - run: dart run build_runner build
-      - run: flutter build apk --profile --split-per-abi --target-platform android-arm64 --flavor dev
+      - run: flutter build apk --profile --split-per-abi --target-platform android-arm64 --flavor dev --dart-define=JEEVES_GIT_SHA=$(git rev-parse --short=7 HEAD)
 
       - name: Compose release notes
         id: notes

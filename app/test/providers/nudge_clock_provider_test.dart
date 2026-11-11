@@ -32,6 +32,13 @@ void main() {
       expect(next, DateTime(2026, 6, 29, 12, 0));
     });
 
+    test('schedules subsequent weekly-review refires before other boundaries', () {
+      final last = DateTime(2026, 6, 15, 12);
+      final next = nextNudgeBoundary(DateTime(2026, 6, 29, 11),
+          shutdownHour: 17, shutdownMinute: 0, weeklyReviewLastCompleted: last);
+      expect(next, DateTime(2026, 6, 29, 12));
+    });
+
     test('ignores a weekly-review due instant that is already in the past', () {
       final now = DateTime(2026, 6, 29, 10, 0);
       final last = DateTime(2026, 6, 1, 9, 0); // due long ago
@@ -50,6 +57,7 @@ void main() {
 
         final container = ProviderContainer(overrides: [
           clockProvider.overrideWithValue(() => now),
+          periodicReviewOpenSinceProvider.overrideWithValue(null),
           periodicReviewLastCompletedProvider.overrideWithValue(last),
         ]);
         addTearDown(container.dispose);
@@ -73,7 +81,8 @@ void main() {
     test('is due immediately when never completed', () {
       final container = ProviderContainer(overrides: [
         clockProvider.overrideWithValue(() => DateTime(2026, 6, 29)),
-        periodicReviewLastCompletedProvider.overrideWithValue(null),
+        periodicReviewOpenSinceProvider.overrideWithValue(null),
+          periodicReviewLastCompletedProvider.overrideWithValue(null),
       ]);
       addTearDown(container.dispose);
       expect(container.read(periodicReviewIsDueProvider), isTrue);

@@ -116,7 +116,7 @@ void main() {
 
       expect(await db.actionDao.getCurrentAction('o1'), isNull);
 
-      final review = await db.todoDao.getNeedsReview();
+      final review = await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff);
       expect(review.map((t) => t.id), ['o1'],
           reason: 'the completed Outcome immediately owes a re-clarification');
     });

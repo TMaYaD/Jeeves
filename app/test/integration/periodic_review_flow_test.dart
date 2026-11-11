@@ -9,15 +9,20 @@ library;
 
 import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:drift/native.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/periodic_review_provider.dart';
 import 'package:jeeves/providers/periodic_review_settings_provider.dart';
 import 'package:jeeves/providers/synced_preferences_provider.dart';
+import 'package:jeeves/screens/periodic_review/periodic_review_screen.dart';
+import 'package:jeeves/services/notification_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../helpers/periodic_review_test_helpers.dart';
+import '../helpers/settle.dart';
 import '../test_helpers.dart';
 
 /// An Inbox item is a Capture with `clarified_at IS NULL` (ADR-0006).
@@ -49,6 +54,30 @@ void main() {
     tearDown(() async {
       c.dispose();
       await db.close();
+    });
+
+    testWidgets('intro reads the estimate as hours and minutes, never a raw '
+        'minute count (#585)', (tester) async {
+      // 105 inbox items × 2 minutes = 210 raw minutes.
+      for (var i = 0; i < 105; i++) {
+        await _insertInbox(db, 'i$i');
+      }
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          databaseProvider.overrideWithValue(db),
+          notificationServiceProvider
+              .overrideWithValue(StubPeriodicReviewNotificationService()),
+        ],
+        child: const MaterialApp(home: PeriodicReviewScreen()),
+      ));
+      await settleWithRealAsync(tester);
+
+      expect(find.textContaining('about 3h 30m'), findsOneWidget);
+      expect(find.textContaining('minutes'), findsNothing);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
     });
 
     test('happy path — banner due, complete wizard, banner dismissed',

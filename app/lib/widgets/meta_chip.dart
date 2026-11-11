@@ -1,13 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
 /// User-facing label for an energy level. Falls back to the raw value so an
 /// unknown level from a newer client renders as itself rather than vanishing.
 String energyLevelLabel(String level) => switch (level) {
-      'low' => 'Low',
-      'medium' => 'Medium',
-      'high' => 'High',
-      _ => level,
-    };
+  'low' => 'Low',
+  'medium' => 'Medium',
+  'high' => 'High',
+  _ => level,
+};
 
 /// User-facing label for a duration in minutes: `45m`, `2h`, `1h 30m`.
 String formatMinutesLabel(int minutes) {
@@ -16,6 +17,61 @@ String formatMinutesLabel(int minutes) {
   if (hours == 0) return '${remainder}m';
   if (remainder == 0) return '${hours}h';
   return '${hours}h ${remainder}m';
+}
+
+/// The due date's local calendar day, in the shared display format.
+String formatDueDateLabel(DateTime dueDate) =>
+    DateFormat('MMM d, y').format(dueDate.toLocal());
+
+/// Read-only Outcome attributes in energy, estimate, logged, due order.
+/// Omit an attribute by leaving its value null; zero is a present duration.
+class OutcomeMetaLine extends StatelessWidget {
+  const OutcomeMetaLine({
+    super.key,
+    this.energyLevel,
+    this.timeEstimateMinutes,
+    this.timeLoggedMinutes,
+    this.dueDate,
+    this.muted = false,
+  });
+
+  final String? energyLevel;
+  final int? timeEstimateMinutes;
+  final int? timeLoggedMinutes;
+  final DateTime? dueDate;
+  final bool muted;
+
+  @override
+  Widget build(BuildContext context) => Wrap(
+    spacing: 8,
+    runSpacing: 8,
+    children: [
+      if (energyLevel != null)
+        MetaChip(
+          icon: Icons.bolt_outlined,
+          label: energyLevelLabel(energyLevel!),
+          color: muted ? const Color(0xFFBDBDBD) : const Color(0xFF7C3AED),
+        ),
+      if (timeEstimateMinutes != null)
+        MetaChip(
+          icon: Icons.timer_outlined,
+          label: formatMinutesLabel(timeEstimateMinutes!),
+          color: muted ? const Color(0xFFBDBDBD) : const Color(0xFF2563EB),
+        ),
+      if (timeLoggedMinutes != null)
+        MetaChip(
+          icon: Icons.history_toggle_off_outlined,
+          label: formatMinutesLabel(timeLoggedMinutes!),
+          color: muted ? const Color(0xFFBDBDBD) : const Color(0xFF16A34A),
+        ),
+      if (dueDate != null)
+        MetaChip(
+          icon: Icons.event_outlined,
+          label: formatDueDateLabel(dueDate!),
+          color: muted ? const Color(0xFFBDBDBD) : const Color(0xFFDC2626),
+        ),
+    ],
+  );
 }
 
 /// A small read-only attribute chip: an icon, a label, and a tinted background

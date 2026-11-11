@@ -13,12 +13,16 @@ library;
 
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
+import 'package:jeeves/widgets/outcome_row.dart';
+import 'package:jeeves/widgets/meta_chip.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
+import 'package:jeeves/providers/task_detail_provider.dart';
+import 'package:jeeves/widgets/outcome_peek_sheet.dart';
 import 'package:jeeves/screens/planning/steps/plan_summary_step.dart';
 
 import '../../../test_helpers.dart';
@@ -52,6 +56,14 @@ Widget _harness(GtdDatabase db, List<Todo> todos) {
   return ProviderScope(
     overrides: [
       databaseProvider.overrideWithValue(db),
+      // The peek watches its Outcome live; a real Drift watch hangs
+      // pumpAndSettle (TESTING.md), so each row's peek streams are stubbed.
+      for (final t in todos) ...[
+        taskDetailTodoProvider(t.id).overrideWith((_) => Stream.value(t)),
+        taskTagsProvider(t.id).overrideWith((_) => Stream.value([])),
+        currentActionProvider(t.id).overrideWith((_) => Stream.value(null)),
+        plannedActionsProvider(t.id).overrideWith((_) => Stream.value([])),
+      ],
       _testTodosProvider.overrideWith((_) => todos),
       // Up Next: next-action todos minus anything already reviewed.
       nextForFocusSessionPlanningProvider.overrideWith((ref) {
@@ -117,6 +129,15 @@ Future<void> _longPressCard(WidgetTester tester, String title) async {
   await tester.pumpAndSettle();
 }
 
+/// A long press on a Today's Plan or Skipped card has no long-press handler,
+/// so its release is a plain tap and opens the peek. The sheet is tall, so
+/// close it before the next press.
+Future<void> _closePeekIfOpen(WidgetTester tester) async {
+  if (find.byType(OutcomePeekSheet).evaluate().isEmpty) return;
+  await tester.tap(find.byTooltip('Close'));
+  await tester.pumpAndSettle();
+}
+
 Future<void> _tapCard(WidgetTester tester, String title) async {
   await tester.tap(_cardWithTitle(title).first);
   await tester.pumpAndSettle();
@@ -139,6 +160,7 @@ void main() {
         _todo(id: 't3', title: 'Task three'),
       ]);
 
+      expect(find.byType(OutcomeRow), findsNWidgets(3));
       // No bar before long-press.
       expect(find.text('Add to Today'), findsNothing);
 
@@ -281,9 +303,11 @@ void main() {
 
       await _longPressCard(tester, 'Selected task');
       expect(find.text('Add to Today'), findsNothing);
+      await _closePeekIfOpen(tester);
 
       await _longPressCard(tester, 'Skipped task');
       expect(find.text('Add to Today'), findsNothing);
+      await _closePeekIfOpen(tester);
 
       await _longPressCard(tester, 'Pending task');
       expect(find.text('1 selected'), findsOneWidget);
@@ -302,6 +326,9 @@ void main() {
           .skipTask('t1');
       await tester.pumpAndSettle();
 
+      final metadata = tester.widget<OutcomeMetaLine>(find.byType(OutcomeMetaLine));
+      expect(metadata.muted, isTrue,
+          reason: 'Skipped rows pass the muted state to their metadata');
       expect(find.textContaining('UP NEXT'), findsNothing);
       expect(find.text('Add to Today'), findsNothing);
     });

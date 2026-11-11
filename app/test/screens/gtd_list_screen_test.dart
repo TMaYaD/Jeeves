@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:jeeves/widgets/outcome_row.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
@@ -54,6 +55,7 @@ void main() {
       await tester.pumpWidget(_buildScreen(Stream.value(items)));
       await tester.pump();
 
+      expect(find.byType(OutcomeRow), findsNWidgets(2));
       expect(find.text('Buy coffee'), findsOneWidget);
       expect(find.text('Fix bug'), findsOneWidget);
     });

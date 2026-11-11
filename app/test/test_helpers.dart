@@ -86,3 +86,9 @@ class StubNotificationService extends NotificationService {
   @override
   Future<void> skipTodayRitualReminder(RitualId ritual) async {}
 }
+
+/// A `getNeedsReview` cutoff so far ahead that every stored
+/// `last_clarified_at` is older than it — the Actionless freshness gate is
+/// wide open. For tests about *which* Outcomes are Stale or Actionless that do
+/// not exercise the time box itself.
+final actionlessGateOpenCutoff = DateTime.utc(2100);

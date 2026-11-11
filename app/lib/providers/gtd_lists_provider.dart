@@ -44,6 +44,17 @@ final maybeProvider = StreamProvider<List<Todo>>((ref) {
   return db.todoDao.watchMaybe(tagIds: tagIds);
 });
 
+/// Stream of every active Outcome tagged with the Project [projectTagId],
+/// whether it is on the Next List, Waiting For or Maybe.
+///
+/// Deliberately ignores [tagFilterProvider]: the Project page is a place of
+/// its own, not a filtered view of Next Actions.
+final projectOutcomesProvider =
+    StreamProvider.family<List<Todo>, String>((ref, projectTagId) {
+  final db = ref.watch(databaseProvider);
+  return db.todoDao.watchByProject(projectTagId);
+});
+
 /// Stream of completed todos ordered by done_at descending.
 final doneProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);

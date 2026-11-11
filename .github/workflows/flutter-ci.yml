@@ -107,9 +107,59 @@ jobs:
             exit 1
           fi
 
+      # Cache only shared downloads, never hook configuration or build outputs.
+      # sqlite3 rehashes this library itself before reusing it.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: app/.dart_tool/hooks_runner/shared/sqlite3
+          key: sqlite3-hooks-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('app/.fvmrc', 'app/pubspec.lock') }}
+
+      - name: Warm verified sqlite3 download
+        run: |
+          python3 - <<'PYTHON'
+          import hashlib
+          import json
+          import pathlib
+          import re
+          import subprocess
+          import urllib.parse
+
+          # Read the hook's own release and checksum, rather than pinning a
+          # second copy that can drift when pubspec.lock changes.
+          config_path = pathlib.Path('.dart_tool/package_config.json').resolve()
+          config = json.loads(config_path.read_text())
+          package = next(p for p in config['packages'] if p['name'] == 'sqlite3')
+          package_uri = urllib.parse.urljoin(config_path.as_uri(), package['rootUri'])
+          package_path = pathlib.Path(urllib.parse.unquote(urllib.parse.urlparse(package_uri).path))
+          hashes = (package_path / 'lib/src/hook/asset_hashes.dart').read_text()
+          release_tag = re.search(r"releaseTag = '([^']+)'", hashes).group(1)
+          asset_name = 'libsqlite3.x64.linux.so'
+          expected_hash = re.search(r"'" + re.escape(asset_name) + r"': '([a-f0-9]{64})'", hashes).group(1)
+          library_path = pathlib.Path('.dart_tool/hooks_runner/shared/sqlite3/build') / ('download-' + expected_hash[:8]) / 'libsqlite3.so'
+          if library_path.exists() and hashlib.sha256(library_path.read_bytes()).hexdigest() == expected_hash:
+              print('Using verified cached sqlite3 library')
+          else:
+              library_path.parent.mkdir(parents=True, exist_ok=True)
+              temporary_path = library_path.with_suffix('.so.tmp')
+              url = f'https://github.com/simolus3/sqlite3.dart/releases/download/{release_tag}/{asset_name}'
+              try:
+                  subprocess.run(['curl', '--fail', '--location', '--retry', '5', '--retry-all-errors',
+                                  '--connect-timeout', '30', '--max-time', '120',
+                                  '--output', str(temporary_path), url], check=True)
+                  if hashlib.sha256(temporary_path.read_bytes()).hexdigest() != expected_hash:
+                      raise RuntimeError('sqlite3 download does not match the package checksum')
+                  temporary_path.replace(library_path)
+              finally:
+                  temporary_path.unlink(missing_ok=True)
+          PYTHON
+
       - run: dart run build_runner build
       - run: flutter analyze
       - run: flutter test
+      - name: Test local due dates west of UTC
+        env:
+          TZ: America/Los_Angeles
+        run: flutter test test/widgets/outcome_meta_line_test.dart test/integration/outcome_peek_edit_journey_test.dart
 
   # Real-SDK coverage for the pre-commit hook's Flutter path (#678). Lives here,
   # in the Flutter workflow, rather than the fast SDK-less `Infra & hooks` job
@@ -197,7 +247,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           distribution: temurin
           java-version: '17'

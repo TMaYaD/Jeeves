@@ -117,10 +117,10 @@ class _BlockingNotifier extends TaskDetailNotifier {
   _BlockingNotifier(GtdDatabase db, String todoId)
       : super(db: db, userId: _userId, todoId: todoId);
 
-  final gate = Completer<void>();
+  final gate = Completer<bool>();
 
   @override
-  Future<void> setPersonTags(Set<String> tagIds) => gate.future;
+  Future<bool> setPersonTags(Set<String> tagIds) => gate.future;
 }
 
 /// Counts route pops so a test can assert how many routes came off the stack,
@@ -283,6 +283,40 @@ void main() {
 
       expect(observed.result, isEmpty);
       expect(await db.todoDao.getPersonTagIdsForTodo('t2'), isEmpty);
+    });
+
+    testWidgets(
+        'an Outcome deleted while the picker is open writes nothing and '
+        'closes as a cancel', (tester) async {
+      await _insertTodo(db, id: 't6');
+      await _insertPersonTag(db, id: 'alice', name: 'Alice');
+      final observed = _Observed();
+
+      await tester.pumpWidget(_harness(
+        db,
+        observed: observed,
+        todoId: 't6',
+        personTags: [_personTag('alice', 'Alice')],
+      ));
+      await _openPicker(tester);
+      await tester.tap(find.text('Alice'));
+      await tester.pumpAndSettle();
+
+      await tester.runAsync(() => db.todoDao.deleteOutcome('t6'));
+      await _tapDone(tester);
+
+      expect(observed.called, isTrue);
+      expect(observed.result, isNull);
+      expect(find.widgetWithText(FilledButton, 'Done'), findsNothing);
+      // A null result keeps the caller page open: it is still the visible
+      // route, and the harness root underneath it is not.
+      expect(observed.callerRouteWasCurrent, isTrue);
+      expect(find.text('Waiting For'), findsOneWidget);
+      expect(find.text('Failed to save. Please try again.'), findsNothing);
+      final orphans = await tester.runAsync(() => (db.select(db.todoTags)
+            ..where((tt) => tt.todoId.equals('t6')))
+          .get());
+      expect(orphans, isEmpty);
     });
 
     testWidgets('cancelling returns null and writes nothing', (tester) async {
@@ -451,11 +485,174 @@ void main() {
       expect(observed.called, isFalse);
 
       // Releasing the write lets the sheet finish the way it always would.
-      blocking.gate.complete();
+      blocking.gate.complete(true);
       await tester.pumpAndSettle();
 
       expect(find.byType(PersonTagPickerSheet), findsNothing);
       expect(observed.result, {'alice'});
+    });
+  });
+
+  group('PersonTagPickerSheet — adding a person (#688)', () {
+    Future<Tag?> findPerson(WidgetTester tester, String name) =>
+        tester.runAsync<Tag?>(() => db.tagDao.findPersonTagByName(name));
+
+    Future<void> search(WidgetTester tester, String text) async {
+      await tester.enterText(find.byType(TextField).first, text);
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('write mode: inline add then Done attaches the new person',
+        (tester) async {
+      await _insertTodo(db, id: 't1');
+      final observed = _Observed();
+
+      await tester.pumpWidget(_harness(
+        db,
+        observed: observed,
+        todoId: 't1',
+        personTags: [_personTag('alice', 'Alice')],
+      ));
+      await _openPicker(tester);
+      await search(tester, 'Bob');
+      expect(find.text('Add "Bob"'), findsOneWidget);
+      await tester.tap(find.text('Add "Bob"'));
+      await tester.pumpAndSettle();
+      await _tapDone(tester);
+
+      final bob = await findPerson(tester, 'Bob');
+      expect(bob, isNotNull);
+      expect(observed.result, {bob!.id});
+      expect(await db.todoDao.getPersonTagIdsForTodo('t1'), {bob.id});
+    });
+
+    testWidgets('Done is inert while an inline add is still pending',
+        (tester) async {
+      final observed = _Observed();
+
+      await tester.pumpWidget(_harness(
+        db,
+        observed: observed,
+        personTags: [_personTag('alice', 'Alice')],
+      ));
+      await _openPicker(tester);
+      await search(tester, 'Bob');
+      await tester.tap(find.text('Add "Bob"'));
+      // No settle: the create is still in flight, so Done must not confirm
+      // the old selection.
+      await tester.tap(find.text('Done'), warnIfMissed: false);
+      await tester.pump();
+      expect(observed.called, isFalse);
+      expect(find.byType(PersonTagPickerSheet), findsOneWidget);
+
+      await tester.pumpAndSettle();
+      await _tapDone(tester);
+
+      final bob = await findPerson(tester, 'Bob');
+      expect(bob, isNotNull);
+      expect(observed.result, {bob!.id});
+    });
+
+    testWidgets('selection-only: inline add then Done returns the new person',
+        (tester) async {
+      final observed = _Observed();
+
+      await tester.pumpWidget(_harness(
+        db,
+        observed: observed,
+        personTags: [_personTag('alice', 'Alice')],
+      ));
+      await _openPicker(tester);
+      await search(tester, 'Bob');
+      await tester.tap(find.text('Add "Bob"'));
+      await tester.pumpAndSettle();
+      await _tapDone(tester);
+
+      final bob = await findPerson(tester, 'Bob');
+      expect(bob, isNotNull);
+      expect(observed.result, {bob!.id});
+      expect(await db.select(db.todoTags).get(), isEmpty);
+    });
+
+    testWidgets('an inline-added person stays in the catalogue on Cancel',
+        (tester) async {
+      final observed = _Observed();
+
+      await tester.pumpWidget(_harness(db, observed: observed));
+      await _openPicker(tester);
+      await search(tester, 'Bob');
+      await tester.tap(find.text('Add "Bob"'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pumpAndSettle();
+
+      expect(observed.called, isTrue);
+      expect(observed.result, isNull);
+      expect(await findPerson(tester, 'Bob'), isNotNull);
+    });
+
+    testWidgets('the typed name is trimmed but keeps its casing',
+        (tester) async {
+      final observed = _Observed();
+
+      await tester.pumpWidget(_harness(db, observed: observed));
+      await _openPicker(tester);
+      await search(tester, '  Bob Smith ');
+      expect(find.text('Add "Bob Smith"'), findsOneWidget);
+      await tester.tap(find.text('Add "Bob Smith"'));
+      await tester.pumpAndSettle();
+
+      expect(await findPerson(tester, 'Bob Smith'), isNotNull);
+      expect(await findPerson(tester, 'bob smith'), isNull);
+    });
+
+    testWidgets('no Add affordance while something matches', (tester) async {
+      final observed = _Observed();
+
+      await tester.pumpWidget(_harness(
+        db,
+        observed: observed,
+        personTags: [_personTag('alice', 'Alice')],
+      ));
+      await _openPicker(tester);
+      await search(tester, 'ali');
+
+      expect(find.text('Alice'), findsOneWidget);
+      expect(find.text('Add "ali"'), findsNothing);
+    });
+
+    testWidgets('a double tap creates one person', (tester) async {
+      final observed = _Observed();
+
+      await tester.pumpWidget(_harness(db, observed: observed));
+      await _openPicker(tester);
+      await search(tester, 'Bob');
+      final add = find.text('Add "Bob"');
+      await tester.tap(add);
+      await tester.tap(add, warnIfMissed: false);
+      await tester.pumpAndSettle();
+
+      final rows = await tester.runAsync(() => (db.select(db.tags)
+            ..where((t) => t.name.equals('Bob') & t.type.equals('person')))
+          .get());
+      expect(rows, hasLength(1));
+    });
+
+    testWidgets('the Add person row still adds and selects', (tester) async {
+      final observed = _Observed();
+
+      await tester.pumpWidget(_harness(db, observed: observed));
+      await _openPicker(tester);
+      await tester.tap(find.text('Add person'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.widgetWithText(TextField, 'Person name'), 'Carol');
+      await tester.tap(find.widgetWithText(FilledButton, 'Add'));
+      await tester.pumpAndSettle();
+      await _tapDone(tester);
+
+      final carol = await findPerson(tester, 'Carol');
+      expect(carol, isNotNull);
+      expect(observed.result, {carol!.id});
     });
   });
 }

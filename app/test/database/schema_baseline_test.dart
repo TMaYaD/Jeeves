@@ -486,11 +486,20 @@ void main() {
       // t1 carries a non-default value in every column the migration must keep;
       // t2 is the legacy `clarified = 0` row the migration carries as an Outcome.
       await seed.customStatement(
-        'INSERT INTO todos (id, title, notes, priority, user_id, created_at, '
-        '  updated_at, done_at, intent, last_clarified_at, clarified) '
-        "VALUES ('t1', 'Ship it', 'some notes', 3, 'u1', ?, ?, "
-        "  '2026-07-31T09:00:00.000Z', 'next', ?, 1)",
-        [createdMs, createdMs + 1000, createdMs + 2000],
+        'INSERT INTO todos (id, title, notes, priority, due_date, user_id, '
+        '  created_at, updated_at, done_at, intent, time_estimate, '
+        '  energy_level, capture_source, location_id, last_clarified_at, '
+        '  last_next_action_completion_at, clarified) '
+        "VALUES ('t1', 'Ship it', 'some notes', 3, ?, 'u1', ?, ?, "
+        "  '2026-07-31T09:00:00.000Z', 'next', 25, 'high', 'nirvana', "
+        "  'loc1', ?, ?, 1)",
+        [
+          createdMs + 5000,
+          createdMs,
+          createdMs + 1000,
+          createdMs + 2000,
+          createdMs + 3000,
+        ],
       );
       await seed.customStatement(
         'INSERT INTO todos (id, title, user_id, created_at, intent, clarified) '

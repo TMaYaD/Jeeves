@@ -100,8 +100,10 @@ DateTime _todayAt(DateTime now, int hour, int minute) {
 }
 
 /// The most recent [hour]:[minute] local-time anchor at or before [now] —
-/// today's if it has already passed, otherwise yesterday's.
-DateTime _lastAnchorBefore(DateTime now, int hour, int minute) {
+/// today's if it has already passed, otherwise yesterday's. Public so a caller
+/// that reads the clock at a moment of use (not reactively) can share the
+/// arithmetic without arming [nudgeBoundaryTickProvider]'s timer.
+DateTime lastAnchorBefore(DateTime now, int hour, int minute) {
   final todayAnchor = _todayAt(now, hour, minute);
   if (!now.isBefore(todayAnchor)) return todayAnchor;
   return DateTime(now.year, now.month, now.day - 1, hour, minute);
@@ -130,7 +132,7 @@ final planningAnchorProvider = Provider<DateTime>((ref) {
 final lastShutdownAnchorProvider = Provider<DateTime>((ref) {
   final now = _now(ref);
   final shutdownTime = ref.watch(shutdownSettingsProvider).shutdownTime;
-  return _lastAnchorBefore(now, shutdownTime.hour, shutdownTime.minute);
+  return lastAnchorBefore(now, shutdownTime.hour, shutdownTime.minute);
 });
 
 /// Whether a session qualifies as belonging to the current planning period —
@@ -161,7 +163,8 @@ final qualifyingSessionTodayProvider = StreamProvider<bool>((ref) {
 ///     firingSince = today's shutdown anchor.
 ///   - WR:  (no prior completion OR now ≥ last completion + 7d) AND
 ///     WR not in-progress.
-///     firingSince = last completion + 7d (or app start if never completed).
+///     firingSince = latest seven-day boundary since last completion
+///     (or start-of-today if never completed).
 final cadenceTriggerProvider =
     Provider.family<TriggerState, RitualId>((ref, ritual) {
   if (ref.watch(ceremonyInProgressForProvider(ritual))) return TriggerState.idle;
@@ -235,13 +238,16 @@ TriggerState _wrCadenceTrigger(Ref ref) {
   if (!hasAnyItem.hasValue || !hasAnyItem.requireValue) return TriggerState.idle;
 
   final lastCompleted = ref.watch(periodicReviewLastCompletedProvider);
-  // firingSince: when the cadence-due edge would have fired. For a
-  // never-completed Ritual we report start-of-today (the predicate has
-  // been true since whenever the app booted today; start-of-today is a
-  // stable, surface-friendly stamp).
-  final since = lastCompleted == null
-      ? _startOfToday(now)
-      : lastCompleted.add(const Duration(days: 7));
+  // Never-completed Rituals retain their stable start-of-today edge.
+  if (lastCompleted == null) {
+    return TriggerState(isFiring: true, firingSince: _startOfToday(now));
+  }
+  // Each elapsed cadence period is a fresh firing, releasing a dismissal
+  // from the previous period. An open review can be due before the first
+  // boundary; retain the first due edge in that case.
+  final elapsedPeriods = now.difference(lastCompleted).inDays ~/ 7;
+  final firingPeriod = elapsedPeriods < 1 ? 1 : elapsedPeriods;
+  final since = lastCompleted.add(Duration(days: 7 * firingPeriod));
   return TriggerState(isFiring: true, firingSince: since);
 }
 

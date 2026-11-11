@@ -227,6 +227,82 @@ void main() {
     });
   });
 
+  group('a sprint on an Actionless Outcome settles and strikes off (#711)', () {
+    late GtdDatabase db;
+    late ClarificationService clarification;
+
+    setUp(() async {
+      SharedPreferences.setMockInitialValues({});
+      db = GtdDatabase(NativeDatabase.memory());
+      clarification = DaoClarificationService(db);
+
+      for (final entry in {
+        'plan': 'Plan member',
+        'offplan': 'Off-Plan thing',
+        'unjudged': 'No verdict yet',
+      }.entries) {
+        final now = DateTime.now();
+        await db.into(db.todos).insert(TodosCompanion(
+              id: Value(entry.key),
+              title: Value(entry.value),
+              intent: const Value('next'),
+              userId: const Value(_userId),
+              createdAt: Value(now),
+              updatedAt: Value(now),
+            ));
+      }
+      final sessionId = await db.focusSessionDao
+          .openSession(userId: _userId, taskIds: ['plan', 'unjudged']);
+
+      // Start -> Done -> verdict, as the Focus screen and re-clarify sheet do.
+      await db.focusSessionDao
+          .setCurrentTask(sessionId: sessionId, taskId: 'plan');
+      await clarification.completeCurrentAction('plan');
+      await clarification.clarifyToOutcome('plan',
+          to: RoutingKind.nextAction,
+          actionText: 'send it for review',
+          userId: _userId);
+
+      // Off-Plan: engaged ad hoc against the session.
+      await db.timeLogDao.openLog(
+          taskId: 'offplan', userId: _userId, focusSessionId: sessionId);
+      await clarification.completeCurrentAction('offplan');
+      await clarification.clarifyToOutcome('offplan',
+          to: RoutingKind.nextAction,
+          actionText: 'follow up',
+          userId: _userId);
+
+      // A second sprint, finished but never given a verdict.
+      await db.focusSessionDao
+          .setCurrentTask(sessionId: sessionId, taskId: 'unjudged');
+      await clarification.completeCurrentAction('unjudged');
+    });
+
+    tearDown(() async => db.close());
+
+    test('Plan member and off-Plan Outcome settle; the unjudged one does not',
+        () async {
+      expect(await db.focusSessionDao.getActiveSessionSettlements(), {
+        'plan': SessionSettlement.next,
+        'offplan': SessionSettlement.next,
+      });
+    });
+
+    testWidgets('the Plan member row is struck off on the Now screen',
+        (tester) async {
+      await tester.pumpWidget(_nowScreen(db));
+      await settleWithRealAsync(tester);
+
+      final struck = tester.widget<Text>(find.text('Plan member'));
+      expect(struck.style?.decoration, TextDecoration.lineThrough);
+      final live = tester.widget<Text>(find.text('No verdict yet'));
+      expect(live.style?.decoration, isNot(TextDecoration.lineThrough));
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+    });
+  });
+
   group('a blank "More to do" save settles it just the same', () {
     late GtdDatabase db;
     late ClarificationService clarification;

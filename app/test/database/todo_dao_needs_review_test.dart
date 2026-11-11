@@ -18,7 +18,7 @@ GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
 Future<String> _insertClarifiedTask(
   GtdDatabase db, {
   String? actionText,
-  DateTime? lastNextActionCompletionAt,
+  DateTime? actionTerminatedAt,
   DateTime? lastClarifiedAt,
   String intent = 'next',
 }) async {
@@ -30,9 +30,6 @@ Future<String> _insertClarifiedTask(
     userId: Value(_userId),
     intent: Value(intent),
     createdAt: Value(now),
-    lastNextActionCompletionAt: lastNextActionCompletionAt != null
-        ? Value(lastNextActionCompletionAt)
-        : const Value.absent(),
     lastClarifiedAt:
         lastClarifiedAt != null ? Value(lastClarifiedAt) : const Value.absent(),
   ));
@@ -43,6 +40,13 @@ Future<String> _insertClarifiedTask(
     userId: _userId,
     createdAt: now,
   );
+  if (actionTerminatedAt != null) {
+    await _insertAction(db,
+        id: 'done-$id',
+        outcomeId: id,
+        role: 'done',
+        doneAt: actionTerminatedAt);
+  }
   return id;
 }
 
@@ -92,12 +96,16 @@ Future<String> _attachPersonTag(
   return tagId;
 }
 
+/// The queue with the Actionless freshness gate wide open.
+Future<List<Todo>> _queue(GtdDatabase db) => db.todoDao
+    .getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff);
+
 /// Is [id] currently in the re-clarification queue? Asked through the one
 /// surviving production entry point, [TodoDao.getNeedsReview] — the
 /// `isNeedsReview` / `getNeedsReviewCount` / `watchNeedsReview` wrappers were
 /// dead surface and were removed in #494.
 Future<bool> _isNeedsReview(GtdDatabase db, String id) async =>
-    (await db.todoDao.getNeedsReview()).any((t) => t.id == id);
+    (await _queue(db)).any((t) => t.id == id);
 
 void main() {
   setUpAll(configureSqliteForTests);
@@ -117,15 +125,34 @@ void main() {
       await _insertClarifiedTask(
         db,
         actionText: 'Buy milk',
-        lastNextActionCompletionAt: null,
       );
 
-      final result = await db.todoDao.getNeedsReview();
+      final result = await _queue(db);
       expect(result, isEmpty);
     });
 
-    // Fixture 2: Stale task (session closed after last clarification).
-    test('2: stale task (lastNextActionCompletionAt > lastClarifiedAt) — in result with updatedSinceClarified hint',
+    // The retired stamp: a closed day no longer makes anything Stale.
+    test('1b: an Outcome carrying a legacy last_next_action_completion_at '
+        'newer than lastClarifiedAt — not in result (#695)', () async {
+      final id = await _insertClarifiedTask(
+        db,
+        actionText: 'Buy milk',
+        lastClarifiedAt:
+            DateTime.now().subtract(const Duration(hours: 2)).toUtc(),
+      );
+      await (db.update(db.todos)..where((t) => t.id.equals(id))).write(
+        TodosCompanion(
+          lastNextActionCompletionAt:
+              Value(DateTime.now().subtract(const Duration(hours: 1)).toUtc()),
+        ),
+      );
+
+      expect(await _queue(db), isEmpty,
+          reason: 'only an Action termination makes an Outcome Stale');
+    });
+
+    // Fixture 2: Stale task (an Action completed after last clarification).
+    test('2: stale task (an Action completed after lastClarifiedAt) — in result with updatedSinceClarified hint',
         () async {
       final clarifiedAt =
           DateTime.now().subtract(const Duration(hours: 2)).toUtc();
@@ -135,14 +162,14 @@ void main() {
         db,
         actionText: 'Draft email',
         lastClarifiedAt: clarifiedAt,
-        lastNextActionCompletionAt: completedAt,
+        actionTerminatedAt: completedAt,
       );
 
-      final result = await db.todoDao.getNeedsReview();
+      final result = await _queue(db);
       expect(result, hasLength(1));
       expect(result.first.id, id);
       expect(await db.actionDao.getCurrentAction(id), isNotNull,
-          reason: 'the actionable branch of the predicate, not the Stale one');
+          reason: 'Stale by Action termination while another Action is current');
     });
 
     // Fixture 3: Stale task with no current Action — Actionless + Stale.
@@ -156,10 +183,10 @@ void main() {
         db,
         actionText: null,
         lastClarifiedAt: clarifiedAt,
-        lastNextActionCompletionAt: completedAt,
+        actionTerminatedAt: completedAt,
       );
 
-      final result = await db.todoDao.getNeedsReview();
+      final result = await _queue(db);
       expect(result, hasLength(1));
       expect(result.first.id, id);
       expect(await db.actionDao.getCurrentAction(id), isNull,
@@ -176,7 +203,7 @@ void main() {
         db,
         actionText: 'Draft email',
         lastClarifiedAt: clarifiedAt,
-        lastNextActionCompletionAt: completedAt,
+        actionTerminatedAt: completedAt,
       );
 
       // Add a context tag (organising — does not stamp last_clarified_at).
@@ -193,7 +220,7 @@ void main() {
         userId: Value(_userId),
       ));
 
-      final result = await db.todoDao.getNeedsReview();
+      final result = await _queue(db);
       expect(result.any((t) => t.id == id), isTrue);
     });
 
@@ -208,14 +235,14 @@ void main() {
         db,
         actionText: 'Draft email',
         lastClarifiedAt: clarifiedAt,
-        lastNextActionCompletionAt: completedAt,
+        actionTerminatedAt: completedAt,
       );
 
-      expect(await db.todoDao.getNeedsReview(), hasLength(1));
+      expect(await _queue(db), hasLength(1));
 
       await db.todoDao.stampLastClarifiedAt(id);
 
-      final result = await db.todoDao.getNeedsReview();
+      final result = await _queue(db);
       expect(result, isEmpty);
     });
 
@@ -224,14 +251,13 @@ void main() {
       final id = await _insertClarifiedTask(
         db,
         actionText: null,
-        lastNextActionCompletionAt: null,
       );
 
-      expect(await db.todoDao.getNeedsReview(), hasLength(1));
+      expect(await _queue(db), hasLength(1));
 
       await db.todoDao.setCurrentActionText(id,'Draft proposal');
 
-      final result = await db.todoDao.getNeedsReview();
+      final result = await _queue(db);
       expect(result, isEmpty);
     });
 
@@ -240,7 +266,7 @@ void main() {
       final id = await _insertClarifiedTask(db, actionText: null);
       await db.todoDao.markDone(id);
 
-      final result = await db.todoDao.getNeedsReview();
+      final result = await _queue(db);
       expect(result, isEmpty);
     });
 
@@ -253,7 +279,7 @@ void main() {
         updates: {db.todos},
       );
 
-      final result = await db.todoDao.getNeedsReview();
+      final result = await _queue(db);
       expect(result, isEmpty);
     });
 
@@ -266,8 +292,15 @@ void main() {
         userId: Value(_userId),
         createdAt: Value(now),
       ));
+      await db.into(db.tags).insert(TagsCompanion(
+        id: const Value('hint-tag'),
+        name: const Value('Trixy'),
+        type: const Value('person'),
+        userId: Value(_userId),
+      ));
+      await db.captureDao.assignTagHint('inbox-capture', 'hint-tag', _userId);
 
-      final result = await db.todoDao.getNeedsReview();
+      final result = await _queue(db);
       expect(result, isEmpty);
     });
 
@@ -277,11 +310,10 @@ void main() {
       final id = await _insertClarifiedTask(
         db,
         actionText: null,
-        lastNextActionCompletionAt: null,
         lastClarifiedAt: null,
       );
 
-      final result = await db.todoDao.getNeedsReview();
+      final result = await _queue(db);
       expect(result, hasLength(1));
       expect(result.first.id, id);
       expect(await db.actionDao.getCurrentAction(id), isNull,
@@ -298,13 +330,13 @@ void main() {
         db,
         actionText: 'Draft email',
         lastClarifiedAt: clarifiedAt,
-        lastNextActionCompletionAt: completedAt,
+        actionTerminatedAt: completedAt,
       );
 
-      expect(await db.todoDao.getNeedsReview(), hasLength(1));
+      expect(await _queue(db), hasLength(1));
       await db.todoDao.markDone(id);
 
-      final result = await db.todoDao.getNeedsReview();
+      final result = await _queue(db);
       expect(result, isEmpty);
     });
 
@@ -313,14 +345,13 @@ void main() {
       final id = await _insertClarifiedTask(
         db,
         actionText: null,
-        lastNextActionCompletionAt: null,
       );
 
       await db.todoDao.deferTaskToMaybe(id);
 
       // After deferring, intent = 'maybe'. The predicate requires intent = 'next',
       // so the task is excluded regardless of the Actionless branch.
-      final result = await db.todoDao.getNeedsReview();
+      final result = await _queue(db);
       expect(result.any((t) => t.id == id), isFalse);
     });
 
@@ -335,14 +366,14 @@ void main() {
         db,
         actionText: 'Draft email',
         lastClarifiedAt: clarifiedAt,
-        lastNextActionCompletionAt: completedAt,
+        actionTerminatedAt: completedAt,
       );
 
-      expect(await db.todoDao.getNeedsReview(), hasLength(1));
+      expect(await _queue(db), hasLength(1));
 
       await db.todoDao.updateFields(id,title: 'Renamed task');
 
-      final result = await db.todoDao.getNeedsReview();
+      final result = await _queue(db);
       expect(result, isEmpty);
     });
 
@@ -350,11 +381,11 @@ void main() {
     test('actionless task is in the queue, leaves after a next action is set', () async {
       final id = await _insertClarifiedTask(db, actionText: null);
 
-      expect((await db.todoDao.getNeedsReview()).any((t) => t.id == id), isTrue);
+      expect((await _queue(db)).any((t) => t.id == id), isTrue);
 
       await db.todoDao.setCurrentActionText(id,'Do something');
 
-      expect((await db.todoDao.getNeedsReview()).any((t) => t.id == id), isFalse);
+      expect((await _queue(db)).any((t) => t.id == id), isFalse);
     });
 
     // ----- Delegated (person-tagged) actionless branch (#289) ----------------
@@ -365,11 +396,10 @@ void main() {
       final id = await _insertClarifiedTask(
         db,
         actionText: null,
-        lastNextActionCompletionAt: null,
       );
       await _attachPersonTag(db, id);
 
-      final result = await db.todoDao.getNeedsReview();
+      final result = await _queue(db);
       expect(result, isEmpty);
     });
 
@@ -380,15 +410,14 @@ void main() {
       final id = await _insertClarifiedTask(
         db,
         actionText: '   ',
-        lastNextActionCompletionAt: null,
       );
       await _attachPersonTag(db, id);
 
-      final result = await db.todoDao.getNeedsReview();
+      final result = await _queue(db);
       expect(result, isEmpty);
     });
 
-    // Delegated + stale (lastNextActionCompletionAt > lastClarifiedAt) DOES
+    // Delegated + stale (an Action completed after lastClarifiedAt) DOES
     // surface — the stale branch fires regardless of person-tag presence.
     test('delegated stale task — in result (stale branch unaffected)',
         () async {
@@ -400,11 +429,11 @@ void main() {
         db,
         actionText: 'Draft email',
         lastClarifiedAt: clarifiedAt,
-        lastNextActionCompletionAt: completedAt,
+        actionTerminatedAt: completedAt,
       );
       await _attachPersonTag(db, id);
 
-      final result = await db.todoDao.getNeedsReview();
+      final result = await _queue(db);
       expect(result, hasLength(1));
       expect(result.first.id, id);
     });
@@ -433,14 +462,13 @@ void main() {
         db,
         actionText: null,
         lastClarifiedAt: clarifiedAt,
-        lastNextActionCompletionAt: null,
       );
       await _attachPersonTag(db, id);
       await _insertAction(db,
           id: 'a-done', outcomeId: id, role: 'done', doneAt: after);
 
-      expect(await db.todoDao.getNeedsReview(), hasLength(1));
-      expect(await db.todoDao.getNeedsReview(), hasLength(1));
+      expect(await _queue(db), hasLength(1));
+      expect(await _queue(db), hasLength(1));
       expect(await _isNeedsReview(db, id), isTrue);
     });
 
@@ -450,13 +478,12 @@ void main() {
         db,
         actionText: null,
         lastClarifiedAt: clarifiedAt,
-        lastNextActionCompletionAt: null,
       );
       await _attachPersonTag(db, id);
       await _insertAction(db,
           id: 'a-done', outcomeId: id, role: 'done', doneAt: before);
 
-      expect(await db.todoDao.getNeedsReview(), isEmpty);
+      expect(await _queue(db), isEmpty);
       expect(await _isNeedsReview(db, id), isFalse);
     });
 
@@ -465,13 +492,12 @@ void main() {
         db,
         actionText: null,
         lastClarifiedAt: clarifiedAt,
-        lastNextActionCompletionAt: null,
       );
       await _attachPersonTag(db, id);
       await _insertAction(db,
           id: 'a-done', outcomeId: id, role: 'done', updatedAt: after);
 
-      expect(await db.todoDao.getNeedsReview(), hasLength(1));
+      expect(await _queue(db), hasLength(1));
     });
 
     test('an app-side supersession is not stale — it stamps with the same '
@@ -480,13 +506,12 @@ void main() {
         db,
         actionText: 'Draft email',
         lastClarifiedAt: clarifiedAt,
-        lastNextActionCompletionAt: null,
       );
       await _attachPersonTag(db, id);
 
       await db.actionDao.clearCurrentAction(id, now: after);
 
-      expect(await db.todoDao.getNeedsReview(), isEmpty,
+      expect(await _queue(db), isEmpty,
           reason: 'equality, not `<` — the supersession already clarified');
     });
 
@@ -497,7 +522,6 @@ void main() {
         db,
         actionText: null,
         lastClarifiedAt: clarifiedAt,
-        lastNextActionCompletionAt: null,
       );
       await _attachPersonTag(db, id);
       await _insertAction(db,
@@ -506,7 +530,7 @@ void main() {
           role: 'superseded',
           updatedAt: after);
 
-      expect(await db.todoDao.getNeedsReview(), isEmpty);
+      expect(await _queue(db), isEmpty);
       expect(await _isNeedsReview(db, id), isFalse);
     });
 
@@ -516,18 +540,17 @@ void main() {
         db,
         actionText: 'Draft email',
         lastClarifiedAt: clarifiedAt,
-        lastNextActionCompletionAt: null,
       );
       await _attachPersonTag(db, id);
-      expect(await db.todoDao.getNeedsReview(), isEmpty);
+      expect(await _queue(db), isEmpty);
 
       await db.actionDao.completeCurrentAction(id, now: after);
 
-      expect(await db.todoDao.getNeedsReview(), hasLength(1));
+      expect(await _queue(db), hasLength(1));
 
       await db.todoDao.setCurrentActionText(id, 'Chase the reply');
 
-      expect(await db.todoDao.getNeedsReview(), isEmpty);
+      expect(await _queue(db), isEmpty);
     });
   });
 
@@ -537,37 +560,46 @@ void main() {
     setUp(() => db = _openInMemory());
     tearDown(() async => db.close());
 
-    test('routing to Next alone leaves an Actionless Outcome in the queue '
-        'forever — the Actionless branch has no freshness gate', () async {
+    test('routing to Next alone only postpones the nag by one review interval',
+        () async {
       // Why the blank save cannot simply route and leave the row Actionless:
-      // a fresh `last_clarified_at` does not suppress this branch, so the item
-      // would land back on the identical review card at the next planning,
-      // every day. This is the failure mode the title-as-action fallback
-      // exists to avoid.
+      // the fresh `last_clarified_at` only holds the Actionless branch off for
+      // the review interval, after which the identical card comes back. The
+      // title-as-action fallback exists to take the Outcome out of the
+      // Actionless state altogether.
       final id = await _insertClarifiedTask(db);
-      expect(await db.todoDao.getNeedsReview(), hasLength(1));
+      expect(await _queue(db), hasLength(1));
 
       await db.todoDao.applyRouting(id, to: RoutingKind.nextAction);
 
-      expect((await db.todoDao.getTodo(id))?.lastClarifiedAt, isNotNull);
-      expect(await db.todoDao.getNeedsReview(), hasLength(1),
-          reason: 'a stamp does not clear the Actionless branch');
+      final stampedAt = (await db.todoDao.getTodo(id))!.lastClarifiedAt!;
+      expect(
+        await db.todoDao.getNeedsReview(
+            actionlessReviewCutoff:
+                stampedAt.subtract(const Duration(days: 1))),
+        isEmpty,
+        reason: 'stamped inside the interval: held back',
+      );
+      expect(
+        await db.todoDao.getNeedsReview(
+            actionlessReviewCutoff: stampedAt.add(const Duration(days: 1))),
+        hasLength(1),
+        reason: 'the stamp is older than the cutoff: it comes back',
+      );
     });
 
     test('route + title mirror takes the Outcome out of the queue', () async {
-      // The composition the blank-save path performs: applyRouting with no
-      // actionText, then the Actionless-guarded title mirror.
+      // What the blank-save path performs: one applyRouting carrying the
+      // Actionless-guarded title mirror.
       final id = await _insertClarifiedTask(db);
       final title = (await db.todoDao.getTodo(id))!.title;
-      expect(await db.todoDao.getNeedsReview(), hasLength(1));
+      expect(await _queue(db), hasLength(1));
 
-      await db.todoDao.applyRouting(id, to: RoutingKind.nextAction);
-      final wrote =
-          await db.todoDao.setCurrentActionTextIfActionless(id, title);
+      await db.todoDao.applyRouting(id,
+          to: RoutingKind.nextAction, actionTextIfActionless: title);
 
-      expect(wrote, isTrue);
       expect((await db.actionDao.getCurrentAction(id))?.actionText, title);
-      expect(await db.todoDao.getNeedsReview(), isEmpty,
+      expect(await _queue(db), isEmpty,
           reason: 'the resolved Outcome must not re-arm the review queue');
     });
 
@@ -575,12 +607,80 @@ void main() {
       final id = await _insertClarifiedTask(db, actionText: 'Book the room');
       final title = (await db.todoDao.getTodo(id))!.title;
 
-      final wrote =
-          await db.todoDao.setCurrentActionTextIfActionless(id, title);
+      await db.todoDao.applyRouting(id,
+          to: RoutingKind.nextAction, actionTextIfActionless: title);
 
-      expect(wrote, isFalse);
       expect((await db.actionDao.getCurrentAction(id))?.actionText,
           'Book the room');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // The Actionless freshness gate (#695): an Outcome clarified at or after the
+  // cutoff stays out of the Actionless branch; one never clarified, or last
+  // clarified before it, is in.
+  // ---------------------------------------------------------------------------
+  group('TodoDao.getNeedsReview — Actionless freshness gate', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    final cutoff = DateTime.parse('2026-07-08T18:00:00.000Z');
+
+    test('never clarified — surfaces', () async {
+      final id = await _insertClarifiedTask(db);
+      final result = await db.todoDao.getNeedsReview(
+          actionlessReviewCutoff: cutoff);
+      expect(result.map((t) => t.id), [id]);
+    });
+
+    test('clarified after the cutoff — suppressed', () async {
+      await _insertClarifiedTask(db,
+          lastClarifiedAt: DateTime.parse('2026-07-09T08:15:00.000Z'));
+      expect(
+          await db.todoDao.getNeedsReview(actionlessReviewCutoff: cutoff),
+          isEmpty);
+    });
+
+    test('clarified before the cutoff — surfaces', () async {
+      final id = await _insertClarifiedTask(db,
+          lastClarifiedAt: DateTime.parse('2026-07-08T08:15:00.000Z'));
+      final result =
+          await db.todoDao.getNeedsReview(actionlessReviewCutoff: cutoff);
+      expect(result.map((t) => t.id), [id]);
+    });
+
+    test('the gate does not hide a Stale Outcome that is also Actionless',
+        () async {
+      final id = await _insertClarifiedTask(db,
+          lastClarifiedAt: DateTime.parse('2026-07-09T08:15:00.000Z'),
+          actionTerminatedAt: DateTime.parse('2026-07-09T09:00:00.000Z'));
+      final result =
+          await db.todoDao.getNeedsReview(actionlessReviewCutoff: cutoff);
+      expect(result.map((t) => t.id), [id]);
+    });
+
+    test('getActionTerminationStaleIds names only the Action-terminated ones',
+        () async {
+      final stale = await _insertClarifiedTask(db,
+          actionText: 'Draft email',
+          lastClarifiedAt: DateTime.parse('2026-07-09T08:00:00.000Z'),
+          actionTerminatedAt: DateTime.parse('2026-07-09T09:00:00.000Z'));
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+      final reclarified = await _insertClarifiedTask(db,
+          actionText: 'Draft email',
+          lastClarifiedAt: DateTime.parse('2026-07-09T10:00:00.000Z'),
+          actionTerminatedAt: DateTime.parse('2026-07-09T09:00:00.000Z'));
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+      final actionless = await _insertClarifiedTask(db);
+
+      expect(
+        await db.todoDao
+            .getActionTerminationStaleIds({stale, reclarified, actionless}),
+        {stale},
+      );
+      expect(await db.todoDao.getActionTerminationStaleIds({}), isEmpty);
     });
   });
 }

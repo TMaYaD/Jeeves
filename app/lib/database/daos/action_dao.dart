@@ -70,7 +70,7 @@
 /// the `apply*` transaction-body variants (package-internal), which run inside
 /// the caller's transaction and defer notification to the caller (so watchers
 /// never re-read pre-commit state) — see `TodoDao.setCurrentActionText` /
-/// `setCurrentActionTextIfActionless` / `applyRouting` / `deleteOutcome`.
+/// `applyRouting` / `deleteOutcome`.
 library;
 
 import 'package:drift/drift.dart';
@@ -455,6 +455,41 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     return row?.read<String?>('id');
   }
 
+  /// [currentActionIdFor], except an Actionless Outcome first gets a `current`
+  /// Action carrying its title (the title-as-action fallback), so a sprint
+  /// started on it is attributed to a real Action that can later be completed
+  /// and settle the row (#711). Runs inside the caller's transaction. Returns
+  /// null only when the Outcome is gone or its title is blank.
+  ///
+  /// Writes the Action only — the Outcome's clarification stamp is untouched,
+  /// since starting a sprint is not a clarifying act. [wroteAction] reports
+  /// whether it minted one, so the caller can notify after commit.
+  static Future<({String? actionId, bool wroteAction})>
+      ensureCurrentActionIdFor(
+    GtdDatabase db,
+    String outcomeId,
+    DateTime ts,
+  ) async {
+    final existing = await currentActionIdFor(db, outcomeId);
+    if (existing != null) return (actionId: existing, wroteAction: false);
+    final outcome = await (db.select(db.todos)
+          ..where((t) => t.id.equals(outcomeId)))
+        .getSingleOrNull();
+    final title = outcome?.title.trim() ?? '';
+    if (title.isEmpty) return (actionId: null, wroteAction: false);
+    // The draft effort the user typed on the Actionless Outcome lands on the
+    // engaged Action, as at every other creation path (ADR-0001 story 7).
+    final seeded = await db.actionDao._seedMetadataFromDraft(outcomeId);
+    final id = await db.actionDao._insertCurrentAction(
+      outcomeId,
+      title,
+      energyLevel: seeded.energyLevel,
+      timeEstimate: seeded.timeEstimate,
+      ts: ts,
+    );
+    return (actionId: id, wroteAction: true);
+  }
+
   /// The Outcome's current Action, or null when it is Actionless.
   Future<Action?> getCurrentAction(String outcomeId) async =>
       _pickWinner(await _currentActionsFor(outcomeId));
@@ -499,6 +534,20 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         if (_pickWinner(entry.value) case final winner?)
           entry.key: winner.actionText,
     };
+  }
+
+  /// Outcomes with at least one planned Action, limited to the requested ids.
+  Future<Set<String>> getOutcomeIdsWithPlannedActions(Set<String> outcomeIds) async {
+    final ids = outcomeIds.toList();
+    final result = <String>{};
+    for (var start = 0; start < ids.length; start += _idChunkSize) {
+      final chunk = ids.sublist(start, (start + _idChunkSize).clamp(0, ids.length));
+      final query = selectOnly(actions, distinct: true)
+        ..addColumns([actions.outcomeId])
+        ..where(actions.outcomeId.isIn(chunk) & actions.role.equals('planned'));
+      result.addAll((await query.get()).map((row) => row.read(actions.outcomeId)!));
+    }
+    return result;
   }
 
   /// Chunk width for `IN (…)` id lookups, well inside SQLite's default

@@ -124,7 +124,7 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
       'COUNT(t.id) AS active_count '
       'FROM tags '
       'LEFT JOIN todo_tags tt ON tt.tag_id = tags.id '
-      'LEFT JOIN todos t ON t.id = tt.todo_id AND t.done_at IS NULL'
+      'LEFT JOIN todos t ON t.id = tt.todo_id AND t.done_at IS NULL '
       'WHERE tags.type = ? '
       'GROUP BY tags.id '
       'ORDER BY tags.name',

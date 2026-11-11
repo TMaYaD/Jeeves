@@ -6,6 +6,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../providers/focus_session_planning_provider.dart';
 import '../../../providers/focus_session_planning_settings_provider.dart';
+import '../../../widgets/meta_chip.dart';
+import '../../../widgets/outcome_row.dart';
 import '../../../widgets/outcome_peek_sheet.dart';
 
 /// Colour of the capacity-bar segment representing minutes counted at the
@@ -30,6 +32,19 @@ class PlanSummaryStep extends ConsumerStatefulWidget {
 
 class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
   final Set<String> _selectedIds = {};
+  final TextEditingController _searchController = TextEditingController();
+
+  /// Trimmed, lower-cased search text. Lives in widget state: the query
+  /// belongs to this visit of the step.
+  String get _query => _searchController.text.trim().toLowerCase();
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  bool _matchesQuery(Todo t) => t.title.toLowerCase().contains(_query);
 
   bool get _selectionMode => _selectedIds.isNotEmpty;
 
@@ -121,6 +136,19 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
             .fold<int>(0, (sum, t) => sum + (t.timeEstimate ?? defaultEstimate))
         : 0;
 
+    final searching = _query.isNotEmpty;
+    // Watched only while searching, so the default view depends on nothing new.
+    final offUpNext = searching
+        ? ref
+            .watch(offUpNextForFocusSessionPlanningProvider)
+            .where((c) => _matchesQuery(c.todo))
+            .toList()
+        : const <OffUpNextCandidate>[];
+    final matchingPending =
+        searching ? pendingTasks.where(_matchesQuery).toList() : pendingTasks;
+    final matchingSkipped =
+        searching ? skippedTasks.where(_matchesQuery).toList() : skippedTasks;
+
     return Column(
       children: [
         // --- Sticky capacity bar ---
@@ -148,6 +176,13 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
         ),
         const Divider(height: 1, color: Color(0xFFF3F4F6)),
 
+        _SearchField(
+          controller: _searchController,
+          enabled: !_selectionMode,
+          onChanged: (_) => setState(() {}),
+          onClear: () => setState(_searchController.clear),
+        ),
+
         if (_selectionMode)
           _MultiSelectActionBar(
             selectedCount: _selectedIds.length,
@@ -172,11 +207,18 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
               physics: const ClampingScrollPhysics(),
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
               children: [
+                if (searching)
+                  ..._searchResults(
+                    matchingPending,
+                    matchingSkipped,
+                    offUpNext,
+                  ),
+
                 // Today's tasks (selected)
-                if (selectedTasks.isNotEmpty) ...[
+                if (!searching && selectedTasks.isNotEmpty) ...[
                   _SectionLabel('Today\'s Plan (${selectedTasks.length})'),
                   const SizedBox(height: 8),
-                  ...selectedTasks.map((t) => _ReviewCard(
+                  ...selectedTasks.map((t) => _planOutcomeRow(
                         todo: t,
                         isSelected: true,
                         onUndo: () => _handleUndo(t),
@@ -189,10 +231,10 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
                 ],
 
                 // Up Next — the undecided pool
-                if (pendingTasks.isNotEmpty) ...[
+                if (!searching && pendingTasks.isNotEmpty) ...[
                   _SectionLabel('Up Next (${pendingTasks.length})'),
                   const SizedBox(height: 8),
-                  ...pendingTasks.map((t) => _ReviewCard(
+                  ...pendingTasks.map((t) => _planOutcomeRow(
                         todo: t,
                         onSelect: () => _handleSelect(t),
                         onSkip: () => _handleSkip(t),
@@ -208,10 +250,10 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
                 ],
 
                 // Skipped
-                if (skippedTasks.isNotEmpty) ...[
+                if (!searching && skippedTasks.isNotEmpty) ...[
                   _SectionLabel('Skipped (${skippedTasks.length})'),
                   const SizedBox(height: 8),
-                  ...skippedTasks.map((t) => _ReviewCard(
+                  ...skippedTasks.map((t) => _planOutcomeRow(
                         todo: t,
                         isSkipped: true,
                         onSelect: () => _handleSelect(t),
@@ -222,7 +264,8 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
                       )),
                 ],
 
-                if (selectedTasks.isEmpty &&
+                if (!searching &&
+                    selectedTasks.isEmpty &&
                     pendingTasks.isEmpty &&
                     skippedTasks.isEmpty)
                   Padding(
@@ -239,6 +282,56 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
         ),
       ],
     );
+  }
+
+  /// The list while a search is active: Up Next matches (then Skipped
+  /// matches), then the visually separate group from outside Up Next. Rows
+  /// carry Select and peek only — no long-press, so no multi-select here.
+  List<Widget> _searchResults(
+    List<Todo> pending,
+    List<Todo> skipped,
+    List<OffUpNextCandidate> offUpNext,
+  ) {
+    final upNextCount = pending.length + skipped.length;
+    return [
+      if (upNextCount > 0) ...[
+        _SectionLabel('Up Next ($upNextCount)'),
+        const SizedBox(height: 8),
+        ...pending.map((t) => _planOutcomeRow(
+              todo: t,
+              onSelect: () => _handleSelect(t),
+              onSkip: () => _handleSkip(t),
+              onPeek: () => OutcomePeekSheet.show(context, t),
+            )),
+        ...skipped.map((t) => _planOutcomeRow(
+              todo: t,
+              isSkipped: true,
+              onSelect: () => _handleSelect(t),
+              onUndo: () => _handleUndo(t),
+              onPeek: () => OutcomePeekSheet.show(context, t),
+            )),
+        const SizedBox(height: 16),
+      ],
+      if (offUpNext.isNotEmpty) ...[
+        _SectionLabel('Not in Up Next (${offUpNext.length})'),
+        const SizedBox(height: 8),
+        ...offUpNext.map((c) => _planOutcomeRow(
+              todo: c.todo,
+              offUpNextReason: c.reason,
+              onSelect: () => _handleSelect(c.todo),
+              onPeek: () => OutcomePeekSheet.show(context, c.todo),
+            )),
+      ],
+      if (upNextCount == 0 && offUpNext.isEmpty)
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          child: Text(
+            'No matches.',
+            style: TextStyle(fontSize: 14, color: Colors.grey[400]),
+            textAlign: TextAlign.center,
+          ),
+        ),
+    ];
   }
 
   void _handleSelect(Todo todo) {
@@ -261,18 +354,10 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
   }
 
   String _capacitySummary(int count, int totalMinutes, int availableMinutes) {
-    final planned = _formatMinutes(totalMinutes);
-    final available = _formatMinutes(availableMinutes);
+    final planned = formatMinutesLabel(totalMinutes);
+    final available = formatMinutesLabel(availableMinutes);
     return '$count task${count == 1 ? '' : 's'} · $planned planned of $available available';
   }
-}
-
-String _formatMinutes(int minutes) {
-  final h = minutes ~/ 60;
-  final m = minutes % 60;
-  if (h == 0) return '${m}m';
-  if (m == 0) return '${h}h';
-  return '${h}h ${m}m';
 }
 
 // ---------------------------------------------------------------------------
@@ -434,7 +519,7 @@ class _MultiSelectActionBar extends StatelessWidget {
                     ),
                     if (previewMinutes > 0)
                       Text(
-                        '+${_formatMinutes(previewMinutes)} planned',
+                        '+${formatMinutesLabel(previewMinutes)} planned',
                         style: TextStyle(
                           fontSize: 12,
                           color: Colors.grey[600],
@@ -495,198 +580,146 @@ class _MultiSelectActionBar extends StatelessWidget {
 /// [onTapInSelectionMode]. [onLongPress] is the entry point into selection
 /// mode and is only meaningful on Up Next rows.
 ///
-/// [onPeek] — a plain tap outside selection mode opens the read-only Outcome
+/// [onPeek] — a plain tap outside selection mode opens the editable Outcome
 /// peek sheet. Callers pass `null` while multi-select is active so the card
 /// carries no gesture params in-mode: on Today's Plan / Skipped rows that
-/// leaves the card with no [GestureDetector] at all (tap inert, rendering and
+/// leaves the row without a gesture handler (tap inert, rendering and
 /// the trailing action buttons untouched); Pending rows keep their in-mode
 /// checkbox-toggle wiring. This is why the peek is gated at the call site
 /// rather than by threading [selectionMode] here — [selectionMode] stays purely
 /// a Pending-card rendering flag.
-class _ReviewCard extends StatelessWidget {
-  const _ReviewCard({
-    required this.todo,
-    this.isSelected = false,
-    this.isSkipped = false,
-    this.onSelect,
-    this.onSkip,
-    this.onUndo,
-    this.selectionMode = false,
-    this.isChecked = false,
-    this.onLongPress,
-    this.onTapInSelectionMode,
-    this.onPeek,
-  });
-
-  final Todo todo;
-  final bool isSelected;
-  final bool isSkipped;
-  final VoidCallback? onSelect;
-  final VoidCallback? onSkip;
-  final VoidCallback? onUndo;
-  final bool selectionMode;
-  final bool isChecked;
-  final VoidCallback? onLongPress;
-  final VoidCallback? onTapInSelectionMode;
-  final VoidCallback? onPeek;
-
-  @override
-  Widget build(BuildContext context) {
-    final textColor = isSkipped ? Colors.grey[500] : const Color(0xFF1A1A2E);
-    final backgroundColor = isSkipped ? const Color(0xFFF9FAFB) : Colors.white;
-
-    final card = Card(
-      elevation: 0,
-      color: backgroundColor,
-      margin: const EdgeInsets.only(bottom: 8),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(
-          color: isSkipped ? const Color(0xFFF3F4F6) : const Color(0xFFE5E7EB),
-        ),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Row(
-          children: [
-            if (selectionMode)
-              Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: Tooltip(
-                  message: 'Select',
-                  child: Checkbox(
-                    value: isChecked,
-                    onChanged: onTapInSelectionMode == null
-                        ? null
-                        : (_) => onTapInSelectionMode!(),
-                    visualDensity: VisualDensity.compact,
-                  ),
-                ),
-              ),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    todo.title,
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w500,
-                      color: textColor,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Wrap(
-                    spacing: 6,
-                    children: [
-                      if (todo.timeEstimate != null)
-                        _Chip(
-                          icon: Icons.timer_outlined,
-                          label: _formatMinutes(todo.timeEstimate!),
-                          color: isSkipped
-                              ? Colors.grey[400]!
-                              : const Color(0xFF2563EB),
-                        ),
-                      if (todo.energyLevel != null)
-                        _Chip(
-                          icon: Icons.bolt_outlined,
-                          label: _energyLabel(todo.energyLevel!),
-                          color: isSkipped
-                              ? Colors.grey[400]!
-                              : const Color(0xFF7C3AED),
-                        ),
-                    ],
-                  ),
-                ],
-              ),
+Widget _planOutcomeRow({
+  required Todo todo,
+  bool isSelected = false,
+  bool isSkipped = false,
+  VoidCallback? onSelect,
+  VoidCallback? onSkip,
+  VoidCallback? onUndo,
+  bool selectionMode = false,
+  bool isChecked = false,
+  VoidCallback? onLongPress,
+  VoidCallback? onTapInSelectionMode,
+  VoidCallback? onPeek,
+  OffUpNextReason? offUpNextReason,
+}) {
+  return OutcomeRow(
+    title: todo.title,
+    framed: true,
+    muted: isSkipped,
+    backgroundColor: isSkipped || offUpNextReason != null
+        ? const Color(0xFFF9FAFB)
+        : Colors.white,
+    borderColor: isSkipped ? const Color(0xFFF3F4F6) : const Color(0xFFE5E7EB),
+    onTap: selectionMode ? onTapInSelectionMode : onPeek,
+    onLongPress: onLongPress,
+    leading: selectionMode
+        ? Tooltip(
+            message: 'Select',
+            child: Checkbox(
+              value: isChecked,
+              onChanged: onTapInSelectionMode == null
+                  ? null
+                  : (_) => onTapInSelectionMode(),
+              visualDensity: VisualDensity.compact,
             ),
-            if (!selectionMode) ...[
-              const SizedBox(width: 8),
-              // Fixed two-button layout — positions never shift:
-              //   pending  → [select] [skip]
-              //   selected → [undo]   [skip]   ← only left changes
-              //   skipped  → [select] [undo]   ← only right changes
-              SizedBox(
-                width: 80,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    // Left slot: Select (pending/skipped) or Undo-of-select (planned)
-                    if (isSelected && onUndo != null)
-                      _IconBtn(
-                        icon: Icons.undo,
-                        color: const Color(0xFF6B7280),
-                        tooltip: 'Remove from today',
-                        onTap: onUndo!,
-                      )
-                    else if (!isSelected && onSelect != null)
-                      _IconBtn(
-                        icon: Icons.check_circle_outline,
-                        color: const Color(0xFF16A34A),
-                        tooltip: 'Select for today',
-                        onTap: onSelect!,
-                      ),
-                    // Right slot: Skip (pending/planned) or Undo-of-skip (skipped)
-                    if (isSkipped && onUndo != null)
-                      _IconBtn(
-                        icon: Icons.undo,
-                        color: const Color(0xFF6B7280),
-                        tooltip: 'Un-skip',
-                        onTap: onUndo!,
-                      )
-                    else if (!isSkipped && onSkip != null)
-                      _IconBtn(
-                        icon: Icons.remove_circle_outline,
-                        color: const Color(0xFF6B7280),
-                        tooltip: 'Skip for today',
-                        onTap: onSkip!,
-                      ),
-                  ],
-                ),
-              ),
-            ],
-          ],
+          )
+        : null,
+    meta: Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        if (offUpNextReason != null)
+          MetaChip(
+            icon: Icons.inbox_outlined,
+            label: offUpNextReason.label,
+            color: const Color(0xFF6B7280),
+          ),
+        OutcomeMetaLine(
+          muted: isSkipped,
+          energyLevel: todo.energyLevel,
+          timeEstimateMinutes: todo.timeEstimate,
         ),
-      ),
-    );
-
-    if (onLongPress == null && onTapInSelectionMode == null && onPeek == null) {
-      return card;
-    }
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onLongPress: onLongPress,
-      onTap: selectionMode ? onTapInSelectionMode : onPeek,
-      child: card,
-    );
-  }
-
-  String _energyLabel(String level) => switch (level) {
-        'low' => 'Low',
-        'medium' => 'Medium',
-        'high' => 'High',
-        _ => level,
-      };
+      ],
+    ),
+    trailing: selectionMode
+        ? const SizedBox.shrink()
+        : SizedBox(
+            width: 80,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                // Left slot: Select (pending/skipped) or Undo-of-select (planned)
+                if (isSelected && onUndo != null)
+                  _IconBtn(
+                    icon: Icons.undo,
+                    color: const Color(0xFF6B7280),
+                    tooltip: 'Remove from today',
+                    onTap: onUndo,
+                  )
+                else if (!isSelected && onSelect != null)
+                  _IconBtn(
+                    icon: Icons.check_circle_outline,
+                    color: const Color(0xFF16A34A),
+                    tooltip: 'Select for today',
+                    onTap: onSelect,
+                  ),
+                // Right slot: Skip (pending/planned) or Undo-of-skip (skipped)
+                if (isSkipped && onUndo != null)
+                  _IconBtn(
+                    icon: Icons.undo,
+                    color: const Color(0xFF6B7280),
+                    tooltip: 'Un-skip',
+                    onTap: onUndo,
+                  )
+                else if (!isSkipped && onSkip != null)
+                  _IconBtn(
+                    icon: Icons.remove_circle_outline,
+                    color: const Color(0xFF6B7280),
+                    tooltip: 'Skip for today',
+                    onTap: onSkip,
+                  ),
+              ],
+            ),
+          ),
+  );
 }
 
-class _Chip extends StatelessWidget {
-  const _Chip({required this.icon, required this.label, required this.color});
+class _SearchField extends StatelessWidget {
+  const _SearchField({
+    required this.controller,
+    required this.enabled,
+    required this.onChanged,
+    required this.onClear,
+  });
 
-  final IconData icon;
-  final String label;
-  final Color color;
+  final TextEditingController controller;
+  final bool enabled;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onClear;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 12, color: color),
-        const SizedBox(width: 2),
-        Text(label,
-            style: TextStyle(
-                fontSize: 12, color: color, fontWeight: FontWeight.w500)),
-      ],
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      child: TextField(
+        controller: controller,
+        enabled: enabled,
+        onChanged: onChanged,
+        textInputAction: TextInputAction.search,
+        decoration: InputDecoration(
+          hintText: 'Search tasks',
+          prefixIcon: const Icon(Icons.search, size: 20),
+          suffixIcon: controller.text.isEmpty
+              ? null
+              : IconButton(
+                  icon: const Icon(Icons.clear, size: 20),
+                  tooltip: 'Clear search',
+                  onPressed: enabled ? onClear : null,
+                ),
+          isDense: true,
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+      ),
     );
   }
 }

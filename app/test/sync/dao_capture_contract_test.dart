@@ -98,6 +98,28 @@ void main() {
       expect(op.fields['intent'], 'trash');
     });
 
+    test('markDone writes no clarified field', () async {
+      final id = await seedOutcome();
+      capture.clear();
+      await db.todoDao.markDone(id);
+      for (final op in capture.forCollection(todosCollection)) {
+        expect(op.fields.containsKey('clarified'), isFalse);
+      }
+    });
+
+    for (final kind in RoutingKind.values) {
+      test('applyRouting(${kind.name}) writes no clarified field', () async {
+        final id = await seedOutcome();
+        capture.clear();
+        await db.todoDao.applyRouting(id, to: kind, now: _ts);
+        final ops = capture.forCollection(todosCollection);
+        expect(ops, isNotEmpty);
+        for (final op in ops) {
+          expect(op.fields.containsKey('clarified'), isFalse);
+        }
+      });
+    }
+
     test('applyRouting restores out of Trash on the same seam', () async {
       final id = await seedOutcome();
       await db.todoDao.setIntent(id, Intent.trash, now: _ts);

@@ -166,7 +166,7 @@ void main() {
       // Actionless + un-stamped ⇒ surfaces in the next DPR's review step. If the
       // user dismisses the prompt (writing nothing — see the sheet test), the
       // Outcome simply stays here for review (AC4).
-      final needsReview = await db.todoDao.getNeedsReview();
+      final needsReview = await db.todoDao.getNeedsReview(actionlessReviewCutoff: actionlessGateOpenCutoff);
       expect(needsReview.map((t) => t.id), contains('o1'));
     });
 
@@ -456,43 +456,47 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
-    // Two things at once, because on this screen they are the same event.
-    //
-    // 1. The mirror of `task_detail_screen_test`'s subject-missing case: a
-    //    write must not outlive its subject (#446 / #447). It matters *more*
-    //    here — the screen's null branch swaps the body out and routes away, so
-    //    the notes page is genuinely torn down at the moment the row goes, on
-    //    the ordinary path rather than a rare one.
-    // 2. The proof that Riverpod delivers the page's own `ref.listen` callback
-    //    before the parent's `ref.watch` rebuild unmounts it. If that ordering
-    //    did not hold, the latch would still be false here and the flush would
-    //    land on the deleted row — which is exactly what this asserts against.
-    testWidgets('a row that goes missing under the open screen is never '
+    // A write must not outlive its subject (#447). It matters more here than
+    // on the detail screen: the screen's null branch swaps the body out and
+    // routes away, so the notes page is torn down at the moment the row goes,
+    // on the ordinary path rather than a rare one. The row is really deleted;
+    // the write seam finds it gone and writes nothing.
+    testWidgets('a row deleted under the open screen is never '
         'written to, and authors no op', (tester) async {
-      final todo = await _insertTodo(db, id: 'o1');
-      final seededUpdatedAt = (await rawRow('o1'))['updated_at'];
-      final feed = StreamController<Todo?>.broadcast();
-      addTearDown(feed.close);
+      final todo = (await tester.runAsync(() => _insertTodo(db, id: 'o1')))!;
 
-      await tester
-          .pumpWidget(_harness(db, todo: todo, todoStream: feed.stream));
-      feed.add(todo);
+      await tester.pumpWidget(_harness(db, todo: todo));
       await _pumpFrames(tester);
       await openNotesEditor(tester);
       await tester.enterText(find.byType(TextField), 'Ask the barista');
 
-      // The row leaves local storage under the open screen. The provider
-      // override decouples the stream from the row, so the row is still there
-      // to prove the negative.
+      await tester.runAsync(() => db.todoDao.deleteOutcome('o1'));
       capture.clear();
-      feed.add(null);
       await _pumpFrames(tester);
       await unmountWhileFocused(tester);
 
-      final row = await rawRow('o1');
-      expect(row['notes'], isNull);
-      expect(row['updated_at'], seededUpdatedAt);
+      expect(await tester.runAsync(() => db.todoDao.getTodo('o1')), isNull);
       // The op-log assertion is the one that survives a future DAO that upserts.
+      expect(capture.forCollection(todosCollection), isEmpty);
+    });
+
+    // The 500 ms debounce is the write path the old latch never covered: its
+    // timer fires after the delete, with no dispose in sight.
+    testWidgets('a pending notes debounce firing after the delete writes '
+        'nothing', (tester) async {
+      final todo = (await tester.runAsync(() => _insertTodo(db, id: 'o1')))!;
+
+      await tester.pumpWidget(_harness(db, todo: todo));
+      await _pumpFrames(tester);
+      await openNotesEditor(tester);
+      await tester.enterText(find.byType(TextField), 'Ask the barista');
+
+      await tester.runAsync(() => db.todoDao.deleteOutcome('o1'));
+      capture.clear();
+      await tester.pump(const Duration(milliseconds: 600));
+      await _pumpFrames(tester);
+
+      expect(await tester.runAsync(() => db.todoDao.getTodo('o1')), isNull);
       expect(capture.forCollection(todosCollection), isEmpty);
     });
   });

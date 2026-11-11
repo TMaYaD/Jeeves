@@ -122,7 +122,7 @@ void main() {
         () async {
       expect(
         () => service.carveOutcome('gone', userId: _userId, title: 'Orphan'),
-        throwsA(isA<StateError>()),
+        throwsA(isA<CaptureNotFoundError>()),
       );
     });
 
@@ -337,7 +337,7 @@ void main() {
     test('refuses to stamp a Capture that has vanished', () async {
       expect(
         () => service.completeCaptureClarification('gone'),
-        throwsA(isA<StateError>()),
+        throwsA(isA<CaptureNotFoundError>()),
       );
     });
   });

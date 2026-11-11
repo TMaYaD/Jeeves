@@ -12,7 +12,7 @@
 /// walked, plus (Daily Planning only) a flat 5 minutes for the Energy/Time
 /// check-ins and task selection. It is rounded up to the nearest 5 and floored
 /// at 5, so the intro always shows a scannable time — a zero-item Weekly
-/// Review reads "about 5 minutes", never "0". The counts recompute run-to-run
+/// Review reads "about 5m", never "0". The counts recompute run-to-run
 /// from the current lists.
 ///
 /// The proceed CTA is Bertie speak (the user answering Jeeves) — see
@@ -25,6 +25,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 
 import '../jeeves_logo.dart';
+import '../meta_chip.dart' show formatMinutesLabel;
 
 // ---------------------------------------------------------------------------
 // Estimate model
@@ -58,24 +59,21 @@ class IntroEstimateReady extends IntroEstimate {
 
 /// The display duration in minutes: [rawMinutes] rounded **up** to the nearest
 /// 5, floored at 5. The floor guarantees the intro always shows a scannable
-/// time (a zero-item Weekly Review reads "about 5 minutes"); the round-up
+/// time (a zero-item Weekly Review reads "about 5m"); the round-up
 /// hides the falsely-precise odd numbers `2×n (+5)` produces.
 int introDisplayMinutes(int rawMinutes) {
   final roundedUpToNearest5 = ((rawMinutes + 4) ~/ 5) * 5;
   return roundedUpToNearest5 < 5 ? 5 : roundedUpToNearest5;
 }
 
-/// The whole "about N minutes" run that fills a copy template's `{duration}`
-/// slot. The floor makes the singular ("about 1 minute") unreachable, but it
-/// is handled grammatically all the same.
-String introDurationText(int rawMinutes) {
-  final minutes = introDisplayMinutes(rawMinutes);
-  return minutes == 1 ? 'about 1 minute' : 'about $minutes minutes';
-}
+/// The whole "about 3h 30m" run that fills a copy template's `{duration}`
+/// slot, rendered by the shared [formatMinutesLabel].
+String introDurationText(int rawMinutes) =>
+    'about ${formatMinutesLabel(introDisplayMinutes(rawMinutes))}';
 
 // ---------------------------------------------------------------------------
 // Copy pools (Jeeves speak) — first person, "sir", dry, no exclamation marks,
-// no emoji. `{duration}` expands to the whole "about N minutes" run, which
+// no emoji. `{duration}` expands to the whole "about 3h 30m" run, which
 // renders as the bold/larger/accent focal point inside the sentence.
 // ---------------------------------------------------------------------------
 
@@ -218,7 +216,7 @@ class _CeremonyIntroBodyState extends State<CeremonyIntroBody> {
     final durationText = introDurationText(estimate.rawMinutes);
 
     // Split the single {duration} slot; the emphasised run spans the whole
-    // "about N minutes" substring inside the sentence (visual layout B).
+    // "about 3h 30m" substring inside the sentence (visual layout B).
     final parts = template.split('{duration}');
     final durationStyle = baseStyle.copyWith(
       fontSize: 30,

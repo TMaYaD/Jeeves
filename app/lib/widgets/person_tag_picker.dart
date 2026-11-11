@@ -21,16 +21,18 @@ import '../providers/task_detail_provider.dart';
 /// - **Write mode** ([todoId] given) — the subject is an existing Outcome.
 ///   Pre-selects its assigned tags and, on confirm, replaces its person-tag
 ///   set with the selection via [TaskDetailNotifier.setPersonTags] before
-///   returning it.
+///   returning it. If the Outcome is gone from local storage when Done is
+///   tapped, nothing is written and the sheet pops `null`, as for cancel.
 /// - **Selection-only mode** (no [todoId]) — the sheet attaches nothing; the
 ///   caller's own routing write does. Used for an Inbox Capture, whose
 ///   Outcome does not exist yet (ADR-0006: clarifying a Capture *creates* the
 ///   Outcome) so there is no row to attach to, and by callers whose routing
 ///   write replaces the person-tag set atomically anyway.
 ///
-/// Independent of mode, the inline "Add person" field persists the new person
-/// tag as soon as it is added: creating a person is its own act, and the new
-/// tag stays in the catalogue even if the user then cancels the sheet.
+/// Independent of mode, both ways of adding a person — `Add "<name>"` from a
+/// search that matches nobody, and the "Add person" field — persist the new
+/// person tag as soon as it is added: creating a person is its own act, and the
+/// new tag stays in the catalogue even if the user then cancels the sheet.
 class PersonTagPickerSheet extends ConsumerStatefulWidget {
   const PersonTagPickerSheet({
     super.key,
@@ -61,6 +63,14 @@ class _PersonTagPickerSheetState extends ConsumerState<PersonTagPickerSheet> {
   bool _creatingNew = false;
   String _filter = '';
 
+  /// The search text as typed (trimmed, original casing). [_filter] is its
+  /// lowercased match key and must never be used as a name.
+  String _searchText = '';
+
+  /// True while a person tag is being created, so a second tap cannot run a
+  /// concurrent create.
+  bool _addingPerson = false;
+
   /// True from the moment "Done" is accepted until the sheet pops. Confirming
   /// is the one path that both writes and pops, so leaving it re-entrant lets
   /// a second tap pop the *caller's* route behind the closing sheet — the
@@ -73,7 +83,10 @@ class _PersonTagPickerSheetState extends ConsumerState<PersonTagPickerSheet> {
     super.initState();
     _selected = Set.from(widget.assignedPersonTagIds);
     _searchController.addListener(() {
-      setState(() => _filter = _searchController.text.trim().toLowerCase());
+      setState(() {
+        _searchText = _searchController.text.trim();
+        _filter = _searchText.toLowerCase();
+      });
     });
   }
 
@@ -128,10 +141,22 @@ class _PersonTagPickerSheetState extends ConsumerState<PersonTagPickerSheet> {
             if (visible.isEmpty && _filter.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Text(
-                  'No match for "$_filter"',
-                  style: TextStyle(
-                      fontSize: 14, color: Theme.of(context).hintColor),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'No match for "$_searchText"',
+                      style: TextStyle(
+                          fontSize: 14, color: Theme.of(context).hintColor),
+                    ),
+                    TextButton.icon(
+                      onPressed: _addingPerson
+                          ? null
+                          : () => _addPerson(_searchText),
+                      icon: const Icon(Icons.add, size: 18),
+                      label: Text('Add "$_searchText"'),
+                    ),
+                  ],
                 ),
               )
             else
@@ -177,7 +202,7 @@ class _PersonTagPickerSheetState extends ConsumerState<PersonTagPickerSheet> {
                   ),
                   const SizedBox(width: 8),
                   FilledButton(
-                    onPressed: _createAndSelect,
+                    onPressed: _addingPerson ? null : _createAndSelect,
                     child: const Text('Add'),
                   ),
                   TextButton(
@@ -207,6 +232,7 @@ class _PersonTagPickerSheetState extends ConsumerState<PersonTagPickerSheet> {
                 const SizedBox(width: 8),
                 FilledButton(
                   onPressed: (_committing ||
+                          _addingPerson ||
                           (widget.requireSelection && _selected.isEmpty))
                       ? null
                       : _confirm,
@@ -221,19 +247,25 @@ class _PersonTagPickerSheetState extends ConsumerState<PersonTagPickerSheet> {
   }
 
   Future<void> _createAndSelect() async {
-    final name = _newPersonController.text.trim();
-    if (name.isEmpty) return;
+    if (await _addPerson(_newPersonController.text) && mounted) {
+      setState(() {
+        _creatingNew = false;
+        _newPersonController.clear();
+      });
+    }
+  }
+
+  /// Persists [name] as a person tag and ticks it. Returns whether it landed.
+  Future<bool> _addPerson(String name) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty || _addingPerson) return false;
+    setState(() => _addingPerson = true);
     try {
       final db = ref.read(databaseProvider);
       final userId = ref.read(currentUserIdProvider);
-      final tagId = await db.tagDao.createPersonTag(name, userId);
-      if (mounted) {
-        setState(() {
-          _creatingNew = false;
-          _newPersonController.clear();
-          _selected.add(tagId);
-        });
-      }
+      final tagId = await db.tagDao.createPersonTag(trimmed, userId);
+      if (mounted) setState(() => _selected.add(tagId));
+      return true;
     } catch (e) {
       debugPrint('Failed to create person tag: $e');
       if (mounted) {
@@ -241,22 +273,26 @@ class _PersonTagPickerSheetState extends ConsumerState<PersonTagPickerSheet> {
           const SnackBar(content: Text('Failed to create tag. Please try again.')),
         );
       }
+      return false;
+    } finally {
+      if (mounted) setState(() => _addingPerson = false);
     }
   }
 
   Future<void> _confirm() async {
-    if (_committing) return;
+    if (_committing || _addingPerson) return;
     // Freeze the selection before the first await: what gets written and what
     // gets returned must be the same set.
     final selected = Set<String>.unmodifiable(_selected);
     final todoId = widget.todoId;
     setState(() => _committing = true);
 
+    var landed = true;
     try {
       if (todoId != null) {
-        await ref.read(taskDetailNotifierProvider(todoId)).setPersonTags(
-              selected,
-            );
+        landed = await ref
+            .read(taskDetailNotifierProvider(todoId))
+            .setPersonTags(selected);
       }
     } catch (e) {
       debugPrint('Failed to save person tags: $e');
@@ -270,12 +306,15 @@ class _PersonTagPickerSheetState extends ConsumerState<PersonTagPickerSheet> {
       return;
     }
 
-    if (mounted) Navigator.pop(context, selected);
+    // The Outcome was deleted while the sheet was open: nothing was written,
+    // so close as a cancel rather than report a selection that did not land.
+    if (mounted) Navigator.pop(context, landed ? selected : null);
   }
 }
 
 /// Shows the [PersonTagPickerSheet] as a modal bottom sheet and returns the
-/// chosen person-tag ids, or `null` if the user cancelled.
+/// chosen person-tag ids, or `null` if the user cancelled or nothing landed
+/// (the Outcome was deleted while the sheet was open).
 ///
 /// The caller performs its own writes and navigation on the result — the
 /// sheet has already closed by the time this future completes. Pass [todoId]

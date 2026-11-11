@@ -25,6 +25,7 @@ import 'package:jeeves/providers/gtd_lists_provider.dart';
 import 'package:jeeves/providers/nudge_clock_provider.dart';
 import 'package:jeeves/providers/nudge_triggers.dart';
 import 'package:jeeves/providers/onboarding_provider.dart';
+import 'package:jeeves/providers/periodic_review_settings_provider.dart';
 import 'package:jeeves/providers/shutdown_settings_provider.dart';
 
 class _StubPlanningSettings extends FocusSessionPlanningSettingsNotifier {
@@ -101,6 +102,49 @@ Future<TriggerState> _readTrigger(
 }
 
 void main() {
+  group('Weekly Review Cadence Trigger', () {
+    final lastCompleted = DateTime(2026, 5, 1, 12);
+    final due = lastCompleted.add(const Duration(days: 7));
+
+    for (final elapsed in [
+      Duration.zero,
+      const Duration(days: 6, hours: 23),
+      const Duration(days: 7),
+    ]) {
+      test('reports the current cadence edge at due + $elapsed', () async {
+        final c = ProviderContainer(overrides: [
+          clockProvider.overrideWithValue(() => due.add(elapsed)),
+          nudgeBoundaryTickProvider.overrideWithValue(0),
+          periodicReviewOpenSinceProvider.overrideWithValue(null),
+          periodicReviewLastCompletedProvider.overrideWithValue(lastCompleted),
+          hasAnyItemProvider.overrideWith((ref) => Stream.value(true)),
+          ceremonyInProgressForProvider.overrideWith((ref, r) => false),
+        ]);
+        addTearDown(c.dispose);
+        final trigger = await _readTrigger(c, RitualId.weeklyReview);
+        expect(trigger.isFiring, isTrue);
+        expect(trigger.firingSince,
+            elapsed.inDays < 7 ? due : due.add(const Duration(days: 7)));
+      });
+    }
+
+    test('never completed keeps the start-of-today edge', () async {
+      final now = DateTime(2026, 5, 20, 15);
+      final c = ProviderContainer(overrides: [
+        clockProvider.overrideWithValue(() => now),
+        nudgeBoundaryTickProvider.overrideWithValue(0),
+        periodicReviewOpenSinceProvider.overrideWithValue(null),
+        periodicReviewLastCompletedProvider.overrideWithValue(null),
+        hasAnyItemProvider.overrideWith((ref) => Stream.value(true)),
+        ceremonyInProgressForProvider.overrideWith((ref, r) => false),
+      ]);
+      addTearDown(c.dispose);
+      final trigger = await _readTrigger(c, RitualId.weeklyReview);
+      expect(trigger.isFiring, isTrue);
+      expect(trigger.firingSince, DateTime(2026, 5, 20));
+    });
+  });
+
   group('Daily Planning Cadence Trigger — ES-anchor attribution', () {
     test('idle before today\'s DPR anchor (no pre-anchor nagging)', () async {
       final c = _makeContainer(now: DateTime(2026, 5, 20, 7, 0));
