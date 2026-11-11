@@ -31,6 +31,16 @@ import java.util.UUID
 class ShareReceiverActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // A non-null saved state means the system restored this Activity (for
+        // example after process death). The original share was already handled
+        // or lost; queueing the replayed intent again would mint a second
+        // shareId and so a duplicate Capture. Config changes never recreate it
+        // (see `android:configChanges` in the manifest), so a worker is never
+        // orphaned mid-copy by a recreation.
+        if (savedInstanceState != null) {
+            finish()
+            return
+        }
         val sharedIntent = intent
         Thread {
             val succeeded = try {
@@ -52,8 +62,9 @@ class ShareReceiverActivity : Activity() {
 
     private fun queueShare(sharedIntent: Intent?) {
         if (sharedIntent?.action != Intent.ACTION_SEND) throw IllegalArgumentException("not a SEND intent")
-        val text = sharedIntent.getStringExtra(Intent.EXTRA_TEXT)
-        val subject = sharedIntent.getStringExtra(Intent.EXTRA_SUBJECT)
+        // EXTRA_TEXT and EXTRA_SUBJECT are CharSequence; styled text is not a String.
+        val text = sharedIntent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
+        val subject = sharedIntent.getCharSequenceExtra(Intent.EXTRA_SUBJECT)?.toString()
         val stream = streamUri(sharedIntent)
         if (text.isNullOrBlank() && subject.isNullOrBlank() && stream == null) {
             throw IllegalArgumentException("nothing to capture")

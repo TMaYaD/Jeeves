@@ -34,6 +34,7 @@
         <activity
             android:name=".ShareReceiverActivity"
             android:exported="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|locale|layoutDirection|density|fontScale|colorMode"
             android:excludeFromRecents="true"
             android:noHistory="true"
             android:taskAffinity=".share"
