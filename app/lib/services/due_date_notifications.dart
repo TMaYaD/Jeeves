@@ -157,10 +157,7 @@ class DueDateNotificationReconciler {
   final DateTime Function() _now;
 
   final _scheduledById = <int, PlannedDueDateNotification>{};
-  // Ids of delivered notifications still in the tray.
-  final _deliveredIds = <int>{};
   List<Todo> _latestOutcomes = const [];
-  bool _seededFromOs = false;
   bool _rescheduleAll = false;
   Future<void> _queue = Future.value();
   StreamSubscription<List<Todo>>? _subscription;
@@ -208,36 +205,23 @@ class DueDateNotificationReconciler {
       now: _now(),
     );
     final desiredIds = plan.toSchedule.map((p) => p.id).toSet();
-    if (!_seededFromOs) {
-      final onDevice = await notifications.dueDateNotificationsOnDevice();
-      _seededFromOs = true;
-      _deliveredIds.addAll(onDevice.delivered);
-      // Everything pending at startup is still waiting to fire, so one the plan
-      // no longer wants (its due date moved into the past, say) is obsolete.
-      for (final id in onDevice.pending.difference(desiredIds)) {
-        await notifications.cancelReminder(id);
-        _deliveredIds.remove(id);
-      }
-    }
-    // Alarms this run scheduled that the plan has since dropped. One whose fire
-    // time has passed has been delivered, so it stays in the tray until the
-    // Outcome stops qualifying.
-    for (final entry in _scheduledById.entries.toList()) {
-      final planned = entry.value;
-      if (desiredIds.contains(entry.key)) continue;
-      if (planned.fireAt.isAfter(_now())) {
-        await notifications.cancelReminder(entry.key);
-        _scheduledById.remove(entry.key);
-        _deliveredIds.remove(entry.key);
-      } else {
-        _deliveredIds.add(entry.key);
-        _scheduledById.remove(entry.key);
-      }
-    }
-    for (final id in _deliveredIds.difference(plan.keepIds).toList()) {
+    // Ask the OS what is actually pending and delivered; never infer delivery
+    // from the clock, since inexact alarms can fire minutes after 09:00. The
+    // two queries are not atomic, so an alarm that fired in between shows up
+    // in both: it has been delivered, so it is not an alarm to cancel.
+    final onDevice = await notifications.dueDateNotificationsOnDevice();
+    final stillPending = onDevice.pending.difference(onDevice.delivered);
+    // A pending alarm the plan no longer wants (its due date moved into the
+    // past, or it fell outside the nearest 50) is obsolete.
+    for (final id in stillPending.difference(desiredIds)) {
       await notifications.cancelReminder(id);
-      _deliveredIds.remove(id);
     }
+    // A delivered notification stays in the tray while its Outcome is overdue
+    // and open, and goes once the Outcome stops qualifying.
+    for (final id in onDevice.delivered.difference(plan.keepIds)) {
+      await notifications.cancelReminder(id);
+    }
+    _scheduledById.removeWhere((id, _) => !desiredIds.contains(id));
     for (final planned in plan.toSchedule) {
       final previous = _scheduledById[planned.id];
       if (!_rescheduleAll && previous != null && previous.sameAs(planned)) {
@@ -251,7 +235,6 @@ class DueDateNotificationReconciler {
         payload: dueDateNotificationPayload(planned.outcomeId),
       );
       _scheduledById[planned.id] = planned;
-      _deliveredIds.remove(planned.id);
     }
     _rescheduleAll = false;
   }

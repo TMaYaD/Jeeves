@@ -166,7 +166,8 @@ class NotificationService {
 
   /// Due-date notifications the OS holds, recognised by their payload:
   /// `pending` are still scheduled to fire; `delivered` already fired and sit
-  /// in the tray.
+  /// in the tray. The queries are sequential, so an alarm that fires between
+  /// them appears in both sets.
   Future<({Set<int> pending, Set<int> delivered})>
       dueDateNotificationsOnDevice() async {
     final pending = <int>{};

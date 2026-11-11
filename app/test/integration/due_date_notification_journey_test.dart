@@ -81,7 +81,7 @@ void main() {
   late GtdDatabase db;
   late FakeOsNotifications os;
   late DueDateNotificationReconciler reconciler;
-  final now = DateTime.utc(2026, 11, 10, 6); // 11:30 in Kolkata.
+  var now = DateTime.utc(2026, 11, 10, 6); // 11:30 in Kolkata.
 
   DueDateNotificationReconciler startReconciler() =>
       DueDateNotificationReconciler(
@@ -104,6 +104,7 @@ void main() {
           id: id, title: 'Title $id', userId: 'local', dueDate: dueDate);
 
   setUp(() {
+    now = DateTime.utc(2026, 11, 10, 6);
     kolkata = tz.getLocation('Asia/Kolkata');
     tz.setLocalLocation(kolkata);
     db = GtdDatabase(NativeDatabase.memory());
@@ -252,6 +253,38 @@ void main() {
     await db.todoDao.markDone('a');
     await settle();
     expect(os.delivered, isEmpty);
+  });
+
+  test('a late alarm past 09:00 is still cancelled when the date moves back',
+      () async {
+    await insert('a', dueDate: _dueDay(kolkata, 2026, 11, 10));
+    now = DateTime.utc(2026, 11, 9, 6);
+    reconciler.dispose();
+    reconciler = startReconciler();
+    await settle();
+    expect(os.pending, hasLength(1));
+
+    // 09:01 on the due day: the OS has not delivered the alarm yet.
+    now = DateTime.utc(2026, 11, 10, 3, 31);
+    await db.todoDao.rescheduleTask('a', _dueDay(kolkata, 2026, 11, 9));
+    await settle();
+
+    expect(os.pending, isEmpty);
+    expect(os.delivered, isEmpty);
+  });
+
+  test('an alarm seen as both pending and delivered stays in the tray',
+      () async {
+    await insert('a', dueDate: _dueDay(kolkata, 2026, 11, 10));
+    final id = dueDateNotificationId('a');
+    os.pending[id] = _Pending(
+        'Title a', 'Due today', now.subtract(const Duration(hours: 1)), 'outcome:a');
+    os.delivered.add(id);
+    reconciler.dispose();
+    reconciler = startReconciler();
+    await settle();
+
+    expect(os.delivered, {id});
   });
 
   test('a timezone change is picked up on the next resume', () async {
