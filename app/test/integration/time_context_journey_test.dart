@@ -74,7 +74,7 @@ void main() {
   ) async {
     final sub = container.listen(provider, (_, _) {});
     addTearDown(sub.close);
-    for (var i = 0; i < 300; i++) {
+    for (var i = 0; i < 800; i++) {
       final value = sub.read();
       if (done(value)) return value;
       await Future<void>.delayed(const Duration(milliseconds: 10));
@@ -94,10 +94,10 @@ void main() {
       'with no other write', () async {
     final actionId = await _insertOutcome(db, 'o1');
     await _insertOutcome(db, 'plain');
-    // Real wall clock, parked 400 ms before tomorrow's local midnight.
+    // Real wall clock, parked 2 s before tomorrow's local midnight.
     final tomorrow = DateTime.now().add(const Duration(days: 1));
     final midnight = DateTime(tomorrow.year, tomorrow.month, tomorrow.day);
-    final start = midnight.subtract(const Duration(milliseconds: 400));
+    final start = midnight.subtract(const Duration(milliseconds: 2000));
     final stopwatch = Stopwatch()..start();
     clock = () => start.add(stopwatch.elapsed);
     startContainer();

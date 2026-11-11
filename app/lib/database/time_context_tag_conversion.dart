@@ -47,14 +47,17 @@ String normaliseContextTagName(String name) => name
 
 /// Converts in one [GtdDatabase.capturing] transaction (all or nothing).
 /// Returns the number of Outcome↔tag links converted.
-Future<int> convertTimeNamedContextTags(GtdDatabase db, {DateTime? now}) {
+Future<int> convertTimeNamedContextTags(
+  GtdDatabase db, {
+  DateTime? now,
+}) async {
   final ts = (now ?? DateTime.now()).toUtc();
-  return db.capturing(() async {
+  final converted = await db.capturing(() async {
     final contextTags = await (db.select(db.tags)
           ..where((t) => t.type.equals('context'))
           ..orderBy([(t) => OrderingTerm.asc(t.name), (t) => OrderingTerm.asc(t.id)]))
         .get();
-    var converted = 0;
+    var linkCount = 0;
     for (final tag in contextTags) {
       final value = timeNamedContextTags[normaliseContextTagName(tag.name)];
       if (value == null) continue;
@@ -67,9 +70,14 @@ Future<int> convertTimeNamedContextTags(GtdDatabase db, {DateTime? now}) {
         if (action == null || action.timeContext != null) continue;
         await db.actionDao.applySetTimeContext(action.id, value, ts: ts);
         await db.tagDao.unassignTag(link.todoId, tag.id);
-        converted++;
+        linkCount++;
       }
     }
-    return converted;
+    return linkCount;
   });
+  if (converted > 0) {
+    db.notifyActionsViewWrite();
+    db.notifyTodosViewWrite(includeTodoTags: true);
+  }
+  return converted;
 }

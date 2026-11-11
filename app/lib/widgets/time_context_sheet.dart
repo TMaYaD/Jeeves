@@ -137,10 +137,10 @@ class _TimeContextSheetState extends State<_TimeContextSheet> {
       final picked24 = picked.hour * 60 + picked.minute;
       if (isStart) {
         _startMinute = picked24;
-        _endMinute ??= (picked24 + 60).clamp(0, 24 * 60);
+        _endMinute ??= (picked24 + 60).clamp(0, 24 * 60).toInt();
       } else {
         _endMinute = picked24;
-        _startMinute ??= (picked24 - 60).clamp(0, 24 * 60);
+        _startMinute ??= (picked24 - 60).clamp(0, 24 * 60).toInt();
       }
       // A time window needs weekdays: default to every day.
       if (_days.isEmpty) _days.addAll(const [1, 2, 3, 4, 5, 6, 7]);

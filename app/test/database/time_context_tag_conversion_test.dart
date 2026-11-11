@@ -11,7 +11,6 @@ import 'package:jeeves/models/time_context.dart';
 import 'package:jeeves/sync/collection_codecs.dart';
 import 'package:jeeves/sync/domain_op_capture.dart';
 
-import '../sync/harness/reduced_state.dart' show RecordingDomainOpCapture;
 import '../test_helpers.dart';
 
 const _userId = 'local';

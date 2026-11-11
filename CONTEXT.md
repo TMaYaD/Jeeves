@@ -93,8 +93,8 @@ _Avoid_: Block, Dependency, Constraint (Constraint is reserved for action-level 
 A Blocker whose unresolved world-state is "this Person has not yet acted." References a specific **Person**; existence of the reference is the wait, removal is its resolution. The user-visible list grouping Outcomes-by-Person is called **Waiting For**.
 _Avoid_: WaitingFor (as an entity name), Wait, PendingPerson
 
-**Context** *(deferred — not yet modelled)*:
-A predicate over current world state ("is *now* a moment when this action is doable?") that attaches to an Action and gates its visibility. Distinct from a Blocker: a Blocker describes outside-the-user state relevant to the *outcome*; a Context gates *whether you can act*. Examples: "@phone" (action is doable when phone is available), "after Nov 30" (action is doable from that date).
+**Context** *(time modelled as TimeContext; location deferred)*:
+A predicate over current world state ("is *now* a moment when this action is doable?") that attaches to an Action and gates its visibility. Distinct from a Blocker: a Blocker describes outside-the-user state relevant to the *outcome*; a Context gates *whether you can act*. **TimeContext** (UI: "Time context") is the time predicate — from a date and/or in a weekly window ("after Nov 30"): unsatisfied, it hides the Outcome from the Next List and Up Next, which leaves it on Next. Detail in REQUIREMENTS.
 _Avoid_: Constraint, Filter, Gate
 
 **Hard landscape** *(deferred — not yet modelled)*:
@@ -173,7 +173,7 @@ _Avoid_: Delete, Dismiss, Done (Done is a different verdict entirely), Trash (Tr
 - An **Outcome** belongs to at most one **Area** (1:N — Area is the exclusive home) and is labelled with zero or more **Labels** (M:N — Label is the cross-cutting annotation).
 - A **PersonBlocker** references exactly one **Person**; one Outcome may have multiple PersonBlockers (waiting on multiple Persons), and one Person may be the subject of PersonBlockers on multiple Outcomes.
 - A **Person** may also appear in Action text or Outcome notes without being a Blocker — referencing a Person does not imply blocking on them.
-- An **Action** may have zero or more **Contexts** (M:N) — deferred but conceptually committed; the relationship is owned by Action, not Outcome.
+- An **Action** has at most one **TimeContext**, owned by the Action, not the Outcome; other Contexts are deferred.
 - **Only the *current* Action is engageable.** Planned Actions cannot have TimeLogs, do not surface in **Next** / Focus Mode / Today's Plan. They are visible only in the context of their Outcome (where the Outcome's plan — an explicit List of planned Actions — is shown).
 - **Promotion from `planned` to `current` is an explicit clarifying act, never automatic.** When the current Action terminates, the Outcome enters the "no current Action" state until the user re-clarifies and either promotes a planned Action, edits one, or creates a new one.
 - **The plan carries no explicit dependencies.** Ordering among planned Actions is the user's intuition about sequence, not a DAG. The user revises ordering during clarification.
