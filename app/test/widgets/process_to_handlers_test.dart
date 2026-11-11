@@ -1953,6 +1953,83 @@ void main() {
       expect(fired, [ProcessAction.nextActionDialog]);
     });
 
+    Future<void> failRouteWrites() => db.customStatement(
+          'CREATE TRIGGER todos_route_fails BEFORE UPDATE OF intent ON todos '
+          "BEGIN SELECT RAISE(ABORT, 'route is unwritable'); END",
+        );
+
+    testWidgets(
+        'a failed route leaves an Actionless promote entirely unapplied (#788)',
+        (tester) async {
+      final todo = await _insertTodo(db, id: 'q788a', intent: 'maybe');
+      await seedQueue('q788a');
+      await failRouteWrites();
+      final fired = <ProcessAction>[];
+      await tester.pumpWidget(
+          _harness(db, todo: todo, onAfterRoute: (a) async => fired.add(a)));
+
+      await openDialog(tester);
+      await tester.tap(find.text('Step one'));
+      await tester.pumpAndSettle();
+
+      expect(await db.actionDao.getCurrentAction('q788a'), isNull,
+          reason: 'the promote and the route commit together or not at all');
+      expect((await db.actionDao.getPlannedActions('q788a')).map((a) => a.id),
+          ['p1', 'p2'],
+          reason: 'the chosen row is still in the queue, in order');
+      final row = await (db.select(db.todos)
+            ..where((t) => t.id.equals('q788a')))
+          .getSingle();
+      expect(row.intent, 'maybe');
+      expect(row.lastClarifiedAt, todo.lastClarifiedAt);
+      expect(row.energyLevel, todo.energyLevel);
+      expect(row.timeEstimate, todo.timeEstimate);
+      expect(find.text('Operation failed. Please try again.'),
+          findsOneWidget);
+      expect(fired, isEmpty,
+          reason: 'the review must not advance past a write that did not land');
+    });
+
+    testWidgets(
+        'a failed route leaves a confirmed replace entirely unapplied (#788)',
+        (tester) async {
+      final todo = await _insertTodo(db, id: 'q788b', intent: 'maybe');
+      await seedCurrentAction(
+          db, outcomeId: 'q788b', text: 'do it', userId: _userId);
+      await seedQueue('q788b');
+      await failRouteWrites();
+      final fired = <ProcessAction>[];
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        currentActionText: 'do it',
+        onAfterRoute: (a) async => fired.add(a),
+      ));
+
+      await openDialog(tester);
+      await tester.tap(find.text('Step one'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('plan_replace_confirm')));
+      await tester.pumpAndSettle();
+
+      expect((await db.actionDao.getCurrentAction('q788b'))?.actionText,
+          'do it',
+          reason: 'the incumbent must not be superseded by a half-write');
+      expect((await db.actionDao.getPlannedActions('q788b')).map((a) => a.id),
+          ['p1', 'p2']);
+      expect(await db.actionDao.getTerminatedActions('q788b'), isEmpty);
+      final row = await (db.select(db.todos)
+            ..where((t) => t.id.equals('q788b')))
+          .getSingle();
+      expect(row.intent, 'maybe');
+      expect(row.lastClarifiedAt, todo.lastClarifiedAt);
+      expect(row.energyLevel, todo.energyLevel);
+      expect(row.timeEstimate, todo.timeEstimate);
+      expect(find.text('Operation failed. Please try again.'),
+          findsOneWidget);
+      expect(fired, isEmpty);
+    });
+
     testWidgets('declining the Replace confirm writes nothing and does not '
         'notify', (tester) async {
       // On Someday, with a current Action and a queue — so a committed route
