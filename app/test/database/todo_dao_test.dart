@@ -29,13 +29,11 @@ Future<String> _insertTodo(
   GtdDatabase db, {
   required String id,
   required String title,
-  bool clarified = true,
 }) async {
   final now = DateTime.now();
   await db.into(db.todos).insert(TodosCompanion(
     id: Value(id),
     title: Value(title),
-    clarified: Value(clarified),
     userId: const Value(_userId),
     createdAt: Value(now),
     updatedAt: Value(now),
@@ -248,18 +246,15 @@ void main() {
       expect(items.first.id, 'w1');
     });
 
-    test('watchPersonTagged excludes tasks where clarified = false', () async {
+    test('watchPersonTagged excludes Inbox Captures', () async {
       final now = DateTime.now();
-      await db.into(db.todos).insert(TodosCompanion(
+      await db.captureDao.insertCapture(CapturesCompanion(
         id: const Value('wc1'),
         title: const Value('Unclarified waiting'),
-        clarified: const Value(false),
         userId: const Value(_userId),
         createdAt: Value(now),
         updatedAt: Value(now),
       ));
-      await _insertPersonTag(db, id: 'p2', name: 'Bob');
-      await db.tagDao.assignTag('wc1', 'p2', _userId);
 
       final items = await db.todoDao.watchPersonTagged().first;
       expect(items.any((t) => t.id == 'wc1'), isFalse);
@@ -355,7 +350,7 @@ void main() {
   group('TodoDao — watchNext (actionless+PersonBlocked exclusion)', () {
     // The Next List membership rule:
     //
-    //   Next = intent='next' ∧ clarified ∧ done_at IS NULL ∧
+    //   Next = intent='next' ∧ done_at IS NULL ∧
     //          (has a current Action ∨ no PersonBlocker on the Outcome)
     //
     // The single excluded quadrant is actionless (no `actions` row with
@@ -466,7 +461,7 @@ void main() {
     setUp(() => db = _openInMemory());
     tearDown(() async => db.close());
 
-    test('returns clarified, non-done, intent=next todos with no person tag',
+    test('returns non-done, intent=next todos with no person tag',
         () async {
       await _insertTodo(db, id: 'nx1', title: 'Plain next');
 
@@ -526,10 +521,14 @@ void main() {
       expect(items.any((t) => t.id == 'nx8'), isFalse);
     });
 
-    test('excludes unclarified, done, and non-next-intent todos', () async {
-      // Unclarified
-      await _insertTodo(
-          db, id: 'nx4', title: 'Unclarified', clarified: false);
+    test('excludes Inbox Captures, done, and non-next-intent todos', () async {
+      // Inbox Capture
+      await db.captureDao.insertCapture(CapturesCompanion(
+        id: const Value('nx4'),
+        title: const Value('Unclarified'),
+        userId: const Value(_userId),
+        createdAt: Value(DateTime.now()),
+      ));
       // Done
       await _insertTodo(db, id: 'nx5', title: 'Done');
       await db.todoDao.markDone('nx5');
@@ -689,7 +688,6 @@ void main() {
       await db.into(db.todos).insert(TodosCompanion(
         id: const Value('tr8'),
         title: const Value('Legacy trashed'),
-        clarified: const Value(true),
         intent: const Value('trash'),
         userId: const Value(_userId),
         createdAt: Value(DateTime.utc(2026, 5, 1)),
@@ -818,10 +816,9 @@ void main() {
     setUp(() => db = _openInMemory());
     tearDown(() async => db.close());
 
-    test('nextAction: clarified=true, intent=next, done_at=null, '
+    test('nextAction: intent=next, done_at=null, '
         'current Action set when provided', () async {
-      // Start with an unclarified row to confirm clarified=true is enforced.
-      await _insertTodo(db, id: 'r1', title: 'Task', clarified: false);
+      await _insertTodo(db, id: 'r1', title: 'Task');
       await db.todoDao.applyRouting(
         'r1',
         to: RoutingKind.nextAction,
@@ -829,7 +826,6 @@ void main() {
       );
 
       final row = await db.todoDao.getTodo('r1');
-      expect(row?.clarified, isTrue);
       expect(row?.intent, 'next');
       expect(row?.doneAt, isNull);
       expect((await db.actionDao.getCurrentAction('r1'))?.actionText,
@@ -837,9 +833,9 @@ void main() {
       expect(row?.lastClarifiedAt, isNotNull);
     });
 
-    test('waitingFor: clarified=true, intent=next, done_at=null, '
+    test('waitingFor: intent=next, done_at=null, '
         'current Action set when provided', () async {
-      await _insertTodo(db, id: 'r2', title: 'Task', clarified: false);
+      await _insertTodo(db, id: 'r2', title: 'Task');
       await db.todoDao.applyRouting(
         'r2',
         to: RoutingKind.waitingFor,
@@ -847,16 +843,15 @@ void main() {
       );
 
       final row = await db.todoDao.getTodo('r2');
-      expect(row?.clarified, isTrue);
       expect(row?.intent, 'next');
       expect(row?.doneAt, isNull);
       expect((await db.actionDao.getCurrentAction('r2'))?.actionText,
           'Wait for Alice');
     });
 
-    test('maybe: clarified=true, intent=maybe, done_at=null, '
+    test('maybe: intent=maybe, done_at=null, '
         'current Action untouched', () async {
-      await _insertTodo(db, id: 'r3', title: 'Task', clarified: false);
+      await _insertTodo(db, id: 'r3', title: 'Task');
       await db.todoDao.setCurrentActionText('r3', 'preserved');
 
       await db.todoDao.applyRouting(
@@ -865,7 +860,6 @@ void main() {
       );
 
       final row = await db.todoDao.getTodo('r3');
-      expect(row?.clarified, isTrue);
       expect(row?.intent, 'maybe');
       expect(row?.doneAt, isNull);
       expect((await db.actionDao.getCurrentAction('r3'))?.actionText,
@@ -873,9 +867,9 @@ void main() {
           reason: 'routing to maybe leaves the current Action standing');
     });
 
-    test('done: clarified=true, done_at=now, intent left as-is, and the '
+    test('done: done_at=now, intent left as-is, and the '
         'completion cascade completes the current Action', () async {
-      await _insertTodo(db, id: 'r4', title: 'Task', clarified: false);
+      await _insertTodo(db, id: 'r4', title: 'Task');
       // A **real current Action** so `done` actually runs the completion
       // cascade — with an Actionless Outcome the assertion below would hold
       // for the wrong reason, no cascade having run at all.
@@ -890,22 +884,20 @@ void main() {
       );
 
       final row = await db.todoDao.getTodo('r4');
-      expect(row?.clarified, isTrue);
       expect(row?.intent, 'maybe', reason: 'done leaves intent untouched');
       expect(row?.doneAt, isNotNull);
       expect(await db.actionDao.getCurrentAction('r4'), isNull,
           reason: 'the cascade completed the current Action');
     });
 
-    test('trash: clarified=true, intent=trash, done_at=null', () async {
-      await _insertTodo(db, id: 'r5', title: 'Task', clarified: false);
+    test('trash: intent=trash, done_at=null', () async {
+      await _insertTodo(db, id: 'r5', title: 'Task');
       await db.todoDao.applyRouting(
         'r5',
         to: RoutingKind.trash,
       );
 
       final row = await db.todoDao.getTodo('r5');
-      expect(row?.clarified, isTrue);
       expect(row?.intent, 'trash');
       expect(row?.doneAt, isNull);
     });
@@ -1148,7 +1140,6 @@ void main() {
       final after2 = await db.todoDao.getTodo('t8');
 
       expect(after2?.intent, after1?.intent);
-      expect(after2?.clarified, after1?.clarified);
       expect(after2?.doneAt, after1?.doneAt);
     });
   });

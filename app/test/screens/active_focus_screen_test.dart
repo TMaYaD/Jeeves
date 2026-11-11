@@ -260,7 +260,6 @@ void main() {
           title: 'Task $id',
           createdAt: DateTime.now(),
           doneAt: doneAt,
-          clarified: true,
           intent: 'next',
           userId: _userId,
         );
@@ -504,7 +503,6 @@ void main() {
           id: id,
           title: title,
           createdAt: DateTime.now(),
-          clarified: true,
           intent: 'next',
           userId: _userId,
         );

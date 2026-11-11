@@ -41,7 +41,6 @@ Todo _todo({
     id: id,
     title: title,
     intent: 'next',
-    clarified: true,
     createdAt: now,
     updatedAt: now,
     userId: 'local',

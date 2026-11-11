@@ -54,7 +54,6 @@ Todo _todo(String id, String title, {String? doneAt}) => Todo(
       title: title,
       createdAt: DateTime.now(),
       doneAt: doneAt,
-      clarified: true,
       intent: 'next',
       userId: 'test-user',
     );

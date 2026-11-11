@@ -20,7 +20,6 @@ Todo _todo(String id, String title) => Todo(
       id: id,
       title: title,
       createdAt: DateTime.now(),
-      clarified: true,
       intent: 'next',
       userId: 'local',
     );

@@ -222,7 +222,6 @@ void main() {
       expect(await db.captureDao.outcomeIdsForCapture('item-1'), hasLength(1),
           reason: 'a raced double-tap must not carve two Outcomes');
       final row = (await _outcomeOf(db, 'item-1'))!;
-      expect(row.clarified, isTrue);
     });
   });
 
@@ -393,7 +392,6 @@ void main() {
       expect(state.inboxRoutings[0], equals(RoutingKind.nextAction));
 
       final row = (await _outcomeOf(db, 'item-1'))!;
-      expect(row.clarified, isTrue);
       expect((await db.actionDao.getCurrentAction(row.id))?.actionText,
           'Test item',
           reason: 'the routed title becomes the Outcome next action');
@@ -412,7 +410,6 @@ void main() {
       expect(state.inboxRoutings[0], equals(RoutingKind.maybe));
 
       final row = (await _outcomeOf(db, 'item-1'))!;
-      expect(row.clarified, isTrue);
       expect(row.intent, 'maybe');
     });
 
@@ -444,7 +441,7 @@ void main() {
       // After Back, the prior routing remains in DB and in inboxRoutings so
       // the "previously selected" affordance can render.
       final afterBack = (await _outcomeOf(db, 'item-1'))!;
-      expect(afterBack.clarified, isTrue,
+      expect(afterBack.lastClarifiedAt, isNotNull,
           reason: 'Back must not revert DB state');
       expect(afterBack.intent, 'maybe');
       var state = container.read(focusSessionPlanningProvider);
@@ -454,7 +451,6 @@ void main() {
       await notifier.processInboxItem('item-1', title: 'Test item');
 
       final row = (await _outcomeOf(db, 'item-1'))!;
-      expect(row.clarified, isTrue);
       expect(row.intent, 'next',
           reason: 'revert restored prior intent before re-routing');
       expect(row.doneAt, isNull);
@@ -501,7 +497,6 @@ void main() {
 
       final row = (await _outcomeOf(db, 'item-1'))!;
       expect(row.doneAt, isNull);
-      expect(row.clarified, isTrue);
     });
 
     test('re-tapping the same destination is a net no-op on routing flags',
@@ -518,8 +513,6 @@ void main() {
       await notifier.processInboxItem('item-1', title: 'Test item'); // same destination
 
       final afterRow = (await _outcomeOf(db, 'item-1'))!;
-
-      expect(afterRow.clarified, equals(beforeRow.clarified));
       expect(afterRow.intent, equals(beforeRow.intent));
       expect(afterRow.doneAt, equals(beforeRow.doneAt));
 
@@ -735,7 +728,6 @@ void main() {
         id: const Value('actionless-1'),
         title: const Value('Actionless task'),
         userId: const Value('local'),
-        clarified: const Value(true),
         createdAt: Value(now),
         // no Action row seeded → Actionless
       ));
@@ -764,7 +756,6 @@ void main() {
         id: const Value('actionless-1'),
         title: const Value('Actionless task'),
         userId: const Value('local'),
-        clarified: const Value(true),
         createdAt: Value(now),
         // no Action row seeded → Actionless
       ));
@@ -808,7 +799,6 @@ void main() {
         id: const Value('actionless-2'),
         title: const Value('Actionless task'),
         userId: const Value('local'),
-        clarified: const Value(true),
         createdAt: Value(now),
       ));
       final notifier = container.read(focusSessionPlanningProvider.notifier);
@@ -850,7 +840,6 @@ void main() {
         id: Value(id),
         title: const Value('Stale task'),
         userId: const Value(userId),
-        clarified: const Value(true),
         createdAt: Value(now),
         lastClarifiedAt: Value(clarifiedAt),
         lastNextActionCompletionAt: Value(completedAt),
@@ -874,7 +863,6 @@ void main() {
         id: Value(id),
         title: const Value('Actionless task'),
         userId: const Value(userId),
-        clarified: const Value(true),
         createdAt: Value(now),
         // no Action row seeded → Actionless
       ));
@@ -1123,7 +1111,6 @@ void main() {
       await db.into(db.todos).insert(TodosCompanion(
         id: Value(id),
         title: Value('Task $id'),
-        clarified: const Value(true),
         userId: const Value('local'),
         createdAt: Value(now),
         updatedAt: Value(now),
@@ -1221,7 +1208,6 @@ void main() {
       await db.into(db.todos).insert(TodosCompanion(
         id: Value(id),
         title: Value('Task $id'),
-        clarified: const Value(true),
         userId: const Value('local'),
         createdAt: Value(now),
         updatedAt: Value(now),

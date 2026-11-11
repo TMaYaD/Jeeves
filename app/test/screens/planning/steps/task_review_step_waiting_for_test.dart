@@ -37,7 +37,6 @@ Future<String> _insertClarifiedTask(
     id: Value(id),
     title: Value(title),
     userId: const Value(_userId),
-    clarified: const Value(true),
     intent: const Value('next'),
     createdAt: Value(now),
     lastNextActionCompletionAt: lastNextActionCompletionAt != null

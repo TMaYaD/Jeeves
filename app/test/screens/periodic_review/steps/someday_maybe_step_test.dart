@@ -38,7 +38,6 @@ Future<String> _insertSomedayTodo(
   await db.into(db.todos).insert(TodosCompanion(
         id: Value(id),
         title: Value(title),
-        clarified: const Value(true),
         intent: const Value('maybe'),
         userId: const Value(_userId),
         createdAt: Value(now),

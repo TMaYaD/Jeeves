@@ -43,7 +43,6 @@ Future<String> _insertActionlessTask(
         id: Value(id),
         title: Value(title),
         userId: const Value(_userId),
-        clarified: const Value(true),
         intent: const Value('next'),
         createdAt: Value(createdAt),
         updatedAt: Value(createdAt),
@@ -120,7 +119,6 @@ void main() {
       // Resolved: routed to Next, clarified, stamped.
       final row = await db.todoDao.getTodo('r1');
       expect(row?.intent, 'next');
-      expect(row?.clarified, isTrue);
       expect(row?.lastClarifiedAt, isNotNull);
 
       // Not actionless: the Outcome title stands in as the current Action.

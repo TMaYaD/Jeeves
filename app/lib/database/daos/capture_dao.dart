@@ -1,6 +1,5 @@
 /// DAO for Captures — the Inbox is `captures` with `clarified_at IS NULL`
-/// (ADR-0006). Owns the Inbox reads that once ran against
-/// `todos WHERE clarified = false`, plus the Capture↔Outcome provenance links
+/// (ADR-0006). Owns the Inbox reads, the Capture↔Outcome provenance links
 /// and Capture tag-hint reads/writes.
 ///
 /// Every method that writes a `captures` / `capture_outcomes` / `capture_tags`

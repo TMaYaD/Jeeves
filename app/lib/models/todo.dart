@@ -64,10 +64,6 @@ abstract class Todo with _$Todo {
     /// Orthogonal intent: next | maybe | trash (migration 0015).
     @Default('next') String intent,
 
-    /// Whether this todo has been processed through the inbox clarification step.
-    /// false = still in inbox; true = clarified and assigned to a GTD list.
-    @Default(true) bool clarified,
-
     /// Estimated effort in minutes.
     int? timeEstimate,
 

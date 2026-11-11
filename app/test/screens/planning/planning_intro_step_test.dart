@@ -41,7 +41,6 @@ Future<void> _insertNeedsReview(GtdDatabase db, String id) async {
         id: Value(id),
         title: Value('Review $id'),
         userId: const Value('local'),
-        clarified: const Value(true),
         createdAt: Value(now),
       ));
 }

@@ -37,7 +37,6 @@ Future<void> _seedClarifiedOutcome(
         id: Value(id),
         title: Value('Outcome $id'),
         userId: const Value(_userId),
-        clarified: const Value(true),
         intent: const Value('next'),
         createdAt: Value(_t0),
         lastClarifiedAt: Value(lastClarifiedAt ?? _t1),

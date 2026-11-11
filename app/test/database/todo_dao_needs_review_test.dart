@@ -28,7 +28,6 @@ Future<String> _insertClarifiedTask(
     id: Value(id),
     title: Value('Task $id'),
     userId: Value(_userId),
-    clarified: const Value(true),
     intent: Value(intent),
     createdAt: Value(now),
     lastNextActionCompletionAt: lastNextActionCompletionAt != null
@@ -258,14 +257,13 @@ void main() {
       expect(result, isEmpty);
     });
 
-    // Fixture 9: Inbox item (clarified = false) does not surface.
-    test('9: inbox item (clarified = false) — not in result', () async {
+    // Fixture 9: an Inbox Capture does not surface.
+    test('9: Inbox Capture — not in result', () async {
       final now = DateTime.now();
-      await db.into(db.todos).insert(TodosCompanion(
-        id: const Value('inbox-task'),
+      await db.captureDao.insertCapture(CapturesCompanion(
+        id: const Value('inbox-capture'),
         title: const Value('Unclarified'),
         userId: Value(_userId),
-        clarified: const Value(false),
         createdAt: Value(now),
       ));
 

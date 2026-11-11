@@ -28,7 +28,6 @@ Future<void> _insertTodo(GtdDatabase db, String id) async {
   await db.into(db.todos).insert(TodosCompanion(
     id: Value(id),
     title: Value('Task $id'),
-    clarified: const Value(true),
     userId: const Value(_userId),
     createdAt: Value(now),
     updatedAt: Value(now),

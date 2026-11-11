@@ -29,7 +29,6 @@ Future<void> _seedOutcome(
   String title = 'Outcome',
   String? energyLevel,
   int? timeEstimate,
-  bool clarified = true,
   String intent = 'next',
 }) async {
   await db.into(db.todos).insert(TodosCompanion(
@@ -37,7 +36,6 @@ Future<void> _seedOutcome(
         title: Value(title),
         userId: const Value(_userId),
         createdAt: Value(_t0),
-        clarified: Value(clarified),
         intent: Value(intent),
         energyLevel: Value(energyLevel),
         timeEstimate: Value(timeEstimate),

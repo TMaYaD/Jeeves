@@ -494,7 +494,7 @@ A device holds **two** stores, and which one to pull depends on the question:
 adb exec-out run-as loonyb.in.jeeves.dev cat app_flutter/jeeves_domain.sqlite     > /tmp/jeeves_domain.sqlite
 adb exec-out run-as loonyb.in.jeeves.dev cat app_flutter/jeeves_domain.sqlite-wal > /tmp/jeeves_domain.sqlite-wal
 adb exec-out run-as loonyb.in.jeeves.dev cat app_flutter/jeeves_domain.sqlite-shm > /tmp/jeeves_domain.sqlite-shm
-sqlite3 /tmp/jeeves_domain.sqlite "SELECT id, title, clarified, intent FROM todos LIMIT 20"
+sqlite3 /tmp/jeeves_domain.sqlite "SELECT id, title, intent FROM todos LIMIT 20"
 ```
 
 Pull all three files — the WAL usually holds the most recent writes. Every synced name is a real table, so query it directly. If the row is correct there, the bug is in watcher invalidation (see the live-refresh invariant in [ARCHITECTURE.md](./ARCHITECTURE.md)); if it is wrong, the bug is in the write path. To ask the second question, pull `jeeves_sync.sqlite` the same way and read `op_log`, `outbox`, `reduced_fields` and `row_tombstones`.

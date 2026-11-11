@@ -75,7 +75,7 @@ void main() {
       expect(op.fields['user_id'], _userId);
       expect(op.fields['created_at'], '2026-07-28T09:00:00.000Z');
       expect(op.fields['intent'], 'next');
-      expect(op.fields['clarified'], isTrue);
+      expect(op.fields.containsKey('clarified'), isFalse);
       // Exactly the synced columns — no more, no less — so a peer can build the
       // row and nothing off-contract slips onto the wire.
       final expected = collectionCodecs[todosCollection]!.columns.keys.toSet();

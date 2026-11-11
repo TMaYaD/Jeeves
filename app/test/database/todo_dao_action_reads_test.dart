@@ -38,7 +38,6 @@ Future<bool> _isNeedsReview(GtdDatabase db, String id) async =>
 Future<String> _seedOutcome(
   GtdDatabase db,
   String id, {
-  bool clarified = true,
   String intent = 'next',
   String? doneAt,
   DateTime? lastNextActionCompletionAt,
@@ -49,7 +48,6 @@ Future<String> _seedOutcome(
         id: Value(id),
         title: Value('Outcome $id'),
         userId: const Value(_userId),
-        clarified: Value(clarified),
         intent: Value(intent),
         doneAt: Value(doneAt),
         createdAt: Value(createdAt ?? _t0),
