@@ -5,6 +5,7 @@ library;
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/bypassed_outcomes_provider.dart';
@@ -17,12 +18,14 @@ const _userId = 'local';
 final _start = DateTime.utc(2030, 1, 10, 9);
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(configureSqliteForTests);
 
   late GtdDatabase db;
   late ProviderContainer container;
 
   setUp(() {
+    SharedPreferences.setMockInitialValues({});
     db = GtdDatabase(NativeDatabase.memory());
     container = createPeriodicReviewTestContainer(db);
   });
