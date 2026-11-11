@@ -9,6 +9,7 @@ library;
 
 import 'dart:async';
 
+import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -16,6 +17,8 @@ import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/database/daos/focus_session_dao.dart' show StaleOutcome;
+import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/providers/stale_sweep_provider.dart';
 import 'package:jeeves/screens/planning/focus_session_planning_screen.dart';
@@ -28,13 +31,19 @@ class _StubPlanningNotifier extends FocusSessionPlanningNotifier {
 
   @override
   Future<void> loadInboxSnapshot() async {}
+
+  @override
+  Future<void> ensureRolloverPreload() async {}
 }
 
 Future<void> _pump(
   WidgetTester tester,
   Future<List<StaleOutcome>> Function() read,
 ) async {
+  final db = GtdDatabase(NativeDatabase.memory());
+  addTearDown(db.close);
   final container = ProviderContainer(overrides: [
+    databaseProvider.overrideWithValue(db),
     activeSessionProvider.overrideWith((ref) => Stream.value(null)),
     focusSessionPlanningProvider.overrideWith(() => _StubPlanningNotifier()),
     focusSessionPlanningIntroCountsProvider
