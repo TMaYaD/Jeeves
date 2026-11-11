@@ -43,6 +43,8 @@ void main() {
   Future<void> restart(WidgetTester tester) async {
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.runAsync(() async {
+      // Let in-flight snapshot loads finish before the container goes away.
+      await pumpEventQueue();
       container.dispose();
       await db.close();
       db = GtdDatabase(NativeDatabase(storeFile));
@@ -117,17 +119,20 @@ void main() {
 
   testWidgets('clearing hours before the pre-fill lands keeps the cleared field',
       (tester) async {
-    await tester.runAsync(() => db.userPreferencesDao
-        .set('local', kLastSessionAvailableMinutesKey, '330'));
     await tester.pumpWidget(UncontrolledProviderScope(
       container: container,
       child: const MaterialApp(home: Scaffold(body: DayCheckinTimeStep())),
     ));
     await tester.enterText(find.byType(TextField).at(0), '');
     await tester.pump();
-    await tester.runAsync(() => container
-        .read(focusSessionPlanningProvider.notifier)
-        .ensureAvailableTimePreload());
+    // The pre-fill value becomes readable only now: it lands late.
+    await tester.runAsync(() async {
+      await db.userPreferencesDao
+          .set('local', kLastSessionAvailableMinutesKey, '330');
+      await container
+          .read(focusSessionPlanningProvider.notifier)
+          .ensureAvailableTimePreload();
+    });
     await settleWithRealAsync(tester);
     expect(fieldText(tester, 0), '');
     expect(container.read(focusSessionPlanningProvider).availableMinutes, 480);
