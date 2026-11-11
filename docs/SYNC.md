@@ -78,6 +78,7 @@ Every current key, grouped by family:
 | `planning_banner_dismissed_date`, `planning_notification_skipped_date` | date | `lww` | Latest-intent scalar, not a set |
 | `shutdown_ritual_completed_date`, `shutdown_banner_dismissed_date`, `shutdown_notification_skipped_date` | date | `lww` | Latest completion / suppression wins |
 | `periodic_review_last_completed_at`, `periodic_review_open_since` | datetime | `lww` | Completion and opening timestamps |
+| `focus_session_planning_last_session_available_minutes` | int (minutes) | `lww` | Latest session's planned time wins; pre-fills the next Daily Planning Time step |
 | `periodic_review_banner_dismissed_date`, `periodic_review_banner_enabled`, `periodic_review_notification_enabled`, `periodic_review_notification_hour`, `periodic_review_notification_minute`, `periodic_review_notification_skipped_date` | date / bool / int | `lww` | Scalar settings / suppression |
 | `periodic_review_nudge_content_firing_edge` | datetime | `lww` | Latest firing edge wins |
 | `clarify_mode` | string enum (`oneToOne` / `nToM`) | `lww` *(registered explicitly)* | Scalar mode selection; both modes read the same many-to-many storage, so either winner leaves every Capture and link valid |

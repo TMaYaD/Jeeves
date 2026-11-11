@@ -53,6 +53,19 @@ String planningToday() {
 const _kNotificationSkippedDateKey = 'planning_notification_skipped_date';
 const _kNotificationSnoozedUntilKey = 'planning_notification_snoozed_until';
 
+/// `user_preferences` key holding the available time (minutes) the most
+/// recently opened session was planned with. Not a setting: it has no
+/// Settings row and exists only to pre-fill the Time step (#825).
+const kLastSessionAvailableMinutesKey =
+    'focus_session_planning_last_session_available_minutes';
+
+/// Available time shown in the Time step when no previous session recorded one.
+const int kFallbackAvailableMinutes = 480;
+
+/// Range the Time step accepts (it clamps typed values to this).
+const int _kMinAvailableMinutes = 1;
+const int _kMaxAvailableMinutes = 1440;
+
 /// Highest 0-indexed step the planning ritual reaches. Step 0 is the
 /// duration-estimate intro (#486), steps 1–5 are the working steps (Clarify
 /// Inbox, Review Tasks, Energy, Time, Plan Summary), step 6 is the Today's
@@ -444,7 +457,7 @@ class ReviewActionRecord {
 class FocusSessionPlanningState {
   const FocusSessionPlanningState({
     this.currentStep = 0,
-    this.availableMinutes = 480, // 8 hours default
+    this.availableMinutes = kFallbackAvailableMinutes,
     this.availableTimeSet = false,
     this.energyLevel,
     this.inboxNav = const SnapshotNav<String>(),
@@ -594,6 +607,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       }
     });
     Future.microtask(ensureRolloverPreload);
+    Future.microtask(ensureAvailableTimePreload);
     return const FocusSessionPlanningState();
   }
 
@@ -643,6 +657,28 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
         ...state.pendingSelectedTaskIds,
       ],
     );
+  }
+
+  /// Pre-fills [FocusSessionPlanningState.availableMinutes] from the available
+  /// time the previous session was planned with (#825).
+  ///
+  /// Idempotent; called at the same planning entry points as
+  /// [ensureRolloverPreload]. Applies only while the user has not edited the
+  /// time in the current draft ([FocusSessionPlanningState.availableTimeSet]
+  /// false), and never sets that flag. A missing or invalid stored value
+  /// (non-integer, outside 1–1440) yields [kFallbackAvailableMinutes].
+  Future<void> ensureAvailableTimePreload() async {
+    final raw = await _db.userPreferencesDao
+        .get(_userId, kLastSessionAvailableMinutesKey);
+    if (!ref.mounted || state.availableTimeSet) return;
+    final stored = raw == null ? null : int.tryParse(raw);
+    final minutes = stored != null &&
+            stored >= _kMinAvailableMinutes &&
+            stored <= _kMaxAvailableMinutes
+        ? stored
+        : kFallbackAvailableMinutes;
+    if (minutes == state.availableMinutes) return;
+    state = state.copyWith(availableMinutes: minutes);
   }
 
   // ---- Step navigation -------------------------------------------------------
@@ -1088,6 +1124,15 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       userId: _userId,
       taskIds: state.pendingSelectedTaskIds,
     );
+    // Remember this session's planned time as the next planning's default.
+    // Skipped when unchanged so an ordinary day authors no redundant sync op.
+    final plannedMinutes = state.availableMinutes;
+    final storedMinutes = await _db.userPreferencesDao
+        .get(_userId, kLastSessionAvailableMinutesKey);
+    if (storedMinutes != plannedMinutes.toString() && ref.mounted) {
+      await syncedPrefs(ref)
+          .set(kLastSessionAvailableMinutesKey, plannedMinutes);
+    }
     // A qualifying session now exists — today's DPR fire is moot. Best-effort.
     await ref
         .read(notificationServiceProvider)
@@ -1095,7 +1140,6 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     state = FocusSessionPlanningState(
       energyLevel: state.energyLevel,
       availableMinutes: state.availableMinutes,
-      availableTimeSet: state.availableTimeSet,
     );
     // Retained clarify drafts belong to the performance that produced them,
     // the same as the inbox snapshot and its cursor above.
@@ -1113,11 +1157,9 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   Future<void> reEnterPlanning() async {
     final preservedEnergy = state.energyLevel;
     final preservedMinutes = state.availableMinutes;
-    final preservedTimeSet = state.availableTimeSet;
     state = FocusSessionPlanningState(
       currentStep: 0,
       availableMinutes: preservedMinutes,
-      availableTimeSet: preservedTimeSet,
       energyLevel: preservedEnergy,
     );
     // A fresh performance re-loads the inbox snapshot, so a draft left against
@@ -1129,5 +1171,6 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     // caller (close_day_step) awaits this before routing to the planning
     // screen, so the carried-over tasks are pre-selected the moment it mounts.
     await ensureRolloverPreload();
+    await ensureAvailableTimePreload();
   }
 }

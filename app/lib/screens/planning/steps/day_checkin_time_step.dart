@@ -32,6 +32,16 @@ class _DayCheckinTimeStepState extends ConsumerState<DayCheckinTimeStep> {
     super.dispose();
   }
 
+  /// Shows a pre-fill that arrives after the step mounted, unless the fields
+  /// already encode [available] (the user's own keystroke produced it).
+  void _syncControllers(int available) {
+    final shown = (int.tryParse(_hoursCtrl.text) ?? 0) * 60 +
+        (int.tryParse(_minutesCtrl.text) ?? 0);
+    if (shown == available) return;
+    _hoursCtrl.text = (available ~/ 60).toString();
+    _minutesCtrl.text = (available % 60).toString();
+  }
+
   void _onTimeChanged() {
     final h = int.tryParse(_hoursCtrl.text) ?? 0;
     final m = int.tryParse(_minutesCtrl.text) ?? 0;
@@ -44,6 +54,10 @@ class _DayCheckinTimeStepState extends ConsumerState<DayCheckinTimeStep> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<int>(
+      focusSessionPlanningProvider.select((s) => s.availableMinutes),
+      (_, available) => _syncControllers(available),
+    );
     return ListView(
       physics: const ClampingScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(16, 24, 16, 32),
