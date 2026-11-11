@@ -114,7 +114,7 @@ An Outcome whose `last_clarified_at < last_action_completion_at` — the current
 
 **Bypassed** *(derived predicate)*:
 An Outcome passed over in Daily Planning the configured number of times (default 3) without a decision. The Weekly Review's Bypassed step asks one decision per Outcome — Someday/Maybe or Trash — and Daily Planning never marks or holds them. Mechanism: TMaYaD/Jeeves#107; surface: [docs/DESIGN.md § Guardrails](docs/DESIGN.md#guardrails--nudges-never-blocks).
-_Avoid_: Stale, stale task (a different predicate — the Action terminated), Neglected (passed over in the Weekly Review, not Daily Planning)
+_Avoid_: Stale, stale task (a different predicate — the Action terminated)
 
 **Actionless** *(derived predicate)*:
 An Outcome with no current Action. May still have planned Actions (the user has externalised thinking but not committed to engagement) or none (planless).
@@ -200,7 +200,6 @@ _Avoid_: health score, score, System Health
 - A trivially-actionable Capture ("call John") could in principle skip Outcome creation and land directly as an Action. The model says no — every Capture clarifies through an Outcome.
 - **Area exclusivity is enforced at the cutover, not yet in storage.** Areas are `Tag(type='area')` linked through `todo_tags`, which carries no `type`, so "at most one Area" is not expressible as a unique index — it needs a dedicated Outcome→Area link or a check reaching into `tags`. Two pieces remain: storage-level enforcement, and the user's own resolution pass over the conversions the initial upload reports.
 - **The code calls the Next List "Next Actions"** throughout. The List is of Outcomes — the action focus comes from each Outcome's current Action — so the plural misleads; the role-label "Next Action" stays for the singular current Action of a row. The List also carries two user-facing names: the drawer says "Next Actions", Daily Planning says "Up Next". That divergence is deliberate (the step's pool is filtered, so one name would show two counts) but neither is the model's.
-- **Neglected** (passed over in the Weekly Review) and **Bypassed** (in Daily Planning) overlap, and only Bypassed has a surface. Whether Neglected survives as its own predicate is open.
 
 ### Engagement
 
