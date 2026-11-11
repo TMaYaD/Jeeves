@@ -90,7 +90,7 @@ To build a hybrid productivity application that merges the rigid organizational 
 ### Epic 7: Android OS Deep Integration
 **Goal:** Zero-friction capture in mobile environments.
 * **Native Share Sheet:** Register app as a target to parse text, URLs, and attachments directly to the Inbox.
-* **Voice Assistant Intents:** `actions.intent.CREATE_THING_TO_DO` integration for hands-free capture via Google Assistant.
+* **Voice Assistant Capture:** Hands-free capture through the phone's voice assistant. On hold: Google Assistant has been replaced by Gemini on Android phones, and Gemini reaches third-party apps only through AppFunctions (Android 16+, early access). The target is Gemini through AppFunctions, once Google opens access; until then nothing is built.
 
 ### Epic 8: AI-Assisted Triage (The Clarify Step)
 **Goal:** Reduce the friction of organizing the Inbox.
