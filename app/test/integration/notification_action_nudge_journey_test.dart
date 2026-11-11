@@ -105,8 +105,6 @@ void main() {
     }
   }
 
-  bool visible(RitualId ritual) => c.read(nudgeVisibleProvider(ritual));
-
   setUp(() {
     final today = DateTime.now();
     firstDue = DateTime(today.year, today.month, today.day - 1, 12);
