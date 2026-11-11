@@ -6,17 +6,11 @@ import 'package:jeeves/providers/periodic_review_ranker.dart';
 PeriodicReviewCandidate candidate(
   String id, {
   PeriodicReviewStepKind step = PeriodicReviewStepKind.next,
-  bool planless = false,
-  bool stale = false,
-  bool actionless = false,
   DateTime? clarified,
   DateTime? created,
 }) => PeriodicReviewCandidate(
   step: step,
   id: id,
-  isPlanless: planless,
-  isStale: stale,
-  isActionless: actionless,
   lastClarifiedAt: clarified,
   createdAt: created ?? DateTime.utc(2026),
 );
@@ -24,23 +18,43 @@ PeriodicReviewCandidate candidate(
 void main() {
   const ranker = FreshnessPeriodicReviewRanker();
 
-  test('tiers, freshness and stable identity produce deterministic priority', () async {
+  test('Inbox first, then every step interleaves by least recent clarification', () async {
+    final day = DateTime.utc(2026, 3, 10);
     final inputs = [
-      candidate('remaining'),
-      candidate('waiting', step: PeriodicReviewStepKind.waitingFor),
-      candidate('actionless', actionless: true),
-      candidate('stale', stale: true),
-      candidate('planless', planless: true, stale: true, actionless: true),
-      candidate('capture', step: PeriodicReviewStepKind.inbox),
-      candidate('someday', step: PeriodicReviewStepKind.someday,
-          planless: true, stale: true, actionless: true),
+      candidate('someday-oldest', step: PeriodicReviewStepKind.someday,
+          clarified: day.subtract(const Duration(days: 80))),
+      candidate('next-old', clarified: day.subtract(const Duration(days: 60))),
+      candidate('waiting-recent', step: PeriodicReviewStepKind.waitingFor,
+          clarified: day.subtract(const Duration(days: 1))),
+      candidate('next-never', created: day),
+      candidate('capture-late', step: PeriodicReviewStepKind.inbox,
+          created: day.add(const Duration(days: 5))),
+      candidate('capture-early', step: PeriodicReviewStepKind.inbox, created: day),
+      candidate('someday-recent', step: PeriodicReviewStepKind.someday, clarified: day),
     ];
-    const expected = ['capture', 'planless', 'stale', 'actionless',
-      'waiting', 'remaining', 'someday'];
+    const expected = ['capture-early', 'capture-late', 'next-never',
+      'someday-oldest', 'next-old', 'waiting-recent', 'someday-recent'];
     for (var seed = 0; seed < 10; seed++) {
       final shuffled = [...inputs]..shuffle(Random(seed));
       expect((await ranker.rank(shuffled)).map((c) => c.id), expected);
     }
+  });
+
+  test('ties fall to creation, id, then step order', () async {
+    final date = DateTime.utc(2026);
+    final inputs = [
+      candidate('x', step: PeriodicReviewStepKind.someday, clarified: date),
+      candidate('x', step: PeriodicReviewStepKind.waitingFor, clarified: date),
+      candidate('b', clarified: date),
+      candidate('a', clarified: date, created: date.add(const Duration(days: 1))),
+    ];
+    final ranked = await ranker.rank(inputs);
+    expect(ranked.map((c) => (c.step, c.id)), [
+      (PeriodicReviewStepKind.next, 'b'),
+      (PeriodicReviewStepKind.next, 'a'),
+      (PeriodicReviewStepKind.waitingFor, 'x'),
+      (PeriodicReviewStepKind.someday, 'x'),
+    ]);
   });
 
   test('null clarification first, then clarification, creation and id', () async {
