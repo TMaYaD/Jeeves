@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../database/gtd_database.dart';
 import 'database_provider.dart';
 import 'tag_filter_provider.dart';
+import 'time_context_provider.dart';
 
 export '../database/gtd_database.dart' show Capture, Todo;
 
@@ -10,10 +11,16 @@ export '../database/gtd_database.dart' show Capture, Todo;
 ///
 /// Automatically filtered by the active context tag set from
 /// [tagFilterProvider] (AND semantics when multiple tags are selected).
+///
+/// Outcomes whose current Action's TimeContext is not satisfied right now are
+/// hidden ([outsideTimeContextOutcomeIdsProvider]); they come back on their own.
 final nextProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
   final tagIds = ref.watch(tagFilterProvider);
-  return db.todoDao.watchNext(tagIds: tagIds);
+  final outside = ref.watch(outsideTimeContextOutcomeIdsProvider);
+  return db.todoDao.watchNext(tagIds: tagIds).map((all) => outside.isEmpty
+      ? all
+      : all.where((t) => !outside.contains(t.id)).toList());
 });
 
 /// Stream of waiting-for todos (todos with at least one person-typed tag).

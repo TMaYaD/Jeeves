@@ -34,6 +34,7 @@ import 'database_provider.dart';
 import 'nudge_triggers.dart' show lastAnchorBefore;
 import 'shutdown_settings_provider.dart' show shutdownSettingsProvider;
 import 'synced_preferences_provider.dart';
+import 'time_context_provider.dart';
 
 export '../database/gtd_database.dart' show Todo, FocusSession, Tag;
 export '../database/daos/focus_session_dao.dart' show SessionSettlement;
@@ -247,9 +248,12 @@ final nextForFocusSessionPlanningProvider =
     ...planningState.pendingSelectedTaskIds,
   };
   final dayEnergy = planningState.energyLevel;
+  final outsideTimeContext = ref.watch(outsideTimeContextOutcomeIdsProvider);
   return db.todoDao.watchNext().map((all) => all
       .where((t) =>
-          !reviewed.contains(t.id) && _energyFits(t.energyLevel, dayEnergy))
+          !reviewed.contains(t.id) &&
+          !outsideTimeContext.contains(t.id) &&
+          _energyFits(t.energyLevel, dayEnergy))
       .toList());
 });
 
@@ -257,7 +261,8 @@ final nextForFocusSessionPlanningProvider =
 enum OffUpNextReason {
   someday('Someday'),
   waitingFor('Waiting For'),
-  aboveEnergy('Above today\'s energy');
+  aboveEnergy('Above today\'s energy'),
+  outsideTimeContext('Outside its time context');
 
   const OffUpNextReason(this.label);
   final String label;
@@ -292,6 +297,7 @@ final offUpNextForFocusSessionPlanningProvider =
   final dayEnergy = planningState.energyLevel;
   final pool = ref.watch(_offUpNextPoolProvider).value ?? const [];
   final nextAll = ref.watch(_allNextPoolProvider).value ?? const [];
+  final outsideTimeContext = ref.watch(outsideTimeContextOutcomeIdsProvider);
   return [
     for (final t in pool)
       if (!taken.contains(t.id))
@@ -301,9 +307,18 @@ final offUpNextForFocusSessionPlanningProvider =
               ? OffUpNextReason.someday
               : OffUpNextReason.waitingFor,
         ),
+    // Outside-its-time-context wins over above-energy, so an Outcome is listed
+    // once.
     for (final t in nextAll)
-      if (!taken.contains(t.id) && !_energyFits(t.energyLevel, dayEnergy))
-        (todo: t, reason: OffUpNextReason.aboveEnergy),
+      if (!taken.contains(t.id) &&
+          (outsideTimeContext.contains(t.id) ||
+              !_energyFits(t.energyLevel, dayEnergy)))
+        (
+          todo: t,
+          reason: outsideTimeContext.contains(t.id)
+              ? OffUpNextReason.outsideTimeContext
+              : OffUpNextReason.aboveEnergy,
+        ),
   ];
 });
 
