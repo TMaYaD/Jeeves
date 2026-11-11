@@ -52,7 +52,7 @@ import 'async_subject.dart';
 import 'capture_outcomes_section.dart';
 import 'clarify_retention.dart';
 import 'clarify_shared_widgets.dart';
-import 'meta_chip.dart' show formatMinutesLabel;
+import 'meta_chip.dart' show formatMinutesLabel, formatDueDateLabel;
 import 'context_tag_picker.dart';
 import 'process_to_handlers.dart';
 import 'project_picker.dart';
@@ -955,9 +955,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
               icon: const Icon(Icons.calendar_today_outlined, size: 16),
               label: Text(
                 _dueDate != null
-                    ? '${_dueDate!.year}-'
-                        '${_dueDate!.month.toString().padLeft(2, '0')}-'
-                        '${_dueDate!.day.toString().padLeft(2, '0')}'
+                    ? formatDueDateLabel(_dueDate!)
                     : 'Set date',
               ),
               style: OutlinedButton.styleFrom(

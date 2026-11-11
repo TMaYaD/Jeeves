@@ -16,6 +16,8 @@ void main() {
     test('defaults to lww for scalar keys', () {
       expect(strategyForKey('focus_settings_sprint_duration_minutes'),
           ConflictStrategy.lww);
+      expect(strategyForKey('periodic_review_open_since'),
+          ConflictStrategy.lww);
       expect(strategyForKey('periodic_review_last_completed_at'),
           ConflictStrategy.lww);
       expect(strategyForKey('planning_banner_dismissed_date'),

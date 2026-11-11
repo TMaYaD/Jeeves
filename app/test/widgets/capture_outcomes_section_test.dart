@@ -29,6 +29,7 @@ import 'package:jeeves/widgets/capture_outcomes_section.dart';
 import 'package:jeeves/widgets/clarify_card.dart';
 import 'package:jeeves/widgets/next_action_dialog.dart';
 import 'package:jeeves/widgets/state_surfaces.dart';
+import 'package:jeeves/widgets/outcome_row.dart';
 
 import '../test_helpers.dart';
 
@@ -656,6 +657,7 @@ void main() {
       await refresh(tester, 'c1');
 
       final outcomeId = (await db.captureDao.outcomeIdsForCapture('c1')).single;
+      expect(find.byType(OutcomeRow), findsOneWidget);
       await tester.tap(find.descendant(
         of: find.byKey(Key('linked_outcome_$outcomeId')),
         matching: find.byIcon(Icons.close),

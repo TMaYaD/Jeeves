@@ -8,6 +8,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:jeeves/widgets/outcome_row.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -61,6 +62,7 @@ void main() {
       expect(find.text(title), findsOneWidget);
     }
 
+    expect(find.byType(OutcomeRow), findsNWidgets(4));
     // Every group is headed, and the headings run in the declared order.
     final headings = tester
         .widgetList<Text>(find.byType(Text))

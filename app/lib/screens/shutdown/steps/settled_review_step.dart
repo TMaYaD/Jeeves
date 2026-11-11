@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../providers/evening_shutdown_provider.dart';
+import '../../../widgets/meta_chip.dart';
+import '../../../widgets/outcome_row.dart';
 
 /// Step 0 of the shutdown ritual: the day's **Settled** Outcomes, grouped by
 /// how each settled.
@@ -107,7 +109,7 @@ class SettledReviewStep extends ConsumerWidget {
                     ),
                   ],
                   const SizedBox(height: 8),
-                  ...entry.value.map((t) => _SettledTaskCard(
+                  ...entry.value.map((t) => _settledOutcomeRow(
                         todo: t,
                         settlement: entry.key,
                         loggedMinutes: loggedMinutes[t.id] ?? 0,
@@ -215,12 +217,12 @@ class _SummaryBar extends StatelessWidget {
           ),
           _StatChip(
             label: 'Estimated',
-            value: _fmtMinutes(totalEstimated),
+            value: totalEstimated == 0 ? '—' : formatMinutesLabel(totalEstimated),
             color: const Color(0xFF2563EB),
           ),
           _StatChip(
             label: 'Actual',
-            value: _fmtMinutes(totalActual),
+            value: totalActual == 0 ? '—' : formatMinutesLabel(totalActual),
             color: const Color(0xFF7C3AED),
           ),
           if (accuracy != null)
@@ -238,13 +240,6 @@ class _SummaryBar extends StatelessWidget {
     if (accuracy >= 80 && accuracy <= 120) return const Color(0xFF16A34A);
     if (accuracy >= 60 && accuracy <= 140) return const Color(0xFFF59E0B);
     return const Color(0xFFDC2626);
-  }
-
-  String _fmtMinutes(int m) {
-    if (m == 0) return '—';
-    if (m < 60) return '${m}m';
-    if (m % 60 == 0) return '${m ~/ 60}h';
-    return '${m ~/ 60}h ${m % 60}m';
   }
 }
 
@@ -284,82 +279,34 @@ class _StatChip extends StatelessWidget {
   }
 }
 
-class _SettledTaskCard extends StatelessWidget {
-  const _SettledTaskCard({
-    required this.todo,
-    required this.settlement,
-    required this.loggedMinutes,
-  });
-
-  final Todo todo;
-
-  /// How this Outcome settled — it decides the card's treatment. The green
-  /// completion card belongs to [SessionSettlement.done] alone: painting a
-  /// waiting / re-planned / deferred item in completion green would recreate
-  /// the Action/Outcome conflation this work exists to remove.
-  final SessionSettlement settlement;
-
-  /// Minutes summed from this Outcome's `time_logs` rows; 0 when it has none.
-  final int loggedMinutes;
-
-  static const _completionGreen = Color(0xFF16A34A);
-  static const _neutralGrey = Color(0xFF6B7280);
-
-  @override
-  Widget build(BuildContext context) {
-    final estimated = todo.timeEstimate;
-    final actual = loggedMinutes;
-    final hasTimeData = estimated != null || actual > 0;
-    final isDone = settlement == SessionSettlement.done;
-    final icon = switch (settlement) {
-      SessionSettlement.done => Icons.check_circle,
-      SessionSettlement.next => Icons.east_rounded,
-      SessionSettlement.waitingFor => Icons.hourglass_empty_rounded,
-      SessionSettlement.someday => Icons.star_border,
-    };
-
-    return Card(
-      elevation: 0,
-      margin: const EdgeInsets.only(bottom: 8),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(
-          color: isDone ? const Color(0xFFD1FAE5) : const Color(0xFFE5E7EB),
-        ),
-      ),
-      color: isDone ? const Color(0xFFF0FDF4) : Colors.white,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Row(
-          children: [
-            Icon(icon,
-                size: 20, color: isDone ? _completionGreen : _neutralGrey),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    todo.title,
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w500,
-                      color: Color(0xFF1A1A2E),
-                    ),
-                  ),
-                  if (hasTimeData) ...[
-                    const SizedBox(height: 4),
-                    _TimeComparison(
-                        estimated: estimated, actual: actual),
-                  ],
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+Widget _settledOutcomeRow({
+  required Todo todo,
+  required SessionSettlement settlement,
+  required int loggedMinutes,
+}) {
+  final estimated = todo.timeEstimate;
+  final actual = loggedMinutes;
+  final isDone = settlement == SessionSettlement.done;
+  final icon = switch (settlement) {
+    SessionSettlement.done => Icons.check_circle,
+    SessionSettlement.next => Icons.east_rounded,
+    SessionSettlement.waitingFor => Icons.hourglass_empty_rounded,
+    SessionSettlement.someday => Icons.star_border,
+  };
+  return OutcomeRow(
+    title: todo.title,
+    framed: true,
+    backgroundColor: isDone ? const Color(0xFFF0FDF4) : Colors.white,
+    borderColor: isDone ? const Color(0xFFD1FAE5) : const Color(0xFFE5E7EB),
+    leading: Icon(
+      icon,
+      size: 20,
+      color: isDone ? const Color(0xFF16A34A) : const Color(0xFF6B7280),
+    ),
+    meta: estimated != null || actual > 0
+        ? _TimeComparison(estimated: estimated, actual: actual)
+        : null,
+  );
 }
 
 class _TimeComparison extends StatelessWidget {
@@ -374,15 +321,15 @@ class _TimeComparison extends StatelessWidget {
       spacing: 12,
       children: [
         if (estimated != null)
-          _TimeChip(
+          MetaChip(
             icon: Icons.timer_outlined,
-            label: 'Est ${_fmt(estimated!)}',
+            label: 'Est ${formatMinutesLabel(estimated!)}',
             color: const Color(0xFF2563EB),
           ),
         if (actual > 0)
-          _TimeChip(
-            icon: Icons.access_time,
-            label: 'Actual ${_fmt(actual)}',
+          MetaChip(
+            icon: Icons.history_toggle_off_outlined,
+            label: 'Actual ${formatMinutesLabel(actual)}',
             color: _actualColor(estimated, actual),
           ),
       ],
@@ -395,37 +342,6 @@ class _TimeComparison extends StatelessWidget {
     if (ratio <= 1.2) return const Color(0xFF16A34A);
     if (ratio <= 1.5) return const Color(0xFFF59E0B);
     return const Color(0xFFDC2626);
-  }
-
-  String _fmt(int m) {
-    if (m < 60) return '${m}m';
-    if (m % 60 == 0) return '${m ~/ 60}h';
-    return '${m ~/ 60}h ${m % 60}m';
-  }
-}
-
-class _TimeChip extends StatelessWidget {
-  const _TimeChip(
-      {required this.icon, required this.label, required this.color});
-
-  final IconData icon;
-  final String label;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 12, color: color),
-        const SizedBox(width: 3),
-        Text(
-          label,
-          style: TextStyle(
-              fontSize: 12, color: color, fontWeight: FontWeight.w500),
-        ),
-      ],
-    );
   }
 }
 

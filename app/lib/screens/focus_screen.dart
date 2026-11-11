@@ -10,6 +10,8 @@ import '../providers/focus_settings_provider.dart';
 import '../providers/sprint_timer_provider.dart'
     show findBatchingCandidates, sprintTimerProvider;
 import '../services/notification_service.dart' show notificationServiceProvider;
+import '../widgets/meta_chip.dart';
+import '../widgets/outcome_row.dart';
 
 class FocusScreen extends ConsumerWidget {
   const FocusScreen({super.key});
@@ -23,7 +25,7 @@ class FocusScreen extends ConsumerWidget {
     // (issue #693). Absent from the map == not Settled, and the map is empty
     // until the first emission lands — so nothing is ever struck off
     // speculatively. Completion is *not* left waiting on it: the row keeps
-    // striking off on `doneAt` alone (see [_TaskRow]), which is what it did
+    // striking off on `doneAt` alone (see [_focusOutcomeRow]), which is what it did
     // before #693 and what AC4 preserves.
     final settlements = ref.watch(activeSessionSettlementsProvider).value ??
         const <String, SessionSettlement>{};
@@ -121,7 +123,9 @@ class FocusScreen extends ConsumerWidget {
                             ),
                           if (planningDone && sortedTasks.isNotEmpty)
                             ...sortedTasks.map(
-                              (t) => _TaskRow(
+                              (t) => _focusOutcomeRow(
+                                context,
+                                sprintMinutes: sprintMinutes,
                                 todo: t,
                                 currentTaskId: currentTaskId,
                                 settlement: settlements[t.id],
@@ -190,7 +194,13 @@ class FocusScreen extends ConsumerWidget {
                                 'CARRIED OVER FROM LAST SESSION'),
                             const SizedBox(height: 8),
                             ...carriedOver
-                                .map((t) => _CarriedOverTaskRow(todo: t)),
+                                .map((t) => OutcomeRow(
+                                  title: t.title,
+                                  muted: true,
+                                  timeEstimateMinutes: t.timeEstimate,
+                                  leading: const Icon(Icons.update_outlined,
+                                    size: 14, color: Color(0xFFD1D5DB)),
+                                )),
                           ],
                           const SizedBox(height: 32),
                         ],
@@ -251,125 +261,67 @@ class FocusScreen extends ConsumerWidget {
 // Task row
 // ---------------------------------------------------------------------------
 
-class _TaskRow extends ConsumerWidget {
-  const _TaskRow({
-    required this.todo,
-    required this.currentTaskId,
-    required this.settlement,
-  });
-  final Todo todo;
-  final String? currentTaskId;
-
-  /// How this Outcome Settled in the open session, or null if it has not
-  /// (issue #693).
-  final SessionSettlement? settlement;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final sprintMinutes =
-        ref.watch(focusSettingsProvider).sprintDurationMinutes;
-    final estimate = todo.timeEstimate;
-    final isDone = todo.doneAt != null;
-    // Strike-off widens from Completion to Settlement: an Outcome the user
-    // finished an Action on and re-clarified to "more work later" / "waiting" /
-    // "someday" is handled *for this session*, and should stop demanding
-    // attention here. It keeps its normal GTD List memberships outside the
-    // session — Settlement is a read and writes nothing.
-    final isSettled = settlement != null;
-    // Widens, not replaces. A completed Outcome always settles as `done`, so
-    // the two agree once the settlement stream has emitted — but it has not
-    // emitted on the first frames, and a row that already shows the filled
-    // check must not lose its strike-off while that is in flight (#693 AC4).
-    final isStruckOff = isDone || isSettled;
-    final isCurrentTask = currentTaskId == todo.id;
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
-        children: [
-          Expanded(
-            child: InkWell(
-              onTap: () => context.push('/task/${todo.id}'),
-              borderRadius: BorderRadius.circular(8),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+Widget _focusOutcomeRow(
+  BuildContext context, {
+  required Todo todo,
+  required String? currentTaskId,
+  required SessionSettlement? settlement,
+  required int sprintMinutes,
+}) {
+  final estimate = todo.timeEstimate;
+  final isDone = todo.doneAt != null;
+  final isSettled = settlement != null;
+  // Completion alone owns the filled glyph; every Settlement strikes the title
+  // and removes Start because the Outcome is handled for this session.
+  return OutcomeRow(
+    title: todo.title,
+    struck: isDone || isSettled,
+    onTap: () => context.push('/task/${todo.id}'),
+    meta: estimate == null && todo.dueDate == null
+        ? null
+        : Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              if (estimate != null)
+                Wrap(
+                  spacing: 6,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    Text(
-                      todo.title,
-                      style: TextStyle(
-                        fontSize: 16,
-                        color: isStruckOff
-                            ? const Color(0xFF9CA3AF)
-                            : const Color(0xFF1A1A2E),
-                        fontWeight: FontWeight.w500,
-                        decoration:
-                            isStruckOff ? TextDecoration.lineThrough : null,
-                      ),
-                    ),
-                    if (todo.dueDate != null) ...[
-                      const SizedBox(height: 2),
-                      Builder(builder: (_) {
-                        // Storage is UTC; display the user's local calendar day.
-                        final d = todo.dueDate!.toLocal();
-                        return Text(
-                          'Due ${d.year}-'
-                          '${d.month.toString().padLeft(2, '0')}-'
-                          '${d.day.toString().padLeft(2, '0')}',
-                          style: const TextStyle(
-                              fontSize: 12, color: Color(0xFF9CA3AF)),
-                        );
-                      }),
-                    ],
-                    if (estimate != null) ...[
-                      const SizedBox(height: 2),
-                      Row(
-                        children: [
-                          Text(
-                            estimate < 60
-                                ? '${estimate}m'
-                                : estimate % 60 == 0
-                                    ? '${estimate ~/ 60}h'
-                                    : '${estimate ~/ 60}h ${estimate % 60}m',
-                            style: const TextStyle(
-                                fontSize: 12, color: Color(0xFF9CA3AF)),
-                          ),
-                          if (estimate > sprintMinutes) ...[
-                            const SizedBox(width: 6),
-                            Text(
-                              '· ${(estimate / sprintMinutes).ceil()} sprints',
-                              style: const TextStyle(
-                                  fontSize: 12, color: Color(0xFF9CA3AF)),
-                            ),
-                          ],
-                        ],
+                    OutcomeMetaLine(timeEstimateMinutes: estimate),
+                    if (estimate > sprintMinutes) ...[
+                      Text(
+                        '· ${(estimate / sprintMinutes).ceil()} sprints',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF9CA3AF),
+                        ),
                       ),
                     ],
                   ],
                 ),
-              ),
-            ),
+              if (todo.dueDate != null) OutcomeMetaLine(dueDate: todo.dueDate),
+            ],
           ),
-          const SizedBox(width: 8),
-          // Three-way. The filled glyph belongs to Completion alone — a Settled
-          // but unachieved Outcome must not borrow it, because that is exactly
-          // the Action/Outcome conflation this work removes. And a Settled row
-          // offers no Start: it is handled for this session (#693 AC2).
-          if (isDone)
-            const Icon(Icons.check_circle,
-                color: Color(0xFF2667B7), size: 20)
-          else if (isSettled)
-            const Icon(Icons.check_circle_outline,
-                color: Color(0xFF9CA3AF), size: 20)
-          else
-            _StartButton(todoId: todo.id, isResume: isCurrentTask),
-          const SizedBox(width: 4),
-          const Icon(Icons.chevron_right, color: Color(0xFF9CA3AF)),
-        ],
-      ),
-    );
-  }
+    trailing: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (isDone)
+          const Icon(Icons.check_circle, color: Color(0xFF2667B7), size: 20)
+        else if (isSettled)
+          const Icon(
+            Icons.check_circle_outline,
+            color: Color(0xFF9CA3AF),
+            size: 20,
+          )
+        else
+          _StartButton(todoId: todo.id, isResume: currentTaskId == todo.id),
+        const SizedBox(width: 4),
+        const Icon(Icons.chevron_right, color: Color(0xFF9CA3AF)),
+      ],
+    ),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -526,49 +478,6 @@ class _SectionLabel extends StatelessWidget {
         color: Color(0xFF9CA3AF),
       ),
     );
-  }
-}
-
-/// Read-only row for tasks pre-selected (rolled over) for today's session
-/// before the user has confirmed today's plan.
-class _CarriedOverTaskRow extends StatelessWidget {
-  const _CarriedOverTaskRow({required this.todo});
-  final Todo todo;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 7),
-      child: Row(
-        children: [
-          const Icon(Icons.update_outlined,
-              size: 14, color: Color(0xFFD1D5DB)),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              todo.title,
-              style: const TextStyle(
-                fontSize: 15,
-                color: Color(0xFF9CA3AF),
-                fontWeight: FontWeight.w400,
-              ),
-            ),
-          ),
-          if (todo.timeEstimate != null)
-            Text(
-              _fmt(todo.timeEstimate!),
-              style:
-                  const TextStyle(fontSize: 12, color: Color(0xFFD1D5DB)),
-            ),
-        ],
-      ),
-    );
-  }
-
-  String _fmt(int m) {
-    if (m < 60) return '${m}m';
-    if (m % 60 == 0) return '${m ~/ 60}h';
-    return '${m ~/ 60}h ${m % 60}m';
   }
 }
 

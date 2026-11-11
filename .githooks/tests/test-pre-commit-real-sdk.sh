@@ -263,7 +263,7 @@ if ! ( cd "${sdk}" && ./bin/flutter --version >/dev/null 2>&1 ); then
 fi
 
 version_json="${sdk}/bin/cache/flutter.version.json"
-version_file="${sdk}/version"   # absent on 3.44.1; snapshotted only if present
+version_file="${sdk}/version"   # absent on 3.47.2; snapshotted only if present
 baseline_json="${WORK}/baseline-flutter.version.json"
 baseline_version="${WORK}/baseline-version"
 

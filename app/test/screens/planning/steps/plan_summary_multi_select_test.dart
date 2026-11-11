@@ -13,6 +13,8 @@ library;
 
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
+import 'package:jeeves/widgets/outcome_row.dart';
+import 'package:jeeves/widgets/meta_chip.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -159,6 +161,7 @@ void main() {
         _todo(id: 't3', title: 'Task three'),
       ]);
 
+      expect(find.byType(OutcomeRow), findsNWidgets(3));
       // No bar before long-press.
       expect(find.text('Add to Today'), findsNothing);
 
@@ -324,6 +327,9 @@ void main() {
           .skipTask('t1');
       await tester.pumpAndSettle();
 
+      final metadata = tester.widget<OutcomeMetaLine>(find.byType(OutcomeMetaLine));
+      expect(metadata.muted, isTrue,
+          reason: 'Skipped rows pass the muted state to their metadata');
       expect(find.textContaining('UP NEXT'), findsNothing);
       expect(find.text('Add to Today'), findsNothing);
     });

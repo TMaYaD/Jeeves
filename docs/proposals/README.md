@@ -21,3 +21,4 @@ When a proposal is superseded or rejected, update the `Status:` line and add a o
 | Proposal | Status | Tracking |
 |----------|--------|----------|
 | [Blockers and Contexts](blockers-and-contexts.md) | Accepted — engineering | [#181](https://github.com/TMaYaD/Jeeves/issues/181) |
+| [Sync plugins](sync-plugins.md) | Draft | — |

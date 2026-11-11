@@ -6,6 +6,7 @@ import '../../database/gtd_database.dart';
 import '../../providers/gtd_lists_provider.dart';
 import '../../widgets/active_filter_bar.dart';
 import '../../widgets/async_list.dart';
+import '../../widgets/outcome_row.dart';
 
 class WaitingForScreen extends ConsumerWidget {
   const WaitingForScreen({super.key});
@@ -42,8 +43,11 @@ class WaitingForScreen extends ConsumerWidget {
                         delegate: SliverChildBuilderDelegate(
                           (_, i) {
                             final todo = entry.value[i];
-                            return _WaitingItem(
-                              todo: todo,
+                            return OutcomeRow(
+                              title: todo.title,
+                              energyLevel: todo.energyLevel,
+                              timeEstimateMinutes: todo.timeEstimate,
+                              dueDate: todo.dueDate,
                               onTap: () =>
                                   context.push('/task/${todo.id}'),
                             );
@@ -79,38 +83,6 @@ class _SectionHeader extends StatelessWidget {
           fontWeight: FontWeight.w600,
           color: Color(0xFF9CA3AF),
           letterSpacing: 0.5,
-        ),
-      ),
-    );
-  }
-}
-
-class _WaitingItem extends StatelessWidget {
-  const _WaitingItem({required this.todo, required this.onTap});
-
-  final Todo todo;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                todo.title,
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w500,
-                  color: Color(0xFF1A1A2E),
-                ),
-              ),
-            ),
-            const Icon(Icons.chevron_right, color: Color(0xFF9CA3AF)),
-          ],
         ),
       ),
     );

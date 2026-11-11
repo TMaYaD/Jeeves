@@ -18,16 +18,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../providers/database_provider.dart';
 import '../../../providers/focus_session_planning_provider.dart';
 import '../../../widgets/process_to_handlers.dart';
+import '../../../widgets/outcome_review_card.dart';
 
 // ---------------------------------------------------------------------------
 // Hint enum — derived from task state
 // ---------------------------------------------------------------------------
 
-enum ReclarifyHint {
-  noNextAction,
-  updatedSinceClarified,
-  staleWaitingFor,
-}
+enum ReclarifyHint { noNextAction, updatedSinceClarified, staleWaitingFor }
 
 /// Mirror of [TodoDao] `_needsReviewWhere`'s actionless predicate: the Outcome
 /// has no `actions` row with `role='current'` (ADR-0001 story 3). Absence of a
@@ -72,53 +69,13 @@ class TaskReviewStep extends ConsumerWidget {
     final task = nav.current!;
     final personTags = state.reviewPersonTags[task.id] ?? const <Tag>[];
     final currentActionText = state.reviewActionTexts[task.id];
-    return _ReviewCard(
-      key: ValueKey(task.id),
-      task: task,
-      hint: hintFor(
-        task,
-        hasPersonTag: personTags.isNotEmpty,
-        isStale: state.reviewStaleIds.contains(task.id),
-        currentActionText: currentActionText,
-      ),
-      personTags: personTags,
+    final previousAction = state.reviewActions[nav.index];
+    final hint = hintFor(
+      task,
+      hasPersonTag: personTags.isNotEmpty,
+      isStale: state.reviewStaleIds.contains(task.id),
       currentActionText: currentActionText,
-      previousAction: state.reviewActions[nav.index],
     );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Per-item review card
-// ---------------------------------------------------------------------------
-
-class _ReviewCard extends ConsumerWidget {
-  const _ReviewCard({
-    super.key,
-    required this.task,
-    required this.hint,
-    this.personTags = const [],
-    this.currentActionText,
-    this.previousAction,
-  });
-
-  final Todo task;
-  final ReclarifyHint hint;
-
-  /// Text of [task]'s current Action, or null when it is Actionless. Renders
-  /// under the title and prefills the "Update next action…" dialog.
-  final String? currentActionText;
-
-  /// Person-typed tags assigned to [task]. Drives the delegate name(s) in
-  /// the [ReclarifyHint.staleWaitingFor] badge.
-  final List<Tag> personTags;
-
-  /// Action recorded for this index on a previous pass — drives selection
-  /// affordances and pre-fills dialogs when the user navigates back.
-  final ReviewActionRecord? previousAction;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
     final isActionless = hint == ReclarifyHint.noNextAction;
     final isWaitingFor = hint == ReclarifyHint.staleWaitingFor;
 
@@ -146,128 +103,67 @@ class _ReviewCard extends ConsumerWidget {
         'Waiting for ${personTags.map((t) => t.name).join(', ')} — still waiting?',
     };
 
-    return ListView(
-      physics: const ClampingScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
-      children: [
-        // Hint badge
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: badgeBg,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: badgeBorder),
-          ),
-          child: Row(
-            children: [
-              Icon(badgeIcon, size: 18, color: badgeIconColor),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  badgeText,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: badgeTextColor,
+    return OutcomeReviewCard(
+      key: ValueKey(task.id),
+      todo: task,
+      banner: OutcomeReviewBanner(
+        icon: badgeIcon,
+        text: badgeText,
+        backgroundColor: badgeBg,
+        borderColor: badgeBorder,
+        iconColor: badgeIconColor,
+        textColor: badgeTextColor,
+      ),
+      currentActionText: isActionless ? null : currentActionText,
+      actions: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _FieldLabel('WHAT DO YOU WANT TO DO?'),
+          const SizedBox(height: 12),
+
+          ProcessToHandlers(
+            subject: OutcomeSubject(task, currentActionText: currentActionText),
+            include: {ProcessAction.keep},
+            labels: {
+              ProcessAction.keep: isWaitingFor
+                  ? 'Still waiting'
+                  : 'Still relevant',
+              // "Update" only when there is a current Action to update; an
+              // Actionless card is *setting* the first one. Matches the dialog's
+              // own "Update next action" / "Set next action" split.
+              ProcessAction.next:
+                  (currentActionText != null &&
+                      currentActionText.trim().isNotEmpty)
+                  ? 'Update next action…'
+                  : 'Set next action…',
+            },
+            lastAction: _toProcessAction(previousAction?.kind),
+            onAfterRoute: (action) async {
+              final notifier = ref.read(focusSessionPlanningProvider.notifier);
+              if (action == ProcessAction.nextActionDialog) {
+                // The route has landed by the time this fires — a blank save
+                // falls back to the Outcome's title rather than skipping the
+                // write — so the only job left is to read the phrase back for
+                // the in-session record and advance.
+                final current = await ref
+                    .read(databaseProvider)
+                    .actionDao
+                    .getCurrentAction(task.id);
+                notifier.recordReviewActionAndAdvance(
+                  ReviewActionRecord(
+                    kind: ReviewActionKind.updateNextAction,
+                    actionText: current?.actionText.trim(),
                   ),
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-
-        // Task title
-        Text(
-          task.title,
-          style: const TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.w700,
-            color: Color(0xFF1A1A2E),
-          ),
-        ),
-
-        // Notes (if any)
-        if (task.notes != null && task.notes!.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          Text(
-            task.notes!,
-            style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+                );
+                return;
+              }
+              final record = _toReviewActionRecord(action);
+              if (record == null) return;
+              notifier.recordReviewActionAndAdvance(record);
+            },
           ),
         ],
-
-        // Current Action (if present)
-        if (!isActionless && currentActionText != null) ...[
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Icon(Icons.arrow_forward_ios,
-                  size: 12, color: Colors.grey[400]),
-              const SizedBox(width: 4),
-              Expanded(
-                child: Text(
-                  currentActionText!,
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: Colors.grey[600],
-                    fontStyle: FontStyle.italic,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ],
-
-        const SizedBox(height: 28),
-
-        // Action buttons — defaults (which include the on-by-default dialog
-        // modifier on Next) plus a "keep" variant (label depends on whether the
-        // task is delegated). On an Actionless card "keep" is the explicit
-        // "ask me again after the review interval".
-        const _FieldLabel('WHAT DO YOU WANT TO DO?'),
-        const SizedBox(height: 12),
-
-        ProcessToHandlers(
-          subject: OutcomeSubject(task, currentActionText: currentActionText),
-          include: {
-            ProcessAction.keep,
-          },
-          labels: {
-            ProcessAction.keep:
-                isWaitingFor ? 'Still waiting' : 'Still relevant',
-            // "Update" only when there is a current Action to update; an
-            // Actionless card is *setting* the first one. Matches the dialog's
-            // own "Update next action" / "Set next action" split.
-            ProcessAction.next: (currentActionText != null &&
-                    currentActionText!.trim().isNotEmpty)
-                ? 'Update next action…'
-                : 'Set next action…',
-          },
-          lastAction: _toProcessAction(previousAction?.kind),
-          onAfterRoute: (action) async {
-            final notifier =
-                ref.read(focusSessionPlanningProvider.notifier);
-            if (action == ProcessAction.nextActionDialog) {
-              // The route has landed by the time this fires — a blank save
-              // falls back to the Outcome's title rather than skipping the
-              // write — so the only job left is to read the phrase back for
-              // the in-session record and advance.
-              final current = await ref
-                  .read(databaseProvider)
-                  .actionDao
-                  .getCurrentAction(task.id);
-              notifier.recordReviewActionAndAdvance(ReviewActionRecord(
-                kind: ReviewActionKind.updateNextAction,
-                actionText: current?.actionText.trim(),
-              ));
-              return;
-            }
-            final record = _toReviewActionRecord(action);
-            if (record == null) return;
-            notifier.recordReviewActionAndAdvance(record);
-          },
-        ),
-      ],
+      ),
     );
   }
 }
