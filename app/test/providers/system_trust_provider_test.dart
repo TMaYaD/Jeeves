@@ -14,6 +14,8 @@ import 'package:jeeves/providers/gtd_lists_provider.dart'
     show unfilteredInboxProvider;
 import 'package:jeeves/providers/nudge_clock_provider.dart';
 import 'package:jeeves/providers/periodic_review_provider.dart';
+import 'package:jeeves/providers/periodic_review_settings_provider.dart'
+    show periodicReviewLastCompletedProvider;
 import 'package:jeeves/providers/synced_preferences_provider.dart';
 import 'package:jeeves/providers/system_trust_provider.dart';
 import 'package:jeeves/services/notification_service.dart'
@@ -306,6 +308,7 @@ void main() {
         final c = ProviderContainer(overrides: [
           clockProvider.overrideWithValue(() => clock),
           weeklyReviewDueAtProvider.overrideWithValue(_due),
+          periodicReviewLastCompletedProvider.overrideWithValue(null),
         ]);
         addTearDown(c.dispose);
 
