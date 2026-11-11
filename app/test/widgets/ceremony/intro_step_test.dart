@@ -166,4 +166,26 @@ void main() {
       expect(find.textContaining('about'), findsNothing);
     });
   });
+
+  group('copy templates', () {
+    // The duration fills as "about N minutes"; no sentence may open with it
+    // (or any other lower-case word) once rendered.
+    final sentenceOpenerLowerCase = RegExp(r'(^|[.?!]\s+)[a-z]');
+
+    for (final entry in {
+      'Daily Planning': dprIntroBodyPool,
+      'Weekly Review': wrIntroBodyPool,
+      'light day': introLightDayPool,
+    }.entries) {
+      for (final template in entry.value) {
+        test('${entry.key}: "$template" never opens a sentence in lower case',
+            () {
+          final rendered =
+              template.replaceAll('{duration}', introDurationText(25));
+          expect(rendered, isNot(matches(sentenceOpenerLowerCase)));
+          expect(rendered, contains('about 25 minutes'));
+        });
+      }
+    }
+  });
 }
