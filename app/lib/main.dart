@@ -7,11 +7,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'models/ritual.dart';
 import 'providers/auth_provider.dart';
 import 'providers/database_provider.dart';
-import 'providers/evening_shutdown_provider.dart';
-import 'providers/focus_session_planning_provider.dart';
 import 'providers/focus_session_planning_settings_provider.dart';
+import 'providers/nudge_action_outbox.dart';
 import 'providers/onboarding_provider.dart';
-import 'providers/periodic_review_settings_provider.dart';
 import 'providers/sync_lifecycle_provider.dart';
 import 'providers/shutdown_settings_provider.dart';
 import 'router.dart';
@@ -22,15 +20,6 @@ Future<void> main() async {
 
   // Seed onboarding dismissal state before the first frame.
   await initOnboardingCompletion();
-
-  // Seed notification-suppression flags before any scheduling so that a
-  // previously skipped/snoozed reminder is not re-enabled on restart.
-  await loadFocusSessionPlanningNotificationSuppression();
-  await loadShutdownNotificationSuppression();
-
-  // Seed periodic-review notification suppression so a previously skipped/
-  // snoozed reminder is not re-enabled on restart.
-  await loadPeriodicReviewNotificationSuppression();
 
   // flutter_local_notifications uses platform channels unavailable on web.
   // Skip the entire notification stack on web; push notifications are a
@@ -62,21 +51,29 @@ Future<void> main() async {
   runApp(const ProviderScope(child: JeevesApp()));
 }
 
-/// Handles taps on planning notification actions (foreground and background).
+/// Handles taps on Ritual notification actions (foreground and background).
+///
+/// Open and a body tap route to the Ritual's wizard. Skip and Snooze do their
+/// immediate OS work (cancel / re-arm the one-off alarm) and record what the
+/// user did, and when, in the Nudge action outbox. The outbox is applied to
+/// the Nudge's dismiss / snooze state by the main isolate — this function may
+/// run in a background isolate with no Riverpod container and no database.
 ///
 /// The `@pragma('vm:entry-point')` annotation keeps this function alive in
 /// release builds so the OS can call it when the app is in the background.
 @pragma('vm:entry-point')
 void _handleNotificationResponse(NotificationResponse response) async {
   final actionId = response.actionId;
+  final ritualAction = ritualNotificationActionFor(actionId);
 
-  switch (actionId) {
-    case kNotificationActionOpen:
-    case null:
-      // Null actionId means the notification body was tapped. Route by
-      // payload — focus/sprint carries 'focus', Ritual notifications carry
-      // `nudge:<keyPrefix>` and resolve to the matching wizard route. A
-      // body tap on an unknown payload falls back to inbox.
+  if (ritualAction == null || ritualAction.kind == RitualNotificationActionKind.open) {
+    // Null actionId means the notification body was tapped. Route by
+    // payload — focus/sprint carries 'focus', Ritual notifications carry
+    // `nudge:<keyPrefix>` and resolve to the matching wizard route. A
+    // body tap on an unknown payload falls back to inbox.
+    if (ritualAction != null) {
+      appRouter.go(ritualNotificationRoute(ritualAction.ritual));
+    } else if (actionId == null) {
       if (response.payload == 'focus') {
         appRouter.go('/focus/active');
       } else {
@@ -85,48 +82,27 @@ void _handleNotificationResponse(NotificationResponse response) async {
             ? ritualNotificationRoute(ritual)
             : '/inbox');
       }
+    }
+    return;
+  }
 
-    case kNotificationActionSnooze:
+  final ritual = ritualAction.ritual;
+  final snoozeMinutes = ritualAction.kind == RitualNotificationActionKind.snooze &&
+          ritual == RitualId.dailyPlanning
       // Read snooze duration directly from SharedPreferences; Riverpod is not
       // available in background-isolate notification callbacks.
-      final snoozeMins = await _readDefaultSnoozeDuration();
-      final until = DateTime.now().add(Duration(minutes: snoozeMins));
-      await persistFocusSessionPlanningSnoozedUntil(until);
-      await NotificationService.instance
-          .snoozeRitualReminder(RitualId.dailyPlanning, snoozeMins);
-
-    case kNotificationActionSkip:
-      await persistFocusSessionPlanningSkipToday();
-      await NotificationService.instance
-          .skipTodayRitualReminder(RitualId.dailyPlanning);
-
-    case kShutdownNotificationActionOpen:
-      appRouter.go('/shutdown');
-
-    case kShutdownNotificationActionSnooze:
-      final until = DateTime.now().add(const Duration(minutes: 60));
-      await persistShutdownSnoozedUntil(until);
-      await NotificationService.instance
-          .snoozeRitualReminder(RitualId.eveningShutdown, 60);
-
-    case kShutdownNotificationActionSkip:
-      await persistShutdownSkipToday();
-      await NotificationService.instance
-          .skipTodayRitualReminder(RitualId.eveningShutdown);
-
-    case kPeriodicReviewActionOpen:
-      appRouter.go('/periodic-review');
-
-    case kPeriodicReviewActionSnooze:
-      final until = DateTime.now().add(const Duration(minutes: 60));
-      await persistPeriodicReviewSnoozedUntil(until);
-      await NotificationService.instance
-          .snoozeRitualReminder(RitualId.weeklyReview, 60);
-
-    case kPeriodicReviewActionSkip:
-      await persistPeriodicReviewSkipToday();
-      await NotificationService.instance
-          .skipTodayRitualReminder(RitualId.weeklyReview);
+      ? await _readDefaultSnoozeDuration()
+      : 60;
+  await recordRitualNotificationAction(
+    ritual: ritual,
+    kind: ritualAction.kind,
+    at: DateTime.now(),
+    snoozeMinutes: snoozeMinutes,
+  );
+  if (ritualAction.kind == RitualNotificationActionKind.snooze) {
+    await NotificationService.instance.snoozeRitualReminder(ritual, snoozeMinutes);
+  } else {
+    await NotificationService.instance.skipTodayRitualReminder(ritual);
   }
 }
 
@@ -161,6 +137,12 @@ class JeevesApp extends ConsumerWidget {
     // interrupted initial upload and subscribes.  Nothing else reads it, so
     // without this read it stays lazy and the device never syncs.
     ref.watch(syncLifecycleProvider);
+
+    // Eagerly materialise [nudgeActionOutboxDrainerProvider] so Skip / Snooze
+    // taps recorded by the notification handler (possibly in a background
+    // isolate) reach the Nudge's dismiss / snooze state, and live legacy
+    // suppression is carried over once.
+    ref.watch(nudgeActionOutboxDrainerProvider);
     return MaterialApp.router(
       title: 'Jeeves',
       theme: ThemeData(

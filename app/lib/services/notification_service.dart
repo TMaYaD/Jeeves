@@ -441,6 +441,30 @@ RitualId? ritualIdFromNotificationPayload(String? payload) {
   return null;
 }
 
+/// What a Ritual notification action button does.
+enum RitualNotificationActionKind { open, snooze, skip }
+
+/// Resolves a notification action ID to its Ritual and verb through the
+/// per-Ritual config matrix. Returns null for an unknown ID, so a stale action
+/// on an already-delivered notification is ignored rather than misrouted.
+({RitualId ritual, RitualNotificationActionKind kind})?
+    ritualNotificationActionFor(String? actionId) {
+  if (actionId == null) return null;
+  for (final entry in _ritualConfigs.entries) {
+    final cfg = entry.value;
+    if (actionId == cfg.openAction) {
+      return (ritual: entry.key, kind: RitualNotificationActionKind.open);
+    }
+    if (actionId == cfg.snoozeAction) {
+      return (ritual: entry.key, kind: RitualNotificationActionKind.snooze);
+    }
+    if (actionId == cfg.skipAction) {
+      return (ritual: entry.key, kind: RitualNotificationActionKind.skip);
+    }
+  }
+  return null;
+}
+
 /// Route to navigate to when the body of [ritual]'s notification is tapped.
 /// Mirrors the per-Ritual wizard routes used by the in-app `NudgeBanner`.
 String ritualNotificationRoute(RitualId ritual) => switch (ritual) {

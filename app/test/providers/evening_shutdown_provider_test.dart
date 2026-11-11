@@ -22,27 +22,11 @@ import '../test_helpers.dart';
 // Must match currentUserIdProvider.build() default so the notifier finds tasks.
 const _uid = 'local';
 
-// Stub: skip platform-channel calls in the notification helpers but exercise
-// the SharedPreferences side effects that real code paths perform.
-class _StubShutdownNotifier extends EveningShutdownNotifier {
-  @override
-  Future<void> skipShutdownToday() async {
-    await persistShutdownSkipToday();
-  }
-
-  @override
-  Future<void> snoozeShutdownNotification(int minutes) async {
-    final until = DateTime.now().add(Duration(minutes: minutes));
-    await persistShutdownSnoozedUntil(until);
-  }
-}
-
 ProviderContainer _container(GtdDatabase db) => ProviderContainer(
       overrides: [
         databaseProvider.overrideWithValue(db),
         notificationServiceProvider
             .overrideWithValue(StubNotificationService()),
-        eveningShutdownProvider.overrideWith(() => _StubShutdownNotifier()),
       ],
     );
 
@@ -57,7 +41,6 @@ ProviderContainer _containerWithSettlements(
         databaseProvider.overrideWithValue(db),
         notificationServiceProvider
             .overrideWithValue(StubNotificationService()),
-        eveningShutdownProvider.overrideWith(() => _StubShutdownNotifier()),
         activeSessionSettlementsProvider.overrideWith((_) => settlements),
       ],
     );
