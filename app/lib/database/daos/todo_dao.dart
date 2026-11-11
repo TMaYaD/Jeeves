@@ -246,7 +246,7 @@ EXISTS (
   ///
   /// The tag-filter shape (`COUNT(DISTINCT tag_id) = n` over `todo_tags`) is
   /// the single source of truth for "all of these tags" semantics. Callers
-  /// like [watchNext] and [watchMaybe] vary only by [intent]; if the
+  /// like [watchNext] and [watchSomedayMaybe] vary only by [intent]; if the
   /// filter ever needs to change (ANY-of-tags, null-handling on the join, …)
   /// the change happens here, once.
   ///
@@ -472,7 +472,7 @@ EXISTS (
   /// Only clarified (processed) todos are returned.  When [tagIds] is
   /// non-empty only todos carrying **all** specified tags are returned
   /// (AND semantics).
-  Stream<List<Todo>> watchMaybe({Set<String> tagIds = const {}}) {
+  Stream<List<Todo>> watchSomedayMaybe({Set<String> tagIds = const {}}) {
     return _watchByIntentAndTags(intent: Intent.maybe, tagIds: tagIds);
   }
 
@@ -826,7 +826,7 @@ AND (
 )''';
 
   /// One-shot snapshot of active next-action todos that carry **no** person-
-  /// typed tag. Used by the Weekly Review wizard's Next Actions step; the
+  /// typed tag. Used by the Weekly Review wizard's Next step; the
   /// person-tag exclusion keeps it disjoint from Waiting For's snapshot so
   /// each task surfaces in at most one wizard step.
   Future<List<Todo>> getNextExcludingPersonTagged() {
@@ -1250,7 +1250,7 @@ AND (
     });
     if (!landed) return false;
 
-    // Notify explicitly so the Inbox / Next Actions lists refresh even when the
+    // Notify explicitly so the Inbox / Next lists refresh even when the
     // write touched a table they do not name — and so they do not depend solely
     // on the async update bridge, which was observed silent on the first cold
     // start of a new planning day (#342). Person-tag edits also touch

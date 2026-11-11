@@ -107,7 +107,7 @@ class _SummaryStepState extends ConsumerState<SummaryStep> {
             children: [
               _StatRow(label: 'Inbox processed', value: inboxProcessed),
               _StatRow(label: 'Waiting-for routed', value: waitingReviewed),
-              _StatRow(label: 'Next actions routed', value: nextReviewed),
+              _StatRow(label: 'Next routed', value: nextReviewed),
               _StatRow(label: 'Someday routed', value: somedayReviewed),
             ],
           ),

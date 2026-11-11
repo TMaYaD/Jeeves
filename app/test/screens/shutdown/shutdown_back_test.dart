@@ -92,6 +92,8 @@ void main() {
       final notifier = container.read(eveningShutdownProvider.notifier);
       notifier.goToStep(1);
       await _settle(tester);
+      expect(find.text('Return to Next'), findsOneWidget);
+      expect(find.text('Move to Someday/Maybe'), findsOneWidget);
       notifier.nextUnfinishedTask();
       await tester.pumpAndSettle();
 

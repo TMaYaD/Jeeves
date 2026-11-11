@@ -1619,7 +1619,7 @@ void main() {
           contains('N'));
       expect((await db.todoDao.watchPersonTagged().first).map((t) => t.id),
           contains('W'));
-      expect((await db.todoDao.watchMaybe().first), isEmpty);
+      expect((await db.todoDao.watchSomedayMaybe().first), isEmpty);
 
       expect(await db.select(db.todos).get(), equals(before),
           reason: 'reading Settlements must never write through');

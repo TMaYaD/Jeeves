@@ -401,7 +401,7 @@ void main() {
           reason: 'SUM(time_logs) for the Outcome');
     });
 
-    test('watchMaybe returns only intent=maybe todos (not done)', () async {
+    test('watchSomedayMaybe returns only intent=maybe todos (not done)', () async {
       await _insertTodo(db, id: 'm1', title: 'Maybe 1');
       await db.todoDao.deferTaskToMaybe('m1');
       await _insertTodo(db, id: 'm2', title: 'Next action');
@@ -409,7 +409,7 @@ void main() {
       await db.todoDao.deferTaskToMaybe('m3');
       await db.todoDao.markDone('m3');
 
-      final items = await db.todoDao.watchMaybe().first;
+      final items = await db.todoDao.watchSomedayMaybe().first;
       expect(items.length, 1);
       expect(items.first.id, 'm1');
     });
@@ -1104,7 +1104,7 @@ void main() {
       expect(row?.intent, 'maybe');
       expect(row?.doneAt, isNull);
       expect(row?.lastClarifiedAt, isNotNull);
-      final maybe = await db.todoDao.watchMaybe().first;
+      final maybe = await db.todoDao.watchSomedayMaybe().first;
       expect(maybe.map((t) => t.id), contains('t2m'));
     });
 

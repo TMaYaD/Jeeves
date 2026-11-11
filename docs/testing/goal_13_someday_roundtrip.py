@@ -17,8 +17,8 @@ Flow:
   6. Tap the task to open task detail. Tap the status pill.
   7. In the status sheet, tap "Next" (or whichever affordance restores the
      intent to next).  This is the resurrection step.
-  8. Open drawer → Next Actions.
-  9. ASSERT: "RoundtripTask_G13" is visible in Next Actions.
+  8. Open drawer → Next.
+  9. ASSERT: "RoundtripTask_G13" is visible in Next.
 
 Note (2026-05-03 manual run): The status sheet for a Maybe item only
 exposes "Waiting For ›", "Done", and "Trash" — there is no direct
@@ -92,17 +92,17 @@ def main():
     d(text="Next").click()
     time.sleep(1)
 
-    # 8. Drawer → Next Actions
+    # 8. Drawer → Next
     d.press("back")
     time.sleep(0.5)
     d.click(105, 422)
     time.sleep(1)
-    d(description="Next Actions").click()
+    d(description="Next").click()
     time.sleep(1.5)
 
-    # 9. Assert visible in Next Actions
+    # 9. Assert visible in Next
     assert d(textContains=TITLE).exists, \
-        f"task '{TITLE}' missing from Next Actions after resurrection"
+        f"task '{TITLE}' missing from Next after resurrection"
 
     print("Goal 13 OK: round-tripped via Someday/Maybe.")
 

@@ -6,7 +6,7 @@ import 'state_surfaces.dart';
 /// Builder that renders the standard loading / error / empty / data surfaces
 /// for an [AsyncValue] holding a list.
 ///
-/// Renders every GTD list screen (Inbox, Next Actions, Waiting For,
+/// Renders every GTD list screen (Inbox, Next, Waiting For,
 /// Someday-Maybe, Search) through the shared surfaces in
 /// `state_surfaces.dart`: a centered spinner while loading; a friendly error
 /// message that never leaks raw exception text; an empty-state container with
