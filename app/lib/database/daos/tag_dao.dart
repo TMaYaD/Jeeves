@@ -235,6 +235,15 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
     );
   }
 
+  /// Removes the Outcome↔tag link and authors the tombstone a peer needs to
+  /// drop it too. The Tag row stays. Runs in the caller's [capturing] scope.
+  Future<void> unassignTag(String todoId, String tagId) async {
+    await (delete(todoTags)
+          ..where((jt) => jt.todoId.equals(todoId) & jt.tagId.equals(tagId)))
+        .go();
+    _tombstoneTodoTag(todoId, tagId);
+  }
+
   void _captureCaptureTag(String captureId, String tagId, String userId) {
     attachedDatabase.opCapture.write(
       collection: captureTagsCollection,
