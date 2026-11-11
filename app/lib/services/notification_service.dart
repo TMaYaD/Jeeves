@@ -164,25 +164,28 @@ class NotificationService {
     );
   }
 
-  /// Ids of due-date notifications the OS holds — scheduled or already
-  /// delivered and still in the tray — recognised by their payload.
-  Future<Set<int>> trackedDueDateNotificationIds() async {
-    final ids = <int>{};
-    for (final pending in await _plugin.pendingNotificationRequests()) {
-      if (outcomeIdFromNotificationPayload(pending.payload) != null) {
-        ids.add(pending.id);
+  /// Due-date notifications the OS holds, recognised by their payload:
+  /// `pending` are still scheduled to fire; `delivered` already fired and sit
+  /// in the tray.
+  Future<({Set<int> pending, Set<int> delivered})>
+      dueDateNotificationsOnDevice() async {
+    final pending = <int>{};
+    for (final request in await _plugin.pendingNotificationRequests()) {
+      if (outcomeIdFromNotificationPayload(request.payload) != null) {
+        pending.add(request.id);
       }
     }
+    final delivered = <int>{};
     final android = _plugin.resolvePlatformSpecificImplementation<
         AndroidFlutterLocalNotificationsPlugin>();
     for (final shown
         in await android?.getActiveNotifications() ?? const <ActiveNotification>[]) {
       final id = shown.id;
       if (id != null && outcomeIdFromNotificationPayload(shown.payload) != null) {
-        ids.add(id);
+        delivered.add(id);
       }
     }
-    return ids;
+    return (pending: pending, delivered: delivered);
   }
 
   /// Re-reads the device timezone into `tz.local`. Returns whether it changed.

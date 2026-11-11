@@ -157,9 +157,11 @@ class DueDateNotificationReconciler {
   final DateTime Function() _now;
 
   final _scheduledById = <int, PlannedDueDateNotification>{};
-  final _trackedIds = <int>{};
+  // Ids of delivered notifications still in the tray.
+  final _deliveredIds = <int>{};
   List<Todo> _latestOutcomes = const [];
   bool _seededFromOs = false;
+  bool _rescheduleAll = false;
   Future<void> _queue = Future.value();
   StreamSubscription<List<Todo>>? _subscription;
   AppLifecycleListener? _lifecycleListener;
@@ -180,7 +182,7 @@ class DueDateNotificationReconciler {
   /// re-scheduled to 09:00 on its due day in the new zone.
   Future<void> onResumed() => _enqueue(() async {
         final changed = await notifications.refreshLocalTimezone();
-        if (changed) _scheduledById.clear();
+        _rescheduleAll = changed;
         await _reconcile();
       });
 
@@ -205,18 +207,42 @@ class DueDateNotificationReconciler {
       location: _location(),
       now: _now(),
     );
+    final desiredIds = plan.toSchedule.map((p) => p.id).toSet();
     if (!_seededFromOs) {
-      _trackedIds.addAll(await notifications.trackedDueDateNotificationIds());
+      final onDevice = await notifications.dueDateNotificationsOnDevice();
       _seededFromOs = true;
+      _deliveredIds.addAll(onDevice.delivered);
+      // Everything pending at startup is still waiting to fire, so one the plan
+      // no longer wants (its due date moved into the past, say) is obsolete.
+      for (final id in onDevice.pending.difference(desiredIds)) {
+        await notifications.cancelReminder(id);
+        _deliveredIds.remove(id);
+      }
     }
-    for (final id in _trackedIds.difference(plan.keepIds).toList()) {
+    // Alarms this run scheduled that the plan has since dropped. One whose fire
+    // time has passed has been delivered, so it stays in the tray until the
+    // Outcome stops qualifying.
+    for (final entry in _scheduledById.entries.toList()) {
+      final planned = entry.value;
+      if (desiredIds.contains(entry.key)) continue;
+      if (planned.fireAt.isAfter(_now())) {
+        await notifications.cancelReminder(entry.key);
+        _scheduledById.remove(entry.key);
+        _deliveredIds.remove(entry.key);
+      } else {
+        _deliveredIds.add(entry.key);
+        _scheduledById.remove(entry.key);
+      }
+    }
+    for (final id in _deliveredIds.difference(plan.keepIds).toList()) {
       await notifications.cancelReminder(id);
-      _trackedIds.remove(id);
-      _scheduledById.remove(id);
+      _deliveredIds.remove(id);
     }
     for (final planned in plan.toSchedule) {
       final previous = _scheduledById[planned.id];
-      if (previous != null && previous.sameAs(planned)) continue;
+      if (!_rescheduleAll && previous != null && previous.sameAs(planned)) {
+        continue;
+      }
       await notifications.scheduleReminder(
         id: planned.id,
         title: planned.title,
@@ -225,8 +251,9 @@ class DueDateNotificationReconciler {
         payload: dueDateNotificationPayload(planned.outcomeId),
       );
       _scheduledById[planned.id] = planned;
-      _trackedIds.add(planned.id);
+      _deliveredIds.remove(planned.id);
     }
+    _rescheduleAll = false;
   }
 }
 

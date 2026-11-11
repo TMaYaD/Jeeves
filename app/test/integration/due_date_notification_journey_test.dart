@@ -43,10 +43,18 @@ class FakeOsNotifications extends NotificationService {
   }
 
   @override
-  Future<void> cancelReminder(int id) async => pending.remove(id);
+  Future<void> cancelReminder(int id) async {
+    pending.remove(id);
+    delivered.remove(id);
+  }
+
+  /// Notifications that already fired and sit in the tray.
+  final delivered = <int>{};
 
   @override
-  Future<Set<int>> trackedDueDateNotificationIds() async => pending.keys.toSet();
+  Future<({Set<int> pending, Set<int> delivered})>
+      dueDateNotificationsOnDevice() async =>
+          (pending: pending.keys.toSet(), delivered: delivered.toSet());
 
   @override
   Future<bool> refreshLocalTimezone() async {
@@ -206,6 +214,44 @@ void main() {
       dueDateNotificationId('keep'),
       dueDateNotificationId('lost'),
     });
+  });
+
+  test('moving the due date into the past cancels the old alarm', () async {
+    await insert('a', dueDate: _dueDay(kolkata, 2026, 11, 20));
+    await settle();
+    await db.todoDao.rescheduleTask('a', _dueDay(kolkata, 2026, 11, 10));
+    await settle();
+
+    expect(os.pending, isEmpty);
+  });
+
+  test('after a restart an alarm for a past due date is cancelled', () async {
+    await insert('a', dueDate: _dueDay(kolkata, 2026, 11, 20));
+    await settle();
+    reconciler.dispose();
+    // Edited into the past by another run of the app, which died before it
+    // could cancel.
+    await db.todoDao.rescheduleTask('a', _dueDay(kolkata, 2026, 11, 10));
+
+    reconciler = startReconciler();
+    await settle();
+
+    expect(os.pending, isEmpty);
+  });
+
+  test('a delivered notification stays while its Outcome is overdue and open',
+      () async {
+    await insert('a', dueDate: _dueDay(kolkata, 2026, 11, 10));
+    os.delivered.add(dueDateNotificationId('a'));
+    reconciler.dispose();
+    reconciler = startReconciler();
+    await settle();
+
+    expect(os.delivered, {dueDateNotificationId('a')});
+
+    await db.todoDao.markDone('a');
+    await settle();
+    expect(os.delivered, isEmpty);
   });
 
   test('a timezone change is picked up on the next resume', () async {
