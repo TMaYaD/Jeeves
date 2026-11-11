@@ -22,6 +22,7 @@ import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/ritual.dart';
 import 'package:jeeves/providers/ceremony_in_progress_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/providers/stale_sweep_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/screens/planning/focus_session_planning_screen.dart';
 
@@ -45,7 +46,12 @@ Future<void> _insertInbox(GtdDatabase db, String id) async {
 
 (Widget, GoRouter, ProviderContainer) _app(GtdDatabase db) {
   final container = ProviderContainer(
-    overrides: [databaseProvider.overrideWithValue(db)],
+    overrides: [
+      databaseProvider.overrideWithValue(db),
+      // Nothing is Stale here; skip the real-store read, which cannot settle
+      // under FakeAsync (docs/TESTING.md).
+      staleOutcomesProvider.overrideWith((ref) async => const []),
+    ],
   );
   final router = GoRouter(
     initialLocation: '/focus-session-planning',
