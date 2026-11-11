@@ -68,6 +68,11 @@ void main() {
     // stubbed streams are fed from whatever the test seeded into that database
     // before opening, so the screen shows the affordance a site needs.
     Future<void> openRoute(WidgetTester tester) async {
+      // Tall enough that the longest bottom sheet (status menu) fits.
+      tester.view.physicalSize = const Size(800, 1800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
       final router = GoRouter(
         initialLocation: '/inbox',
         routes: [
@@ -123,6 +128,9 @@ void main() {
       router.push('/task/o1');
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 400));
+      // The seeded streams deliver on a later microtask; let them render so
+      // pickers snapshot the seeded lists and the Action controls exist.
+      await tester.pumpAndSettle();
     }
 
     testWidgets('an edit in the field when the Outcome is deleted is dropped',
@@ -384,9 +392,8 @@ void main() {
             (db.select(db.actions)..where((a) => a.outcomeId.equals('o1')))
                 .get());
         expect(actionRows, isEmpty);
-        if (scenario.closesSheet) {
-          expect(scenario.sheetMarker, findsNothing);
-        }
+        expect(scenario.sheetMarker,
+            scenario.closesSheet ? findsNothing : findsOneWidget);
         expect(find.byType(SnackBar), findsNothing);
         expect(tester.takeException(), isNull);
       });
@@ -435,7 +442,9 @@ Future<void> _openContextTagEditor(WidgetTester tester) async {
 }
 
 Future<void> _tapFirstContextTag(WidgetTester tester) async {
-  await tester.tap(find.descendant(
-      of: find.byType(ContextTagPickerWidget),
-      matching: find.byType(TagText).first));
+  await tester.tap(find
+      .descendant(
+          of: find.byType(ContextTagPickerWidget),
+          matching: find.byType(TagText))
+      .first);
 }
