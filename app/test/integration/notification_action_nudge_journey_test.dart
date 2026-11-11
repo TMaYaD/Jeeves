@@ -202,6 +202,57 @@ void main() {
     sub.close();
   });
 
+  test('a Skip tapped before a content-state refire but drained after it '
+      'does not suppress the refire', () async {
+    // Cadence stays idle (reviewed yesterday), so only the content-state
+    // Trigger can bring the banner back.
+    var now = DateTime(2026, 11, 11, 9);
+    await boot(
+      clock: () => now,
+      weeklyReviewLastCompleted: now.subtract(const Duration(days: 1)),
+      itemCreatedAt: now,
+      startDrainer: false, // the app is not running when the button is tapped
+    );
+    final nowUtc = now.toUtc();
+    await db.into(db.todos).insert(TodosCompanion(
+          id: const Value('maybe'),
+          title: const Value('Someday thing'),
+          userId: const Value('local'),
+          clarified: const Value(true),
+          createdAt: Value(nowUtc),
+          updatedAt: Value(nowUtc),
+        ));
+    await db.todoDao.deferTaskToMaybe('maybe');
+
+    final sub = c.listen(nudgeVisibleProvider(RitualId.weeklyReview), (_, _) {});
+    await settle();
+    expect(sub.read(), isFalse,
+        reason: 'the Inbox holds a capture, so the content predicate is false');
+
+    // Skip at T. The app is not running, so it only reaches the outbox.
+    await tap(RitualId.weeklyReview, kPeriodicReviewActionSkip);
+
+    // T+1h: the Inbox empties, and the predicate goes false -> true.
+    now = now.add(const Duration(hours: 1));
+    await (db.update(db.captures)
+          ..where((t) => t.id.equals('inbox')))
+        .write(CapturesCompanion(clarifiedAt: Value(now.toUtc())));
+    await settle();
+    expect(sub.read(), isTrue, reason: 'the content-state Trigger refired');
+
+    // The app comes back and drains: dismissed_at is T, before the refire.
+    c.read(nudgeActionOutboxDrainerProvider);
+    await settle();
+    final dismissedAt =
+        c.read(nudgeStateProvider(RitualId.weeklyReview)).dismissedAt;
+    expect(dismissedAt, isNotNull);
+    expect(dismissedAt!.isAtSameMomentAs(DateTime(2026, 11, 11, 9)), isTrue,
+        reason: 'the Skip is applied with its tap time, not the drain time');
+    expect(sub.read(), isTrue,
+        reason: 'a Skip older than the refire must not hide it');
+    sub.close();
+  });
+
   test('a Skip tapped after the refire suppresses it', () async {
     final now = nextDue.add(const Duration(minutes: 30));
     await boot(
