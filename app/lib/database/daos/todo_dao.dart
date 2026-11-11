@@ -934,13 +934,12 @@ AND (
     ).get().then((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
-  /// One-shot snapshot of tasks needing re-clarification: unclarified since an Action,
-  /// or Actionless
+  /// One-shot snapshot of tasks needing re-clarification: Stale or Actionless
   /// per spec.
   ///
-  /// Unclarified since an Action: an Action was completed after the Outcome was last clarified,
+  /// Stale: an Action was completed after the Outcome was last clarified,
   /// read from the Action rows themselves ([_latestActionTerminationClause],
-  /// ADR-0001 story 4). Nothing else makes an Outcome unclarified since an Action: a day that closed
+  /// ADR-0001 story 4). Nothing else makes an Outcome Stale: a day that closed
   /// with the Outcome still on the Plan says nothing about it.
   /// Actionless: no current Action row AND not delegated. Delegated tasks
   /// (carrying any person-typed tag) are excluded from the actionless branch —
@@ -960,10 +959,10 @@ AND (
     ).get().then((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
-  /// The subset of [ids] that are unclarified since an Action — the same SQL
-  /// as that branch of [getNeedsReview], so the Task Review card's
+  /// The subset of [ids] that are Stale by Action termination — the same SQL
+  /// as the Stale branch of [getNeedsReview], so the Task Review card's Stale
   /// hint and the queue's membership cannot drift apart.
-  Future<Set<String>> getUnclarifiedSinceActionIds(Set<String> ids) async {
+  Future<Set<String>> getActionTerminationStaleIds(Set<String> ids) async {
     if (ids.isEmpty) return {};
     final placeholders = List.filled(ids.length, '?').join(', ');
     final rows = await customSelect(

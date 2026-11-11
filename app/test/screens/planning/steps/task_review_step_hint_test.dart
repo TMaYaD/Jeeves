@@ -23,7 +23,7 @@ void main() {
   group('hintFor — actionless detection (#278)', () {
     test('no current Action → noNextAction', () {
       expect(
-        hintFor(_todo(), hasPersonTag: false, isUnclarifiedSinceAction: false),
+        hintFor(_todo(), hasPersonTag: false, isStale: false),
         ReclarifyHint.noNextAction,
       );
     });
@@ -31,7 +31,7 @@ void main() {
     test('whitespace-only Action text → noNextAction', () {
       expect(
         hintFor(_todo(),
-            hasPersonTag: false, isUnclarifiedSinceAction: false, currentActionText: '   '),
+            hasPersonTag: false, isStale: false, currentActionText: '   '),
         ReclarifyHint.noNextAction,
         reason:
             'hintFor reads the same evidence as TodoDao._needsReviewWhere — '
@@ -43,7 +43,7 @@ void main() {
     test('tabs and newlines → noNextAction', () {
       expect(
         hintFor(_todo(),
-            hasPersonTag: false, isUnclarifiedSinceAction: false, currentActionText: '\t\n '),
+            hasPersonTag: false, isStale: false, currentActionText: '\t\n '),
         ReclarifyHint.noNextAction,
       );
     });
@@ -51,7 +51,7 @@ void main() {
     test('non-empty text → updatedSinceClarified', () {
       expect(
         hintFor(_todo(),
-            hasPersonTag: false, isUnclarifiedSinceAction: true, currentActionText: 'Call Trixy'),
+            hasPersonTag: false, isStale: true, currentActionText: 'Call Trixy'),
         ReclarifyHint.updatedSinceClarified,
       );
     });
@@ -59,7 +59,7 @@ void main() {
     test('text with leading/trailing whitespace → updatedSinceClarified', () {
       expect(
         hintFor(_todo(),
-            hasPersonTag: false, isUnclarifiedSinceAction: true, currentActionText: '  Call Trixy  '),
+            hasPersonTag: false, isStale: true, currentActionText: '  Call Trixy  '),
         ReclarifyHint.updatedSinceClarified,
       );
     });
@@ -73,7 +73,7 @@ void main() {
         hintFor(
           _todo(),
           hasPersonTag: true,
-          isUnclarifiedSinceAction: true,
+          isStale: true,
           currentActionText: 'Email Trixy',
         ),
         ReclarifyHint.staleWaitingFor,
@@ -87,7 +87,7 @@ void main() {
         hintFor(
           _todo(),
           hasPersonTag: true,
-          isUnclarifiedSinceAction: true,
+          isStale: true,
         ),
         ReclarifyHint.staleWaitingFor,
       );
@@ -99,11 +99,11 @@ void main() {
       // helper still has to return something coherent.
       expect(
         hintFor(_todo(),
-            hasPersonTag: true, isUnclarifiedSinceAction: false, currentActionText: 'X'),
+            hasPersonTag: true, isStale: false, currentActionText: 'X'),
         ReclarifyHint.updatedSinceClarified,
       );
       expect(
-        hintFor(_todo(), hasPersonTag: true, isUnclarifiedSinceAction: false),
+        hintFor(_todo(), hasPersonTag: true, isStale: false),
         ReclarifyHint.noNextAction,
       );
     });
@@ -113,7 +113,7 @@ void main() {
         hintFor(
           _todo(),
           hasPersonTag: false,
-          isUnclarifiedSinceAction: true,
+          isStale: true,
           currentActionText: 'Draft email',
         ),
         ReclarifyHint.updatedSinceClarified,
@@ -125,15 +125,15 @@ void main() {
     test('a completed Action leaves the Outcome Actionless → noNextAction, '
         'even though the DAO surfaced it through the widened Stale branch', () {
       // Completion terminates the current Action without stamping, so the
-      // Outcome is by construction Actionless. `isUnclarifiedSinceAction` stays false here: it
+      // Outcome is by construction Actionless. `isStale` stays false here: it
       // mirrors only the session-history half of the widened DAO branch, and
       // "define the next action" is the accurate prompt either way.
       expect(
-        hintFor(_todo(), hasPersonTag: false, isUnclarifiedSinceAction: false),
+        hintFor(_todo(), hasPersonTag: false, isStale: false),
         ReclarifyHint.noNextAction,
       );
       expect(
-        hintFor(_todo(), hasPersonTag: true, isUnclarifiedSinceAction: false),
+        hintFor(_todo(), hasPersonTag: true, isStale: false),
         ReclarifyHint.noNextAction,
       );
     });

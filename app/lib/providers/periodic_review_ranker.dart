@@ -16,7 +16,7 @@ class PeriodicReviewCandidate {
     required this.step,
     required this.id,
     required this.isPlanless,
-    required this.isUnclarifiedSinceAction,
+    required this.isStale,
     required this.isActionless,
     required this.lastClarifiedAt,
     required this.createdAt,
@@ -25,7 +25,7 @@ class PeriodicReviewCandidate {
   final PeriodicReviewStepKind step;
   final String id;
   final bool isPlanless;
-  final bool isUnclarifiedSinceAction;
+  final bool isStale;
   final bool isActionless;
   final DateTime? lastClarifiedAt;
   final DateTime createdAt;
@@ -47,7 +47,7 @@ class FreshnessPeriodicReviewRanker implements PeriodicReviewRanker {
     if (candidate.step == PeriodicReviewStepKind.inbox) return 0;
     if (candidate.step != PeriodicReviewStepKind.someday) {
       if (candidate.isPlanless) return 1;
-      if (candidate.isUnclarifiedSinceAction) return 2;
+      if (candidate.isStale) return 2;
       if (candidate.isActionless) return 3;
       if (candidate.step == PeriodicReviewStepKind.waitingFor) return 4;
     }

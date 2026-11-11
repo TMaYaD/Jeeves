@@ -1,13 +1,13 @@
 /// Step 2 of the daily planning ritual: Task Review (re-clarification surface).
 ///
 /// Surfaces tasks needing re-clarification one at a time:
-/// - Unclarified since an Action: an Action was completed more recently than last clarified.
+/// - Stale tasks: an Action was completed more recently than last clarified.
 /// - Actionless tasks: no current Action (excluding delegated tasks).
 ///
 /// Context-aware action menu:
-/// - Unclarified-since-Action tasks without a delegate show "Still relevant" (stamps
+/// - Stale tasks without a delegate show "Still relevant" (stamps
 ///   last_clarified_at, clears stale).
-/// - Unclarified-since-Action delegated tasks show "Still waiting" (same write, waiting-for copy).
+/// - Stale delegated tasks show "Still waiting" (same write, waiting-for copy).
 /// - Actionless tasks also offer "Still relevant": it defers the question for
 ///   a review interval rather than answering it.
 library;
@@ -31,19 +31,19 @@ enum ReclarifyHint { noNextAction, updatedSinceClarified, staleWaitingFor }
 /// [currentActionText] *is* Actionless — the DAO predicate and this hint read
 /// the same evidence, so they cannot disagree.
 ///
-/// [currentActionText], [hasPersonTag] and [isUnclarifiedSinceAction] are computed by the caller
+/// [currentActionText], [hasPersonTag] and [isStale] are computed by the caller
 /// (the widget reads the Action text from
 /// [FocusSessionPlanningState.reviewActionTexts], person tags from
-/// `reviewPersonTags`, and unclarified-since-Action from
-/// `reviewUnclarifiedSinceActionIds`). Keeping the
+/// `reviewPersonTags`, and stale from
+/// `reviewStaleIds`). Keeping the
 /// helper pure makes it trivially unit-testable.
 ReclarifyHint hintFor(
   Todo t, {
   required bool hasPersonTag,
-  required bool isUnclarifiedSinceAction,
+  required bool isStale,
   String? currentActionText,
 }) {
-  if (isUnclarifiedSinceAction && hasPersonTag) return ReclarifyHint.staleWaitingFor;
+  if (isStale && hasPersonTag) return ReclarifyHint.staleWaitingFor;
   if (currentActionText == null || currentActionText.trim().isEmpty) {
     return ReclarifyHint.noNextAction;
   }
@@ -73,7 +73,7 @@ class TaskReviewStep extends ConsumerWidget {
     final hint = hintFor(
       task,
       hasPersonTag: personTags.isNotEmpty,
-      isUnclarifiedSinceAction: state.reviewUnclarifiedSinceActionIds.contains(task.id),
+      isStale: state.reviewStaleIds.contains(task.id),
       currentActionText: currentActionText,
     );
     final isActionless = hint == ReclarifyHint.noNextAction;

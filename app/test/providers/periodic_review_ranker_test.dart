@@ -15,7 +15,7 @@ PeriodicReviewCandidate candidate(
   step: step,
   id: id,
   isPlanless: planless,
-  isUnclarifiedSinceAction: stale,
+  isStale: stale,
   isActionless: actionless,
   lastClarifiedAt: clarified,
   createdAt: created ?? DateTime.utc(2026),
