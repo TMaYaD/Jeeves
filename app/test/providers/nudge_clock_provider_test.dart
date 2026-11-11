@@ -32,6 +32,13 @@ void main() {
       expect(next, DateTime(2026, 6, 29, 12, 0));
     });
 
+    test('schedules subsequent weekly-review refires before other boundaries', () {
+      final last = DateTime(2026, 6, 15, 12);
+      final next = nextNudgeBoundary(DateTime(2026, 6, 29, 11),
+          shutdownHour: 17, shutdownMinute: 0, weeklyReviewLastCompleted: last);
+      expect(next, DateTime(2026, 6, 29, 12));
+    });
+
     test('ignores a weekly-review due instant that is already in the past', () {
       final now = DateTime(2026, 6, 29, 10, 0);
       final last = DateTime(2026, 6, 1, 9, 0); // due long ago

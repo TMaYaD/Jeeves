@@ -2,7 +2,7 @@
 ///
 /// Time-based Trigger predicates (see `nudge_triggers.dart`) compare the
 /// current instant against scheduled boundaries — the day boundary, the
-/// Evening Shutdown anchor, the Weekly Review cadence-due instant. Sampling
+/// Evening Shutdown anchor, the Weekly Review cadence boundaries. Sampling
 /// `DateTime.now()` directly inside those Providers makes them un-reactive:
 /// Riverpod never re-evaluates them when a boundary passes, so a predicate's
 /// false→true edge is only observed when some unrelated rebuild happens to
@@ -14,7 +14,7 @@
 /// - [nudgeBoundaryTickProvider] — a coarse reactive signal that the
 ///   time-based Trigger Providers `ref.watch`. It schedules a single [Timer]
 ///   that fires at the *next* relevant boundary across all Rituals (next day
-///   boundary, today's Evening Shutdown anchor, the Weekly Review due instant),
+///   boundary, today's Evening Shutdown anchor, the next Weekly Review period boundary),
 ///   bumps the tick, and re-arms. Watching it re-evaluates a Trigger exactly
 ///   when a boundary crosses — not on a per-second cadence — so there is no
 ///   rebuild storm and unrelated Providers are untouched.
@@ -64,8 +64,8 @@ DateTime _todayAt(DateTime now, int hour, int minute) {
 ///   - the next day boundary (DPR / WR `firingSince` and the content-state
 ///     per-day stamp all key off start-of-day);
 ///   - today's Evening Shutdown anchor, if still in the future (ES flips at it);
-///   - the Weekly Review cadence-due instant (`lastCompleted + 7d`), if still
-///     in the future (WR's due predicate flips at it).
+///   - the next Weekly Review seven-day boundary after last completion
+///     (WR becomes due at the first, then refires at each subsequent boundary).
 DateTime nextNudgeBoundary(
   DateTime now, {
   required int shutdownHour,
@@ -80,8 +80,11 @@ DateTime nextNudgeBoundary(
   }
 
   if (weeklyReviewLastCompleted != null) {
+    final elapsedPeriods =
+        now.difference(weeklyReviewLastCompleted).inDays ~/ _kWeeklyReviewCadenceDays;
+    final nextPeriod = elapsedPeriods < 0 ? 1 : elapsedPeriods + 1;
     final due = weeklyReviewLastCompleted
-        .add(const Duration(days: _kWeeklyReviewCadenceDays));
+        .add(Duration(days: _kWeeklyReviewCadenceDays * nextPeriod));
     if (due.isAfter(now) && due.isBefore(next)) {
       next = due;
     }
