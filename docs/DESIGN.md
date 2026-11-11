@@ -518,7 +518,7 @@ Paths are under `app/lib/`; DPR means Daily Planning and ES means Evening Shutdo
 
 | Surface / source | Fields | Layout / representation contract | Interactions |
 |---|---|---|---|
-| Task detail — `screens/task_detail/task_detail_screen.dart` | Project, status, title, attributes, contexts, people, Plan, notes, History, reminders, captured-from | Full Outcome detail | Autosave edits; status menu; attribute editors |
+| Task detail — `screens/task_detail/task_detail_screen.dart` | Project, status, title, attributes, contexts, people, Plan, History, notes, reminders, captured-from | Full Outcome detail | Autosave edits; status menu; attribute editors |
 | Peek — `widgets/outcome_peek_sheet.dart` | Title, energy, estimate, logged time, due, contexts, people, Plan, notes | Bottom-sheet Outcome detail | Edit in place; close |
 | Clarify — `widgets/clarify_card.dart` | Title, notes, project, contexts, energy, estimate, due, process-to | Outlined form; shared labels and estimate picker | Capture draft or Outcome autosave; process-to routing |
 | DPR plan summary — `screens/planning/steps/plan_summary_step.dart` | Title, off-Up-Next reason, estimate, energy | Framed `OutcomeRow`, checkbox and selection controls | Peek, long-press selection, Select/Skip/Undo |

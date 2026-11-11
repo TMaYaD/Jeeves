@@ -42,6 +42,8 @@ void main() {
             createdAt: Value(DateTime.now()),
           ),
         );
+    await db.tagDao.findOrCreateTag('Alice', 'person', 'local');
+    await db.tagDao.findOrCreateTag('Bob', 'person', 'local');
   });
   tearDown(() async => db.close());
 
@@ -93,6 +95,32 @@ void main() {
         '2h 5m',
         'Mar 15, 2030',
       ]);
+      // People row: empty until a Person is picked, then shown for any status.
+      final delegates = find.byKey(const Key('task_detail_delegates'));
+      expect(
+        find.descendant(of: delegates, matching: find.text('Nobody')),
+        findsOneWidget,
+      );
+      await tester.tap(delegates);
+      await _settle(tester);
+      await tester.tap(find.text('Alice'));
+      await _settle(tester);
+      await tester.tap(find.text('Bob'));
+      await _settle(tester);
+      await tester.tap(find.text('Done'));
+      await _settle(tester);
+      expect(
+        find.descendant(of: delegates, matching: find.text('Alice, Bob')),
+        findsOneWidget,
+      );
+      final personTagNames = (await tester.runAsync(() async {
+        final ids = await db.todoDao.getPersonTagIdsForTodo('report');
+        final rows = await (db.select(db.tags)
+              ..where((t) => t.id.isIn(ids)))
+            .get();
+        return rows.map((t) => t.name).toSet();
+      }))!;
+      expect(personTagNames, {'Alice', 'Bob'});
       await tester.tap(
         find.descendant(of: detail, matching: find.text('High')),
       );

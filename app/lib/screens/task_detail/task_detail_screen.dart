@@ -21,6 +21,7 @@ import '../../widgets/meta_chip.dart';
 import '../../widgets/outcome_attribute_editors.dart';
 import '../../widgets/outcome_attribute_strip.dart';
 import '../../widgets/outcome_plan_section.dart';
+import '../../widgets/person_tag_picker.dart';
 import '../../widgets/project_picker.dart';
 import '../../widgets/tag_list.dart';
 import '../../widgets/task_status_row.dart';
@@ -236,6 +237,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
           final tags = tagsAsync.asData?.value ?? [];
           final projectTag = tags.where((t) => t.type == 'project').firstOrNull;
           final contextTags = tags.where((t) => t.type == 'context').toList();
+          final personTags = tags.where((t) => t.type == 'person').toList();
 
           return Scaffold(
             backgroundColor: Colors.white,
@@ -335,6 +337,40 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                               border: Border.all(color: const Color(0xFFD1D5DB)),
                             ),
                             child: const Icon(Icons.add, size: 16, color: Color(0xFF9CA3AF)),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'WAITING FOR',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 1.2,
+                          color: Color(0xFF9CA3AF),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      InkWell(
+                        key: const Key('task_detail_delegates'),
+                        onTap: () => showPersonTagPicker(
+                          context,
+                          todoId: widget.todoId,
+                          assignedPersonTagIds:
+                              personTags.map((t) => t.id).toSet(),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          child: Text(
+                            personTags.isEmpty
+                                ? 'Nobody'
+                                : personTags.map((t) => t.name).join(', '),
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: personTags.isEmpty
+                                  ? const Color(0xFF9CA3AF)
+                                  : const Color(0xFF374151),
+                            ),
                           ),
                         ),
                       ),
