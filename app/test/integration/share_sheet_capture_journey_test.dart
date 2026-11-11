@@ -99,6 +99,11 @@ void main() {
 
     final queue = Directory(p.join(filesDirectory.path, 'share_inbox'));
     expect(queue.listSync(), isEmpty);
+
+    // Unmount inside the test so drift's stream-close timer is flushed here
+    // rather than left pending when the binding disposes the tree.
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
   });
 
   test('draining twice, or after a crash before the delete, adds nothing',
