@@ -334,6 +334,7 @@ _Avoid_: stack, list (too generic), priority list (acceptable but Nudge queue is
 #### Flagged ambiguities
 
 - **Nudge** (this context) and **Reminder** (forthcoming, GTD Core) are different concepts. A Nudge targets a *Ritual* — "it's time for your weekly review". A Reminder targets an *individual Action* — "remind me to call John at 5pm". Different scopes, triggers and lifecycles; do not collapse them into one primitive even though both surface as OS notifications.
+- The **due-date notification** (an Outcome due today) is neither a Nudge nor the reserved **Reminder**. `NotificationService.scheduleReminder` keeps its name but serves due-date notifications; the name is a candidate for renaming when Reminder is built.
 
 ### Sync
 

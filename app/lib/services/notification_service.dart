@@ -14,6 +14,7 @@ import 'package:timezone/data/latest_all.dart' as tz_data;
 import 'package:timezone/timezone.dart' as tz;
 
 import '../models/ritual.dart';
+import 'due_date_notifications.dart' show outcomeIdFromNotificationPayload;
 
 // Stable notification IDs.
 const _kFocusSessionPlanningNotificationId = 0;
@@ -131,7 +132,8 @@ class NotificationService {
   }
 
   // ---------------------------------------------------------------------------
-  // Task reminders (generic, used by future reminder feature)
+  // Due-date notifications. Named `scheduleReminder` for historical reasons;
+  // "Reminder" in CONTEXT.md is a different, Action-level concept.
   // ---------------------------------------------------------------------------
 
   Future<void> scheduleReminder({
@@ -139,18 +141,20 @@ class NotificationService {
     required String title,
     required String body,
     required DateTime scheduledAt,
+    String? payload,
   }) async {
     final scheduled = tz.TZDateTime.from(scheduledAt, tz.local);
     await _plugin.zonedSchedule(
       id: id,
       title: title,
       body: body,
+      payload: payload,
       scheduledDate: scheduled,
       notificationDetails: const NotificationDetails(
         android: AndroidNotificationDetails(
-          'task_reminders',
-          'Task Reminders',
-          channelDescription: 'Reminders for scheduled tasks',
+          'due_dates',
+          'Due dates',
+          channelDescription: 'Outcomes that are due today',
           importance: Importance.high,
           priority: Priority.high,
         ),
@@ -158,6 +162,35 @@ class NotificationService {
       ),
       androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
     );
+  }
+
+  /// Ids of due-date notifications the OS holds — scheduled or already
+  /// delivered and still in the tray — recognised by their payload.
+  Future<Set<int>> trackedDueDateNotificationIds() async {
+    final ids = <int>{};
+    for (final pending in await _plugin.pendingNotificationRequests()) {
+      if (outcomeIdFromNotificationPayload(pending.payload) != null) {
+        ids.add(pending.id);
+      }
+    }
+    final android = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    for (final shown
+        in await android?.getActiveNotifications() ?? const <ActiveNotification>[]) {
+      final id = shown.id;
+      if (id != null && outcomeIdFromNotificationPayload(shown.payload) != null) {
+        ids.add(id);
+      }
+    }
+    return ids;
+  }
+
+  /// Re-reads the device timezone into `tz.local`. Returns whether it changed.
+  Future<bool> refreshLocalTimezone() async {
+    final info = await FlutterTimezone.getLocalTimezone();
+    if (info.identifier == tz.local.name) return false;
+    tz.setLocalLocation(tz.getLocation(info.identifier));
+    return true;
   }
 
   // ---------------------------------------------------------------------------
