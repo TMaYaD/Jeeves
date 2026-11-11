@@ -74,7 +74,7 @@ void main() {
   }
 
   Future<bool> weeklyReviewVisible() async {
-    final sub = c.listen(nudgeVisibleProvider(RitualId.weeklyReview), (_, __) {});
+    final sub = c.listen(nudgeVisibleProvider(RitualId.weeklyReview), (_, _) {});
     await pumpEventQueue();
     final visible = sub.read();
     sub.close();
