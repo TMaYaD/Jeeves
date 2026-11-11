@@ -6,6 +6,7 @@ import '../database/daos/action_dao.dart' show TerminatedAction;
 import '../database/daos/capture_dao.dart' show CarvedOutcome;
 import '../database/gtd_database.dart';
 import '../models/action_draft.dart';
+import '../models/time_context.dart';
 import '../models/todo.dart' show Intent, RoutingKind;
 import 'auth_provider.dart';
 import 'database_provider.dart';
@@ -233,6 +234,28 @@ class TaskDetailNotifier {
         _todoId,
         timeEstimate: minutes,
       ));
+
+  /// Sets or clears (null) the TimeContext of the Outcome's current Action.
+  /// Returns whether the Outcome was still present; an Actionless Outcome has
+  /// nothing to attach it to and is left untouched. Does not stamp
+  /// `last_clarified_at` (Organising).
+  Future<bool> setTimeContext(TimeContext? value) async {
+    var wrote = false;
+    final present = await _ifOutcomePresent(() async {
+      final current = await _db.actionDao.getCurrentAction(_todoId);
+      if (current == null) return;
+      wrote = await _db.actionDao.applySetTimeContext(
+        current.id,
+        value,
+        ts: DateTime.now().toUtc(),
+      );
+    });
+    if (wrote) {
+      _db.notifyActionsViewWrite();
+      _db.notifyTodosViewWrite();
+    }
+    return present;
+  }
 
   Future<bool> setDueDate(DateTime date) =>
       _ifOutcomePresent(() => _db.todoDao.updateFields(
