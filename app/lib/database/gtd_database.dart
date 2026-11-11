@@ -252,9 +252,16 @@ class GtdDatabase extends _$GtdDatabase {
           }
           // v4 (issue #238): `actions.time_context`, the TimeContext on an
           // Action. A nullable `ADD COLUMN` — no table rebuild, every existing
-          // row reads NULL ("not gated"), nothing is lost.
+          // row reads NULL ("not gated"), nothing is lost. Guarded on the
+          // column's absence so a store that already carries it (a rebuilt
+          // fixture, a half-applied earlier attempt) does not fail the ladder.
           if (from < 4) {
-            await m.addColumn(actions, actions.timeContext);
+            final existing = await m.database
+                .customSelect('PRAGMA table_info(actions)')
+                .get();
+            if (!existing.any((row) => row.read<String>('name') == 'time_context')) {
+              await m.addColumn(actions, actions.timeContext);
+            }
           }
         }),
       );
