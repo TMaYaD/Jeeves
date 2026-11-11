@@ -25,7 +25,9 @@ import 'package:jeeves/providers/gtd_lists_provider.dart';
 import 'package:jeeves/providers/nudge_clock_provider.dart';
 import 'package:jeeves/providers/nudge_triggers.dart';
 import 'package:jeeves/providers/onboarding_provider.dart';
-import 'package:jeeves/providers/periodic_review_settings_provider.dart';
+import 'package:jeeves/providers/periodic_review_settings_provider.dart'
+    show periodicReviewIsDueProvider, periodicReviewLastCompletedProvider;
+import 'package:jeeves/models/nudge_predicates.dart';
 import 'package:jeeves/providers/shutdown_settings_provider.dart';
 
 class _StubPlanningSettings extends FocusSessionPlanningSettingsNotifier {
@@ -254,6 +256,30 @@ void main() {
       final t = await _readTrigger(c, RitualId.eveningShutdown);
       expect(t.isFiring, isTrue);
       expect(t.firingSince, DateTime(2026, 5, 20, 18, 0));
+    });
+  });
+  group('Weekly Review Cadence Trigger — early open review', () {
+    test('keeps firing at lastCompleted + 7d while an early review is open',
+        () async {
+      // Completed Monday; a partial review opened Wednesday keeps the review
+      // "due" in periodicReviewIsDueProvider before the seven-day boundary.
+      final completed = DateTime(2026, 5, 18, 9, 0);
+      final now = DateTime(2026, 5, 20, 10, 0);
+      final c = ProviderContainer(overrides: [
+        clockProvider.overrideWithValue(() => now),
+        nudgeBoundaryTickProvider.overrideWithValue(0),
+        periodicReviewIsDueProvider.overrideWithValue(true),
+        periodicReviewLastCompletedProvider.overrideWithValue(completed),
+        hasAnyItemProvider.overrideWith((ref) => Stream.value(true)),
+        ceremonyInProgressForProvider.overrideWith((ref, r) => false),
+      ]);
+      addTearDown(c.dispose);
+      final t = await _readTrigger(c, RitualId.weeklyReview);
+      final edge = completed.add(const Duration(days: 7));
+      expect(t.isFiring, isTrue);
+      expect(t.firingSince, edge);
+      expect(nudgeVisibleAt(now, t.firingSince, const NudgeState(), null),
+          isTrue);
     });
   });
 }

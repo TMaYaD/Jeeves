@@ -226,10 +226,18 @@ TriggerState _wrCadenceTrigger(Ref ref) {
   if (!ref.watch(periodicReviewIsDueProvider)) return TriggerState.idle;
   final hasAnyItem = ref.watch(hasAnyItemProvider);
   if (!hasAnyItem.hasValue) return TriggerState.idle;
-  return _stateForEdge(wrFiringEdgeAt(now, WrFacts(
-    hasAnyItem: hasAnyItem.requireValue,
-    lastCompleted: ref.watch(periodicReviewLastCompletedProvider),
-  )));
+  final lastCompleted = ref.watch(periodicReviewLastCompletedProvider);
+  // An open Weekly Review is due before lastCompleted + 7 days, where the
+  // predicate has no edge yet; the live Trigger keeps firing from that
+  // cadence boundary, as it did before the predicate was extracted.
+  final edge = wrFiringEdgeAt(now, WrFacts(
+        hasAnyItem: hasAnyItem.requireValue,
+        lastCompleted: lastCompleted,
+      )) ??
+      (hasAnyItem.requireValue
+          ? lastCompleted?.add(const Duration(days: 7))
+          : null);
+  return _stateForEdge(edge);
 }
 
 // ---------------------------------------------------------------------------
