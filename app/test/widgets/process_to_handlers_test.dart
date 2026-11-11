@@ -75,6 +75,8 @@ class _FailingClarificationService extends DaoClarificationService {
     required RoutingKind to,
     String? actionText,
     String? actionTextIfActionless,
+    String? promotePlannedActionId,
+    String? replacingCurrentActionId,
     Set<String>? personTagIds,
     String? userId,
   }) =>
@@ -2118,10 +2120,10 @@ void main() {
       expect(await db.actionDao.getTerminatedActions('q6'), isEmpty,
           reason: 'the aborted replace retires nothing');
       expect((await db.todoDao.getTodo('q6'))?.intent, 'maybe',
-          reason: 'the throw lands before _commit, so the Outcome stays on '
-              'Someday');
+          reason: 'the stale-confirm throw rolls the whole write back, so the '
+              'Outcome stays on Someday');
       expect((await db.todoDao.getTodo('q6'))?.lastClarifiedAt, isNull,
-          reason: 'no route landed, so nothing stamped by _commit');
+          reason: 'no route landed, so nothing stamped');
       expect(fired, isEmpty, reason: 'the aborted replace commits no route');
     });
 
@@ -2164,7 +2166,7 @@ void main() {
       expect((await db.todoDao.getTodo('q7'))?.intent, 'maybe',
           reason: 'no route committed, so the Outcome stays on Someday');
       expect((await db.todoDao.getTodo('q7'))?.lastClarifiedAt, isNull,
-          reason: 'no route landed, so nothing stamped by _commit');
+          reason: 'no route landed, so nothing stamped');
       expect(fired, isEmpty);
     });
 
