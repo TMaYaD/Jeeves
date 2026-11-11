@@ -30,7 +30,7 @@ dependencies:
   # touched so live queries refresh.
   drift_sqlite_async: ^0.3.1
   # Imported directly for `SqliteDatabase` in the domain store's open path.
-  sqlite_async: ^0.14.5
+  sqlite_async: ^0.14.8
   sqlite3_flutter_libs: ^0.6.0+eol
   path_provider: ^2.1.6
   path: ^1.9.0
@@ -65,10 +65,10 @@ dependencies:
   # Local key-value persistence (planning ritual state)
   shared_preferences: ^2.5.6
   # Reads the installed package's versionName/versionCode for Settings → About.
-  package_info_plus: ^10.2.1
+  package_info_plus: ^10.2.2
 
   # File import
-  file_picker: ^13.1.0
+  file_picker: ^13.3.2
 
   # Encrypted token storage (JWT)
   flutter_secure_storage: ^11.2.0
