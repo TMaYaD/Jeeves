@@ -55,8 +55,30 @@ tz.TZDateTime dueDateNotificationFireAt(DateTime dueDate, tz.Location location) 
       location, day.year, day.month, day.day, kDueDateNotificationHour);
 }
 
-String dueDateNotificationPayload(String outcomeId) =>
-    '$kDueDateNotificationPayloadPrefix$outcomeId';
+/// Separates the Outcome id from the requested fire instant in a payload.
+const kDueDateNotificationFireAtSeparator = '@';
+
+/// Payload for the notification of [outcomeId]. When [fireAt] is given it is
+/// recorded (epoch milliseconds), so a pending alarm can later be told apart
+/// from one scheduled for a different, since-changed due day.
+String dueDateNotificationPayload(String outcomeId, {DateTime? fireAt}) =>
+    fireAt == null
+        ? '$kDueDateNotificationPayloadPrefix$outcomeId'
+        : '$kDueDateNotificationPayloadPrefix$outcomeId'
+            '$kDueDateNotificationFireAtSeparator'
+            '${fireAt.millisecondsSinceEpoch}';
+
+/// The fire instant (epoch milliseconds) recorded in a due-date payload, or
+/// null when the payload carries none.
+int? fireAtMillisFromNotificationPayload(String? payload) {
+  if (payload == null ||
+      !payload.startsWith(kDueDateNotificationPayloadPrefix)) {
+    return null;
+  }
+  final at = payload.lastIndexOf(kDueDateNotificationFireAtSeparator);
+  if (at < 0) return null;
+  return int.tryParse(payload.substring(at + 1));
+}
 
 /// The Outcome id carried by a due-date notification payload, or null.
 String? outcomeIdFromNotificationPayload(String? payload) {
@@ -64,7 +86,9 @@ String? outcomeIdFromNotificationPayload(String? payload) {
       !payload.startsWith(kDueDateNotificationPayloadPrefix)) {
     return null;
   }
-  final id = payload.substring(kDueDateNotificationPayloadPrefix.length);
+  var id = payload.substring(kDueDateNotificationPayloadPrefix.length);
+  final at = id.indexOf(kDueDateNotificationFireAtSeparator);
+  if (at >= 0) id = id.substring(0, at);
   return id.isEmpty ? null : id;
 }
 
@@ -86,7 +110,11 @@ class PlannedDueDateNotification {
 }
 
 class DueDateNotificationPlan {
-  const DueDateNotificationPlan({required this.toSchedule, required this.keepIds});
+  const DueDateNotificationPlan({
+    required this.toSchedule,
+    required this.keepIds,
+    required this.passedFireTimes,
+  });
 
   /// Notifications that should be pending, soonest first.
   final List<PlannedDueDateNotification> toSchedule;
@@ -95,6 +123,11 @@ class DueDateNotificationPlan {
   /// whose 09:00 has already passed (their notification was delivered; it
   /// leaves the tray only when the Outcome stops qualifying).
   final Set<int> keepIds;
+
+  /// (notification id, fire instant in epoch milliseconds) for each Outcome
+  /// whose 09:00 has already passed. A pending alarm matching one of these is
+  /// unchanged and still awaiting delivery, so it must not be cancelled.
+  final Set<(int, int)> passedFireTimes;
 }
 
 /// Decides what should be pending for [outcomes] — Outcomes that are due-dated
@@ -106,6 +139,7 @@ DueDateNotificationPlan planDueDateNotifications(
   int maxScheduled = kMaxScheduledDueDateNotifications,
 }) {
   final keepIds = <int>{};
+  final passedFireTimes = <(int, int)>{};
   final futureById = <int, PlannedDueDateNotification>{};
   for (final outcome in outcomes) {
     final dueDate = outcome.dueDate;
@@ -118,6 +152,7 @@ DueDateNotificationPlan planDueDateNotifications(
     );
     if (!planned.fireAt.isAfter(now)) {
       keepIds.add(planned.id);
+      passedFireTimes.add((planned.id, planned.fireAt.millisecondsSinceEpoch));
       continue;
     }
     // Id collision: keep the earlier fire time (then the smaller Outcome id)
@@ -137,7 +172,11 @@ DueDateNotificationPlan planDueDateNotifications(
     });
   final toSchedule = sorted.take(maxScheduled).toList();
   keepIds.addAll(toSchedule.map((p) => p.id));
-  return DueDateNotificationPlan(toSchedule: toSchedule, keepIds: keepIds);
+  return DueDateNotificationPlan(
+    toSchedule: toSchedule,
+    keepIds: keepIds,
+    passedFireTimes: passedFireTimes,
+  );
 }
 
 /// Keeps the OS's scheduled due-date notifications equal to the Outcomes
@@ -211,10 +250,16 @@ class DueDateNotificationReconciler {
     // in both: it has been delivered, so it is not an alarm to cancel.
     final onDevice = await notifications.dueDateNotificationsOnDevice();
     final stillPending = onDevice.pending.difference(onDevice.delivered);
-    // A pending alarm the plan no longer wants (its due date moved into the
-    // past, or it fell outside the nearest 50) is obsolete.
+    // A pending alarm the plan no longer wants is obsolete (its due date
+    // moved, or it fell outside the nearest 50) — unless it is unchanged and
+    // merely late: its Outcome still qualifies, 09:00 has passed, and the
+    // instant recorded in the alarm equals the one planned today. Android may
+    // deliver such an alarm minutes after 09:00, so it must survive.
     for (final id in stillPending.difference(desiredIds)) {
-      await notifications.cancelReminder(id);
+      final recordedMillis = onDevice.pendingFireAtMillis[id];
+      final unchangedAwaitingDelivery = recordedMillis != null &&
+          plan.passedFireTimes.contains((id, recordedMillis));
+      if (!unchangedAwaitingDelivery) await notifications.cancelReminder(id);
     }
     // A delivered notification stays in the tray while its Outcome is overdue
     // and open, and goes once the Outcome stops qualifying.
@@ -232,7 +277,8 @@ class DueDateNotificationReconciler {
         title: planned.title,
         body: kDueDateNotificationBody,
         scheduledAt: planned.fireAt,
-        payload: dueDateNotificationPayload(planned.outcomeId),
+        payload: dueDateNotificationPayload(planned.outcomeId,
+            fireAt: planned.fireAt),
       );
       _scheduledById[planned.id] = planned;
     }

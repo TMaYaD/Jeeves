@@ -52,9 +52,20 @@ class FakeOsNotifications extends NotificationService {
   final delivered = <int>{};
 
   @override
-  Future<({Set<int> pending, Set<int> delivered})>
-      dueDateNotificationsOnDevice() async =>
-          (pending: pending.keys.toSet(), delivered: delivered.toSet());
+  Future<
+      ({
+        Set<int> pending,
+        Map<int, int> pendingFireAtMillis,
+        Set<int> delivered
+      })> dueDateNotificationsOnDevice() async => (
+        pending: pending.keys.toSet(),
+        pendingFireAtMillis: {
+          for (final e in pending.entries)
+            if (fireAtMillisFromNotificationPayload(e.value.payload) != null)
+              e.key: fireAtMillisFromNotificationPayload(e.value.payload)!,
+        },
+        delivered: delivered.toSet(),
+      );
 
   @override
   Future<bool> refreshLocalTimezone() async {
@@ -126,7 +137,9 @@ void main() {
     final scheduled = os.pending[dueDateNotificationId('a')]!;
     expect(scheduled.title, 'Title a');
     expect(scheduled.body, 'Due today');
-    expect(scheduled.payload, 'outcome:a');
+    expect(
+        scheduled.payload,
+        dueDateNotificationPayload('a', fireAt: scheduled.fireAt));
     expect(scheduled.fireAt.isAtSameMomentAs(tz.TZDateTime(kolkata, 2026, 11, 20, 9)),
         isTrue);
   });
@@ -271,6 +284,34 @@ void main() {
 
     expect(os.pending, isEmpty);
     expect(os.delivered, isEmpty);
+  });
+
+  test('an unchanged alarm still pending after 09:00 survives a resume',
+      () async {
+    await insert('a', dueDate: _dueDay(kolkata, 2026, 11, 10));
+    now = DateTime.utc(2026, 11, 9, 6);
+    reconciler.dispose();
+    reconciler = startReconciler();
+    await settle();
+    final id = dueDateNotificationId('a');
+    expect(os.pending, hasLength(1));
+
+    // 09:01 on the due day: the OS has not delivered the alarm yet.
+    now = DateTime.utc(2026, 11, 10, 3, 31);
+    await reconciler.onResumed();
+    await settle();
+    expect(os.pending.keys, [id]);
+
+    // An unrelated Outcome write must not cancel it either.
+    await insert('b');
+    await settle();
+    expect(os.pending.keys, [id]);
+
+    // After a restart (no in-memory tracking) it still survives.
+    reconciler.dispose();
+    reconciler = startReconciler();
+    await settle();
+    expect(os.pending.keys, [id]);
   });
 
   test('an alarm seen as both pending and delivered stays in the tray',

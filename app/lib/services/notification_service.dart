@@ -14,7 +14,10 @@ import 'package:timezone/data/latest_all.dart' as tz_data;
 import 'package:timezone/timezone.dart' as tz;
 
 import '../models/ritual.dart';
-import 'due_date_notifications.dart' show outcomeIdFromNotificationPayload;
+import 'due_date_notifications.dart'
+    show
+        fireAtMillisFromNotificationPayload,
+        outcomeIdFromNotificationPayload;
 
 // Stable notification IDs.
 const _kFocusSessionPlanningNotificationId = 0;
@@ -168,12 +171,21 @@ class NotificationService {
   /// `pending` are still scheduled to fire; `delivered` already fired and sit
   /// in the tray. The queries are sequential, so an alarm that fires between
   /// them appears in both sets.
-  Future<({Set<int> pending, Set<int> delivered})>
-      dueDateNotificationsOnDevice() async {
+  /// `pendingFireAtMillis` maps a pending id to the fire instant recorded in
+  /// its payload (absent for payloads that carry none).
+  Future<
+      ({
+        Set<int> pending,
+        Map<int, int> pendingFireAtMillis,
+        Set<int> delivered
+      })> dueDateNotificationsOnDevice() async {
     final pending = <int>{};
+    final pendingFireAtMillis = <int, int>{};
     for (final request in await _plugin.pendingNotificationRequests()) {
       if (outcomeIdFromNotificationPayload(request.payload) != null) {
         pending.add(request.id);
+        final millis = fireAtMillisFromNotificationPayload(request.payload);
+        if (millis != null) pendingFireAtMillis[request.id] = millis;
       }
     }
     final delivered = <int>{};
@@ -186,7 +198,11 @@ class NotificationService {
         delivered.add(id);
       }
     }
-    return (pending: pending, delivered: delivered);
+    return (
+      pending: pending,
+      pendingFireAtMillis: pendingFireAtMillis,
+      delivered: delivered
+    );
   }
 
   /// Re-reads the device timezone into `tz.local`. Returns whether it changed.

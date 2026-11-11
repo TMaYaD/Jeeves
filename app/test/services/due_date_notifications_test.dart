@@ -72,6 +72,16 @@ void main() {
       expect(outcomeIdFromNotificationPayload('outcome:'), isNull);
       expect(outcomeIdFromNotificationPayload(null), isNull);
     });
+
+    test('a recorded fire instant is read back and does not alter the id', () {
+      final fireAt = DateTime.utc(2026, 11, 20, 3, 30);
+      final payload = dueDateNotificationPayload('x1', fireAt: fireAt);
+      expect(outcomeIdFromNotificationPayload(payload), 'x1');
+      expect(fireAtMillisFromNotificationPayload(payload),
+          fireAt.millisecondsSinceEpoch);
+      expect(fireAtMillisFromNotificationPayload('outcome:x1'), isNull);
+      expect(fireAtMillisFromNotificationPayload('focus'), isNull);
+    });
   });
 
   group('with a database', () {
