@@ -155,4 +155,59 @@ void main() {
 
     await _unmount(tester);
   });
+
+  Future<void> _replaceCurrentWhileOpen(WidgetTester tester) async {
+    await tester.runAsync(() async {
+      await db.actionDao
+          .supersedeCurrentAction('t5', newActionText: 'the successor');
+      await db.customStatement(
+          "UPDATE actions SET time_context = '{\"days\":[1]}' "
+          "WHERE role = 'current'");
+    });
+  }
+
+  Future<List<String?>> _storedByRole(WidgetTester tester) async {
+    final rows = await tester.runAsync(() => (db.select(db.actions)
+          ..orderBy([(a) => OrderingTerm.asc(a.createdAt)]))
+        .get());
+    return [for (final r in rows!) r.timeContext];
+  }
+
+  testWidgets('Save after the Action was replaced leaves the successor alone',
+      (tester) async {
+    final todo = await _seedOutcome(db, 't5');
+    await tester.pumpWidget(_harness(db, todo));
+    await _open(tester);
+
+    await tester.tap(find.byKey(const Key('time_context_chip')));
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('time_context_day_2')));
+    await tester.pump();
+    await _replaceCurrentWhileOpen(tester);
+    await tester.tap(find.byKey(const Key('time_context_save')));
+    await _settle(tester);
+
+    expect(await _storedByRole(tester), [null, '{"days":[1]}']);
+
+    await _unmount(tester);
+  });
+
+  testWidgets('Clear after the Action was replaced leaves the successor alone',
+      (tester) async {
+    final todo = await _seedOutcome(db, 't5');
+    await db.customStatement(
+        "UPDATE actions SET time_context = '{\"days\":[2]}'");
+    await tester.pumpWidget(_harness(db, todo));
+    await _open(tester);
+
+    await tester.tap(find.byKey(const Key('time_context_chip')));
+    await _settle(tester);
+    await _replaceCurrentWhileOpen(tester);
+    await tester.tap(find.byKey(const Key('time_context_clear')));
+    await _settle(tester);
+
+    expect(await _storedByRole(tester), ['{"days":[2]}', '{"days":[1]}']);
+
+    await _unmount(tester);
+  });
 }

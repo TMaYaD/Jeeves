@@ -235,15 +235,18 @@ class TaskDetailNotifier {
         timeEstimate: minutes,
       ));
 
-  /// Sets or clears (null) the TimeContext of the Outcome's current Action.
-  /// Returns whether the Outcome was still present; an Actionless Outcome has
-  /// nothing to attach it to and is left untouched. Does not stamp
+  /// Sets or clears (null) the TimeContext of the Action [actionId] the editor
+  /// was opened for. Returns whether the Outcome was still present. The write
+  /// is dropped when that Action is no longer the Outcome's current one (it
+  /// was replaced or abandoned while the sheet was open, e.g. by a sync), so
+  /// an edit never lands on a successor the user did not see. Does not stamp
   /// `last_clarified_at` (Organising).
-  Future<bool> setTimeContext(TimeContext? value) async {
+  Future<bool> setTimeContext(TimeContext? value,
+      {required String actionId}) async {
     var wrote = false;
     final present = await _ifOutcomePresent(() async {
       final current = await _db.actionDao.getCurrentAction(_todoId);
-      if (current == null) return;
+      if (current == null || current.id != actionId) return;
       wrote = await _db.actionDao.applySetTimeContext(
         current.id,
         value,

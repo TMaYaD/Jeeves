@@ -2,6 +2,15 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/models/time_context.dart';
 
 void main() {
+  test('a window ending at end of day (24:00) round-trips', () {
+    final value = TimeContext.create(
+        days: {1}, startMinute: 23 * 60 + 30, endMinute: 24 * 60)!;
+    expect(value.encode(), '{"days":[1],"start":"23:30","end":"24:00"}');
+    final parsed = TimeContext.tryParse(value.encode())!;
+    expect(parsed.endMinute, 24 * 60);
+    expect(parsed.encode(), value.encode());
+  });
+
   group('encode / tryParse', () {
     test('canonical round-trip with fixed key order', () {
       final tc = TimeContext.create(

@@ -32,6 +32,7 @@ class TimeContextChip extends ConsumerWidget {
       onTap: () => showTimeContextSheet(
         context,
         ref.read(taskDetailNotifierProvider(outcomeId)),
+        action.id,
         parsed,
         hasStoredValue: isSet,
       ),
@@ -47,6 +48,7 @@ class TimeContextChip extends ConsumerWidget {
 Future<void> showTimeContextSheet(
   BuildContext context,
   TaskDetailNotifier notifier,
+  String actionId,
   TimeContext? current, {
   bool hasStoredValue = false,
 }) {
@@ -56,6 +58,7 @@ Future<void> showTimeContextSheet(
     backgroundColor: Colors.white,
     builder: (ctx) => _TimeContextSheet(
       notifier: notifier,
+      actionId: actionId,
       current: current,
       hasStoredValue: hasStoredValue || current != null,
     ),
@@ -65,11 +68,16 @@ Future<void> showTimeContextSheet(
 class _TimeContextSheet extends StatefulWidget {
   const _TimeContextSheet({
     required this.notifier,
+    required this.actionId,
     required this.current,
     required this.hasStoredValue,
   });
 
   final TaskDetailNotifier notifier;
+
+  /// The Action the sheet was opened for; saves and clears target it, not
+  /// whatever is current when the user confirms.
+  final String actionId;
   final TimeContext? current;
   final bool hasStoredValue;
 
@@ -125,11 +133,15 @@ class _TimeContextSheetState extends State<_TimeContextSheet> {
 
   Future<void> _pickTime({required bool isStart}) async {
     final minuteOfDay = isStart ? _startMinute : _endMinute;
+    // An end of 24:00 (end of day) is valid for the value but not for
+    // TimeOfDay, whose hour is 0–23: show 23:59 in the picker.
+    final initialMinute =
+        (minuteOfDay ?? (isStart ? 9 * 60 : 17 * 60)).clamp(0, 24 * 60 - 1);
     final picked = await showTimePicker(
       context: context,
       initialTime: TimeOfDay(
-        hour: (minuteOfDay ?? (isStart ? 9 * 60 : 17 * 60)) ~/ 60,
-        minute: (minuteOfDay ?? 0) % 60,
+        hour: initialMinute ~/ 60,
+        minute: initialMinute % 60,
       ),
     );
     if (picked == null) return;
@@ -151,12 +163,12 @@ class _TimeContextSheetState extends State<_TimeContextSheet> {
     final value = _value;
     if (value == null) return;
     Navigator.pop(context);
-    await widget.notifier.setTimeContext(value);
+    await widget.notifier.setTimeContext(value, actionId: widget.actionId);
   }
 
   Future<void> _clear() async {
     Navigator.pop(context);
-    await widget.notifier.setTimeContext(null);
+    await widget.notifier.setTimeContext(null, actionId: widget.actionId);
   }
 
   @override
