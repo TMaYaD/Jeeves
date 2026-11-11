@@ -17,6 +17,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/providers/stale_sweep_provider.dart';
 
 import '../test_helpers.dart';
@@ -196,5 +197,41 @@ void main() {
     expect(await staleIds(3), isEmpty);
     expect(await staleIds(2), {'s'});
   });
-}
 
+  for (final choice in ['Someday/Maybe', 'Trash']) {
+    test('sweeping a rolled-over Stale Outcome ($choice) takes it off the '
+        'draft Plan, even when a rollover preload is in flight', () async {
+      await insertOutcome('r');
+      await runSession(skipped: {'r'});
+      await runSession(plan: ['r']);
+      late String lastSessionId;
+      await runSession(plan: ['r'], during: (_) async {
+        lastSessionId = (await db.focusSessionDao.getActiveSession())!.id;
+        await db.focusSessionDao.setTaskDisposition(
+          sessionId: lastSessionId,
+          taskId: 'r',
+          disposition: 'rollover',
+        );
+      });
+      expect(await staleIds(), {'r'});
+
+      final planning = container.read(focusSessionPlanningProvider.notifier);
+      await planning.ensureRolloverPreload();
+      expect(container.read(focusSessionPlanningProvider).pendingSelectedTaskIds,
+          contains('r'),
+          reason: 'the rollover default pre-selects it');
+
+      final inFlight = planning.ensureRolloverPreload();
+      final sweep = container.read(staleSweepProvider);
+      choice == 'Trash'
+          ? await sweep.trash('r')
+          : await sweep.moveToSomedayMaybe('r');
+      await inFlight;
+      await planning.ensureRolloverPreload();
+
+      expect(container.read(focusSessionPlanningProvider).pendingSelectedTaskIds,
+          isNot(contains('r')),
+          reason: 'startDay commits pendingSelectedTaskIds as the Plan');
+    });
+  }
+}

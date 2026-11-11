@@ -16,6 +16,7 @@ import '../sync/collection_codecs.dart'
 import '../utils/uuid.dart';
 import 'auth_provider.dart';
 import 'database_provider.dart';
+import 'focus_session_planning_provider.dart';
 import 'synced_preferences_provider.dart';
 
 /// How many FocusSessions must have passed an Outcome over before it is Stale.
@@ -125,6 +126,10 @@ class StaleSweepActions {
       );
       db.notifyFocusSessionsViewWrite();
     });
+    // The draft Plan must not keep (or later regain) the swept Outcome.
+    _ref
+        .read(focusSessionPlanningProvider.notifier)
+        .forgetSweptOutcome(outcomeId);
     _ref.invalidate(staleOutcomesProvider);
   }
 }

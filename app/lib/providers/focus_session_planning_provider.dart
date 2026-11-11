@@ -575,6 +575,11 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// the branch awaits a snapshot load or is otherwise synchronous.
   bool _advancing = false;
 
+  /// Outcomes the Stale sweep moved off Next during this performance. The
+  /// rollover preload (which may be mid-flight when the sweep decides) never
+  /// puts them back on the draft Plan.
+  final Set<String> _sweptOutcomeIds = {};
+
   @override
   FocusSessionPlanningState build() {
     // Refresh notification-suppression flags when Drift receives cross-device
@@ -634,7 +639,10 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     final pending = Set.of(state.pendingSelectedTaskIds);
     final reviewed = Set.of(state.reviewedTaskIds);
     final newIds = ids
-        .where((id) => !pending.contains(id) && !reviewed.contains(id))
+        .where((id) =>
+            !pending.contains(id) &&
+            !reviewed.contains(id) &&
+            !_sweptOutcomeIds.contains(id))
         .toList();
     if (newIds.isEmpty) return;
     state = state.copyWith(
@@ -642,6 +650,17 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
         ...newIds,
         ...state.pendingSelectedTaskIds,
       ],
+    );
+  }
+
+  /// Drops an Outcome the Stale sweep just moved to Someday/Maybe or Trash from
+  /// the draft Plan, and keeps the rollover preload from restoring it.
+  void forgetSweptOutcome(String id) {
+    _sweptOutcomeIds.add(id);
+    state = state.copyWith(
+      pendingSelectedTaskIds:
+          state.pendingSelectedTaskIds.where((t) => t != id).toList(),
+      reviewedTaskIds: state.reviewedTaskIds.where((t) => t != id).toList(),
     );
   }
 
@@ -1092,6 +1111,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
           .where((id) => !state.pendingSelectedTaskIds.contains(id))
           .toSet(),
     );
+    _sweptOutcomeIds.clear();
     // A qualifying session now exists — today's DPR fire is moot. Best-effort.
     await ref
         .read(notificationServiceProvider)

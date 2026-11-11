@@ -115,9 +115,15 @@ class _FocusSessionPlanningScreenState
     }
 
     // Stale sweep: while any Outcome is Stale, it is decided before the wizard
-    // starts. A read still loading (or failed) falls through to the wizard.
-    final staleOutcomes = ref.watch(staleOutcomesProvider).value;
-    if (staleOutcomes != null && staleOutcomes.isNotEmpty) {
+    // starts. The gate stays closed until the read has succeeded and come back
+    // empty — a pending or failed read never lets the wizard through.
+    final staleAsync = ref.watch(staleOutcomesProvider);
+    if (staleAsync.hasError && !staleAsync.isLoading) {
+      return const _StaleSweepReadFailed();
+    }
+    final staleOutcomes = staleAsync.value;
+    if (staleOutcomes == null) return const _StaleSweepReadPending();
+    if (staleOutcomes.isNotEmpty) {
       return StaleSweepInterstitial(staleOutcomes: staleOutcomes);
     }
 
@@ -454,6 +460,68 @@ class _SessionOpenInterstitial extends ConsumerWidget {
                   child: const Text('Not now'),
                 ),
               ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+
+/// Shown while the Stale sweep read is in flight; the wizard stays unreachable.
+class _StaleSweepReadPending extends StatelessWidget {
+  const _StaleSweepReadPending();
+
+  @override
+  Widget build(BuildContext context) {
+    return const CeremonyPopScope(
+      onBack: null,
+      child: Scaffold(
+        key: Key('stale_sweep_loading'),
+        backgroundColor: Colors.white,
+        body: SafeArea(child: Center(child: CircularProgressIndicator())),
+      ),
+    );
+  }
+}
+
+/// Shown when the Stale sweep read failed: retry, or leave for Now.
+class _StaleSweepReadFailed extends ConsumerWidget {
+  const _StaleSweepReadFailed();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return CeremonyPopScope(
+      onBack: null,
+      child: Scaffold(
+        key: const Key('stale_sweep_error'),
+        backgroundColor: Colors.white,
+        body: SafeArea(
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    "Couldn't check for Stale Outcomes.",
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 16),
+                  ),
+                  const SizedBox(height: 16),
+                  FilledButton(
+                    key: const Key('stale_sweep_retry'),
+                    onPressed: () => ref.invalidate(staleOutcomesProvider),
+                    child: const Text('Retry'),
+                  ),
+                  TextButton(
+                    key: const Key('stale_sweep_exit'),
+                    onPressed: () => context.go('/focus'),
+                    child: const Text('Back to Now'),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
