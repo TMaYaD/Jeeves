@@ -1,10 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
-import 'models/ritual.dart';
 import 'providers/auth_provider.dart';
 import 'providers/database_provider.dart';
 import 'providers/focus_session_planning_settings_provider.dart';
@@ -14,6 +14,7 @@ import 'providers/sync_lifecycle_provider.dart';
 import 'providers/shutdown_settings_provider.dart';
 import 'router.dart';
 import 'services/notification_service.dart';
+import 'services/ritual_notification_response_handler.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -51,64 +52,19 @@ Future<void> main() async {
   runApp(const ProviderScope(child: JeevesApp()));
 }
 
-/// Handles taps on Ritual notification actions (foreground and background).
-///
-/// Open and a body tap route to the Ritual's wizard. Skip and Snooze do their
-/// immediate OS work (cancel / re-arm the one-off alarm) and record what the
-/// user did, and when, in the Nudge action outbox. The outbox is applied to
-/// the Nudge's dismiss / snooze state by the main isolate — this function may
-/// run in a background isolate with no Riverpod container and no database.
+/// Plugin callback for notification taps and action buttons. The logic lives in
+/// [handleRitualNotificationResponse]; this binds it to the real plugin and
+/// router.
 ///
 /// The `@pragma('vm:entry-point')` annotation keeps this function alive in
 /// release builds so the OS can call it when the app is in the background.
 @pragma('vm:entry-point')
-void _handleNotificationResponse(NotificationResponse response) async {
-  final actionId = response.actionId;
-  final ritualAction = ritualNotificationActionFor(actionId);
-
-  if (ritualAction == null || ritualAction.kind == RitualNotificationActionKind.open) {
-    // Null actionId means the notification body was tapped. Route by
-    // payload — focus/sprint carries 'focus', Ritual notifications carry
-    // `nudge:<keyPrefix>` and resolve to the matching wizard route. A
-    // body tap on an unknown payload falls back to inbox.
-    if (ritualAction != null) {
-      appRouter.go(ritualNotificationRoute(ritualAction.ritual));
-    } else if (actionId == null) {
-      if (response.payload == 'focus') {
-        appRouter.go('/focus/active');
-      } else {
-        final ritual = ritualIdFromNotificationPayload(response.payload);
-        appRouter.go(ritual != null
-            ? ritualNotificationRoute(ritual)
-            : '/inbox');
-      }
-    }
-    return;
-  }
-
-  final ritual = ritualAction.ritual;
-  final snoozeMinutes = ritualAction.kind == RitualNotificationActionKind.snooze &&
-          ritual == RitualId.dailyPlanning
-      // Read snooze duration directly from SharedPreferences; Riverpod is not
-      // available in background-isolate notification callbacks.
-      ? await _readDefaultSnoozeDuration()
-      : 60;
-  await recordRitualNotificationAction(
-    ritual: ritual,
-    kind: ritualAction.kind,
-    at: DateTime.now(),
-    snoozeMinutes: snoozeMinutes,
-  );
-  if (ritualAction.kind == RitualNotificationActionKind.snooze) {
-    await NotificationService.instance.snoozeRitualReminder(ritual, snoozeMinutes);
-  } else {
-    await NotificationService.instance.skipTodayRitualReminder(ritual);
-  }
-}
-
-Future<int> _readDefaultSnoozeDuration() async {
-  final prefs = await SharedPreferences.getInstance();
-  return prefs.getInt('focus_session_planning_settings_default_snooze_duration') ?? 60;
+void _handleNotificationResponse(NotificationResponse response) {
+  unawaited(handleRitualNotificationResponse(
+    response,
+    service: NotificationService.instance,
+    navigate: appRouter.go,
+  ));
 }
 
 class JeevesApp extends ConsumerWidget {

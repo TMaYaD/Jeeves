@@ -45,7 +45,13 @@ void main() {
   Future<List<String>> outbox() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.reload();
-    return prefs.getStringList(kNudgeActionOutboxKey) ?? [];
+    return (prefs
+            .getKeys()
+            .where((k) => k.startsWith(kNudgeActionOutboxKeyPrefix))
+            .toList()
+          ..sort())
+        .map((k) => prefs.getString(k)!)
+        .toList();
   }
 
   group('outbox', () {
@@ -62,7 +68,7 @@ void main() {
       await recordRitualNotificationAction(
         ritual: RitualId.weeklyReview,
         kind: RitualNotificationActionKind.snooze,
-        at: tapped,
+        at: tapped.add(const Duration(seconds: 1)),
         snoozeMinutes: 45,
       );
       await recordRitualNotificationAction(
@@ -82,13 +88,14 @@ void main() {
       expect(
           entries[1]!
               .until!
-              .isAtSameMomentAs(tapped.add(const Duration(minutes: 45))),
+              .isAtSameMomentAs(tapped
+                  .add(const Duration(seconds: 1, minutes: 45))),
           isTrue);
     });
 
     test('a corrupt entry is skipped and still cleared', () async {
       await boot({
-        kNudgeActionOutboxKey: ['not json'],
+        '${kNudgeActionOutboxKeyPrefix}0': 'not json',
       });
       expect(await c.read(_drainProvider.future), 0);
       expect(await outbox(), isEmpty);
@@ -149,6 +156,72 @@ void main() {
               .dismissedAt!
               .isAtSameMomentAs(later),
           isTrue);
+    });
+  });
+
+  group('outbox concurrency', () {
+    test('simultaneous appends all survive', () async {
+      await boot();
+      await Future.wait([
+        for (var i = 0; i < 20; i++)
+          recordRitualNotificationAction(
+            ritual: RitualId.weeklyReview,
+            kind: RitualNotificationActionKind.skip,
+            at: now, // identical tap time: keys must still not collide
+            snoozeMinutes: 60,
+          ),
+      ]);
+      expect(await outbox(), hasLength(20));
+    });
+
+    test('an action appended while a drain runs is never lost', () async {
+      await boot();
+      await recordRitualNotificationAction(
+        ritual: RitualId.dailyPlanning,
+        kind: RitualNotificationActionKind.skip,
+        at: now.subtract(const Duration(minutes: 10)),
+        snoozeMinutes: 60,
+      );
+      final draining = c.read(_drainProvider.future);
+      await recordRitualNotificationAction(
+        ritual: RitualId.eveningShutdown,
+        kind: RitualNotificationActionKind.skip,
+        at: now.subtract(const Duration(minutes: 5)),
+        snoozeMinutes: 60,
+      );
+      final firstApplied = await draining;
+      c.invalidate(_drainProvider);
+      final secondApplied = await c.read(_drainProvider.future);
+
+      expect(firstApplied + secondApplied, 2);
+      expect(c.read(nudgeStateProvider(RitualId.eveningShutdown)).dismissedAt,
+          isNotNull);
+      expect(await outbox(), isEmpty);
+    });
+
+    test('a delayed older snooze never shortens a later one', () async {
+      await boot();
+      // Tapped 09:00 -> expires 10:00; drained after an 11:00 snooze exists.
+      final laterExpiry = now.add(const Duration(hours: 1));
+      await c.read(nudgeActionsProvider).snooze(
+          RitualId.weeklyReview, const Duration(hours: 2),
+          at: now.subtract(const Duration(hours: 1)));
+      await recordRitualNotificationAction(
+        ritual: RitualId.weeklyReview,
+        kind: RitualNotificationActionKind.snooze,
+        at: now.subtract(const Duration(hours: 1)),
+        snoozeMinutes: 60,
+      );
+
+      await c.read(_drainProvider.future);
+
+      expect(
+          c
+              .read(nudgeStateProvider(RitualId.weeklyReview))
+              .snoozedUntil!
+              .isAtSameMomentAs(laterExpiry),
+          isTrue);
+      expect(await outbox(), isEmpty);
     });
   });
 

@@ -21,10 +21,13 @@
 /// until the next Trigger firing edge.
 library;
 
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/ritual.dart';
 import 'ceremony_in_progress_provider.dart';
+import 'clock_provider.dart';
 import 'nudge_triggers.dart';
 import 'synced_preferences_provider.dart';
 
@@ -124,10 +127,17 @@ final nudgeVisibleProvider =
   if (firingEdge == null) return false;
 
   final s = ref.watch(nudgeStateProvider(ritual));
-  final now = DateTime.now();
+  final now = ref.watch(clockProvider)();
 
-  // Snooze blocks visibility until expiry.
-  if (s.snoozedUntil != null && now.isBefore(s.snoozedUntil!)) return false;
+  // Snooze blocks visibility until expiry. Re-evaluate at the expiry instant:
+  // nothing else changes when a snooze runs out, so without this the Nudge
+  // would stay hidden until some unrelated rebuild.
+  final snoozedUntil = s.snoozedUntil;
+  if (snoozedUntil != null && now.isBefore(snoozedUntil)) {
+    final timer = Timer(snoozedUntil.difference(now), ref.invalidateSelf);
+    ref.onDispose(timer.cancel);
+    return false;
+  }
 
   // Dismiss blocks until a Trigger refires past the dismiss time.
   if (s.dismissedAt != null && !s.dismissedAt!.isBefore(firingEdge)) {

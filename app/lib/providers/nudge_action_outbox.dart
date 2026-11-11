@@ -16,6 +16,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' show Random;
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -28,9 +29,16 @@ import 'clock_provider.dart';
 import 'nudge_provider.dart';
 import 'synced_preferences_provider.dart';
 
-/// Device-local (not synced) SharedPreferences key holding the outbox: a list
-/// of JSON-encoded [PendingNudgeAction]s, oldest first.
-const kNudgeActionOutboxKey = 'nudge_action_outbox';
+/// Device-local (not synced) SharedPreferences key prefix of the outbox. Each
+/// pending action is its own entry, `<prefix><tap micros>.<random>`, holding one
+/// JSON-encoded [PendingNudgeAction].
+///
+/// One key per action, never one shared list: SharedPreferences has no
+/// cross-isolate lock, so a read-modify-write of a shared list loses whichever
+/// write lands second. A unique key is only ever written once and removed by
+/// the drainer that applied it, so appenders and the drainer cannot clobber
+/// each other.
+const kNudgeActionOutboxKeyPrefix = 'nudge_action_outbox.';
 
 /// Device-local marker: set once the legacy suppression values have been
 /// carried over to the Nudge state on this device.
@@ -92,16 +100,16 @@ class PendingNudgeAction {
 /// on the next app resume instead.
 final ValueNotifier<int> nudgeActionOutboxChanged = ValueNotifier<int>(0);
 
-/// Appends [action] to the outbox. Safe to call from a background isolate.
+final _outboxKeyRandom = Random();
+
+/// Appends [action] to the outbox. Safe to call from a background isolate:
+/// it writes one fresh key and reads nothing back.
 Future<void> appendNudgeAction(PendingNudgeAction action) async {
   final prefs = await SharedPreferences.getInstance();
-  // Another isolate may have written since this one cached its copy.
-  await prefs.reload();
-  final entries = prefs.getStringList(kNudgeActionOutboxKey) ?? <String>[];
-  await prefs.setStringList(kNudgeActionOutboxKey, [
-    ...entries,
-    action.toJson(),
-  ]);
+  final key = '$kNudgeActionOutboxKeyPrefix'
+      '${action.at.toUtc().microsecondsSinceEpoch.toString().padLeft(20, '0')}.'
+      '${_outboxKeyRandom.nextInt(1 << 32).toRadixString(16)}';
+  await prefs.setString(key, action.toJson());
   nudgeActionOutboxChanged.value++;
 }
 
@@ -130,45 +138,46 @@ Future<void> recordRitualNotificationAction({
   }
 }
 
-/// Applies every outboxed action through `NudgeActions`, oldest first, then
-/// removes the applied entries. Returns how many were applied.
+/// Applies every outboxed action through `NudgeActions`, oldest first, and
+/// removes each entry once it is applied. Returns how many were applied.
+/// Entries appended while this runs are untouched and picked up next time.
 Future<int> drainNudgeActionOutbox(Ref ref) async {
   final prefs = await SharedPreferences.getInstance();
   await prefs.reload();
-  final drained = prefs.getStringList(kNudgeActionOutboxKey) ?? <String>[];
-  if (drained.isEmpty) return 0;
+  final keys = prefs
+      .getKeys()
+      .where((k) => k.startsWith(kNudgeActionOutboxKeyPrefix))
+      .toList()
+    ..sort(); // key embeds the tap time, zero-padded: lexical order is tap order
+  if (keys.isEmpty) return 0;
 
   final actions = ref.read(nudgeActionsProvider);
   var applied = 0;
-  for (final raw in drained) {
-    final action = PendingNudgeAction.tryParse(raw);
-    if (action == null) continue;
-    switch (action.verb) {
-      case NudgeActionVerb.dismiss:
-        // Never move a dismissal backwards past one already recorded.
-        final existing = ref.read(nudgeStateProvider(action.ritual)).dismissedAt;
-        if (existing != null && existing.isAfter(action.at)) break;
-        await actions.dismiss(action.ritual, at: action.at);
-      case NudgeActionVerb.snooze:
-        await actions.snooze(
-          action.ritual,
-          action.until!.difference(action.at),
-          at: action.at,
-        );
+  for (final key in keys) {
+    final action = PendingNudgeAction.tryParse(prefs.getString(key) ?? '');
+    if (action != null) {
+      final existing = ref.read(nudgeStateProvider(action.ritual));
+      switch (action.verb) {
+        case NudgeActionVerb.dismiss:
+          // Never move a dismissal backwards past one already recorded.
+          if (existing.dismissedAt == null ||
+              !existing.dismissedAt!.isAfter(action.at)) {
+            await actions.dismiss(action.ritual, at: action.at);
+          }
+        case NudgeActionVerb.snooze:
+          // A delayed replay must not shorten a snooze that runs later.
+          if (existing.snoozedUntil == null ||
+              existing.snoozedUntil!.isBefore(action.until!)) {
+            await actions.snooze(
+              action.ritual,
+              action.until!.difference(action.at),
+              at: action.at,
+            );
+          }
+      }
+      applied++;
     }
-    applied++;
-  }
-
-  // A background isolate may have appended while this ran; keep those.
-  await prefs.reload();
-  final current = prefs.getStringList(kNudgeActionOutboxKey) ?? <String>[];
-  final remaining = current.length >= drained.length
-      ? current.sublist(drained.length)
-      : <String>[];
-  if (remaining.isEmpty) {
-    await prefs.remove(kNudgeActionOutboxKey);
-  } else {
-    await prefs.setStringList(kNudgeActionOutboxKey, remaining);
+    await prefs.remove(key); // an unreadable entry is dropped, not retried
   }
   return applied;
 }
