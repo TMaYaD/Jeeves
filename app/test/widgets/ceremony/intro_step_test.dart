@@ -168,7 +168,7 @@ void main() {
   });
 
   group('copy templates', () {
-    // The duration fills as "about N minutes"; no sentence may open with it
+    // The duration fills as "about 25m"; no sentence may open with it
     // (or any other lower-case word) once rendered.
     final sentenceOpenerLowerCase = RegExp(r'(^|[.?!]\s+)[a-z]');
 
@@ -183,7 +183,7 @@ void main() {
           final rendered =
               template.replaceAll('{duration}', introDurationText(25));
           expect(rendered, isNot(matches(sentenceOpenerLowerCase)));
-          expect(rendered, contains('about 25 minutes'));
+          expect(rendered, contains('about 25m'));
         });
       }
     }
