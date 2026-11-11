@@ -465,11 +465,11 @@ void main() {
     });
   });
 
-  group('v4 onUpgrade adds the Stale sweep tables', () {
-    const staleTables = [
+  group('v4 onUpgrade adds the Bypassed tables', () {
+    const bypassedTables = [
       'focus_session_planning_bypasses',
       'focus_session_reschedules',
-      'outcome_sweep_decisions',
+      'outcome_bypass_decisions',
     ];
 
     test('the upgrade creates them and preserves every existing row',
@@ -489,7 +489,7 @@ void main() {
 
       addTearDown(closeSeed);
       // A faithful v3 store: the fresh shape without the three v4 tables.
-      for (final table in staleTables) {
+      for (final table in bypassedTables) {
         await seed.customStatement('DROP TABLE $table');
       }
       final createdMs =
@@ -514,9 +514,9 @@ void main() {
             ),
         4,
       );
-      expect(await _objects(upgraded, 'table'), containsAll(staleTables));
+      expect(await _objects(upgraded, 'table'), containsAll(bypassedTables));
       expect(await _rows(upgraded, 'todos'), todosBefore);
-      for (final table in staleTables) {
+      for (final table in bypassedTables) {
         expect(await _rows(upgraded, table), isEmpty);
       }
     });

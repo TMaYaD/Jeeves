@@ -39,7 +39,7 @@ export 'tables.dart';
 part 'gtd_database.g.dart';
 
 @DriftDatabase(
-  tables: [Todos, Tags, TodoTags, TimeLogs, FocusSessions, FocusSessionTasks, FocusSessionDispositions, FocusSessionPlanningBypasses, FocusSessionReschedules, OutcomeSweepDecisions, UserPreferences, Captures, CaptureOutcomes, CaptureTags, Actions],
+  tables: [Todos, Tags, TodoTags, TimeLogs, FocusSessions, FocusSessionTasks, FocusSessionDispositions, FocusSessionPlanningBypasses, FocusSessionReschedules, OutcomeBypassDecisions, UserPreferences, Captures, CaptureOutcomes, CaptureTags, Actions],
   daos: [TagDao, TodoDao, TimeLogDao, FocusSessionDao, CaptureDao, ActionDao],
 )
 class GtdDatabase extends _$GtdDatabase {
@@ -250,12 +250,12 @@ class GtdDatabase extends _$GtdDatabase {
           if (from < 3) {
             await m.alterTable(TableMigration(tags));
           }
-          // v4 (issue #107): the Stale sweep's three tables. Created only;
+          // v4 (issue #107): the Bypassed Outcome tables. Created only;
           // nothing is dropped or altered, so no row of an existing store moves.
           if (from < 4) {
             await m.createTable(focusSessionPlanningBypasses);
             await m.createTable(focusSessionReschedules);
-            await m.createTable(outcomeSweepDecisions);
+            await m.createTable(outcomeBypassDecisions);
           }
         }),
       );
@@ -345,7 +345,7 @@ class GtdDatabase extends _$GtdDatabase {
         const TableUpdate('focus_session_dispositions'),
         const TableUpdate('focus_session_planning_bypasses'),
         const TableUpdate('focus_session_reschedules'),
-        const TableUpdate('outcome_sweep_decisions'),
+        const TableUpdate('outcome_bypass_decisions'),
       });
 
   /// The [notifyTodosViewWrite] analogue for `user_preferences`.

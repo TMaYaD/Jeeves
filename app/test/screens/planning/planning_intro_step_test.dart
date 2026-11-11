@@ -15,7 +15,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
-import 'package:jeeves/providers/stale_sweep_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/screens/planning/focus_session_planning_screen.dart';
 
@@ -48,12 +47,7 @@ Future<void> _insertNeedsReview(GtdDatabase db, String id) async {
 }
 
 Widget _screen(GtdDatabase db) => ProviderScope(
-      overrides: [
-        databaseProvider.overrideWithValue(db),
-        // Nothing is Stale here; skip the real-store read, which cannot settle
-        // under FakeAsync (docs/TESTING.md).
-        staleOutcomesProvider.overrideWith((ref) async => const []),
-      ],
+      overrides: [databaseProvider.overrideWithValue(db)],
       child: const MaterialApp(home: FocusSessionPlanningScreen()),
     );
 
@@ -64,10 +58,7 @@ FocusSessionPlanningState _stateOf(WidgetTester tester) {
   return container.read(focusSessionPlanningProvider);
 }
 
-// Two rounds: the first resolves the Stale sweep read and builds the wizard, the
-// second lets the wizard's own snapshot reads land.
-Future<void> _settle(WidgetTester tester) =>
-    settleWithRealAsync(tester, rounds: 2);
+Future<void> _settle(WidgetTester tester) => settleWithRealAsync(tester);
 
 /// Drives the transition into Clarify Inbox in real time while draining its
 /// lazy snapshot load — a plain pumpAndSettle would hang on the spinner.

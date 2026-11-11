@@ -20,7 +20,6 @@ import 'package:go_router/go_router.dart';
 import '../../models/ritual.dart';
 import '../../providers/ceremony_in_progress_provider.dart';
 import '../../providers/focus_session_planning_provider.dart';
-import '../../providers/stale_sweep_provider.dart';
 import '../../widgets/ceremony/ceremony_pop_scope.dart';
 import '../../widgets/ceremony/intro_step.dart';
 import '../../widgets/ceremony/wizard.dart';
@@ -30,7 +29,6 @@ import 'steps/inbox_clarification_step.dart';
 import 'steps/plan_summary_step.dart';
 import 'steps/scheduled_review_step.dart';
 import 'steps/task_review_step.dart';
-import 'stale_sweep_interstitial.dart';
 
 class FocusSessionPlanningScreen extends ConsumerStatefulWidget {
   const FocusSessionPlanningScreen({super.key});
@@ -112,20 +110,6 @@ class _FocusSessionPlanningScreenState
     final activeSession = ref.watch(activeSessionProvider);
     if (activeSession.asData?.value != null) {
       return const _SessionOpenInterstitial();
-    }
-
-    // Stale sweep: while any Outcome is Stale, it is decided before the wizard
-    // starts. The gate stays closed until the read has succeeded and come back
-    // empty — a pending or failed read never lets the wizard through.
-    final staleAsync = ref.watch(staleOutcomesProvider);
-    // Riverpod keeps the previous value while a refresh or retry is in flight,
-    // so loading is checked before the retained value is read.
-    if (staleAsync.isLoading) return const _StaleSweepReadPending();
-    if (staleAsync.hasError) return const _StaleSweepReadFailed();
-    final staleOutcomes = staleAsync.value;
-    if (staleOutcomes == null) return const _StaleSweepReadPending();
-    if (staleOutcomes.isNotEmpty) {
-      return StaleSweepInterstitial(staleOutcomes: staleOutcomes);
     }
 
     final state = ref.watch(focusSessionPlanningProvider);
@@ -461,68 +445,6 @@ class _SessionOpenInterstitial extends ConsumerWidget {
                   child: const Text('Not now'),
                 ),
               ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-
-/// Shown while the Stale sweep read is in flight; the wizard stays unreachable.
-class _StaleSweepReadPending extends StatelessWidget {
-  const _StaleSweepReadPending();
-
-  @override
-  Widget build(BuildContext context) {
-    return const CeremonyPopScope(
-      onBack: null,
-      child: Scaffold(
-        key: Key('stale_sweep_loading'),
-        backgroundColor: Colors.white,
-        body: SafeArea(child: Center(child: CircularProgressIndicator())),
-      ),
-    );
-  }
-}
-
-/// Shown when the Stale sweep read failed: retry, or leave for Now.
-class _StaleSweepReadFailed extends ConsumerWidget {
-  const _StaleSweepReadFailed();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return CeremonyPopScope(
-      onBack: null,
-      child: Scaffold(
-        key: const Key('stale_sweep_error'),
-        backgroundColor: Colors.white,
-        body: SafeArea(
-          child: Center(
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text(
-                    "Couldn't check for Stale Outcomes.",
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 16),
-                  ),
-                  const SizedBox(height: 16),
-                  FilledButton(
-                    key: const Key('stale_sweep_retry'),
-                    onPressed: () => ref.invalidate(staleOutcomesProvider),
-                    child: const Text('Retry'),
-                  ),
-                  TextButton(
-                    key: const Key('stale_sweep_exit'),
-                    onPressed: () => context.go('/focus'),
-                    child: const Text('Back to Now'),
-                  ),
-                ],
-              ),
             ),
           ),
         ),

@@ -223,15 +223,13 @@ class FocusSessionDispositions extends Table {
 }
 
 // ---------------------------------------------------------------------------
-// Stale signals (CONTEXT.md § Engagement, Stale)
+// Bypassed signals (CONTEXT.md § Engagement, Bypassed)
 // ---------------------------------------------------------------------------
 
 /// A FocusSession's Daily Planning passed an Outcome over **without putting it
-/// on the Plan**: the user tapped Skip on it (`reason = 'skipped'`), or left it
-/// unclarified after an Action finished (`reason = 'unclarified'`). Written by
+/// on the Plan**: the user tapped Skip on it. Written by
 /// `FocusSessionDao.openSession`, in the same scope as the Plan, so an abandoned
-/// Planning performance records nothing. One row per (FocusSession, Outcome);
-/// a skip takes precedence over `unclarified`.
+/// Planning performance records nothing. One row per (FocusSession, Outcome).
 @DataClassName('FocusSessionPlanningBypass')
 class FocusSessionPlanningBypasses extends Table {
   /// Sync row identifier, derived from the pair
@@ -240,8 +238,6 @@ class FocusSessionPlanningBypasses extends Table {
   TextColumn get focusSessionId => text().references(FocusSessions, #id)();
   TextColumn get taskId => text().references(Todos, #id)();
 
-  /// `skipped` | `unclarified`.
-  TextColumn get reason => text()();
   DateTimeColumn get recordedAt => dateTime()();
   TextColumn get userId => text()();
 
@@ -266,11 +262,11 @@ class FocusSessionReschedules extends Table {
   Set<Column<Object>> get primaryKey => {focusSessionId, taskId};
 }
 
-/// The decision log of the Stale sweep: one row per Outcome the user moved to
+/// The decision log of the Weekly Review's Bypassed step: one row per Outcome the user moved to
 /// Someday/Maybe or Trashed from it. An event log, so the id is random. The
-/// latest row for an Outcome is part of its Stale floor.
-@DataClassName('OutcomeSweepDecision')
-class OutcomeSweepDecisions extends Table {
+/// latest row for an Outcome is part of its Bypassed floor.
+@DataClassName('OutcomeBypassDecision')
+class OutcomeBypassDecisions extends Table {
   TextColumn get id => text().clientDefault(() => uuid.v4())();
   TextColumn get taskId => text().references(Todos, #id)();
 

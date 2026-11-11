@@ -1,4 +1,4 @@
-/// The Stale sweep's storage rules (#107): which pass-overs `openSession` and
+/// The Bypassed Outcome's storage rules (#107): which pass-overs `openSession` and
 /// the due-date write paths record, how they are captured, and what a hard
 /// delete takes with it.
 library;
@@ -48,7 +48,7 @@ void main() {
       db.select(db.focusSessionReschedules).get();
 
   group('openSession records the Planning pass-overs', () {
-    test('a skip is recorded as skipped, a planned Outcome is not', () async {
+    test('a skip is recorded, a planned Outcome is not', () async {
       await outcome('skip');
       await outcome('plan');
       final sessionId = await db.focusSessionDao.openSession(
@@ -58,26 +58,9 @@ void main() {
         now: _ts,
       );
       final rows = await bypasses();
-      expect(rows.map((r) => (r.taskId, r.reason, r.focusSessionId)), [
-        ('skip', 'skipped', sessionId),
+      expect(rows.map((r) => (r.taskId, r.focusSessionId)), [
+        ('skip', sessionId),
       ]);
-    });
-
-    test('an Outcome unclarified since its Action finished is recorded as '
-        'unclarified, and a skip wins over it', () async {
-      await outcome('u');
-      await outcome('both');
-      await outcome('fresh');
-      await db.actionDao.completeCurrentAction('u', now: _ts.add(const Duration(minutes: 30)));
-      await db.actionDao.completeCurrentAction('both', now: _ts.add(const Duration(minutes: 30)));
-      await db.focusSessionDao.openSession(
-        userId: _userId,
-        taskIds: [],
-        skippedTaskIds: {'both'},
-        now: _ts.add(const Duration(hours: 1)),
-      );
-      final byTask = {for (final r in await bypasses()) r.taskId: r.reason};
-      expect(byTask, {'u': 'unclarified', 'both': 'skipped'});
     });
 
     test('rows are captured under their pair-derived ids with exactly the '
@@ -156,7 +139,7 @@ void main() {
     });
   });
 
-  group('getStaleOutcomes', () {
+  group('getBypassedOutcomes', () {
     test('Someday, Done and Trash Outcomes are never candidates', () async {
       await outcome('maybe');
       await outcome('done');
@@ -172,10 +155,10 @@ void main() {
       }
       await db.todoDao.setIntent('maybe', Intent.maybe);
       await db.todoDao.markDone('done');
-      expect(await db.focusSessionDao.getStaleOutcomes(3), isEmpty);
+      expect(await db.focusSessionDao.getBypassedOutcomes(3), isEmpty);
     });
 
-    test('a sweep decision is a floor: earlier pass-overs stop counting',
+    test('a Bypassed decision is a floor: earlier pass-overs stop counting',
         () async {
       await outcome('o');
       for (var i = 0; i < 3; i++) {
@@ -188,20 +171,20 @@ void main() {
         await db.focusSessionDao
             .closeSession(sessionId: id, now: _ts.add(Duration(hours: 2 * i + 1)));
       }
-      expect(await db.focusSessionDao.getStaleOutcomes(3), hasLength(1));
-      await db.into(db.outcomeSweepDecisions).insert(
-            OutcomeSweepDecisionsCompanion.insert(
+      expect(await db.focusSessionDao.getBypassedOutcomes(3), hasLength(1));
+      await db.into(db.outcomeBypassDecisions).insert(
+            OutcomeBypassDecisionsCompanion.insert(
               taskId: 'o',
               decision: 'maybe',
               decidedAt: _ts.add(const Duration(days: 1)),
               userId: _userId,
             ),
           );
-      expect(await db.focusSessionDao.getStaleOutcomes(3), isEmpty);
+      expect(await db.focusSessionDao.getBypassedOutcomes(3), isEmpty);
     });
   });
 
-  test('deleteOutcome removes and tombstones the Stale rows', () async {
+  test('deleteOutcome removes and tombstones the Bypassed rows', () async {
     await outcome('o', dueDate: DateTime.utc(2030, 2, 1));
     final sessionId = await db.focusSessionDao.openSession(
       userId: _userId,
@@ -218,8 +201,8 @@ void main() {
             userId: _userId,
           ),
         );
-    await db.into(db.outcomeSweepDecisions).insert(
-          OutcomeSweepDecisionsCompanion.insert(
+    await db.into(db.outcomeBypassDecisions).insert(
+          OutcomeBypassDecisionsCompanion.insert(
             taskId: 'o',
             decision: 'maybe',
             decidedAt: _ts,
@@ -232,11 +215,11 @@ void main() {
 
     expect(await bypasses(), isEmpty);
     expect(await reschedules(), isEmpty);
-    expect(await db.select(db.outcomeSweepDecisions).get(), isEmpty);
+    expect(await db.select(db.outcomeBypassDecisions).get(), isEmpty);
     for (final collection in [
       focusSessionPlanningBypassesCollection,
       focusSessionReschedulesCollection,
-      outcomeSweepDecisionsCollection,
+      outcomeBypassDecisionsCollection,
     ]) {
       expect(capture.forCollection(collection).single.tombstone, isTrue,
           reason: collection);

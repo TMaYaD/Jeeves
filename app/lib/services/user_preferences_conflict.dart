@@ -43,7 +43,7 @@ library;
 import 'dart:convert';
 
 import '../models/clarify_mode.dart' show kClarifyModePrefKey;
-import '../models/stale_sweep.dart' show kStaleSweepThresholdPrefKey;
+import '../models/bypassed_outcome.dart' show kBypassThresholdPrefKey;
 
 /// How two conflicting rows for the same `user_preferences` key are reconciled.
 enum ConflictStrategy {
@@ -107,7 +107,7 @@ const preferenceConflictRegistry = <String, ConflictStrategy>{
   // on either value leaves every Capture and link valid (issue #433).
   kClarifyModePrefKey: ConflictStrategy.lww,
   // A scalar setting: the latest value on any device is the right winner.
-  kStaleSweepThresholdPrefKey: ConflictStrategy.lww,
+  kBypassThresholdPrefKey: ConflictStrategy.lww,
 };
 
 /// Returns the [ConflictStrategy] for [key].

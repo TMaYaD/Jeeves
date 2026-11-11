@@ -125,7 +125,7 @@ class DomainProjector {
         collections.contains(focusSessionDispositionsCollection) ||
         collections.contains(focusSessionPlanningBypassesCollection) ||
         collections.contains(focusSessionReschedulesCollection) ||
-        collections.contains(outcomeSweepDecisionsCollection)) {
+        collections.contains(outcomeBypassDecisionsCollection)) {
       domain.notifyFocusSessionsViewWrite();
     }
     if (collections.contains(userPreferencesCollection)) {

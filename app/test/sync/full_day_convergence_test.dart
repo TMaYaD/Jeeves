@@ -62,7 +62,7 @@ const _tables = <String, Set<String>>{
   'focus_session_dispositions': {},
   'focus_session_planning_bypasses': {},
   'focus_session_reschedules': {},
-  'outcome_sweep_decisions': {},
+  'outcome_bypass_decisions': {},
   'time_logs': {},
   'user_preferences': {},
 };

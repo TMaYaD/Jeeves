@@ -634,7 +634,7 @@ EXISTS (
     });
   }
 
-  /// Stale's signal (c): records that the due date of [todoId] was pushed
+  /// A Bypassed signal: records that the due date of [todoId] was pushed
   /// **later** while the Outcome sits on the Plan of the open FocusSession.
   ///
   /// Counts only an *existing* due date moved later — a first due date, a clear
@@ -972,22 +972,6 @@ AND (
       'AND (last_clarified_at IS NULL '
       '     OR last_clarified_at < $_latestActionTerminationClause)',
       variables: [for (final id in ids) Variable<String>(id)],
-      readsFrom: {todos, actions},
-    ).get();
-    return rows.map((r) => r.read<String>('id')).toSet();
-  }
-
-  /// Every live Next Outcome that is unclarified since an Action — the same SQL
-  /// as [getUnclarifiedSinceActionIds], over all Outcomes rather than a given
-  /// set. Read by `FocusSessionDao.openSession` for Stale's fourth signal.
-  Future<Set<String>> getAllNextUnclarifiedSinceActionIds() async {
-    final rows = await customSelect(
-      'SELECT todos.id AS id FROM todos '
-      "WHERE todos.clarified = 1 AND todos.done_at IS NULL "
-      "AND todos.intent = 'next' "
-      'AND $_latestActionTerminationClause IS NOT NULL '
-      'AND (last_clarified_at IS NULL '
-      '     OR last_clarified_at < $_latestActionTerminationClause)',
       readsFrom: {todos, actions},
     ).get();
     return rows.map((r) => r.read<String>('id')).toSet();
@@ -1597,7 +1581,7 @@ AND (
         fields: {'action_id': null},
       );
     }
-    // The Stale sweep's rows about this Outcome go with it: every read of them
+    // The Bypassed rows about this Outcome go with it: every read of them
     // joins `todos`, so a survivor could never surface, but it would linger.
     final db = attachedDatabase;
     final bypassRows = await (db.select(db.focusSessionPlanningBypasses)
@@ -1618,12 +1602,12 @@ AND (
         entityId: focusSessionRescheduleIdFor(row.focusSessionId, id),
       );
     }
-    final decisionRows = await (db.select(db.outcomeSweepDecisions)
+    final decisionRows = await (db.select(db.outcomeBypassDecisions)
           ..where((d) => d.taskId.equals(id)))
         .get();
     for (final row in decisionRows) {
       capture.tombstone(
-        collection: outcomeSweepDecisionsCollection,
+        collection: outcomeBypassDecisionsCollection,
         entityId: row.id,
       );
     }
@@ -1653,7 +1637,7 @@ AND (
       await (db.delete(db.focusSessionReschedules)
             ..where((r) => r.taskId.equals(id)))
           .go();
-      await (db.delete(db.outcomeSweepDecisions)
+      await (db.delete(db.outcomeBypassDecisions)
             ..where((d) => d.taskId.equals(id)))
           .go();
       await (delete(todos)..where((t) => t.id.equals(id))).go();

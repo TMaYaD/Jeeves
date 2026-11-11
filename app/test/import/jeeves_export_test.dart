@@ -161,13 +161,12 @@ Future<void> _seed(GtdDatabase db, {String userId = _userId}) async {
           disposition: const Value('maybe'),
           userId: Value(userId)));
 
-  // --- the Stale sweep's rows ---
+  // --- the Bypassed Outcome rows ---
   await db.into(db.focusSessionPlanningBypasses).insert(
       FocusSessionPlanningBypassesCompanion(
           id: const Value('fspb-1'),
           focusSessionId: const Value('fs-1'),
           taskId: const Value('todo-done'),
-          reason: const Value('skipped'),
           recordedAt: Value(_utc(28, 8, 0, 0)),
           userId: Value(userId)));
   await db.into(db.focusSessionReschedules).insert(
@@ -177,7 +176,7 @@ Future<void> _seed(GtdDatabase db, {String userId = _userId}) async {
           taskId: const Value('todo-next'),
           recordedAt: Value(_utc(28, 8, 10, 0)),
           userId: Value(userId)));
-  await db.into(db.outcomeSweepDecisions).insert(OutcomeSweepDecisionsCompanion(
+  await db.into(db.outcomeBypassDecisions).insert(OutcomeBypassDecisionsCompanion(
       id: const Value('osd-1'),
       taskId: const Value('todo-done'),
       decision: const Value('maybe'),

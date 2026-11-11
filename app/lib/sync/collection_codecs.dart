@@ -60,7 +60,7 @@ const String focusSessionDispositionsCollection = 'focus_session_dispositions';
 const String focusSessionPlanningBypassesCollection =
     'focus_session_planning_bypasses';
 const String focusSessionReschedulesCollection = 'focus_session_reschedules';
-const String outcomeSweepDecisionsCollection = 'outcome_sweep_decisions';
+const String outcomeBypassDecisionsCollection = 'outcome_bypass_decisions';
 const String userPreferencesCollection = 'user_preferences';
 
 /// How a column's SQL value maps to and from its JSON field value.
@@ -388,14 +388,12 @@ const Map<String, CollectionCodec> collectionCodecs = {
     columns: {
       'focus_session_id': FieldKind.text,
       'task_id': FieldKind.text,
-      'reason': FieldKind.text,
       'recorded_at': FieldKind.instant,
       ..._junctionUserId,
     },
     requiredColumns: {
       'focus_session_id',
       'task_id',
-      'reason',
       'recorded_at',
       'user_id',
     },
@@ -413,9 +411,9 @@ const Map<String, CollectionCodec> collectionCodecs = {
     requiredColumns: {'focus_session_id', 'task_id', 'recorded_at', 'user_id'},
     identityColumns: ['focus_session_id', 'task_id'],
   ),
-  outcomeSweepDecisionsCollection: CollectionCodec(
-    collection: outcomeSweepDecisionsCollection,
-    table: 'outcome_sweep_decisions',
+  outcomeBypassDecisionsCollection: CollectionCodec(
+    collection: outcomeBypassDecisionsCollection,
+    table: 'outcome_bypass_decisions',
     columns: {
       'task_id': FieldKind.text,
       'decision': FieldKind.text,

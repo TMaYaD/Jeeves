@@ -22,7 +22,6 @@ import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/ritual.dart';
 import 'package:jeeves/providers/ceremony_in_progress_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
-import 'package:jeeves/providers/stale_sweep_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/screens/planning/focus_session_planning_screen.dart';
 
@@ -46,12 +45,7 @@ Future<void> _insertInbox(GtdDatabase db, String id) async {
 
 (Widget, GoRouter, ProviderContainer) _app(GtdDatabase db) {
   final container = ProviderContainer(
-    overrides: [
-      databaseProvider.overrideWithValue(db),
-      // Nothing is Stale here; skip the real-store read, which cannot settle
-      // under FakeAsync (docs/TESTING.md).
-      staleOutcomesProvider.overrideWith((ref) async => const []),
-    ],
+    overrides: [databaseProvider.overrideWithValue(db)],
   );
   final router = GoRouter(
     initialLocation: '/focus-session-planning',
@@ -76,10 +70,7 @@ Future<void> _insertInbox(GtdDatabase db, String id) async {
 /// The ritual loads its inbox snapshot through a drift watch-stream, which
 /// only emits inside the real async zone. Drain that queue (no wall-clock
 /// sleep) before settling the frame — see [settleWithRealAsync].
-// Two rounds: the first resolves the Stale sweep read and builds the wizard, the
-// second lets the wizard's own snapshot reads land.
-Future<void> _settle(WidgetTester tester) =>
-    settleWithRealAsync(tester, rounds: 2);
+Future<void> _settle(WidgetTester tester) => settleWithRealAsync(tester);
 
 /// The text the clarify card currently holds in its title field.
 String _titleText(WidgetTester tester) =>

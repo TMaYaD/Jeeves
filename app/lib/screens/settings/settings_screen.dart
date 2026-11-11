@@ -9,7 +9,7 @@ import 'package:go_router/go_router.dart';
 import '../../auth/session_gate.dart';
 import '../../models/clarify_mode.dart';
 import '../../models/focus_session_planning_settings.dart';
-import '../../models/stale_sweep.dart';
+import '../../models/bypassed_outcome.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/build_version_provider.dart';
 import '../../providers/clarify_mode_provider.dart';
@@ -20,7 +20,7 @@ import '../../providers/focus_settings_provider.dart';
 import '../../providers/periodic_review_provider.dart';
 import '../../providers/periodic_review_settings_provider.dart';
 import '../../providers/shutdown_settings_provider.dart';
-import '../../providers/stale_sweep_provider.dart';
+import '../../providers/bypassed_outcomes_provider.dart';
 import '../../services/export_service.dart';
 import '../../widgets/app_title_bar/app_title_bar.dart';
 import '../enrolment/enrolment_ceremony_screen.dart';
@@ -72,6 +72,23 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               gate == SessionGate.ready;
           return ListView(
         children: [
+          _sectionHeader('SYSTEM TRUST'),
+          ListTile(
+            key: const Key('bypass_threshold_tile'),
+            leading: const Icon(Icons.low_priority_outlined,
+                color: Color(0xFF9CA3AF)),
+            title: const Text(
+              'Bypassed after',
+              style: TextStyle(
+                  fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+            ),
+            subtitle: Text(
+              '${ref.watch(bypassThresholdProvider)} passes in Daily Planning',
+              style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+            ),
+            onTap: () => _pickBypassThreshold(context, ref),
+          ),
+          const Divider(height: 1, color: Color(0xFFF3F4F6)),
           _sectionHeader('SYNC'),
           if (!isAuthenticated) ...[
             ListTile(
@@ -292,6 +309,35 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     return 'jeeves-export-$year$month$day.json';
   }
 
+  Future<void> _pickBypassThreshold(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    final current = ref.read(bypassThresholdProvider);
+    final picked = await showDialog<int>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('Bypassed after how many passes?'),
+        children: kBypassThresholdOptions
+            .map((n) => SimpleDialogOption(
+                  key: Key('bypass_threshold_option_$n'),
+                  onPressed: () => Navigator.pop(ctx, n),
+                  child: Text(
+                    '$n passes',
+                    style: TextStyle(
+                      fontWeight:
+                          n == current ? FontWeight.w700 : FontWeight.normal,
+                    ),
+                  ),
+                ))
+            .toList(),
+      ),
+    );
+    if (picked != null) {
+      await ref.read(bypassThresholdProvider.notifier).set(picked);
+    }
+  }
+
   Widget _sectionHeader(String title) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 4),
@@ -420,53 +466,8 @@ class _FocusSessionPlanningSettings extends ConsumerWidget {
           ),
           onTap: () => _pickDefaultTimeEstimate(context, ref, settings),
         ),
-        ListTile(
-          key: const Key('stale_sweep_threshold_tile'),
-          leading:
-              const Icon(Icons.cleaning_services_outlined, color: Color(0xFF9CA3AF)),
-          title: const Text(
-            'Stale after',
-            style:
-                TextStyle(fontWeight: FontWeight.w500, color: Color(0xFF374151)),
-          ),
-          subtitle: Text(
-            'Sweep an Outcome once ${ref.watch(staleSweepThresholdProvider)} '
-            'sessions have passed it over.',
-            style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
-          ),
-          onTap: () => _pickStaleSweepThreshold(context, ref),
-        ),
       ],
     );
-  }
-
-  Future<void> _pickStaleSweepThreshold(
-    BuildContext context,
-    WidgetRef ref,
-  ) async {
-    final current = ref.read(staleSweepThresholdProvider);
-    final picked = await showDialog<int>(
-      context: context,
-      builder: (ctx) => SimpleDialog(
-        title: const Text('Stale after how many sessions?'),
-        children: kStaleSweepThresholdOptions
-            .map((n) => SimpleDialogOption(
-                  key: Key('stale_sweep_threshold_option_$n'),
-                  onPressed: () => Navigator.pop(ctx, n),
-                  child: Text(
-                    '$n sessions',
-                    style: TextStyle(
-                      fontWeight:
-                          n == current ? FontWeight.w700 : FontWeight.normal,
-                    ),
-                  ),
-                ))
-            .toList(),
-      ),
-    );
-    if (picked != null) {
-      await ref.read(staleSweepThresholdProvider.notifier).set(picked);
-    }
   }
 
   static const _defaultEstimateOptions = [5, 10, 15, 20, 30, 45, 60];

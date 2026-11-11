@@ -102,7 +102,7 @@ const List<String> initialUploadCollectionOrder = [
   focusSessionDispositionsCollection,
   focusSessionPlanningBypassesCollection,
   focusSessionReschedulesCollection,
-  outcomeSweepDecisionsCollection,
+  outcomeBypassDecisionsCollection,
   userPreferencesCollection,
 ];
 

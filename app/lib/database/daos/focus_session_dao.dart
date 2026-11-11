@@ -42,10 +42,10 @@ String focusSessionRescheduleIdFor(String sessionId, String taskId) => uuid.v5(
       'jeeves://focus_session_reschedule/$sessionId/$taskId',
     );
 
-/// An Outcome that is Stale, with how many FocusSessions passed it over since
-/// its floor.
-class StaleOutcome {
-  const StaleOutcome({
+/// An Outcome that is Bypassed, with how many FocusSessions passed it over
+/// since its floor.
+class BypassedOutcome {
+  const BypassedOutcome({
     required this.outcome,
     required this.passedOverSessionCount,
   });
@@ -71,7 +71,7 @@ enum SessionSettlement { done, next, waitingFor, someday }
   FocusSessionDispositions,
   FocusSessionPlanningBypasses,
   FocusSessionReschedules,
-  OutcomeSweepDecisions,
+  OutcomeBypassDecisions,
   TimeLogs,
   Todos,
   Actions,
@@ -131,11 +131,10 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   /// Returns the new session's id. Runs atomically in a transaction.
   ///
   /// The session also records which Outcomes its Daily Planning **passed over**
-  /// without planning them — Stale's signals (a) and (d), CONTEXT.md § Engagement.
-  /// [skippedTaskIds] are the ones the user tapped Skip on; every other Next
-  /// Outcome that is unclarified since an Action finished is recorded as
-  /// `unclarified`. Both land in the Plan's own scope, so a Planning performance
-  /// that is abandoned records nothing.
+  /// without planning them — a Bypassed signal, CONTEXT.md § Engagement.
+  /// [skippedTaskIds] are the ones the user tapped Skip on. They land in the
+  /// Plan's own scope, so a Planning performance that is abandoned records
+  /// nothing.
   ///
   /// [now] is injectable for deterministic testing; defaults to [DateTime.now].
   Future<String> openSession({
@@ -218,23 +217,17 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
         );
       }
 
-      // Stale's signals (a) and (d): Outcomes this Planning passed over. A
-      // skip wins over `unclarified`; neither is recorded for a planned Outcome.
-      final planned = taskIds.toSet();
-      final skipped = skippedTaskIds.difference(planned);
-      final unclarified = (await attachedDatabase.todoDao
-              .getAllNextUnclarifiedSinceActionIds())
-          .difference(planned)
-          .difference(skipped);
+      // A Bypassed signal: Outcomes the user skipped in this Planning and did
+      // not plan after all.
+      final skipped = skippedTaskIds.difference(taskIds.toSet());
       final recordedAt = DateTime.parse(ts).toUtc();
-      Future<void> recordBypass(String taskId, String reason) async {
+      for (final taskId in skipped) {
         final bypassId = focusSessionPlanningBypassIdFor(newId, taskId);
         await into(focusSessionPlanningBypasses).insert(
           FocusSessionPlanningBypassesCompanion(
             id: Value(bypassId),
             focusSessionId: Value(newId),
             taskId: Value(taskId),
-            reason: Value(reason),
             recordedAt: Value(recordedAt),
             userId: Value(userId),
           ),
@@ -246,18 +239,10 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
           fields: {
             'focus_session_id': newId,
             'task_id': taskId,
-            'reason': reason,
             'recorded_at': encodeInstant(recordedAt),
             'user_id': userId,
           },
         );
-      }
-
-      for (final taskId in skipped) {
-        await recordBypass(taskId, 'skipped');
-      }
-      for (final taskId in unclarified) {
-        await recordBypass(taskId, 'unclarified');
       }
     });
 
@@ -680,7 +665,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       'AND fs.ended_at = ('
       '  SELECT MAX(ended_at) FROM focus_sessions WHERE ended_at IS NOT NULL)';
 
-  /// Only Outcomes still on Next: a Stale sweep (or any later Someday/Maybe or
+  /// Only Outcomes still on Next: a Bypassed decision (or any later Someday/Maybe or
   /// Trash routing) moves an Outcome off Next, and its stored `rollover`
   /// Disposition must not put it back on a draft Plan after a restart.
   Future<List<String>> getLastClosedSessionRolloverTaskIds() async {
@@ -722,19 +707,19 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
-  /// The Stale query. For each live Next Outcome, counts the distinct
+  /// The Bypassed query. For each live Next Outcome, counts the distinct
   /// FocusSessions that passed it over **after its floor** and keeps those at or
-  /// above the threshold (the single `?`). CONTEXT.md § Engagement, Stale.
+  /// above the threshold (the single `?`). CONTEXT.md § Engagement, Bypassed.
   ///
   /// A session passes an Outcome over when (b) the Outcome was on its Plan, the
   /// session is closed and the Outcome was not engaged in it, or when a row
-  /// exists for it in `focus_session_planning_bypasses` (signals a and d) or
-  /// `focus_session_reschedules` (signal c). The floor is the latest of any
-  /// TimeLog of the Outcome, any completed Action, and its latest sweep
+  /// exists for it in `focus_session_planning_bypasses` (the Planning skip) or
+  /// `focus_session_reschedules` (the reschedule). The floor is the latest of any
+  /// TimeLog of the Outcome, any completed Action, and its latest Bypassed
   /// decision; for (b) a session counts by its `started_at`, for the stored
   /// signals by `recorded_at`. Timestamps are ISO-8601 UTC text, so they order
   /// lexicographically. The empty string is "no floor".
-  static const String _staleOutcomeIdsSql = '''
+  static const String _bypassedOutcomeIdsSql = '''
 SELECT f.task_id AS id, COUNT(DISTINCT p.session_id) AS pass_count
 FROM (
   SELECT t.id AS task_id,
@@ -744,7 +729,7 @@ FROM (
       COALESCE((SELECT MAX(a.done_at) FROM actions a
                 WHERE a.outcome_id = t.id AND a.role = 'done'
                   AND a.done_at IS NOT NULL), ''),
-      COALESCE((SELECT MAX(d.decided_at) FROM outcome_sweep_decisions d
+      COALESCE((SELECT MAX(d.decided_at) FROM outcome_bypass_decisions d
                 WHERE d.task_id = t.id), '')
     ) AS floor_at
   FROM todos t
@@ -770,7 +755,7 @@ GROUP BY f.task_id
 HAVING COUNT(DISTINCT p.session_id) >= ?''';
 
 
-  Set<ResultSetImplementation<dynamic, dynamic>> get _staleTables => {
+  Set<ResultSetImplementation<dynamic, dynamic>> get _bypassTables => {
         todos,
         attachedDatabase.actions,
         attachedDatabase.timeLogs,
@@ -778,44 +763,44 @@ HAVING COUNT(DISTINCT p.session_id) >= ?''';
         focusSessionTasks,
         focusSessionPlanningBypasses,
         focusSessionReschedules,
-        outcomeSweepDecisions,
+        outcomeBypassDecisions,
       };
 
-  String get _staleOutcomesSql =>
+  String get _bypassedOutcomesSql =>
       'SELECT $_todoColumnsSql, c.pass_count AS pass_count FROM todos t '
-      'JOIN ($_staleOutcomeIdsSql) c ON c.id = t.id '
+      'JOIN ($_bypassedOutcomeIdsSql) c ON c.id = t.id '
       'ORDER BY c.pass_count DESC, t.created_at';
 
-  StaleOutcome _staleOutcomeFromRow(QueryRow r) => StaleOutcome(
+  BypassedOutcome _bypassedOutcomeFromRow(QueryRow r) => BypassedOutcome(
         outcome: todos.map(r.data),
         passedOverSessionCount: r.read<int>('pass_count'),
       );
 
-  /// One-shot read of the Stale Outcomes at [threshold] (see
-  /// [_staleOutcomeIdsSql]), most-passed-over first. The Daily Planning gate
-  /// reads this once and re-reads after each sweep decision.
-  Future<List<StaleOutcome>> getStaleOutcomes(int threshold) async {
+  /// One-shot read of the Bypassed Outcomes at [threshold] (see
+  /// [_bypassedOutcomeIdsSql]), most-passed-over first. The Weekly Review reads
+  /// this once and re-reads after each Bypassed decision.
+  Future<List<BypassedOutcome>> getBypassedOutcomes(int threshold) async {
     final rows = await customSelect(
-      _staleOutcomesSql,
+      _bypassedOutcomesSql,
       variables: [Variable<int>(threshold)],
-      readsFrom: _staleTables,
+      readsFrom: _bypassTables,
     ).get();
-    return rows.map(_staleOutcomeFromRow).toList();
+    return rows.map(_bypassedOutcomeFromRow).toList();
   }
 
-  /// Reactive form of [getStaleOutcomes]; re-emits when any table it reads
-  /// changes. Backs the Stale count that system health reads.
-  Stream<List<StaleOutcome>> watchStaleOutcomes(int threshold) {
+  /// Reactive form of [getBypassedOutcomes]; re-emits when any table it reads
+  /// changes. Backs the Bypassed count that System Trust reads.
+  Stream<List<BypassedOutcome>> watchBypassedOutcomes(int threshold) {
     return customSelect(
-      _staleOutcomesSql,
+      _bypassedOutcomesSql,
       variables: [Variable<int>(threshold)],
-      readsFrom: _staleTables,
-    ).watch().map((rows) => rows.map(_staleOutcomeFromRow).toList());
+      readsFrom: _bypassTables,
+    ).watch().map((rows) => rows.map(_bypassedOutcomeFromRow).toList());
   }
 
-  /// The Stale sweep's decision log, newest first.
-  Stream<List<OutcomeSweepDecision>> watchSweepDecisions() =>
-      (select(outcomeSweepDecisions)
+  /// The Bypassed decision log, newest first.
+  Stream<List<OutcomeBypassDecision>> watchBypassDecisions() =>
+      (select(outcomeBypassDecisions)
             ..orderBy([(d) => OrderingTerm.desc(d.decidedAt)]))
           .watch();
 
