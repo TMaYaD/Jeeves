@@ -18,10 +18,9 @@ DateTime dueDay(tz.Location location, int y, int m, int d) =>
     );
 
 void main() {
-  setUpAll(() {
-    configureSqliteForTests();
-    tz_data.initializeTimeZones();
-  });
+  // Before the groups below, whose bodies look up zones while being declared.
+  tz_data.initializeTimeZones();
+  setUpAll(configureSqliteForTests);
 
   group('dueDateNotificationId', () {
     test('is stable, in range, and differs between Outcomes', () {
