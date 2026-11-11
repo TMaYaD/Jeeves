@@ -147,10 +147,20 @@ DateTime? esFiringEdgeAt(DateTime instant, EsFacts facts) {
 /// tracked by the live provider and remain frozen during a projection.
 DateTime? wrFiringEdgeAt(DateTime instant, WrFacts facts) {
   if (!facts.hasAnyItem) return null;
-  final due =
-      facts.lastCompleted?.add(const Duration(days: 7)) ??
-      _todayAt(instant, 0, 0);
-  final cadenceEdge = instant.isBefore(due) ? null : due;
+  final lastCompleted = facts.lastCompleted;
+  // Each elapsed seven-day period is a fresh firing (releasing a dismissal
+  // from the previous one): the edge is lastCompleted + 7d·k for the largest
+  // k whose edge is not after the instant. Before the first boundary there is
+  // no cadence edge.
+  final DateTime? cadenceEdge;
+  if (lastCompleted == null) {
+    cadenceEdge = _todayAt(instant, 0, 0);
+  } else {
+    final elapsedPeriods = instant.difference(lastCompleted).inDays ~/ 7;
+    cadenceEdge = elapsedPeriods < 1
+        ? null
+        : lastCompleted.add(Duration(days: 7 * elapsedPeriods));
+  }
   final contentEdge = facts.contentFiringEdge;
   if (cadenceEdge == null) return contentEdge;
   if (contentEdge == null) return cadenceEdge;

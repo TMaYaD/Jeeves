@@ -25,8 +25,7 @@ import 'package:jeeves/providers/gtd_lists_provider.dart';
 import 'package:jeeves/providers/nudge_clock_provider.dart';
 import 'package:jeeves/providers/nudge_triggers.dart';
 import 'package:jeeves/providers/onboarding_provider.dart';
-import 'package:jeeves/providers/periodic_review_settings_provider.dart'
-    show periodicReviewIsDueProvider, periodicReviewLastCompletedProvider;
+import 'package:jeeves/providers/periodic_review_settings_provider.dart';
 import 'package:jeeves/models/nudge_predicates.dart';
 import 'package:jeeves/providers/shutdown_settings_provider.dart';
 

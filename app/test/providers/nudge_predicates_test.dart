@@ -132,7 +132,7 @@ void main() {
   });
 
   test(
-    'Weekly Review fires at seven days and preserves the current cadence edge',
+    'Weekly Review fires at seven days and refires each elapsed seven-day period',
     () {
       final completed = morning.subtract(const Duration(days: 7));
       final facts = WrFacts(hasAnyItem: true, lastCompleted: completed);
@@ -144,9 +144,20 @@ void main() {
         isNull,
       );
       expect(wrFiringEdgeAt(morning, facts), morning);
+      // Just before the second boundary the first edge still holds; at it,
+      // the edge moves to the new period.
+      final secondBoundary = morning.add(const Duration(days: 7));
       expect(
-        wrFiringEdgeAt(morning.add(const Duration(days: 7)), facts),
+        wrFiringEdgeAt(
+          secondBoundary.subtract(const Duration(microseconds: 1)),
+          facts,
+        ),
         morning,
+      );
+      expect(wrFiringEdgeAt(secondBoundary, facts), secondBoundary);
+      expect(
+        wrFiringEdgeAt(secondBoundary.add(const Duration(days: 3)), facts),
+        secondBoundary,
       );
       expect(
         wrFiringEdgeAt(morning, const WrFacts(hasAnyItem: true)),
