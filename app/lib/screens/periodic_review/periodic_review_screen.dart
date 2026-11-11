@@ -333,14 +333,15 @@ class _PeriodicReviewScreenState
     if (step == PeriodicReviewNotifier.kStepIntro) return null;
     final nav = switch (step) {
       PeriodicReviewNotifier.kStepInbox => state.inboxNav,
-      PeriodicReviewNotifier.kStepBypassed => state.bypassedNav,
+      // Decisions are tracked by id, not by cursor: Back never re-offers one.
+      PeriodicReviewNotifier.kStepBypassed => const SnapshotNav<Never>(),
       PeriodicReviewNotifier.kStepWaitingFor => state.waitingForNav,
       PeriodicReviewNotifier.kStepNext => state.nextNav,
       _ => state.somedayNav,
     };
     final VoidCallback previous = switch (step) {
       PeriodicReviewNotifier.kStepInbox => notifier.previousInbox,
-      PeriodicReviewNotifier.kStepBypassed => notifier.previousBypassed,
+      PeriodicReviewNotifier.kStepBypassed => () {},
       PeriodicReviewNotifier.kStepWaitingFor => notifier.previousWaitingFor,
       PeriodicReviewNotifier.kStepNext => notifier.previousNext,
       _ => notifier.previousSomeday,
@@ -380,8 +381,8 @@ class _PeriodicReviewScreenState
   ) {
     final nav = state.bypassedNav;
     final back = _backFor(
-      nav: nav,
-      previous: notifier.previousBypassed,
+      nav: const SnapshotNav<Never>(),
+      previous: () {},
       stepIndex: PeriodicReviewNotifier.kStepBypassed,
       currentStep: state.currentStep,
       notifier: notifier,
@@ -390,11 +391,12 @@ class _PeriodicReviewScreenState
       title: _stepTitles[PeriodicReviewNotifier.kStepBypassed],
       body: const BypassedStep(),
       activeFraction: nav.isLoaded && !nav.isEmpty
-          ? (nav.index / nav.length).clamp(0.0, 1.0)
+          ? (state.bypassedDecidedIds.length / nav.length).clamp(0.0, 1.0)
           : 0.0,
       subtitle: _subtitle(state, nav, PeriodicReviewNotifier.kStepBypassed,
-          'decided'),
-      footer: nav.isLoaded && nav.isComplete
+          'decided',
+          consumed: state.bypassedDecidedIds.length),
+      footer: state.bypassedAllDecided
           ? WizardFooter(
               ceremonyId: _ceremonyId,
               accentColor: _accent,
@@ -462,8 +464,9 @@ class _PeriodicReviewScreenState
     PeriodicReviewState state,
     SnapshotNav<dynamic> nav,
     int stepIndex,
-    String verb,
-  ) {
+    String verb, {
+    int? consumed,
+  }) {
     // The intro is excluded from the progress count, so a working step's
     // 1-based display number *is* its position among the steps shown:
     // kStepInbox == 1 reads "Step 1 of 4".
@@ -471,8 +474,8 @@ class _PeriodicReviewScreenState
         'Step ${_position(state, stepIndex)} of ${_progressSegmentCount(state)}';
     if (!nav.isLoaded) return '$stepLabel · Loading…';
     if (nav.isEmpty) return '$stepLabel · Nothing to review';
-    final consumed = nav.index.clamp(0, nav.length);
-    return '$stepLabel · $consumed / ${nav.length} $verb';
+    final done = consumed ?? nav.index.clamp(0, nav.length);
+    return '$stepLabel · $done / ${nav.length} $verb';
   }
 
   /// True when the cursor is still pointing at a real item — i.e. the

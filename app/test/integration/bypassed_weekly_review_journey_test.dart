@@ -2,6 +2,8 @@
 /// in the Weekly Review's "Decide Bypassed Outcomes" step, over a real store.
 library;
 
+import 'dart:async';
+
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -95,12 +97,10 @@ void main() {
       await toBypassedStep();
       final actions = container.read(bypassActionsProvider);
 
-      await actions.moveToSomedayMaybe('a');
-      review().advanceBypassed();
-      await actions.trash('b');
-      review().advanceBypassed();
+      await review().decideBypassed('a', actions.moveToSomedayMaybe);
+      await review().decideBypassed('b', actions.trash);
 
-      expect(state().bypassedNav.isComplete, isTrue);
+      expect(state().bypassedAllDecided, isTrue);
       final a = await db.todoDao.getTodo('a');
       final b = await db.todoDao.getTodo('b');
       expect(a!.intent, 'maybe');
@@ -109,6 +109,70 @@ void main() {
       expect({for (final d in log) d.taskId: d.decision},
           {'a': 'maybe', 'b': 'trash'});
       expect(await db.focusSessionDao.getBypassedOutcomes(3), isEmpty);
+    });
+
+    test('a repeated tap while the write is pending decides once and does not '
+        'skip the next Outcome', () async {
+      await review().loadAllSnapshots();
+      await toBypassedStep();
+      final first = state().bypassedNextUndecided!.id;
+      final other = first == 'a' ? 'b' : 'a';
+      final release = Completer<void>();
+      var writes = 0;
+      Future<void> held(String id) async {
+        writes++;
+        await release.future;
+      }
+
+      final firstTap = review().decideBypassed(first, held);
+      final secondTap = review().decideBypassed(first, held);
+      expect(state().bypassedDecisionPending, isTrue);
+      release.complete();
+      await Future.wait([firstTap, secondTap]);
+
+      expect(writes, 1);
+      expect(state().bypassedDecidedIds, {first});
+      expect(state().bypassedNextUndecided!.id, other,
+          reason: 'the other Outcome is still waiting for its decision');
+      expect(state().bypassedAllDecided, isFalse);
+    });
+
+    test('a failed write leaves the Outcome undecided and unlocks the step',
+        () async {
+      await review().loadAllSnapshots();
+      await toBypassedStep();
+      final first = state().bypassedNextUndecided!.id;
+      await expectLater(
+        review().decideBypassed(first, (_) async => throw StateError('disk')),
+        throwsStateError,
+      );
+      expect(state().bypassedDecidedIds, isEmpty);
+      expect(state().bypassedDecisionPending, isFalse);
+    });
+
+    test('Back never offers a decided Outcome again, in step or on '
+        're-entry', () async {
+      await review().loadAllSnapshots();
+      await toBypassedStep();
+      final actions = container.read(bypassActionsProvider);
+      final first = state().bypassedNextUndecided!.id;
+      await review().decideBypassed(first, actions.trash);
+      final second = state().bypassedNextUndecided!.id;
+      expect(second, isNot(first));
+
+      // Leave to the intro-side step and come back: still on the second.
+      await review().previousStep();
+      await review().advanceStep();
+      expect(state().currentStep, PeriodicReviewNotifier.kStepBypassed);
+      expect(state().bypassedNextUndecided!.id, second);
+
+      await review().decideBypassed(second, actions.moveToSomedayMaybe);
+      expect(state().bypassedAllDecided, isTrue);
+      await review().advanceStep();
+      await review().previousStep();
+      expect(state().currentStep, PeriodicReviewNotifier.kStepBypassed);
+      expect(state().bypassedNextUndecided, isNull,
+          reason: 'completion line, not a decided Outcome, after Back');
     });
 
     test('Back from Review Waiting For returns to the Bypassed step',

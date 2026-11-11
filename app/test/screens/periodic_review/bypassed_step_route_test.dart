@@ -1,0 +1,153 @@
+/// Route-level coverage of the Weekly Review's "Decide Bypassed Outcomes" step
+/// (#107): the real screen over a real store, driven by taps.
+library;
+
+import 'package:drift/native.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/providers/periodic_review_provider.dart';
+import 'package:jeeves/screens/periodic_review/periodic_review_screen.dart';
+
+import '../../helpers/settle.dart';
+import '../../test_helpers.dart';
+
+const _userId = 'local';
+final _start = DateTime.utc(2030, 1, 10, 9);
+
+Future<void> _stage(GtdDatabase db, List<String> ids) async {
+  for (final id in ids) {
+    await db.todoDao.insertOutcome(
+        id: id, title: 'Outcome $id', userId: _userId, now: _start);
+    await seedCurrentAction(db,
+        outcomeId: id, text: 'work on $id', userId: _userId);
+  }
+  for (var i = 0; i < 3; i++) {
+    final sessionId = await db.focusSessionDao.openSession(
+      userId: _userId,
+      taskIds: [],
+      skippedTaskIds: ids.toSet(),
+      now: _start.add(Duration(hours: 2 * i + 1)),
+    );
+    await db.focusSessionDao.closeSession(
+        sessionId: sessionId, now: _start.add(Duration(hours: 2 * i + 2)));
+  }
+}
+
+void main() {
+  setUpAll(configureSqliteForTests);
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  late GtdDatabase db;
+  late ProviderContainer container;
+
+  Future<void> mount(WidgetTester tester, List<String> bypassed) async {
+    db = GtdDatabase(NativeDatabase.memory());
+    await tester.runAsync(() => _stage(db, bypassed));
+    container = ProviderContainer(
+      overrides: [databaseProvider.overrideWithValue(db)],
+    );
+    final router = GoRouter(
+      initialLocation: '/periodic-review',
+      routes: [
+        GoRoute(
+          path: '/focus',
+          builder: (_, _) => const Scaffold(body: Text('execution home')),
+        ),
+        GoRoute(
+          path: '/periodic-review',
+          builder: (_, _) => const PeriodicReviewScreen(),
+        ),
+      ],
+    );
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: container,
+      child: MaterialApp.router(routerConfig: router),
+    ));
+    await settleWithRealAsync(tester);
+    final notifier = container.read(periodicReviewProvider.notifier);
+    await tester.runAsync(() async {
+      await notifier.startSession();
+      await notifier.goToStep(PeriodicReviewNotifier.kStepInbox);
+      await notifier.advanceStep();
+    });
+    await settleWithRealAsync(tester, rounds: 2);
+  }
+
+  Future<void> close(WidgetTester tester) async {
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.runAsync(() async {
+      container.dispose();
+      await db.close();
+    });
+  }
+
+  PeriodicReviewState state() => container.read(periodicReviewProvider);
+
+  Future<void> tapKey(WidgetTester tester, String key) async {
+    await tester.tap(find.byKey(Key(key)));
+    await settleWithRealAsync(tester, rounds: 2);
+  }
+
+  testWidgets(
+      'taps decide each Outcome once; Back-only footer until all are decided; '
+      'Back never re-offers a decided Outcome', (tester) async {
+    await mount(tester, ['a', 'b']);
+
+    expect(state().currentStep, PeriodicReviewNotifier.kStepBypassed);
+    expect(find.text('Decide Bypassed Outcomes'), findsWidgets);
+    expect(find.textContaining('Step 2 of 5'), findsOneWidget);
+    expect(find.text('Back'), findsOneWidget);
+    expect(find.text('Next step'), findsNothing,
+        reason: 'no Skip and no Next step until every Outcome is decided');
+
+    final first = state().bypassedNextUndecided!.id;
+    await tapKey(tester, 'bypassed_trash');
+    expect(state().bypassedDecidedIds, {first});
+    expect(find.text('Next step'), findsNothing);
+    final second = state().bypassedNextUndecided!.id;
+    expect(second, isNot(first));
+    expect(find.textContaining('1 / 2 decided'), findsOneWidget);
+
+    // Back crosses to Process Inbox; coming forward again lands on the second.
+    await tester.tap(find.text('Back'));
+    await settleWithRealAsync(tester, rounds: 2);
+    expect(state().currentStep, PeriodicReviewNotifier.kStepInbox);
+    await tester.runAsync(() => container
+        .read(periodicReviewProvider.notifier)
+        .advanceStep());
+    await settleWithRealAsync(tester, rounds: 2);
+    expect(state().bypassedNextUndecided!.id, second);
+
+    await tapKey(tester, 'bypassed_someday_maybe');
+    expect(state().bypassedAllDecided, isTrue);
+    expect(find.text('All Bypassed Outcomes decided'), findsOneWidget);
+    expect(find.text('Next step'), findsOneWidget);
+
+    final rows = await tester.runAsync(() async => {
+          'first': (await db.todoDao.getTodo(first))!.intent,
+          'second': (await db.todoDao.getTodo(second))!.intent,
+          'log': (await db.focusSessionDao.watchBypassDecisions().first).length,
+        });
+    expect(rows, {'first': 'trash', 'second': 'maybe', 'log': 2});
+
+    // Completion-line Back does not re-offer a decided Outcome either.
+    await tester.tap(find.text('Back'));
+    await settleWithRealAsync(tester, rounds: 2);
+    expect(state().currentStep, PeriodicReviewNotifier.kStepInbox);
+    await close(tester);
+  });
+
+  testWidgets('a session with no Bypassed Outcome shows four steps',
+      (tester) async {
+    await mount(tester, []);
+    expect(state().currentStep, PeriodicReviewNotifier.kStepWaitingFor);
+    expect(find.textContaining('of 4'), findsOneWidget);
+    await close(tester);
+  });
+}

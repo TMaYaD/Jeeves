@@ -6,6 +6,8 @@
 /// offers only Back until every Outcome in the step is decided.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -20,6 +22,10 @@ class BypassedStep extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final nav = ref.watch(periodicReviewProvider.select((s) => s.bypassedNav));
+    final todo =
+        ref.watch(periodicReviewProvider.select((s) => s.bypassedNextUndecided));
+    final decisionPending = ref
+        .watch(periodicReviewProvider.select((s) => s.bypassedDecisionPending));
     final loadError =
         ref.watch(periodicReviewProvider.select((s) => s.bypassedLoadError));
     final passCounts =
@@ -38,7 +44,7 @@ class BypassedStep extends ConsumerWidget {
       );
     }
     if (!nav.isLoaded) return const Center(child: CircularProgressIndicator());
-    if (nav.isEmpty || nav.isComplete) {
+    if (nav.isEmpty || todo == null) {
       return ReviewEmptyState(
         icon: Icons.task_alt_outlined,
         title: 'All Bypassed Outcomes decided',
@@ -49,14 +55,14 @@ class BypassedStep extends ConsumerWidget {
       );
     }
 
-    final todo = nav.current!;
     final passCount = passCounts[todo.id] ?? 0;
     final actions = ref.read(bypassActionsProvider);
 
-    Future<void> decide(Future<void> Function(String id) decision) async {
-      await decision(todo.id);
-      notifier.advanceBypassed();
-    }
+    final todoId = todo.id;
+    VoidCallback? decide(Future<void> Function(String id) decision) =>
+        decisionPending
+            ? null
+            : () => unawaited(notifier.decideBypassed(todoId, decision));
 
     return OutcomeReviewCard(
       key: ValueKey(todo.id),
@@ -72,14 +78,14 @@ class BypassedStep extends ConsumerWidget {
         children: [
           FilledButton.icon(
             key: const Key('bypassed_someday_maybe'),
-            onPressed: () => decide(actions.moveToSomedayMaybe),
+            onPressed: decide(actions.moveToSomedayMaybe),
             icon: const Icon(Icons.inbox_outlined, size: 18),
             label: const Text('Someday/Maybe'),
           ),
           const SizedBox(height: 8),
           OutlinedButton.icon(
             key: const Key('bypassed_trash'),
-            onPressed: () => decide(actions.trash),
+            onPressed: decide(actions.trash),
             icon: const Icon(Icons.delete_outline, size: 18),
             label: const Text('Trash'),
           ),

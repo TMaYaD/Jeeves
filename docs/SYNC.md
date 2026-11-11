@@ -87,6 +87,8 @@ Every current key, grouped by family:
 
 **Snooze arbitration departs deliberately from the blanket LWW default**: between two live values the later *value* wins so a floor never regresses, while a clear is arbitrated against a live value by last-write-wins.
 
+Bypassed Outcomes add three append-only collections, `focus_session_planning_skips`, `focus_session_reschedules` and `outcome_bypass_decisions`, each registered in `collection_codecs.dart` and carried by the initial upload like any domain collection. Jeeves works without them leaving the device: they are ordinary local rows first.
+
 ## Derived identity, and why merge does not need to care about it
 
 Two collections have a domain key that is not their `id` column: `focus_session_tasks` (the `(session, task)` pair) and `user_preferences` (the `(workspace, key)` pair). Their local DAO writes mint a row id of their own, so two devices creating the same logical row would otherwise fork into two entities that never merge.

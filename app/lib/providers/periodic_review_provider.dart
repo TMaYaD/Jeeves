@@ -41,6 +41,8 @@ class PeriodicReviewState {
     this.somedayNav = const SnapshotNav<Todo>(),
     this.bypassedPassCounts = const {},
     this.bypassedDeferredCount = 0,
+    this.bypassedDecidedIds = const {},
+    this.bypassedDecisionPending = false,
     this.waitingForPersonTags = const {},
     this.actionTexts = const {},
     this.inboxRoutings = const {},
@@ -72,6 +74,26 @@ class PeriodicReviewState {
   /// Bypassed Outcomes a short session left out; they wait for a longer one.
   /// Never in any step, so the step's completion line says how many there are.
   final int bypassedDeferredCount;
+
+  /// Outcomes in [bypassedNav] that already have a decision. Navigation never
+  /// changes it: a decided Outcome is not offered again, however the user
+  /// moves Back and forth.
+  final Set<String> bypassedDecidedIds;
+
+  /// True while a decision is being written; the step disables both buttons.
+  final bool bypassedDecisionPending;
+
+  /// The first Outcome in [bypassedNav] without a decision, or null when
+  /// every one is decided (or the snapshot is not loaded).
+  Todo? get bypassedNextUndecided {
+    for (final todo in bypassedNav.items ?? const <Todo>[]) {
+      if (!bypassedDecidedIds.contains(todo.id)) return todo;
+    }
+    return null;
+  }
+
+  bool get bypassedAllDecided =>
+      bypassedNav.isLoaded && bypassedNextUndecided == null;
   final SnapshotNav<Todo> waitingForNav;
   final SnapshotNav<Todo> nextNav;
   final SnapshotNav<Todo> somedayNav;
@@ -117,6 +139,8 @@ class PeriodicReviewState {
     SnapshotNav<Todo>? somedayNav,
     Map<String, int>? bypassedPassCounts,
     int? bypassedDeferredCount,
+    Set<String>? bypassedDecidedIds,
+    bool? bypassedDecisionPending,
     Map<String, List<Tag>>? waitingForPersonTags,
     Map<String, String>? actionTexts,
     Map<int, RoutingKind>? inboxRoutings,
@@ -143,6 +167,9 @@ class PeriodicReviewState {
         bypassedPassCounts: bypassedPassCounts ?? this.bypassedPassCounts,
         bypassedDeferredCount:
             bypassedDeferredCount ?? this.bypassedDeferredCount,
+        bypassedDecidedIds: bypassedDecidedIds ?? this.bypassedDecidedIds,
+        bypassedDecisionPending:
+            bypassedDecisionPending ?? this.bypassedDecisionPending,
         waitingForNav: waitingForNav ?? this.waitingForNav,
         nextNav: nextNav ?? this.nextNav,
         somedayNav: somedayNav ?? this.somedayNav,
@@ -503,12 +530,28 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
     state = state.copyWith(inboxNav: state.inboxNav.previous());
   }
 
-  void advanceBypassed() =>
-      state = state.copyWith(bypassedNav: state.bypassedNav.next());
-
-  void previousBypassed() {
-    if (!state.bypassedNav.canGoBack) return;
-    state = state.copyWith(bypassedNav: state.bypassedNav.previous());
+  /// Records one decision for [outcomeId]. Writes are serialized (a second tap
+  /// while one is pending is ignored) and an Outcome that already has a
+  /// decision is never decided again. Only a successful write marks it
+  /// decided, keyed by id, so navigation during the write cannot misattribute
+  /// it.
+  Future<void> decideBypassed(
+    String outcomeId,
+    Future<void> Function(String outcomeId) decision,
+  ) async {
+    if (state.bypassedDecisionPending ||
+        state.bypassedDecidedIds.contains(outcomeId)) {
+      return;
+    }
+    state = state.copyWith(bypassedDecisionPending: true);
+    try {
+      await decision(outcomeId);
+      state = state.copyWith(
+        bypassedDecidedIds: {...state.bypassedDecidedIds, outcomeId},
+      );
+    } finally {
+      state = state.copyWith(bypassedDecisionPending: false);
+    }
   }
 
   void advanceWaitingFor() =>
