@@ -25,6 +25,8 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'clock_provider.dart';
+import 'periodic_review_settings_provider.dart'
+    show periodicReviewLastCompletedProvider;
 import 'shutdown_settings_provider.dart' show shutdownSettingsProvider;
 import 'system_trust_provider.dart' show weeklyReviewDueAtProvider;
 
@@ -70,6 +72,7 @@ DateTime nextNudgeBoundary(
   required int shutdownHour,
   required int shutdownMinute,
   required DateTime? weeklyReviewDueAt,
+  DateTime? weeklyReviewLastCompleted,
 }) {
   var next = _nextDayBoundary(now);
 
@@ -86,6 +89,20 @@ DateTime nextNudgeBoundary(
         .add(Duration(days: _kWeeklyReviewCadenceDays * nextPeriod));
     if (due.isAfter(now) && due.isBefore(next)) {
       next = due;
+    }
+  }
+
+  // The shipped Weekly Review Trigger still refires from the last completion,
+  // which a partial review does not move; keep that boundary until the nudge
+  // story changes it.
+  if (weeklyReviewLastCompleted != null) {
+    final elapsedPeriods = now.difference(weeklyReviewLastCompleted).inDays ~/
+        _kWeeklyReviewCadenceDays;
+    final nextPeriod = elapsedPeriods < 0 ? 1 : elapsedPeriods + 1;
+    final refire = weeklyReviewLastCompleted
+        .add(Duration(days: _kWeeklyReviewCadenceDays * nextPeriod));
+    if (refire.isAfter(now) && refire.isBefore(next)) {
+      next = refire;
     }
   }
 
@@ -113,12 +130,14 @@ final nudgeBoundaryTickProvider = Provider<int>((ref) {
   final now = ref.watch(clockProvider)();
   final shutdown = ref.watch(shutdownSettingsProvider).shutdownTime;
   final dueAt = ref.watch(weeklyReviewDueAtProvider);
+  final lastCompleted = ref.watch(periodicReviewLastCompletedProvider);
 
   final next = nextNudgeBoundary(
     now,
     shutdownHour: shutdown.hour,
     shutdownMinute: shutdown.minute,
     weeklyReviewDueAt: dueAt,
+    weeklyReviewLastCompleted: lastCompleted,
   );
 
   final delay = next.difference(now);

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:fake_async/fake_async.dart';
@@ -14,6 +16,8 @@ import 'package:jeeves/providers/nudge_clock_provider.dart';
 import 'package:jeeves/providers/periodic_review_provider.dart';
 import 'package:jeeves/providers/synced_preferences_provider.dart';
 import 'package:jeeves/providers/system_trust_provider.dart';
+import 'package:jeeves/services/notification_service.dart'
+    show notificationServiceProvider;
 
 import '../helpers/periodic_review_test_helpers.dart';
 import '../test_helpers.dart';
@@ -22,6 +26,7 @@ const _lastCompletedKey = 'periodic_review_last_completed_at';
 const _sessionFinishedKey = 'periodic_review_last_session_finished_at';
 final _lastReviewed = DateTime.utc(2026, 3, 1, 9);
 final _due = _lastReviewed.add(const Duration(days: 7));
+final _doneAt = DateTime.utc(2026, 3, 4, 15, 30);
 
 Future<void> _addCapture(GtdDatabase db, String id, DateTime createdAt) =>
     db.captureDao.insertCapture(CapturesCompanion(
@@ -65,8 +70,14 @@ void main() {
     await container.read(neverReviewedBaselineProvider.future);
   }
 
-  Future<void> settle() =>
-      Future<void>.delayed(const Duration(milliseconds: 50));
+  /// Awaits the next Inbox emission after a write, rather than sleeping.
+  Future<void> nextInboxEmission() {
+    final next = Completer<void>();
+    final sub = container.listen(unfilteredInboxProvider, (_, _) {
+      if (!next.isCompleted) next.complete();
+    });
+    return next.future.whenComplete(sub.close);
+  }
 
   setUp(() {
     db = GtdDatabase(NativeDatabase.memory());
@@ -84,8 +95,9 @@ void main() {
       expect(container.read(unprocessedCaptureCountProvider), 50);
       expect(container.read(inboxTooFullProvider), isFalse);
 
+      final emitted = nextInboxEmission();
       await _addCapture(db, 'extra', _lastReviewed);
-      await settle();
+      await emitted;
       expect(container.read(unprocessedCaptureCountProvider), 51);
       expect(container.read(inboxTooFullProvider), isTrue);
     });
@@ -95,10 +107,11 @@ void main() {
       await start(lastReviewed: _lastReviewed);
       expect(container.read(inboxTooFullProvider), isTrue);
 
+      final emitted = nextInboxEmission();
       await (db.update(db.captures)..where((c) => c.id.equals('c0')))
           .write(CapturesCompanion(clarifiedAt: Value(now.toUtc())));
       db.notifyCapturesViewWrite();
-      await settle();
+      await emitted;
       expect(container.read(inboxTooFullProvider), isFalse);
     });
   });
@@ -153,15 +166,19 @@ void main() {
 
   group('Done stamps the session-finished key', () {
     Future<ProviderContainer> reviewContainer() async {
-      final c = createPeriodicReviewTestContainer(db);
+      final c = ProviderContainer(overrides: [
+        databaseProvider.overrideWithValue(db),
+        notificationServiceProvider
+            .overrideWithValue(StubPeriodicReviewNotificationService()),
+        clockProvider.overrideWithValue(() => _doneAt),
+      ]);
       await c.read(syncedPreferencesProvider.future);
       return c;
     }
 
-    void expectDueAboutAWeekFromNow(ProviderContainer c) {
-      final due = c.read(weeklyReviewDueAtProvider)!;
-      final expected = DateTime.now().add(const Duration(days: 7));
-      expect(due.difference(expected).abs(), lessThan(const Duration(minutes: 1)));
+    void expectDueExactlyAWeekAfterDone(ProviderContainer c) {
+      expect(c.read(weeklyReviewDueAtProvider),
+          _doneAt.add(const Duration(days: 7)));
     }
 
     test('a partial Done stamps it, leaves completion alone, moves the due date',
@@ -175,9 +192,10 @@ void main() {
       await Future<void>.delayed(Duration.zero);
 
       final prefs = container.read(syncedPreferencesProvider).requireValue;
-      expect(prefs.get<String>(_sessionFinishedKey), isNotNull);
+      expect(prefs.get<String>(_sessionFinishedKey),
+          _doneAt.toIso8601String());
       expect(prefs.get<String>(_lastCompletedKey), isNull);
-      expectDueAboutAWeekFromNow(container);
+      expectDueExactlyAWeekAfterDone(container);
     });
 
     test('a final Done stamps both keys and moves the due date', () async {
@@ -190,9 +208,10 @@ void main() {
       await Future<void>.delayed(Duration.zero);
 
       final prefs = container.read(syncedPreferencesProvider).requireValue;
-      expect(prefs.get<String>(_sessionFinishedKey), isNotNull);
-      expect(prefs.get<String>(_lastCompletedKey), isNotNull);
-      expectDueAboutAWeekFromNow(container);
+      expect(prefs.get<String>(_sessionFinishedKey),
+          _doneAt.toIso8601String());
+      expect(prefs.get<String>(_lastCompletedKey), _doneAt.toIso8601String());
+      expectDueExactlyAWeekAfterDone(container);
     });
   });
 
@@ -221,6 +240,27 @@ void main() {
       expect(container.read(weeklyReviewDaysLateProvider), 1);
     });
 
+    test('a spring-forward interval counts calendar days, not 24-hour spans',
+        () async {
+      // 2026-03-08 is the US spring-forward day. Due 2026-03-07 12:00 local,
+      // now 2026-03-09 11:00 local: 47 elapsed hours (one is skipped), but
+      // two calendar days late. Only meaningful in a DST zone, so CI runs
+      // this file under TZ=America/Los_Angeles as well.
+      final dueLocal = DateTime(2026, 3, 7, 12);
+      final nowLocal = DateTime(2026, 3, 9, 11);
+      expect(dueLocal.timeZoneOffset, isNot(nowLocal.timeZoneOffset),
+          reason: 'needs a zone with DST; run with TZ=America/Los_Angeles');
+      expect(nowLocal.difference(dueLocal).inHours, 46);
+      await start(
+          lastReviewed: dueLocal.subtract(const Duration(days: 7)).toUtc());
+      now = nowLocal;
+      container.invalidate(weeklyReviewDaysLateProvider);
+      expect(container.read(weeklyReviewDaysLateProvider), 2);
+    }, skip: DateTime(2026, 3, 7, 12).timeZoneOffset ==
+            DateTime(2026, 3, 9, 11).timeZoneOffset
+        ? 'runs under TZ=America/Los_Angeles in CI'
+        : false);
+
     test('is exact across a month-end and a long gap', () async {
       await start(lastReviewed: _lastReviewed);
       final dueLocal = _due.toLocal();
@@ -239,6 +279,24 @@ void main() {
         nextNudgeBoundary(justBefore,
             shutdownHour: 23, shutdownMinute: 59, weeklyReviewDueAt: _due),
         _due,
+      );
+    });
+
+    test('a partial-session due date keeps the completion-based refire', () {
+      // Completed day 0 (Mar 1) 10:00; a partial Done on day 8 12:00 moves
+      // the due instant to day 15 12:00. The shipped nudge still refires at
+      // day 14 10:00, so the tick must not skip it.
+      final completed = DateTime.utc(2026, 3, 1, 10);
+      final partialDone = DateTime.utc(2026, 3, 9, 12);
+      final now = DateTime.utc(2026, 3, 15, 9);
+      expect(
+        nextNudgeBoundary(now,
+            shutdownHour: 23,
+            shutdownMinute: 59,
+            weeklyReviewDueAt: partialDone.add(const Duration(days: 7)),
+            weeklyReviewLastCompleted: completed),
+        DateTime.utc(2026, 3, 15, 10),
+        reason: 'completion + 14d is the earlier boundary',
       );
     });
 

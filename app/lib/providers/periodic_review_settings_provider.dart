@@ -297,7 +297,7 @@ class PeriodicReviewSettingsNotifier
   /// device LWW + tombstone semantics from synced-prefs ensure all devices
   /// suppress the banner on their next sync.
   Future<void> completeReview() async {
-    final stamp = DateTime.now().toUtc().toIso8601String();
+    final stamp = ref.read(clockProvider)().toUtc().toIso8601String();
     await syncedPrefs(ref).set(_kLastCompletedAtKey, stamp);
     await syncedPrefs(ref).set(_kLastSessionFinishedAtKey, stamp);
   }
@@ -308,7 +308,7 @@ class PeriodicReviewSettingsNotifier
   Future<void> markSessionFinished() async {
     await syncedPrefs(ref).set(
       _kLastSessionFinishedAtKey,
-      DateTime.now().toUtc().toIso8601String(),
+      ref.read(clockProvider)().toUtc().toIso8601String(),
     );
   }
 
