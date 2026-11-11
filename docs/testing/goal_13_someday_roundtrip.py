@@ -12,8 +12,8 @@ Flow:
   2. Open drawer → Focus → "Plan the Day" (Daily Planning ritual).
   3. In step 1 "Clarify Inbox", scroll to the PROCESS TO section and tap
      "Maybe". Item moves out of inbox; ritual advances to next step.
-  4. Back out of planning. Open drawer → "Maybe" inventory.
-  5. ASSERT: "RoundtripTask_G13" is visible in the Maybe list.
+  4. Back out of planning. Open drawer → "Someday/Maybe" inventory.
+  5. ASSERT: "RoundtripTask_G13" is visible in the Someday/Maybe list.
   6. Tap the task to open task detail. Tap the status pill.
   7. In the status sheet, tap "Next" (or whichever affordance restores the
      intent to next).  This is the resurrection step.
@@ -74,10 +74,10 @@ def main():
     # 5. Drawer → Maybe → assert visible
     d.click(105, 422)
     time.sleep(1)
-    d(description="Maybe").click()
+    d(description="Someday/Maybe").click()
     time.sleep(1.5)
     assert d(textContains=TITLE).exists or d(descriptionContains=TITLE).exists, \
-        f"task '{TITLE}' missing from Maybe list"
+        f"task '{TITLE}' missing from Someday/Maybe list"
 
     # 6. Open task detail; tap status pill
     d(textContains=TITLE).click()
