@@ -460,6 +460,10 @@ class Actions extends Table {
   /// Estimated effort in minutes (nullable).
   IntColumn get timeEstimate => integer().nullable()();
 
+  /// TimeContext (issue #238): canonical JSON, see `models/time_context.dart`.
+  /// NULL = not gated. Belongs to this Action row; never copied to a successor.
+  TextColumn get timeContext => text().named('time_context').nullable()();
+
   DateTimeColumn get createdAt => dateTime()();
 
   /// Client-stamped; a superseded row's timestamp is read from here.

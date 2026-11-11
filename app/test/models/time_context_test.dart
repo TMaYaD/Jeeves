@@ -108,7 +108,7 @@ void main() {
       expect(tc.nextTransitionAfter(DateTime(2026, 11, 13, 12)),
           DateTime(2026, 11, 14));
       expect(tc.nextTransitionAfter(DateTime(2026, 11, 14, 12)),
-          DateTime(2026, 11, 14, 24));
+          DateTime(2026, 11, 15));
     });
 
     test('is stable across a DST change (local wall clock)', () {

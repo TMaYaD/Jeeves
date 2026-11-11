@@ -23,6 +23,7 @@ import 'package:jeeves/database/daos/focus_session_dao.dart'
     show focusSessionDispositionIdFor;
 import 'package:jeeves/database/daos/tag_dao.dart' show todoTagIdFor;
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/time_context.dart';
 import 'package:jeeves/models/todo.dart' show Intent, RoutingKind;
 import 'package:jeeves/sync/collection_codecs.dart';
 import 'package:jeeves/sync/domain_op_capture.dart';
@@ -349,6 +350,20 @@ void main() {
       await db.actionDao.editAction(actionId, energyLevel: 'low', now: _ts);
       expect(only(actionsCollection).fields['energy_level'], 'low');
       expect(only(todosCollection).fields['energy_level'], 'low');
+    });
+
+    test('setTimeContext captures time_context and updated_at, nothing on the '
+        'Outcome', () async {
+      final id = await seedOutcome();
+      await db.actionDao.setCurrentAction(id, 'Draft', now: _ts);
+      final actionId = only(actionsCollection).entityId;
+      capture.clear();
+      final value = TimeContext.create(days: {1})!;
+      await db.actionDao.setTimeContext(actionId, value, now: _ts);
+      final op = only(actionsCollection);
+      expect(op.fields['time_context'], value.encode());
+      expect(op.fields.containsKey('updated_at'), isTrue);
+      expect(capture.forCollection(todosCollection), isEmpty);
     });
 
     test('a seeded promote captures the drafted effort on the actions op, not '
