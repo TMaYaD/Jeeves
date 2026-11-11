@@ -67,13 +67,15 @@ class TimeContext {
   /// The canonical JSON text. Fixed key order `from, days, start, end`, absent
   /// keys omitted, so two devices writing the same value write the same bytes.
   String encode() {
+    final from = fromDate;
     final days = this.days;
-    final sorted = days == null ? null : (days.toList()..sort());
+    final start = startMinute;
+    final end = endMinute;
     return jsonEncode(<String, Object?>{
-      if (fromDate != null) 'from': _date(fromDate!),
-      if (sorted != null) 'days': sorted,
-      if (startMinute != null) 'start': _clock(startMinute!),
-      if (endMinute != null) 'end': _clock(endMinute!),
+      'from': ?(from == null ? null : _date(from)),
+      'days': ?(days == null ? null : (days.toList()..sort())),
+      'start': ?(start == null ? null : _clock(start)),
+      'end': ?(end == null ? null : _clock(end)),
     });
   }
 
