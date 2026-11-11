@@ -118,9 +118,10 @@ class _FocusSessionPlanningScreenState
     // starts. The gate stays closed until the read has succeeded and come back
     // empty — a pending or failed read never lets the wizard through.
     final staleAsync = ref.watch(staleOutcomesProvider);
-    if (staleAsync.hasError && !staleAsync.isLoading) {
-      return const _StaleSweepReadFailed();
-    }
+    // Riverpod keeps the previous value while a refresh or retry is in flight,
+    // so loading is checked before the retained value is read.
+    if (staleAsync.isLoading) return const _StaleSweepReadPending();
+    if (staleAsync.hasError) return const _StaleSweepReadFailed();
     final staleOutcomes = staleAsync.value;
     if (staleOutcomes == null) return const _StaleSweepReadPending();
     if (staleOutcomes.isNotEmpty) {

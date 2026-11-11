@@ -232,6 +232,19 @@ void main() {
       expect(container.read(focusSessionPlanningProvider).pendingSelectedTaskIds,
           isNot(contains('r')),
           reason: 'startDay commits pendingSelectedTaskIds as the Plan');
+
+      // A restart before Start Day loses the notifier's memory; the stored
+      // rollover Disposition must not bring the swept Outcome back.
+      final restarted = ProviderContainer(overrides: [
+        databaseProvider.overrideWithValue(db),
+      ]);
+      addTearDown(restarted.dispose);
+      await restarted
+          .read(focusSessionPlanningProvider.notifier)
+          .ensureRolloverPreload();
+      expect(restarted.read(focusSessionPlanningProvider).pendingSelectedTaskIds,
+          isNot(contains('r')),
+          reason: 'a swept Outcome is off Next, so it is no longer rolled over');
     });
   }
 }

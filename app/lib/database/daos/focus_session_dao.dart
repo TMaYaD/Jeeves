@@ -680,14 +680,23 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       'AND fs.ended_at = ('
       '  SELECT MAX(ended_at) FROM focus_sessions WHERE ended_at IS NOT NULL)';
 
+  /// Only Outcomes still on Next: a Stale sweep (or any later Someday/Maybe or
+  /// Trash routing) moves an Outcome off Next, and its stored `rollover`
+  /// Disposition must not put it back on a draft Plan after a restart.
   Future<List<String>> getLastClosedSessionRolloverTaskIds() async {
     final rows = await customSelect(
-      _lastClosedRolloverTaskIdsSql,
+      'SELECT t.id AS task_id FROM todos t WHERE t.intent = \'next\' '
+      'AND t.id IN ($_lastClosedRolloverTaskIdsSql)',
       variables: [
         Variable('rollover'),
         Variable('rollover'),
       ],
-      readsFrom: {focusSessions, focusSessionTasks, focusSessionDispositions},
+      readsFrom: {
+        todos,
+        focusSessions,
+        focusSessionTasks,
+        focusSessionDispositions,
+      },
     ).get();
     return rows.map((r) => r.read<String>('task_id')).toList();
   }

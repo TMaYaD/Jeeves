@@ -36,7 +36,7 @@ class _StubPlanningNotifier extends FocusSessionPlanningNotifier {
   Future<void> ensureRolloverPreload() async {}
 }
 
-Future<void> _pump(
+Future<ProviderContainer> _pump(
   WidgetTester tester,
   Future<List<StaleOutcome>> Function() read,
 ) async {
@@ -67,6 +67,7 @@ Future<void> _pump(
     child: MaterialApp.router(routerConfig: router),
   ));
   await tester.pump();
+  return container;
 }
 
 void main() {
@@ -112,6 +113,31 @@ void main() {
         reason: 'the retry is pending, the gate stays closed');
 
     second.complete(const []);
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('Daily Planning'), findsWidgets);
+  });
+
+  testWidgets('a refresh over a retained empty result closes the gate again',
+      (tester) async {
+    var attempts = 0;
+    final refreshed = Completer<List<StaleOutcome>>();
+    final container = await _pump(tester, () async {
+      attempts++;
+      if (attempts == 1) return const [];
+      return refreshed.future;
+    });
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('Daily Planning'), findsWidgets);
+
+    container.invalidate(staleOutcomesProvider);
+    await tester.pump();
+    expect(find.byKey(const Key('stale_sweep_loading')), findsOneWidget,
+        reason: 'the retained empty value must not keep the wizard open');
+    expect(find.text('Daily Planning'), findsNothing);
+
+    refreshed.complete(const []);
     await tester.pump();
     await tester.pump();
     expect(find.text('Daily Planning'), findsWidgets);
