@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../providers/evening_shutdown_provider.dart';
+import '../../../providers/focus_session_planning_provider.dart';
 import '../../../widgets/meta_chip.dart';
 import '../../../widgets/outcome_review_card.dart';
 import '../../../providers/task_detail_provider.dart';
@@ -16,7 +17,10 @@ import '../../../providers/task_detail_provider.dart';
 /// already Settled during the session was answered for then, and appears in the
 /// summary rather than here (#694). For every remaining task, the user must
 /// choose one of three dispositions:
-/// - Roll Over to Tomorrow → preselects the task for tomorrow's plan.
+/// - Roll Over (to Tomorrow) → preselects the task in the next plan. Reads
+///   "Roll Over to Tomorrow" for an ordinary shutdown, and plain "Roll Over"
+///   when Daily Planning launched this shutdown ([shutdownThenPlanProvider]),
+///   because the next plan is then minutes away, not tomorrow's.
 /// - Return to Next Actions → clears the daily selection; task reappears in
 ///   tomorrow's planning session.
 /// - Defer until a later day → moves the task to Someday/Maybe.
@@ -89,6 +93,7 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
         ref.watch(loggedMinutesByOutcomeProvider).value?[current.id] ?? 0;
 
     final currentAction = ref.watch(currentActionProvider(current.id)).value;
+    final launchedByDailyPlanning = ref.watch(shutdownThenPlanProvider);
     return OutcomeReviewCard(
       key: ValueKey(current.id),
       todo: current,
@@ -102,8 +107,10 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
         children: [
           // Vertical resolution buttons
           _ResolutionButton(
-            label: 'Roll Over to Tomorrow',
-            subtitle: "Add to tomorrow's plan",
+            label: launchedByDailyPlanning ? 'Roll Over' : 'Roll Over to Tomorrow',
+            subtitle: launchedByDailyPlanning
+                ? 'Add to your next plan'
+                : "Add to tomorrow's plan",
             icon: Icons.center_focus_strong_outlined,
             color: const Color(0xFF2563EB),
             onTap: () => notifier.rolloverTask(current.id),
