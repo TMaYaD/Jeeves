@@ -4,8 +4,10 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
+import 'package:jeeves/screens/planning/focus_session_planning_screen.dart';
 import 'package:jeeves/screens/planning/steps/day_checkin_time_step.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -15,6 +17,8 @@ import '../test_helpers.dart';
 
 /// Journey: the Time step of Daily Planning opens pre-filled with the
 /// available time of the previous session, across process restarts (#825).
+const _focusKey = Key('focus_route');
+
 void main() {
   setUpAll(configureSqliteForTests);
   late Directory storeDirectory;
@@ -46,15 +50,20 @@ void main() {
     });
   }
 
-  /// Opens the Time step as Daily Planning does on mount.
+  /// Mounts the real Daily Planning screen (its mount callback runs the
+  /// pre-fill; nothing here invokes it) and walks to the Time step.
   Future<void> openTimeStep(WidgetTester tester) async {
+    final router = GoRouter(routes: [
+      GoRoute(path: '/', builder: (_, _) => const FocusSessionPlanningScreen()),
+      GoRoute(
+          path: '/focus', builder: (_, _) => const SizedBox(key: _focusKey)),
+    ]);
+    addTearDown(router.dispose);
     await tester.pumpWidget(UncontrolledProviderScope(
       container: container,
-      child: const MaterialApp(home: Scaffold(body: DayCheckinTimeStep())),
+      child: MaterialApp.router(routerConfig: router),
     ));
-    await tester.runAsync(() => container
-        .read(focusSessionPlanningProvider.notifier)
-        .ensureAvailableTimePreload());
+    container.read(focusSessionPlanningProvider.notifier).goToStep(4);
     await settleWithRealAsync(tester);
   }
 
@@ -63,13 +72,18 @@ void main() {
       .controller!
       .text;
 
+  /// Types the time, then taps the real Start Day button on the last step.
   Future<void> planAndStart(
       WidgetTester tester, int hours, int minutes) async {
     await tester.enterText(find.byType(TextField).at(0), '$hours');
     await tester.enterText(find.byType(TextField).at(1), '$minutes');
     await tester.pump();
+    container.read(focusSessionPlanningProvider.notifier).goToStep(6);
+    await settleWithRealAsync(tester);
+    await tester.tap(find.text('Start Day'));
+    await settleWithRealAsync(tester);
+    expect(find.byKey(_focusKey), findsOneWidget);
     await tester.runAsync(() async {
-      await container.read(focusSessionPlanningProvider.notifier).startDay();
       final session = await db.focusSessionDao.getActiveSession();
       await db.focusSessionDao.closeSession(sessionId: session!.id);
     });
@@ -99,5 +113,23 @@ void main() {
     await restart(tester);
     await openTimeStep(tester);
     expect(fieldText(tester, 0), '6');
+  });
+
+  testWidgets('clearing hours before the pre-fill lands keeps the cleared field',
+      (tester) async {
+    await tester.runAsync(() => db.userPreferencesDao
+        .set('local', kLastSessionAvailableMinutesKey, '330'));
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: container,
+      child: const MaterialApp(home: Scaffold(body: DayCheckinTimeStep())),
+    ));
+    await tester.enterText(find.byType(TextField).at(0), '');
+    await tester.pump();
+    await tester.runAsync(() => container
+        .read(focusSessionPlanningProvider.notifier)
+        .ensureAvailableTimePreload());
+    await settleWithRealAsync(tester);
+    expect(fieldText(tester, 0), '');
+    expect(container.read(focusSessionPlanningProvider).availableMinutes, 480);
   });
 }

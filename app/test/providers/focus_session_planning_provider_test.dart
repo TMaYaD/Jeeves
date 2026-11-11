@@ -161,6 +161,16 @@ void main() {
             container.read(focusSessionPlanningProvider).availableMinutes, 90);
       });
 
+      test('an empty edit marks the time edited so a preload leaves it', () async {
+        await store('330');
+        final notifier = container.read(focusSessionPlanningProvider.notifier);
+        notifier.markAvailableTimeEdited();
+        await notifier.ensureAvailableTimePreload();
+        final state = container.read(focusSessionPlanningProvider);
+        expect(state.availableTimeSet, isTrue);
+        expect(state.availableMinutes, 480);
+      });
+
       for (final garbage in ['"abc"', '0', '5000', '-5', '1.5']) {
         test('stored $garbage falls back to 8 hours', () async {
           await store(garbage);

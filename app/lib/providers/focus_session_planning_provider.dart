@@ -754,6 +754,14 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     state = state.copyWith(currentStep: step.clamp(0, _maxStepIndex));
   }
 
+  /// Records that the user is editing the available time without changing the
+  /// value — an intermediate empty/zero entry (e.g. hours cleared mid-typing).
+  /// Stops a late [ensureAvailableTimePreload] from overwriting the field.
+  void markAvailableTimeEdited() {
+    if (state.availableTimeSet) return;
+    state = state.copyWith(availableTimeSet: true);
+  }
+
   void setAvailableTime(int minutes) {
     state = state.copyWith(availableMinutes: minutes, availableTimeSet: true);
   }

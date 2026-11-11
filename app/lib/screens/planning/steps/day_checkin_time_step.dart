@@ -46,10 +46,13 @@ class _DayCheckinTimeStepState extends ConsumerState<DayCheckinTimeStep> {
     final h = int.tryParse(_hoursCtrl.text) ?? 0;
     final m = int.tryParse(_minutesCtrl.text) ?? 0;
     final totalMinutes = h * 60 + m;
-    if (totalMinutes == 0) return;
-    ref
-        .read(focusSessionPlanningProvider.notifier)
-        .setAvailableTime(totalMinutes.clamp(1, 1440));
+    final notifier = ref.read(focusSessionPlanningProvider.notifier);
+    if (totalMinutes == 0) {
+      // Keep the intermediate entry: a pending pre-fill must not overwrite it.
+      notifier.markAvailableTimeEdited();
+      return;
+    }
+    notifier.setAvailableTime(totalMinutes.clamp(1, 1440));
   }
 
   @override
