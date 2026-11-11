@@ -30,25 +30,26 @@ history records only completed performances.
 The current Ceremonies are `focus_session_planning`, `focus_session_review`,
 `periodic_review`, and inbox clarification.
 
-Daily Planning opens with the **Stale sweep** whenever an Outcome is Stale
-(CONTEXT.md § Stale): a screen before the wizard that forces Move to
-Someday/Maybe or Trash for each. It is not a wizard step, because wizard steps
-never auto-skip. The Planning that starts the day records the Outcomes it skipped
-or left unclarified after an Action finished, in the Plan's own write.
-
 ## Weekly Review sessions
 
 The intro offers Everything by default, plus 15, 30 and 60-minute budgets when
 strictly shorter than the full estimate. At two minutes per item, 15 minutes
-selects seven items from one pool across all four steps. Selection preserves the
+selects seven items from one pool across all steps. Selection preserves the
 existing order within each step. The ranker is replaceable through
 `periodicReviewRankerProvider`.
 
-The first matching priority tier wins: Inbox Captures; Planless Outcomes; Outcomes
-unclarified since an Action finished; Actionless Outcomes with planned Actions;
-remaining Waiting For Outcomes; everything else. Someday/Maybe never enters the
-Planless, unclarified-since-an-Action or Actionless tiers. Within each tier, least-recently-clarified comes first (never
+The first matching priority tier wins: Inbox Captures; Bypassed Outcomes;
+Planless Outcomes; Stale Outcomes; Actionless Outcomes with planned Actions; remaining Waiting For
+Outcomes; everything else. Someday/Maybe never enters the Planless, Stale or
+Actionless tiers. Within each tier, least-recently-clarified comes first (never
 clarified first), then creation time, then id, ascending.
+
+Each Outcome is ranked once. A Bypassed Outcome groups into the Decide Bypassed
+Outcomes step, which follows Process Inbox and appears only when the session
+holds one; it is never also a Waiting For or Next item, and one cut from a short
+session appears in no step. The step has no Skip: each Outcome is moved to
+Someday/Maybe or Trashed, and the footer offers only Back until all are decided.
+Its completion line says how many Bypassed Outcomes wait for a longer session.
 
 The first partial session opens a seven-day review period. Outcomes clarified
 since it opened count as covered, including Keep and clarification on other

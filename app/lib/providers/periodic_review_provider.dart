@@ -14,9 +14,11 @@ library;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../database/daos/focus_session_dao.dart' show BypassedOutcome;
 import '../database/gtd_database.dart';
 import '../models/todo.dart' show RoutingKind;
 import '../utils/snapshot_nav.dart';
+import 'bypassed_outcomes_provider.dart';
 import 'clarify_retention_provider.dart';
 import 'database_provider.dart';
 import 'clock_provider.dart';
@@ -33,9 +35,12 @@ class PeriodicReviewState {
     this.sessionStarted = false,
     this.isFinalSession = true,
     this.inboxNav = const SnapshotNav<String>(),
+    this.bypassedNav = const SnapshotNav<Todo>(),
     this.waitingForNav = const SnapshotNav<Todo>(),
     this.nextNav = const SnapshotNav<Todo>(),
     this.somedayNav = const SnapshotNav<Todo>(),
+    this.bypassedPassCounts = const {},
+    this.bypassedDeferredCount = 0,
     this.waitingForPersonTags = const {},
     this.actionTexts = const {},
     this.inboxRoutings = const {},
@@ -43,6 +48,7 @@ class PeriodicReviewState {
     this.nextRoutings = const {},
     this.somedayRoutings = const {},
     this.inboxLoadError,
+    this.bypassedLoadError,
     this.waitingForLoadError,
     this.nextLoadError,
     this.somedayLoadError,
@@ -54,6 +60,18 @@ class PeriodicReviewState {
 
   /// Snapshot of inbox todo IDs to clarify (oldest-first).
   final SnapshotNav<String> inboxNav;
+
+  /// Bypassed Outcomes this session decides, between Process Inbox and Review
+  /// Waiting For. The step is shown only when this holds at least one.
+  final SnapshotNav<Todo> bypassedNav;
+
+  /// How many FocusSessions passed each Outcome in [bypassedNav] over, keyed by
+  /// Outcome id; the card says "Bypassed N times".
+  final Map<String, int> bypassedPassCounts;
+
+  /// Bypassed Outcomes a short session left out; they wait for a longer one.
+  /// Never in any step, so the step's completion line says how many there are.
+  final int bypassedDeferredCount;
   final SnapshotNav<Todo> waitingForNav;
   final SnapshotNav<Todo> nextNav;
   final SnapshotNav<Todo> somedayNav;
@@ -83,6 +101,7 @@ class PeriodicReviewState {
   /// Non-null when the matching snapshot load failed; rendered inline by the
   /// step (no toasts in the wizard) with a Retry affordance.
   final String? inboxLoadError;
+  final String? bypassedLoadError;
   final String? waitingForLoadError;
   final String? nextLoadError;
   final String? somedayLoadError;
@@ -92,9 +111,12 @@ class PeriodicReviewState {
     bool? sessionStarted,
     bool? isFinalSession,
     SnapshotNav<String>? inboxNav,
+    SnapshotNav<Todo>? bypassedNav,
     SnapshotNav<Todo>? waitingForNav,
     SnapshotNav<Todo>? nextNav,
     SnapshotNav<Todo>? somedayNav,
+    Map<String, int>? bypassedPassCounts,
+    int? bypassedDeferredCount,
     Map<String, List<Tag>>? waitingForPersonTags,
     Map<String, String>? actionTexts,
     Map<int, RoutingKind>? inboxRoutings,
@@ -103,6 +125,8 @@ class PeriodicReviewState {
     Map<int, RoutingKind>? somedayRoutings,
     String? inboxLoadError,
     bool clearInboxLoadError = false,
+    String? bypassedLoadError,
+    bool clearBypassedLoadError = false,
     String? waitingForLoadError,
     bool clearWaitingForLoadError = false,
     String? nextLoadError,
@@ -115,6 +139,10 @@ class PeriodicReviewState {
         sessionStarted: sessionStarted ?? this.sessionStarted,
         isFinalSession: isFinalSession ?? this.isFinalSession,
         inboxNav: inboxNav ?? this.inboxNav,
+        bypassedNav: bypassedNav ?? this.bypassedNav,
+        bypassedPassCounts: bypassedPassCounts ?? this.bypassedPassCounts,
+        bypassedDeferredCount:
+            bypassedDeferredCount ?? this.bypassedDeferredCount,
         waitingForNav: waitingForNav ?? this.waitingForNav,
         nextNav: nextNav ?? this.nextNav,
         somedayNav: somedayNav ?? this.somedayNav,
@@ -128,6 +156,9 @@ class PeriodicReviewState {
         inboxLoadError: clearInboxLoadError
             ? null
             : (inboxLoadError ?? this.inboxLoadError),
+        bypassedLoadError: clearBypassedLoadError
+            ? null
+            : (bypassedLoadError ?? this.bypassedLoadError),
         waitingForLoadError: clearWaitingForLoadError
             ? null
             : (waitingForLoadError ?? this.waitingForLoadError),
@@ -153,12 +184,17 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
   // excluded from the progress count, so the four working steps still read
   // "Step 1 of 4" … "Step 4 of 4". The intro loads no snapshot — the mount's
   // loadAllSnapshots already covers every step.
+  //
+  // [kStepBypassed] exists only for a session that holds a Bypassed Outcome;
+  // otherwise [advanceStep] and [previousStep] step over it and the working
+  // steps number from 1 to 4 as before.
   static const int kStepIntro = 0;
   static const int kStepInbox = 1;
-  static const int kStepWaitingFor = 2;
-  static const int kStepNext = 3;
-  static const int kStepSomeMaybe = 4;
-  static const int kStepSummary = 5;
+  static const int kStepBypassed = 2;
+  static const int kStepWaitingFor = 3;
+  static const int kStepNext = 4;
+  static const int kStepSomeMaybe = 5;
+  static const int kStepSummary = 6;
 
   static const int _kMaxStep = kStepSummary;
 
@@ -174,6 +210,7 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
   /// in-flight reads (post-frame callbacks fire on every rebuild while the
   /// nav is unloaded) and let re-entry preserve the user's per-item cursor.
   bool _loadingInboxSnapshot = false;
+  bool _loadingBypassedSnapshot = false;
   bool _loadingWaitingForSnapshot = false;
   bool _loadingNextSnapshot = false;
   bool _loadingSomedaySnapshot = false;
@@ -205,13 +242,49 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
     }
   }
 
+  /// Every Bypassed Outcome at the current threshold, most-passed-over first.
+  Future<List<BypassedOutcome>> _bypassedOutcomes() => _db.focusSessionDao
+      .getBypassedOutcomes(ref.read(bypassThresholdProvider));
+
+  /// Outcome ids the Bypassed step owns, whether or not a short session keeps
+  /// them: they never also appear in Review Waiting For or Review Next Actions.
+  Future<Set<String>> _bypassedIds() async =>
+      {for (final bypassed in await _bypassedOutcomes()) bypassed.outcome.id};
+
+  Future<void> loadBypassedSnapshot() async {
+    if (state.bypassedNav.isLoaded || _loadingBypassedSnapshot) return;
+    _loadingBypassedSnapshot = true;
+    state = state.copyWith(clearBypassedLoadError: true);
+    try {
+      await ref.read(syncedPreferencesProvider.future);
+      final bypassed = await _bypassedOutcomes();
+      final todos = _uncovered([for (final b in bypassed) b.outcome]);
+      final actionTexts = await _db.actionDao
+          .getCurrentActionTexts({for (final t in todos) t.id});
+      state = state.copyWith(
+        bypassedNav: state.bypassedNav.withItems(todos),
+        bypassedPassCounts: {
+          for (final b in bypassed) b.outcome.id: b.passedOverSessionCount,
+        },
+        actionTexts: {...state.actionTexts, ...actionTexts},
+      );
+    } catch (e) {
+      state = state.copyWith(bypassedLoadError: e.toString());
+    } finally {
+      _loadingBypassedSnapshot = false;
+    }
+  }
+
   Future<void> loadWaitingForSnapshot() async {
     if (state.waitingForNav.isLoaded || _loadingWaitingForSnapshot) return;
     _loadingWaitingForSnapshot = true;
     state = state.copyWith(clearWaitingForLoadError: true);
     try {
       await ref.read(syncedPreferencesProvider.future);
-      final todos = _uncovered(await _db.todoDao.watchPersonTagged().first);
+      final bypassedIds = await _bypassedIds();
+      final todos = _uncovered(await _db.todoDao.watchPersonTagged().first)
+          .where((todo) => !bypassedIds.contains(todo.id))
+          .toList();
       // Batch the person-tag lookup so the card can render delegate names
       // without spawning one DAO call per item.
       final tags = await _db.todoDao
@@ -236,7 +309,10 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
     state = state.copyWith(clearNextLoadError: true);
     try {
       await ref.read(syncedPreferencesProvider.future);
-      final todos = _uncovered(await _db.todoDao.getNextExcludingPersonTagged());
+      final bypassedIds = await _bypassedIds();
+      final todos = _uncovered(await _db.todoDao.getNextExcludingPersonTagged())
+          .where((todo) => !bypassedIds.contains(todo.id))
+          .toList();
       // Batched current-Action lookup so the card renders the concrete
       // commitment without one DAO call per item.
       final actionTexts = await _db.actionDao
@@ -284,6 +360,7 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
     await ref.read(syncedPreferencesProvider.future);
     await Future.wait<void>([
       loadInboxSnapshot(),
+      loadBypassedSnapshot(),
       loadWaitingForSnapshot(),
       loadNextSnapshot(),
       loadSomedaySnapshot(),
@@ -299,6 +376,7 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
 
   Future<List<PeriodicReviewCandidate>> _candidates() async {
     final outcomes = [
+      ...state.bypassedNav.items!,
       ...state.waitingForNav.items!,
       ...state.nextNav.items!,
       ...state.somedayNav.items!,
@@ -325,6 +403,8 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
           isPlanless: false, isStale: false, isActionless: false,
           lastClarifiedAt: null, createdAt: _captureCreatedAtCache[id]!,
         ),
+      for (final todo in state.bypassedNav.items!)
+        outcome(todo, PeriodicReviewStepKind.bypassed),
       for (final todo in state.waitingForNav.items!)
         outcome(todo, PeriodicReviewStepKind.waitingFor),
       for (final todo in state.nextNav.items!)
@@ -344,11 +424,13 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
         return;
       }
       await loadAllSnapshots();
-      if (!state.inboxNav.isLoaded || !state.waitingForNav.isLoaded ||
+      if (!state.inboxNav.isLoaded || !state.bypassedNav.isLoaded ||
+          !state.waitingForNav.isLoaded ||
           !state.nextNav.isLoaded || !state.somedayNav.isLoaded) {
         throw StateError('Could not load the review. Please try again.');
       }
-      final count = state.inboxNav.length + state.waitingForNav.length +
+      final count = state.inboxNav.length + state.bypassedNav.length +
+          state.waitingForNav.length +
           state.nextNav.length + state.somedayNav.length;
       final budget = budgetMinutes == null ? count : weeklyReviewItemBudget(budgetMinutes);
       if (budgetMinutes != null && budget <= 0) {
@@ -376,6 +458,11 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
         state = state.copyWith(
           inboxNav: state.inboxNav.withItems(state.inboxNav.items!
               .where((id) => selected.contains((PeriodicReviewStepKind.inbox, id))).toList()),
+          bypassedNav: state.bypassedNav.withItems(selectedTodos(
+              state.bypassedNav.items!, PeriodicReviewStepKind.bypassed)),
+          bypassedDeferredCount: state.bypassedNav.length -
+              selectedTodos(state.bypassedNav.items!,
+                  PeriodicReviewStepKind.bypassed).length,
           waitingForNav: state.waitingForNav.withItems(selectedTodos(
               state.waitingForNav.items!, PeriodicReviewStepKind.waitingFor)),
           nextNav: state.nextNav.withItems(selectedTodos(
@@ -414,6 +501,14 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
   void previousInbox() {
     if (!state.inboxNav.canGoBack) return;
     state = state.copyWith(inboxNav: state.inboxNav.previous());
+  }
+
+  void advanceBypassed() =>
+      state = state.copyWith(bypassedNav: state.bypassedNav.next());
+
+  void previousBypassed() {
+    if (!state.bypassedNav.canGoBack) return;
+    state = state.copyWith(bypassedNav: state.bypassedNav.previous());
   }
 
   void advanceWaitingFor() =>
@@ -476,7 +571,24 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
 
   Future<void> advanceStep() async {
     if (_isTransitioning) return;
-    await _transitionTo((state.currentStep + 1).clamp(0, _kMaxStep));
+    var next = (state.currentStep + 1).clamp(0, _kMaxStep);
+    if (next == kStepBypassed) {
+      await loadBypassedSnapshot();
+      if (!_hasBypassedStep) next++;
+    }
+    await _transitionTo(next);
+  }
+
+  /// Whether this session shows the Bypassed step: only when it holds at
+  /// least one Bypassed Outcome.
+  bool get _hasBypassedStep => state.bypassedNav.items?.isNotEmpty ?? false;
+
+  /// Crosses to the previous step, over the Bypassed step when it is hidden.
+  Future<void> previousStep() async {
+    if (_isTransitioning) return;
+    var previous = (state.currentStep - 1).clamp(0, _kMaxStep);
+    if (previous == kStepBypassed && !_hasBypassedStep) previous--;
+    await _transitionTo(previous);
   }
 
   Future<void> goToStep(int step) async {
@@ -502,6 +614,8 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
     switch (step) {
       case kStepInbox:
         await loadInboxSnapshot();
+      case kStepBypassed:
+        await loadBypassedSnapshot();
       case kStepWaitingFor:
         await loadWaitingForSnapshot();
       case kStepNext:
@@ -530,6 +644,7 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
   Future<void> finishSession() async {
     _captureCreatedAtCache.clear();
     _loadingInboxSnapshot = false;
+    _loadingBypassedSnapshot = false;
     _loadingWaitingForSnapshot = false;
     _loadingNextSnapshot = false;
     _loadingSomedaySnapshot = false;

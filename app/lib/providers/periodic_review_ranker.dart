@@ -9,7 +9,7 @@ List<int> weeklyReviewBudgetOptions(int itemCount) => [
     if (minutes < itemCount * kWeeklyReviewMinutesPerItem) minutes,
 ];
 
-enum PeriodicReviewStepKind { inbox, waitingFor, next, someday }
+enum PeriodicReviewStepKind { inbox, bypassed, waitingFor, next, someday }
 
 class PeriodicReviewCandidate {
   const PeriodicReviewCandidate({
@@ -45,13 +45,14 @@ class FreshnessPeriodicReviewRanker implements PeriodicReviewRanker {
 
   int _tier(PeriodicReviewCandidate candidate) {
     if (candidate.step == PeriodicReviewStepKind.inbox) return 0;
+    if (candidate.step == PeriodicReviewStepKind.bypassed) return 1;
     if (candidate.step != PeriodicReviewStepKind.someday) {
-      if (candidate.isPlanless) return 1;
-      if (candidate.isStale) return 2;
-      if (candidate.isActionless) return 3;
-      if (candidate.step == PeriodicReviewStepKind.waitingFor) return 4;
+      if (candidate.isPlanless) return 2;
+      if (candidate.isStale) return 3;
+      if (candidate.isActionless) return 4;
+      if (candidate.step == PeriodicReviewStepKind.waitingFor) return 5;
     }
-    return 5;
+    return 6;
   }
 
   @override

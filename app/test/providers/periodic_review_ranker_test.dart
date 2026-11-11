@@ -32,10 +32,11 @@ void main() {
       candidate('stale', stale: true),
       candidate('planless', planless: true, stale: true, actionless: true),
       candidate('capture', step: PeriodicReviewStepKind.inbox),
+      candidate('bypassed', step: PeriodicReviewStepKind.bypassed),
       candidate('someday', step: PeriodicReviewStepKind.someday,
           planless: true, stale: true, actionless: true),
     ];
-    const expected = ['capture', 'planless', 'stale', 'actionless',
+    const expected = ['capture', 'bypassed', 'planless', 'stale', 'actionless',
       'waiting', 'remaining', 'someday'];
     for (var seed = 0; seed < 10; seed++) {
       final shuffled = [...inputs]..shuffle(Random(seed));
