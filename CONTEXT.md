@@ -268,7 +268,7 @@ Subdivisions of a TimeLog applying the Pomodoro discipline. A **Sprint** is a ti
 _Avoid_: PomodoroPhase, FocusBlock, WorkBlock
 
 **Disposition**:
-Where an Outcome that did not complete during the FocusSession stands at the end of it. Usually the user's own decision in the Review phase; on a **Settled** Outcome it is *implied* by the verdict already given in-session, because Review never asks about one. One of three values:
+Where an Outcome that did not complete during the FocusSession stands at the end of it. Usually the user's own decision in the Review phase; on a **Settled** Outcome it is *implied* by the verdict already given in-session, because Review never asks about one; a verdict given from Review's Done choice implies it the same way. One of three values:
 
 - `rollover` — pre-select this Outcome for the next FocusSession's Planning (user can deselect there). Rendered in UI copy as **"Carried over from last session"** — "last session", not "yesterday", because sessions are calendar-independent and may span days. The code identifier stays `rollover`; the Now screen's carried-over section reads the `rollover` union across both Disposition homes from the most recently closed session, shown only while no session is open.
 - `leave` — return to its normal List membership; no special handling.

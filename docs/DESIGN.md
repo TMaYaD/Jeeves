@@ -538,7 +538,7 @@ Paths are under `app/lib/`; DPR means Daily Planning and ES means Evening Shutdo
 | DPR re-clarify — `screens/planning/steps/task_review_step.dart` | Hint, title, notes, current Action | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | `ProcessToHandlers` |
 | DPR scheduled — `screens/planning/steps/scheduled_review_step.dart` | Title, due, estimate | Framed `OutcomeRow` | None |
 | ES settled — `screens/shutdown/steps/settled_review_step.dart` | Settlement icon, title, estimate vs actual | Framed `OutcomeRow` | None |
-| ES disposition — `screens/shutdown/steps/unfinished_tasks_step.dart` | Title, current Action, notes, estimate, logged | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Roll over / Return to Next / Defer |
+| ES disposition — `screens/shutdown/steps/unfinished_tasks_step.dart` | Title, current Action, notes, estimate, logged | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Done (verdict sheet) / Roll over / Return to Next / Defer |
 | Weekly review — `screens/periodic_review/steps/list_review_step.dart` | Banner, people, title, current Action, notes | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Injected `ProcessToHandlers` |
 | Focus — `screens/focus_screen.dart` | Title, due, estimate, sprint count | Flat `OutcomeRow`, trailing Start/status | Open detail; Start/Resume |
 | Focus carried-over — `screens/focus_screen.dart` | Muted title, estimate | Flat `OutcomeRow`, leading icon | None |
@@ -564,7 +564,7 @@ Paths are under `app/lib/`; DPR means Daily Planning and ES means Evening Shutdo
 | ES settled | Estimate-versus-actual ratio colours; zero totals shown as a dash | Estimate accuracy is the purpose of this step. |
 | Linked Outcomes | Context chips and merge provenance; no navigation | The surface edits Capture links. |
 | DPR re-clarify | Hint banner | Explains why the Outcome is queued. |
-| ES disposition | Three resolution buttons with previous choice | Records the unfinished Outcome's disposition. |
+| ES disposition | Four resolution buttons (Done floats the session verdict sheet) with previous choice | Records the unfinished Outcome's disposition. |
 
 `TaskStatusRow` is a status control, and `CaptureListItem` represents Captures;
 neither is an Outcome representation. Blank-title handling and the energy
