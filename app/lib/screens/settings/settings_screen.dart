@@ -22,6 +22,7 @@ import '../../providers/shutdown_settings_provider.dart';
 import '../../services/export_service.dart';
 import '../../widgets/app_title_bar/app_title_bar.dart';
 import '../enrolment/enrolment_ceremony_screen.dart';
+import 'system_trust_section.dart';
 import '../../widgets/capture/capture_action.dart';
 import '../../widgets/jeeves_logo.dart';
 
@@ -70,6 +71,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               gate == SessionGate.ready;
           return ListView(
         children: [
+          const SystemTrustSection(),
+          const Divider(height: 1, color: Color(0xFFF3F4F6)),
           _sectionHeader('SYNC'),
           if (!isAuthenticated) ...[
             ListTile(
