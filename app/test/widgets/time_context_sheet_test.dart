@@ -156,7 +156,7 @@ void main() {
     await _unmount(tester);
   });
 
-  Future<void> _replaceCurrentWhileOpen(WidgetTester tester) async {
+  Future<void> replaceCurrentWhileOpen(WidgetTester tester) async {
     await tester.runAsync(() async {
       await db.actionDao
           .supersedeCurrentAction('t5', newActionText: 'the successor');
@@ -166,7 +166,7 @@ void main() {
     });
   }
 
-  Future<List<String?>> _storedByRole(WidgetTester tester) async {
+  Future<List<String?>> storedByRole(WidgetTester tester) async {
     final rows = await tester.runAsync(() => (db.select(db.actions)
           ..orderBy([(a) => OrderingTerm.asc(a.createdAt)]))
         .get());
@@ -183,11 +183,11 @@ void main() {
     await _settle(tester);
     await tester.tap(find.byKey(const Key('time_context_day_2')));
     await tester.pump();
-    await _replaceCurrentWhileOpen(tester);
+    await replaceCurrentWhileOpen(tester);
     await tester.tap(find.byKey(const Key('time_context_save')));
     await _settle(tester);
 
-    expect(await _storedByRole(tester), [null, '{"days":[1]}']);
+    expect(await storedByRole(tester), [null, '{"days":[1]}']);
 
     await _unmount(tester);
   });
@@ -202,11 +202,11 @@ void main() {
 
     await tester.tap(find.byKey(const Key('time_context_chip')));
     await _settle(tester);
-    await _replaceCurrentWhileOpen(tester);
+    await replaceCurrentWhileOpen(tester);
     await tester.tap(find.byKey(const Key('time_context_clear')));
     await _settle(tester);
 
-    expect(await _storedByRole(tester), ['{"days":[2]}', '{"days":[1]}']);
+    expect(await storedByRole(tester), ['{"days":[2]}', '{"days":[1]}']);
 
     await _unmount(tester);
   });

@@ -96,8 +96,10 @@ void main() {
     final actionId = await _insertOutcome(db, 'o1');
     await _insertOutcome(db, 'plain');
     // Real wall clock, parked 2 s before tomorrow's local midnight.
-    final tomorrow = DateTime.now().add(const Duration(days: 1));
-    final midnight = DateTime(tomorrow.year, tomorrow.month, tomorrow.day);
+    // Calendar-date arithmetic: `+ 24h` is still today in the first hour of a
+    // fall-back DST day.
+    final today = DateTime.now();
+    final midnight = DateTime(today.year, today.month, today.day + 1);
     final start = midnight.subtract(const Duration(milliseconds: 2000));
     final stopwatch = Stopwatch()..start();
     clock = () => start.add(stopwatch.elapsed);
