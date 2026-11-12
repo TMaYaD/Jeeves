@@ -269,10 +269,23 @@ class DueDateNotificationReconciler {
     for (final id in onDevice.delivered.difference(plan.keepIds)) {
       await notifications.cancelReminder(id);
     }
+    // A tray entry whose Outcome now has a future alarm is from an earlier due
+    // date ("Due today" no longer true). Remove it; cancelling also drops any
+    // pending alarm under that id, so it is scheduled again below.
+    final replacedIds = onDevice.delivered.intersection(desiredIds);
+    for (final id in replacedIds) {
+      await notifications.cancelReminder(id);
+    }
     _scheduledById.removeWhere((id, _) => !desiredIds.contains(id));
     for (final planned in plan.toSchedule) {
       final previous = _scheduledById[planned.id];
-      if (!_rescheduleAll && previous != null && previous.sameAs(planned)) {
+      // Skip only when the OS still holds the alarm: it may have dropped it
+      // (app data cleared by a task killer, channel deleted) while we ran.
+      if (!_rescheduleAll &&
+          previous != null &&
+          previous.sameAs(planned) &&
+          stillPending.contains(planned.id) &&
+          !replacedIds.contains(planned.id)) {
         continue;
       }
       await notifications.scheduleReminder(

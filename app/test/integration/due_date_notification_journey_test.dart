@@ -368,11 +368,12 @@ void main() {
     await settle();
     expect(os.delivered, {id});
 
-    // Rescheduled ahead: the new alarm shares the id with the tray entry.
+    // Rescheduled ahead: the stale "Due today" leaves the tray and the new
+    // alarm is pending.
     await db.todoDao.rescheduleTask('a', _dueDay(kolkata, 2026, 11, 20));
     await settle();
     expect(os.pending.keys, [id]);
-    expect(os.delivered, {id});
+    expect(os.delivered, isEmpty);
 
     // Rescheduled into the past while the reconciler keeps running.
     now = DateTime.utc(2026, 11, 11, 6);
@@ -389,6 +390,19 @@ void main() {
     reconciler = startReconciler();
     await settle();
     expect(os.pending, isEmpty);
+  });
+
+  test('an alarm the OS dropped is scheduled again on the next write',
+      () async {
+    await insert('a', dueDate: _dueDay(kolkata, 2026, 11, 20));
+    await settle();
+    expect(os.pending, hasLength(1));
+
+    os.pending.clear();
+    await insert('b');
+    await settle();
+
+    expect(os.pending.keys, [dueDateNotificationId('a')]);
   });
 
   test('a timezone change is picked up on the next resume', () async {

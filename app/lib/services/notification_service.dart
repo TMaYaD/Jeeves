@@ -41,6 +41,7 @@ const kPeriodicReviewActionSnooze = 'periodic_review_snooze';
 const kPeriodicReviewActionSkip = 'periodic_review_skip_today';
 
 const _kFocusId = 1001;
+const _kDueDateChannelId = 'due_dates';
 
 class NotificationService {
   NotificationService._();
@@ -155,7 +156,7 @@ class NotificationService {
       scheduledDate: scheduled,
       notificationDetails: const NotificationDetails(
         android: AndroidNotificationDetails(
-          'due_dates',
+          _kDueDateChannelId,
           'Due dates',
           channelDescription: 'Outcomes that are due today',
           importance: Importance.high,
@@ -194,7 +195,11 @@ class NotificationService {
     for (final shown
         in await android?.getActiveNotifications() ?? const <ActiveNotification>[]) {
       final id = shown.id;
-      if (id != null && outcomeIdFromNotificationPayload(shown.payload) != null) {
+      // Android reports no payload for active notifications (iOS/macOS only),
+      // so recognise ours by channel, or by payload where one is present.
+      if (id != null &&
+          (shown.channelId == _kDueDateChannelId ||
+              outcomeIdFromNotificationPayload(shown.payload) != null)) {
         delivered.add(id);
       }
     }
