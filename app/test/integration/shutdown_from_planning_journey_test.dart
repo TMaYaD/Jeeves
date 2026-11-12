@@ -183,6 +183,9 @@ void main() {
       await _pumpFrames(tester);
       await tester.tap(find.text('Roll Over to Tomorrow'));
       await tester.runAsync(() => pumpEventQueue());
+      // First frame mounts the step (its ticker starts there), then wait out
+      // the 1.6 s entrance.
+      await tester.pump();
       await tester.pump(const Duration(milliseconds: 1700));
       await tester.pump();
 
