@@ -82,16 +82,16 @@ void main() {
   setUpAll(configureSqliteForTests);
 
   group('schema version', () {
-    test('is 3 — two onUpgrade steps behind the fresh baseline', () async {
+    test('is 4 — three onUpgrade steps behind the fresh baseline', () async {
       final db = _openInMemory();
       addTearDown(db.close);
-      expect(db.schemaVersion, 3);
+      expect(db.schemaVersion, 4);
       // A fresh file runs onCreate at the current version, not the ladder.
       expect(
         await db.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        3,
+        4,
       );
     });
   });
@@ -299,9 +299,9 @@ void main() {
       await seed.customStatement('PRAGMA user_version = 1');
       await seed.close();
 
-      // Open 2: Drift sees user_version=1 and schemaVersion=3, so it runs the
-      // whole ladder — the v2 drop asserted here, and the v3 `tags` recreate the
-      // group below owns.
+      // Open 2: Drift sees user_version=1 and schemaVersion=4, so it runs the
+      // whole ladder — the v2 drop asserted here, the v3 `tags` recreate and the
+      // v4 column the groups below own.
       final upgraded = GtdDatabase(
         NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
       );
@@ -311,7 +311,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        3,
+        4,
       );
       expect(await _columnNames(upgraded, 'todos'),
           isNot(contains('time_spent_minutes')),
@@ -438,7 +438,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        3,
+        4,
       );
       expect(await _uniqueConstraintIndexes(upgraded, 'tags'), isEmpty,
           reason: 'v3 drops UNIQUE (name, type)');
@@ -462,6 +462,69 @@ void main() {
         "VALUES ('tag-alice-peer', 'Alice', '#00ff88', 'person', 'u1')",
       );
       expect(await _rows(upgraded, 'tags'), hasLength(3));
+    });
+  });
+  group('v4 onUpgrade adds actions.time_context', () {
+    test('adds a nullable column and keeps every existing Action row', () async {
+      final raw = sqlite3.openInMemory();
+      addTearDown(raw.close);
+
+      final seed = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      var seedClosed = false;
+      Future<void> closeSeed() async {
+        if (seedClosed) return;
+        seedClosed = true;
+        await seed.close();
+      }
+
+      addTearDown(closeSeed);
+
+      // A v3 `actions` table: the current declaration with the v4 column cut
+      // out of the CREATE statement Drift itself emitted.
+      final createSql = (await seed
+              .customSelect("SELECT sql FROM sqlite_master "
+                  "WHERE type = 'table' AND name = 'actions'")
+              .getSingle())
+          .read<String>('sql');
+      final v3Sql = createSql.replaceFirst(
+        RegExp(r',\s*"?time_context"?\s+TEXT\s+NULL', caseSensitive: false),
+        '',
+      );
+      expect(v3Sql, isNot(contains('time_context')),
+          reason: 'the fixture is only a v3 store without the column');
+      await seed.customStatement('DROP TABLE actions');
+      await seed.customStatement(v3Sql);
+
+      final createdMs =
+          DateTime.parse('2026-07-30T09:00:00.000Z').millisecondsSinceEpoch;
+      await seed.customStatement(
+        'INSERT INTO todos (id, title, user_id, created_at, intent, clarified) '
+        "VALUES ('t1', 'Ship it', 'u1', ?, 'next', 1)",
+        [createdMs],
+      );
+      await seed.customStatement(
+        'INSERT INTO actions (id, outcome_id, user_id, text, role, created_at) '
+        "VALUES ('a1', 't1', 'u1', 'Call Bob', 'current', ?)",
+        [createdMs],
+      );
+      await seed.customStatement('PRAGMA user_version = 3');
+      await closeSeed();
+
+      final upgraded = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      addTearDown(upgraded.close);
+
+      expect(await _columnNames(upgraded, 'actions'), contains('time_context'));
+      final rows = await upgraded
+          .customSelect('SELECT id, text, role, time_context FROM actions')
+          .get();
+      expect(rows.single.read<String>('id'), 'a1');
+      expect(rows.single.read<String>('text'), 'Call Bob');
+      expect(rows.single.read<String>('role'), 'current');
+      expect(rows.single.read<String?>('time_context'), isNull);
     });
   });
 }

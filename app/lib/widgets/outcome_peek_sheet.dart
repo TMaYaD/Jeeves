@@ -25,6 +25,7 @@ import '../providers/database_provider.dart';
 import '../providers/task_detail_provider.dart';
 import 'meta_chip.dart';
 import 'outcome_attribute_editors.dart';
+import 'time_context_sheet.dart';
 import 'outcome_plan_section.dart';
 import 'person_tag_picker.dart';
 import 'tag_list.dart';
@@ -282,6 +283,7 @@ class _OutcomePeekSheetState extends ConsumerState<OutcomePeekSheet> {
                                 ),
                               ),
                               _TimeLoggedChip(value: timeLogged),
+                              TimeContextChip(outcomeId: widget.todo.id),
                               _TapChip(
                                 key: const Key('outcome_peek_due'),
                                 onTap: () async {

@@ -22,6 +22,7 @@ import '../../widgets/outcome_attribute_editors.dart';
 import '../../widgets/outcome_plan_section.dart';
 import '../../widgets/project_picker.dart';
 import '../../widgets/tag_list.dart';
+import '../../widgets/time_context_sheet.dart';
 import '../../widgets/task_status_row.dart';
 
 class TaskDetailScreen extends ConsumerStatefulWidget {
@@ -340,6 +341,13 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                             onTap: () => showOutcomeEnergyLevelSheet(context, _notifier, todo.energyLevel),
                           )),
                         ],
+                      ),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: TimeContextChip(outcomeId: widget.todoId),
+                        ),
                       ),
                       const SizedBox(height: 8),
                     ],

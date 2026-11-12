@@ -186,7 +186,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final UserPreferencesDao userPreferencesDao = UserPreferencesDao(this);
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   /// Completes with the [OpeningDetails] of this store's one open.
   ///
@@ -249,6 +249,19 @@ class GtdDatabase extends _$GtdDatabase {
           // which survive as the dangling references they were.
           if (from < 3) {
             await m.alterTable(TableMigration(tags));
+          }
+          // v4 (issue #238): `actions.time_context`, the TimeContext on an
+          // Action. A nullable `ADD COLUMN` — no table rebuild, every existing
+          // row reads NULL ("not gated"), nothing is lost. Guarded on the
+          // column's absence so a store that already carries it (a rebuilt
+          // fixture, a half-applied earlier attempt) does not fail the ladder.
+          if (from < 4) {
+            final existing = await m.database
+                .customSelect('PRAGMA table_info(actions)')
+                .get();
+            if (!existing.any((row) => row.read<String>('name') == 'time_context')) {
+              await m.addColumn(actions, actions.timeContext);
+            }
           }
         }),
       );
