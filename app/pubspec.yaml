@@ -23,7 +23,7 @@ dependencies:
   meta: ^1.17.0
 
   # Local storage (offline-first)
-  drift: ^2.35.3
+  drift: ^2.35.4
   # Bridges Drift to a sqlite_async connection, which is what the domain store
   # (`database/domain_store_io.dart`) is opened over: one shared connection with
   # a proper write lock, and an update stream that names the tables a write
@@ -102,18 +102,18 @@ dependencies:
   # every other database failure by SQLite's extended result code, so it imports
   # the exception type directly. Already in the graph under drift, so making it
   # direct adds no resolution risk.
-  sqlite3: ^3.5.2
+  sqlite3: ^3.9.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   fake_async: ^1.3.3
   flutter_lints: ^6.0.0
-  build_runner: ^2.15.1
+  build_runner: ^2.17.1
   freezed: ^4.0.1
   json_serializable: ^6.15.2
   riverpod_generator: ^4.0.9
-  drift_dev: ^2.35.2
+  drift_dev: ^2.35.3
   retrofit_generator: ^10.3.3
   # Icon generation: flavored configs live in flutter_launcher_icons-<flavor>.yaml
   # at app/ root (per-flavor is the format flutter_launcher_icons supports; see

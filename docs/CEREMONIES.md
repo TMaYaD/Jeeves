@@ -38,11 +38,10 @@ selects seven items from one pool across all steps. Selection preserves the
 existing order within each step. The ranker is replaceable through
 `periodicReviewRankerProvider`.
 
-The first matching priority tier wins: Inbox Captures; Bypassed Outcomes;
-Planless Outcomes; Stale Outcomes; Actionless Outcomes with planned Actions; remaining Waiting For
-Outcomes; everything else. Someday/Maybe never enters the Planless, Stale or
-Actionless tiers. Within each tier, least-recently-clarified comes first (never
-clarified first), then creation time, then id, ascending.
+Inbox Captures come first in every session, then Bypassed Outcomes. Every
+other candidate, from any step, is ranked least-recently-clarified first (never clarified first), then by
+creation time, id and step, ascending. Planless, Stale, Actionless and Waiting
+For Outcomes get no priority of their own.
 
 Each Outcome is ranked once. A Bypassed Outcome groups into the Decide Bypassed
 Outcomes step, which follows Process Inbox and appears only when the session

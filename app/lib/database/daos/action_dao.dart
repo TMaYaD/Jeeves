@@ -536,20 +536,6 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     };
   }
 
-  /// Outcomes with at least one planned Action, limited to the requested ids.
-  Future<Set<String>> getOutcomeIdsWithPlannedActions(Set<String> outcomeIds) async {
-    final ids = outcomeIds.toList();
-    final result = <String>{};
-    for (var start = 0; start < ids.length; start += _idChunkSize) {
-      final chunk = ids.sublist(start, (start + _idChunkSize).clamp(0, ids.length));
-      final query = selectOnly(actions, distinct: true)
-        ..addColumns([actions.outcomeId])
-        ..where(actions.outcomeId.isIn(chunk) & actions.role.equals('planned'));
-      result.addAll((await query.get()).map((row) => row.read(actions.outcomeId)!));
-    }
-    return result;
-  }
-
   /// Chunk width for `IN (…)` id lookups, well inside SQLite's default
   /// bound-variable ceiling.
   static const _idChunkSize = 500;
