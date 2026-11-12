@@ -7,6 +7,7 @@
 /// `setUp`, per docs/TESTING.md.
 library;
 
+import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -20,8 +21,34 @@ import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/screens/shutdown/shutdown_ritual_screen.dart';
 import 'package:jeeves/services/notification_service.dart';
 
-import '../helpers/settle.dart';
 import '../test_helpers.dart';
+
+const _userId = 'local';
+
+/// Bounded stand-in for `pumpAndSettle`: with a staged open session the
+/// ritual's live drift watch-streams keep a timer pending, so settling would
+/// spin until the 10-minute default (docs/TESTING.md). Drain real async and
+/// pump a fixed number of frames instead.
+Future<void> _pumpFrames(WidgetTester tester, {int frames = 6}) async {
+  for (var i = 0; i < frames; i++) {
+    await tester.runAsync(() => pumpEventQueue());
+    await tester.pump(const Duration(milliseconds: 50));
+  }
+}
+
+Future<void> _insertOutcome(GtdDatabase db, String id,
+    {bool completed = false}) async {
+  final now = DateTime.now();
+  await db.into(db.todos).insert(TodosCompanion(
+        id: Value(id),
+        title: Value('Task $id'),
+        clarified: const Value(true),
+        userId: const Value(_userId),
+        doneAt: Value(completed ? now : null),
+        createdAt: Value(now),
+        updatedAt: Value(now),
+      ));
+}
 
 (Widget, ProviderContainer) _app(GtdDatabase db) {
   final container = ProviderContainer(overrides: [
@@ -54,100 +81,134 @@ void main() {
   setUpAll(configureSqliteForTests);
 
   late GtdDatabase db;
-  setUp(() async {
+
+  Future<void> stage({required bool completed}) async {
     SharedPreferences.setMockInitialValues({});
     db = GtdDatabase(NativeDatabase.memory());
-  });
-  tearDown(() async => db.close());
+    await _insertOutcome(db, 't1', completed: completed);
+    await db.focusSessionDao.openSession(userId: _userId, taskIds: ['t1']);
+  }
 
-  /// Close Day's commit stamps today's completion date (the session-closing
-  /// part of `closeDay()` is unchanged and covered by its provider tests; a
-  /// real session cannot be committed through the UI under the widget-test
-  /// fake clock).
-  Future<void> expectCommitted() async {
+  Future<void> expectCommitted(WidgetTester tester,
+      {required bool rolledOver}) async {
+    final active = await tester.runAsync(db.focusSessionDao.getActiveSession);
+    expect(active, isNull, reason: 'Close Day still closes the session');
+    final rollover = await tester
+        .runAsync(db.focusSessionDao.getLastClosedSessionRolloverTaskIds);
+    if (rolledOver) {
+      expect(rollover, contains('t1'),
+          reason: 'the unfinished Outcome is still rolled over');
+    } else {
+      expect(rollover, isNot(contains('t1')));
+    }
     final prefs = await SharedPreferences.getInstance();
-    expect(prefs.getString('shutdown_ritual_completed_date'), isNotNull);
+    final today = DateTime.now();
+    expect(prefs.getString('shutdown_ritual_completed_date'),
+        contains('${today.year}'),
+        reason: 'the completion date is stored');
   }
 
   Future<void> unmount(WidgetTester tester) async {
     await tester.pumpWidget(const SizedBox.shrink());
-    await tester.pumpAndSettle();
+    await tester.runAsync(() => pumpEventQueue());
+    await tester.pump();
   }
 
-  testWidgets(
-      'launched by Daily Planning: no moon, phrase or Close Day button; '
-      'commits and lands in planning', (tester) async {
+  void expectNoClosingAnimation() {
+    expect(find.byIcon(Icons.nightlight_round), findsNothing);
+    expect(find.text('Close Day'), findsNothing);
+    expect(find.text('Review Your Day'), findsNothing,
+        reason: 'the Review step must not flash through the reset');
+  }
+
+  Future<void> runForgottenShutdown(
+    WidgetTester tester, {
+    required bool unfinished,
+  }) async {
     final (widget, container) = _app(db);
     addTearDown(container.dispose);
     container.read(shutdownThenPlanProvider.notifier).set(true);
 
     await tester.pumpWidget(widget);
-    await settleWithRealAsync(tester);
+    await _pumpFrames(tester);
     expect(find.text('Review Your Day'), findsOneWidget);
 
     await tester.tap(find.text('Next step'));
+    await _pumpFrames(tester);
+    if (unfinished) {
+      await tester.tap(find.text('Roll Over to Tomorrow'));
+    }
     // Only a few frames: no waiting out the 1.6 s entrance.
     await tester.pump();
-    expect(find.byIcon(Icons.nightlight_round), findsNothing);
-    expect(find.text('Close Day'), findsNothing);
-    await tester.runAsync(() => pumpEventQueue());
-    for (var i = 0; i < 15; i++) {
-      await tester.pump();
-      expect(find.byIcon(Icons.nightlight_round), findsNothing);
-      expect(find.text('Close Day'), findsNothing);
-      expect(find.text('Review Your Day'), findsNothing,
-          reason: 'the Review step must not flash through the reset');
+    expectNoClosingAnimation();
+    for (var i = 0; i < 10; i++) {
       await tester.runAsync(() => pumpEventQueue());
+      await tester.pump();
+      expectNoClosingAnimation();
     }
 
     expect(find.text('planning'), findsOneWidget);
     expect(container.read(shutdownThenPlanProvider), isFalse);
-    await expectCommitted();
+    await expectCommitted(tester, rolledOver: unfinished);
     await unmount(tester);
+  }
+
+  group('forgotten shutdown with an unfinished Outcome', () {
+    setUp(() => stage(completed: false));
+    tearDown(() async => db.close());
+
+    testWidgets(
+        'launched by Daily Planning: no moon, phrase or Close Day button; '
+        'commits and lands in planning',
+        (tester) => runForgottenShutdown(tester, unfinished: true));
+
+    testWidgets(
+        'same day: moon and Close Day button, tap does not open planning',
+        (tester) async {
+      final (widget, container) = _app(db);
+      addTearDown(container.dispose);
+
+      await tester.pumpWidget(widget);
+      await _pumpFrames(tester);
+      await tester.tap(find.text('Next step'));
+      await _pumpFrames(tester);
+      await tester.tap(find.text('Roll Over to Tomorrow'));
+      await tester.runAsync(() => pumpEventQueue());
+      await tester.pump(const Duration(milliseconds: 1700));
+      await tester.pump();
+
+      expect(find.byIcon(Icons.nightlight_round), findsWidgets);
+      await tester.tap(find.text('Close Day'));
+      for (var i = 0; i < 6; i++) {
+        await tester.pump();
+        await tester.runAsync(() => pumpEventQueue());
+      }
+      expect(find.text('planning'), findsNothing);
+      await expectCommitted(tester, rolledOver: true);
+
+      // Unmount before the fade-out ends so the real closeApp() is not called.
+      await unmount(tester);
+    });
+
+    testWidgets('abandoned sequenced shutdown does not leak the intent',
+        (tester) async {
+      final (widget, container) = _app(db);
+      addTearDown(container.dispose);
+      container.read(shutdownThenPlanProvider.notifier).set(true);
+
+      await tester.pumpWidget(widget);
+      await _pumpFrames(tester);
+      await unmount(tester);
+
+      expect(container.read(shutdownThenPlanProvider), isFalse);
+    });
   });
 
-  testWidgets('same day: moon and Close Day button, tap does not open planning',
-      (tester) async {
-    final (widget, container) = _app(db);
-    addTearDown(container.dispose);
+  group('forgotten shutdown with every Outcome completed', () {
+    setUp(() => stage(completed: true));
+    tearDown(() async => db.close());
 
-    await tester.pumpWidget(widget);
-    await settleWithRealAsync(tester);
-    await tester.tap(find.text('Next step'));
-    // Let the empty Resolve step auto-advance to Close Day.
-    for (var i = 0; i < 4; i++) {
-      await tester.pump();
-      await tester.runAsync(() => pumpEventQueue());
-    }
-    await tester.pump(const Duration(milliseconds: 1700));
-    await tester.pump();
-
-    expect(find.byIcon(Icons.nightlight_round), findsWidgets);
-    await tester.tap(find.text('Close Day'));
-    for (var i = 0; i < 6; i++) {
-      await tester.pump();
-      await tester.runAsync(() => pumpEventQueue());
-    }
-    expect(find.text('planning'), findsNothing);
-    await expectCommitted();
-
-    // Unmount before the fade-out ends so the real closeApp() is not called.
-    await tester.pumpWidget(const SizedBox.shrink());
-    await tester.pump();
-  });
-
-  testWidgets('abandoned sequenced shutdown does not leak the intent',
-      (tester) async {
-    final (widget, container) = _app(db);
-    addTearDown(container.dispose);
-    container.read(shutdownThenPlanProvider.notifier).set(true);
-
-    await tester.pumpWidget(widget);
-    await settleWithRealAsync(tester);
-    await tester.pumpWidget(const SizedBox.shrink());
-    await tester.runAsync(() => pumpEventQueue());
-    await tester.pump();
-
-    expect(container.read(shutdownThenPlanProvider), isFalse);
+    testWidgets('goes straight from Review to planning without animation',
+        (tester) => runForgottenShutdown(tester, unfinished: false));
   });
 }

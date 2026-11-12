@@ -40,6 +40,11 @@ class _CloseDayStepState extends ConsumerState<CloseDayStep>
   /// so it must not be watched.
   late bool _skipAnimation;
 
+  /// Whether Daily Planning launched this shutdown. Unlike [_skipAnimation]
+  /// it never changes, so a failed commit cannot turn later retries into
+  /// ordinary exceptions.
+  late final bool _enteredFromPlanning;
+
   static const _phrases = [
     'Another day superbly managed, sir. Pleasant dreams.',
     'Capital effort today, sir. I shall stand down for the evening.',
@@ -65,7 +70,8 @@ class _CloseDayStepState extends ConsumerState<CloseDayStep>
     _fade = Tween<double>(begin: 0, end: 1).animate(
       CurvedAnimation(parent: _controller, curve: Curves.easeIn),
     );
-    _skipAnimation = ref.read(shutdownThenPlanProvider);
+    _enteredFromPlanning = ref.read(shutdownThenPlanProvider);
+    _skipAnimation = _enteredFromPlanning;
     if (_skipAnimation) {
       // closeDay() mutates provider state, which Riverpod forbids in initState.
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -93,9 +99,13 @@ class _CloseDayStepState extends ConsumerState<CloseDayStep>
       await ref.read(eveningShutdownProvider.notifier).closeDay();
     } catch (_) {
       if (!mounted) return;
-      if (!_skipAnimation) rethrow;
-      // Skip path failed: show the ordinary step so there is a control to
-      // retry with. The flag stays set, so the retry still ends in planning.
+      if (!_enteredFromPlanning) {
+        setState(() => _closing = false);
+        rethrow;
+      }
+      // Sequenced path failed: show the ordinary step so there is a control
+      // to retry with, after every failure. The flag stays set, so a retry
+      // still ends in planning.
       _controller.value = 1;
       setState(() {
         _skipAnimation = false;

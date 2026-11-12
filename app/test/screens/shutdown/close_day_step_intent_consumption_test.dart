@@ -27,13 +27,13 @@ import 'package:jeeves/widgets/app_title_bar/app_title_bar.dart';
 
 import '../../test_helpers.dart';
 
-class _FailOnceShutdown extends EveningShutdownNotifier {
-  bool _failed = false;
+class _FailTwiceShutdown extends EveningShutdownNotifier {
+  int _failures = 0;
 
   @override
   Future<void> closeDay({DateTime? now}) async {
-    if (!_failed) {
-      _failed = true;
+    if (_failures < 2) {
+      _failures++;
       throw StateError('write failed');
     }
     return super.closeDay(now: now);
@@ -41,10 +41,10 @@ class _FailOnceShutdown extends EveningShutdownNotifier {
 }
 
 (Widget, ProviderContainer) _app(GtdDatabase db,
-    {bool failFirstClose = false}) {
+    {bool failTwice = false}) {
   final container = ProviderContainer(overrides: [
-    if (failFirstClose)
-      eveningShutdownProvider.overrideWith(_FailOnceShutdown.new),
+    if (failTwice)
+      eveningShutdownProvider.overrideWith(_FailTwiceShutdown.new),
     databaseProvider.overrideWithValue(db),
     notificationServiceProvider.overrideWithValue(StubNotificationService()),
   ]);
@@ -137,12 +137,12 @@ void main() {
   });
 
   testWidgets(
-      'and-then-plan intent set, commit fails: ordinary Close Day step with '
-      'an enabled button; retry still ends in planning', (tester) async {
+      'and-then-plan intent set, commit fails twice: ordinary Close Day step '
+      'with an enabled button after each failure; third try ends in planning', (tester) async {
     final db = GtdDatabase(NativeDatabase.memory());
     addTearDown(db.close);
 
-    final (widget, container) = _app(db, failFirstClose: true);
+    final (widget, container) = _app(db, failTwice: true);
     addTearDown(container.dispose);
     container.read(shutdownThenPlanProvider.notifier).set(true);
 
@@ -156,6 +156,16 @@ void main() {
     expect(find.byIcon(Icons.nightlight_round), findsWidgets);
     expect(container.read(shutdownThenPlanProvider), isTrue,
         reason: 'the flag stays set so the retry still ends in planning');
+
+    // The retry fails too: the button must stay usable, not strand the user.
+    await tester.tap(find.text('Close Day'));
+    for (var i = 0; i < 4; i++) {
+      await tester.pump();
+      await tester.runAsync(() => pumpEventQueue());
+    }
+    await _revealButton(tester);
+    expect(find.text('focus-session-planning'), findsNothing);
+    expect(container.read(shutdownThenPlanProvider), isTrue);
 
     await tester.tap(find.text('Close Day'));
     for (var i = 0; i < 8; i++) {
