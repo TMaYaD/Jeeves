@@ -191,6 +191,12 @@ void main() {
         await tester.tap(find.text('Outcome o1'));
         await _settle(tester);
         expect(find.text('Waiting For Alicia'), findsOneWidget);
+        expect(
+          find.descendant(
+              of: find.byKey(const Key('task_detail_delegates')),
+              matching: find.text('Alicia')),
+          findsOneWidget,
+        );
         router.go(TagManagementKind.people.routePath);
         await _settle(tester);
 
@@ -229,7 +235,13 @@ void main() {
         expect(
           find.descendant(
               of: find.byKey(const Key('status_pill')),
-              matching: find.text('Next Actions')),
+              matching: find.text('Next')),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+              of: find.byKey(const Key('task_detail_delegates')),
+              matching: find.text('Nobody')),
           findsOneWidget,
         );
         expect(find.text('Waiting For Alicia'), findsNothing);
