@@ -108,6 +108,16 @@ void main() {
         reason: 'the completion date is stored');
   }
 
+  /// Disposing the container cancels the live drift streams, which schedules
+  /// a zero-duration timer; it must fire inside the test body or the binding
+  /// reports a pending timer.
+  Future<void> disposeContainer(
+      WidgetTester tester, ProviderContainer container) async {
+    container.dispose();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 10));
+  }
+
   Future<void> unmount(WidgetTester tester) async {
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.runAsync(() => pumpEventQueue());
@@ -126,8 +136,7 @@ void main() {
     required bool unfinished,
   }) async {
     final (widget, container) = _app(db);
-    addTearDown(container.dispose);
-    container.read(shutdownThenPlanProvider.notifier).set(true);
+        container.read(shutdownThenPlanProvider.notifier).set(true);
 
     await tester.pumpWidget(widget);
     await _pumpFrames(tester);
@@ -151,6 +160,7 @@ void main() {
     expect(container.read(shutdownThenPlanProvider), isFalse);
     await expectCommitted(tester, rolledOver: unfinished);
     await unmount(tester);
+    await disposeContainer(tester, container);
   }
 
   group('forgotten shutdown with an unfinished Outcome', () {
@@ -166,8 +176,7 @@ void main() {
         'same day: moon and Close Day button, tap does not open planning',
         (tester) async {
       final (widget, container) = _app(db);
-      addTearDown(container.dispose);
-
+      
       await tester.pumpWidget(widget);
       await _pumpFrames(tester);
       await tester.tap(find.text('Next step'));
@@ -188,19 +197,20 @@ void main() {
 
       // Unmount before the fade-out ends so the real closeApp() is not called.
       await unmount(tester);
+      await disposeContainer(tester, container);
     });
 
     testWidgets('abandoned sequenced shutdown does not leak the intent',
         (tester) async {
       final (widget, container) = _app(db);
-      addTearDown(container.dispose);
-      container.read(shutdownThenPlanProvider.notifier).set(true);
+            container.read(shutdownThenPlanProvider.notifier).set(true);
 
       await tester.pumpWidget(widget);
       await _pumpFrames(tester);
       await unmount(tester);
 
       expect(container.read(shutdownThenPlanProvider), isFalse);
+      await disposeContainer(tester, container);
     });
   });
 
