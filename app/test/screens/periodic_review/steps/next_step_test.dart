@@ -1,4 +1,4 @@
-/// Widget tests for the Weekly Review wizard's Next Actions step.
+/// Widget tests for the Weekly Review wizard's Next step.
 ///
 /// Covers the per-item action bar — including the `Re-clarify…` sub-flow
 /// added in #294 — over the real [PeriodicReviewNotifier] and an in-memory
@@ -111,6 +111,11 @@ void main() {
 
     setUp(() => db = _openInMemory());
     tearDown(() async => db.close());
+
+    testWidgets('empty Next uses the List name', (tester) async {
+      await _enterStep(tester, db);
+      expect(find.text('Nothing on Next to review'), findsOneWidget);
+    });
 
     testWidgets('the subtext is the current Action, not the Outcome title',
         (tester) async {

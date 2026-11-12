@@ -357,7 +357,7 @@ void main() {
             ..where((t) => t.id.equals('t1')))
           .getSingle();
       expect(after.intent, equals('next'),
-          reason: 'leave-dispositioned tasks remain in next-actions');
+          reason: 'leave-dispositioned tasks remain in Next');
     });
 
     // ---- Stream providers ----------------------------------------------------

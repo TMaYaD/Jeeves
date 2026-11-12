@@ -80,7 +80,7 @@ void main() {
       expect(nav.isEmpty, isTrue);
     });
 
-    test('loadSomedaySnapshot populates somedayNav from maybeProvider',
+    test('loadSomedaySnapshot populates somedayNav from somedayMaybeProvider',
         () async {
       await _insertMaybe(db, 's1');
       await _insertMaybe(db, 's2');

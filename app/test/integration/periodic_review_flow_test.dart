@@ -95,17 +95,17 @@ void main() {
       await notifier.goToStep(PeriodicReviewNotifier.kStepInbox);
       // Single inbox item: skipping it past the cursor moves the wizard into
       // the "Inbox is clear" terminal state. The next advanceStep crosses
-      // out of Inbox. Empty steps (Waiting For, Next Actions, Someday/Maybe)
+      // out of Inbox. Empty steps (Waiting For, Next, Someday/Maybe)
       // no longer auto-skip — they show an inline empty-state; the user
       // clicks Next to proceed. Walk each one manually.
       notifier.advanceInbox();
       await notifier.advanceStep(); // Inbox → Waiting For
       expect(c.read(periodicReviewProvider).currentStep,
           equals(PeriodicReviewNotifier.kStepWaitingFor));
-      await notifier.advanceStep(); // Waiting For → Next Actions
+      await notifier.advanceStep(); // Waiting For → Next
       expect(c.read(periodicReviewProvider).currentStep,
           equals(PeriodicReviewNotifier.kStepNext));
-      await notifier.advanceStep(); // Next Actions → Someday/Maybe
+      await notifier.advanceStep(); // Next → Someday/Maybe
       expect(c.read(periodicReviewProvider).currentStep,
           equals(PeriodicReviewNotifier.kStepSomeMaybe));
       await notifier.advanceStep(); // Someday/Maybe → Summary
@@ -157,7 +157,7 @@ void main() {
     });
 
     test('disjointness — person-tagged next action appears in Waiting For '
-        'only, plain next action appears in Next Actions only', () async {
+        'only, plain next action appears in Next only', () async {
       await c.read(syncedPreferencesProvider.future);
       final now = DateTime.now();
 
@@ -178,7 +178,7 @@ void main() {
       ));
       await db.tagDao.assignTag('wf1', 'alice', 'local');
 
-      // Plain next action with no person tag — should land in Next Actions.
+      // Plain next action with no person tag — should land in Next.
       await db.into(db.todos).insert(TodosCompanion(
             id: const Value('na1'),
             title: const Value('Plain next'),
@@ -189,7 +189,7 @@ void main() {
           ));
 
       // Project-tagged next action with NO person tag — must still appear in
-      // Next Actions (project-tag exclusion no longer applies).
+      // Next (project-tag exclusion no longer applies).
       await db.into(db.todos).insert(TodosCompanion(
             id: const Value('na2'),
             title: const Value('Project task'),
@@ -223,7 +223,7 @@ void main() {
       expect(waitingIds.intersection(nextIds), isEmpty);
     });
 
-    test('empty Next Actions step — snapshot loads, step does not auto-skip',
+    test('empty Next step — snapshot loads, step does not auto-skip',
         () async {
       await c.read(syncedPreferencesProvider.future);
       final notifier = c.read(periodicReviewProvider.notifier);
@@ -232,7 +232,7 @@ void main() {
       final state = c.read(periodicReviewProvider);
       expect(state.nextNav.isLoaded, isTrue);
       expect(state.nextNav.isEmpty, isTrue);
-      // Empty Next Actions no longer auto-skips. The step shows an inline
+      // Empty Next no longer auto-skips. The step shows an inline
       // empty-state and waits for the user to tap Next.
       expect(state.currentStep,
           equals(PeriodicReviewNotifier.kStepNext));

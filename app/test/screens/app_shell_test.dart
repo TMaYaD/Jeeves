@@ -77,7 +77,7 @@ Widget _buildShellOnly({
           .overrideWith((_) => inboxStream ?? Stream.value(items)),
       nextProvider.overrideWith((_) => Stream.value([])),
       waitingForProvider.overrideWith((_) => Stream.value([])),
-      maybeProvider.overrideWith((_) => Stream.value([])),
+      somedayMaybeProvider.overrideWith((_) => Stream.value([])),
       projectTagsProvider.overrideWith((_) => Stream.value(projectTags)),
       contextTagsProvider.overrideWith((_) => Stream.value([])),
       // The Now route's Re-plan page action derives from these two providers
@@ -120,8 +120,8 @@ Widget _buildShellOnly({
                     builder: (_, _) => const Scaffold(body: Text('Inbox body')),
                   ),
                   GoRoute(
-                    path: '/next-actions',
-                    builder: (_, _) => const Scaffold(body: Text('Next Actions body')),
+                    path: '/next',
+                    builder: (_, _) => const Scaffold(body: Text('Next body')),
                   ),
                   GoRoute(
                     path: '/projects/:id',
@@ -254,9 +254,9 @@ void main() {
     // at the bottom of the scrollable nav column, so their tiles need the
     // drawer scrolled before they are tappable.
     const cases = <({String label, String body, bool scroll})>[
-      (label: 'Next Actions', body: 'Next Actions body', scroll: false),
+      (label: 'Next', body: 'Next body', scroll: false),
       (label: 'Waiting For', body: 'Waiting For body', scroll: false),
-      (label: 'Maybe', body: 'Someday body', scroll: false),
+      (label: 'Someday/Maybe', body: 'Someday body', scroll: false),
       (label: 'Now', body: 'Focus body', scroll: false),
       (label: 'Done', body: 'Done body', scroll: true),
       (label: 'Trash', body: 'Trash body', scroll: true),
@@ -411,7 +411,7 @@ void main() {
     testWidgets('is absent on non-inbox routes even with captures',
         (tester) async {
       await tester.pumpWidget(_buildShellOnly(
-        initialLocation: '/next-actions',
+        initialLocation: '/next',
         items: [
           Capture(
             id: 'a',
@@ -558,7 +558,7 @@ void main() {
     testWidgets('is absent on non-Now routes even with an open session+tasks',
         (tester) async {
       await tester.pumpWidget(_buildShellOnly(
-        initialLocation: '/next-actions',
+        initialLocation: '/next',
         activeSession: _openSession(),
         sessionTasks: [_todo('t1', 'Planned task')],
       ));

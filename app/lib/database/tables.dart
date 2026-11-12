@@ -162,7 +162,7 @@ class FocusSessionTasks extends Table {
   /// ADR-0002); their Dispositions live in [FocusSessionDispositions] instead.
   /// NULL = not yet reviewed (active session) or done task.
   /// 'rollover' = carry forward to next session's pre-selected list.
-  /// 'leave' = return to Next Actions (no mutation on todos).
+  /// 'leave' = return to Next (no mutation on todos).
   /// 'maybe' = defer; FocusSessionReviewNotifier writes intent='maybe' to todos.
   TextColumn get disposition => text().nullable()();
 

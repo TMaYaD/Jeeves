@@ -462,6 +462,7 @@ void main() {
         db,
         id: 'c1',
         title: 'Call the plumber',
+        clarified: true,
       );
 
       final results =

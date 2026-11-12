@@ -4,9 +4,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
-import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/inbox_provider.dart';
 import 'package:jeeves/screens/common/gtd_list_screen.dart';
+import 'package:jeeves/providers/gtd_lists_provider.dart';
+import 'package:jeeves/screens/next/next_screen.dart';
+import 'package:jeeves/screens/someday_maybe/someday_maybe_screen.dart';
 import '../test_helpers.dart';
 
 // ---------------------------------------------------------------------------
@@ -39,6 +41,24 @@ void main() {
   setUpAll(configureSqliteForTests);
 
   group('GtdListScreen', () {
+    for (final entry in <(Widget, String)>[
+      (const NextScreen(), 'Nothing on Next'),
+      (const SomedayMaybeScreen(), 'Nothing in Someday/Maybe'),
+    ]) {
+      testWidgets('empty List says ${entry.$2}', (tester) async {
+        await tester.pumpWidget(ProviderScope(
+          overrides: [
+            nextProvider.overrideWith((_) => Stream.value([])),
+            somedayMaybeProvider.overrideWith((_) => Stream.value([])),
+            inboxItemsProvider.overrideWith((_) => Stream.value([])),
+          ],
+          child: MaterialApp(home: entry.$1),
+        ));
+        await tester.pump();
+        expect(find.text(entry.$2), findsOneWidget);
+      });
+    }
+
     testWidgets('shows empty state message when no items', (tester) async {
       await tester.pumpWidget(_buildScreen(Stream.value([])));
       await tester.pump();

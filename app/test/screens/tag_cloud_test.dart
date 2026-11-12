@@ -68,7 +68,7 @@ Widget _buildShell({
       inboxItemsProvider.overrideWith((_) => Stream.value([])),
       nextProvider.overrideWith((_) => Stream.value([])),
       waitingForProvider.overrideWith((_) => Stream.value([])),
-      maybeProvider.overrideWith((_) => Stream.value([])),
+      somedayMaybeProvider.overrideWith((_) => Stream.value([])),
       projectTagsProvider.overrideWith((_) => Stream.value([])),
       contextTagsProvider
           .overrideWith((_) => Stream.value(contextTags)),
@@ -447,7 +447,7 @@ void main() {
           inboxItemsProvider.overrideWith((_) => Stream.value([])),
           nextProvider.overrideWith((_) => Stream.value([])),
           waitingForProvider.overrideWith((_) => Stream.value([])),
-              maybeProvider.overrideWith((_) => Stream.value([])),
+              somedayMaybeProvider.overrideWith((_) => Stream.value([])),
           projectTagsProvider.overrideWith((_) => Stream.value([])),
           contextTagsProvider.overrideWith((_) => Stream.value([tag])),
           contextTagsWithCountProvider
