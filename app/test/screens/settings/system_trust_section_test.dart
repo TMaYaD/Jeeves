@@ -48,7 +48,7 @@ void main() {
 
   // ListTile merges its trailing glyph's label into the row's semantics, so
   // match the glyph's own Semantics node rather than the merged label.
-  Finder _glyphLabelled(String label) => find.byWidgetPredicate(
+  Finder glyphLabelled(String label) => find.byWidgetPredicate(
       (widget) => widget is Semantics && widget.properties.label == label);
 
   Future<void> pump(WidgetTester tester) async {
@@ -96,8 +96,8 @@ void main() {
     await pump(tester);
 
     expect(find.text('SYSTEM TRUST'), findsOneWidget);
-    expect(_glyphLabelled('All good'), findsNWidgets(3));
-    expect(_glyphLabelled('Needs attention'), findsNothing);
+    expect(glyphLabelled('All good'), findsNWidgets(3));
+    expect(glyphLabelled('Needs attention'), findsNothing);
     expect(find.text('3 days ago'), findsOneWidget);
   });
 
@@ -106,8 +106,8 @@ void main() {
     await _addCaptures(db, 51);
     await pump(tester);
 
-    expect(_glyphLabelled('Needs attention'), findsNWidgets(2));
-    expect(_glyphLabelled('All good'), findsOneWidget);
+    expect(glyphLabelled('Needs attention'), findsNWidgets(2));
+    expect(glyphLabelled('All good'), findsOneWidget);
 
     await db.customStatement(
         "UPDATE captures SET clarified_at = '2026-03-02T00:00:00.000Z' "
@@ -115,21 +115,21 @@ void main() {
     db.notifyCapturesViewWrite();
     await tester.pumpAndSettle();
 
-    expect(_glyphLabelled('Needs attention'), findsNothing);
-    expect(_glyphLabelled('All good'), findsNWidgets(3));
+    expect(glyphLabelled('Needs attention'), findsNothing);
+    expect(glyphLabelled('All good'), findsNWidgets(3));
     expect(container.read(unprocessedCaptureCountProvider), 50);
   });
 
   testWidgets('the review due date passing turns the review row to a ring',
       (tester) async {
     await pump(tester);
-    expect(_glyphLabelled('Needs attention'), findsNothing);
+    expect(glyphLabelled('Needs attention'), findsNothing);
 
     now = _due;
     container.invalidate(nudgeBoundaryTickProvider);
     await tester.pumpAndSettle();
 
-    expect(_glyphLabelled('Needs attention'), findsNWidgets(2));
+    expect(glyphLabelled('Needs attention'), findsNWidgets(2));
     expect(find.text('7 days ago'), findsOneWidget);
   });
 
