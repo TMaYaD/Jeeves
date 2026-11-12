@@ -1,7 +1,9 @@
 package loonyb.`in`.jeeves
 
 import android.app.Activity
+import android.content.ContentResolver
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -66,6 +68,7 @@ class ShareReceiverActivity : Activity() {
         val text = sharedIntent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
         val subject = sharedIntent.getCharSequenceExtra(Intent.EXTRA_SUBJECT)?.toString()
         val stream = streamUri(sharedIntent)
+        if (stream != null) requireForeignContentUri(stream)
         if (text.isNullOrBlank() && subject.isNullOrBlank() && stream == null) {
             throw IllegalArgumentException("nothing to capture")
         }
@@ -113,6 +116,28 @@ class ShareReceiverActivity : Activity() {
             storedImage?.delete()
             throw error
         }
+    }
+
+    /**
+     * Only a `content://` stream not served by Jeeves itself may be copied. `file://`
+     * Uris are opened with this process's own permissions, and a Uri on one of
+     * Jeeves' own providers would be read the same way; neither is something
+     * the sender was granted access to.
+     */
+    private fun requireForeignContentUri(stream: Uri) {
+        if (stream.scheme != ContentResolver.SCHEME_CONTENT) {
+            throw SecurityException("only content:// streams are accepted")
+        }
+        val authority = stream.authority ?: throw SecurityException("stream has no authority")
+        // Own providers are enumerated rather than resolving the authority: another
+        // app's provider may be invisible to us under package visibility rules.
+        val ownProviders = packageManager
+            .getPackageInfo(packageName, PackageManager.GET_PROVIDERS)
+            .providers.orEmpty()
+        val ownsAuthority = ownProviders.any { provider ->
+            provider.authority?.split(';')?.any { it.equals(authority, ignoreCase = true) } == true
+        }
+        if (ownsAuthority) throw SecurityException("stream authority belongs to Jeeves")
     }
 
     @Suppress("DEPRECATION")
