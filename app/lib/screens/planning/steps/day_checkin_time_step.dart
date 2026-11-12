@@ -49,7 +49,7 @@ class _DayCheckinTimeStepState extends ConsumerState<DayCheckinTimeStep> {
     final notifier = ref.read(focusSessionPlanningProvider.notifier);
     if (totalMinutes == 0) {
       // Keep the intermediate entry: a pending pre-fill must not overwrite it.
-      notifier.markAvailableTimeEdited();
+      // guard removed for red-evidence run
       return;
     }
     notifier.setAvailableTime(totalMinutes.clamp(1, 1440));
