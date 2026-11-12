@@ -145,7 +145,7 @@ here means one of those moved.
 ### Start, stop, reach
 
 ```bash
-VBoxManage startvm jeeves-builder --type headless   # allow ~4 min to boot
+VBoxManage startvm jeeves-builder --type headless   # SSH normally answers in ~20s
 ssh -i ~/.ssh/id_ed25519 -p 2222 paperclipai@127.0.0.1
 VBoxManage controlvm jeeves-builder acpipowerbutton  # graceful shutdown
 ```
@@ -160,6 +160,65 @@ ISO carries its public half. Regenerating that host key locks the VM out, and
 re-seeding does not fix it: cloud-init skips `users:` for a user that already
 exists, so a replacement key has to be installed from `runcmd`.
 
+### Memory cap and rollback
+
+The VM retains **6144 MB** with its existing 8 GB guest swapfile. An integer-GB
+search from 2 to 6 on commit `0a4951f` rejected every lower cap under the fixed
+criteria below. The 6 GB baseline passed; 6 GB remains the fallback rather than
+a claim that it passed a same-daemon confirmation. This search recovers no
+additional host memory relative to its starting 6 GB cap.
+
+The workload used Flutter 3.47.2, Gradle 9.8.2, AGP 9.5.1 and Kotlin 2.4.21.
+Each build ran `flutter clean`, dependency resolution, launcher-icon generation,
+code generation and the profile arm64 dev APK command with verbose output.
+Gradle's build cache was disabled through a temporary guest-only setting;
+downloaded dependencies stayed cached. The repository's 8 GB Gradle heap ceiling
+remained in force.
+
+| Cap | Build | Wall seconds | Peak anonymous MB | Swap-in MB | Stall some/full | OOM kills | Verdict |
+|---|---|---:|---:|---:|---|---:|---|
+| 6 GB | Baseline | 582 | 3791 | 0 | 0.039% / 0.026% | 0 | PASS |
+| 2 GB | Trial | 679 | 1680 | 1267 | 5.708% / 3.465% | 0 | FAIL |
+| 4 GB | Trial | 514 | 2957 | 20 | 0.867% / 0.695% | 0 | PASS |
+| 3 GB | Trial | 546 | 2592 | 124 | 2.516% / 1.762% | 0 | PASS |
+| 3 GB | Same-daemon confirmation | 449 | 2608 | 1336 | 4.519% / 2.686% | 0 | FAIL |
+| 4 GB | Repeat trial after reboot | 573 | 3495 | 128 | 1.942% / 1.517% | 0 | PASS |
+| 4 GB | Same-daemon confirmation | 446 | 3337 | 1412 | 4.269% / 3.070% | 0 | FAIL |
+| 5 GB | Trial | 523 | 3495 | 0.06 | 0.101% / 0.056% | 0 | PASS |
+| 5 GB | Same-daemon confirmation | 361 | 4067 | 272.4 | 7.004% / 3.093% | 0 | FAIL |
+
+Every completed build produced a fresh 40,949,537-byte APK, with app Kotlin and
+dex tasks executed and no `FROM-CACHE` tasks. Passing limits were no OOM or Java
+memory failure, at most 256 MB swap-in, at most 10% `some` and 5% `full` memory
+stall time, and at most 1.5 times baseline wall time when host CPU and paging
+probes read SANE at both ends. Confirmation used a second clean build on the
+same boot and Gradle daemon; its wall time was not judged. The temporary
+cache override was removed after the experiment.
+
+### Risks
+
+These measurements cover one pinned commit and APK workload, not future build
+growth or `flutter test`. The confirmation failures show that a successful
+fresh-boot build alone is insufficient. The 5 GB confirmation missed the
+256 MB swap-in limit by 6.4%; the limit was kept unchanged. Swap occupancy is
+not swap-in; cold pages in the swapfile are recorded but are not themselves a failure.
+
+If a later build shows guest swap-in, memory stalls or an OOM kill, raise the cap
+by 1 GB and check the build again. Rollback is 6144 MB. Before each transition,
+wait for no build and a one-minute guest load below 0.5; wait up to 180 seconds
+for genuine `poweroff` after ACPI shutdown. Do not force shutdown or use saved
+state. Then change memory and boot:
+
+```bash
+VBoxManage controlvm jeeves-builder acpipowerbutton
+# Poll showvminfo until VMState="poweroff" before proceeding.
+VBoxManage modifyvm jeeves-builder --memory 6144
+VBoxManage startvm jeeves-builder --type headless
+```
+
+Check SSH, guest memory and the 8 GB `/swapfile` after boot. Host RSS and paging
+depend on other workloads and are not proof of physical memory recovered by a cap change alone.
+
 ### Build
 
 `~/.jeeves_env` exports `JAVA_HOME`, `ANDROID_HOME`/`ANDROID_SDK_ROOT` and
@@ -167,9 +226,9 @@ exists, so a replacement key has to be installed from `runcmd`.
 line sits *above* Ubuntu's non-interactive early-return, so `ssh host '<cmd>'`
 gets the toolchain too — move it below and every non-login command loses `java`.
 
-The VM holds no GitHub credential and no `.git`; the Mac fetches and pushes and
-the VM only compiles. Sync the Mac's current tree over first, or the build
-compiles whatever was synced last. The excludes keep `.git` out and leave the
+Fetch and push on the Mac; the VM compiles the source synced to it. Use a clean
+export of a pinned commit when the host checkout is shared between runs. Sync
+that tree first, or the build compiles whatever was synced last. The excludes keep `.git` out and leave the
 guest's build output and caches alone, so the next build stays warm:
 
 ```bash
@@ -204,7 +263,7 @@ Gradle distribution, resolving dependencies, installing CMake and dexing every
 external library — not throughput, and Dart-side work is only ~1.3× slower even
 cold. So the thing to protect is the Gradle cache and daemon: leave the VM
 running between builds rather than starting clean. The cold column is a first
-build on empty caches, not a measurement of `flutter clean`, which was not timed.
+build on empty caches, separate from the clean rebuilds measured above.
 Treat all three columns as ceilings rather than benchmarks
 anyway; the host is a dual-core i5 shared with the agent fleet, and when it
 runs short of memory it swaps, which stops the guest for tens of seconds at a
