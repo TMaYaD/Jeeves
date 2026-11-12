@@ -22,6 +22,7 @@ import '../../providers/shutdown_settings_provider.dart';
 import '../../services/export_service.dart';
 import '../../widgets/app_title_bar/app_title_bar.dart';
 import '../enrolment/enrolment_ceremony_screen.dart';
+import '../tag_management/tag_management_screen.dart';
 import '../../widgets/capture/capture_action.dart';
 import '../../widgets/jeeves_logo.dart';
 
@@ -130,6 +131,31 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               onTap: () => _confirmLogout(context),
             ),
           ],
+          const Divider(height: 1, color: Color(0xFFF3F4F6)),
+          _sectionHeader('MANAGE'),
+          for (final kind in TagManagementKind.values)
+            ListTile(
+              key: Key('manage_${kind.name}_tile'),
+              leading: Icon(
+                switch (kind) {
+                  TagManagementKind.tags => Icons.label_outline,
+                  TagManagementKind.projects => Icons.folder_outlined,
+                  TagManagementKind.people => Icons.people_outline,
+                },
+                color: const Color(0xFF9CA3AF),
+              ),
+              title: Text(
+                kind.title,
+                style: const TextStyle(
+                    fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+              ),
+              subtitle: Text(
+                'Rename, merge or delete ${kind.title.toLowerCase()}.',
+                style:
+                    const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+              ),
+              onTap: () => context.push(kind.routePath),
+            ),
           const Divider(height: 1, color: Color(0xFFF3F4F6)),
           _sectionHeader('IMPORT'),
           ListTile(

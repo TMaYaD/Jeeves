@@ -75,11 +75,29 @@ void main() {
 
     testWidgets('shows the empty state for a project with no Outcomes',
         (tester) async {
+      await db.tagDao.upsertTag(const TagsCompanion(
+          id: Value('proj'),
+          name: Value('proj'),
+          type: Value('project'),
+          userId: Value('local')));
       await tester.pumpWidget(buildScreen());
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
 
       expect(find.text('No Outcomes in this project'), findsOneWidget);
+
+      await disposeScreen(tester);
+    });
+
+    testWidgets('leaves the page when its project no longer exists',
+        (tester) async {
+      // No `proj` tag row: the project was merged away or deleted.
+      await tester.pumpWidget(buildScreen());
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(find.text('No Outcomes in this project'), findsNothing);
 
       await disposeScreen(tester);
     });

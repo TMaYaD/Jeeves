@@ -376,6 +376,13 @@ any chip in the bar are 4px, never pills.
 
 ## Interaction Patterns
 
+### Managing tags, projects and people
+Settings → Manage opens one list per kind (row: name, active-Outcome count);
+tapping a row opens a bottom sheet with Rename, Merge into…, Delete and — for
+tags only — Recolour. Merge targets are the same kind only. Merge and delete
+confirm in a dialog that says what happens to the Outcomes and that it cannot
+be undone.
+
 ### Ceremony back navigation
 System back inside a ceremony mirrors the footer Back affordance — it invokes
 the exact callback the active step's footer renders, retreating the per-item

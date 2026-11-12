@@ -311,17 +311,15 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   /// Merge [sourceTagId] into [targetTagId] — the *user's* deliberate fold, as
   /// opposed to [foldDuplicateTags]' automatic one.
   ///
-  /// Re-assigns all `todo_tags` rows that reference [sourceTagId] to
-  /// [targetTagId] (idempotent via [assignTag]), then deletes the source tag
-  /// and its junction rows atomically.
-  ///
-  /// **It repoints only `todo_tags`, so it orphans the source tag's
-  /// `capture_tags` rows** — with FK enforcement off (#637) that is a silently
-  /// invisible tag hint rather than an error. [repointTagReferences] is the shared
-  /// helper that covers both junctions; switching this method onto it is #645.
+  /// Repoints every `todo_tags` row **and** every `capture_tags` row that
+  /// references [sourceTagId] to [targetTagId] (an item holding both ends up
+  /// with exactly one link to the target), then deletes the source tag. Colour
+  /// and name of the target are kept.
   ///
   /// Throws [ArgumentError] if [sourceTagId] equals [targetTagId] — a
-  /// self-merge would silently delete the tag and strip every association.
+  /// self-merge would silently delete the tag and strip every association — or
+  /// if either tag is missing or the two differ in `type`: a project folded
+  /// into a person is never what the user meant.
   Future<void> merge(String sourceTagId, String targetTagId) {
     if (sourceTagId == targetTagId) {
       throw ArgumentError.value(
@@ -331,24 +329,65 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
       );
     }
     return attachedDatabase.capturing(() async {
-      final sourceTodoTags = await (select(todoTags)
-            ..where((tt) => tt.tagId.equals(sourceTagId)))
-          .get();
-      for (final tt in sourceTodoTags) {
-        await assignTag(tt.todoId, targetTagId, tt.userId);
+      final source = await (select(tags)..where((t) => t.id.equals(sourceTagId)))
+          .getSingleOrNull();
+      final target = await (select(tags)..where((t) => t.id.equals(targetTagId)))
+          .getSingleOrNull();
+      if (source == null || target == null) {
+        throw ArgumentError.value(
+          source == null ? sourceTagId : targetTagId,
+          source == null ? 'sourceTagId' : 'targetTagId',
+          'Tag does not exist',
+        );
       }
-      await (delete(todoTags)
-            ..where((tt) => tt.tagId.equals(sourceTagId)))
-          .go();
-      // Cascade set, enumerated at capture time: the log has no FK cascade, so
-      // every junction the source tag held is tombstoned explicitly alongside
-      // the tag itself.
-      for (final tt in sourceTodoTags) {
-        _tombstoneTodoTag(tt.todoId, sourceTagId);
+      if (source.type != target.type) {
+        throw ArgumentError.value(
+          targetTagId,
+          'targetTagId',
+          'Source and target tags must have the same type',
+        );
       }
+      await _repointTagReferences(from: sourceTagId, to: targetTagId);
       await (delete(tags)..where((t) => t.id.equals(sourceTagId))).go();
       attachedDatabase.opCapture
           .tombstone(collection: tagsCollection, entityId: sourceTagId);
+      attachedDatabase.notifyTodosViewWrite(includeTodoTags: true);
+      attachedDatabase.notifyCapturesViewWrite();
+    });
+  }
+
+  /// Delete [tagId] outright — the *user's* deliberate removal of a Tag,
+  /// Project or Person from every Outcome and Capture hint that carried it.
+  /// The Outcomes and Captures themselves stay.
+  ///
+  /// The op log has no foreign-key cascade, so every junction row the tag held
+  /// (`todo_tags` and `capture_tags`) is tombstoned explicitly alongside the
+  /// tag. Does not stamp `last_clarified_at`: removing an entry from a
+  /// management list is not thinking about each Outcome. Returns without
+  /// writing when [tagId] is unknown.
+  Future<void> deleteTag(String tagId) {
+    return attachedDatabase.capturing(() async {
+      final existing = await (select(tags)..where((t) => t.id.equals(tagId)))
+          .getSingleOrNull();
+      if (existing == null) return;
+      final todoJunctions =
+          await (select(todoTags)..where((tt) => tt.tagId.equals(tagId))).get();
+      final captureJunctions = await (select(captureTags)
+            ..where((ct) => ct.tagId.equals(tagId)))
+          .get();
+      await (delete(todoTags)..where((tt) => tt.tagId.equals(tagId))).go();
+      await (delete(captureTags)..where((ct) => ct.tagId.equals(tagId))).go();
+      for (final row in todoJunctions) {
+        _tombstoneTodoTag(row.todoId, tagId);
+      }
+      for (final row in captureJunctions) {
+        _tombstoneCaptureTag(row.captureId, tagId);
+      }
+      await (delete(tags)..where((t) => t.id.equals(tagId))).go();
+      attachedDatabase.opCapture
+          .tombstone(collection: tagsCollection, entityId: tagId);
+      attachedDatabase.notifyTodosViewWrite(includeTodoTags: true);
+      attachedDatabase.notifyCapturesViewWrite();
     });
   }
 
@@ -469,8 +508,7 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   /// assignment or tag hint. Each junction's identity is its pair, so the row
   /// moves by inserting the derived id for `(parent, to)` and deleting the old
   /// one; a `(parent, to)` row that already existed collapses under the primary
-  /// key via `INSERT OR REPLACE`. `[TagDao.merge]` still repoints only
-  /// `todo_tags`; switching it onto this helper is #645.
+  /// key via `INSERT OR REPLACE`.
   Future<void> _repointTagReferences({
     required String from,
     required String to,

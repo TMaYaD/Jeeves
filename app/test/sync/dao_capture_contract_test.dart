@@ -58,6 +58,15 @@ void main() {
     return id;
   }
 
+  Future<void> seedCapture() async {
+    await db.captureDao.insertCapture(CapturesCompanion(
+      id: const Value('c1'),
+      title: const Value('a thought'),
+      userId: const Value(_userId),
+      createdAt: Value(_ts),
+    ));
+  }
+
   CapturedOp only(String collection) {
     final ops = capture.forCollection(collection);
     expect(ops, hasLength(1), reason: 'expected exactly one $collection op');
@@ -430,6 +439,44 @@ void main() {
       );
     });
 
+    test('merge also moves Capture hints and tombstones the source hint',
+        () async {
+      await seedCapture();
+      final source = await db.tagDao.findOrCreateTag('a', 'context', _userId);
+      final target = await db.tagDao.findOrCreateTag('b', 'context', _userId);
+      await db.captureDao.assignTagHint('c1', source, _userId);
+      capture.clear();
+
+      await db.tagDao.merge(source, target);
+      final byKey = {
+        for (final op in capture.forCollection(captureTagsCollection))
+          op.entityId: op.tombstone,
+      };
+      expect(byKey[captureTagIdFor('c1', source)], isTrue);
+      expect(byKey[captureTagIdFor('c1', target)], isFalse);
+    });
+
+    test('deleteTag tombstones the tag and every junction of both kinds',
+        () async {
+      final outcome = await seedOutcome();
+      await seedCapture();
+      final tag = await db.tagDao.findOrCreateTag('a', 'person', _userId);
+      await db.tagDao.assignTag(outcome, tag, _userId);
+      await db.captureDao.assignTagHint('c1', tag, _userId);
+      capture.clear();
+
+      await db.tagDao.deleteTag(tag);
+      final byKey = {
+        for (final op in capture.recorded)
+          '${op.collection}/${op.entityId}': op.tombstone,
+      };
+      expect(byKey['$tagsCollection/$tag'], isTrue);
+      expect(byKey['$todoTagsCollection/${todoTagIdFor(outcome, tag)}'], isTrue);
+      expect(
+          byKey['$captureTagsCollection/${captureTagIdFor('c1', tag)}'], isTrue);
+      expect(byKey, hasLength(3));
+    });
+
     test('enforceSingleProject tombstones the displaced project link', () async {
       final outcome = await seedOutcome();
       final first = await db.tagDao.findOrCreateTag('p1', 'project', _userId);
@@ -447,15 +494,6 @@ void main() {
   });
 
   group('capture_dao', () {
-    Future<void> seedCapture() async {
-      await db.captureDao.insertCapture(CapturesCompanion(
-        id: const Value('c1'),
-        title: const Value('a thought'),
-        userId: const Value(_userId),
-        createdAt: Value(_ts),
-      ));
-    }
-
     test('insertCapture asserts the whole row', () async {
       await seedCapture();
       expect(only(capturesCollection).fields.keys.toSet(),

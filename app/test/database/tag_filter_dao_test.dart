@@ -291,6 +291,127 @@ void main() {
     });
   });
 
+  group('TagDao.merge across both junctions', () {
+    late GtdDatabase db;
+    setUp(() => db = _openInMemory());
+    tearDown(() => db.close());
+
+    Future<void> insertCapture(String id) =>
+        db.captureDao.insertCapture(CapturesCompanion(
+          id: Value(id),
+          title: Value('Capture $id'),
+          captureSource: const Value('manual'),
+          userId: const Value(_userId),
+          createdAt: Value(DateTime.now()),
+          updatedAt: Value(DateTime.now()),
+        ));
+
+    for (final kind in ['context', 'project', 'person']) {
+      test('$kind: moves Outcome links and Capture hints, leaving none on the source',
+          () async {
+        await _insertTag(db, id: 'src', name: 'old', type: kind);
+        await _insertTag(db, id: 'tgt', name: 'new', type: kind);
+        await _insertTodo(db, id: 't1', title: 'Task');
+        await _insertTodo(db, id: 't2', title: 'Both');
+        await insertCapture('c1');
+        await _assignTag(db, 't1', 'src');
+        await _assignTag(db, 't2', 'src');
+        await _assignTag(db, 't2', 'tgt');
+        await db.captureDao.assignTagHint('c1', 'src', _userId);
+
+        await db.tagDao.merge('src', 'tgt');
+
+        final todoRows = await db.select(db.todoTags).get();
+        expect(todoRows.map((r) => r.tagId).toSet(), {'tgt'});
+        expect(todoRows.where((r) => r.todoId == 't2'), hasLength(1));
+        expect(todoRows, hasLength(2));
+        final captureRows = await db.select(db.captureTags).get();
+        expect(captureRows, hasLength(1));
+        expect(captureRows.single.tagId, 'tgt');
+        expect(captureRows.single.captureId, 'c1');
+        final ids = (await db.select(db.tags).get()).map((t) => t.id);
+        expect(ids, ['tgt']);
+        expect(await db.select(db.todos).get(), hasLength(2));
+      });
+    }
+
+    test('refuses a merge across kinds and changes nothing', () async {
+      await _insertTag(db, id: 'src', name: 'Alice', type: 'person');
+      await _insertTag(db, id: 'tgt', name: 'work', type: 'context');
+      await _insertTodo(db, id: 't1', title: 'Task');
+      await _assignTag(db, 't1', 'src');
+
+      await expectLater(db.tagDao.merge('src', 'tgt'), throwsArgumentError);
+
+      expect(await db.select(db.tags).get(), hasLength(2));
+      expect((await db.select(db.todoTags).get()).single.tagId, 'src');
+    });
+
+    test('refuses a missing target', () async {
+      await _insertTag(db, id: 'src', name: 'old');
+      await expectLater(db.tagDao.merge('src', 'nope'), throwsArgumentError);
+      expect(await db.select(db.tags).get(), hasLength(1));
+    });
+
+    test('rename onto a taken name of the same kind merges', () async {
+      await _insertTag(db, id: 'a', name: 'Alice', type: 'person');
+      await _insertTag(db, id: 'b', name: 'Alise', type: 'person');
+      await _insertTodo(db, id: 't1', title: 'Task');
+      await _assignTag(db, 't1', 'b');
+
+      await db.tagDao.rename('b', 'Alice');
+
+      final all = await db.select(db.tags).get();
+      expect(all.map((t) => t.id), ['a']);
+      expect((await db.select(db.todoTags).get()).single.tagId, 'a');
+    });
+  });
+
+  group('TagDao.deleteTag', () {
+    late GtdDatabase db;
+    setUp(() => db = _openInMemory());
+    tearDown(() => db.close());
+
+    for (final kind in ['context', 'project', 'person']) {
+      test('$kind: removes the entry from every Outcome and Capture, keeping both',
+          () async {
+        await _insertTag(db, id: 'gone', name: 'x', type: kind);
+        await _insertTag(db, id: 'keep', name: 'y', type: kind);
+        await _insertTodo(db, id: 't1', title: 'Task');
+        await _insertTodo(db, id: 't2', title: 'Other');
+        await db.captureDao.insertCapture(CapturesCompanion(
+          id: const Value('c1'),
+          title: const Value('Capture'),
+          captureSource: const Value('manual'),
+          userId: const Value(_userId),
+          createdAt: Value(DateTime.now()),
+          updatedAt: Value(DateTime.now()),
+        ));
+        await _assignTag(db, 't1', 'gone');
+        await _assignTag(db, 't2', 'gone');
+        await _assignTag(db, 't2', 'keep');
+        await db.captureDao.assignTagHint('c1', 'gone', _userId);
+        await db.captureDao.assignTagHint('c1', 'keep', _userId);
+
+        await db.tagDao.deleteTag('gone');
+
+        expect((await db.select(db.tags).get()).map((t) => t.id), ['keep']);
+        final todoRows = await db.select(db.todoTags).get();
+        expect(todoRows.map((r) => '${r.todoId}/${r.tagId}'), ['t2/keep']);
+        final captureRows = await db.select(db.captureTags).get();
+        expect(captureRows.map((r) => r.tagId), ['keep']);
+        expect(await db.select(db.todos).get(), hasLength(2));
+        expect(await db.select(db.captures).get(), hasLength(1));
+      });
+    }
+
+    test('an unknown id is a no-op', () async {
+      await _insertTag(db, id: 'keep', name: 'y');
+      await db.tagDao.deleteTag('nope');
+      expect(await db.select(db.tags).get(), hasLength(1));
+    });
+  });
+
   group('TodoDao tag filtering', () {
     late GtdDatabase db;
     setUp(() => db = _openInMemory());

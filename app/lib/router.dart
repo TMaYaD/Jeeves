@@ -14,6 +14,7 @@ import 'screens/project/project_screen.dart';
 import 'screens/periodic_review/periodic_review_screen.dart';
 import 'screens/planning/focus_session_planning_screen.dart';
 import 'screens/settings/settings_screen.dart';
+import 'screens/tag_management/tag_management_screen.dart';
 import 'screens/someday_maybe/someday_maybe_screen.dart';
 import 'screens/sync_health/sync_health_screen.dart';
 import 'screens/task_detail/task_detail_screen.dart';
@@ -113,6 +114,12 @@ final appRouter = GoRouter(
       path: '/settings',
       builder: (context, state) => const SettingsScreen(),
     ),
+    // Outside the shell, like /settings: management lists opened from Settings.
+    for (final kind in TagManagementKind.values)
+      GoRoute(
+        path: kind.routePath,
+        builder: (context, state) => TagManagementScreen(kind: kind),
+      ),
     // Outside the shell, like /settings: it is an account of what happened
     // rather than a place in the app. Nothing routes here on its own — the
     // drawer indicator pushes it, and only while there is something to report.
