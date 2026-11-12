@@ -176,6 +176,57 @@ void main() {
     await close(tester);
   });
 
+  testWidgets(
+      'leaving the route mid-step and reopening it resumes at the undecided '
+      'Outcome', (tester) async {
+    await mount(tester, ['a', 'b']);
+    final first = state().bypassedNextUndecided!.id;
+    await tapKey(tester, 'bypassed_trash');
+    final second = state().bypassedNextUndecided!.id;
+    expect(second, isNot(first));
+
+    // Leave the route: the screen unmounts, the container (the app process)
+    // stays.
+    await tester.pumpWidget(const SizedBox.shrink());
+    expect(find.text('Decide Bypassed Outcomes'), findsNothing);
+
+    // Reopen the route in the same process.
+    final router = GoRouter(
+      initialLocation: '/periodic-review',
+      routes: [
+        GoRoute(
+          path: '/focus',
+          builder: (_, _) => const Scaffold(body: Text('execution home')),
+        ),
+        GoRoute(
+          path: '/periodic-review',
+          builder: (_, _) => const PeriodicReviewScreen(),
+        ),
+      ],
+    );
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: container,
+      child: MaterialApp.router(routerConfig: router),
+    ));
+    await settleWithRealAsync(tester, rounds: 2);
+
+    expect(state().currentStep, PeriodicReviewNotifier.kStepBypassed);
+    expect(state().bypassedNextUndecided!.id, second,
+        reason: 'the undecided Outcome resumes');
+    expect(state().bypassedDecidedIds, {first},
+        reason: 'the decided Outcome is not offered again');
+    expect(find.byKey(const Key('bypassed_trash')), findsOneWidget);
+    expect(find.text('Back'), findsOneWidget);
+    expect(find.text('Next step'), findsNothing,
+        reason: 'footer stays Back-only until every Outcome is decided');
+    expect(find.text('All Bypassed Outcomes decided'), findsNothing);
+
+    final log = await tester.runAsync(
+        () => db.focusSessionDao.watchBypassDecisions().first);
+    expect(log, hasLength(1), reason: 'no duplicate decision is recorded');
+    await close(tester);
+  });
+
   testWidgets('a session with no Bypassed Outcome shows four steps',
       (tester) async {
     await mount(tester, []);
