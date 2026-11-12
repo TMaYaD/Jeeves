@@ -45,7 +45,7 @@ Two tiers with different jobs. The hook catches the obvious break at the moment 
 | **Fast** | `build_runner` (skipped when no codegen input changed), `flutter analyze`, and only the Flutter tests covering the staged changes. Backend keeps its whole `pytest` — it costs seconds. | `.githooks/pre-commit`, every commit |
 | **Full** | Both suites, entire | CI, every PR — `flutter-ci.yml`, `backend-ci.yml` |
 
-The Outcome due-date widget and peek journey tests also run with
+The Outcome due-date widget and peek journey tests, and the System Trust provider test (spring-forward day count), also run with
 `TZ=America/Los_Angeles` in CI to exercise the local-day boundary; the full suite
 keeps the runner's UTC timezone. See [flutter-ci.yml](../.github/workflows/flutter-ci.yml).
 

@@ -159,7 +159,7 @@ jobs:
       - name: Test local due dates west of UTC
         env:
           TZ: America/Los_Angeles
-        run: flutter test test/widgets/outcome_meta_line_test.dart test/integration/outcome_peek_edit_journey_test.dart
+        run: flutter test test/widgets/outcome_meta_line_test.dart test/integration/outcome_peek_edit_journey_test.dart test/providers/system_trust_provider_test.dart
 
   # Real-SDK coverage for the pre-commit hook's Flutter path (#678). Lives here,
   # in the Flutter workflow, rather than the fast SDK-less `Infra & hooks` job

@@ -12,6 +12,7 @@ library;
 
 import 'package:flutter/material.dart';
 
+import 'meta_chip.dart';
 import 'state_surfaces.dart';
 
 const _labelGray = Color(0xFF9CA3AF);
@@ -104,6 +105,32 @@ class ClarifyEnergyPicker extends StatelessWidget {
       }).toList(),
     );
   }
+}
+
+/// The shared estimate ladder. Tapping the selected option clears it.
+class ClarifyEstimatePicker extends StatelessWidget {
+  const ClarifyEstimatePicker({
+    super.key,
+    required this.selectedMinutes,
+    required this.onSelect,
+  });
+
+  final int? selectedMinutes;
+  final ValueChanged<int?> onSelect;
+
+  @override
+  Widget build(BuildContext context) => Wrap(
+    spacing: 8,
+    runSpacing: 8,
+    children: [
+      for (final minutes in kEstimateOptionsMinutes)
+        ClarifyEstimateChip(
+          label: formatMinutesLabel(minutes),
+          selected: selectedMinutes == minutes,
+          onTap: () => onSelect(selectedMinutes == minutes ? null : minutes),
+        ),
+    ],
+  );
 }
 
 class ClarifyEstimateChip extends StatelessWidget {

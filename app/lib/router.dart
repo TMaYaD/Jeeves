@@ -142,7 +142,7 @@ final appRouter = GoRouter(
           builder: (context, state) => const InboxScreen(),
         ),
         GoRoute(
-          path: '/next-actions',
+          path: '/next',
           builder: (context, state) => const NextScreen(),
         ),
         GoRoute(

@@ -82,23 +82,23 @@ const dprIntroBodyPool = <String>[
   "Shall we set the day to rights, sir? I should think {duration} will see us "
       "through.",
   "A moment to order the day — {duration} or thereabouts, sir.",
-  "Let us take stock of what's before you, sir. {duration}, at my estimate.",
+  "Let us take stock of what's before you, sir. I estimate {duration}.",
   "The day awaits arrangement, sir. I make it {duration}.",
 ];
 
 /// Weekly Review intro body pool.
 const wrIntroBodyPool = <String>[
   "The week in review, sir — I should allow {duration}.",
-  "Time to survey the week's estate. {duration}, by my reckoning.",
-  "Shall we take the longer view, sir? {duration} should suffice.",
+  "Time to survey the week's estate. By my reckoning, {duration}.",
+  "Shall we take the longer view, sir? I find {duration} should suffice.",
 ];
 
 /// Light-day pool, used at zero items by either ceremony. Still shows the
 /// floored `{duration}`.
 const introLightDayPool = <String>[
   "A light day, sir — little to trouble you. Done in {duration}.",
-  "Scarcely anything outstanding, sir. {duration} and you're free.",
-  "The decks are near clear, sir. {duration}, no more.",
+  "Scarcely anything outstanding, sir. Give me {duration} and you're free.",
+  "The decks are near clear, sir. I ask {duration}, no more.",
 ];
 
 // ---------------------------------------------------------------------------
