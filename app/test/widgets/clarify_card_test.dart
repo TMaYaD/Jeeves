@@ -1545,6 +1545,7 @@ void main() {
         matching: find.text('High'),
       ));
       await tester.pump();
+      expect(find.byType(ClarifyEstimatePicker), findsOneWidget);
       await tester.tap(find.text('30m'));
       await tester.pump();
 

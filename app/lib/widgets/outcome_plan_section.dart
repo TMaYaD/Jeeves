@@ -536,23 +536,10 @@ class _PlanActionSheetState extends State<_PlanActionSheet> {
               const SizedBox(height: 20),
               const ClarifyFieldLabel('TIME ESTIMATE'),
               const SizedBox(height: 8),
-              Wrap(
+              ClarifyEstimatePicker(
                 key: const Key('plan_action_estimate'),
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final minutes in kEstimateOptionsMinutes)
-                    ClarifyEstimateChip(
-                      label: formatMinutesLabel(minutes),
-                      selected: _timeEstimateMinutes == minutes,
-                      // Tapping the selected chip deselects it, matching the
-                      // energy picker.
-                      onTap: () => setState(
-                        () => _timeEstimateMinutes =
-                            _timeEstimateMinutes == minutes ? null : minutes,
-                      ),
-                    ),
-                ],
+                selectedMinutes: _timeEstimateMinutes,
+                onSelect: (minutes) => setState(() => _timeEstimateMinutes = minutes),
               ),
               const SizedBox(height: 24),
               SizedBox(

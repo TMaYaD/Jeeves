@@ -52,7 +52,7 @@ import 'async_subject.dart';
 import 'capture_outcomes_section.dart';
 import 'clarify_retention.dart';
 import 'clarify_shared_widgets.dart';
-import 'meta_chip.dart' show formatMinutesLabel, formatDueDateLabel;
+import 'meta_chip.dart' show formatDueDateLabel;
 import 'context_tag_picker.dart';
 import 'process_to_handlers.dart';
 import 'project_picker.dart';
@@ -922,21 +922,12 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
 
         const ClarifyFieldLabel('TIME ESTIMATE'),
         const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: kEstimateOptionsMinutes.map((m) {
-            final selected = _timeEstimate == m;
-            return ClarifyEstimateChip(
-              label: formatMinutesLabel(m),
-              selected: selected,
-              onTap: () {
-                final newValue = selected ? null : m;
-                setState(() => _timeEstimate = newValue);
-                unawaited(_saveTimeEstimate(newValue));
-              },
-            );
-          }).toList(),
+        ClarifyEstimatePicker(
+          selectedMinutes: _timeEstimate,
+          onSelect: (newValue) {
+            setState(() => _timeEstimate = newValue);
+            unawaited(_saveTimeEstimate(newValue));
+          },
         ),
         const SizedBox(height: 20),
 
