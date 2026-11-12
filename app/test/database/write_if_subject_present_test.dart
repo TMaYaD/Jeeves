@@ -4,7 +4,8 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/action_draft.dart';
-import 'package:jeeves/models/todo.dart' show Intent, RoutingKind;
+import 'package:jeeves/models/intent.dart';
+import 'package:jeeves/models/routing_kind.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/sync/collection_codecs.dart'
     show captureTagsCollection, todosCollection;

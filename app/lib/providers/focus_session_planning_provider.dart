@@ -23,7 +23,7 @@ import '../database/daos/focus_session_dao.dart' show SessionSettlement;
 import '../database/gtd_database.dart';
 import '../models/action_draft.dart';
 import '../models/ritual.dart';
-import '../models/todo.dart' show RoutingKind;
+import '../models/routing_kind.dart';
 import '../services/clarification_service.dart';
 import '../services/notification_service.dart';
 import '../utils/snapshot_nav.dart';
