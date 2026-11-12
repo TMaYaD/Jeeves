@@ -21,9 +21,10 @@ The current known divergences:
 - **Next** (domain) is rendered as "Next Action" in UI copy when referring to the current-role Action of an Outcome on the Next List.
 - A FocusSession's **Plan** (domain) is rendered with cadence-flavoured copy ("Today's Plan" at the daily cadence).
 - A Nudge's `dismissed` / `completed` states (domain) are rendered with cadence-flavoured copy ("Not today" / "Not this week" / etc.) in Banner and Notification surfaces.
+- Daily Planning labels its undecided pool **"Up Next"**: a view of Next, energy-filtered and net of what is already picked or skipped. It is not the List, so it does not carry the List name.
 - **Focus** (domain — the FocusSession's execution home screen) is rendered as **"Now"** in UI copy. "Now" answers *what am I doing?* alongside Next (*what could I do?*) and Someday/Maybe (*what might I do eventually?*); internal identifiers stay Focus / FocusSession, and the cadence remains daily by default. (Ruled in the epic #35 design review — see the decision comments on TMaYaD/Jeeves#35.)
 
-**New surfaces lead the rename.** Where UI copy and canonical vocabulary have drifted (e.g. legacy "Next Actions" / "Maybe" labels), every *new* surface uses the canonical term regardless of what neighbouring legacy surfaces still display; legacy surfaces catch up later. Divergence within the app between new-correct and old-retired labels is an accepted transitional state, not a reason to propagate retired terms.
+**New surfaces lead the rename.** Where UI copy and canonical vocabulary have drifted (e.g. a retired label for a List), every *new* surface uses the canonical term regardless of what neighbouring legacy surfaces still display; legacy surfaces catch up later. Divergence within the app between new-correct and old-retired labels is an accepted transitional state, not a reason to propagate retired terms.
 
 Prospective renames considered and **deferred**, pending legacy cleanup:
 
@@ -199,7 +200,6 @@ _Avoid_: health score, score, System Health
 - The proposal's four long-term states (`active / someday / done / trashed`) collapse two independent axes into one enum. The code's `intent` column is the Intent axis and `done_at` the Completion axis; the proposal's wording is the conceptual error.
 - A trivially-actionable Capture ("call John") could in principle skip Outcome creation and land directly as an Action. The model says no — every Capture clarifies through an Outcome.
 - **Area exclusivity is enforced at the cutover, not yet in storage.** Areas are `Tag(type='area')` linked through `todo_tags`, which carries no `type`, so "at most one Area" is not expressible as a unique index — it needs a dedicated Outcome→Area link or a check reaching into `tags`. Two pieces remain: storage-level enforcement, and the user's own resolution pass over the conversions the initial upload reports.
-- **The code calls the Next List "Next Actions"** throughout. The List is of Outcomes — the action focus comes from each Outcome's current Action — so the plural misleads; the role-label "Next Action" stays for the singular current Action of a row. The List also carries two user-facing names: the drawer says "Next Actions", Daily Planning says "Up Next". That divergence is deliberate (the step's pool is filtered, so one name would show two counts) but neither is the model's.
 
 ### Engagement
 

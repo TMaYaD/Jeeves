@@ -291,7 +291,7 @@ final wrContentFiringProvider = Provider<bool?>((ref) {
   final inbox = ref.watch(unfilteredInboxProvider);
   final next = ref.watch(unfilteredNextProvider);
   final waiting = ref.watch(unfilteredWaitingForProvider);
-  final maybe = ref.watch(unfilteredMaybeProvider);
+  final maybe = ref.watch(unfilteredSomedayMaybeProvider);
   if (!hasAnyItem.hasValue ||
       !inbox.hasValue ||
       !next.hasValue ||

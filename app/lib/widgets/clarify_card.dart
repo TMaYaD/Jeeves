@@ -34,7 +34,7 @@
 ///
 /// Used by the daily-planning ritual's inbox-clarify step and by the
 /// Weekly Review wizard (zero-inbox step + the `reclarify` sub-flow opened
-/// from the Waiting For / Next Actions / Someday-Maybe steps).
+/// from the Waiting For / Next / Someday-Maybe steps).
 library;
 
 import 'dart:async';

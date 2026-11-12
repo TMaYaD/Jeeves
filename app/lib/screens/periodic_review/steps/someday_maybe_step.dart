@@ -34,7 +34,7 @@ class SomedayMaybeStep extends ConsumerWidget {
       // Action (ADR-0001 story 3).
       currentActionTextFor: (todo) => actionTexts[todo.id],
       headline: 'Worth pursuing now?',
-      // The user can Keep on Someday, Re-clarify…, promote to Next Actions,
+      // The user can Keep on Someday, Re-clarify…, promote to Next,
       // mark Done, or Trash. Waiting For / Someday stay excluded because they
       // change little for an item already on Someday. Done stays offered
       // because a deferred Outcome that turns out to be achieved belongs on
