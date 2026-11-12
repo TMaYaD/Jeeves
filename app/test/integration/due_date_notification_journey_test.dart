@@ -39,6 +39,7 @@ class FakeOsNotifications extends NotificationService {
     required DateTime scheduledAt,
     String? payload,
   }) async {
+    scheduleCount++;
     pending[id] = _Pending(title, body, scheduledAt, payload);
   }
 
@@ -51,13 +52,19 @@ class FakeOsNotifications extends NotificationService {
   /// Notifications that already fired and sit in the tray.
   final delivered = <int>{};
 
+  /// Runs while the device query is in flight, before its answer is read.
+  Future<void> Function()? duringDeviceQuery;
+  var scheduleCount = 0;
+
   @override
   Future<
       ({
         Set<int> pending,
         Map<int, int> pendingFireAtMillis,
         Set<int> delivered
-      })> dueDateNotificationsOnDevice() async => (
+      })> dueDateNotificationsOnDevice() async {
+    await duringDeviceQuery?.call();
+    return (
         pending: pending.keys.toSet(),
         pendingFireAtMillis: {
           for (final e in pending.entries)
@@ -66,6 +73,7 @@ class FakeOsNotifications extends NotificationService {
         },
         delivered: delivered.toSet(),
       );
+  }
 
   @override
   Future<bool> refreshLocalTimezone() async {
@@ -328,6 +336,32 @@ void main() {
     await settle();
 
     expect(os.delivered, {id});
+  });
+
+  test('an alarm firing while the device query is in flight keeps its tray entry',
+      () async {
+    await insert('a', dueDate: _dueDay(kolkata, 2026, 11, 10));
+    final id = dueDateNotificationId('a');
+    final firesAt =
+        dueDateNotificationFireAt(_dueDay(kolkata, 2026, 11, 10), kolkata);
+    os.pending[id] = _Pending('Title a', 'Due today', firesAt,
+        dueDateNotificationPayload('a', fireAt: firesAt));
+    reconciler.dispose();
+    now = DateTime.utc(2026, 11, 10, 3, 29, 59); // 08:59:59 in Kolkata.
+    await settle(); // OS state is settled before the racing pass.
+    os.scheduleCount = 0;
+    os.duringDeviceQuery = () async {
+      // 09:00 passes mid-query; the alarm fires and is seen in both sets.
+      now = DateTime.utc(2026, 11, 10, 3, 30, 1);
+      os.delivered.add(id);
+      os.duringDeviceQuery = null;
+    };
+    reconciler = startReconciler();
+    await settle();
+
+    expect(os.delivered, {id});
+    expect(os.pending.keys, [id]);
+    expect(os.scheduleCount, 0);
   });
 
   test('an old tray entry does not hide a newer pending alarm gone obsolete',

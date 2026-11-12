@@ -238,12 +238,6 @@ class DueDateNotificationReconciler {
   }
 
   Future<void> _reconcile() async {
-    final plan = planDueDateNotifications(
-      _latestOutcomes,
-      location: _location(),
-      now: _now(),
-    );
-    final desiredIds = plan.toSchedule.map((p) => p.id).toSet();
     // Ask the OS what is actually pending and delivered; never infer delivery
     // from the clock, since inexact alarms can fire minutes after 09:00.
     // Pending ids are NOT reduced by the delivered ids: one Outcome has one
@@ -251,6 +245,15 @@ class DueDateNotificationReconciler {
     // it. Each pending alarm is judged by the fire instant recorded in it.
     final onDevice = await notifications.dueDateNotificationsOnDevice();
     final stillPending = onDevice.pending;
+    // Plan only after the awaited device query: it can take long enough for
+    // a 09:00 alarm to fire meanwhile. Planning earlier would call that alarm
+    // still-future, cancel its fresh tray entry and re-schedule a passed time.
+    final plan = planDueDateNotifications(
+      _latestOutcomes,
+      location: _location(),
+      now: _now(),
+    );
+    final desiredIds = plan.toSchedule.map((p) => p.id).toSet();
     // A pending alarm the plan no longer wants is obsolete (its due date
     // moved, or it fell outside the nearest 50) — unless it is unchanged and
     // merely late: its Outcome still qualifies, 09:00 has passed, and the
