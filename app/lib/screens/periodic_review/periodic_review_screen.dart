@@ -1,7 +1,7 @@
 /// Weekly Review wizard — outer container screen (Issue #54).
 ///
 /// Composes four list-driven [WizardStep]s against the shared [Wizard]
-/// widget (Inbox, Waiting For, Next Actions, Someday/Maybe). The final
+/// widget (Inbox, Waiting For, Next, Someday/Maybe). The final
 /// "Review Complete" summary screen is rendered outside the wizard — it
 /// is a post-ritual confirmation, not a step the user walks through.
 /// Wizard chrome — header, segmented progress — is owned by [Wizard] per
@@ -68,7 +68,7 @@ class _PeriodicReviewScreenState
     'Process Inbox',
     'Decide Bypassed Outcomes',
     'Review Waiting For',
-    'Review Next Actions',
+    'Review Next',
     'Review Someday/Maybe',
   ];
 
@@ -407,7 +407,7 @@ class _PeriodicReviewScreenState
     );
   }
 
-  /// Builds a list-driven step (Inbox / Waiting For / Next Actions /
+  /// Builds a list-driven step (Inbox / Waiting For / Next /
   /// Someday-Maybe). Skip advances the per-item cursor while items
   /// remain; Next step crosses once the cursor is on the last item.
   ///

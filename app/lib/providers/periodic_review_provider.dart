@@ -274,7 +274,7 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
       .getBypassedOutcomes(ref.read(bypassThresholdProvider));
 
   /// Outcome ids the Bypassed step owns, whether or not a short session keeps
-  /// them: they never also appear in Review Waiting For or Review Next Actions.
+  /// them: they never also appear in Review Waiting For or Review Next.
   Future<Set<String>> _bypassedIds() async =>
       {for (final bypassed in await _bypassedOutcomes()) bypassed.outcome.id};
 
@@ -361,7 +361,7 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
     state = state.copyWith(clearSomedayLoadError: true);
     try {
       await ref.read(syncedPreferencesProvider.future);
-      final todos = _uncovered(await _db.todoDao.watchMaybe().first);
+      final todos = _uncovered(await _db.todoDao.watchSomedayMaybe().first);
       final actionTexts = await _db.actionDao
           .getCurrentActionTexts({for (final t in todos) t.id});
       state = state.copyWith(
@@ -514,7 +514,7 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
     final captures = await _db.captureDao.watchInbox().first;
     final waiting = _uncovered(await _db.todoDao.watchPersonTagged().first);
     final next = _uncovered(await _db.todoDao.getNextExcludingPersonTagged());
-    final someday = _uncovered(await _db.todoDao.watchMaybe().first);
+    final someday = _uncovered(await _db.todoDao.watchSomedayMaybe().first);
     return captures.length + waiting.length + next.length + someday.length;
   }
 
