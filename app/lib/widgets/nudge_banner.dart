@@ -2,7 +2,8 @@
 /// **Nudge queue** (see `CONTEXT.md`'s **Banner** and **Nudge queue**
 /// entries) — renders the highest-priority Ritual whose Nudge is currently
 /// visible and whose banner-enabled setting is `true`. Tapping opens the
-/// Ceremony; the ✕ maps to a Nudge **dismiss** (current firing).
+/// Ceremony; a horizontal swipe maps to a Nudge **dismiss** (current firing).
+/// No Banner carries a ✕.
 ///
 /// Replaces the three bespoke per-Ritual banner widgets with one
 /// queue-driven widget parametrised by a per-Ritual chrome matrix.
@@ -15,9 +16,12 @@ import 'package:go_router/go_router.dart';
 import '../models/ritual.dart';
 import '../providers/focus_session_planning_settings_provider.dart';
 import '../providers/nudge_provider.dart';
+import '../providers/nudge_triggers.dart' show unfinishedReviewTriggerProvider;
 import '../providers/periodic_review_settings_provider.dart'
     show periodicReviewBannerEnabledProvider;
 import '../providers/shutdown_settings_provider.dart';
+import '../providers/system_trust_provider.dart'
+    show weeklyReviewDaysLateProvider;
 
 /// True iff the in-app Banner for [ritual] is enabled in user settings.
 /// Each Ritual has its own enabled flag because the user might want to
@@ -52,11 +56,19 @@ class NudgeBanner extends ConsumerWidget {
     if (ritual == null) return const SizedBox.shrink();
 
     final skin = _skins[ritual]!;
-    final quip = skin.quipForToday();
+    final _Quip quip;
+    if (ritual == RitualId.weeklyReview) {
+      quip = _weeklyReviewQuip(
+        now: DateTime.now(),
+        unfinished: ref.watch(unfinishedReviewTriggerProvider).isFiring,
+        daysLate: ref.watch(weeklyReviewDaysLateProvider),
+      );
+    } else {
+      quip = skin.quipForToday();
+    }
 
     return _BannerContent(
       key: Key('${ritual.keyPrefix}_banner_visible'),
-      ritual: ritual,
       skin: skin,
       quip: quip,
       onTap: () => context.go(skin.route),
@@ -69,6 +81,8 @@ class NudgeBanner extends ConsumerWidget {
 // ---------------------------------------------------------------------------
 // Per-Ritual skin matrix
 // ---------------------------------------------------------------------------
+
+int _dailySeed(DateTime now) => now.year * 366 + now.month * 31 + now.day;
 
 class _Quip {
   const _Quip(this.title, this.sub, this.cta);
@@ -91,7 +105,6 @@ class _Skin {
     required this.pulseDuration,
     required this.pulseFromScale,
     required this.pulseToScale,
-    this.hardCtaLabel,
   });
 
   final List<_Quip> quips;
@@ -107,16 +120,8 @@ class _Skin {
   final double pulseFromScale;
   final double pulseToScale;
 
-  /// When non-null, overrides the quip's CTA label (used by Weekly Review
-  /// which keeps a stable "Start Weekly Review" pill regardless of the
-  /// quip text).
-  final String? hardCtaLabel;
-
-  _Quip quipForToday() {
-    final now = DateTime.now();
-    final seed = now.year * 366 + now.month * 31 + now.day + quipSeedOffset;
-    return quips[seed % quips.length];
-  }
+  _Quip quipForToday() =>
+      quips[(_dailySeed(DateTime.now()) + quipSeedOffset) % quips.length];
 }
 
 final _skins = <RitualId, _Skin>{
@@ -186,17 +191,8 @@ final _skins = <RitualId, _Skin>{
     pulseToScale: 1.08,
   ),
   RitualId.weeklyReview: const _Skin(
-    quips: [
-      _Quip('A weekly tidy, sir?',
-          'A trifling few minutes keeps the system humming.', ''),
-      _Quip('If I might suggest, sir.',
-          'A weekly review keeps the chaos at bay.', ''),
-      _Quip('Sir?', 'Your future self will, I venture, thank you.', ''),
-      _Quip('Pardon me, sir.', 'Clear the decks. Set the week.', ''),
-      _Quip('Shall we, sir?', 'Your list, audited and ready.', ''),
-      _Quip('A moment, sir.', 'Ten minutes now, ten fewer worries later.', ''),
-      _Quip('Ahem, sir.', 'Time to see what is actually going on.', ''),
-    ],
+    // The Weekly Review's lines are built by [_weeklyReviewQuip].
+    quips: [],
     quipSeedOffset: 0,
     route: '/periodic-review',
     bg: Color(0xFFECFDF5), // emerald-50
@@ -208,9 +204,82 @@ final _skins = <RitualId, _Skin>{
     pulseDuration: Duration(milliseconds: 1400),
     pulseFromScale: 0.92,
     pulseToScale: 1.08,
-    hardCtaLabel: 'Start Weekly Review',
   ),
 };
+
+// ---------------------------------------------------------------------------
+// Weekly Review copy
+// ---------------------------------------------------------------------------
+
+/// Bertie-speak buttons for a due Weekly Review (DESIGN.md § Voice): the
+/// button answers Jeeves, so it never names the Ceremony.
+const kWeeklyReviewButtonPool = <String>[
+  'Right ho  →',
+  'Very good  →',
+  'At once  →',
+  'Indeed  →',
+];
+
+/// The continue-wording button for a review left unfinished.
+const kWeeklyReviewContinueButton = 'Push on  →';
+
+/// First line of an unfinished review's Banner.
+const kWeeklyReviewUnfinishedLine = 'The Weekly Review, sir. Unfinished.';
+
+// TODO(copy): placeholder. The real second-line remedy pool is on the design
+// canvas; every line in it says that a short session is enough. Until it is
+// pasted in, the shipped Weekly Review second lines stand in.
+const kWeeklyReviewRemedyLinePool = <String>[
+  'A trifling few minutes keeps the system humming.',
+  'A weekly review keeps the chaos at bay.',
+  'Your future self will, I venture, thank you.',
+  'Clear the decks. Set the week.',
+  'Your list, audited and ready.',
+  'Ten minutes now, ten fewer worries later.',
+  'Time to see what is actually going on.',
+];
+
+// TODO(copy): placeholder. The real content-state line pair (Next empty while
+// Waiting For or Someday/Maybe hold items; "days late" is untrue there) comes
+// from the design canvas or the Product Owner. The shipped pair stands in.
+const kWeeklyReviewContentStateLinePair = <(String, String)>[
+  ('A weekly tidy, sir?', 'A trifling few minutes keeps the system humming.'),
+];
+
+const _smallNumberWords = <String>[
+  'Zero', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight',
+  'Nine',
+];
+
+/// The Weekly Review's first line: "is due" on the due day, then the days late
+/// in words up to nine and digits from ten.
+String weeklyReviewFirstLine(int daysLate) {
+  if (daysLate <= 0) return 'The Weekly Review is due, sir.';
+  final count = daysLate < 10 ? _smallNumberWords[daysLate] : '$daysLate';
+  final unit = daysLate == 1 ? 'day' : 'days';
+  return 'The Weekly Review, sir. $count $unit late.';
+}
+
+_Quip _weeklyReviewQuip({
+  required DateTime now,
+  required bool unfinished,
+  required int? daysLate,
+}) {
+  final seed = _dailySeed(now);
+  final remedy =
+      kWeeklyReviewRemedyLinePool[seed % kWeeklyReviewRemedyLinePool.length];
+  if (unfinished) {
+    return _Quip(kWeeklyReviewUnfinishedLine, remedy, kWeeklyReviewContinueButton);
+  }
+  final button = kWeeklyReviewButtonPool[seed % kWeeklyReviewButtonPool.length];
+  if (daysLate == null) {
+    // Only the content-state Trigger is firing: the review is not late.
+    final pair = kWeeklyReviewContentStateLinePair[
+        seed % kWeeklyReviewContentStateLinePair.length];
+    return _Quip(pair.$1, pair.$2, button);
+  }
+  return _Quip(weeklyReviewFirstLine(daysLate), remedy, button);
+}
 
 // ---------------------------------------------------------------------------
 // Banner chrome — shared between all Rituals, parametrised by [_Skin].
@@ -219,14 +288,12 @@ final _skins = <RitualId, _Skin>{
 class _BannerContent extends StatefulWidget {
   const _BannerContent({
     super.key,
-    required this.ritual,
     required this.skin,
     required this.quip,
     required this.onTap,
     required this.onDismiss,
   });
 
-  final RitualId ritual;
   final _Skin skin;
   final _Quip quip;
   final VoidCallback onTap;
@@ -236,9 +303,16 @@ class _BannerContent extends StatefulWidget {
   State<_BannerContent> createState() => _BannerContentState();
 }
 
+/// Horizontal travel, in logical pixels, that counts as a swipe-dismiss.
+const double _kSwipeDismissDistance = 80;
+
+/// Horizontal fling speed that counts as a swipe-dismiss on its own.
+const double _kSwipeDismissVelocity = 700;
+
 class _BannerContentState extends State<_BannerContent>
     with SingleTickerProviderStateMixin {
   late final AnimationController _pulse;
+  double _dragOffset = 0;
 
   @override
   void initState() {
@@ -253,78 +327,91 @@ class _BannerContentState extends State<_BannerContent>
     super.dispose();
   }
 
+  void _finishDrag(DragEndDetails details) {
+    final travelled = _dragOffset.abs();
+    setState(() => _dragOffset = 0);
+    if (travelled >= _kSwipeDismissDistance ||
+        details.velocity.pixelsPerSecond.dx.abs() >= _kSwipeDismissVelocity) {
+      widget.onDismiss();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final skin = widget.skin;
-    return GestureDetector(
-      onTap: widget.onTap,
-      child: Container(
-        decoration: BoxDecoration(
-          color: skin.bg,
-          border: Border(bottom: BorderSide(color: Color(skin.borderTint))),
-        ),
-        child: SafeArea(
-          bottom: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
-            child: Row(
-              children: [
-                ScaleTransition(
-                  scale: Tween<double>(
-                    begin: skin.pulseFromScale,
-                    end: skin.pulseToScale,
-                  ).animate(
-                    CurvedAnimation(parent: _pulse, curve: Curves.easeInOut),
-                  ),
-                  child: Icon(skin.icon, size: 22, color: skin.accent),
+    final content = Container(
+      decoration: BoxDecoration(
+        color: skin.bg,
+        border: Border(bottom: BorderSide(color: Color(skin.borderTint))),
+      ),
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+          child: Row(
+            children: [
+              ScaleTransition(
+                scale: Tween<double>(
+                  begin: skin.pulseFromScale,
+                  end: skin.pulseToScale,
+                ).animate(
+                  CurvedAnimation(parent: _pulse, curve: Curves.easeInOut),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        widget.quip.title,
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w700,
-                          color: skin.ink,
-                          height: 1.2,
-                        ),
+                child: Icon(skin.icon, size: 22, color: skin.accent),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      widget.quip.title,
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: skin.ink,
+                        height: 1.2,
                       ),
-                      const SizedBox(height: 2),
-                      Text(
-                        widget.quip.sub,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                          color: skin.inkMuted,
-                          height: 1.2,
-                        ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      widget.quip.sub,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: skin.inkMuted,
+                        height: 1.2,
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 8),
-                _CtaPill(
-                  label: skin.hardCtaLabel ?? widget.quip.cta,
-                  color: skin.accent,
-                  onTap: widget.onTap,
-                ),
-                const SizedBox(width: 4),
-                IconButton(
-                  key: Key('${widget.ritual.keyPrefix}_banner_dismiss'),
-                  tooltip: 'Dismiss',
-                  onPressed: widget.onDismiss,
-                  visualDensity: VisualDensity.compact,
-                  padding: const EdgeInsets.all(6),
-                  constraints: const BoxConstraints(),
-                  icon: Icon(Icons.close, size: 18, color: skin.inkMuted),
-                ),
-              ],
-            ),
+              ),
+              const SizedBox(width: 8),
+              _CtaPill(
+                label: widget.quip.cta,
+                color: skin.accent,
+                onTap: widget.onTap,
+              ),
+            ],
           ),
+        ),
+      ),
+    );
+    return Semantics(
+      customSemanticsActions: {
+        const CustomSemanticsAction(label: 'Dismiss for today'):
+            widget.onDismiss,
+      },
+      child: GestureDetector(
+        onTap: widget.onTap,
+        onHorizontalDragUpdate: (details) =>
+            setState(() => _dragOffset += details.delta.dx),
+        onHorizontalDragCancel: () => setState(() => _dragOffset = 0),
+        onHorizontalDragEnd: _finishDrag,
+        child: Transform.translate(
+          offset: Offset(_dragOffset, 0),
+          child: content,
         ),
       ),
     );
@@ -346,9 +433,9 @@ class _CtaPill extends StatelessWidget {
   Widget build(BuildContext context) {
     return Material(
       color: color,
-      borderRadius: BorderRadius.circular(999),
+      borderRadius: BorderRadius.circular(2),
       child: InkWell(
-        borderRadius: BorderRadius.circular(999),
+        borderRadius: BorderRadius.circular(2),
         onTap: onTap,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),

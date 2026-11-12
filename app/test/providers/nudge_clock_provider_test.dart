@@ -1,9 +1,9 @@
-import 'package:fake_async/fake_async.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/providers/clock_provider.dart';
 import 'package:jeeves/providers/nudge_clock_provider.dart';
 import 'package:jeeves/providers/periodic_review_settings_provider.dart';
+import 'package:jeeves/providers/system_trust_provider.dart';
 
 void main() {
   group('nextNudgeBoundary', () {
@@ -49,43 +49,35 @@ void main() {
     });
   });
 
-  group('periodicReviewIsDueProvider — reactive to the cadence boundary', () {
-    test('its scheduled boundary Timer fires at last + 7d and flips to due', () {
-      fakeAsync((async) {
-        final last = DateTime(2026, 6, 23, 10, 0); // due exactly at 6/30 10:00
-        var now = DateTime(2026, 6, 29, 10, 0); // one day before the boundary
-
-        final container = ProviderContainer(overrides: [
+  group('periodicReviewIsDueProvider — follows the due instant', () {
+    ProviderContainer containerAt(DateTime now, DateTime? dueAt) =>
+        ProviderContainer(overrides: [
           clockProvider.overrideWithValue(() => now),
-          periodicReviewOpenSinceProvider.overrideWithValue(null),
-          periodicReviewLastCompletedProvider.overrideWithValue(last),
+          nudgeBoundaryTickProvider.overrideWithValue(0),
+          weeklyReviewDueAtProvider.overrideWithValue(dueAt),
         ]);
-        addTearDown(container.dispose);
 
-        // Building the provider schedules a Timer for the exact due instant.
-        expect(container.read(periodicReviewIsDueProvider), isFalse);
+    final due = DateTime(2026, 6, 30, 10, 0);
 
-        // One second short of the cutoff: the timer has not fired, still not due.
-        now = DateTime(2026, 6, 30, 9, 59, 59);
-        async.elapse(const Duration(days: 1) - const Duration(seconds: 1));
-        expect(container.read(periodicReviewIsDueProvider), isFalse);
-
-        // Cross the exact cutoff: the scheduled Timer fires invalidateSelf and
-        // the predicate re-evaluates to due — no manual invalidation.
-        now = DateTime(2026, 6, 30, 10, 0);
-        async.elapse(const Duration(seconds: 1));
-        expect(container.read(periodicReviewIsDueProvider), isTrue);
-      });
+    test('is not due one second before the due instant', () {
+      final container =
+          containerAt(due.subtract(const Duration(seconds: 1)), due);
+      addTearDown(container.dispose);
+      expect(container.read(periodicReviewIsDueProvider), isFalse);
     });
 
-    test('is due immediately when never completed', () {
-      final container = ProviderContainer(overrides: [
-        clockProvider.overrideWithValue(() => DateTime(2026, 6, 29)),
-        periodicReviewOpenSinceProvider.overrideWithValue(null),
-          periodicReviewLastCompletedProvider.overrideWithValue(null),
-      ]);
+    test('is due at the due instant and after it', () {
+      for (final now in [due, due.add(const Duration(days: 30))]) {
+        final container = containerAt(now, due);
+        addTearDown(container.dispose);
+        expect(container.read(periodicReviewIsDueProvider), isTrue);
+      }
+    });
+
+    test('is not due when there is no due instant (no items yet)', () {
+      final container = containerAt(DateTime(2026, 6, 29), null);
       addTearDown(container.dispose);
-      expect(container.read(periodicReviewIsDueProvider), isTrue);
+      expect(container.read(periodicReviewIsDueProvider), isFalse);
     });
   });
 }

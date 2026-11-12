@@ -51,8 +51,10 @@ leaves it pending**, so it returns next session. Skip likewise leaves an item
 pending in a partial session. Progress survives process death; the precise
 in-session cursor remains transient.
 
-A partial summary shows the remaining count from current storage and Done ends
-only that sitting. A session containing all remaining items completes the review
+Done on any session, partial or final, sets the last-review time: the review is
+due seven days after it, or seven days after the first Capture or Outcome for a
+user who has never reviewed. A partial summary shows the remaining count from
+current storage and Done ends only that sitting. A session containing all remaining items completes the review
 on Done, even with skips, preserving the full-review behaviour. An unfinished
 review expires seven days after opening and starts fresh. Nudge cadence and
 in-progress suppression continue to apply.
@@ -98,7 +100,7 @@ visible when the predicate transitions false → true. A Nudge has one or more, 
 are independent of each other and of Cadence period semantics, and each owns its
 full domain logic — including any "is this stale enough to nag about again?" rule.
 
-Two shapes exist today.
+Three shapes exist today.
 
 - The **Cadence Trigger** is the canonical one. It fires once per anchor-to-anchor
   period — *the clock has crossed into a new period and the Ritual has not been
@@ -106,6 +108,13 @@ Two shapes exist today.
 - **Content-state Triggers** are predicates over the user's data, refiring whenever
   the predicate newly evaluates true mid-period. The only one today is the Weekly
   Review's: *the Next list is empty while Waiting For or Someday still holds items*.
+- The **Unfinished Trigger** is the Weekly Review's alone: *a session was started and
+  left without Done*. It fires at once, whether or not the review is due, ends when a
+  session is finished, and lives in memory on this device. While it fires the Banner
+  uses continue wording.
+
+The Weekly Review's Cadence Trigger fires while the review is due and refires every
+day, so a swipe holds for the rest of the day and the Nudge returns tomorrow.
 
 A predicate may also carry **world-state preconditions** — facts that gate whether
 the Ritual makes sense at all. These stay inside the Trigger rather than becoming
@@ -190,7 +199,7 @@ fidelity**, which is the whole reason the two gestures differ:
 
 | Surface | Gesture | Maps to | Why |
 |---|---|---|---|
-| Banner | ✕ | dismiss | An explicit in-app gesture; the user meant it |
+| Banner | horizontal swipe | dismiss | An explicit in-app gesture; the user meant it |
 | Banner | action button | user-explicit snooze | A duration the user chose |
 | Notification | swipe away | system-implicit snooze | Low-signal — mass-dismiss fatigue makes it a poor read of intent |
 | Notification | skip | dismiss | An explicit button, cadence-flavoured copy ("Skip today") |

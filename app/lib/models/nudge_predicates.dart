@@ -89,14 +89,10 @@ class EsFacts {
 }
 
 class WrFacts {
-  const WrFacts({
-    required this.hasAnyItem,
-    this.lastCompleted,
-    this.contentFiringEdge,
-  });
+  const WrFacts({this.dueAt, this.contentFiringEdge});
 
-  final bool hasAnyItem;
-  final DateTime? lastCompleted;
+  /// When the Weekly Review falls due; null when nothing is due (no items).
+  final DateTime? dueAt;
 
   /// Null when the content-state Trigger is not firing.
   final DateTime? contentFiringEdge;
@@ -145,21 +141,16 @@ DateTime? esFiringEdgeAt(DateTime instant, EsFacts facts) {
 
 /// Most recent active Weekly Review Trigger edge. Content edges are already
 /// tracked by the live provider and remain frozen during a projection.
+///
+/// While the review is due the Cadence Trigger fires afresh every day: its
+/// edge is the later of the due instant and the start of today, so a swipe
+/// holds for the rest of the day and the Banner is back tomorrow.
 DateTime? wrFiringEdgeAt(DateTime instant, WrFacts facts) {
-  if (!facts.hasAnyItem) return null;
-  final lastCompleted = facts.lastCompleted;
-  // Each elapsed seven-day period is a fresh firing (releasing a dismissal
-  // from the previous one): the edge is lastCompleted + 7d·k for the largest
-  // k whose edge is not after the instant. Before the first boundary there is
-  // no cadence edge.
-  final DateTime? cadenceEdge;
-  if (lastCompleted == null) {
-    cadenceEdge = _todayAt(instant, 0, 0);
-  } else {
-    final elapsedPeriods = instant.difference(lastCompleted).inDays ~/ 7;
-    cadenceEdge = elapsedPeriods < 1
-        ? null
-        : lastCompleted.add(Duration(days: 7 * elapsedPeriods));
+  final dueAt = facts.dueAt;
+  DateTime? cadenceEdge;
+  if (dueAt != null && !instant.isBefore(dueAt)) {
+    final startOfDay = _todayAt(instant, 0, 0);
+    cadenceEdge = dueAt.isAfter(startOfDay) ? dueAt : startOfDay;
   }
   final contentEdge = facts.contentFiringEdge;
   if (cadenceEdge == null) return contentEdge;

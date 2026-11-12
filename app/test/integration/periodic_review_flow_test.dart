@@ -19,6 +19,7 @@ import 'package:jeeves/providers/periodic_review_settings_provider.dart';
 import 'package:jeeves/providers/synced_preferences_provider.dart';
 import 'package:jeeves/screens/periodic_review/periodic_review_screen.dart';
 import 'package:jeeves/services/notification_service.dart';
+import 'package:jeeves/providers/system_trust_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../helpers/periodic_review_test_helpers.dart';
@@ -84,7 +85,17 @@ void main() {
         () async {
       await c.read(syncedPreferencesProvider.future);
 
-      // 1. Pre-completion state: due, banner enabled.
+      // 1. Pre-completion state: due (the first item is eight days old),
+      // banner enabled.
+      final eightDaysAgo = DateTime.now().subtract(const Duration(days: 8));
+      await db.captureDao.insertCapture(CapturesCompanion(
+        id: const Value('old'),
+        title: const Value('Old capture'),
+        userId: const Value('local'),
+        createdAt: Value(eightDaysAgo),
+        updatedAt: Value(eightDaysAgo),
+      ));
+      await c.read(neverReviewedBaselineProvider.future);
       expect(c.read(periodicReviewIsDueProvider), isTrue);
       expect(c.read(periodicReviewBannerEnabledProvider), isTrue);
 
