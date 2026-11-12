@@ -9,7 +9,8 @@
 /// Step 1 → Step 2 advances automatically once the user resolves the last
 /// unfinished task; the screen latches onto [CloseDayStep] once reached so
 /// `closeDay()` resetting `currentStep` mid fade-out cannot expose the
-/// Review step underneath.
+/// Review step underneath. When Daily Planning launched the shutdown, Close Day
+/// skips its animation and continues straight into planning.
 library;
 
 import 'package:flutter/material.dart';
@@ -18,6 +19,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../models/ritual.dart';
 import '../../providers/ceremony_in_progress_provider.dart';
 import '../../providers/evening_shutdown_provider.dart';
+import '../../providers/focus_session_planning_provider.dart'
+    show ShutdownThenPlanNotifier, shutdownThenPlanProvider;
 import '../../widgets/ceremony/ceremony_pop_scope.dart';
 import '../../widgets/ceremony/wizard.dart';
 import 'steps/close_day_step.dart';
@@ -34,6 +37,7 @@ class ShutdownRitualScreen extends ConsumerStatefulWidget {
 
 class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
   late final CeremonyInProgressNotifier _ceremonyNotifier;
+  late final ShutdownThenPlanNotifier _shutdownThenPlanNotifier;
   int? _resolveInitialTotal;
   bool _showCloseDay = false;
 
@@ -47,6 +51,7 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
     // Capture the notifier now so dispose() can call exit() without
     // touching `ref` after the widget has been unmounted.
     _ceremonyNotifier = ref.read(ceremonyInProgressProvider.notifier);
+    _shutdownThenPlanNotifier = ref.read(shutdownThenPlanProvider.notifier);
     // hold the Nudge while this Ceremony performance is in progress.
     // Defer `enter()` to the post-frame callback — Riverpod 3.x forbids
     // notifier mutation during the build phase, which initState is part of.
@@ -63,7 +68,17 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
     // mirror of the deferred `enter()` above). The notifier guards against
     // the container being torn down before the microtask fires.
     final notifier = _ceremonyNotifier;
-    Future.microtask(() => notifier.exit(RitualId.eveningShutdown));
+    final thenPlanNotifier = _shutdownThenPlanNotifier;
+    Future.microtask(() {
+      notifier.exit(RitualId.eveningShutdown);
+      // The "shut down, then plan" intent must not outlive this screen: if the
+      // user backs out, a later ordinary shutdown would skip its animation.
+      try {
+        thenPlanNotifier.set(false);
+      } on StateError {
+        // Container already torn down.
+      }
+    });
     super.dispose();
   }
 
