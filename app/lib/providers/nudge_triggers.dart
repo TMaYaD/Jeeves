@@ -41,9 +41,7 @@ import 'nudge_clock_provider.dart';
 import 'onboarding_provider.dart';
 import 'periodic_review_provider.dart' show periodicReviewProvider;
 import 'periodic_review_settings_provider.dart'
-    show
-        emptyActionableBannerTrigger,
-        periodicReviewIsDueProvider;
+    show emptyActionableBannerTrigger;
 import 'shutdown_settings_provider.dart' show shutdownSettingsProvider;
 import 'synced_preferences_provider.dart';
 import 'system_trust_provider.dart' show weeklyReviewDueAtProvider;
@@ -164,7 +162,7 @@ final qualifyingSessionTodayProvider = StreamProvider<bool>((ref) {
 ///     firingSince = later of (today's DPR anchor, last ES anchor).
 ///   - ES:  FS active AND now ≥ shutdown anchor AND ES not in-progress.
 ///     firingSince = today's shutdown anchor.
-///   - WR:  review due (`periodicReviewIsDueProvider`) AND WR not in-progress.
+///   - WR:  review due (now ≥ `weeklyReviewDueAtProvider`) AND WR not in-progress.
 ///     firingSince = later of the due instant and the start of today, so the
 ///     Nudge returns daily while due.
 final cadenceTriggerProvider =
@@ -222,12 +220,13 @@ TriggerState _esCadenceTrigger(Ref ref) {
 }
 
 TriggerState _wrCadenceTrigger(Ref ref) {
+  // `_now` re-evaluates at every local midnight and at the due instant (the
+  // boundary tick), so the daily return needs no timer of its own. The due
+  // instant is the single due predicate's input; it is null with no items yet.
   final now = _now(ref);
-  // The single due predicate; its dueAt already covers "no items yet".
-  if (!ref.watch(periodicReviewIsDueProvider)) return TriggerState.idle;
   final dueAt = ref.watch(weeklyReviewDueAtProvider);
-  return _stateForEdge(wrFiringEdgeAt(now, WrFacts(dueAt: dueAt)) ??
-      _startOfToday(now));
+  if (dueAt == null || now.isBefore(dueAt)) return TriggerState.idle;
+  return _stateForEdge(wrFiringEdgeAt(now, WrFacts(dueAt: dueAt)));
 }
 
 // ---------------------------------------------------------------------------

@@ -148,9 +148,9 @@ final periodicReviewOpenSinceProvider = Provider<DateTime?>((ref) {
 });
 
 /// True when the Weekly Review is due: [weeklyReviewDueAtProvider] has
-/// passed. The single due predicate for the Banner and the Notification; an
-/// open review period does not make the review due, so a finished short
-/// session clears both until seven days after it.
+/// passed. The Notification reads this; the Banner's Cadence Trigger reads the
+/// same due instant. An open review period does not make the review due, so a
+/// finished short session clears both until seven days after it.
 final periodicReviewIsDueProvider = Provider<bool>((ref) {
   final due = ref.watch(weeklyReviewDueAtProvider);
   if (due == null) return false;

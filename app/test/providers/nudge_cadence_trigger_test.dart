@@ -25,7 +25,6 @@ import 'package:jeeves/providers/gtd_lists_provider.dart';
 import 'package:jeeves/providers/nudge_clock_provider.dart';
 import 'package:jeeves/providers/nudge_triggers.dart';
 import 'package:jeeves/providers/onboarding_provider.dart';
-import 'package:jeeves/providers/periodic_review_settings_provider.dart';
 import 'package:jeeves/models/nudge_predicates.dart';
 import 'package:jeeves/providers/shutdown_settings_provider.dart';
 import 'package:jeeves/providers/system_trust_provider.dart'
@@ -119,27 +118,25 @@ void main() {
     ProviderContainer container({
       required DateTime now,
       required DateTime? dueAt,
-      required bool isDue,
     }) {
       return ProviderContainer(overrides: [
         clockProvider.overrideWithValue(() => now),
         nudgeBoundaryTickProvider.overrideWithValue(0),
         weeklyReviewDueAtProvider.overrideWithValue(dueAt),
-        periodicReviewIsDueProvider.overrideWithValue(isDue),
         ceremonyInProgressForProvider.overrideWith((ref, r) => false),
       ]);
     }
 
     test('idle before the review falls due', () async {
       final c = container(
-          now: due.subtract(const Duration(hours: 1)), dueAt: due, isDue: false);
+          now: due.subtract(const Duration(hours: 1)), dueAt: due);
       addTearDown(c.dispose);
       expect((await _readTrigger(c, RitualId.weeklyReview)).isFiring, isFalse);
     });
 
     test('on the due day the edge is the due instant', () async {
       final c = container(
-          now: due.add(const Duration(hours: 3)), dueAt: due, isDue: true);
+          now: due.add(const Duration(hours: 3)), dueAt: due);
       addTearDown(c.dispose);
       final trigger = await _readTrigger(c, RitualId.weeklyReview);
       expect(trigger.isFiring, isTrue);
@@ -149,7 +146,7 @@ void main() {
     for (final days in [1, 3, 12]) {
       test('$days day(s) late the edge is the start of today', () async {
         final now = due.add(Duration(days: days, hours: 3));
-        final c = container(now: now, dueAt: due, isDue: true);
+        final c = container(now: now, dueAt: due);
         addTearDown(c.dispose);
         final trigger = await _readTrigger(c, RitualId.weeklyReview);
         expect(trigger.isFiring, isTrue);
@@ -159,7 +156,7 @@ void main() {
 
     test('a swipe holds for the day and the next day releases it', () async {
       final now = due.add(const Duration(days: 2, hours: 3));
-      final c = container(now: now, dueAt: due, isDue: true);
+      final c = container(now: now, dueAt: due);
       addTearDown(c.dispose);
       final edge = (await _readTrigger(c, RitualId.weeklyReview)).firingSince;
       final swipedAt = now.add(const Duration(hours: 1));
@@ -168,7 +165,7 @@ void main() {
           isFalse);
       final tomorrow = DateTime(now.year, now.month, now.day + 1);
       final c2 = container(
-          now: tomorrow.add(const Duration(hours: 9)), dueAt: due, isDue: true);
+          now: tomorrow.add(const Duration(hours: 9)), dueAt: due);
       addTearDown(c2.dispose);
       final nextEdge =
           (await _readTrigger(c2, RitualId.weeklyReview)).firingSince;
