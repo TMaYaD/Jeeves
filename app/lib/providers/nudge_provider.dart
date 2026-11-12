@@ -23,10 +23,13 @@ library;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../models/nudge_predicates.dart';
 import '../models/ritual.dart';
 import 'ceremony_in_progress_provider.dart';
 import 'nudge_triggers.dart';
 import 'synced_preferences_provider.dart';
+
+export '../models/nudge_predicates.dart' show NudgeState;
 
 // ---------------------------------------------------------------------------
 // Key helpers
@@ -34,48 +37,6 @@ import 'synced_preferences_provider.dart';
 
 String _dismissedAtKey(RitualId ritual) => '${ritual.keyPrefix}_nudge_dismissed_at';
 String _snoozedUntilKey(RitualId ritual) => '${ritual.keyPrefix}_nudge_snoozed_until';
-
-// ---------------------------------------------------------------------------
-// NudgeState
-// ---------------------------------------------------------------------------
-
-/// Persisted Nudge state for one Ritual. The `visible` flag is *computed*
-/// from this state combined with Trigger state and the in-progress flag — it
-/// is not part of the persisted record.
-class NudgeState {
-  const NudgeState({this.dismissedAt, this.snoozedUntil});
-
-  /// Timestamp of the most recent user-dismiss. The Nudge stays hidden until
-  /// any Trigger's `firingSince` advances past this.
-  final DateTime? dismissedAt;
-
-  /// Snooze expiry. `null` means no snooze; a value in the past has expired
-  /// and is treated as `null` for visibility purposes (kept around so a
-  /// future "reactivate snooze" UX can read it).
-  final DateTime? snoozedUntil;
-
-  NudgeState copyWith({
-    DateTime? dismissedAt,
-    DateTime? snoozedUntil,
-    bool clearDismissedAt = false,
-    bool clearSnoozedUntil = false,
-  }) {
-    return NudgeState(
-      dismissedAt: clearDismissedAt ? null : (dismissedAt ?? this.dismissedAt),
-      snoozedUntil:
-          clearSnoozedUntil ? null : (snoozedUntil ?? this.snoozedUntil),
-    );
-  }
-
-  @override
-  bool operator ==(Object other) =>
-      other is NudgeState &&
-      other.dismissedAt == dismissedAt &&
-      other.snoozedUntil == snoozedUntil;
-
-  @override
-  int get hashCode => Object.hash(dismissedAt, snoozedUntil);
-}
 
 // ---------------------------------------------------------------------------
 // NudgeState provider (persisted, per-Ritual)
@@ -126,15 +87,7 @@ final nudgeVisibleProvider =
   final s = ref.watch(nudgeStateProvider(ritual));
   final now = DateTime.now();
 
-  // Snooze blocks visibility until expiry.
-  if (s.snoozedUntil != null && now.isBefore(s.snoozedUntil!)) return false;
-
-  // Dismiss blocks until a Trigger refires past the dismiss time.
-  if (s.dismissedAt != null && !s.dismissedAt!.isBefore(firingEdge)) {
-    return false;
-  }
-
-  return true;
+  return nudgeVisibleAt(now, firingEdge, s, null);
 });
 
 // ---------------------------------------------------------------------------
