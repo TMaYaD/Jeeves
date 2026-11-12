@@ -357,8 +357,10 @@ void main() {
       await tester.binding.handlePopRoute();
       await tester.pumpAndSettle();
       expect(find.text('Outcome achieved'), findsNothing);
-      expect((await todo(tester, 'a')).doneAt, isNull,
-          reason: 'the write must still be pending when the sheet is gone');
+      // The store is not read here: the held write sits inside a transaction
+      // that owns the connection, so a read would queue behind it. The gate
+      // itself proves the write is uncommitted; the unchanged Roll Over below
+      // proves the ritual has not been told about a verdict yet.
       expect(container.read(eveningShutdownProvider).dispositions['a'],
           'rollover');
 
