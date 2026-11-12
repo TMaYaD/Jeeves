@@ -15,6 +15,8 @@ import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/nudge_clock_provider.dart';
 import 'package:jeeves/providers/nudge_provider.dart';
 import 'package:jeeves/providers/periodic_review_provider.dart';
+import 'package:jeeves/providers/periodic_review_settings_provider.dart'
+    show periodicReviewIsDueProvider;
 import 'package:jeeves/providers/synced_preferences_provider.dart';
 import 'package:jeeves/router.dart';
 import 'package:jeeves/services/notification_service.dart';
@@ -195,8 +197,10 @@ void main() {
 
       // Done on the summary of a session.
       await tester.runAsync(() => review.completeSession());
-      // The due date moved while inside runAsync, so the boundary tick re-armed
-      // its Timer on the real clock. Re-arm it in the test's fake time.
+      // The due date moved while inside runAsync, so the due predicate and the
+      // boundary tick armed their Timers on the real clock. Re-arm both in the
+      // test's fake time, where only elapsed time may restore the Banner.
+      c.invalidate(periodicReviewIsDueProvider);
       c.invalidate(nudgeBoundaryTickProvider);
       await _flush(tester);
       expect(banner, findsNothing);
