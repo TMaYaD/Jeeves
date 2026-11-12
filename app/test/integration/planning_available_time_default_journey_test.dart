@@ -10,7 +10,6 @@ import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/services/notification_service.dart';
 import 'package:jeeves/screens/planning/focus_session_planning_screen.dart';
-import 'package:jeeves/screens/planning/steps/day_checkin_time_step.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../helpers/periodic_review_test_helpers.dart';
@@ -132,20 +131,23 @@ void main() {
 
   testWidgets('clearing hours before the pre-fill lands keeps the cleared field',
       (tester) async {
+    await tester.runAsync(() => db.userPreferencesDao
+        .set('local', kLastSessionAvailableMinutesKey, '330'));
+    final router = GoRouter(routes: [
+      GoRoute(path: '/', builder: (_, _) => const FocusSessionPlanningScreen()),
+    ]);
+    addTearDown(router.dispose);
     await tester.pumpWidget(UncontrolledProviderScope(
       container: container,
-      child: const MaterialApp(home: Scaffold(body: DayCheckinTimeStep())),
+      child: MaterialApp.router(routerConfig: router),
     ));
+    container.read(focusSessionPlanningProvider.notifier).goToStep(4);
+    // Fake-time pumps only: the stored value is read on the real event loop,
+    // so it cannot have landed yet.
+    await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField).at(0), '');
     await tester.pump();
-    // The pre-fill value becomes readable only now: it lands late.
-    await tester.runAsync(() async {
-      await db.userPreferencesDao
-          .set('local', kLastSessionAvailableMinutesKey, '330');
-      await container
-          .read(focusSessionPlanningProvider.notifier)
-          .ensureAvailableTimePreload();
-    });
+    // The pre-fill lands now.
     await settleWithRealAsync(tester);
     expect(fieldText(tester, 0), '');
     expect(container.read(focusSessionPlanningProvider).availableMinutes, 480);
