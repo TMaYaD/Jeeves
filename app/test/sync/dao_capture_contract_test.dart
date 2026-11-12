@@ -252,6 +252,44 @@ void main() {
       expect(op.fields.keys.toSet(),
           collectionCodecs[todosCollection]!.columns.keys.toSet());
     });
+    test('applyRouting with a queue promote authors ops only when it lands (#788)',
+        () async {
+      final id = await seedOutcome();
+      await db.todoDao.setIntent(id, Intent.maybe, now: _ts);
+      await seedPlannedAction(db,
+          outcomeId: id,
+          text: 'Step one',
+          userId: _userId,
+          id: 'p1',
+          position: 0);
+      capture.clear();
+
+      await db.customStatement(
+          'CREATE TRIGGER todos_route_fails BEFORE UPDATE OF intent ON todos '
+          "BEGIN SELECT RAISE(ABORT, 'route is unwritable'); END");
+      await expectLater(
+        db.todoDao.applyRouting(id,
+            to: RoutingKind.nextAction, promotePlannedActionId: 'p1', now: _ts),
+        throwsA(anything),
+      );
+      expect(capture.forCollection(todosCollection), isEmpty);
+      expect(capture.forCollection(actionsCollection), isEmpty,
+          reason: 'a rolled-back promote authors no op');
+
+      await db.customStatement('DROP TRIGGER todos_route_fails');
+      await db.todoDao.applyRouting(id,
+          to: RoutingKind.nextAction, promotePlannedActionId: 'p1', now: _ts);
+      final op = only(todosCollection);
+      expect(op.fields['intent'], 'next');
+      expect(op.fields['last_clarified_at'], isNotNull);
+      expect(
+          capture
+              .forCollection(actionsCollection)
+              .firstWhere((o) => o.entityId == 'p1')
+              .fields['role'],
+          'current');
+    });
+
 
     test('upsertOutcome asserts only the present fields when it updates',
         () async {

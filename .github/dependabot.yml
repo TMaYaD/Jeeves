@@ -59,6 +59,14 @@ updates:
     groups:
       backend-docker:
         update-types: [minor, patch]
+    # A Python minor/major upgrade is a deliberate edit to the requires-python
+    # band plus the FROM tag, not a dependency bump (docs/BACKEND_GUIDELINES.md,
+    # "Python version"). Patch bumps within the current minor keep flowing.
+    ignore:
+      - dependency-name: python
+        update-types:
+          - version-update:semver-minor
+          - version-update:semver-major
 
   # ---------------------------------------------------------------------------
   # Infra docker-compose services (infra/docker-compose.yml).

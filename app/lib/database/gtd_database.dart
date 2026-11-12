@@ -39,7 +39,7 @@ export 'tables.dart';
 part 'gtd_database.g.dart';
 
 @DriftDatabase(
-  tables: [Todos, Tags, TodoTags, TimeLogs, FocusSessions, FocusSessionTasks, FocusSessionDispositions, UserPreferences, Captures, CaptureOutcomes, CaptureTags, Actions],
+  tables: [Todos, Tags, TodoTags, TimeLogs, FocusSessions, FocusSessionTasks, FocusSessionDispositions, UserPreferences, Captures, CaptureAttachments, CaptureOutcomes, CaptureTags, Actions],
   daos: [TagDao, TodoDao, TimeLogDao, FocusSessionDao, CaptureDao, ActionDao],
 )
 class GtdDatabase extends _$GtdDatabase {
@@ -186,7 +186,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final UserPreferencesDao userPreferencesDao = UserPreferencesDao(this);
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   /// Completes with the [OpeningDetails] of this store's one open.
   ///
@@ -249,6 +249,11 @@ class GtdDatabase extends _$GtdDatabase {
           // which survive as the dangling references they were.
           if (from < 3) {
             await m.alterTable(TableMigration(tags));
+          }
+          // v4 (share-sheet capture): add the device-local `capture_attachments`
+          // table. Purely additive — no existing row is touched.
+          if (from < 4) {
+            await m.createTable(captureAttachments);
           }
         }),
       );
