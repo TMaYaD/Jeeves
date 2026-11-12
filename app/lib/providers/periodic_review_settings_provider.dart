@@ -21,6 +21,7 @@ import 'synced_preferences_provider.dart';
 const kPeriodicReviewOpenSinceKey = 'periodic_review_open_since';
 
 const _kLastCompletedAtKey = 'periodic_review_last_completed_at';
+const _kLastSessionFinishedAtKey = 'periodic_review_last_session_finished_at';
 const _kBannerEnabledKey = 'periodic_review_banner_enabled';
 const _kNotificationEnabledKey = 'periodic_review_notification_enabled';
 const _kNotificationHourKey = 'periodic_review_notification_hour';
@@ -38,6 +39,19 @@ final periodicReviewLastCompletedProvider = Provider<DateTime?>((ref) {
       .asData
       ?.value
       .get<String>(_kLastCompletedAtKey);
+  if (raw == null) return null;
+  return DateTime.tryParse(raw);
+});
+
+/// UTC timestamp of the last review session finished with Done, partial or
+/// final, or null if none. Unlike the completion stamp it never closes the
+/// review period; it only moves the Weekly Review's due date.
+final periodicReviewLastSessionFinishedProvider = Provider<DateTime?>((ref) {
+  final raw = ref
+      .watch(syncedPreferencesProvider)
+      .asData
+      ?.value
+      .get<String>(_kLastSessionFinishedAtKey);
   if (raw == null) return null;
   return DateTime.tryParse(raw);
 });
@@ -185,9 +199,18 @@ class PeriodicReviewSettingsNotifier
   /// device LWW + tombstone semantics from synced-prefs ensure all devices
   /// suppress the banner on their next sync.
   Future<void> completeReview() async {
+    final stamp = ref.read(clockProvider)().toUtc().toIso8601String();
+    await syncedPrefs(ref).set(_kLastCompletedAtKey, stamp);
+    await syncedPrefs(ref).set(_kLastSessionFinishedAtKey, stamp);
+  }
+
+  /// Stamps the current UTC timestamp as the last finished session. A partial
+  /// session's Done calls this; it leaves the completion stamp, and so the
+  /// open review period, alone.
+  Future<void> markSessionFinished() async {
     await syncedPrefs(ref).set(
-      _kLastCompletedAtKey,
-      DateTime.now().toUtc().toIso8601String(),
+      _kLastSessionFinishedAtKey,
+      ref.read(clockProvider)().toUtc().toIso8601String(),
     );
   }
 

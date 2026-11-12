@@ -1,10 +1,12 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'capture/share_inbox_host.dart';
 import 'providers/auth_provider.dart';
 import 'providers/database_provider.dart';
 import 'providers/focus_session_planning_settings_provider.dart';
@@ -108,6 +110,11 @@ class JeevesApp extends ConsumerWidget {
         scaffoldBackgroundColor: Colors.white,
       ),
       routerConfig: appRouter,
+      // Only Android has a share-sheet receiver that queues shares.
+      builder: (context, child) =>
+          !kIsWeb && defaultTargetPlatform == TargetPlatform.android
+              ? ShareInboxHost(child: child ?? const SizedBox.shrink())
+              : child ?? const SizedBox.shrink(),
     );
   }
 }
