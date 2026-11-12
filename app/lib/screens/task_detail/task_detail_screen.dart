@@ -364,7 +364,9 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                           child: Text(
                             personTags.isEmpty
                                 ? 'Nobody'
-                                : personTags.map((t) => t.name).join(', '),
+                                : (personTags.map((t) => t.name).toList()
+                                      ..sort())
+                                    .join(', '),
                             style: TextStyle(
                               fontSize: 14,
                               color: personTags.isEmpty
