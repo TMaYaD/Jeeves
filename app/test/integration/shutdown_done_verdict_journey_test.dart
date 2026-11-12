@@ -7,7 +7,10 @@
 /// — and read inside a test body only through `tester.runAsync`.
 library;
 
-import 'package:drift/drift.dart' show Value, Variable;
+import 'dart:async';
+
+import 'package:drift/drift.dart'
+    show QueryExecutor, QueryInterceptor, Value, Variable;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -42,6 +45,39 @@ Future<void> _insertOutcome(GtdDatabase db, String id) async {
       outcomeId: id, text: 'work on $id', userId: _userId);
 }
 
+/// Holds the first `todos` UPDATE issued after [armed] is set until [release]
+/// is called, so a test can dismiss the verdict sheet while the real Completion
+/// write is provably still pending. Everything else passes straight through to
+/// the real in-memory store.
+class _HoldCompletionWrite extends QueryInterceptor {
+  bool armed = false;
+  final reached = Completer<void>();
+  final _gate = Completer<void>();
+
+  void release() => _gate.complete();
+
+  Future<T> _maybeHold<T>(String statement, Future<T> Function() run) async {
+    if (armed &&
+        !reached.isCompleted &&
+        statement.trimLeft().toUpperCase().startsWith('UPDATE') &&
+        statement.contains('todos')) {
+      reached.complete();
+      await _gate.future;
+    }
+    return run();
+  }
+
+  @override
+  Future<int> runUpdate(
+          QueryExecutor executor, String statement, List<Object?> args) =>
+      _maybeHold(statement, () => super.runUpdate(executor, statement, args));
+
+  @override
+  Future<void> runCustom(
+          QueryExecutor executor, String statement, List<Object?> args) =>
+      _maybeHold(statement, () => super.runCustom(executor, statement, args));
+}
+
 Future<void> _tapVisible(WidgetTester tester, Finder finder) async {
   await tester.ensureVisible(finder);
   await tester.pumpAndSettle();
@@ -55,13 +91,15 @@ void main() {
   late GtdDatabase db;
   late String sessionId;
   late ProviderContainer container;
+  late _HoldCompletionWrite hold;
 
   /// Stages [ids] as the session Plan, all unengaged, in `setUp`.
   void scenario(String name, List<String> ids, void Function() body) {
     group(name, () {
       setUp(() async {
         SharedPreferences.setMockInitialValues({});
-        db = GtdDatabase(NativeDatabase.memory());
+        hold = _HoldCompletionWrite();
+        db = GtdDatabase(NativeDatabase.memory().interceptWith(hold));
         for (final id in ids) {
           await _insertOutcome(db, id);
         }
@@ -311,15 +349,33 @@ void main() {
           'rollover');
 
       await openSheet(tester);
-      // Start the write, then dismiss before the real-async store call lands.
+      // Hold the real Completion write at the store, then dismiss the sheet
+      // while it is provably pending: dismissal precedes commit by construction.
+      hold.armed = true;
       await tester.tap(find.text('Outcome achieved'));
+      await tester.runAsync(() => hold.reached.future
+          .timeout(const Duration(seconds: 10)));
       await tester.binding.handlePopRoute();
-      await settleWithRealAsync(tester);
+      await tester.pumpAndSettle();
+      expect(find.text('Outcome achieved'), findsNothing);
+      expect((await todo(tester, 'a')).doneAt, isNull,
+          reason: 'the write must still be pending when the sheet is gone');
+      expect(container.read(eveningShutdownProvider).dispositions['a'],
+          'rollover');
 
+      // Let the write land. The verdict must still reach the ritual state.
+      hold.release();
+      await settleWithRealAsync(tester);
       expect((await todo(tester, 'a')).doneAt, isNotNull);
       final state = container.read(eveningShutdownProvider);
       expect(state.dispositions.containsKey('a'), isFalse);
       expect(state.unfinishedNav.items!.map((t) => t.id), ['b']);
+
+      // Finish the ritual: the achieved Outcome gets no Disposition row.
+      await _tapVisible(tester, find.text('Roll Over to Tomorrow'));
+      await closeDay(tester);
+      expect(await disposition(tester, 'a'), isNull);
+      expect(await disposition(tester, 'b'), 'rollover');
       await unmount(tester);
     });
   });
