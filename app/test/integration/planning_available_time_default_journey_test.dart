@@ -129,29 +129,35 @@ void main() {
     expect(fieldText(tester, 0), '6');
   });
 
-  testWidgets('clearing hours before the pre-fill lands keeps the cleared field',
+  testWidgets('clearing hours before a late pre-fill keeps the cleared field',
       (tester) async {
-    await tester.runAsync(() => db.userPreferencesDao
-        .set('local', kLastSessionAvailableMinutesKey, '330'));
-    final router = GoRouter(routes: [
-      GoRoute(path: '/', builder: (_, _) => const FocusSessionPlanningScreen()),
-    ]);
-    addTearDown(router.dispose);
-    await tester.pumpWidget(UncontrolledProviderScope(
-      container: container,
-      child: MaterialApp.router(routerConfig: router),
-    ));
-    container.read(focusSessionPlanningProvider.notifier).goToStep(4);
-    // Fake-time pumps only: the stored value is read on the real event loop,
-    // so it cannot have landed yet.
-    await tester.pumpAndSettle();
+    // Nothing is stored yet, so the mount-time pre-fill settles on the 8 h
+    // fallback; the stored value only appears after the user has edited.
+    await openTimeStep(tester);
+    final notifier = container.read(focusSessionPlanningProvider.notifier);
+    expect(fieldText(tester, 0), '8');
+    expect(fieldText(tester, 1), '0');
+    expect(container.read(focusSessionPlanningProvider).availableMinutes, 480);
+    expect(container.read(focusSessionPlanningProvider).availableTimeSet,
+        isFalse);
+
+    // Clearing hours leaves 0 h 0 m: an intermediate entry that is not a
+    // valid time, so the value stays 480 but the draft counts as edited.
     await tester.enterText(find.byType(TextField).at(0), '');
     await tester.pump();
-    // The pre-fill lands now.
-    await settleWithRealAsync(tester);
+    var state = container.read(focusSessionPlanningProvider);
+    expect(state.availableMinutes, 480);
+    expect(state.availableTimeSet, isTrue);
+
+    // Now a pre-fill lands late, with a stored value that differs from 480.
+    await tester.runAsync(() => db.userPreferencesDao
+        .set('local', kLastSessionAvailableMinutesKey, '330'));
+    await tester.runAsync(notifier.ensureAvailableTimePreload);
+    await tester.pump();
+
     expect(fieldText(tester, 0), '');
-    // The user's own edit stands (0 h clamps to the 30-minute floor), not the
-    // stored 330 minutes.
-    expect(container.read(focusSessionPlanningProvider).availableMinutes, 30);
+    state = container.read(focusSessionPlanningProvider);
+    expect(state.availableMinutes, 480);
+    expect(state.availableTimeSet, isTrue);
   });
 }
