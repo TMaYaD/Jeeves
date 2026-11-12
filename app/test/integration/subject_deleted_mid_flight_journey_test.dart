@@ -218,12 +218,12 @@ void main() {
             tester.tap(find.widgetWithText(ListTile, 'Trash')),
       ),
       _DeletedMidFlightScenario(
-        name: 'status menu → Next Actions (from Someday)',
+        name: 'status menu → Next (from Someday)',
         seed: () => db.todoDao.setIntent('o1', Intent.maybe),
         open: _openStatusMenu,
         sheetMarker: find.text('Set Status'),
         confirm: (tester) async =>
-            tester.tap(find.widgetWithText(ListTile, 'Next Actions')),
+            tester.tap(find.widgetWithText(ListTile, 'Next')),
       ),
       _DeletedMidFlightScenario(
         name: 'status menu → Restore (from Trash)',
