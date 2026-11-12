@@ -150,6 +150,8 @@ void main() {
     // The pre-fill lands now.
     await settleWithRealAsync(tester);
     expect(fieldText(tester, 0), '');
-    expect(container.read(focusSessionPlanningProvider).availableMinutes, 480);
+    // The user's own edit stands (0 h clamps to the 30-minute floor), not the
+    // stored 330 minutes.
+    expect(container.read(focusSessionPlanningProvider).availableMinutes, 30);
   });
 }
