@@ -351,6 +351,46 @@ void main() {
     expect(os.pending, isEmpty);
   });
 
+  test('delivered, then rescheduled ahead, then rescheduled into the past',
+      () async {
+    final id = dueDateNotificationId('a');
+    now = DateTime.utc(2026, 11, 9, 6);
+    await insert('a', dueDate: _dueDay(kolkata, 2026, 11, 10));
+    await settle();
+    expect(os.pending.keys, [id]);
+
+    // 09:00 on Nov 10: the alarm fires; it leaves the pending set and sits in
+    // the tray.
+    now = DateTime.utc(2026, 11, 10, 4);
+    os.pending.remove(id);
+    os.delivered.add(id);
+    await reconciler.onResumed();
+    await settle();
+    expect(os.delivered, {id});
+
+    // Rescheduled ahead: the new alarm shares the id with the tray entry.
+    await db.todoDao.rescheduleTask('a', _dueDay(kolkata, 2026, 11, 20));
+    await settle();
+    expect(os.pending.keys, [id]);
+    expect(os.delivered, {id});
+
+    // Rescheduled into the past while the reconciler keeps running.
+    now = DateTime.utc(2026, 11, 11, 6);
+    await db.todoDao.rescheduleTask('a', _dueDay(kolkata, 2026, 11, 9));
+    await settle();
+    expect(os.pending, isEmpty);
+
+    // Same state after a restart with both observations present.
+    final newerFireAt =
+        dueDateNotificationFireAt(_dueDay(kolkata, 2026, 11, 20), kolkata);
+    os.pending[id] = _Pending('Title a', 'Due today', newerFireAt,
+        dueDateNotificationPayload('a', fireAt: newerFireAt));
+    reconciler.dispose();
+    reconciler = startReconciler();
+    await settle();
+    expect(os.pending, isEmpty);
+  });
+
   test('a timezone change is picked up on the next resume', () async {
     await insert('a', dueDate: _dueDay(kolkata, 2026, 11, 20));
     await settle();
