@@ -142,7 +142,7 @@ void main() {
   Future<List<Map<String, Object?>>> actions(
       WidgetTester tester, String outcomeId) async {
     final rows = await tester.runAsync(() => db.customSelect(
-          'SELECT role, action_text FROM actions WHERE outcome_id = ? '
+          'SELECT role, text FROM actions WHERE outcome_id = ? '
           'ORDER BY created_at',
           variables: [Variable<String>(outcomeId)],
         ).get());
@@ -150,7 +150,7 @@ void main() {
       for (final r in rows!)
         {
           'role': r.read<String>('role'),
-          'text': r.read<String?>('action_text'),
+          'text': r.read<String?>('text'),
         },
     ];
   }
