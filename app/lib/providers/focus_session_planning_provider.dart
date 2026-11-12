@@ -895,7 +895,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   Future<Set<String>> getPersonTagIds(String todoId) =>
       _clarification.getPersonTagIds(todoId);
 
-  // ---- Task mutations (Step 2 — Next Actions review) -------------------------
+  // ---- Task mutations (Step 2 — Next review) -------------------------
 
   /// Adds [ids] to the pending day's plan in a single state publish
   /// (in-memory; committed by [startDay]).

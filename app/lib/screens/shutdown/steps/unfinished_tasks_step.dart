@@ -21,7 +21,7 @@ import '../../../providers/task_detail_provider.dart';
 ///   "Roll Over to Tomorrow" for an ordinary shutdown, and plain "Roll Over"
 ///   when Daily Planning launched this shutdown ([shutdownThenPlanProvider]),
 ///   because the next plan is then minutes away, not tomorrow's.
-/// - Return to Next Actions → clears the daily selection; task reappears in
+/// - Return to Next → clears the daily selection; task reappears in
 ///   tomorrow's planning session.
 /// - Defer until a later day → moves the task to Someday/Maybe.
 ///
@@ -118,7 +118,7 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
           ),
           const SizedBox(height: 10),
           _ResolutionButton(
-            label: 'Return to Next Actions',
+            label: 'Return to Next',
             subtitle: 'Reappear in a future planning session',
             icon: Icons.check_circle_outline,
             color: const Color(0xFF6B7280),
@@ -128,7 +128,7 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
           const SizedBox(height: 10),
           _ResolutionButton(
             label: 'Defer until a later day',
-            subtitle: 'Move to Someday / Maybe',
+            subtitle: 'Move to Someday/Maybe',
             icon: Icons.star_border,
             color: const Color(0xFF6B7280),
             onTap: () => notifier.deferTask(current.id),

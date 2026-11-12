@@ -9,7 +9,7 @@ Realistic goals a first-time user would attempt. Each goal is exercised by a sep
 
 ## Planning & Daily Ritual
 4. Plan today using the Daily Planning ritual (energy check-in → review → estimates → summary).
-5. Multi-select several Next Actions during planning review and pull them into today in one gesture.
+5. Multi-select several Next during planning review and pull them into today in one gesture.
 6. Re-clarify a stale task (aged `last_clarified_at`) via the Daily Planning review step.
 7. Change planning time so "today" rolls over at a different hour.
 
@@ -21,7 +21,7 @@ Realistic goals a first-time user would attempt. Each goal is exercised by a sep
 
 ## Inventory Navigation
 12. Find and review the Waiting For list (incl. tasks marked "Waiting on <person>").
-13. Move a task to Someday/Maybe and later resurrect it to Next Actions.
+13. Move a task to Someday/Maybe and later resurrect it to Next.
 14. Filter tasks by context tag using the tag cloud.
 15. Attach a person tag (`@alice`) and find every task involving that person.
 16. Rename/recolor a tag from the long-press management sheet.

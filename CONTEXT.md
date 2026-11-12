@@ -21,9 +21,10 @@ The current known divergences:
 - **Next** (domain) is rendered as "Next Action" in UI copy when referring to the current-role Action of an Outcome on the Next List.
 - A FocusSession's **Plan** (domain) is rendered with cadence-flavoured copy ("Today's Plan" at the daily cadence).
 - A Nudge's `dismissed` / `completed` states (domain) are rendered with cadence-flavoured copy ("Not today" / "Not this week" / etc.) in Banner and Notification surfaces.
+- Daily Planning labels its undecided pool **"Up Next"**: a view of Next, energy-filtered and net of what is already picked or skipped. It is not the List, so it does not carry the List name.
 - **Focus** (domain — the FocusSession's execution home screen) is rendered as **"Now"** in UI copy. "Now" answers *what am I doing?* alongside Next (*what could I do?*) and Someday/Maybe (*what might I do eventually?*); internal identifiers stay Focus / FocusSession, and the cadence remains daily by default. (Ruled in the epic #35 design review — see the decision comments on TMaYaD/Jeeves#35.)
 
-**New surfaces lead the rename.** Where UI copy and canonical vocabulary have drifted (e.g. legacy "Next Actions" / "Maybe" labels), every *new* surface uses the canonical term regardless of what neighbouring legacy surfaces still display; legacy surfaces catch up later. Divergence within the app between new-correct and old-retired labels is an accepted transitional state, not a reason to propagate retired terms.
+**New surfaces lead the rename.** Where UI copy and canonical vocabulary have drifted (e.g. a retired label for a List), every *new* surface uses the canonical term regardless of what neighbouring legacy surfaces still display; legacy surfaces catch up later. Divergence within the app between new-correct and old-retired labels is an accepted transitional state, not a reason to propagate retired terms.
 
 Prospective renames considered and **deferred**, pending legacy cleanup:
 
@@ -34,10 +35,10 @@ Prospective renames considered and **deferred**, pending legacy cleanup:
 #### Language
 
 **Capture**:
-A raw, unprocessed fragment the user has put into the system because it has their attention. Pending clarification; not yet an Outcome or Action. A Capture's clarification is its terminal act, recorded once as `clarified_at` — stamped when the user completes the clarify act for that Capture, whether it produced new Outcomes, merged into existing ones, or was **discarded** (a zero-Outcome clarification is a legitimate verdict, not a special case — see **Discard**). An unstamped Capture sits in the Inbox; a stamped one persists as provenance for the Outcomes it clarified into — Captures are never deleted and merge never consumes them.
-**Clarification never rewrites a Capture** (ADR-0023). The clarify surface seeds its fields from the fragment and feeds the Outcome draft; the Capture keeps exactly what was captured, so what the system holds as "what I captured" stays the raw record rather than the interpretation of it. The visible consequence: correct a typo mid-clarify and Skip, and the Inbox still shows the typo while the correction rides the draft onto the Outcome when you route.
+A raw, unprocessed fragment the user has put into the system because it has their attention. Pending clarification; not yet an Outcome or Action. A Capture's clarification is its terminal act, recorded once as `clarified_at` — stamped when the user completes the clarify act for that Capture, whether it produced new Outcomes, merged into existing ones, or was **discarded** (see **Discard**). An unstamped Capture sits in the Inbox; a stamped one persists as provenance for the Outcomes it clarified into — Captures are never deleted and merge never consumes them.
+**Clarification never rewrites a Capture** (ADR-0023). The clarify surface seeds its fields from the fragment and feeds the Outcome draft; the Capture keeps exactly what was captured, so what the system holds as "what I captured" stays the raw record rather than the interpretation of it.
 
-A Capture may carry **tag hints** from capture time (stored in the `capture_tags` join). Tag hints are the single exception to the rule above — they *are* written to the Capture, at capture time and during clarification. A tag hint is *not* Organising and never stamps anything: it is a suggestion the user recorded alongside the raw fragment, not a rewrite of it, surfaced during clarification as removable chips on the Outcome draft (when carving a new Outcome) and as prefill (when merging into an existing one). Organising — sorting an Outcome into structure — happens on the Outcome, not the Capture.
+A Capture may carry **tag hints** from capture time — the one exception to the rule above, written to the Capture at capture and during clarification. A hint is *not* Organising and never stamps anything: a suggestion recorded beside the raw fragment, not a rewrite of it, surfaced on the Outcome draft at clarification. Organising — sorting an Outcome into structure — happens on the Outcome, not the Capture.
 _Avoid_: Todo, Task, Item, Inbox item, Thought, Stuff, Note
 
 **Outcome**:
@@ -112,6 +113,10 @@ _Avoid_: Categorising (narrower — covers only one mode of Organising), Filing,
 **Stale** *(derived predicate)*:
 An Outcome whose `last_clarified_at < last_action_completion_at` — the current Action has terminated since the user last thought about the Outcome. The strongest "pick this up next clarification" signal.
 
+**Bypassed** *(derived predicate)*:
+An Outcome passed over in Daily Planning the configured number of times (default 3) without a decision. The Weekly Review's Bypassed step asks one decision per Outcome — Someday/Maybe or Trash — and Daily Planning never marks or holds them. Mechanism: TMaYaD/Jeeves#107; surface: [docs/DESIGN.md § Guardrails](docs/DESIGN.md#guardrails--nudges-never-blocks).
+_Avoid_: Stale, stale task (a different predicate — the Action terminated)
+
 **Actionless** *(derived predicate)*:
 An Outcome with no current Action. May still have planned Actions (the user has externalised thinking but not committed to engagement) or none (planless).
 
@@ -160,6 +165,10 @@ Discard is **not** the same verdict as **Done**, and the two must never share an
 UI label mapping — the `trash` action in `ProcessToHandlers` resolves its copy from the subject: **"Discard Capture"** on a Capture (this term), **"Trash"** on an Outcome (the List above). One code identifier, two canonical names, because the two subjects genuinely mean different things.
 _Avoid_: Delete, Dismiss, Done (Done is a different verdict entirely), Trash (Trash is the Outcome-side List)
 
+**System Trust**:
+Whether the user's system can still be trusted: one indicator over three signals — Captures in the Inbox, days since the last Weekly Review, Bypassed Outcomes — read as all good or needs attention, never a number. Guardrails nudge towards the habit; they never block. Surface: [docs/DESIGN.md § Guardrails](docs/DESIGN.md#guardrails--nudges-never-blocks).
+_Avoid_: health score, score, System Health
+
 #### Relationships
 
 - A **Capture** is many-to-many with **Outcome**: one Capture may clarify to zero, one, or several Outcomes; one Outcome may trace back to several Captures (duplicate or complementary fragments merged during clarification).
@@ -191,7 +200,6 @@ _Avoid_: Delete, Dismiss, Done (Done is a different verdict entirely), Trash (Tr
 - The proposal's four long-term states (`active / someday / done / trashed`) collapse two independent axes into one enum. The code's `intent` column is the Intent axis and `done_at` the Completion axis; the proposal's wording is the conceptual error.
 - A trivially-actionable Capture ("call John") could in principle skip Outcome creation and land directly as an Action. The model says no — every Capture clarifies through an Outcome.
 - **Area exclusivity is enforced at the cutover, not yet in storage.** Areas are `Tag(type='area')` linked through `todo_tags`, which carries no `type`, so "at most one Area" is not expressible as a unique index — it needs a dedicated Outcome→Area link or a check reaching into `tags`. Two pieces remain: storage-level enforcement, and the user's own resolution pass over the conversions the initial upload reports.
-- **The code calls the Next List "Next Actions"** throughout. The List is of Outcomes — the action focus comes from each Outcome's current Action — so the plural misleads; the role-label "Next Action" stays for the singular current Action of a row. The List also carries two user-facing names: the drawer says "Next Actions", Daily Planning says "Up Next". That divergence is deliberate (the step's pool is filtered, so one name would show two counts) but neither is the model's.
 
 ### Engagement
 
@@ -334,6 +342,7 @@ _Avoid_: stack, list (too generic), priority list (acceptable but Nudge queue is
 #### Flagged ambiguities
 
 - **Nudge** (this context) and **Reminder** (forthcoming, GTD Core) are different concepts. A Nudge targets a *Ritual* — "it's time for your weekly review". A Reminder targets an *individual Action* — "remind me to call John at 5pm". Different scopes, triggers and lifecycles; do not collapse them into one primitive even though both surface as OS notifications.
+- **Inbox too full** is a nudge with no Ritual behind it — Inbox clarification is an ad-hoc Ceremony — yet it heads the Nudge queue above the Weekly Review. How it enters the queue is unmodelled.
 
 ### Sync
 
@@ -384,9 +393,9 @@ What a Device records when the log it was served cannot be reconciled with the c
 _Avoid_: Sync error (a transport failure of one attempt is not an accusation), Conflict (merge conflicts are resolved by the merge strategy and are not integrity events), Dead Letter (retired vocabulary, for an unrelated mechanism), Rejected op (a rejection is the server's answer to an append, not the receiver's record)
 
 **Tag** *(backs the GTD Core concepts Person, Area, Label, and legacy Context)*:
-The shared storage row backing several conceptual entities, discriminated by a `Tag.type` field. Outcome ↔ Tag links are stored in a `TodoTags` join table; the join carries no role information of its own (its semantics depend entirely on the linked Tag's `type`). The user does not think in terms of Tags — they think in terms of the domain entities Tag backs. Physical-world equivalent: a folder, sticky note, or label-maker — a categorisation mechanism, not a domain concept. Each conceptual entity Tag currently backs has its own Conceptual-tier glossary entry; this entry exists so the code's `tags` table has a name in this glossary without implying that "Tag" is part of the user's mental model.
+The shared storage row backing several conceptual entities, discriminated by a `Tag.type` field. Outcome ↔ Tag links are stored in a `TodoTags` join table; the join carries no role information of its own (its semantics depend entirely on the linked Tag's `type`). The user does not think in terms of Tags — they think in terms of the domain entities Tag backs. Physical-world equivalent: a folder, sticky note, or label-maker — a categorisation mechanism, not a domain concept. This entry exists so the code's `tags` table has a name here; the user never thinks in Tags.
 
-**A Tag has two identities, and only one of them is the primary key.** `id` is the op-log identity — client-random, so it is what the sync substrate names the entity by. `(name, type)` is the *user-facing* identity: two rows with the same pair are one Person, one Area, one Label or one Context as far as the user is concerned. Because ids are random, two Devices each creating "Alice"/`person` while apart mint two entities for one pair, and both are real — a transient, converging state, not corruption. They fold onto one as the Devices converge. Seeing two "Alice" entries on a freshly reconnected Device is convergence; still seeing them once synced is a bug. Fold mechanics in [docs/SYNC.md](docs/SYNC.md).
+**A Tag has two identities, and only one of them is the primary key.** `id` is the op-log identity, client-random; `(name, type)` is the *user-facing* one — two rows with the same pair are one Person, one Area, one Label or one Context. Two Devices each creating "Alice"/`person` while apart mint two entities for one pair; they fold onto one as the Devices converge — convergence, not corruption. Fold mechanics in [docs/SYNC.md](docs/SYNC.md).
 _Avoid_: (none — Tag is the canonical name for the storage)
 
 **Banner** *(an in-app surface for a Nudge)*:
@@ -401,7 +410,7 @@ A platform-delivered alert (Android / iOS / web push) that surfaces a Nudge even
 - **skip** (explicit action button) — high-signal **dismiss** (current firing). User-facing copy is cadence-flavoured ("Skip today" at daily cadence, "Skip this week" at weekly).
 - **implicit swipe-away** — low-signal; mass-dismiss fatigue makes this an unreliable indicator of intent, so the surface maps it to a **system-implicit snooze** with a default duration (which the implementation may borrow from the Ritual's Cadence; see the Nudge entry).
 
-Today each Ritual schedules its own Notification — same consolidation target as Banner.
+Today each Ritual schedules its own Notification; consolidating them behind the queue, as the Banner already is, is the standing target.
 _Avoid_: Push, Alert, Reminder (Reminder is a separate concept — see ambiguities)
 
 **Wizard** *(one possible implementation form for a Ceremony)*:

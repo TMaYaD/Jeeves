@@ -577,7 +577,7 @@ void main() {
                   subtitle: ''),
               WizardStep(title: 'Process Inbox', body: SizedBox.shrink()),
               WizardStep(title: 'Waiting For', body: SizedBox.shrink()),
-              WizardStep(title: 'Next Actions', body: SizedBox.shrink()),
+              WizardStep(title: 'Next', body: SizedBox.shrink()),
               WizardStep(title: 'Someday/Maybe', body: SizedBox.shrink()),
             ],
           ),

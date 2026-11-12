@@ -84,7 +84,7 @@ def _resolve_unfinished_with_first_rollover(d):
     unfinished task. The FIRST task gets Roll Over; remaining tasks
     cycle through Return / Defer."""
     rollover_label = "Roll Over to Tomorrow"
-    leave_label    = "Return to Next Actions"
+    leave_label    = "Return to Next"
     rotation = [leave_label, rollover_label]  # second-and-on cycle
     rolled = 0
     i = 0

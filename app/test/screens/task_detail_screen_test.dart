@@ -209,12 +209,12 @@ void main() {
       expect(find.text('Project X'), findsOneWidget);
     });
 
-    testWidgets('status pill shows Next Actions when no person tags assigned', (tester) async {
+    testWidgets('status pill shows Next when no person tags assigned', (tester) async {
       final todo = await _insertAt(db, id: 'task5', title: 'Task without tags');
       final (widget, router) = _buildScreen(db, 'task5', initialTodo: todo);
       await _showTaskDetail(tester, widget, router, 'task5');
 
-      expect(find.text('Next Actions'), findsOneWidget);
+      expect(find.text('Next'), findsOneWidget);
     });
 
     testWidgets('status pill shows Waiting For when person tags assigned', (tester) async {
@@ -251,7 +251,7 @@ void main() {
       expect(find.text('High'), findsOneWidget);
     });
 
-    testWidgets('status sheet shows Next Actions tile for Maybe todo', (tester) async {
+    testWidgets('status sheet shows Next tile for Maybe todo', (tester) async {
       final todo = await _insertAt(db, id: 'maybe1', title: 'Maybe task', intent: 'maybe');
       final (widget, router) = _buildScreen(db, 'maybe1', initialTodo: todo);
       await _showTaskDetail(tester, widget, router, 'maybe1');
@@ -259,15 +259,15 @@ void main() {
       await tester.tap(find.byKey(const Key('status_pill')));
       await tester.pumpAndSettle();
 
-      expect(find.text('Next Actions'), findsOneWidget);
+      expect(find.text('Next'), findsOneWidget);
 
-      await tester.tap(find.widgetWithText(ListTile, 'Next Actions'));
+      await tester.tap(find.widgetWithText(ListTile, 'Next'));
       await tester.pumpAndSettle();
       final updated = await db.todoDao.getTodo('maybe1');
       expect(updated!.intent, 'next');
     });
 
-    testWidgets('status sheet does not show Next Actions tile for a Next todo', (tester) async {
+    testWidgets('status sheet does not show Next tile for a Next todo', (tester) async {
       final todo = await _insertAt(db, id: 'next1', title: 'Next task', intent: 'next');
       final (widget, router) = _buildScreen(db, 'next1', initialTodo: todo);
       await _showTaskDetail(tester, widget, router, 'next1');
@@ -275,7 +275,7 @@ void main() {
       await tester.tap(find.byKey(const Key('status_pill')));
       await tester.pumpAndSettle();
 
-      expect(find.descendant(of: find.byType(ListTile), matching: find.text('Next Actions')), findsNothing);
+      expect(find.descendant(of: find.byType(ListTile), matching: find.text('Next')), findsNothing);
     });
 
     // -------------------------------------------------------------------------
@@ -643,7 +643,7 @@ void main() {
       expect(row!.intent, 'maybe');
       expect(row.doneAt, isNull);
       final maybe =
-          (await tester.runAsync(() => db.todoDao.watchMaybe().first))!;
+          (await tester.runAsync(() => db.todoDao.watchSomedayMaybe().first))!;
       expect(maybe.map((t) => t.id), contains('rt3'),
           reason: 'restored Outcome reappears on the Maybe List (AC 2)');
     });
