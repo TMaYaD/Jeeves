@@ -1,5 +1,5 @@
 /// Shared per-item-cursor step body for the Weekly Review wizard's three
-/// list-driven steps: Waiting For, Next Actions, Someday/Maybe.
+/// list-driven steps: Waiting For, Next, Someday/Maybe.
 ///
 /// Each step iterates one item at a time over a stable [SnapshotNav<Todo>]
 /// loaded when the step opens (per `REQUIREMENTS.md:72`), guards on
@@ -129,7 +129,7 @@ class ListReviewStep<T extends Todo> extends ConsumerWidget {
   final VoidCallback onAdvance;
 
   /// Optional per-item subtext rendered between the title and the notes
-  /// (e.g. the Next Actions step surfaces the current Action's text).
+  /// (e.g. the Next step surfaces the current Action's text).
   final String? Function(T todo)? subtextFor;
 
   /// Optional per-item current-Action text, from the step's snapshot of

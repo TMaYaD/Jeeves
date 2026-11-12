@@ -24,9 +24,9 @@ import 'sync_health/sync_health_screen.dart';
 const Map<String, String> shellRouteTitles = {
   '/inbox': 'Inbox',
   '/focus': 'Now',
-  '/next-actions': 'Next Actions',
+  '/next': 'Next',
   '/waiting-for': 'Waiting For',
-  '/someday-maybe': 'Maybe',
+  '/someday-maybe': 'Someday/Maybe',
   '/done': 'Done',
   '/trash': 'Trash',
 };
@@ -157,7 +157,8 @@ class CustomDrawer extends ConsumerWidget {
     final inboxCount = ref.watch(inboxItemsProvider).asData?.value.length ?? 0;
     final nextCount = ref.watch(nextProvider).asData?.value.length ?? 0;
     final waitingForCount = ref.watch(waitingForProvider).asData?.value.length ?? 0;
-    final maybeCount = ref.watch(maybeProvider).asData?.value.length ?? 0;
+    final somedayMaybeCount =
+        ref.watch(somedayMaybeProvider).asData?.value.length ?? 0;
     final syncAsync = ref.watch(syncStatusProvider);
     // A throwing health read is a red indicator with nothing behind it: we do
     // not know what to report, so the tile must not offer to explain.
@@ -235,8 +236,8 @@ class CustomDrawer extends ConsumerWidget {
                       location: location),
                   _buildNavItem(context,
                       icon: Icons.check_circle_outline,
-                      title: 'Next Actions',
-                      path: '/next-actions',
+                      title: 'Next',
+                      path: '/next',
                       location: location,
                       count: nextCount),
                   _buildNavItem(context,
@@ -247,10 +248,10 @@ class CustomDrawer extends ConsumerWidget {
                       count: waitingForCount),
                   _buildNavItem(context,
                       icon: Icons.star_border,
-                      title: 'Maybe',
+                      title: 'Someday/Maybe',
                       path: '/someday-maybe',
                       location: location,
-                      count: maybeCount),
+                      count: somedayMaybeCount),
                   const SizedBox(height: 8),
                   const Divider(height: 1, color: Color(0xFFF3F4F6)),
                   const SizedBox(height: 8),
