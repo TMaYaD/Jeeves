@@ -59,8 +59,9 @@ class TagManagementSheet extends ConsumerWidget {
               icon: Icons.edit_outlined,
               label: 'Rename',
               onTap: () {
+                final container = ProviderScope.containerOf(context);
                 Navigator.pop(context);
-                _showRenameDialog(context, ref);
+                _showRenameDialog(context, container);
               },
             ),
             if (tag.type == 'context')
@@ -68,8 +69,9 @@ class TagManagementSheet extends ConsumerWidget {
                 icon: Icons.palette_outlined,
                 label: 'Recolour',
                 onTap: () {
+                  final container = ProviderScope.containerOf(context);
                   Navigator.pop(context);
-                  _showRecolourDialog(context, ref);
+                  _showRecolourDialog(context, container);
                 },
               ),
             _ActionTile(
@@ -84,8 +86,9 @@ class TagManagementSheet extends ConsumerWidget {
               icon: Icons.delete_outline,
               label: 'Delete',
               onTap: () {
+                final container = ProviderScope.containerOf(context);
                 Navigator.pop(context);
-                _showDeleteDialog(context, ref);
+                _showDeleteDialog(context, container);
               },
             ),
           ],
@@ -94,7 +97,7 @@ class TagManagementSheet extends ConsumerWidget {
     );
   }
 
-  void _showRenameDialog(BuildContext context, WidgetRef ref) {
+  void _showRenameDialog(BuildContext context, ProviderContainer container) {
     final noun = tagKindNoun(tag.type);
     final controller = TextEditingController(text: tag.name);
     showDialog<void>(
@@ -120,7 +123,7 @@ class TagManagementSheet extends ConsumerWidget {
                 // A name already held by another entry of this kind would make
                 // the DAO fold this one into it. Ask first: the merge cannot be
                 // undone and must not happen by surprise.
-                final sameKind = await ref
+                final sameKind = await container
                     .read(tagsWithCountByTypeProvider(tag.type).future);
                 final taken = sameKind
                     .map((e) => e.tag)
@@ -149,9 +152,9 @@ class TagManagementSheet extends ConsumerWidget {
                     ),
                   );
                   if (confirm != true) return;
-                  await ref.read(tagNotifierProvider).merge(tag.id, taken.id);
+                  await container.read(tagNotifierProvider).merge(tag.id, taken.id);
                 } else {
-                  await ref.read(tagNotifierProvider).rename(tag.id, newName);
+                  await container.read(tagNotifierProvider).rename(tag.id, newName);
                 }
                 if (ctx.mounted) Navigator.pop(ctx);
               } catch (_) {
@@ -168,7 +171,7 @@ class TagManagementSheet extends ConsumerWidget {
     );
   }
 
-  void _showDeleteDialog(BuildContext context, WidgetRef ref) {
+  void _showDeleteDialog(BuildContext context, ProviderContainer container) {
     final noun = tagKindNoun(tag.type);
     final consequence = switch (tag.type) {
       'project' => 'Its outcomes stay, without a project.',
@@ -190,7 +193,7 @@ class TagManagementSheet extends ConsumerWidget {
           FilledButton(
             onPressed: () async {
               try {
-                await ref.read(tagNotifierProvider).delete(tag.id);
+                await container.read(tagNotifierProvider).delete(tag.id);
                 if (ctx.mounted) Navigator.pop(ctx);
               } catch (_) {
                 if (!ctx.mounted) return;
@@ -206,7 +209,7 @@ class TagManagementSheet extends ConsumerWidget {
     );
   }
 
-  void _showRecolourDialog(BuildContext context, WidgetRef ref) {
+  void _showRecolourDialog(BuildContext context, ProviderContainer container) {
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -230,7 +233,7 @@ class TagManagementSheet extends ConsumerWidget {
                   child: GestureDetector(
                     onTap: () async {
                       try {
-                        await ref
+                        await container
                             .read(tagNotifierProvider)
                             .updateColor(tag.id, null);
                         if (ctx.mounted) Navigator.pop(ctx);
@@ -264,7 +267,7 @@ class TagManagementSheet extends ConsumerWidget {
                 child: GestureDetector(
                   onTap: () async {
                     try {
-                      await ref
+                      await container
                           .read(tagNotifierProvider)
                           .updateColor(tag.id, hex);
                       if (ctx.mounted) Navigator.pop(ctx);

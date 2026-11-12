@@ -63,6 +63,9 @@ Future<void> _tapJeeves(WidgetTester tester, int times) async {
     find.byKey(const Key('about_jeeves_name')),
     200,
   );
+  // Built is not the same as on screen: bring the name fully into view.
+  await tester.ensureVisible(find.byKey(const Key('about_jeeves_name')));
+  await tester.pumpAndSettle();
   for (var i = 0; i < times; i++) {
     await tester.tap(find.byKey(const Key('about_jeeves_name')));
   }

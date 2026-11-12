@@ -7,8 +7,11 @@ import 'package:go_router/go_router.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/ritual.dart';
 import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/providers/tag_filter_provider.dart';
 import 'package:jeeves/screens/settings/settings_screen.dart';
 import 'package:jeeves/screens/tag_management/tag_management_screen.dart';
+import 'package:jeeves/screens/task_detail/task_detail_screen.dart';
+import 'package:jeeves/screens/waiting_for/waiting_for_screen.dart';
 import 'package:jeeves/services/notification_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -97,6 +100,14 @@ void main() {
         initialLocation: '/settings',
         routes: [
           GoRoute(path: '/settings', builder: (_, _) => const SettingsScreen()),
+          GoRoute(
+              path: '/waiting-for',
+              builder: (_, _) => const WaitingForScreen()),
+          GoRoute(
+            path: '/task/:id',
+            builder: (_, state) =>
+                TaskDetailScreen(todoId: state.pathParameters['id']!),
+          ),
           for (final kind in TagManagementKind.values)
             GoRoute(
               path: kind.routePath,
@@ -104,13 +115,15 @@ void main() {
             ),
         ],
       );
+      final container = ProviderContainer(overrides: [
+        databaseProvider.overrideWithValue(db),
+        notificationServiceProvider
+            .overrideWithValue(_StubNotificationService()),
+      ]);
+      addTearDown(container.dispose);
       await tester.pumpWidget(
-        ProviderScope(
-          overrides: [
-            databaseProvider.overrideWithValue(db),
-            notificationServiceProvider
-                .overrideWithValue(_StubNotificationService()),
-          ],
+        UncontrolledProviderScope(
+          container: container,
           child: MaterialApp.router(routerConfig: router),
         ),
       );
@@ -118,11 +131,16 @@ void main() {
         await _settle(tester);
         await tester.scrollUntilVisible(
             find.byKey(const Key('manage_people_tile')), 200);
+        await tester.ensureVisible(find.byKey(const Key('manage_people_tile')));
+        await tester.pumpAndSettle();
         await tester.tap(find.byKey(const Key('manage_people_tile')));
         await _settle(tester);
         expect(find.byType(TagManagementScreen), findsOneWidget);
         expect(find.text('Alise'), findsOneWidget);
         expect(find.text('Alice'), findsOneWidget);
+
+        // The misspelt person is in the sticky tag filter when it is merged.
+        container.read(tagFilterProvider.notifier).toggle('alise');
 
         // Merge Alise into Alice.
         await tester.tap(find.byKey(const Key('tag_management_row_alise')));
@@ -141,6 +159,18 @@ void main() {
         expect(junctions, hasLength(2));
         final hints = await _real(tester, () => db.select(db.captureTags).get());
         expect(hints.single.tagId, 'alice');
+        // The filter follows the merge instead of pointing at a removed id.
+        expect(container.read(tagFilterProvider), {'alice'});
+
+        // Waiting For: one Alice group holding both Outcomes, no Alise.
+        router.go('/waiting-for');
+        await _settle(tester);
+        expect(find.text('Alice'), findsOneWidget);
+        expect(find.text('Alise'), findsNothing);
+        expect(find.text('Outcome o1'), findsOneWidget);
+        expect(find.text('Outcome o2'), findsOneWidget);
+        router.go(TagManagementKind.people.routePath);
+        await _settle(tester);
 
         // Rename the survivor.
         await tester.tap(find.byKey(const Key('tag_management_row_alice')));
@@ -153,6 +183,17 @@ void main() {
         expect(find.text('Alicia'), findsOneWidget);
         expect(find.text('Alice'), findsNothing);
 
+        // The renamed header on Waiting For, and the Outcome detail status.
+        router.go('/waiting-for');
+        await _settle(tester);
+        expect(find.text('Alicia'), findsOneWidget);
+        expect(find.text('Alice'), findsNothing);
+        await tester.tap(find.text('Outcome o1'));
+        await _settle(tester);
+        expect(find.text('Waiting For Alicia'), findsOneWidget);
+        router.go(TagManagementKind.people.routePath);
+        await _settle(tester);
+
         // Delete it: the Outcomes and the Capture stay, the entry goes.
         await tester.tap(find.byKey(const Key('tag_management_row_alice')));
         await _settle(tester);
@@ -162,6 +203,8 @@ void main() {
         await _settle(tester);
 
         expect(find.byKey(const Key('tag_management_empty')), findsOneWidget);
+        // The filter drops the deleted id.
+        expect(container.read(tagFilterProvider), isEmpty);
         junctions = await _real(tester, () => db.select(db.todoTags).get());
         expect(junctions, isEmpty);
         expect(await _real(tester, () => db.select(db.captureTags).get()),
@@ -170,6 +213,17 @@ void main() {
             hasLength(2));
         expect(await _real(tester, () => db.select(db.captures).get()),
             hasLength(1));
+
+        // Both Outcomes left Waiting For and are no longer waiting on anyone.
+        router.go('/waiting-for');
+        await _settle(tester);
+        expect(find.text('Outcome o1'), findsNothing);
+        expect(find.text('Outcome o2'), findsNothing);
+        expect(find.text('Nothing waiting on anyone'), findsOneWidget);
+        router.go('/task/o1');
+        await _settle(tester);
+        expect(find.text('Next Actions'), findsWidgets);
+        expect(find.text('Waiting For Alicia'), findsNothing);
       } finally {
         await tester.pumpWidget(const SizedBox.shrink());
         await tester.pumpAndSettle();
