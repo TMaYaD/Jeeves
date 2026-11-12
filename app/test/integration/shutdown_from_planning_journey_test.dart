@@ -29,10 +29,10 @@ const _userId = 'local';
 /// ritual's live drift watch-streams keep a timer pending, so settling would
 /// spin until the 10-minute default (docs/TESTING.md). Drain real async and
 /// pump a fixed number of frames instead.
-Future<void> _pumpFrames(WidgetTester tester, {int frames = 6}) async {
+Future<void> _pumpFrames(WidgetTester tester, {int frames = 12}) async {
   for (var i = 0; i < frames; i++) {
     await tester.runAsync(() => pumpEventQueue());
-    await tester.pump(const Duration(milliseconds: 50));
+    await tester.pump(const Duration(milliseconds: 100));
   }
 }
 
