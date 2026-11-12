@@ -702,10 +702,14 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   ///
   /// Drives the Now screen's "Carried over from last session" section, which
   /// shows only while no session is open. Re-emits when a session closes.
+  /// Only clarified Outcomes still on Next are listed: one Trashed, moved to
+  /// Someday/Maybe, completed or unclarified since the rollover drops out.
   Stream<List<Todo>> watchLastClosedSessionRolloverTasks() {
     return customSelect(
       'SELECT $_todoColumnsSql FROM todos t WHERE t.id IN '
-      '($_lastClosedRolloverTaskIdsSql)',
+      '($_lastClosedRolloverTaskIdsSql) '
+      "AND t.intent = 'next' AND t.clarified = 1 "
+      "AND t.done_at IS NULL",
       variables: [Variable('rollover'), Variable('rollover')],
       readsFrom: {
         focusSessions,

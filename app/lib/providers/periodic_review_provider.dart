@@ -683,6 +683,13 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
     await finishSession();
   }
 
+  /// Done on a partial session: stamps the session as the last review and
+  /// ends the sitting. The durable review period stays open.
+  Future<void> completeSession() async {
+    await ref.read(periodicReviewSettingsProvider.notifier).markSessionFinished();
+    await finishSession();
+  }
+
   /// Ends only this sitting; the durable review remains open.
   Future<void> finishSession() async {
     _captureCreatedAtCache.clear();

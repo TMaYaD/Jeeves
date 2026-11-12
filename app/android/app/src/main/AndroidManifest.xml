@@ -29,6 +29,23 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- Share-sheet target: queues text, URLs and images for the Inbox with
+             no UI, so the user stays in the app they shared from. -->
+        <activity
+            android:name=".ShareReceiverActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode|locale|layoutDirection|density|fontScale|colorMode"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=".share"
+            android:theme="@style/ShareReceiverTheme">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="text/plain"/>
+                <data android:mimeType="image/*"/>
+            </intent-filter>
+        </activity>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

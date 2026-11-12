@@ -39,7 +39,7 @@ export 'tables.dart';
 part 'gtd_database.g.dart';
 
 @DriftDatabase(
-  tables: [Todos, Tags, TodoTags, TimeLogs, FocusSessions, FocusSessionTasks, FocusSessionDispositions, FocusSessionPlanningBypasses, FocusSessionReschedules, OutcomeBypassDecisions, UserPreferences, Captures, CaptureOutcomes, CaptureTags, Actions],
+  tables: [Todos, Tags, TodoTags, TimeLogs, FocusSessions, FocusSessionTasks, FocusSessionDispositions, FocusSessionPlanningBypasses, FocusSessionReschedules, OutcomeBypassDecisions, UserPreferences, Captures, CaptureAttachments, CaptureOutcomes, CaptureTags, Actions],
   daos: [TagDao, TodoDao, TimeLogDao, FocusSessionDao, CaptureDao, ActionDao],
 )
 class GtdDatabase extends _$GtdDatabase {
@@ -186,7 +186,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final UserPreferencesDao userPreferencesDao = UserPreferencesDao(this);
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   /// Completes with the [OpeningDetails] of this store's one open.
   ///
@@ -250,9 +250,14 @@ class GtdDatabase extends _$GtdDatabase {
           if (from < 3) {
             await m.alterTable(TableMigration(tags));
           }
-          // v4 (issue #107): the Bypassed Outcome tables. Created only;
-          // nothing is dropped or altered, so no row of an existing store moves.
+          // v4 (share-sheet capture): add the device-local `capture_attachments`
+          // table. Purely additive — no existing row is touched.
           if (from < 4) {
+            await m.createTable(captureAttachments);
+          }
+          // v5 (issue #107): the Bypassed Outcome tables. Created only;
+          // nothing is dropped or altered, so no row of an existing store moves.
+          if (from < 5) {
             await m.createTable(focusSessionPlanningBypasses);
             await m.createTable(focusSessionReschedules);
             await m.createTable(outcomeBypassDecisions);

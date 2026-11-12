@@ -1163,6 +1163,16 @@ AND (
   /// All writes run inside a single transaction so a failure leaves the row
   /// in its prior state.
   ///
+  /// [promotePlannedActionId] folds the Next Action dialog's queue promote into
+  /// the same transaction as the route (#788): the planned Action becomes
+  /// `current` (via [ActionDao.applyPromotePlannedAction], which refuses to
+  /// replace an existing current), or — when [replacingCurrentActionId] names
+  /// the current Action the user confirmed replacing — supersedes it first
+  /// (which throws if sync changed the current meanwhile). Only valid for
+  /// `nextAction`; exclusive with the two action-text parameters. The route
+  /// lands only if the chosen Action ends up the Outcome's current one; if the
+  /// planned row vanished, nothing is written and this returns `false`.
+  ///
   /// Returns `true` iff the routing landed. The Outcome's presence is checked
   /// inside that transaction; an absent row (hard-deleted since the caller
   /// looked) writes nothing — no Action, no person tags, no notifies — and
@@ -1172,10 +1182,25 @@ AND (
     required RoutingKind to,
     String? actionText,
     String? actionTextIfActionless,
+    String? promotePlannedActionId,
+    String? replacingCurrentActionId,
     Set<String>? personTagIds,
     String? userId,
     DateTime? now,
   }) async {
+    if (promotePlannedActionId != null) {
+      if (to != RoutingKind.nextAction) {
+        throw ArgumentError.value(to, 'to',
+            'promotePlannedActionId is only valid for nextAction');
+      }
+      if (actionText != null || actionTextIfActionless != null) {
+        throw ArgumentError('promotePlannedActionId is mutually exclusive '
+            'with actionText and actionTextIfActionless');
+      }
+    } else if (replacingCurrentActionId != null) {
+      throw ArgumentError(
+          'replacingCurrentActionId requires promotePlannedActionId');
+    }
     if (actionTextIfActionless != null) {
       if (to != RoutingKind.nextAction && to != RoutingKind.waitingFor) {
         throw ArgumentError.value(to, 'to',
@@ -1201,8 +1226,32 @@ AND (
         actionText != null;
     var actionTerminated = false;
     var logChanged = false;
+    var promotedPlannedAction = false;
     final landed = await attachedDatabase.capturing(() async {
       if (!await _todoRowExists(todoId)) return false;
+      if (promotePlannedActionId != null) {
+        // The queue promote shares this transaction, so a failed route write
+        // rolls the promote (and any supersede) back (#788). Runs before the
+        // routing UPDATE; its own guards throw on a stale confirm.
+        final actionDao = attachedDatabase.actionDao;
+        final effect = replacingCurrentActionId == null
+            ? await actionDao.applyPromotePlannedAction(promotePlannedActionId,
+                ts: ts)
+            : await actionDao.applySupersedeAndPromote(promotePlannedActionId,
+                expectedCurrentActionId: replacingCurrentActionId, ts: ts);
+        // Land only once the chosen Action is this Outcome's current one.
+        final current = await actionDao.getCurrentAction(todoId);
+        if (current?.id != promotePlannedActionId) {
+          // `false` must mean nothing was written.
+          if (effect.changed) {
+            throw StateError('applyRouting: promoted Action '
+                '$promotePlannedActionId does not belong to Outcome $todoId');
+          }
+          return false;
+        }
+        promotedPlannedAction = effect.changed;
+        logChanged = logChanged || effect.logChanged;
+      }
       final captured = switch (to) {
         RoutingKind.nextAction || RoutingKind.waitingFor => <String, Object?>{
             'clarified': true,
@@ -1316,7 +1365,10 @@ AND (
     // start of a new planning day (#342). Person-tag edits also touch
     // `todo_tags`, so refresh those watchers too.
     attachedDatabase.notifyTodosViewWrite(includeTodoTags: personTagIds != null);
-    if (touchesAction || actionTerminated || wroteFallbackAction) {
+    if (touchesAction ||
+        actionTerminated ||
+        wroteFallbackAction ||
+        promotedPlannedAction) {
       attachedDatabase.notifyActionsViewWrite();
     }
     // A supersede or completion in the cascade closes the current Action's open
