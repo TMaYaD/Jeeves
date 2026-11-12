@@ -18,6 +18,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
+import 'package:jeeves/screens/planning/focus_session_planning_screen.dart';
 import 'package:jeeves/screens/shutdown/shutdown_ritual_screen.dart';
 import 'package:jeeves/services/notification_service.dart';
 
@@ -50,13 +51,28 @@ Future<void> _insertOutcome(GtdDatabase db, String id,
       ));
 }
 
-(Widget, ProviderContainer) _app(GtdDatabase db) {
+/// Skips the rollover preload and the inbox-snapshot DB work so the real
+/// planning wizard does not start Drift reads that never settle under
+/// fake-async (same stub as planning_blocked_start_gate_test.dart).
+class _StubPlanningNotifier extends FocusSessionPlanningNotifier {
+  @override
+  FocusSessionPlanningState build() => const FocusSessionPlanningState();
+
+  @override
+  Future<void> loadInboxSnapshot() async {}
+}
+
+(Widget, ProviderContainer, GoRouter) _app(GtdDatabase db,
+    {required String initialLocation}) {
   final container = ProviderContainer(overrides: [
     databaseProvider.overrideWithValue(db),
     notificationServiceProvider.overrideWithValue(StubNotificationService()),
+    focusSessionPlanningProvider.overrideWith(() => _StubPlanningNotifier()),
+    focusSessionPlanningIntroCountsProvider
+        .overrideWith((ref) async => (inboxCount: 0, reviewCount: 0)),
   ]);
   final router = GoRouter(
-    initialLocation: '/shutdown',
+    initialLocation: initialLocation,
     routes: [
       GoRoute(
         path: '/shutdown',
@@ -64,7 +80,7 @@ Future<void> _insertOutcome(GtdDatabase db, String id,
       ),
       GoRoute(
         path: '/focus-session-planning',
-        builder: (_, _) => const Scaffold(body: Text('planning')),
+        builder: (_, _) => const FocusSessionPlanningScreen(),
       ),
     ],
   );
@@ -74,6 +90,7 @@ Future<void> _insertOutcome(GtdDatabase db, String id,
       child: MaterialApp.router(routerConfig: router),
     ),
     container,
+    router,
   );
 }
 
@@ -101,10 +118,12 @@ void main() {
     } else {
       expect(rollover, isNot(contains('t1')));
     }
+    final ended = await tester.runAsync(() => (db.select(db.focusSessions)
+          ..where((s) => s.endedAt.isNotNull()))
+        .get());
+    expect(ended, hasLength(1), reason: 'the staged session has ended_at');
     final prefs = await SharedPreferences.getInstance();
-    final today = DateTime.now();
-    expect(prefs.getString('shutdown_ritual_completed_date'),
-        contains('${today.year}'),
+    expect(prefs.getString('shutdown_ritual_completed_date'), planningToday(),
         reason: 'the completion date is stored');
   }
 
@@ -135,10 +154,15 @@ void main() {
     WidgetTester tester, {
     required bool unfinished,
   }) async {
-    final (widget, container) = _app(db);
-        container.read(shutdownThenPlanProvider.notifier).set(true);
+    final (widget, container, router) =
+        _app(db, initialLocation: '/focus-session-planning');
 
     await tester.pumpWidget(widget);
+    await _pumpFrames(tester);
+    // Daily Planning blocks on the still-open session; enter through its
+    // real interstitial rather than setting the intent by hand.
+    expect(find.text('Close your current session first'), findsOneWidget);
+    await tester.tap(find.text('Begin Evening Shutdown'));
     await _pumpFrames(tester);
     expect(find.text('Review Your Day'), findsOneWidget);
 
@@ -156,7 +180,8 @@ void main() {
       expectNoClosingAnimation();
     }
 
-    expect(find.text('planning'), findsOneWidget);
+    expect(router.routeInformationProvider.value.uri.path,
+        '/focus-session-planning');
     expect(container.read(shutdownThenPlanProvider), isFalse);
     await expectCommitted(tester, rolledOver: unfinished);
     await unmount(tester);
@@ -175,8 +200,9 @@ void main() {
     testWidgets(
         'same day: moon and Close Day button, tap does not open planning',
         (tester) async {
-      final (widget, container) = _app(db);
-      
+      final (widget, container, router) =
+          _app(db, initialLocation: '/shutdown');
+
       await tester.pumpWidget(widget);
       await _pumpFrames(tester);
       await tester.tap(find.text('Next step'));
@@ -195,7 +221,7 @@ void main() {
         await tester.pump();
         await tester.runAsync(() => pumpEventQueue());
       }
-      expect(find.text('planning'), findsNothing);
+      expect(router.routeInformationProvider.value.uri.path, '/shutdown');
       await expectCommitted(tester, rolledOver: true);
 
       // Unmount before the fade-out ends so the real closeApp() is not called.
@@ -205,11 +231,14 @@ void main() {
 
     testWidgets('abandoned sequenced shutdown does not leak the intent',
         (tester) async {
-      final (widget, container) = _app(db);
-            container.read(shutdownThenPlanProvider.notifier).set(true);
+      final (widget, container, _) =
+          _app(db, initialLocation: '/focus-session-planning');
 
       await tester.pumpWidget(widget);
       await _pumpFrames(tester);
+      await tester.tap(find.text('Begin Evening Shutdown'));
+      await _pumpFrames(tester);
+      expect(container.read(shutdownThenPlanProvider), isTrue);
       await unmount(tester);
 
       expect(container.read(shutdownThenPlanProvider), isFalse);
