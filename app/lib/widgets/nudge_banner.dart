@@ -212,37 +212,87 @@ final _skins = <RitualId, _Skin>{
 // Weekly Review copy
 // ---------------------------------------------------------------------------
 
-/// Bertie-speak buttons for a due Weekly Review (DESIGN.md § Voice): the
-/// button answers Jeeves, so it never names the Ceremony.
-const kWeeklyReviewButtonPool = <String>[
-  'Right ho  →',
-  'Very good  →',
-  'At once  →',
-  'Indeed  →',
-];
+/// One row of the Weekly Review pool: lines and buttons drawn once a day.
+/// `%N` in a first line stands for the days late (words up to nine, digits
+/// from ten).
+class _WeeklyReviewRow {
+  const _WeeklyReviewRow(this.firsts, this.seconds, this.buttons);
+  final List<String> firsts;
+  final List<String> seconds;
+  final List<String> buttons;
+}
 
-/// The continue-wording button for a review left unfinished.
-const kWeeklyReviewContinueButton = 'Push on  →';
+// Every second line says that a short session is enough (design canvas pool,
+// given by the board owner). Buttons are Bertie speak: they answer Jeeves, so
+// they never name the Ceremony.
+const _wrDueDay = _WeeklyReviewRow(
+  [
+    'The Weekly Review is due, sir.',
+    'Review day, sir.',
+    'The week wants its review, sir.',
+  ],
+  [
+    'Today. A short sitting will do.',
+    'Fifteen minutes would settle it.',
+    'Even a short sitting counts.',
+  ],
+  ['Right ho  →', 'Very good  →', 'Indeed  →'],
+);
 
-/// First line of an unfinished review's Banner.
-const kWeeklyReviewUnfinishedLine = 'The Weekly Review, sir. Unfinished.';
+const _wrOneDayLate = _WeeklyReviewRow(
+  [
+    'The Weekly Review, sir. A day late.',
+    'Yesterday’s review, sir, by my book.',
+  ],
+  ['No harm done, if we are quick.', 'A short sitting puts it right.'],
+  ['At once  →', 'Right ho  →'],
+);
 
-// TODO(copy): placeholder. The real second-line remedy pool is on the design
-// canvas; every line in it says that a short session is enough. Until it is
-// pasted in, the shipped Weekly Review second lines stand in.
-const kWeeklyReviewRemedyLinePool = <String>[
-  'A trifling few minutes keeps the system humming.',
-  'A weekly review keeps the chaos at bay.',
-  'Your future self will, I venture, thank you.',
-  'Clear the decks. Set the week.',
-  'Your list, audited and ready.',
-  'Ten minutes now, ten fewer worries later.',
-  'Time to see what is actually going on.',
-];
+const _wrTwoToNineDaysLate = _WeeklyReviewRow(
+  [
+    'The Weekly Review, sir. %N days late.',
+    '%N days past the review, sir.',
+  ],
+  [
+    'A short sitting settles it.',
+    'The lists do not audit themselves.',
+    'One hesitates to mention it. Fifteen minutes?',
+  ],
+  ['Quite  →', 'Indeed  →', 'Very good  →'],
+);
 
-// TODO(copy): placeholder. The real content-state line pair (Next empty while
-// Waiting For or Someday/Maybe hold items; "days late" is untrue there) comes
-// from the design canvas or the Product Owner. The shipped pair stands in.
+/// Joins the pool only at exactly seven days late.
+const _wrAWeekLateFirstLine = 'A week without a review, sir.';
+
+const _wrTenOrMoreDaysLate = _WeeklyReviewRow(
+  [
+    'The Weekly Review, sir. %N days late.',
+    '%N days without a review, sir. I kept count.',
+  ],
+  [
+    'A short sitting still counts.',
+    'Quarter of an hour would do nicely.',
+  ],
+  ['Quite  →', 'Right ho  →'],
+);
+
+const _wrUnfinished = _WeeklyReviewRow(
+  [
+    'The Weekly Review, sir. Unfinished.',
+    'We left the review half done, sir.',
+    'Half a review, sir.',
+  ],
+  [
+    'Shall we go on where we left off?',
+    'It keeps, but only just.',
+    'The rest awaits.',
+  ],
+  ['Push on  →', 'Carry on  →', 'On we go  →'],
+);
+
+// TODO(copy): placeholder. The content-state line pair (Next empty while
+// Waiting For or Someday/Maybe hold items; "days late" is untrue there) is
+// being written by the Product Owner. The shipped pair stands in until then.
 const kWeeklyReviewContentStateLinePair = <(String, String)>[
   ('A weekly tidy, sir?', 'A trifling few minutes keeps the system humming.'),
 ];
@@ -252,14 +302,27 @@ const _smallNumberWords = <String>[
   'Nine',
 ];
 
-/// The Weekly Review's first line: "is due" on the due day, then the days late
-/// in words up to nine and digits from ten.
-String weeklyReviewFirstLine(int daysLate) {
-  if (daysLate <= 0) return 'The Weekly Review is due, sir.';
-  final count = daysLate < 10 ? _smallNumberWords[daysLate] : '$daysLate';
-  final unit = daysLate == 1 ? 'day' : 'days';
-  return 'The Weekly Review, sir. $count $unit late.';
+_WeeklyReviewRow _rowForDaysLate(int daysLate) {
+  if (daysLate <= 0) return _wrDueDay;
+  if (daysLate == 1) return _wrOneDayLate;
+  if (daysLate < 10) return _wrTwoToNineDaysLate;
+  return _wrTenOrMoreDaysLate;
 }
+
+String _firstLineFor(int daysLate, int seed) {
+  final row = _rowForDaysLate(daysLate);
+  final firsts = [
+    ...row.firsts,
+    if (daysLate == 7) _wrAWeekLateFirstLine,
+  ];
+  final count = daysLate < 10 ? _smallNumberWords[daysLate.clamp(0, 9)] : '$daysLate';
+  return firsts[seed % firsts.length].replaceAll('%N', count);
+}
+
+/// The Weekly Review's first line for [daysLate]; [seed] picks from the pool
+/// (seed 0 is the canonical line).
+String weeklyReviewFirstLine(int daysLate, {int seed = 0}) =>
+    _firstLineFor(daysLate, seed);
 
 _Quip _weeklyReviewQuip({
   required DateTime now,
@@ -267,19 +330,21 @@ _Quip _weeklyReviewQuip({
   required int? daysLate,
 }) {
   final seed = _dailySeed(now);
-  final remedy =
-      kWeeklyReviewRemedyLinePool[seed % kWeeklyReviewRemedyLinePool.length];
-  if (unfinished) {
-    return _Quip(kWeeklyReviewUnfinishedLine, remedy, kWeeklyReviewContinueButton);
-  }
-  final button = kWeeklyReviewButtonPool[seed % kWeeklyReviewButtonPool.length];
-  if (daysLate == null) {
+  if (daysLate == null && !unfinished) {
     // Only the content-state Trigger is firing: the review is not late.
     final pair = kWeeklyReviewContentStateLinePair[
         seed % kWeeklyReviewContentStateLinePair.length];
-    return _Quip(pair.$1, pair.$2, button);
+    return _Quip(pair.$1, pair.$2, _wrDueDay.buttons[seed % _wrDueDay.buttons.length]);
   }
-  return _Quip(weeklyReviewFirstLine(daysLate), remedy, button);
+  final row = unfinished ? _wrUnfinished : _rowForDaysLate(daysLate!);
+  final title = unfinished
+      ? row.firsts[seed % row.firsts.length]
+      : _firstLineFor(daysLate!, seed);
+  return _Quip(
+    title,
+    row.seconds[seed % row.seconds.length],
+    row.buttons[seed % row.buttons.length],
+  );
 }
 
 // ---------------------------------------------------------------------------

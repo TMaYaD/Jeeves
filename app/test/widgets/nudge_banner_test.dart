@@ -195,37 +195,42 @@ void main() {
 
     test('first line carries the days late: words to nine, digits from ten', () {
       expect(weeklyReviewFirstLine(0), 'The Weekly Review is due, sir.');
-      expect(weeklyReviewFirstLine(1), 'The Weekly Review, sir. One day late.');
+      expect(weeklyReviewFirstLine(1), 'The Weekly Review, sir. A day late.');
       expect(
           weeklyReviewFirstLine(3), 'The Weekly Review, sir. Three days late.');
       expect(
+          weeklyReviewFirstLine(5, seed: 1), 'Five days past the review, sir.');
+      expect(weeklyReviewFirstLine(7, seed: 2), 'A week without a review, sir.');
+      expect(
           weeklyReviewFirstLine(9), 'The Weekly Review, sir. Nine days late.');
       expect(weeklyReviewFirstLine(10), 'The Weekly Review, sir. 10 days late.');
-      expect(weeklyReviewFirstLine(12), 'The Weekly Review, sir. 12 days late.');
+      expect(weeklyReviewFirstLine(12, seed: 1),
+          '12 days without a review, sir. I kept count.');
     });
 
     testWidgets('a due review shows the days late and a Bertie button',
         (tester) async {
       await pumpWeeklyReview(tester, daysLate: 3);
-      expect(find.text('The Weekly Review, sir. Three days late.'),
+      expect(
+          find.textContaining(RegExp(r'^(The Weekly Review, sir\. Three days late\.|Three days past the review, sir\.)$')),
           findsOneWidget);
       expect(find.text('Start Weekly Review'), findsNothing);
       expect(
-          find.textContaining(RegExp(r'^(Right ho|Very good|At once|Indeed)')),
+          find.textContaining(RegExp(r'^(Right ho|Very good|At once|Indeed|Quite)')),
           findsOneWidget);
     });
 
     testWidgets('an unfinished review uses the continue wording',
         (tester) async {
       await pumpWeeklyReview(tester, daysLate: null, unfinished: true);
-      expect(find.text('The Weekly Review, sir. Unfinished.'), findsOneWidget);
-      expect(find.text('Push on  →'), findsOneWidget);
+      expect(find.textContaining(_unfinishedFirstLine), findsOneWidget);
+      expect(find.textContaining(_unfinishedButton), findsOneWidget);
     });
 
     testWidgets('unfinished wins over days late', (tester) async {
       await pumpWeeklyReview(tester, daysLate: 12, unfinished: true);
-      expect(find.text('The Weekly Review, sir. Unfinished.'), findsOneWidget);
-      expect(find.textContaining('12 days late'), findsNothing);
+      expect(find.textContaining(_unfinishedFirstLine), findsOneWidget);
+      expect(find.textContaining('12 days'), findsNothing);
     });
 
     testWidgets('only the content-state Trigger firing is not "late"',
@@ -236,3 +241,7 @@ void main() {
     });
   });
 }
+
+final _unfinishedFirstLine = RegExp(
+    r'^(The Weekly Review, sir\. Unfinished\.|We left the review half done, sir\.|Half a review, sir\.)$');
+final _unfinishedButton = RegExp(r'^(Push on|Carry on|On we go)');

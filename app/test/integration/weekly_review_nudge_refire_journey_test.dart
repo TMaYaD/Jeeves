@@ -109,7 +109,7 @@ void main() {
     try {
       await pumpApp(tester);
       expect(banner, findsOneWidget);
-      expect(find.text('The Weekly Review, sir. Three days late.'),
+      expect(find.textContaining(RegExp(r'^(The Weekly Review, sir\. Three days late\.|Three days past the review, sir\.)$')),
           findsOneWidget);
       expect(find.byIcon(Icons.close), findsNothing,
           reason: 'no Banner carries a ✕');
@@ -129,7 +129,7 @@ void main() {
       await tester.pump(const Duration(days: 1));
       await _flush(tester);
       expect(banner, findsOneWidget);
-      expect(find.text('The Weekly Review, sir. Four days late.'),
+      expect(find.textContaining(RegExp(r'^(The Weekly Review, sir\. Four days late\.|Four days past the review, sir\.)$')),
           findsOneWidget);
       expect(c.read(nudgeStateProvider(RitualId.weeklyReview)).dismissedAt,
           dismissedAt);
@@ -164,8 +164,12 @@ void main() {
       ceremony.exit(RitualId.weeklyReview);
       await _flush(tester);
       expect(banner, findsOneWidget);
-      expect(find.text('The Weekly Review, sir. Unfinished.'), findsOneWidget);
-      expect(find.text('Push on  →'), findsOneWidget);
+      expect(
+          find.textContaining(RegExp(
+              r'^(The Weekly Review, sir\. Unfinished\.|We left the review half done, sir\.|Half a review, sir\.)$')),
+          findsOneWidget);
+      expect(find.textContaining(RegExp(r'^(Push on|Carry on|On we go)')),
+          findsOneWidget);
 
       // Reopening resumes at the step it left: nothing reset the notifier.
       expect(c.read(periodicReviewProvider).currentStep, stepLeftAt);
@@ -223,7 +227,10 @@ void main() {
       await tester.pump(const Duration(days: 1, minutes: 1));
       await _flush(tester);
       expect(banner, findsOneWidget);
-      expect(find.text('The Weekly Review is due, sir.'), findsOneWidget);
+      expect(
+          find.textContaining(RegExp(
+              r'^(The Weekly Review is due, sir\.|Review day, sir\.|The week wants its review, sir\.)$')),
+          findsOneWidget);
     } finally {
       await tearDownApp(tester);
     }
