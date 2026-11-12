@@ -9,9 +9,8 @@
 /// queue-driven widget parametrised by a per-Ritual chrome matrix.
 library;
 
-import 'dart:ui' show CustomSemanticsAction;
-
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart' show CustomSemanticsAction;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
