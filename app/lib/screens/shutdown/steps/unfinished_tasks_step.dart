@@ -3,17 +3,12 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../database/gtd_database.dart' show Todo;
 import '../../../services/clarification_service.dart';
 import '../../../providers/evening_shutdown_provider.dart';
-/// choose Done (which floats the session's verdict sheet) or one of three
-/// dispositions:
-/// - Done → records the current Action done, then the verdict sheet; the verdict
-///   is written at once and the task leaves this list.
-/// - Roll Over (to Tomorrow) → preselects the task in the next plan. Reads
-///   "Roll Over to Tomorrow" for an ordinary shutdown, and plain "Roll Over"
-///   when Daily Planning launched this shutdown ([shutdownThenPlanProvider]),
-///   because the next plan is then minutes away, not tomorrow's.
-/// - Return to Next Actions → clears the daily selection; task reappears in
+import '../../../providers/focus_session_planning_provider.dart';
+import '../../../widgets/process_to_handlers.dart';
+import '../../../widgets/reclarify_prompt_sheet.dart';
 import '../../../widgets/meta_chip.dart';
 import '../../../widgets/outcome_review_card.dart';
 import '../../../providers/task_detail_provider.dart';
