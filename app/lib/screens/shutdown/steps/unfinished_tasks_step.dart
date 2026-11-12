@@ -56,14 +56,9 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
       // dismissal while the write is pending resolves the sheet to null yet
       // the verdict still lands.
       final notifier = ref.read(eveningShutdownProvider.notifier);
-      await ReclarifyPromptSheet.show(
-        context,
-        todo,
-        onVerdictCommitted: (verdict) {
-          final kind = verdict.toRoutingKind();
-          if (kind != null) notifier.recordVerdict(todo.id, kind);
-        },
-      );
+      final verdict = await ReclarifyPromptSheet.show(context, todo);
+      final kind = verdict?.toRoutingKind();
+      if (kind != null) notifier.recordVerdict(todo.id, kind);
     } finally {
       _doneInFlight = false;
     }
