@@ -31,12 +31,12 @@ class _FailOnceShutdown extends EveningShutdownNotifier {
   bool _failed = false;
 
   @override
-  Future<void> closeDay() async {
+  Future<void> closeDay({DateTime? now}) async {
     if (!_failed) {
       _failed = true;
       throw StateError('write failed');
     }
-    return super.closeDay();
+    return super.closeDay(now: now);
   }
 }
 
