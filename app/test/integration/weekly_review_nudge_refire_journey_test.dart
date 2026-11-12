@@ -12,11 +12,8 @@ import 'package:jeeves/models/ritual.dart';
 import 'package:jeeves/providers/ceremony_in_progress_provider.dart';
 import 'package:jeeves/providers/clock_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
-import 'package:jeeves/providers/nudge_clock_provider.dart';
 import 'package:jeeves/providers/nudge_provider.dart';
 import 'package:jeeves/providers/periodic_review_provider.dart';
-import 'package:jeeves/providers/periodic_review_settings_provider.dart'
-    show periodicReviewIsDueProvider;
 import 'package:jeeves/providers/synced_preferences_provider.dart';
 import 'package:jeeves/router.dart';
 import 'package:jeeves/services/notification_service.dart';
@@ -172,37 +169,34 @@ void main() {
 
       // Reopening resumes at the step it left: nothing reset the notifier.
       expect(c.read(periodicReviewProvider).currentStep, stepLeftAt);
+
+      // Finishing the session with Done ends the Unfinished Trigger, and the
+      // review is not due again for seven days.
+      await tester.runAsync(() => review.completeSession());
+      await _flush(tester);
+      expect(banner, findsNothing);
     } finally {
       await tearDownApp(tester);
     }
   });
 
   testWidgets(
-      'finishing a short session clears the Banner; it returns seven days later',
-      (tester) async {
+      'a short session finished with Done clears the Banner; it returns seven '
+      'days later', (tester) async {
     await insertCapture('inbox', startedAt.subtract(const Duration(days: 20)));
     await setLastCompleted(startedAt.subtract(const Duration(days: 10)));
+    // Start a 15-minute session, leave it, then finish it with Done, before
+    // the app mounts: the review was due, and Done stamps the last review.
+    final ceremony = c.read(ceremonyInProgressProvider.notifier);
+    final review = c.read(periodicReviewProvider.notifier);
+    await tester.runAsync(() async {
+      ceremony.enter(RitualId.weeklyReview);
+      await review.startSession(budgetMinutes: 15);
+      ceremony.exit(RitualId.weeklyReview);
+      await review.completeSession();
+    });
     try {
       await pumpApp(tester);
-      expect(banner, findsOneWidget);
-
-      final ceremony = c.read(ceremonyInProgressProvider.notifier);
-      final review = c.read(periodicReviewProvider.notifier);
-      ceremony.enter(RitualId.weeklyReview);
-      await tester.runAsync(() => review.startSession(budgetMinutes: 15));
-      await _flush(tester);
-      ceremony.exit(RitualId.weeklyReview);
-      await _flush(tester);
-      expect(find.text('The Weekly Review, sir. Unfinished.'), findsOneWidget);
-
-      // Done on the summary of a session.
-      await tester.runAsync(() => review.completeSession());
-      // The due date moved while inside runAsync, so the due predicate and the
-      // boundary tick armed their Timers on the real clock. Re-arm both in the
-      // test's fake time, where only elapsed time may restore the Banner.
-      c.invalidate(periodicReviewIsDueProvider);
-      c.invalidate(nudgeBoundaryTickProvider);
-      await _flush(tester);
       expect(banner, findsNothing);
 
       for (var day = 1; day <= 6; day++) {
