@@ -3,7 +3,6 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../database/gtd_database.dart' show Todo;
 import '../../../services/clarification_service.dart';
 import '../../../providers/evening_shutdown_provider.dart';
 import '../../../widgets/process_to_handlers.dart';
