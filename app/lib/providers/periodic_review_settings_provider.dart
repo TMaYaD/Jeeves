@@ -18,7 +18,6 @@ import '../services/notification_service.dart';
 import 'clock_provider.dart';
 import 'focus_session_planning_provider.dart' show planningToday;
 import 'gtd_lists_provider.dart' show Capture, Todo;
-import 'nudge_clock_provider.dart' show nudgeBoundaryTickProvider;
 import 'synced_preferences_provider.dart';
 import 'system_trust_provider.dart' show weeklyReviewDueAtProvider;
 
@@ -153,11 +152,16 @@ final periodicReviewOpenSinceProvider = Provider<DateTime?>((ref) {
 /// open review period does not make the review due, so a finished short
 /// session clears both until seven days after it.
 final periodicReviewIsDueProvider = Provider<bool>((ref) {
-  // Re-evaluates at the due instant and at every local midnight.
-  ref.watch(nudgeBoundaryTickProvider);
   final due = ref.watch(weeklyReviewDueAtProvider);
   if (due == null) return false;
-  return !ref.watch(clockProvider)().isBefore(due);
+  final now = ref.watch(clockProvider)();
+  if (!now.isBefore(due)) return true;
+  // Not due yet — re-evaluate exactly when the due instant passes, so the
+  // Nudge surfaces reactively the moment the review falls due rather than
+  // waiting for an unrelated rebuild. One timer, cancelled on dispose.
+  final timer = Timer(due.difference(now), ref.invalidateSelf);
+  ref.onDispose(timer.cancel);
+  return false;
 });
 
 /// Whether the Weekly Review banner is enabled (defaults to true).

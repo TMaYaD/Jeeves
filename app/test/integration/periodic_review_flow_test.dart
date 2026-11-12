@@ -95,6 +95,7 @@ void main() {
         createdAt: Value(eightDaysAgo),
         updatedAt: Value(eightDaysAgo),
       ));
+      c.listen(neverReviewedBaselineProvider, (_, _) {});
       await c.read(neverReviewedBaselineProvider.future);
       expect(c.read(periodicReviewIsDueProvider), isTrue);
       expect(c.read(periodicReviewBannerEnabledProvider), isTrue);

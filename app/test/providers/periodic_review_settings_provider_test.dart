@@ -27,6 +27,7 @@ void main() {
       addTearDown(c.dispose);
 
       await c.read(syncedPreferencesProvider.future);
+      c.listen(neverReviewedBaselineProvider, (_, _) {});
       await c.read(neverReviewedBaselineProvider.future);
       expect(c.read(periodicReviewIsDueProvider), isFalse);
     });
@@ -47,6 +48,7 @@ void main() {
         updatedAt: Value(sevenDaysAgo),
       ));
       await c.read(syncedPreferencesProvider.future);
+      c.listen(neverReviewedBaselineProvider, (_, _) {});
       await c.read(neverReviewedBaselineProvider.future);
       expect(c.read(periodicReviewIsDueProvider), isTrue);
     });
@@ -67,6 +69,7 @@ void main() {
         updatedAt: Value(sixDaysAgo),
       ));
       await c.read(syncedPreferencesProvider.future);
+      c.listen(neverReviewedBaselineProvider, (_, _) {});
       await c.read(neverReviewedBaselineProvider.future);
       expect(c.read(periodicReviewIsDueProvider), isFalse);
     });

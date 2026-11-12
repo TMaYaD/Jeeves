@@ -90,6 +90,7 @@ void main() {
     expect(container.read(periodicReviewLastCompletedProvider), isNull);
     expect(container.read(periodicReviewProvider).currentStep, 0);
     // Due by the never-reviewed baseline (the oldest Outcome is 20 days old).
+    container.listen(neverReviewedBaselineProvider, (_, _) {});
     await container.read(neverReviewedBaselineProvider.future);
     expect(container.read(periodicReviewIsDueProvider), isTrue);
   });

@@ -12,6 +12,7 @@ import 'package:jeeves/models/ritual.dart';
 import 'package:jeeves/providers/ceremony_in_progress_provider.dart';
 import 'package:jeeves/providers/clock_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/providers/nudge_clock_provider.dart';
 import 'package:jeeves/providers/nudge_provider.dart';
 import 'package:jeeves/providers/periodic_review_provider.dart';
 import 'package:jeeves/providers/synced_preferences_provider.dart';
@@ -194,6 +195,9 @@ void main() {
 
       // Done on the summary of a session.
       await tester.runAsync(() => review.completeSession());
+      // The due date moved while inside runAsync, so the boundary tick re-armed
+      // its Timer on the real clock. Re-arm it in the test's fake time.
+      c.invalidate(nudgeBoundaryTickProvider);
       await _flush(tester);
       expect(banner, findsNothing);
 
