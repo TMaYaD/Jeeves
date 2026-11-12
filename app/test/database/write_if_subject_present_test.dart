@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/action_draft.dart';
+import 'package:jeeves/models/todo.dart' show Intent, RoutingKind;
 import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/sync/collection_codecs.dart'
     show captureTagsCollection, todosCollection;
@@ -76,6 +77,11 @@ void main() {
     test('every write on a deleted Outcome reports false and leaves no rows',
         () async {
       await insertOutcome('o1');
+      // Real tag rows, so the assign calls would land if the guard were missing.
+      final contextTagId =
+          await db.tagDao.findOrCreateTag('work', 'context', _userId);
+      final projectTagId =
+          await db.tagDao.findOrCreateTag('Move', 'project', _userId);
       await db.todoDao.deleteOutcome('o1');
       capture.clear();
       final notifier =
@@ -87,7 +93,28 @@ void main() {
       expect(await notifier.clearProject(), isFalse);
       expect(await notifier.addPlannedAction(const ActionDraft(text: 'Call')), isFalse);
 
-      expect(capture.forCollection(todosCollection), isEmpty);
+      // The remaining writes behind the task detail sheets and dialogs (#781).
+      expect(await notifier.setIntent(Intent.maybe), isFalse);
+      expect(await notifier.markDone(), isFalse);
+      expect(await notifier.restoreTo(RoutingKind.nextAction), isFalse);
+      expect(await notifier.clearAllPersonTags(), isFalse);
+      expect(await notifier.assignContextTag(contextTagId), isFalse);
+      expect(await notifier.removeContextTag(contextTagId), isFalse);
+      expect(await notifier.setEnergyLevel('high'), isFalse);
+      expect(await notifier.clearEnergyLevel(), isFalse);
+      expect(await notifier.clearTimeEstimate(), isFalse);
+      expect(await notifier.setDueDate(DateTime(2030, 1, 1)), isFalse);
+      expect(await notifier.clearDueDate(), isFalse);
+      expect(await notifier.assignProject(projectTagId), isFalse);
+      expect(
+          await notifier.editAction('a1', const ActionDraft(text: 'Call')),
+          isFalse);
+      expect(await notifier.supersedeAndPromote('a1'), isFalse);
+      expect(await notifier.abandonCurrentAction(), isFalse);
+
+      expect(capture.recorded, isEmpty);
+      expect(await db.todoDao.getTodo('o1'), isNull);
+      expect(await db.select(db.todoTags).get(), isEmpty);
       expect(await db.select(db.actions).get(), isEmpty);
     });
   });

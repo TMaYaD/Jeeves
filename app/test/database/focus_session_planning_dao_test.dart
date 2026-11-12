@@ -1093,6 +1093,44 @@ void main() {
       expect(tasks.single.title, 'B');
     });
 
+    test(
+        'excludes a rolled-over Outcome later Trashed, moved to Someday/Maybe, '
+        'completed or unclarified; keeps one still on Next', () async {
+      for (final id in ['keep', 'trashed', 'maybe', 'done', 'unclarified']) {
+        await _insertTodo(db, id: id, title: id);
+      }
+      final sessionId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: ['keep', 'trashed', 'maybe', 'done', 'unclarified'],
+        now: DateTime(2026, 4, 29, 9, 0),
+      );
+      await db.focusSessionDao.reviewAndCloseSession(
+        sessionId: sessionId,
+        dispositions: {
+          'keep': 'rollover',
+          'trashed': 'rollover',
+          'maybe': 'rollover',
+          'done': 'rollover',
+          'unclarified': 'rollover',
+        },
+        now: DateTime(2026, 4, 29, 17, 0),
+      );
+      await db.customStatement(
+          "UPDATE todos SET clarified = 0 WHERE id = 'unclarified'");
+      await db.customStatement(
+          "UPDATE todos SET intent = 'trash' WHERE id = 'trashed'");
+      await db.customStatement(
+          "UPDATE todos SET intent = 'maybe' WHERE id = 'maybe'");
+      await db.customStatement(
+          "UPDATE todos SET done_at = '2026-04-30T09:00:00.000Z' "
+          "WHERE id = 'done'");
+
+      final tasks = await db.focusSessionDao
+          .watchLastClosedSessionRolloverTasks()
+          .first;
+      expect(tasks.map((t) => t.id), ['keep']);
+    });
+
     test('re-emits when a session closes', () async {
       await _insertTodo(db, id: 'x', title: 'X');
       final stream =

@@ -793,14 +793,15 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// Capture's own title; its tag hints seed the new Outcome's tags.
   ///
   /// Bails out without mutating state if the snapshot row no longer exists
-  /// in the DB (deleted between snapshot load and apply). Idempotent under
+  /// in the DB (deleted before or during the write). Idempotent under
   /// rapid re-taps: the cursor advance check at the end discards a second
   /// call's state mutation when the first call has already advanced.
   ///
-  /// Note: the routing write is a multi-statement transaction whose
-  /// affected-rows count says nothing about the subject in particular, so we
-  /// pre-check for row existence via [ClarificationService.captureExists] and
-  /// otherwise trust the snapshot's claim that the row exists.
+  /// Note: the routing write is a multi-statement transaction that checks for
+  /// the Capture itself and throws [CaptureNotFoundError] when it is gone. That
+  /// error is the gate: it is caught (and only it) and the step is skipped
+  /// silently, with no record and no cursor move. The Capture read below is a
+  /// data read (default title and notes), not an existence guard.
   Future<void> _routeInboxItem(
     String captureId, {
     required RoutingKind to,
@@ -809,21 +810,25 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     Set<String>? personTagIds,
   }) async {
     final idx = state.inboxNav.index;
-    final capture = await _db.captureDao.getCapture(captureId);
-    if (capture == null) return;
-    if (to == RoutingKind.trash) {
-      await _clarification.discardCapture(captureId);
-    } else {
-      await _clarification.clarifyCaptureToOutcome(
-        captureId,
-        to: to,
-        userId: _userId,
-        title: title ?? capture.title,
-        notes: capture.notes,
-        action: actionText == null ? null : ActionDraft(text: actionText),
-        personTagIds: personTagIds,
-        tagIds: await _db.captureDao.tagHintIdsForCapture(captureId),
-      );
+    try {
+      if (to == RoutingKind.trash) {
+        await _clarification.discardCapture(captureId);
+      } else {
+        final capture = await _db.captureDao.getCapture(captureId);
+        if (capture == null) return;
+        await _clarification.clarifyCaptureToOutcome(
+          captureId,
+          to: to,
+          userId: _userId,
+          title: title ?? capture.title,
+          notes: capture.notes,
+          action: actionText == null ? null : ActionDraft(text: actionText),
+          personTagIds: personTagIds,
+          tagIds: await _db.captureDao.tagHintIdsForCapture(captureId),
+        );
+      }
+    } on CaptureNotFoundError {
+      return;
     }
     if (state.inboxNav.index != idx) return;
     state = state.copyWith(
@@ -961,11 +966,12 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// write that stamps `last_clarified_at`.
   Future<void> confirmReviewItemRelevant(String id) async {
     final idx = state.reviewNav.index;
-    await _clarification.clarifyToOutcome(
+    final landed = await _clarification.clarifyToOutcome(
       id,
       to: RoutingKind.nextAction,
       userId: _userId,
     );
+    if (!landed) return;
     if (state.reviewNav.index != idx) return;
     _recordAndAdvance(
       const ReviewActionRecord(kind: ReviewActionKind.stillRelevant),
@@ -986,11 +992,12 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// path for setting the phrase.
   Future<void> markReviewItemWaitingFor(String id) async {
     final idx = state.reviewNav.index;
-    await _clarification.clarifyToOutcome(
+    final landed = await _clarification.clarifyToOutcome(
       id,
       to: RoutingKind.waitingFor,
       userId: _userId,
     );
+    if (!landed) return;
     if (state.reviewNav.index != idx) return;
     final tagIds = await _db.tagDao.getPersonTagIdsForTodo(id);
     if (state.reviewNav.index != idx) return;
@@ -1003,11 +1010,12 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// "Mark done" — sets done_at and stamps last_clarified_at.
   Future<void> markReviewItemDone(String id) async {
     final idx = state.reviewNav.index;
-    await _clarification.clarifyToOutcome(
+    final landed = await _clarification.clarifyToOutcome(
       id,
       to: RoutingKind.done,
       userId: _userId,
     );
+    if (!landed) return;
     if (state.reviewNav.index != idx) return;
     _recordAndAdvance(const ReviewActionRecord(kind: ReviewActionKind.markDone));
   }
@@ -1015,11 +1023,12 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// "Send to Someday" — sets intent='maybe' and stamps last_clarified_at.
   Future<void> deferReviewItemToSomeday(String id) async {
     final idx = state.reviewNav.index;
-    await _clarification.clarifyToOutcome(
+    final landed = await _clarification.clarifyToOutcome(
       id,
       to: RoutingKind.maybe,
       userId: _userId,
     );
+    if (!landed) return;
     if (state.reviewNav.index != idx) return;
     _recordAndAdvance(
       const ReviewActionRecord(kind: ReviewActionKind.sendToSomeday),
@@ -1029,11 +1038,12 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// "Trash" — sets intent='trash' and stamps last_clarified_at.
   Future<void> trashReviewItem(String id) async {
     final idx = state.reviewNav.index;
-    await _clarification.clarifyToOutcome(
+    final landed = await _clarification.clarifyToOutcome(
       id,
       to: RoutingKind.trash,
       userId: _userId,
     );
+    if (!landed) return;
     if (state.reviewNav.index != idx) return;
     _recordAndAdvance(const ReviewActionRecord(kind: ReviewActionKind.trash));
   }

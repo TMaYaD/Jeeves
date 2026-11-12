@@ -41,7 +41,7 @@ class _SummaryStepState extends ConsumerState<SummaryStep> {
       if (ref.read(periodicReviewProvider).isFinalSession) {
         await notifier.completeReview();
       } else {
-        await notifier.finishSession();
+        await notifier.completeSession();
       }
       if (!mounted) return;
       context.go('/inbox');

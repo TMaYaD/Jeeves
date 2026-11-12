@@ -11,14 +11,14 @@ void main() {
         'boundary', () {
       final now = DateTime(2026, 6, 29, 10, 0);
       final next = nextNudgeBoundary(now,
-          shutdownHour: 17, shutdownMinute: 0, weeklyReviewLastCompleted: null);
+          shutdownHour: 17, shutdownMinute: 0, weeklyReviewDueAt: null);
       expect(next, DateTime(2026, 6, 29, 17, 0));
     });
 
     test('falls back to the next day boundary once the anchor has passed', () {
       final now = DateTime(2026, 6, 29, 18, 0);
       final next = nextNudgeBoundary(now,
-          shutdownHour: 17, shutdownMinute: 0, weeklyReviewLastCompleted: null);
+          shutdownHour: 17, shutdownMinute: 0, weeklyReviewDueAt: null);
       expect(next, DateTime(2026, 6, 30));
     });
 
@@ -28,14 +28,14 @@ void main() {
       // shutdown anchor and tonight's midnight.
       final last = DateTime(2026, 6, 22, 12, 0);
       final next = nextNudgeBoundary(now,
-          shutdownHour: 17, shutdownMinute: 0, weeklyReviewLastCompleted: last);
+          shutdownHour: 17, shutdownMinute: 0, weeklyReviewDueAt: last.add(const Duration(days: 7)));
       expect(next, DateTime(2026, 6, 29, 12, 0));
     });
 
     test('schedules subsequent weekly-review refires before other boundaries', () {
       final last = DateTime(2026, 6, 15, 12);
       final next = nextNudgeBoundary(DateTime(2026, 6, 29, 11),
-          shutdownHour: 17, shutdownMinute: 0, weeklyReviewLastCompleted: last);
+          shutdownHour: 17, shutdownMinute: 0, weeklyReviewDueAt: last.add(const Duration(days: 7)));
       expect(next, DateTime(2026, 6, 29, 12));
     });
 
@@ -43,7 +43,7 @@ void main() {
       final now = DateTime(2026, 6, 29, 10, 0);
       final last = DateTime(2026, 6, 1, 9, 0); // due long ago
       final next = nextNudgeBoundary(now,
-          shutdownHour: 23, shutdownMinute: 0, weeklyReviewLastCompleted: last);
+          shutdownHour: 23, shutdownMinute: 0, weeklyReviewDueAt: last.add(const Duration(days: 7)));
       // Past due instant is skipped; the 23:00 anchor is the earliest future one.
       expect(next, DateTime(2026, 6, 29, 23, 0));
     });
