@@ -298,6 +298,32 @@ void main() {
     });
   });
 
+  scenario('Sheet dismissed while the verdict write is pending', ['a', 'b'], () {
+    testWidgets('the landed Completion still clears an earlier Roll Over',
+        (tester) async {
+      await mount(tester);
+      // Roll Over a, move on to b, come Back to a: the Roll Over is held.
+      await _tapVisible(tester, find.text('Roll Over to Tomorrow'));
+      await settleWithRealAsync(tester);
+      await tester.tap(find.text('Back'));
+      await settleWithRealAsync(tester);
+      expect(container.read(eveningShutdownProvider).dispositions['a'],
+          'rollover');
+
+      await openSheet(tester);
+      // Start the write, then dismiss before the real-async store call lands.
+      await tester.tap(find.text('Outcome achieved'));
+      await tester.binding.handlePopRoute();
+      await settleWithRealAsync(tester);
+
+      expect((await todo(tester, 'a')).doneAt, isNotNull);
+      final state = container.read(eveningShutdownProvider);
+      expect(state.dispositions.containsKey('a'), isFalse);
+      expect(state.unfinishedNav.items!.map((t) => t.id), ['b']);
+      await unmount(tester);
+    });
+  });
+
   scenario('Single task achieved', ['only'], () {
     testWidgets('advances the ritual straight to Close Day', (tester) async {
       await mount(tester);

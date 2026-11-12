@@ -52,10 +52,18 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
     try {
       await ref.read(clarificationServiceProvider).completeCurrentAction(todo.id);
       if (!mounted) return;
-      final verdict = await ReclarifyPromptSheet.show(context, todo);
-      final kind = verdict?.toRoutingKind();
-      if (!mounted || kind == null) return;
-      ref.read(eveningShutdownProvider.notifier).recordVerdict(todo.id, kind);
+      // Ritual state follows the committed write, not the sheet's result: a
+      // dismissal while the write is pending resolves the sheet to null yet
+      // the verdict still lands.
+      final notifier = ref.read(eveningShutdownProvider.notifier);
+      await ReclarifyPromptSheet.show(
+        context,
+        todo,
+        onVerdictCommitted: (verdict) {
+          final kind = verdict.toRoutingKind();
+          if (kind != null) notifier.recordVerdict(todo.id, kind);
+        },
+      );
     } finally {
       _doneInFlight = false;
     }

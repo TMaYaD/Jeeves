@@ -31,14 +31,27 @@ import '../database/gtd_database.dart';
 import 'process_to_handlers.dart';
 
 class ReclarifyPromptSheet extends StatelessWidget {
-  const ReclarifyPromptSheet({super.key, required this.todo});
+  const ReclarifyPromptSheet({
+    super.key,
+    required this.todo,
+    this.onVerdictCommitted,
+  });
 
   final Todo todo;
+
+  /// Called once a verdict's write has committed, even when the sheet was
+  /// dismissed while that write was still pending (the sheet's own pop is then
+  /// skipped, so the [show] result would be `null` for a verdict that landed).
+  final void Function(ProcessAction verdict)? onVerdictCommitted;
 
   /// Floats the re-clarify prompt for [todo]. Resolves to the chosen
   /// [ProcessAction] once a verdict commits, or `null` when the user dismisses
   /// the sheet without choosing one.
-  static Future<ProcessAction?> show(BuildContext context, Todo todo) {
+  static Future<ProcessAction?> show(
+    BuildContext context,
+    Todo todo, {
+    void Function(ProcessAction verdict)? onVerdictCommitted,
+  }) {
     return showModalBottomSheet<ProcessAction>(
       context: context,
       isScrollControlled: true,
@@ -47,7 +60,10 @@ class ReclarifyPromptSheet extends StatelessWidget {
         // Sheets sit at 6px on the canonical 2/4/6 scale (DESIGN.md §Roundedness).
         borderRadius: BorderRadius.vertical(top: Radius.circular(6)),
       ),
-      builder: (_) => ReclarifyPromptSheet(todo: todo),
+      builder: (_) => ReclarifyPromptSheet(
+        todo: todo,
+        onVerdictCommitted: onVerdictCommitted,
+      ),
     );
   }
 
@@ -115,6 +131,7 @@ class ReclarifyPromptSheet extends StatelessWidget {
                   ProcessAction.someday: 'Defer to Someday',
                 },
                 onAfterRoute: (action) async {
+                  onVerdictCommitted?.call(action);
                   // onAfterRoute runs after the routing write is awaited, so
                   // the sheet's context may already be deactivated. Guard
                   // before touching the Navigator — an unmounted context leaves
