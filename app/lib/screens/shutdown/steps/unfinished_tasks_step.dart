@@ -3,7 +3,6 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../database/gtd_database.dart' show Todo;
 import '../../../services/clarification_service.dart';
 import '../../../providers/evening_shutdown_provider.dart';
 import '../../../providers/focus_session_planning_provider.dart';
@@ -28,7 +27,7 @@ import '../../../providers/task_detail_provider.dart';
 ///   "Roll Over to Tomorrow" for an ordinary shutdown, and plain "Roll Over"
 ///   when Daily Planning launched this shutdown ([shutdownThenPlanProvider]),
 ///   because the next plan is then minutes away, not tomorrow's.
-/// - Return to Next Actions → clears the daily selection; task reappears in
+/// - Return to Next → clears the daily selection; task reappears in
 ///   tomorrow's planning session.
 /// - Defer until a later day → moves the task to Someday/Maybe.
 ///
