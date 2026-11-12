@@ -38,17 +38,17 @@ final waitingListGroupedProvider = StreamProvider<Map<Tag, List<Todo>>>((ref) {
 });
 
 /// Stream of maybe-intent todos (intent = 'maybe', done_at IS NULL).
-final maybeProvider = StreamProvider<List<Todo>>((ref) {
+final somedayMaybeProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
   final tagIds = ref.watch(tagFilterProvider);
-  return db.todoDao.watchMaybe(tagIds: tagIds);
+  return db.todoDao.watchSomedayMaybe(tagIds: tagIds);
 });
 
 /// Stream of every active Outcome tagged with the Project [projectTagId],
 /// whether it is on the Next List, Waiting For or Maybe.
 ///
 /// Deliberately ignores [tagFilterProvider]: the Project page is a place of
-/// its own, not a filtered view of Next Actions.
+/// its own, not a filtered view of Next.
 final projectOutcomesProvider =
     StreamProvider.family<List<Todo>, String>((ref, projectTagId) {
   final db = ref.watch(databaseProvider);
@@ -103,10 +103,10 @@ final unfilteredWaitingForProvider = StreamProvider<List<Todo>>((ref) {
 
 /// Stream of maybe-intent todos — no context tag filter.
 ///
-/// Unlike [maybeProvider], this ignores [tagFilterProvider] so it covers the
+/// Unlike [somedayMaybeProvider], this ignores [tagFilterProvider] so it covers the
 /// user's full someday/maybe list. Used by the Weekly Review Content-state Trigger to decide
 /// whether the empty-actionable trigger should fire.
-final unfilteredMaybeProvider = StreamProvider<List<Todo>>((ref) {
+final unfilteredSomedayMaybeProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
-  return db.todoDao.watchMaybe();
+  return db.todoDao.watchSomedayMaybe();
 });

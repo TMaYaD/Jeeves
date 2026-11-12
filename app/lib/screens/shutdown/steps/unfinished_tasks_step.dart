@@ -5,8 +5,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../services/clarification_service.dart';
 import '../../../providers/evening_shutdown_provider.dart';
-import '../../../widgets/process_to_handlers.dart';
-import '../../../widgets/reclarify_prompt_sheet.dart';
+/// choose Done (which floats the session's verdict sheet) or one of three
+/// dispositions:
+/// - Done → records the current Action done, then the verdict sheet; the verdict
+///   is written at once and the task leaves this list.
+/// - Roll Over (to Tomorrow) → preselects the task in the next plan. Reads
+///   "Roll Over to Tomorrow" for an ordinary shutdown, and plain "Roll Over"
+///   when Daily Planning launched this shutdown ([shutdownThenPlanProvider]),
+///   because the next plan is then minutes away, not tomorrow's.
+/// - Return to Next Actions → clears the daily selection; task reappears in
 import '../../../widgets/meta_chip.dart';
 import '../../../widgets/outcome_review_card.dart';
 import '../../../providers/task_detail_provider.dart';
@@ -22,7 +29,10 @@ import '../../../providers/task_detail_provider.dart';
 /// dispositions:
 /// - Done → records the current Action done, then the verdict sheet; the verdict
 ///   is written at once and the task leaves this list.
-/// - Roll Over to Tomorrow → preselects the task for tomorrow's plan.
+/// - Roll Over (to Tomorrow) → preselects the task in the next plan. Reads
+///   "Roll Over to Tomorrow" for an ordinary shutdown, and plain "Roll Over"
+///   when Daily Planning launched this shutdown ([shutdownThenPlanProvider]),
+///   because the next plan is then minutes away, not tomorrow's.
 /// - Return to Next Actions → clears the daily selection; task reappears in
 ///   tomorrow's planning session.
 /// - Defer until a later day → moves the task to Someday/Maybe.
@@ -122,6 +132,7 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
         ref.watch(loggedMinutesByOutcomeProvider).value?[current.id] ?? 0;
 
     final currentAction = ref.watch(currentActionProvider(current.id)).value;
+    final launchedByDailyPlanning = ref.watch(shutdownThenPlanProvider);
     return OutcomeReviewCard(
       key: ValueKey(current.id),
       todo: current,
@@ -142,8 +153,10 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
           ),
           const SizedBox(height: 10),
           _ResolutionButton(
-            label: 'Roll Over to Tomorrow',
-            subtitle: "Add to tomorrow's plan",
+            label: launchedByDailyPlanning ? 'Roll Over' : 'Roll Over to Tomorrow',
+            subtitle: launchedByDailyPlanning
+                ? 'Add to your next plan'
+                : "Add to tomorrow's plan",
             icon: Icons.center_focus_strong_outlined,
             color: const Color(0xFF2563EB),
             onTap: () => notifier.rolloverTask(current.id),
@@ -151,7 +164,7 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
           ),
           const SizedBox(height: 10),
           _ResolutionButton(
-            label: 'Return to Next Actions',
+            label: 'Return to Next',
             subtitle: 'Reappear in a future planning session',
             icon: Icons.check_circle_outline,
             color: const Color(0xFF6B7280),
@@ -161,7 +174,7 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
           const SizedBox(height: 10),
           _ResolutionButton(
             label: 'Defer until a later day',
-            subtitle: 'Move to Someday / Maybe',
+            subtitle: 'Move to Someday/Maybe',
             icon: Icons.star_border,
             color: const Color(0xFF6B7280),
             onTap: () => notifier.deferTask(current.id),

@@ -208,6 +208,229 @@ void main() {
     });
   });
 
+  group('TodoDao — applyRouting promotePlannedActionId (#788)', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    final t0 = DateTime.parse('2026-07-01T09:00:00.000Z');
+    final t1 = DateTime.parse('2026-07-01T10:00:00.000Z');
+
+    Future<void> seedPlanned(String outcomeId, String id, int position) =>
+        seedPlannedAction(db,
+            outcomeId: outcomeId,
+            text: 'Step $id',
+            userId: _userId,
+            id: id,
+            position: position);
+
+    Future<void> failRoute() => db.customStatement(
+        'CREATE TRIGGER todos_route_fails BEFORE UPDATE OF intent ON todos '
+        "BEGIN SELECT RAISE(ABORT, 'route is unwritable'); END");
+
+    test('one call promotes onto an Actionless Outcome, routes and stamps',
+        () async {
+      await _insertTodo(db, id: 'o1', title: 'Outcome o1');
+      await seedPlanned('o1', 'p1', 0);
+
+      final landed = await db.todoDao.applyRouting('o1',
+          to: RoutingKind.nextAction, promotePlannedActionId: 'p1', now: t1);
+
+      expect(landed, isTrue);
+      expect((await db.actionDao.getCurrentAction('o1'))?.id, 'p1');
+      final row = await db.todoDao.getTodo('o1');
+      expect(row?.intent, 'next');
+      expect(row?.clarified, isTrue);
+      expect(row?.lastClarifiedAt, t1);
+    });
+
+    test('with replacingCurrentActionId the incumbent is superseded and the '
+        'chosen row routes', () async {
+      await _insertTodo(db, id: 'o1', title: 'Outcome o1');
+      await seedCurrentAction(db,
+          outcomeId: 'o1', id: 'c1', text: 'old', userId: _userId, createdAt: t0);
+      await seedPlanned('o1', 'p1', 0);
+
+      final landed = await db.todoDao.applyRouting('o1',
+          to: RoutingKind.nextAction,
+          promotePlannedActionId: 'p1',
+          replacingCurrentActionId: 'c1',
+          now: t1);
+
+      expect(landed, isTrue);
+      expect((await db.actionDao.getCurrentAction('o1'))?.id, 'p1');
+      expect(
+          (await db.actionDao.getTerminatedActions('o1'))
+              .map((t) => t.action.id),
+          ['c1']);
+      expect((await db.todoDao.getTodo('o1'))?.intent, 'next');
+    });
+
+    test('a vanished planned row writes nothing and returns false', () async {
+      await _insertTodo(db, id: 'o1', title: 'Outcome o1');
+      final before = await db.todoDao.getTodo('o1');
+
+      expect(
+        await db.todoDao.applyRouting('o1',
+            to: RoutingKind.nextAction, promotePlannedActionId: 'gone'),
+        isFalse,
+      );
+      expect(
+        await db.todoDao.applyRouting('o1',
+            to: RoutingKind.nextAction,
+            promotePlannedActionId: 'gone',
+            replacingCurrentActionId: 'c1'),
+        isFalse,
+      );
+      final after = await db.todoDao.getTodo('o1');
+      expect(after?.intent, before?.intent);
+      expect(after?.lastClarifiedAt, before?.lastClarifiedAt);
+      expect(await db.actionDao.getCurrentAction('o1'), isNull);
+    });
+
+    test('a vanished planned row beside a different current Action routes '
+        'nothing', () async {
+      await _insertTodo(db, id: 'o1', title: 'Outcome o1');
+      await seedCurrentAction(db,
+          outcomeId: 'o1', id: 'c1', text: 'synced in', userId: _userId);
+      final before = await db.todoDao.getTodo('o1');
+
+      expect(
+        await db.todoDao.applyRouting('o1',
+            to: RoutingKind.nextAction, promotePlannedActionId: 'gone'),
+        isFalse,
+      );
+      expect((await db.todoDao.getTodo('o1'))?.lastClarifiedAt,
+          before?.lastClarifiedAt);
+    });
+
+    test('a replace whose expected current changed throws and writes nothing',
+        () async {
+      await _insertTodo(db, id: 'o1', title: 'Outcome o1');
+      await seedCurrentAction(db,
+          outcomeId: 'o1', id: 'c2', text: 'swapped', userId: _userId);
+      await seedPlanned('o1', 'p1', 0);
+
+      await expectLater(
+        db.todoDao.applyRouting('o1',
+            to: RoutingKind.nextAction,
+            promotePlannedActionId: 'p1',
+            replacingCurrentActionId: 'c1'),
+        throwsA(isA<StateError>()),
+      );
+      expect((await db.actionDao.getCurrentAction('o1'))?.id, 'c2');
+      expect((await db.actionDao.getPlannedActions('o1')).map((a) => a.id),
+          ['p1']);
+      expect(await db.actionDao.getTerminatedActions('o1'), isEmpty);
+    });
+
+    test('an Actionless promote refuses when a current Action exists',
+        () async {
+      await _insertTodo(db, id: 'o1', title: 'Outcome o1');
+      await seedCurrentAction(db,
+          outcomeId: 'o1', id: 'c1', text: 'synced in', userId: _userId);
+      await seedPlanned('o1', 'p1', 0);
+
+      await expectLater(
+        db.todoDao.applyRouting('o1',
+            to: RoutingKind.nextAction, promotePlannedActionId: 'p1'),
+        throwsA(isA<StateError>()),
+      );
+      expect((await db.actionDao.getCurrentAction('o1'))?.id, 'c1');
+      expect((await db.actionDao.getPlannedActions('o1')).map((a) => a.id),
+          ['p1']);
+    });
+
+    test('a failing route rolls an Actionless promote back', () async {
+      await _insertTodo(db, id: 'o1', title: 'Outcome o1');
+      await seedPlanned('o1', 'p1', 0);
+      final before = await db.todoDao.getTodo('o1');
+      await failRoute();
+
+      await expectLater(
+        db.todoDao.applyRouting('o1',
+            to: RoutingKind.nextAction, promotePlannedActionId: 'p1', now: t1),
+        throwsA(anything),
+      );
+      expect(await db.actionDao.getCurrentAction('o1'), isNull);
+      expect((await db.actionDao.getPlannedActions('o1')).map((a) => a.id),
+          ['p1']);
+      final after = await db.todoDao.getTodo('o1');
+      expect(after?.intent, before?.intent);
+      expect(after?.lastClarifiedAt, before?.lastClarifiedAt);
+    });
+
+    test('a failing route rolls a supersede-and-promote back', () async {
+      await _insertTodo(db, id: 'o1', title: 'Outcome o1');
+      await seedCurrentAction(db,
+          outcomeId: 'o1', id: 'c1', text: 'old', userId: _userId);
+      await seedPlanned('o1', 'p1', 0);
+      await failRoute();
+
+      await expectLater(
+        db.todoDao.applyRouting('o1',
+            to: RoutingKind.nextAction,
+            promotePlannedActionId: 'p1',
+            replacingCurrentActionId: 'c1',
+            now: t1),
+        throwsA(anything),
+      );
+      expect((await db.actionDao.getCurrentAction('o1'))?.id, 'c1');
+      expect((await db.actionDao.getPlannedActions('o1')).map((a) => a.id),
+          ['p1']);
+      expect(await db.actionDao.getTerminatedActions('o1'), isEmpty);
+    });
+
+    test('an Action of another Outcome throws and leaves both untouched',
+        () async {
+      await _insertTodo(db, id: 'o1', title: 'Outcome o1');
+      await _insertTodo(db, id: 'o2', title: 'Outcome o2');
+      await seedPlanned('o2', 'p1', 0);
+      final before = await db.todoDao.getTodo('o1');
+
+      await expectLater(
+        db.todoDao.applyRouting('o1',
+            to: RoutingKind.nextAction, promotePlannedActionId: 'p1'),
+        throwsA(isA<StateError>()),
+      );
+      expect(await db.actionDao.getCurrentAction('o2'), isNull,
+          reason: 'the other Outcome\'s row is not promoted');
+      expect((await db.todoDao.getTodo('o1'))?.lastClarifiedAt,
+          before?.lastClarifiedAt);
+    });
+
+    test('caller errors: wrong destination, with action text, orphan replace',
+        () async {
+      await _insertTodo(db, id: 'o1', title: 'Outcome o1');
+
+      expect(
+        () => db.todoDao.applyRouting('o1',
+            to: RoutingKind.maybe, promotePlannedActionId: 'p1'),
+        throwsArgumentError,
+      );
+      expect(
+        () => db.todoDao.applyRouting('o1',
+            to: RoutingKind.nextAction,
+            promotePlannedActionId: 'p1',
+            actionText: 'a'),
+        throwsArgumentError,
+      );
+      expect(
+        () => db.todoDao.applyRouting('o1',
+            to: RoutingKind.nextAction,
+            promotePlannedActionId: 'p1',
+            actionTextIfActionless: 'a'),
+        throwsArgumentError,
+      );
+      expect(
+        () => db.todoDao.applyRouting('o1',
+            to: RoutingKind.nextAction, replacingCurrentActionId: 'c1'),
+        throwsArgumentError,
+      );
+    });
+  });
+
   group('TodoDao — setCurrentActionText', () {
     late GtdDatabase db;
 
@@ -401,7 +624,7 @@ void main() {
           reason: 'SUM(time_logs) for the Outcome');
     });
 
-    test('watchMaybe returns only intent=maybe todos (not done)', () async {
+    test('watchSomedayMaybe returns only intent=maybe todos (not done)', () async {
       await _insertTodo(db, id: 'm1', title: 'Maybe 1');
       await db.todoDao.deferTaskToMaybe('m1');
       await _insertTodo(db, id: 'm2', title: 'Next action');
@@ -409,7 +632,7 @@ void main() {
       await db.todoDao.deferTaskToMaybe('m3');
       await db.todoDao.markDone('m3');
 
-      final items = await db.todoDao.watchMaybe().first;
+      final items = await db.todoDao.watchSomedayMaybe().first;
       expect(items.length, 1);
       expect(items.first.id, 'm1');
     });
@@ -1104,7 +1327,7 @@ void main() {
       expect(row?.intent, 'maybe');
       expect(row?.doneAt, isNull);
       expect(row?.lastClarifiedAt, isNotNull);
-      final maybe = await db.todoDao.watchMaybe().first;
+      final maybe = await db.todoDao.watchSomedayMaybe().first;
       expect(maybe.map((t) => t.id), contains('t2m'));
     });
 

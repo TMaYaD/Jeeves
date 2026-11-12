@@ -167,7 +167,7 @@ class FocusSessionTasks extends Table {
   /// ADR-0002); their Dispositions live in [FocusSessionDispositions] instead.
   /// NULL = not yet reviewed (active session) or done task.
   /// 'rollover' = carry forward to next session's pre-selected list.
-  /// 'leave' = return to Next Actions (no mutation on todos).
+  /// 'leave' = return to Next (no mutation on todos).
   /// 'maybe' = defer; FocusSessionReviewNotifier writes intent='maybe' to todos.
   TextColumn get disposition => text().nullable()();
 
@@ -350,6 +350,26 @@ class Captures extends Table {
 // ---------------------------------------------------------------------------
 // capture_outcomes  (provenance join: which Outcomes a Capture clarified into)
 // ---------------------------------------------------------------------------
+
+/// A file attached to a Capture — today, an image shared in through the
+/// Android share sheet. The bytes live in app-private storage at
+/// `relative_path` (relative to the application support directory).
+///
+/// **Device-local: no sync codec, no op.** The image bytes never replicate, so a
+/// replicated row would dangle on every peer. A domain store rebuilt from the op
+/// log therefore loses these links (the files stay on disk).
+class CaptureAttachments extends Table {
+  TextColumn get id => text().clientDefault(() => uuid.v4())();
+  TextColumn get captureId =>
+      text().references(Captures, #id, onDelete: KeyAction.cascade)();
+  TextColumn get relativePath => text()();
+  TextColumn get mimeType => text()();
+  DateTimeColumn get createdAt => dateTime()();
+  TextColumn get userId => text()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {id};
+}
 
 /// Many-to-many provenance link between a [Captures] row and an Outcome
 /// (`todos`). The join *is* the provenance — "this Outcome was captured from
