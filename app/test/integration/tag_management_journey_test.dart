@@ -221,8 +221,17 @@ void main() {
         expect(find.text('Outcome o2'), findsNothing);
         expect(find.text('Nothing waiting on anyone'), findsOneWidget);
         router.go('/task/o1');
-        await _settle(tester);
-        expect(find.text('Next Actions'), findsWidgets);
+        // The detail screen shows its status pill only once its tag stream has
+        // emitted; give that real-async emission a few turns.
+        for (var i = 0; i < 4; i++) {
+          await _settle(tester);
+        }
+        expect(
+          find.descendant(
+              of: find.byKey(const Key('status_pill')),
+              matching: find.text('Next Actions')),
+          findsOneWidget,
+        );
         expect(find.text('Waiting For Alicia'), findsNothing);
       } finally {
         await tester.pumpWidget(const SizedBox.shrink());
