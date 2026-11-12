@@ -318,14 +318,37 @@ void main() {
       () async {
     await insert('a', dueDate: _dueDay(kolkata, 2026, 11, 10));
     final id = dueDateNotificationId('a');
-    os.pending[id] = _Pending(
-        'Title a', 'Due today', now.subtract(const Duration(hours: 1)), 'outcome:a');
+    final firedAt =
+        dueDateNotificationFireAt(_dueDay(kolkata, 2026, 11, 10), kolkata);
+    os.pending[id] = _Pending('Title a', 'Due today', firedAt,
+        dueDateNotificationPayload('a', fireAt: firedAt));
     os.delivered.add(id);
     reconciler.dispose();
     reconciler = startReconciler();
     await settle();
 
     expect(os.delivered, {id});
+  });
+
+  test('an old tray entry does not hide a newer pending alarm gone obsolete',
+      () async {
+    // Delivered on Nov 10, then rescheduled to Nov 20: the tray entry and the
+    // pending alarm share the Outcome's notification id.
+    now = DateTime.utc(2026, 11, 11, 6);
+    await insert('a', dueDate: _dueDay(kolkata, 2026, 11, 9));
+    final id = dueDateNotificationId('a');
+    final newerFireAt =
+        dueDateNotificationFireAt(_dueDay(kolkata, 2026, 11, 20), kolkata);
+    os.pending[id] = _Pending('Title a', 'Due today', newerFireAt,
+        dueDateNotificationPayload('a', fireAt: newerFireAt));
+    os.delivered.add(id);
+
+    // The date is now in the past; both observations are present at startup.
+    reconciler.dispose();
+    reconciler = startReconciler();
+    await settle();
+
+    expect(os.pending, isEmpty);
   });
 
   test('a timezone change is picked up on the next resume', () async {

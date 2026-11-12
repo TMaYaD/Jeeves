@@ -245,16 +245,19 @@ class DueDateNotificationReconciler {
     );
     final desiredIds = plan.toSchedule.map((p) => p.id).toSet();
     // Ask the OS what is actually pending and delivered; never infer delivery
-    // from the clock, since inexact alarms can fire minutes after 09:00. The
-    // two queries are not atomic, so an alarm that fired in between shows up
-    // in both: it has been delivered, so it is not an alarm to cancel.
+    // from the clock, since inexact alarms can fire minutes after 09:00.
+    // Pending ids are NOT reduced by the delivered ids: one Outcome has one
+    // notification id, so an old tray entry and a newer pending alarm can share
+    // it. Each pending alarm is judged by the fire instant recorded in it.
     final onDevice = await notifications.dueDateNotificationsOnDevice();
-    final stillPending = onDevice.pending.difference(onDevice.delivered);
+    final stillPending = onDevice.pending;
     // A pending alarm the plan no longer wants is obsolete (its due date
     // moved, or it fell outside the nearest 50) — unless it is unchanged and
     // merely late: its Outcome still qualifies, 09:00 has passed, and the
     // instant recorded in the alarm equals the one planned today. Android may
-    // deliver such an alarm minutes after 09:00, so it must survive.
+    // deliver such an alarm minutes after 09:00, so it must survive. The same
+    // test covers an alarm that fired between the pending and tray queries: it
+    // is seen in both, and its recorded instant still equals today's.
     for (final id in stillPending.difference(desiredIds)) {
       final recordedMillis = onDevice.pendingFireAtMillis[id];
       final unchangedAwaitingDelivery = recordedMillis != null &&
