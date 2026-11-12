@@ -7,7 +7,7 @@ import '../../widgets/active_filter_bar.dart';
 import '../../widgets/async_list.dart';
 import '../../widgets/outcome_row.dart';
 
-/// Shared list screen for all GTD views (Next Actions, Waiting For, etc.).
+/// Shared list screen for all GTD views (Next, Waiting For, etc.).
 ///
 /// Displays todos in a scrollable list. Tapping a todo navigates to
 /// `/task/:id` for editing and state transitions.

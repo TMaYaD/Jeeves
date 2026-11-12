@@ -47,10 +47,10 @@ class NextStep extends ConsumerWidget {
       processLabels: const {},
       emptyState: const ListReviewEmpty(
         icon: Icons.task_alt_outlined,
-        title: 'No next actions to review',
+        title: 'Nothing on Next to review',
         subtitle: 'Tap Next to continue.',
       ),
-      loadErrorTitle: "Couldn't load Next Actions",
+      loadErrorTitle: "Couldn't load Next",
       // Surface the current Action's text so the reviewer sees the concrete
       // commitment they made, not just the Outcome title.
       subtextFor: (todo) => actionTexts[todo.id],

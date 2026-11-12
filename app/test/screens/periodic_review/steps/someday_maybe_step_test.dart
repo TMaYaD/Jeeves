@@ -30,7 +30,7 @@ const _userId = 'local';
 GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
 
 /// Inserts a clarified, non-done, intent='maybe' todo — the shape
-/// `watchMaybe` surfaces into the Someday/Maybe step.
+/// `watchSomedayMaybe` surfaces into the Someday/Maybe step.
 Future<String> _insertSomedayTodo(
   GtdDatabase db, {
   required String id,
@@ -206,7 +206,7 @@ void main() {
 
     testWidgets(
         'tapping Done stamps Completion, leaves intent=maybe, and moves the '
-        'item from watchMaybe to watchDone', (tester) async {
+        'item from watchSomedayMaybe to watchDone', (tester) async {
       await useTallViewport(tester);
       await _insertSomedayTodo(db, id: 'sm1');
       await _enterStep(tester, db);
@@ -225,7 +225,7 @@ void main() {
       // event loop (they never settle under fake test time, and would
       // otherwise trip the pending-timer check at teardown).
       final (maybeIds, doneIds) = (await tester.runAsync(() async {
-        final maybe = await db.todoDao.watchMaybe().first;
+        final maybe = await db.todoDao.watchSomedayMaybe().first;
         final done = await db.todoDao.watchDone().first;
         return (
           maybe.map((t) => t.id).toList(),

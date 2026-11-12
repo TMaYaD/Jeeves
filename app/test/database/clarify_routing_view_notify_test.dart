@@ -1,4 +1,4 @@
-/// Regression test for #342 — "Inbox/Next Actions watchers go stale after
+/// Regression test for #342 — "Inbox/Next watchers go stale after
 /// clarify-routing on a new planning day."
 ///
 /// Over the **production topology**: `jeeves_domain.sqlite` on disk through
@@ -72,7 +72,7 @@ void main() {
   });
 
   test(
-    'clarify-routing an Outcome refreshes the Next Actions watcher',
+    'clarify-routing an Outcome refreshes the Next watcher',
     () async {
       // Seed an unclarified row directly (the pre-split Inbox shape); it is
       // absent from Next until routing flips clarified + intent.

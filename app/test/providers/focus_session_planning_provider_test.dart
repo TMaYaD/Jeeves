@@ -1,15 +1,18 @@
 import 'package:drift/drift.dart' show Value, Variable;
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/action_draft.dart' show ActionDraft;
 import 'package:jeeves/models/todo.dart' show RoutingKind;
 import 'package:jeeves/providers/clarify_retention_provider.dart';
 import 'package:jeeves/providers/clock_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/services/clarification_service.dart';
 import 'package:jeeves/services/notification_service.dart';
 import 'package:jeeves/widgets/clarify_retention.dart';
 import '../test_helpers.dart';
@@ -44,8 +47,13 @@ class _StubFocusSessionPlanningNotifier extends FocusSessionPlanningNotifier {
   }
 }
 
-ProviderContainer _container(GtdDatabase db) => ProviderContainer(
+ProviderContainer _container(
+  GtdDatabase db, {
+  List<Override> extraOverrides = const [],
+}) =>
+    ProviderContainer(
       overrides: [
+        ...extraOverrides,
         databaseProvider.overrideWithValue(db),
         notificationServiceProvider
             .overrideWithValue(StubNotificationService()),
@@ -53,6 +61,53 @@ ProviderContainer _container(GtdDatabase db) => ProviderContainer(
             .overrideWith(() => _StubFocusSessionPlanningNotifier()),
       ],
     );
+
+/// The real service, except that the Capture row is hard-deleted immediately
+/// before the real write runs — the window between the notifier's read and
+/// the write. The write and the database stay real.
+class _CaptureVanishesBeforeWriteService extends DaoClarificationService {
+  _CaptureVanishesBeforeWriteService(this._db) : super(_db);
+  final GtdDatabase _db;
+
+  Future<void> _vanish(String captureId) =>
+      (_db.delete(_db.captures)..where((c) => c.id.equals(captureId))).go();
+
+  @override
+  Future<String> clarifyCaptureToOutcome(
+    String captureId, {
+    required RoutingKind to,
+    required String userId,
+    required String title,
+    String? notes,
+    DateTime? dueDate,
+    ActionDraft? action,
+    Set<String>? personTagIds,
+    Set<String> tagIds = const {},
+    String? outcomeId,
+    DateTime? now,
+  }) async {
+    await _vanish(captureId);
+    return super.clarifyCaptureToOutcome(
+      captureId,
+      to: to,
+      userId: userId,
+      title: title,
+      notes: notes,
+      dueDate: dueDate,
+      action: action,
+      personTagIds: personTagIds,
+      tagIds: tagIds,
+      outcomeId: outcomeId,
+      now: now,
+    );
+  }
+
+  @override
+  Future<void> discardCapture(String captureId, {DateTime? now}) async {
+    await _vanish(captureId);
+    return super.discardCapture(captureId, now: now);
+  }
+}
 
 /// An Inbox item is a Capture with `clarified_at IS NULL` (ADR-0006).
 Future<void> _insertInboxItem(
@@ -735,6 +790,34 @@ void main() {
       expect(state.inboxRoutings, isEmpty,
           reason: 'no routing record for a missing row');
     });
+
+    for (final (label, run) in <(
+      String,
+      Future<void> Function(FocusSessionPlanningNotifier)
+    )>[
+      ('Next Action', (n) => n.processInboxItem('item-1', title: 'T')),
+      ('Trash', (n) => n.processInboxItemToTrash('item-1')),
+    ]) {
+      test('routing to $label skips silently when the Capture vanishes '
+          'mid-write', () async {
+        container.dispose();
+        container = _container(db, extraOverrides: [
+          clarificationServiceProvider
+              .overrideWithValue(_CaptureVanishesBeforeWriteService(db)),
+        ]);
+        await _insertInboxItem(db, id: 'item-1');
+        final notifier = container.read(focusSessionPlanningProvider.notifier);
+        await notifier.loadInboxSnapshot();
+
+        await run(notifier); // must not throw
+
+        final state = container.read(focusSessionPlanningProvider);
+        expect(state.inboxNav.index, equals(0));
+        expect(state.inboxRoutings, isEmpty);
+        expect(await db.select(db.todos).get(), isEmpty);
+        expect(await db.select(db.captureOutcomes).get(), isEmpty);
+      });
+    }
   });
 
   // ---------------------------------------------------------------------------
@@ -973,6 +1056,29 @@ void main() {
         // no Action row seeded → Actionless
       ));
       return id;
+    }
+
+    for (final (label, run) in <(
+      String,
+      Future<void> Function(FocusSessionPlanningNotifier, String)
+    )>[
+      ('confirmReviewItemRelevant', (n, id) => n.confirmReviewItemRelevant(id)),
+      ('markReviewItemWaitingFor', (n, id) => n.markReviewItemWaitingFor(id)),
+      ('markReviewItemDone', (n, id) => n.markReviewItemDone(id)),
+      ('deferReviewItemToSomeday', (n, id) => n.deferReviewItemToSomeday(id)),
+      ('trashReviewItem', (n, id) => n.trashReviewItem(id)),
+    ]) {
+      test('$label records nothing when the Outcome was deleted', () async {
+        final id = await insertStaleTask();
+        final notifier = container.read(focusSessionPlanningProvider.notifier);
+        await db.todoDao.deleteOutcome(id);
+
+        await run(notifier, id);
+
+        final state = container.read(focusSessionPlanningProvider);
+        expect(state.reviewNav.index, equals(0));
+        expect(state.reviewActions, isEmpty);
+      });
     }
 
     test('confirmReviewItemRelevant: stamps lastClarifiedAt; task leaves the needs-review queue; reviewIndex advances',
