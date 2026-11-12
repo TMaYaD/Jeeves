@@ -46,7 +46,8 @@ void main() {
   late GtdDatabase db;
   late ProviderContainer container;
 
-  Future<void> mount(WidgetTester tester, List<String> bypassed) async {
+  Future<void> mount(WidgetTester tester, List<String> bypassed,
+      {int? budgetMinutes}) async {
     db = GtdDatabase(NativeDatabase.memory());
     await tester.runAsync(() => _stage(db, bypassed));
     container = ProviderContainer(
@@ -72,7 +73,7 @@ void main() {
     await settleWithRealAsync(tester);
     final notifier = container.read(periodicReviewProvider.notifier);
     await tester.runAsync(() async {
-      await notifier.startSession();
+      await notifier.startSession(budgetMinutes: budgetMinutes);
       await notifier.goToStep(PeriodicReviewNotifier.kStepInbox);
       await notifier.advanceStep();
     });
@@ -140,6 +141,38 @@ void main() {
     await tester.tap(find.text('Back'));
     await settleWithRealAsync(tester, rounds: 2);
     expect(state().currentStep, PeriodicReviewNotifier.kStepInbox);
+    await close(tester);
+  });
+
+  testWidgets(
+      'a short session shows only the ranked Bypassed Outcomes and the '
+      'completion line counts the rest', (tester) async {
+    final ids = [for (var i = 0; i < 10; i++) 'o$i'];
+    await mount(tester, ids, budgetMinutes: 15);
+
+    final inSession = state().bypassedNav.length;
+    final deferred = state().bypassedDeferredCount;
+    expect(inSession, lessThan(ids.length));
+    expect(inSession + deferred, ids.length);
+
+    for (var i = 0; i < inSession; i++) {
+      await tapKey(tester, i.isEven ? 'bypassed_trash' : 'bypassed_someday_maybe');
+    }
+    expect(state().bypassedAllDecided, isTrue);
+    expect(find.text('All Bypassed Outcomes decided'), findsOneWidget);
+    expect(find.textContaining('$deferred more wait for a longer session'),
+        findsOneWidget);
+
+    // Leave the step and come back in the same process: still complete, and
+    // no decided Outcome is offered again.
+    await tester.tap(find.text('Back'));
+    await settleWithRealAsync(tester, rounds: 2);
+    await tester.runAsync(() =>
+        container.read(periodicReviewProvider.notifier).advanceStep());
+    await settleWithRealAsync(tester, rounds: 2);
+    expect(state().currentStep, PeriodicReviewNotifier.kStepBypassed);
+    expect(state().bypassedAllDecided, isTrue);
+    expect(find.byKey(const Key('bypassed_trash')), findsNothing);
     await close(tester);
   });
 
