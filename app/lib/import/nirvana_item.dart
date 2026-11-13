@@ -25,7 +25,7 @@ class NirvanaItem {
   /// 'task' or 'project'
   final String type;
 
-  /// Direct semantic match to the `todos.clarified` column. False for Nirvana
+  /// Inbox-versus-Outcome discriminator. False for Nirvana
   /// inbox items (they need to be clarified inside Jeeves); true for every
   /// other recognised Nirvana state.
   final bool clarified;

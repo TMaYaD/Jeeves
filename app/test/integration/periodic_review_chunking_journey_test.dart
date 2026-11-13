@@ -48,7 +48,6 @@ void main() {
         title: Value('Outcome $index'),
         userId: const Value('local'),
         intent: const Value('next'),
-        clarified: const Value(true),
         createdAt: Value(createdAt.add(Duration(days: index))),
         updatedAt: Value(createdAt),
       ));

@@ -363,7 +363,7 @@ void main() {
       // link back to the Capture is the provenance record (ADR-0006).
       final outcome = await _outcomeOf(db, 'x');
       expect(outcome, isNotNull);
-      expect(outcome!.clarified, isTrue);
+      expect(outcome!.lastClarifiedAt, isNotNull);
       expect(outcome.title, 'Buy milk');
       expect((await db.captureDao.getCapture('x'))!.clarifiedAt, isNotNull);
       // And the clarified Capture leaves the Inbox.
@@ -633,7 +633,6 @@ void main() {
       final outcome = (await _outcomeOf(db, 'x'))!;
       expect(outcome.notes, isNull);
       expect(outcome.dueDate, isNull);
-      expect(outcome.clarified, isTrue);
       // Effort read raw: the D2 projection COALESCEs the current Action's
       // values over the columns, so `outcome.energyLevel` would resolve on the
       // Action and pass whether or not the column was written.

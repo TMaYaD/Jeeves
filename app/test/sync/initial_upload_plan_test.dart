@@ -96,7 +96,7 @@ void main() {
       expect(encoded.fields['done_at'], raw);
     });
 
-    test('reads an integer boolean column as a bool', () {
+    test('ignores a legacy `clarified` column', () {
       final encoded = encodeLegacyRow(
         collection: todosCollection,
         row: {
@@ -107,7 +107,7 @@ void main() {
         },
         userId: _userId,
       );
-      expect(encoded.fields['clarified'], isTrue);
+      expect(encoded.fields.containsKey('clarified'), isFalse);
     });
 
     test('authors an explicit null for an absent optional column', () {

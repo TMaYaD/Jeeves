@@ -55,7 +55,6 @@ Todo _todo(String id, String title, {String? doneAt}) => Todo(
       title: title,
       createdAt: DateTime.now(),
       doneAt: doneAt,
-      clarified: true,
       intent: 'next',
       userId: 'test-user',
     );
@@ -158,7 +157,7 @@ void main() {
       activeSession: _openSession(),
       tasks: [Todo(
         id: 'long', title: 'Write the report', userId: 'test-user',
-        createdAt: DateTime(2030), clarified: true, intent: 'next',
+        createdAt: DateTime(2030), intent: 'next',
         timeEstimate: 125, dueDate: DateTime(2030, 3, 15),
       )],
     ));

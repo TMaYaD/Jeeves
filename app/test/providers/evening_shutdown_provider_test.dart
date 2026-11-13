@@ -56,7 +56,6 @@ Future<String> _insertTodo(
   await db.into(db.todos).insert(TodosCompanion(
         id: Value(id),
         title: Value('Task $id'),
-        clarified: const Value(true),
         intent: Value(intent),
         doneAt: Value(doneAt),
         userId: const Value(_uid),

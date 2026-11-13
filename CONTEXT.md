@@ -135,7 +135,7 @@ _Avoid_: Capture queue, Capture List
 The implicit List of Outcomes the user is willing to handle next. Defined by:
 
 ```text
-Intent = next ∧ clarified ∧ Completion is null ∧ (has current Action ∨ no PersonBlocker)
+Intent = next ∧ Completion is null ∧ (has current Action ∨ no PersonBlocker)
 ```
 
 The user engages with the row's *current Action* — but the List contains Outcomes, not Actions. The single excluded quadrant is **actionless AND PersonBlocked**: an Outcome with no current Action that is waiting on a Person is a pure wait and surfaces only on Waiting For, whose cadence is the weekly pass. An Outcome *with* a current Action belongs on Next regardless of any PersonBlocker — "call Trixy for a follow up" is engageable while the Outcome waits on Trixy, so it appears on Next *and* under Waiting For.
@@ -194,7 +194,6 @@ _Avoid_: health score, score, System Health
 #### Flagged ambiguities
 
 - The **title-as-action fallback** is stated for **Next** and **Waiting For**; the implementation covers Waiting For only on the clarify surfaces. The shared `ProcessToHandlers` Waiting For button, which the review steps use against an *existing* Outcome, routes intent-only. The model is right and the implementation lags.
-- **`clarified` (boolean)** on the Todo row is a leftover of the Capture/Outcome conflation. Inbox membership no longer derives from it, but the GTD list watchers still read it as a real-Outcome guard, so retiring it means reworking those predicates first — not a drop-in migration. **`last_clarified_at`** is a distinct concept (staleness of the *current* clarification) and survives the split.
 - **Draft attributes have no home on a Capture.** A Capture carries title and notes only. Due date, energy and time estimate live as in-memory draft (`ClarifyRetention`, keyed by Capture id) and land at clarification — surviving Skip and Back but not process death. Tag *hints* are the exception: they alone persist on the Capture and seed the new Outcome's tags. Energy and time are Action-grain but still resolve from Outcome columns as fallback.
 - **The codebase says "Todo" (table, Drift class) and "Task" (docs, `task_id`) for what the model calls an Outcome.** The rename is unstarted. `docs/proposals/blockers-and-contexts.md` uses "Task" and "NextAction" throughout and predates the Action rename.
 - The proposal's four long-term states (`active / someday / done / trashed`) collapse two independent axes into one enum. The code's `intent` column is the Intent axis and `done_at` the Completion axis; the proposal's wording is the conceptual error.

@@ -28,7 +28,6 @@ void main() {
             id: const Value('passport'),
             title: const Value('Renew passport'),
             notes: const Value('Bring the original documents'),
-            clarified: const Value(true),
             intent: const Value('next'),
             userId: const Value('local'),
             createdAt: Value(now),

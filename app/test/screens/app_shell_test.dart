@@ -166,7 +166,6 @@ Todo _todo(String id, String title) => Todo(
       title: title,
       createdAt: DateTime.now(),
       doneAt: null,
-      clarified: true,
       intent: 'next',
       userId: 'test-user',
     );

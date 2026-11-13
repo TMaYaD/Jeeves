@@ -26,7 +26,6 @@ Future<void> _insertOutcome(GtdDatabase db, String id, String title) =>
           id: Value(id),
           title: Value(title),
           intent: const Value('next'),
-          clarified: const Value(true),
           userId: const Value('local'),
           createdAt: Value(DateTime.now()),
           updatedAt: Value(DateTime.now()),
