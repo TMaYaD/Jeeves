@@ -284,9 +284,14 @@ List<PlannedNudgeNotification> planNudgeNotifications(
 /// Makes the OS's pending and delivered Ritual notifications match the plan.
 /// Runs one reconciliation at a time.
 class NudgeNotificationScheduler {
-  NudgeNotificationScheduler(this._notifications);
+  /// [clock] is read when scheduling, not when the facts were captured: the
+  /// debounce can run a reconciliation just after an alarm's instant, and the
+  /// OS refuses to schedule one in the past. Defaults to the facts' own `now`.
+  NudgeNotificationScheduler(this._notifications, {DateTime Function()? clock})
+      : _clock = clock;
 
   final NotificationService _notifications;
+  final DateTime Function()? _clock;
   Future<void> _queue = Future.value();
   bool _disposed = false;
 
@@ -337,25 +342,37 @@ class NudgeNotificationScheduler {
       if (dueButUndelivered) continue;
       await _notifications.cancelReminder(id);
     }
+    final executionNow = _clock?.call() ?? facts.now;
     for (final entry in plan) {
       // Same id and same payload (which records the fire instant): unchanged.
       if (pendingPayloadById[entry.id] == entry.payload) continue;
-      if (entry.isKeepAlive) {
-        await _notifications.scheduleRitualKeepAlive(
-          id: entry.id,
-          ritual: entry.ritual,
-          firstFireAt: entry.fireAt,
-          payload: entry.payload,
-        );
-      } else {
-        await _notifications.scheduleRitualNotification(
-          id: entry.id,
-          ritual: entry.ritual,
-          fireAt: entry.fireAt,
-          payload: entry.payload,
-        );
+      // Its instant passed while the reconciliation waited; the next one
+      // replans from the new time.
+      if (!entry.isKeepAlive && !entry.fireAt.isAfter(executionNow)) continue;
+      try {
+        await _schedule(entry);
+      } catch (e, s) {
+        // One refused alarm must not stop the ones after it.
+        debugPrint('Scheduling Ritual notification ${entry.id} failed: $e\n$s');
       }
     }
+  }
+
+  Future<void> _schedule(PlannedNudgeNotification entry) {
+    if (entry.isKeepAlive) {
+      return _notifications.scheduleRitualKeepAlive(
+        id: entry.id,
+        ritual: entry.ritual,
+        firstFireAt: entry.fireAt,
+        payload: entry.payload,
+      );
+    }
+    return _notifications.scheduleRitualNotification(
+      id: entry.id,
+      ritual: entry.ritual,
+      fireAt: entry.fireAt,
+      payload: entry.payload,
+    );
   }
 }
 
@@ -455,7 +472,10 @@ final nudgeNotificationFactsProvider = Provider<NudgeNotificationFacts?>((ref) {
 /// web, where the notification stack is not initialised.
 final nudgeNotificationSchedulerProvider = Provider<void>((ref) {
   if (kIsWeb) return;
-  final scheduler = NudgeNotificationScheduler(ref.watch(notificationServiceProvider));
+  final scheduler = NudgeNotificationScheduler(
+    ref.watch(notificationServiceProvider),
+    clock: ref.read(clockProvider),
+  );
   final debounce = ref.read(nudgeNotificationDebounceProvider);
   Timer? pending;
 

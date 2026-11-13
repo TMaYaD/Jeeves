@@ -45,6 +45,29 @@ void main() {
     expect(parseRitualNotificationPayload(alarm.payload)!.snoozeMinutes, 15);
   });
 
+  test('Snooze cancels the Ritual\'s alarms inside the window and keeps later ones',
+      () async {
+    Future<void> arm(int id, DateTime at) => service.scheduleRitualNotification(
+          id: id,
+          ritual: RitualId.weeklyReview,
+          fireAt: at,
+          payload: ritualNotificationPayload(RitualId.weeklyReview,
+              edge: DateTime(2026, 11, 10, 7), snoozeMinutes: 60, fireAt: at),
+        );
+    await arm(300, DateTime(2026, 11, 11, 9)); // inside 08:05 + 60 min
+    await arm(301, DateTime(2026, 11, 12, 9)); // tomorrow
+
+    await tap(kNotificationActionSnooze,
+        payloadFor(RitualId.weeklyReview, DateTime(2026, 11, 10, 7)));
+
+    expect(service.pending.containsKey(300), isFalse);
+    expect(service.pending.containsKey(301), isTrue);
+    expect(
+        service.pending
+            .containsKey(ritualSnoozeNotificationId(RitualId.weeklyReview)),
+        isTrue);
+  });
+
   test('Snooze on a notification from an older build falls back to an hour',
       () async {
     await tap(kNotificationActionSnooze, 'nudge:planning');

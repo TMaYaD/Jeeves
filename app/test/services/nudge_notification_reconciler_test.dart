@@ -11,6 +11,7 @@ DateTime _at(int dayOffset, int hour, [int minute = 0]) =>
 
 NudgeNotificationFacts _facts({
   DateTime? now,
+  bool sessionIsOpen = false,
 }) {
   final instant = now ?? _at(0, 7);
   return NudgeNotificationFacts(
@@ -32,7 +33,7 @@ NudgeNotificationFacts _facts({
       hasAnyItem: true,
       hasInboxOrNext: true,
     ),
-    es: const EsFacts(shutdownHour: 18, shutdownMinute: 0, sessionIsOpen: false),
+    es: EsFacts(shutdownHour: 18, shutdownMinute: 0, sessionIsOpen: sessionIsOpen),
     wr: WrFacts(
       hasAnyItem: true,
       lastCompleted: instant.subtract(const Duration(days: 2)),
@@ -145,10 +146,28 @@ void main() {
         ritualNotificationPayload(RitualId.dailyPlanning,
             edge: _at(0, 8), snoozeMinutes: 60, fireAt: _at(0, 8)));
 
-    await scheduler.reconcile(_facts(now: _at(0, 18).add(const Duration(seconds: 30))));
+    // Evening Shutdown fires only while a Focus Session is open.
+    await scheduler.reconcile(_facts(
+        now: _at(0, 18).add(const Duration(seconds: 30)), sessionIsOpen: true));
 
     expect(service.pending.containsKey(260), isTrue);
     expect(service.pending.containsKey(261), isFalse);
+  });
+
+  test('skips an alarm whose instant passed while the reconciliation waited',
+      () async {
+    // Facts captured at 07:59:59.8; the debounce ran the pass at 08:00:01.
+    final late = NudgeNotificationScheduler(service,
+        clock: () => _at(0, 8).add(const Duration(seconds: 1)));
+
+    await late.reconcile(
+        _facts(now: _at(0, 8).subtract(const Duration(milliseconds: 200))));
+
+    expect(
+        service.alarmsOf(RitualId.dailyPlanning).map((a) => a.fireAt),
+        isNot(contains(_at(0, 8))));
+    expect(service.alarmsOf(RitualId.dailyPlanning), isNotEmpty,
+        reason: 'the alarms after it are still scheduled');
   });
 
   test('cancels an alarm of a Ritual that no longer notifies', () async {

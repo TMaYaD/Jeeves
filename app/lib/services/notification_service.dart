@@ -278,14 +278,11 @@ class NotificationService {
     ];
   }
 
-  /// Ritual notifications sitting in the tray. Android reports no payload for
-  /// them, so the Ritual is recognised by its channel.
+  /// Ritual notifications sitting in the tray. iOS reports the payload; Android
+  /// reports none, so the Ritual is then recognised by its channel.
   Future<List<({int id, RitualId ritual})>> deliveredRitualNotifications() async {
-    final android = _plugin.resolvePlatformSpecificImplementation<
-        AndroidFlutterLocalNotificationsPlugin>();
     final delivered = <({int id, RitualId ritual})>[];
-    for (final shown
-        in await android?.getActiveNotifications() ?? const <ActiveNotification>[]) {
+    for (final shown in await _plugin.getActiveNotifications()) {
       final id = shown.id;
       if (id == null) continue;
       RitualId? ritual = ritualIdFromNotificationPayload(shown.payload);
