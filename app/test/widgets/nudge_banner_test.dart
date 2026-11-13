@@ -268,6 +268,17 @@ void main() {
       expect(find.textContaining('late.'), findsNothing);
       expect(find.textContaining('Unfinished'), findsNothing);
     });
+
+    testWidgets('content-state Trigger shows one approved pair',
+        (tester) async {
+      await pumpWeeklyReview(tester, daysLate: null);
+      final shownPairCount = kWeeklyReviewContentStateLinePair.where((pair) {
+        return find.text(pair.$1).evaluate().isNotEmpty &&
+            find.text(pair.$2).evaluate().isNotEmpty;
+      }).length;
+      expect(shownPairCount, 1);
+      expect(kWeeklyReviewContentStateLinePair.length, 3);
+    });
   });
 }
 

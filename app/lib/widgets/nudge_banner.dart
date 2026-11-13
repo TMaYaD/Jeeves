@@ -291,11 +291,19 @@ const _wrUnfinished = _WeeklyReviewRow(
   ['Push on  →', 'Carry on  →', 'On we go  →'],
 );
 
-// TODO(copy): placeholder. The content-state line pair (Next empty while
-// Waiting For or Someday/Maybe hold items; "days late" is untrue there) is
-// being written by the Product Owner. The shipped pair stands in until then.
+/// Content-state Trigger lines: the review is not late, Next and Inbox are
+/// empty, and Waiting For or Someday/Maybe still hold items. One pair is
+/// drawn per day.
 const kWeeklyReviewContentStateLinePair = <(String, String)>[
-  ('A weekly tidy, sir?', 'A trifling few minutes keeps the system humming.'),
+  ('Nothing on Next, sir.', 'A short review would find the next thing.'),
+  (
+    'Nothing to be getting on with, sir.',
+    'Fifteen minutes with the lists would mend that.',
+  ),
+  (
+    'All quiet, sir. Rather too quiet.',
+    'Waiting For and Someday/Maybe want a short look.',
+  ),
 ];
 
 const _smallNumberWords = <String>[
