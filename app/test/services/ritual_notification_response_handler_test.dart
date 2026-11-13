@@ -68,6 +68,27 @@ void main() {
         isTrue);
   });
 
+  test('Snooze also cancels overdue alarms still pending at or before the tap',
+      () async {
+    Future<void> arm(int id, DateTime at) => service.scheduleRitualNotification(
+          id: id,
+          ritual: RitualId.weeklyReview,
+          fireAt: at,
+          payload: ritualNotificationPayload(RitualId.weeklyReview,
+              edge: DateTime(2026, 11, 10, 7), snoozeMinutes: 60, fireAt: at),
+        );
+    await arm(300, DateTime(2026, 11, 11, 8, 4)); // due, not yet delivered
+    await arm(301, tappedAt); // due exactly at the tap
+    await arm(302, DateTime(2026, 11, 12, 9)); // tomorrow
+
+    await tap(kPeriodicReviewActionSnooze,
+        payloadFor(RitualId.weeklyReview, DateTime(2026, 11, 10, 7)));
+
+    expect(service.pending.containsKey(300), isFalse);
+    expect(service.pending.containsKey(301), isFalse);
+    expect(service.pending.containsKey(302), isTrue);
+  });
+
   test('Snooze on a notification from an older build falls back to an hour',
       () async {
     await tap(kNotificationActionSnooze, 'nudge:planning');

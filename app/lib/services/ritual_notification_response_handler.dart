@@ -80,14 +80,14 @@ Future<void> handleRitualNotificationResponse(
             ),
     );
     // Snooze hides the Ritual until [fireAt]: an alarm already planned inside
-    // that window would still ring. Later alarms stay.
+    // that window would still ring, including an overdue one the OS has not
+    // delivered yet. Later alarms stay.
     for (final pending in await service.pendingRitualNotifications()) {
       final other = parseRitualNotificationPayload(pending.payload);
       final otherFireAt = other?.fireAt;
       if (other != null &&
           other.ritual == ritual &&
           otherFireAt != null &&
-          otherFireAt.isAfter(tappedAt) &&
           !otherFireAt.isAfter(fireAt) &&
           pending.id != ritualSnoozeNotificationId(ritual)) {
         await service.cancelReminder(pending.id);
