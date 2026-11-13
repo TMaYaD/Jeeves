@@ -128,9 +128,9 @@ DateTime? dprFiringEdgeAt(DateTime instant, DprFacts facts) {
       (facts.latestSessionStartedAt != null &&
           !facts.latestSessionStartedAt!.isBefore(lastShutdownAnchor));
   if (qualifying) return null;
-  return planningAnchor.isAfter(lastShutdownAnchor)
-      ? planningAnchor
-      : lastShutdownAnchor;
+  // From the ES anchor until the next planning anchor the Trigger is idle.
+  if (lastShutdownAnchor.isAfter(planningAnchor)) return null;
+  return planningAnchor;
 }
 
 DateTime? esFiringEdgeAt(DateTime instant, EsFacts facts) {
