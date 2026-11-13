@@ -294,8 +294,13 @@ class NudgeNotificationScheduler {
     // A delivered notification stays only while its Ritual still holds the
     // surface. Withdraw first: cancelling an id also drops a pending alarm that
     // shares it, so the pending set must be read afterwards.
-    final head = notifyingRitualAt(facts.now, facts);
-    for (final delivered in await _notifications.deliveredRitualNotifications()) {
+    // The head is judged at the time the device answers: an alarm can fire
+    // while the query is in flight, and the facts are frozen so any instant
+    // can be evaluated.
+    final deliveredNotifications =
+        await _notifications.deliveredRitualNotifications();
+    final head = notifyingRitualAt(_clock?.call() ?? facts.now, facts);
+    for (final delivered in deliveredNotifications) {
       if (delivered.ritual != head) await _notifications.cancelReminder(delivered.id);
     }
 

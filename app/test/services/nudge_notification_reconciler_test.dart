@@ -153,6 +153,26 @@ void main() {
     expect(service.pending.containsKey(261), isFalse);
   });
 
+  test('judges delivered notifications at the time of the device query, not '
+      'before it', () async {
+    // Facts captured at 07:59:59.8. While the reconciler waits on the device,
+    // the 08:00 Daily Planning alarm fires and lands in the tray.
+    var clockNow = _at(0, 8).subtract(const Duration(milliseconds: 200));
+    final racing = _FiresDuringQueryService(
+      onQuery: () {
+        clockNow = _at(0, 8).add(const Duration(seconds: 1));
+        return (id: 130, ritual: RitualId.dailyPlanning);
+      },
+    );
+    final racingScheduler =
+        NudgeNotificationScheduler(racing, clock: () => clockNow);
+
+    await racingScheduler.reconcile(_facts(now: clockNow));
+
+    expect(racing.delivered.map((d) => d.ritual), [RitualId.dailyPlanning],
+        reason: 'Planning holds the surface by the time the query returns');
+  });
+
   test('skips an alarm whose instant passed while the reconciliation waited',
       () async {
     // Facts captured at 07:59:59.8; the debounce ran the pass at 08:00:01.
@@ -202,4 +222,18 @@ void main() {
 
     expect(service.pending.containsKey(500), isFalse);
   });
+}
+
+/// Delivers one notification during the delivered-notifications query, as an
+/// alarm firing mid-reconciliation does.
+class _FiresDuringQueryService extends RecordingNotificationService {
+  _FiresDuringQueryService({required this.onQuery});
+
+  final ({int id, RitualId ritual}) Function() onQuery;
+
+  @override
+  Future<List<({int id, RitualId ritual})>> deliveredRitualNotifications() async {
+    delivered.add(onQuery());
+    return List.of(delivered);
+  }
 }

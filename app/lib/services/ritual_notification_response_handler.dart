@@ -66,23 +66,37 @@ Future<void> handleRitualNotificationResponse(
       at: tappedAt,
       snoozeMinutes: snoozeMinutes,
     );
-    await service.scheduleRitualNotification(
-      id: ritualSnoozeNotificationId(ritual),
-      ritual: ritual,
-      fireAt: fireAt,
-      payload: tappedEdge == null
-          ? 'nudge:${ritual.keyPrefix}'
-          : ritualNotificationPayload(
-              ritual,
-              edge: tappedEdge,
-              snoozeMinutes: snoozeMinutes,
-              fireAt: fireAt,
-            ),
-    );
+    final pendingAlarms = await service.pendingRitualNotifications();
+    // A higher-priority Ritual with an alarm planned by the expiry holds the
+    // queue head then, so the planner has already chosen it over this one.
+    final outranked = pendingAlarms.any((pending) {
+      final other = parseRitualNotificationPayload(pending.payload);
+      final otherFireAt = other?.fireAt;
+      return other != null &&
+          otherFireAt != null &&
+          !otherFireAt.isAfter(fireAt) &&
+          ritualsByPriority.indexOf(other.ritual) <
+              ritualsByPriority.indexOf(ritual);
+    });
+    if (!outranked) {
+      await service.scheduleRitualNotification(
+        id: ritualSnoozeNotificationId(ritual),
+        ritual: ritual,
+        fireAt: fireAt,
+        payload: tappedEdge == null
+            ? 'nudge:${ritual.keyPrefix}'
+            : ritualNotificationPayload(
+                ritual,
+                edge: tappedEdge,
+                snoozeMinutes: snoozeMinutes,
+                fireAt: fireAt,
+              ),
+      );
+    }
     // Snooze hides the Ritual until [fireAt]: an alarm already planned inside
     // that window would still ring, including an overdue one the OS has not
     // delivered yet. Later alarms stay.
-    for (final pending in await service.pendingRitualNotifications()) {
+    for (final pending in pendingAlarms) {
       final other = parseRitualNotificationPayload(pending.payload);
       final otherFireAt = other?.fireAt;
       if (other != null &&
