@@ -7,9 +7,9 @@
 /// evaluates the same predicates the live queue uses (`nudge_predicates.dart`)
 /// at each candidate fire instant over a rolling [kNudgeNotificationHorizonDays]
 /// day horizon, with the facts frozen at their current values. The reconciler
-/// then makes the OS's pending Ritual notifications match the plan. A per-Ritual
-/// daily keep-alive starts where the horizon ends, so reminders do not stop when
-/// the app is not opened for a week.
+/// then makes the OS's pending Ritual notifications match the plan. The horizon
+/// is replanned whenever the app opens or resumes; if the app is not opened for
+/// [kNudgeNotificationHorizonDays] days, reminders stop until it is.
 ///
 /// See `CONTEXT.md`'s **Notification** and **Nudge queue** entries and
 /// `docs/CEREMONIES.md` § Surfaces are projections.
@@ -45,7 +45,7 @@ const kNudgeNotificationHorizonDays = 7;
 const _kWeeklyReviewCadence = Duration(days: 7);
 
 // Ritual notification ids live below 10000 (the due-date range starts there):
-// one slot per (Ritual, calendar day), the Ritual's snooze id, and a keep-alive.
+// one slot per (Ritual, calendar day) and the Ritual's snooze id.
 const _kDayIdBase = 100;
 const _kDayIdSlotsPerRitual = 100;
 
@@ -181,16 +181,12 @@ class PlannedNudgeNotification {
     required this.ritual,
     required this.fireAt,
     required this.payload,
-    this.isKeepAlive = false,
   });
 
   final int id;
   final RitualId ritual;
   final DateTime fireAt;
   final String payload;
-
-  /// A daily recurring alarm starting at [fireAt], not a one-off.
-  final bool isKeepAlive;
 }
 
 int _dayNotificationId(RitualId ritual, DateTime day) {
@@ -203,8 +199,7 @@ int _dayNotificationId(RitualId ritual, DateTime day) {
 
 /// The alarms that should be pending, soonest first: for each day of the
 /// horizon, each Ritual whose notification time falls on the Notification
-/// surface; each pending snooze's expiry; and one keep-alive per Ritual still
-/// notifying at the end of the horizon.
+/// surface; each pending snooze's expiry. Nothing is planned past the horizon.
 List<PlannedNudgeNotification> planNudgeNotifications(
   NudgeNotificationFacts facts,
 ) {
@@ -215,7 +210,6 @@ List<PlannedNudgeNotification> planNudgeNotifications(
     RitualId ritual,
     DateTime instant, {
     required int id,
-    bool isKeepAlive = false,
   }) {
     if (notifyingRitualAt(instant, facts) != ritual) return null;
     final edge = nudgeFiringEdgeAt(ritual, instant, facts);
@@ -224,7 +218,6 @@ List<PlannedNudgeNotification> planNudgeNotifications(
       id: id,
       ritual: ritual,
       fireAt: instant,
-      isKeepAlive: isKeepAlive,
       payload: ritualNotificationPayload(
         ritual,
         edge: edge,
@@ -255,22 +248,6 @@ List<PlannedNudgeNotification> planNudgeNotifications(
     }
     final entry =
         entryAt(ritual, snoozedUntil, id: ritualSnoozeNotificationId(ritual));
-    if (entry != null) planned.add(entry);
-  }
-
-  final keepAliveDay =
-      DateTime(now.year, now.month, now.day + kNudgeNotificationHorizonDays);
-  for (final ritual in RitualId.values) {
-    if (!facts.isEnabled(ritual)) continue;
-    final time = facts.notificationTimeOf(ritual);
-    final instant = DateTime(
-        keepAliveDay.year, keepAliveDay.month, keepAliveDay.day, time.hour, time.minute);
-    final entry = entryAt(
-      ritual,
-      instant,
-      id: kRitualKeepAliveIdBase + RitualId.values.indexOf(ritual),
-      isKeepAlive: true,
-    );
     if (entry != null) planned.add(entry);
   }
 
@@ -338,7 +315,7 @@ class NudgeNotificationScheduler {
           !fireAt.isAfter(facts.now) &&
           ritual != null &&
           ritual == head &&
-          !isRitualKeepAliveNotificationId(id);
+          !isLegacyKeepAliveNotificationId(id);
       if (dueButUndelivered) continue;
       await _notifications.cancelReminder(id);
     }
@@ -348,7 +325,7 @@ class NudgeNotificationScheduler {
       if (pendingPayloadById[entry.id] == entry.payload) continue;
       // Its instant passed while the reconciliation waited; the next one
       // replans from the new time.
-      if (!entry.isKeepAlive && !entry.fireAt.isAfter(executionNow)) continue;
+      if (!entry.fireAt.isAfter(executionNow)) continue;
       try {
         await _schedule(entry);
       } catch (e, s) {
@@ -359,14 +336,6 @@ class NudgeNotificationScheduler {
   }
 
   Future<void> _schedule(PlannedNudgeNotification entry) {
-    if (entry.isKeepAlive) {
-      return _notifications.scheduleRitualKeepAlive(
-        id: entry.id,
-        ritual: entry.ritual,
-        firstFireAt: entry.fireAt,
-        payload: entry.payload,
-      );
-    }
     return _notifications.scheduleRitualNotification(
       id: entry.id,
       ritual: entry.ritual,

@@ -76,19 +76,19 @@ Iterable<PlannedNudgeNotification> _of(
     plan.where((p) => p.ritual == ritual);
 
 void main() {
-  group('horizon and keep-alive', () {
-    test('plans Daily Planning each day of the horizon, then a keep-alive', () {
+  group('horizon', () {
+    test('plans Daily Planning each day of the horizon, and nothing past it', () {
       final plan = planNudgeNotifications(_facts());
 
       final dpr = _of(plan, RitualId.dailyPlanning).toList();
-      expect(dpr.where((p) => !p.isKeepAlive).map((p) => p.fireAt),
+      expect(dpr.map((p) => p.fireAt),
           [for (var d = 0; d < 7; d++) _at(d, 8)]);
-      expect(dpr.where((p) => p.isKeepAlive).map((p) => p.fireAt), [_at(7, 8)],
-          reason: 'the keep-alive starts where the horizon ends');
-      expect(plan.length, 8, reason: 'ES has no open session, WR is off');
+      expect(plan.every((p) => p.fireAt.isBefore(_at(7, 0))), isTrue,
+          reason: 'no alarm is planned past the 7-day horizon');
+      expect(plan.length, 7, reason: 'ES has no open session, WR is off');
     });
 
-    test('a Ritual with notifications off gets neither alarms nor keep-alive',
+    test('a Ritual with notifications off gets no alarms',
         () {
       final plan = planNudgeNotifications(_facts(enabled: const {
         RitualId.dailyPlanning: false,
@@ -102,7 +102,7 @@ void main() {
     test('a time earlier today than now is not planned for today', () {
       final plan = planNudgeNotifications(_facts(now: _at(0, 8, 30)));
 
-      expect(_of(plan, RitualId.dailyPlanning).where((p) => !p.isKeepAlive)
+      expect(_of(plan, RitualId.dailyPlanning)
           .first.fireAt, _at(1, 8));
     });
 
@@ -120,7 +120,7 @@ void main() {
       final nextDay = planNudgeNotifications(_facts(now: _at(1, 7)));
 
       int idOnDay(List<PlannedNudgeNotification> plan, int offset) => plan
-          .firstWhere((p) => !p.isKeepAlive && p.fireAt == _at(offset, 8))
+          .firstWhere((p) => p.fireAt == _at(offset, 8))
           .id;
       expect(idOnDay(morning, 3), idOnDay(nextDay, 3));
     });
@@ -247,7 +247,7 @@ void main() {
       ));
 
       expect(
-        _of(plan, RitualId.weeklyReview).where((p) => !p.isKeepAlive)
+        _of(plan, RitualId.weeklyReview)
             .map((p) => p.fireAt),
         [_at(6, 9)],
         reason: 'hidden for the rest of this period, back at the next boundary',

@@ -80,8 +80,7 @@ Future<void> handleRitualNotificationResponse(
             ),
     );
     // Snooze hides the Ritual until [fireAt]: an alarm already planned inside
-    // that window would still ring. Later alarms stay; a keep-alive repeats
-    // daily and cannot be trimmed.
+    // that window would still ring. Later alarms stay.
     for (final pending in await service.pendingRitualNotifications()) {
       final other = parseRitualNotificationPayload(pending.payload);
       final otherFireAt = other?.fireAt;
@@ -90,8 +89,7 @@ Future<void> handleRitualNotificationResponse(
           otherFireAt != null &&
           otherFireAt.isAfter(tappedAt) &&
           !otherFireAt.isAfter(fireAt) &&
-          pending.id != ritualSnoozeNotificationId(ritual) &&
-          !isRitualKeepAliveNotificationId(pending.id)) {
+          pending.id != ritualSnoozeNotificationId(ritual)) {
         await service.cancelReminder(pending.id);
       }
     }
@@ -116,10 +114,7 @@ Future<void> handleRitualNotificationResponse(
     if (other != null &&
         other.ritual == ritual &&
         otherEdge != null &&
-        otherEdge.isAtSameMomentAs(skippedEdge) &&
-        // A keep-alive repeats daily and its payload edge is only the one it
-        // was armed under; cancelling it would silence every later day.
-        !isRitualKeepAliveNotificationId(pending.id)) {
+        otherEdge.isAtSameMomentAs(skippedEdge)) {
       await service.cancelReminder(pending.id);
     }
   }

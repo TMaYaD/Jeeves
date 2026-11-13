@@ -66,8 +66,7 @@ void main() {
       () async {
     await scheduler.reconcile(_facts());
     final firstPass = service.scheduleCalls.length;
-    expect(firstPass, 8, reason: 'seven daily alarms and a keep-alive');
-    expect(service.pending.values.where((a) => a.isKeepAlive), hasLength(1));
+    expect(firstPass, 7, reason: 'seven daily alarms, nothing past the horizon');
 
     await scheduler.reconcile(_facts());
 
@@ -188,5 +187,19 @@ void main() {
     await scheduler.settled();
 
     expect(service.pending, isNotEmpty);
+  });
+
+  test('cancels repeating keep-alive alarms an earlier build armed', () async {
+    final payload = ritualNotificationPayload(
+      RitualId.dailyPlanning,
+      edge: _at(7, 8),
+      snoozeMinutes: 60,
+      fireAt: _at(7, 8),
+    );
+    await _seed(service, 500, RitualId.dailyPlanning, payload);
+
+    await scheduler.reconcile(_facts());
+
+    expect(service.pending.containsKey(500), isFalse);
   });
 }

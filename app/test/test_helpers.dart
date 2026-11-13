@@ -105,18 +105,7 @@ class RecordingNotificationService extends NotificationService {
     required String payload,
   }) async {
     scheduleCalls.add(id);
-    pending[id] = RecordedRitualAlarm(ritual, fireAt, payload, false);
-  }
-
-  @override
-  Future<void> scheduleRitualKeepAlive({
-    required int id,
-    required RitualId ritual,
-    required DateTime firstFireAt,
-    required String payload,
-  }) async {
-    scheduleCalls.add(id);
-    pending[id] = RecordedRitualAlarm(ritual, firstFireAt, payload, true);
+    pending[id] = RecordedRitualAlarm(ritual, fireAt, payload);
   }
 
   @override
@@ -134,7 +123,7 @@ class RecordingNotificationService extends NotificationService {
     delivered.removeWhere((d) => d.id == id);
   }
 
-  /// The pending one-off and keep-alive alarms of [ritual], soonest first.
+  /// The pending alarms of [ritual], soonest first.
   List<RecordedRitualAlarm> alarmsOf(RitualId ritual) => pending.values
       .where((a) => a.ritual == ritual)
       .toList()
@@ -143,12 +132,11 @@ class RecordingNotificationService extends NotificationService {
 
 class RecordedRitualAlarm {
   const RecordedRitualAlarm(
-      this.ritual, this.fireAt, this.payload, this.isKeepAlive);
+      this.ritual, this.fireAt, this.payload);
 
   final RitualId ritual;
   final DateTime fireAt;
   final String payload;
-  final bool isKeepAlive;
 }
 
 /// A [RecordingNotificationService] for tests that only need the plugin kept

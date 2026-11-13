@@ -245,28 +245,6 @@ class NotificationService {
     );
   }
 
-  /// Schedules [ritual]'s daily keep-alive: it first fires at [firstFireAt] and
-  /// then every day at that time of day, so reminders do not stop when the app
-  /// is not opened for longer than the planned horizon.
-  Future<void> scheduleRitualKeepAlive({
-    required int id,
-    required RitualId ritual,
-    required DateTime firstFireAt,
-    required String payload,
-  }) async {
-    final cfg = _ritualConfigs[ritual]!;
-    await _plugin.zonedSchedule(
-      id: id,
-      title: cfg.title,
-      body: cfg.body,
-      payload: payload,
-      scheduledDate: tz.TZDateTime.from(firstFireAt, tz.local),
-      notificationDetails: _ritualNotificationDetails(cfg),
-      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-      matchDateTimeComponents: DateTimeComponents.time,
-    );
-  }
-
   /// Ritual notifications the OS still has scheduled: everything with a
   /// `nudge:` payload, plus the fixed ids earlier builds armed (which carry
   /// the same payload prefix, or none when scheduled before payloads existed).
@@ -497,16 +475,17 @@ const _kLegacyRitualNotificationIds = {0, 1, 4, 5, 6, 7};
 
 bool _isRitualNotification(int id, String? payload) =>
     _kLegacyRitualNotificationIds.contains(id) ||
+    isLegacyKeepAliveNotificationId(id) ||
     (payload?.startsWith(_kNudgePayloadPrefix) ?? false);
 
-/// Keep-alive alarms repeat daily past the planning horizon, so they carry
-/// the ids from here up, one per Ritual.
-const kRitualKeepAliveIdBase = 500;
+/// An earlier build of this scheduler armed one repeating alarm per Ritual
+/// from here up. Nothing arms them now; the reconciler cancels any left over.
+const _kLegacyKeepAliveIdBase = 500;
 
-/// Whether [id] is a Ritual's repeating keep-alive alarm.
-bool isRitualKeepAliveNotificationId(int id) =>
-    id >= kRitualKeepAliveIdBase &&
-    id < kRitualKeepAliveIdBase + RitualId.values.length;
+/// Whether [id] is one of those retired repeating alarms.
+bool isLegacyKeepAliveNotificationId(int id) =>
+    id >= _kLegacyKeepAliveIdBase &&
+    id < _kLegacyKeepAliveIdBase + RitualId.values.length;
 
 /// The id of [ritual]'s snooze alarm. One per Ritual: snoozing again moves it.
 int ritualSnoozeNotificationId(RitualId ritual) =>

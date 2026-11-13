@@ -103,7 +103,7 @@ void main() {
   });
 
   Iterable<DateTime> oneOffs(RitualId ritual) =>
-      service.alarmsOf(ritual).where((a) => !a.isKeepAlive).map((a) => a.fireAt);
+      service.alarmsOf(ritual).map((a) => a.fireAt);
 
   test('a due Weekly Review holds the shared 09:00 instant; completing it '
       're-arms Daily Planning', () async {
