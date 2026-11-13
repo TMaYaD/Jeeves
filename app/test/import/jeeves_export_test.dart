@@ -159,6 +159,28 @@ Future<void> _seed(GtdDatabase db, {String userId = _userId}) async {
           disposition: const Value('maybe'),
           userId: Value(userId)));
 
+  // --- the Bypassed Outcome rows ---
+  await db.into(db.focusSessionPlanningBypasses).insert(
+      FocusSessionPlanningBypassesCompanion(
+          id: const Value('fspb-1'),
+          focusSessionId: const Value('fs-1'),
+          taskId: const Value('todo-done'),
+          recordedAt: Value(_utc(28, 8, 0, 0)),
+          userId: Value(userId)));
+  await db.into(db.focusSessionReschedules).insert(
+      FocusSessionReschedulesCompanion(
+          id: const Value('fsr-1'),
+          focusSessionId: const Value('fs-1'),
+          taskId: const Value('todo-next'),
+          recordedAt: Value(_utc(28, 8, 10, 0)),
+          userId: Value(userId)));
+  await db.into(db.outcomeBypassDecisions).insert(OutcomeBypassDecisionsCompanion(
+      id: const Value('osd-1'),
+      taskId: const Value('todo-done'),
+      decision: const Value('maybe'),
+      decidedAt: Value(_utc(28, 9, 0, 0)),
+      userId: Value(userId)));
+
   // --- a preference: MUST be excluded from the export ---
   await db.into(db.userPreferences).insert(UserPreferencesCompanion(
       id: const Value('pref-1'),

@@ -58,8 +58,9 @@ Five layers, and a write crosses all of them in one direction.
 
 A screen never touches a DAO. Providers hold state and are the seam tests drive.
 Services exist only where an operation spans several DAOs and has to be
-atomic — clarification is the standard example. Domain models are `freezed`
-classes in `app/lib/models/`.
+atomic — clarification is the standard example. Persisted domain types are the Drift row
+classes generated from `app/lib/database/tables.dart`; `app/lib/models/` holds
+hand-written enums and value classes with no code generation.
 
 **Writes describe themselves.** Every DAO write runs inside a *capturing scope*
 (`GtdDatabase.capturing`), which is one transaction and which hands the effect to

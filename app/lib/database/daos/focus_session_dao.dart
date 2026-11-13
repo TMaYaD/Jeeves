@@ -27,6 +27,33 @@ String focusSessionDispositionIdFor(String sessionId, String taskId) => uuid.v5(
       'jeeves://focus_session_disposition/$sessionId/$taskId',
     );
 
+/// Deterministic `focus_session_planning_bypasses.id` for the (sessionId,
+/// taskId) pair — the same derivation scheme as the disposition id above.
+String focusSessionPlanningBypassIdFor(String sessionId, String taskId) =>
+    uuid.v5(
+      Namespace.url.value,
+      'jeeves://focus_session_planning_bypass/$sessionId/$taskId',
+    );
+
+/// Deterministic `focus_session_reschedules.id` for the (sessionId, taskId)
+/// pair, so repeated due-date edits in one session collapse onto one row.
+String focusSessionRescheduleIdFor(String sessionId, String taskId) => uuid.v5(
+      Namespace.url.value,
+      'jeeves://focus_session_reschedule/$sessionId/$taskId',
+    );
+
+/// An Outcome that is Bypassed, with how many FocusSessions passed it over
+/// since its floor.
+class BypassedOutcome {
+  const BypassedOutcome({
+    required this.outcome,
+    required this.passedOverSessionCount,
+  });
+
+  final Todo outcome;
+  final int passedOverSessionCount;
+}
+
 /// How an Outcome **Settled** in a FocusSession — one bucket per Settled
 /// Outcome, assigned by the ladder in
 /// [FocusSessionDao.watchActiveSessionSettlements].
@@ -42,6 +69,9 @@ enum SessionSettlement { done, next, waitingFor, someday }
   FocusSessions,
   FocusSessionTasks,
   FocusSessionDispositions,
+  FocusSessionPlanningBypasses,
+  FocusSessionReschedules,
+  OutcomeBypassDecisions,
   TimeLogs,
   Todos,
   Actions,
@@ -100,10 +130,17 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   ///
   /// Returns the new session's id. Runs atomically in a transaction.
   ///
+  /// The session also records which Outcomes its Daily Planning **passed over**
+  /// without planning them — a Bypassed signal, CONTEXT.md § Engagement.
+  /// [skippedTaskIds] are the ones the user tapped Skip on. They land in the
+  /// Plan's own scope, so a Planning performance that is abandoned records
+  /// nothing.
+  ///
   /// [now] is injectable for deterministic testing; defaults to [DateTime.now].
   Future<String> openSession({
     required String userId,
     required List<String> taskIds,
+    Set<String> skippedTaskIds = const {},
     DateTime? now,
   }) async {
     final ts = (now ?? DateTime.now()).toUtc().toIso8601String();
@@ -175,6 +212,43 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
             'task_id': taskIds[i],
             'position': i,
             'disposition': null,
+            'user_id': userId,
+          },
+        );
+      }
+
+      // A Bypassed signal: Outcomes the user skipped in this Planning and did
+      // not plan after all.
+      final skippedCandidates = skippedTaskIds.difference(taskIds.toSet());
+      // An Outcome deleted since it was skipped leaves neither row nor op.
+      final stillPresent = skippedCandidates.isEmpty
+          ? <String>{}
+          : (await (select(todos)
+                    ..where((t) => t.id.isIn(skippedCandidates)))
+                  .get())
+              .map((t) => t.id)
+              .toSet();
+      final skipped = skippedCandidates.intersection(stillPresent);
+      final recordedAt = DateTime.parse(ts).toUtc();
+      for (final taskId in skipped) {
+        final bypassId = focusSessionPlanningBypassIdFor(newId, taskId);
+        await into(focusSessionPlanningBypasses).insert(
+          FocusSessionPlanningBypassesCompanion(
+            id: Value(bypassId),
+            focusSessionId: Value(newId),
+            taskId: Value(taskId),
+            recordedAt: Value(recordedAt),
+            userId: Value(userId),
+          ),
+          mode: InsertMode.insertOrReplace,
+        );
+        attachedDatabase.opCapture.write(
+          collection: focusSessionPlanningBypassesCollection,
+          entityId: bypassId,
+          fields: {
+            'focus_session_id': newId,
+            'task_id': taskId,
+            'recorded_at': encodeInstant(recordedAt),
             'user_id': userId,
           },
         );
@@ -610,14 +684,23 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       'AND fs.ended_at = ('
       '  SELECT MAX(ended_at) FROM focus_sessions WHERE ended_at IS NOT NULL)';
 
+  /// Only Outcomes still on Next: a Bypassed decision (or any later Someday/Maybe or
+  /// Trash routing) moves an Outcome off Next, and its stored `rollover`
+  /// Disposition must not put it back on a draft Plan after a restart.
   Future<List<String>> getLastClosedSessionRolloverTaskIds() async {
     final rows = await customSelect(
-      _lastClosedRolloverTaskIdsSql,
+      'SELECT t.id AS task_id FROM todos t WHERE t.intent = \'next\' '
+      'AND t.id IN ($_lastClosedRolloverTaskIdsSql)',
       variables: [
         Variable('rollover'),
         Variable('rollover'),
       ],
-      readsFrom: {focusSessions, focusSessionTasks, focusSessionDispositions},
+      readsFrom: {
+        todos,
+        focusSessions,
+        focusSessionTasks,
+        focusSessionDispositions,
+      },
     ).get();
     return rows.map((r) => r.read<String>('task_id')).toList();
   }
@@ -646,6 +729,114 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       },
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
+
+  /// The Bypassed query. For each live Next Outcome, counts the distinct
+  /// FocusSessions that passed it over **after its floor** and keeps those at or
+  /// above the threshold (the single `?`). CONTEXT.md § Engagement, Bypassed.
+  ///
+  /// A session passes an Outcome over when (b) the Outcome was on its Plan, the
+  /// session is closed and the Outcome was not engaged in it, or when a row
+  /// exists for it in `focus_session_planning_bypasses` (the Planning skip) or
+  /// `focus_session_reschedules` (the reschedule). The floor is the latest of any
+  /// TimeLog of the Outcome, any completed Action, and its latest Bypassed
+  /// decision; for (b) a session counts by its `started_at`, for the stored
+  /// signals by `recorded_at`. Timestamps are ISO-8601 UTC text, so they order
+  /// lexicographically. The empty string is "no floor".
+  static const String _bypassedOutcomeIdsSql = '''
+SELECT f.task_id AS id, COUNT(DISTINCT p.session_id) AS pass_count
+FROM (
+  SELECT t.id AS task_id,
+    MAX(
+      COALESCE((SELECT MAX(tl.started_at) FROM time_logs tl
+                WHERE tl.task_id = t.id), ''),
+      COALESCE((SELECT MAX(a.done_at) FROM actions a
+                WHERE a.outcome_id = t.id AND a.role = 'done'
+                  AND a.done_at IS NOT NULL), ''),
+      COALESCE((SELECT MAX(d.decided_at) FROM outcome_bypass_decisions d
+                WHERE d.task_id = t.id), '')
+    ) AS floor_at
+  FROM todos t
+  WHERE t.intent = 'next' AND t.done_at IS NULL
+    -- Next's own membership rule: the actionless PersonBlocked quadrant is
+    -- Waiting For, which Bypassed never claims.
+    AND (
+      EXISTS (SELECT 1 FROM actions ca
+              WHERE ca.outcome_id = t.id AND ca.role = 'current')
+      OR NOT EXISTS (
+        SELECT 1 FROM todo_tags tt JOIN tags tg ON tg.id = tt.tag_id
+        WHERE tt.todo_id = t.id AND tg.type = 'person')
+    )
+) f
+JOIN (
+  SELECT fst.task_id AS task_id, fs.id AS session_id, fs.started_at AS passed_at
+  FROM focus_session_tasks fst
+  JOIN focus_sessions fs ON fs.id = fst.focus_session_id
+  WHERE fs.ended_at IS NOT NULL
+    AND (fst.disposition IS NULL OR fst.disposition IN ('rollover', 'leave'))
+    AND NOT EXISTS (
+      SELECT 1 FROM time_logs tl
+      WHERE tl.focus_session_id = fs.id AND tl.task_id = fst.task_id)
+  UNION ALL
+  SELECT b.task_id, b.focus_session_id, b.recorded_at
+  FROM focus_session_planning_bypasses b
+  UNION ALL
+  SELECT r.task_id, r.focus_session_id, r.recorded_at
+  FROM focus_session_reschedules r
+) p ON p.task_id = f.task_id AND p.passed_at > f.floor_at
+GROUP BY f.task_id
+HAVING COUNT(DISTINCT p.session_id) >= ?''';
+
+
+  Set<ResultSetImplementation<dynamic, dynamic>> get _bypassTables => {
+        todos,
+        attachedDatabase.actions,
+        attachedDatabase.timeLogs,
+        attachedDatabase.todoTags,
+        attachedDatabase.tags,
+        focusSessions,
+        focusSessionTasks,
+        focusSessionPlanningBypasses,
+        focusSessionReschedules,
+        outcomeBypassDecisions,
+      };
+
+  String get _bypassedOutcomesSql =>
+      'SELECT $_todoColumnsSql, c.pass_count AS pass_count FROM todos t '
+      'JOIN ($_bypassedOutcomeIdsSql) c ON c.id = t.id '
+      'ORDER BY c.pass_count DESC, t.created_at';
+
+  BypassedOutcome _bypassedOutcomeFromRow(QueryRow r) => BypassedOutcome(
+        outcome: todos.map(r.data),
+        passedOverSessionCount: r.read<int>('pass_count'),
+      );
+
+  /// One-shot read of the Bypassed Outcomes at [threshold] (see
+  /// [_bypassedOutcomeIdsSql]), most-passed-over first. The Weekly Review reads
+  /// this once and re-reads after each Bypassed decision.
+  Future<List<BypassedOutcome>> getBypassedOutcomes(int threshold) async {
+    final rows = await customSelect(
+      _bypassedOutcomesSql,
+      variables: [Variable<int>(threshold)],
+      readsFrom: _bypassTables,
+    ).get();
+    return rows.map(_bypassedOutcomeFromRow).toList();
+  }
+
+  /// Reactive form of [getBypassedOutcomes]; re-emits when any table it reads
+  /// changes. Backs the Bypassed count that System Trust reads.
+  Stream<List<BypassedOutcome>> watchBypassedOutcomes(int threshold) {
+    return customSelect(
+      _bypassedOutcomesSql,
+      variables: [Variable<int>(threshold)],
+      readsFrom: _bypassTables,
+    ).watch().map((rows) => rows.map(_bypassedOutcomeFromRow).toList());
+  }
+
+  /// The Bypassed decision log, newest first.
+  Stream<List<OutcomeBypassDecision>> watchBypassDecisions() =>
+      (select(outcomeBypassDecisions)
+            ..orderBy([(d) => OrderingTerm.desc(d.decidedAt)]))
+          .watch();
 
   /// Stream of [Todo] rows in the currently open session.
   ///

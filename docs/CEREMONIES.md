@@ -34,14 +34,21 @@ The current Ceremonies are `focus_session_planning`, `focus_session_review`,
 
 The intro offers Everything by default, plus 15, 30 and 60-minute budgets when
 strictly shorter than the full estimate. At two minutes per item, 15 minutes
-selects seven items from one pool across all four steps. Selection preserves the
+selects seven items from one pool across all steps. Selection preserves the
 existing order within each step. The ranker is replaceable through
 `periodicReviewRankerProvider`.
 
-Inbox Captures come first in every session. Every other candidate, from any
-step, is ranked least-recently-clarified first (never clarified first), then by
+Inbox Captures come first in every session, then Bypassed Outcomes. Every
+other candidate, from any step, is ranked least-recently-clarified first (never clarified first), then by
 creation time, id and step, ascending. Planless, Stale, Actionless and Waiting
 For Outcomes get no priority of their own.
+
+Each Outcome is ranked once. A Bypassed Outcome groups into the Decide Bypassed
+Outcomes step, which follows Process Inbox and appears only when the session
+holds one; it is never also a Waiting For or Next item, and one cut from a short
+session appears in no step. The step has no Skip: each Outcome is moved to
+Someday/Maybe or Trashed, and the footer offers only Back until all are decided.
+Its completion line says how many Bypassed Outcomes wait for a longer session.
 
 The first partial session opens a seven-day review period. Outcomes clarified
 since it opened count as covered, including Keep and clarification on other
