@@ -16,7 +16,8 @@ class _RecordingNudgeActions extends NudgeActions {
   final void Function(RitualId) onDismiss;
 
   @override
-  Future<void> dismiss(RitualId ritual) async => onDismiss(ritual);
+  Future<void> dismiss(RitualId ritual, {DateTime? at}) async =>
+      onDismiss(ritual);
 }
 
 GoRouter _router() => GoRouter(

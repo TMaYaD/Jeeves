@@ -1,39 +1,29 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart'
     show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import 'capture/share_inbox_host.dart';
-import 'models/ritual.dart';
 import 'providers/auth_provider.dart';
 import 'providers/database_provider.dart';
-import 'providers/evening_shutdown_provider.dart';
-import 'providers/focus_session_planning_provider.dart';
 import 'providers/focus_session_planning_settings_provider.dart';
+import 'providers/nudge_action_outbox.dart';
 import 'providers/onboarding_provider.dart';
-import 'providers/periodic_review_settings_provider.dart';
 import 'providers/sync_lifecycle_provider.dart';
 import 'providers/shutdown_settings_provider.dart';
 import 'router.dart';
 import 'services/due_date_notifications.dart';
 import 'services/notification_service.dart';
+import 'services/ritual_notification_response_handler.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Seed onboarding dismissal state before the first frame.
   await initOnboardingCompletion();
-
-  // Seed notification-suppression flags before any scheduling so that a
-  // previously skipped/snoozed reminder is not re-enabled on restart.
-  await loadFocusSessionPlanningNotificationSuppression();
-  await loadShutdownNotificationSuppression();
-
-  // Seed periodic-review notification suppression so a previously skipped/
-  // snoozed reminder is not re-enabled on restart.
-  await loadPeriodicReviewNotificationSuppression();
 
   // flutter_local_notifications uses platform channels unavailable on web.
   // Skip the entire notification stack on web; push notifications are a
@@ -65,80 +55,19 @@ Future<void> main() async {
   runApp(const ProviderScope(child: JeevesApp()));
 }
 
-/// Handles taps on planning notification actions (foreground and background).
+/// Plugin callback for notification taps and action buttons. The logic lives in
+/// [handleRitualNotificationResponse]; this binds it to the real plugin and
+/// router.
 ///
 /// The `@pragma('vm:entry-point')` annotation keeps this function alive in
 /// release builds so the OS can call it when the app is in the background.
 @pragma('vm:entry-point')
-void _handleNotificationResponse(NotificationResponse response) async {
-  final actionId = response.actionId;
-
-  switch (actionId) {
-    case kNotificationActionOpen:
-    case null:
-      // Null actionId means the notification body was tapped. Route by
-      // payload — focus/sprint carries 'focus', Ritual notifications carry
-      // `nudge:<keyPrefix>` and resolve to the matching wizard route. A
-      // body tap on an unknown payload falls back to inbox.
-      if (response.payload == 'focus') {
-        appRouter.go('/focus/active');
-      } else {
-        final outcomeId = outcomeIdFromNotificationPayload(response.payload);
-        final ritual = ritualIdFromNotificationPayload(response.payload);
-        appRouter.go(outcomeId != null
-            ? '/task/$outcomeId'
-            : ritual != null
-                ? ritualNotificationRoute(ritual)
-                : '/inbox');
-      }
-
-    case kNotificationActionSnooze:
-      // Read snooze duration directly from SharedPreferences; Riverpod is not
-      // available in background-isolate notification callbacks.
-      final snoozeMins = await _readDefaultSnoozeDuration();
-      final until = DateTime.now().add(Duration(minutes: snoozeMins));
-      await persistFocusSessionPlanningSnoozedUntil(until);
-      await NotificationService.instance
-          .snoozeRitualReminder(RitualId.dailyPlanning, snoozeMins);
-
-    case kNotificationActionSkip:
-      await persistFocusSessionPlanningSkipToday();
-      await NotificationService.instance
-          .skipTodayRitualReminder(RitualId.dailyPlanning);
-
-    case kShutdownNotificationActionOpen:
-      appRouter.go('/shutdown');
-
-    case kShutdownNotificationActionSnooze:
-      final until = DateTime.now().add(const Duration(minutes: 60));
-      await persistShutdownSnoozedUntil(until);
-      await NotificationService.instance
-          .snoozeRitualReminder(RitualId.eveningShutdown, 60);
-
-    case kShutdownNotificationActionSkip:
-      await persistShutdownSkipToday();
-      await NotificationService.instance
-          .skipTodayRitualReminder(RitualId.eveningShutdown);
-
-    case kPeriodicReviewActionOpen:
-      appRouter.go('/periodic-review');
-
-    case kPeriodicReviewActionSnooze:
-      final until = DateTime.now().add(const Duration(minutes: 60));
-      await persistPeriodicReviewSnoozedUntil(until);
-      await NotificationService.instance
-          .snoozeRitualReminder(RitualId.weeklyReview, 60);
-
-    case kPeriodicReviewActionSkip:
-      await persistPeriodicReviewSkipToday();
-      await NotificationService.instance
-          .skipTodayRitualReminder(RitualId.weeklyReview);
-  }
-}
-
-Future<int> _readDefaultSnoozeDuration() async {
-  final prefs = await SharedPreferences.getInstance();
-  return prefs.getInt('focus_session_planning_settings_default_snooze_duration') ?? 60;
+void _handleNotificationResponse(NotificationResponse response) {
+  unawaited(handleRitualNotificationResponse(
+    response,
+    service: NotificationService.instance,
+    navigate: appRouter.go,
+  ));
 }
 
 class JeevesApp extends ConsumerWidget {
@@ -168,6 +97,11 @@ class JeevesApp extends ConsumerWidget {
     // without this read it stays lazy and the device never syncs.
     ref.watch(syncLifecycleProvider);
 
+    // Eagerly materialise [nudgeActionOutboxDrainerProvider] so Skip / Snooze
+    // taps recorded by the notification handler (possibly in a background
+    // isolate) reach the Nudge's dismiss / snooze state, and live legacy
+    // suppression is carried over once.
+    ref.watch(nudgeActionOutboxDrainerProvider);
     // Keeps a notification scheduled for each due-dated Outcome (09:00 on its
     // due day). Nothing else reads it, so without this watch it never runs.
     ref.watch(dueDateNotificationReconcilerProvider);

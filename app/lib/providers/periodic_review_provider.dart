@@ -16,7 +16,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/daos/focus_session_dao.dart' show BypassedOutcome;
 import '../database/gtd_database.dart';
-import '../models/todo.dart' show RoutingKind;
+import '../models/routing_kind.dart';
 import '../utils/snapshot_nav.dart';
 import 'bypassed_outcomes_provider.dart';
 import 'clarify_retention_provider.dart';
@@ -27,7 +27,7 @@ import 'synced_preferences_provider.dart';
 import 'periodic_review_settings_provider.dart';
 
 export '../database/gtd_database.dart' show Todo;
-export '../models/todo.dart' show RoutingKind;
+export '../models/routing_kind.dart';
 
 class PeriodicReviewState {
   const PeriodicReviewState({

@@ -13,7 +13,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/daos/focus_session_dao.dart'
     show focusSessionDispositionIdFor;
 import 'package:jeeves/database/gtd_database.dart';
-import 'package:jeeves/models/todo.dart' show RoutingKind;
+import 'package:jeeves/models/routing_kind.dart';
 import 'package:jeeves/sync/ids.dart'
     show focusSessionTaskIdFor, jeevesWorkspaceNamespace;
 import 'package:uuid/uuid.dart';

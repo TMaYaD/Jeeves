@@ -7,7 +7,6 @@
 /// closes the session via [FocusSessionDao.reviewAndCloseSession].
 ///
 /// Public surface:
-/// - Notification skip/snooze helpers used by main.dart on action taps.
 /// - [sessionSettlementGroupsProvider], [unfinishedSelectedTodayProvider] —
 ///   stream providers driven by the active focus session's members.
 /// - [loggedMinutesByOutcomeProvider] — the derived time-spent total the Review
@@ -23,7 +22,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../database/daos/focus_session_dao.dart' show SessionSettlement;
 import '../database/gtd_database.dart';
 import '../models/ritual.dart';
-import '../models/todo.dart' show RoutingKind;
+import '../models/routing_kind.dart';
 import '../services/notification_service.dart';
 import '../utils/snapshot_nav.dart';
 import 'database_provider.dart';
@@ -43,77 +42,9 @@ export '../database/daos/focus_session_dao.dart' show SessionSettlement;
 // ---------------------------------------------------------------------------
 
 const _kShutdownCompletedDateKey = 'shutdown_ritual_completed_date';
-const _kShutdownNotificationSkippedDateKey =
-    'shutdown_notification_skipped_date';
-const _kShutdownNotificationSnoozedUntilKey =
-    'shutdown_notification_snoozed_until';
 
 /// Total number of shutdown ritual steps (0-indexed max).
 const int _kShutdownMaxStep = 2;
-
-// ---------------------------------------------------------------------------
-// Notification suppression helpers
-// ---------------------------------------------------------------------------
-
-bool _shutdownNotificationSkippedToday = false;
-bool _shutdownNotificationSnoozedActive = false;
-
-bool _parseSnoozedActive(String? snoozedUntilStr) {
-  if (snoozedUntilStr == null) return false;
-  final snoozedUntil = DateTime.tryParse(snoozedUntilStr);
-  return snoozedUntil != null && DateTime.now().isBefore(snoozedUntil);
-}
-
-/// Returns true if the user has skipped/snoozed shutdown notifications today.
-bool isShutdownNotificationSuppressedToday() =>
-    _shutdownNotificationSkippedToday || _shutdownNotificationSnoozedActive;
-
-/// Returns true iff the user has tapped "Skip today" (as distinct from an
-/// active snooze). The reschedule logic uses this to suppress *today*'s
-/// recurring fire while leaving tomorrow's intact; a snooze is satisfied by
-/// its own one-off and does not need to touch the recurring schedule.
-bool isShutdownNotificationSkippedToday() =>
-    _shutdownNotificationSkippedToday;
-
-/// Reads shutdown skip/snooze state from [SharedPreferences] into module-level flags.
-Future<void> loadShutdownNotificationSuppression() async {
-  final prefs = await SharedPreferences.getInstance();
-  final today = planningToday();
-  _shutdownNotificationSkippedToday =
-      prefs.getString(_kShutdownNotificationSkippedDateKey) == today;
-
-  _shutdownNotificationSnoozedActive = _parseSnoozedActive(
-    prefs.getString(_kShutdownNotificationSnoozedUntilKey),
-  );
-}
-
-/// Persists and activates the "skip shutdown today" suppression.
-///
-/// Dual-writes to SharedPreferences (startup reads) and synced preferences
-/// (cross-device visibility). Pass [ref] to enable the Drift write.
-Future<void> persistShutdownSkipToday({Ref? ref}) async {
-  final today = planningToday();
-  final prefs = await SharedPreferences.getInstance();
-  await prefs.setString(_kShutdownNotificationSkippedDateKey, today);
-  _shutdownNotificationSkippedToday = true;
-  if (ref != null) {
-    await syncedPrefs(ref).set(_kShutdownNotificationSkippedDateKey, today);
-  }
-}
-
-/// Persists and activates a shutdown snooze until [until].
-///
-/// Dual-writes to SharedPreferences (startup reads) and synced preferences
-/// (cross-device visibility). Pass [ref] to enable the Drift write.
-Future<void> persistShutdownSnoozedUntil(DateTime until, {Ref? ref}) async {
-  final value = until.toIso8601String();
-  final prefs = await SharedPreferences.getInstance();
-  await prefs.setString(_kShutdownNotificationSnoozedUntilKey, value);
-  _shutdownNotificationSnoozedActive = DateTime.now().isBefore(until);
-  if (ref != null) {
-    await syncedPrefs(ref).set(_kShutdownNotificationSnoozedUntilKey, value);
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Session date cache
@@ -299,20 +230,6 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
 
   @override
   EveningShutdownState build() {
-    // Refresh notification-suppression flags when Drift receives cross-device
-    // sync. Banner dismiss state is now persisted by the Nudge module (see
-    // nudgeStateProvider).
-    ref.listen(syncedPreferencesProvider, (_, next) {
-      if (next is AsyncData<SyncedPreferences>) {
-        final today = planningToday();
-        _shutdownNotificationSkippedToday =
-            next.value.get<String>(_kShutdownNotificationSkippedDateKey) == today;
-
-        _shutdownNotificationSnoozedActive = _parseSnoozedActive(
-          next.value.get<String>(_kShutdownNotificationSnoozedUntilKey),
-        );
-      }
-    });
     return const EveningShutdownState();
   }
 
@@ -467,22 +384,6 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
                 ? _kDispRollover
                 : _kDispLeave,
       };
-
-  // ---- Notification skip / snooze --------------------------------------------
-
-  Future<void> skipShutdownToday() async {
-    await persistShutdownSkipToday(ref: ref);
-    // Skip today only — leave tomorrow's recurring reminder intact.
-    await NotificationService.instance
-        .skipTodayRitualReminder(RitualId.eveningShutdown);
-  }
-
-  Future<void> snoozeShutdownNotification(int minutes) async {
-    final until = DateTime.now().add(Duration(minutes: minutes));
-    await persistShutdownSnoozedUntil(until, ref: ref);
-    await NotificationService.instance
-        .snoozeRitualReminder(RitualId.eveningShutdown, minutes);
-  }
 
   // ---- Shutdown lifecycle ----------------------------------------------------
 
