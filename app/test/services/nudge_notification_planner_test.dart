@@ -239,7 +239,7 @@ void main() {
 
   group('dismiss, snooze and in-progress hygiene', () {
     test('a dismiss hides only the firing it covered', () {
-      // Due since 10 Nov 07:00; refires at 17 Nov 07:00.
+      // Due since 10 Nov 07:00; while due, the Nudge refires every day.
       final plan = planNudgeNotifications(_facts(
         weeklyReviewLastCompleted: _at(-8, 7),
         enabled: _allEnabled,
@@ -251,8 +251,8 @@ void main() {
       expect(
         _of(plan, RitualId.weeklyReview)
             .map((p) => p.fireAt),
-        [_at(6, 9)],
-        reason: 'hidden for the rest of this period, back at the next boundary',
+        [for (var day = 1; day <= 6; day++) _at(day, 9)],
+        reason: 'hidden for the rest of today, back with tomorrow\'s firing',
       );
     });
 

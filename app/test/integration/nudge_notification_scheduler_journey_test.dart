@@ -128,7 +128,7 @@ void main() {
   test('dismissing the banner removes the dismissed firing\'s alarms and '
       'keeps the next firing\'s', () async {
     await boot(now: at(0, 7), prefs: {
-      // Due since 9 Nov 07:00; the next period starts on 16 Nov 07:00.
+      // Due since 9 Nov 07:00; while due, the Nudge refires every day.
       'periodic_review_last_completed_at': at(-9, 7).toIso8601String(),
     });
     expect(oneOffs(RitualId.weeklyReview), hasLength(7));
@@ -140,9 +140,10 @@ void main() {
     await settle();
 
     expect(visible.read(), isFalse);
-    expect(oneOffs(RitualId.weeklyReview), [at(5, 9), at(6, 9)],
-        reason: 'this period is silenced on both surfaces; the next one, '
-            'which starts on 16 Nov, is not');
+    expect(oneOffs(RitualId.weeklyReview),
+        [for (var day = 1; day <= 6; day++) at(day, 9)],
+        reason: 'today is silenced on both surfaces; tomorrow\'s firing, '
+            'which begins at midnight, is not');
     visible.close();
   });
 
