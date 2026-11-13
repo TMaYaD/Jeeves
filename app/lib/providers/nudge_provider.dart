@@ -122,7 +122,7 @@ class NudgeActions {
   Future<void> dismiss(RitualId ritual, {DateTime? at}) async {
     await syncedPrefs(_ref).set(
       _dismissedAtKey(ritual),
-      (at ?? DateTime.now()).toUtc().toIso8601String(),
+      (at ?? _ref.read(clockProvider)()).toUtc().toIso8601String(),
     );
   }
 
@@ -132,7 +132,7 @@ class NudgeActions {
       {DateTime? at}) async {
     await syncedPrefs(_ref).set(
       _snoozedUntilKey(ritual),
-      (at ?? DateTime.now()).toUtc().add(duration).toIso8601String(),
+      (at ?? _ref.read(clockProvider)()).toUtc().add(duration).toIso8601String(),
     );
   }
 

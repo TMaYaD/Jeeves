@@ -166,7 +166,10 @@ void main() {
     await skipToSummary(tester);
     await tap(tester, find.byKey(const Key('periodic_review_done')));
     expect(container.read(periodicReviewLastCompletedProvider), isNull);
-    expect(container.read(periodicReviewIsDueProvider), isTrue);
+    // A finished short session counts as the last Weekly Review: the review
+    // period stays open but the review is no longer due.
+    expect(container.read(periodicReviewLastSessionFinishedProvider), isNotNull);
+    expect(container.read(periodicReviewIsDueProvider), isFalse);
     expect(container.read(syncedPreferencesProvider).requireValue
         .get<String>('periodic_review_open_since'), isNotNull);
 

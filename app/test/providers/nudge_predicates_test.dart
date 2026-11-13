@@ -131,65 +131,57 @@ void main() {
     expect(dprFiringEdgeAt(evening, ready), evening);
   });
 
-  test(
-    'Weekly Review fires at seven days and refires each elapsed seven-day period',
-    () {
-      final completed = morning.subtract(const Duration(days: 7));
-      final facts = WrFacts(hasAnyItem: true, lastCompleted: completed);
-      expect(
-        wrFiringEdgeAt(
-          morning.subtract(const Duration(microseconds: 1)),
-          facts,
-        ),
-        isNull,
-      );
-      expect(wrFiringEdgeAt(morning, facts), morning);
-      // Just before the second boundary the first edge still holds; at it,
-      // the edge moves to the new period.
-      final secondBoundary = morning.add(const Duration(days: 7));
-      expect(
-        wrFiringEdgeAt(
-          secondBoundary.subtract(const Duration(microseconds: 1)),
-          facts,
-        ),
-        morning,
-      );
-      expect(wrFiringEdgeAt(secondBoundary, facts), secondBoundary);
-      expect(
-        wrFiringEdgeAt(secondBoundary.add(const Duration(days: 3)), facts),
-        secondBoundary,
-      );
-      expect(
-        wrFiringEdgeAt(morning, const WrFacts(hasAnyItem: true)),
-        DateTime(2026, 5, 20),
-      );
-      expect(wrFiringEdgeAt(morning, const WrFacts(hasAnyItem: false)), isNull);
-    },
-  );
-
-  test('Weekly Review uses the latest firing content edge', () {
-    final content = morning.add(const Duration(hours: 1));
+  test('Weekly Review is idle before it falls due', () {
+    expect(wrFiringEdgeAt(morning, const WrFacts()), isNull);
     expect(
       wrFiringEdgeAt(
-        content,
-        WrFacts(
-          hasAnyItem: true,
-          lastCompleted: morning.subtract(const Duration(days: 7)),
-          contentFiringEdge: content,
-        ),
+        morning.subtract(const Duration(microseconds: 1)),
+        WrFacts(dueAt: morning),
       ),
+      isNull,
+    );
+  });
+
+  test('Weekly Review fires at the due instant and afresh every day after', () {
+    final dueAt = DateTime(2026, 5, 18, 12);
+    expect(wrFiringEdgeAt(dueAt, WrFacts(dueAt: dueAt)), dueAt);
+    // Later the same day the edge is still the due instant.
+    expect(
+      wrFiringEdgeAt(DateTime(2026, 5, 18, 20), WrFacts(dueAt: dueAt)),
+      dueAt,
+    );
+    // Each following day the edge is that day's start, which releases a swipe.
+    expect(
+      wrFiringEdgeAt(DateTime(2026, 5, 19, 9), WrFacts(dueAt: dueAt)),
+      DateTime(2026, 5, 19),
+    );
+    expect(
+      wrFiringEdgeAt(DateTime(2026, 5, 30, 9), WrFacts(dueAt: dueAt)),
+      DateTime(2026, 5, 30),
+    );
+  });
+
+  test('Weekly Review uses the latest firing content edge', () {
+    final dueAt = morning.subtract(const Duration(days: 3));
+    final content = morning.add(const Duration(hours: 1));
+    expect(
+      wrFiringEdgeAt(content, WrFacts(dueAt: dueAt, contentFiringEdge: content)),
       content,
     );
     expect(
+      wrFiringEdgeAt(content, WrFacts(contentFiringEdge: content)),
+      content,
+    );
+    // A content edge older than today's start loses to the daily edge.
+    expect(
       wrFiringEdgeAt(
         content,
         WrFacts(
-          hasAnyItem: true,
-          lastCompleted: morning,
-          contentFiringEdge: content,
+          dueAt: dueAt,
+          contentFiringEdge: morning.subtract(const Duration(days: 1)),
         ),
       ),
-      content,
+      DateTime(morning.year, morning.month, morning.day),
     );
   });
 

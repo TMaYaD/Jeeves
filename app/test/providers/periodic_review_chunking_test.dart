@@ -9,6 +9,7 @@ import 'package:jeeves/providers/periodic_review_provider.dart';
 import 'package:jeeves/providers/periodic_review_ranker.dart';
 import 'package:jeeves/providers/periodic_review_settings_provider.dart';
 import 'package:jeeves/providers/synced_preferences_provider.dart';
+import 'package:jeeves/providers/system_trust_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../test_helpers.dart';
@@ -87,6 +88,9 @@ void main() {
     await notifier.finishSession();
     expect(container.read(periodicReviewLastCompletedProvider), isNull);
     expect(container.read(periodicReviewProvider).currentStep, 0);
+    // Due by the never-reviewed baseline (the oldest Outcome is 20 days old).
+    container.listen(neverReviewedBaselineProvider, (_, _) {});
+    await container.read(neverReviewedBaselineProvider.future);
     expect(container.read(periodicReviewIsDueProvider), isTrue);
   });
 

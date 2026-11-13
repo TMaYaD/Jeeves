@@ -15,6 +15,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'clock_provider.dart';
 import 'gtd_lists_provider.dart' show Capture, Todo;
 import 'synced_preferences_provider.dart';
+import 'system_trust_provider.dart' show weeklyReviewDueAtProvider;
 
 const kPeriodicReviewOpenSinceKey = 'periodic_review_open_since';
 
@@ -70,22 +71,21 @@ final periodicReviewOpenSinceProvider = Provider<DateTime?>((ref) {
   return opened;
 });
 
-/// True when the review is due (never completed, or > [_kCadenceDays] old).
+/// True when the Weekly Review is due: [weeklyReviewDueAtProvider] has
+/// passed. The Notification reads this; the Banner's Cadence Trigger reads the
+/// same due instant. An open review period does not make the review due, so a
+/// finished short session clears both until seven days after it.
 final periodicReviewIsDueProvider = Provider<bool>((ref) {
+  final due = ref.watch(weeklyReviewDueAtProvider);
+  if (due == null) return false;
   final now = ref.watch(clockProvider)();
-  if (ref.watch(periodicReviewOpenSinceProvider) != null) return true;
-  final last = ref.watch(periodicReviewLastCompletedProvider);
-  if (last == null) return true;
-  final due = last.add(const Duration(days: _kCadenceDays));
-  if (now.isBefore(due)) {
-    // Not due yet — re-evaluate exactly when the cadence boundary passes, so a
-    // Weekly Review Nudge surfaces reactively the moment it becomes due rather
-    // than waiting for an unrelated rebuild. One timer, cancelled on dispose.
-    final timer = Timer(due.difference(now), ref.invalidateSelf);
-    ref.onDispose(timer.cancel);
-    return false;
-  }
-  return true;
+  if (!now.isBefore(due)) return true;
+  // Not due yet — re-evaluate exactly when the due instant passes, so the
+  // Nudge surfaces reactively the moment the review falls due rather than
+  // waiting for an unrelated rebuild. One timer, cancelled on dispose.
+  final timer = Timer(due.difference(now), ref.invalidateSelf);
+  ref.onDispose(timer.cancel);
+  return false;
 });
 
 /// Whether the Weekly Review banner is enabled (defaults to true).

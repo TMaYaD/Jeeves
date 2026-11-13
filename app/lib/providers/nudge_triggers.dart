@@ -3,7 +3,8 @@
 /// conceptual definition and `docs/adr/0008-cadence-as-anchor-with-period.md`
 /// for the Cadence-as-anchor-with-period decision.
 ///
-/// Two concrete shapes:
+/// Three concrete shapes (the third, the Unfinished Trigger, is Weekly
+/// Review's alone):
 ///
 /// - **Cadence Trigger** — fires once per anchor-to-anchor period. The
 ///   predicate combines "current time has crossed into a new period",
@@ -38,13 +39,12 @@ import 'focus_session_planning_settings_provider.dart'
 import 'gtd_lists_provider.dart';
 import 'nudge_clock_provider.dart';
 import 'onboarding_provider.dart';
+import 'periodic_review_provider.dart' show periodicReviewProvider;
 import 'periodic_review_settings_provider.dart'
-    show
-        emptyActionableBannerTrigger,
-        periodicReviewIsDueProvider,
-        periodicReviewLastCompletedProvider;
+    show emptyActionableBannerTrigger;
 import 'shutdown_settings_provider.dart' show shutdownSettingsProvider;
 import 'synced_preferences_provider.dart';
+import 'system_trust_provider.dart' show weeklyReviewDueAtProvider;
 
 // ---------------------------------------------------------------------------
 // TriggerState
@@ -162,10 +162,9 @@ final qualifyingSessionTodayProvider = StreamProvider<bool>((ref) {
 ///     firingSince = later of (today's DPR anchor, last ES anchor).
 ///   - ES:  FS active AND now ≥ shutdown anchor AND ES not in-progress.
 ///     firingSince = today's shutdown anchor.
-///   - WR:  (no prior completion OR now ≥ last completion + 7d) AND
-///     WR not in-progress.
-///     firingSince = latest seven-day boundary since last completion
-///     (or start-of-today if never completed).
+///   - WR:  review due (now ≥ `weeklyReviewDueAtProvider`) AND WR not in-progress.
+///     firingSince = later of the due instant and the start of today, so the
+///     Nudge returns daily while due.
 final cadenceTriggerProvider =
     Provider.family<TriggerState, RitualId>((ref, ritual) {
   if (ref.watch(ceremonyInProgressForProvider(ritual))) return TriggerState.idle;
@@ -221,23 +220,13 @@ TriggerState _esCadenceTrigger(Ref ref) {
 }
 
 TriggerState _wrCadenceTrigger(Ref ref) {
+  // `_now` re-evaluates at every local midnight and at the due instant (the
+  // boundary tick), so the daily return needs no timer of its own. The due
+  // instant is the single due predicate's input; it is null with no items yet.
   final now = _now(ref);
-  // Preserve the due provider's timer subscription and existing override seam.
-  if (!ref.watch(periodicReviewIsDueProvider)) return TriggerState.idle;
-  final hasAnyItem = ref.watch(hasAnyItemProvider);
-  if (!hasAnyItem.hasValue) return TriggerState.idle;
-  final lastCompleted = ref.watch(periodicReviewLastCompletedProvider);
-  // An open Weekly Review is due before lastCompleted + 7 days, where the
-  // predicate has no edge yet; the live Trigger keeps firing from that
-  // cadence boundary, as it did before the predicate was extracted.
-  final edge = wrFiringEdgeAt(now, WrFacts(
-        hasAnyItem: hasAnyItem.requireValue,
-        lastCompleted: lastCompleted,
-      )) ??
-      (hasAnyItem.requireValue
-          ? lastCompleted?.add(const Duration(days: 7))
-          : null);
-  return _stateForEdge(edge);
+  final dueAt = ref.watch(weeklyReviewDueAtProvider);
+  if (dueAt == null || now.isBefore(dueAt)) return TriggerState.idle;
+  return _stateForEdge(wrFiringEdgeAt(now, WrFacts(dueAt: dueAt)));
 }
 
 // ---------------------------------------------------------------------------
@@ -380,6 +369,55 @@ TriggerState _wrContentStateTrigger(Ref ref) {
 }
 
 // ---------------------------------------------------------------------------
+// Unfinished Trigger
+// ---------------------------------------------------------------------------
+
+/// The instant the user left a Weekly Review session without finishing it, or
+/// null while no session is unfinished.
+///
+/// A session is unfinished when it was started (`sessionStarted`) and its
+/// Ceremony is no longer in progress (the screen was left) without Done. The
+/// instant is held in memory on this device and ends when a session is
+/// finished, matching the in-progress hygiene rule it complements.
+class UnfinishedReviewLeftAtNotifier extends Notifier<DateTime?> {
+  @override
+  DateTime? build() {
+    final inProgress =
+        ref.watch(ceremonyInProgressForProvider(RitualId.weeklyReview));
+    final started = ref
+        .watch(periodicReviewProvider.select((state) => state.sessionStarted));
+    if (!started || inProgress) return null;
+    // The Ceremony tracker records every exit, so a second exit after a
+    // reopen is seen even though nothing watched this provider meanwhile.
+    return ref
+            .read(ceremonyInProgressProvider.notifier)
+            .lastExitedAt(RitualId.weeklyReview) ??
+        ref.read(clockProvider)();
+  }
+}
+
+final unfinishedReviewLeftAtProvider =
+    NotifierProvider<UnfinishedReviewLeftAtNotifier, DateTime?>(
+  UnfinishedReviewLeftAtNotifier.new,
+);
+
+/// The Weekly Review **Unfinished Trigger**: fires while a started session has
+/// been left without Done, whether or not the review is due. `firingSince` is
+/// the later of the instant it was left and the start of today, so a swipe
+/// earlier today does not hide a review left after it, and the Nudge returns
+/// the next day while the session stays unfinished.
+final unfinishedReviewTriggerProvider = Provider<TriggerState>((ref) {
+  final now = _now(ref);
+  final leftAt = ref.watch(unfinishedReviewLeftAtProvider);
+  if (leftAt == null) return TriggerState.idle;
+  final startOfToday = _startOfToday(now);
+  return TriggerState(
+    isFiring: true,
+    firingSince: leftAt.isAfter(startOfToday) ? leftAt : startOfToday,
+  );
+});
+
+// ---------------------------------------------------------------------------
 // Aggregate helpers
 // ---------------------------------------------------------------------------
 
@@ -390,6 +428,8 @@ final triggersForRitualProvider =
   return [
     ref.watch(cadenceTriggerProvider(ritual)),
     ref.watch(contentStateTriggerProvider(ritual)),
+    if (ritual == RitualId.weeklyReview)
+      ref.watch(unfinishedReviewTriggerProvider),
   ];
 });
 
