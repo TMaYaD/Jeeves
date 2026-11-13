@@ -10,7 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/daos/focus_session_dao.dart'
     show focusSessionPlanningBypassIdFor, focusSessionRescheduleIdFor;
 import 'package:jeeves/database/gtd_database.dart';
-import 'package:jeeves/models/todo.dart' show Intent;
+import 'package:jeeves/models/intent.dart' show Intent;
 import 'package:jeeves/sync/collection_codecs.dart';
 import 'package:jeeves/sync/domain_op_capture.dart';
 

@@ -9,7 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../database/daos/focus_session_dao.dart' show BypassedOutcome;
 import '../database/gtd_database.dart';
 import '../models/bypassed_outcome.dart';
-import '../models/todo.dart' show RoutingKind;
+import '../models/routing_kind.dart' show RoutingKind;
 import '../services/clarification_service.dart';
 import '../sync/collection_codecs.dart'
     show encodeInstant, outcomeBypassDecisionsCollection;
