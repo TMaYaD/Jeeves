@@ -11,6 +11,8 @@ import '../providers/sprint_timer_provider.dart'
     show findBatchingCandidates, sprintTimerProvider;
 import '../services/notification_service.dart' show notificationServiceProvider;
 import '../widgets/meta_chip.dart';
+import '../widgets/nudge_banner.dart'
+    show InboxTooFullHead, NudgeEmptyState, RitualHead, nudgeSurfaceHeadProvider;
 import '../widgets/outcome_row.dart';
 
 class FocusScreen extends ConsumerWidget {
@@ -71,6 +73,19 @@ class FocusScreen extends ConsumerWidget {
                               .watch(lastClosedSessionRolloverTasksProvider)
                               .value ??
                           const <Todo>[]);
+                  // The nudge that holds the Today's Tasks empty state: Inbox
+                  // too full, the Weekly Review or Daily Planning, while no
+                  // open session carries tasks. Evening Shutdown and no head
+                  // keep the existing content.
+                  final surfaceHead = ref.watch(nudgeSurfaceHeadProvider);
+                  final nudgeHead = !showShutdownEntry &&
+                          sortedTasks.isEmpty &&
+                          (surfaceHead is InboxTooFullHead ||
+                              (surfaceHead is RitualHead &&
+                                  surfaceHead.ritual !=
+                                      RitualId.eveningShutdown))
+                      ? surfaceHead
+                      : null;
                   return ListView(
                         physics: const ClampingScrollPhysics(),
                         padding: const EdgeInsets.symmetric(
@@ -131,6 +146,12 @@ class FocusScreen extends ConsumerWidget {
                                 settlement: settlements[t.id],
                               ),
                             )
+                          else if (sortedTasks.isEmpty && nudgeHead != null)
+                            Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(vertical: 16),
+                              child: NudgeEmptyState(head: nudgeHead),
+                            )
                           else if (sortedTasks.isEmpty)
                             Padding(
                               padding:
@@ -160,7 +181,7 @@ class FocusScreen extends ConsumerWidget {
                               onTap: () => _beginShutdown(
                                   context, ref, tasks, activeSession),
                             )
-                          else
+                          else if (nudgeHead == null)
                             FilledButton(
                               onPressed: () => _replanDay(context, ref),
                               style: FilledButton.styleFrom(
