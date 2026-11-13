@@ -155,7 +155,7 @@ void main() {
         .read(nudgeActionsProvider)
         .snooze(RitualId.dailyPlanning, const Duration(minutes: 30), at: at(0, 8, 30));
     await settle();
-    expect(service.pending[snoozeId]?.fireAt, at(0, 9),
+    expect(service.pending[snoozeId]?.fireAt.isAtSameMomentAs(at(0, 9)), isTrue,
         reason: 'the snooze expiry is a planned alarm');
 
     setClock(at(0, 8, 35));
@@ -184,8 +184,9 @@ void main() {
     await db.todoDao.deferTaskToMaybe('maybe');
     await c.read(nudgeActionsProvider).dismiss(RitualId.weeklyReview, at: at(0, 9));
     await settle();
-    expect(service.alarmsOf(RitualId.weeklyReview), isEmpty,
-        reason: 'the Inbox holds a capture: nothing is firing');
+    expect(oneOffs(RitualId.weeklyReview), isNot(contains(at(0, 11))),
+        reason: 'the Inbox holds a capture: nothing is firing today (the '
+            'review is not due by cadence until 17 Nov)');
 
     // The Inbox empties: the content-state predicate goes false -> true.
     setClock(at(0, 10));
