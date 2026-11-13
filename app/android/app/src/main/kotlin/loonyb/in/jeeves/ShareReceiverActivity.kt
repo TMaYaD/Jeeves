@@ -119,16 +119,18 @@ class ShareReceiverActivity : Activity() {
     }
 
     /**
-     * Only a `content://` stream not served by Jeeves itself may be copied. `file://`
-     * Uris are opened with this process's own permissions, and a Uri on one of
-     * Jeeves' own providers would be read the same way; neither is something
-     * the sender was granted access to.
+     * Input contract: a shared stream must be a `content://` Uri served by another
+     * app. Any other scheme, or a Uri on one of Jeeves' own providers, is refused
+     * before anything is written.
      */
     private fun requireForeignContentUri(stream: Uri) {
         if (stream.scheme != ContentResolver.SCHEME_CONTENT) {
             throw SecurityException("only content:// streams are accepted")
         }
-        val authority = stream.authority ?: throw SecurityException("stream has no authority")
+        val rawAuthority = stream.authority ?: throw SecurityException("stream has no authority")
+        // A content Uri may carry a "userId@" prefix; providers are looked up by
+        // the part after the last '@'.
+        val authority = rawAuthority.substringAfterLast('@')
         // Own providers are enumerated rather than resolving the authority: another
         // app's provider may be invisible to us under package visibility rules.
         val ownProviders = packageManager
