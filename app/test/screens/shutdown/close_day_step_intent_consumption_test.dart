@@ -215,4 +215,35 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
   });
+
+  testWidgets(
+      'and-then-plan intent set but reEnterPlanning throws: the user still '
+      'reaches planning and the shutdown commit is not repeated (#874)',
+      (tester) async {
+    final db = GtdDatabase(NativeDatabase.memory());
+    addTearDown(db.close);
+
+    final failingNotifier = _FailingReEnterPlanningNotifier();
+    final (widget, container) =
+        _app(db, planningNotifierFactory: () => failingNotifier);
+    addTearDown(container.dispose);
+
+    container.read(shutdownThenPlanProvider.notifier).set(true);
+
+    await tester.pumpWidget(widget);
+    await _revealButton(tester);
+
+    await tester.tap(find.text('Close Day'));
+    for (var i = 0; i < 6; i++) {
+      await tester.pump();
+    }
+
+    expect(failingNotifier.reEnterCallCount, 1);
+    expect(tester.takeException(), isNull,
+        reason: 'the preload failure must not escape the tap handler');
+    expect(find.text('focus-session-planning'), findsOneWidget,
+        reason: 'a failed preload still routes into Daily Planning, whose '
+            'mount re-runs the rollover preload');
+    expect(container.read(shutdownThenPlanProvider), isFalse);
+  });
 }
