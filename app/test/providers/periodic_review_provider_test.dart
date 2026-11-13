@@ -32,7 +32,6 @@ Future<void> _insertMaybe(GtdDatabase db, String id) async {
         title: Value('Maybe $id'),
         userId: const Value('local'),
         intent: const Value('maybe'),
-        clarified: const Value(true),
         createdAt: Value(now),
         updatedAt: Value(now),
       ));

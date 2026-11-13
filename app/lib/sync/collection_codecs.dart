@@ -238,7 +238,6 @@ const Map<String, CollectionCodec> collectionCodecs = {
       'updated_at': FieldKind.instant,
       // Declared TEXT on the table, so it passes through opaque.
       'done_at': FieldKind.text,
-      'clarified': FieldKind.boolean,
       'intent': FieldKind.text,
       'time_estimate': FieldKind.integer,
       'energy_level': FieldKind.text,

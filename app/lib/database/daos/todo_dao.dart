@@ -38,7 +38,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
 
   /// The whole synced row, as the op-log fields a create asserts. Read off the
   /// stored [row] rather than the caller's companion, so client defaults
-  /// (`id`, `intent`, `clarified`) are carried at the value SQLite settled on.
+  /// (`id`, `intent`) are carried at the value SQLite settled on.
   ///
   /// Exactly `collectionCodecs[todosCollection].columns` — the contract test
   /// pins the two sets equal, so a new synced column has one place to be added.
@@ -50,7 +50,6 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
         'created_at': encodeInstant(row.createdAt),
         'updated_at': encodeInstant(row.updatedAt),
         'done_at': row.doneAt,
-        'clarified': row.clarified,
         'intent': row.intent,
         'time_estimate': row.timeEstimate,
         'energy_level': row.energyLevel,
@@ -75,7 +74,6 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
         if (companion.updatedAt.present)
           'updated_at': encodeInstant(companion.updatedAt.value),
         if (companion.doneAt.present) 'done_at': companion.doneAt.value,
-        if (companion.clarified.present) 'clarified': companion.clarified.value,
         if (companion.intent.present) 'intent': companion.intent.value,
         if (companion.timeEstimate.present)
           'time_estimate': companion.timeEstimate.value,
@@ -124,7 +122,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
           await (select(todos)..where((t) => t.id.equals(id))).getSingleOrNull();
       if (existing == null) {
         await into(todos).insert(createColumns.copyWith(id: Value(id)));
-        // Read back rather than trust the companion: `clarified` and `intent`
+        // Read back rather than trust the companion: `intent`
         // can come from client defaults, and the create assertion must carry
         // the value the row actually holds.
         final created =
@@ -181,7 +179,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   /// `time_spent_minutes` column used to hide (issue #604).
   static String todoProjectionSql(String t) =>
       '$t.id, $t.title, $t.notes, $t.priority, $t.due_date, $t.created_at, '
-      '$t.updated_at, $t.done_at, $t.clarified, $t.intent, '
+      '$t.updated_at, $t.done_at, $t.intent, '
       '${effectiveTimeEstimateSql(t)} AS time_estimate, '
       '${effectiveEnergyLevelSql(t)} AS energy_level, '
       '$t.capture_source, $t.location_id, $t.user_id, $t.last_clarified_at, '
@@ -247,7 +245,7 @@ EXISTS (
   )
 )''';
 
-  /// Stream of clarified, non-done todos filtered by [intent] and, optionally,
+  /// Stream of non-done todos filtered by [intent] and, optionally,
   /// by an AND-set of [tagIds].
   ///
   /// The tag-filter shape (`COUNT(DISTINCT tag_id) = n` over `todo_tags`) is
@@ -278,7 +276,7 @@ EXISTS (
     if (tagIds.isEmpty) {
       return customSelect(
         'SELECT ${todoProjectionSql('todos')} FROM todos '
-        'WHERE clarified = 1 AND done_at IS NULL AND intent = ?'
+        'WHERE done_at IS NULL AND intent = ?'
         '$extraWhere '
         'ORDER BY created_at',
         variables: [intentVar],
@@ -291,8 +289,7 @@ EXISTS (
     final placeholders = List.filled(n, '?').join(', ');
     return customSelect(
       'SELECT ${todoProjectionSql('todos')} FROM todos '
-      'WHERE todos.clarified = 1 '
-      'AND todos.done_at IS NULL '
+      'WHERE todos.done_at IS NULL '
       'AND todos.intent = ? '
       'AND (SELECT COUNT(DISTINCT tag_id) FROM todo_tags '
       '     WHERE todo_id = todos.id '
@@ -311,7 +308,7 @@ EXISTS (
   /// matches.
   ///
   /// ```text
-  /// clarified ∧ done_at IS NULL ∧
+  /// done_at IS NULL ∧
   ///   (intent='maybe' ∨ (intent='next' ∧ actionless ∧ PersonBlocked))
   /// ```
   ///
@@ -322,7 +319,7 @@ EXISTS (
   Stream<List<Todo>> watchOffUpNextPlanningCandidates() {
     return customSelect(
       'SELECT ${todoProjectionSql('todos')} FROM todos '
-      "WHERE clarified = 1 AND done_at IS NULL AND ("
+      "WHERE done_at IS NULL AND ("
       "intent = 'maybe' OR "
       "(intent = 'next' AND NOT $_excludeActionlessPersonBlockedClause)) "
       'ORDER BY created_at',
@@ -335,7 +332,7 @@ EXISTS (
   /// The Next List rule is:
   ///
   /// ```text
-  /// Next = intent='next' ∧ clarified ∧ done_at IS NULL ∧
+  /// Next = intent='next' ∧ done_at IS NULL ∧
   ///        (has a current Action ∨ no PersonBlocker on the Outcome)
   /// ```
   ///
@@ -365,7 +362,7 @@ EXISTS (
   }
 
   /// Stream of every active Outcome carrying [projectTagId], whatever its
-  /// Intent (`next` or `maybe`): clarified, not done, not trashed.
+  /// Intent (`next` or `maybe`): not done, not trashed.
   ///
   /// Unlike [watchNext] this applies no Next List rule and no context-tag
   /// filter — a Project's page answers "what is in this project", so a
@@ -373,7 +370,7 @@ EXISTS (
   Stream<List<Todo>> watchByProject(String projectTagId) {
     return customSelect(
       'SELECT ${todoProjectionSql('todos')} FROM todos '
-      'WHERE clarified = 1 AND done_at IS NULL '
+      'WHERE done_at IS NULL '
       "AND intent IN ('next', 'maybe') "
       'AND EXISTS (SELECT 1 FROM todo_tags tt '
       '            WHERE tt.todo_id = todos.id AND tt.tag_id = ?) '
@@ -385,7 +382,7 @@ EXISTS (
 
   /// Stream of "Waiting For" todos.
   ///
-  /// Returns clarified, non-done, intent='next' todos that have at least one
+  /// Returns non-done, intent='next' todos that have at least one
   /// person-typed tag. When [tagIds] is non-empty only todos carrying **all**
   /// specified (context/filter) tags are returned (AND semantics).
   ///
@@ -400,8 +397,7 @@ EXISTS (
         'SELECT DISTINCT ${todoProjectionSql('todos')} FROM todos '
         'JOIN todo_tags tt ON tt.todo_id = todos.id '
         'JOIN tags tg ON tg.id = tt.tag_id AND tg.type = ? '
-        'WHERE todos.clarified = 1 '
-        'AND todos.done_at IS NULL '
+        'WHERE todos.done_at IS NULL '
         'AND todos.intent = ? '
         'ORDER BY todos.created_at',
         variables: [
@@ -417,8 +413,7 @@ EXISTS (
       'SELECT DISTINCT ${todoProjectionSql('todos')} FROM todos '
       'JOIN todo_tags tt ON tt.todo_id = todos.id '
       'JOIN tags tg ON tg.id = tt.tag_id AND tg.type = ? '
-      'WHERE todos.clarified = 1 '
-      'AND todos.done_at IS NULL '
+      'WHERE todos.done_at IS NULL '
       'AND todos.intent = ? '
       'AND (SELECT COUNT(DISTINCT tag_id) FROM todo_tags '
       '     WHERE todo_id = todos.id '
@@ -448,8 +443,7 @@ EXISTS (
       'FROM todos '
       'JOIN todo_tags tt ON tt.todo_id = todos.id '
       'JOIN tags tg ON tg.id = tt.tag_id AND tg.type = ? '
-      'WHERE todos.clarified = 1 '
-      '  AND todos.done_at IS NULL '
+      'WHERE todos.done_at IS NULL '
       '  AND todos.intent = ? '
       'ORDER BY tg.name, todos.created_at',
       variables: [
@@ -475,7 +469,7 @@ EXISTS (
 
   /// Stream of maybe-intent todos (intent = 'maybe', done_at IS NULL).
   ///
-  /// Only clarified (processed) todos are returned.  When [tagIds] is
+  /// Every todo is an Outcome, so all are eligible.  When [tagIds] is
   /// non-empty only todos carrying **all** specified tags are returned
   /// (AND semantics).
   Stream<List<Todo>> watchSomedayMaybe({Set<String> tagIds = const {}}) {
@@ -507,7 +501,7 @@ EXISTS (
     var logChanged = false;
     await attachedDatabase.capturing(() async {
       affected = await customUpdate(
-        'UPDATE todos SET done_at = ?, updated_at = ?, clarified = 1, last_clarified_at = ? '
+        'UPDATE todos SET done_at = ?, updated_at = ?, last_clarified_at = ? '
         'WHERE id = ?',
         variables: [
           Variable(tsIso),
@@ -523,7 +517,6 @@ EXISTS (
           // `done_at` is a TEXT column: its stored string travels opaque.
           'done_at': tsIso,
           'updated_at': encodeInstant(ts),
-          'clarified': true,
           'last_clarified_at': encodeInstant(ts),
         });
       }
@@ -544,7 +537,7 @@ EXISTS (
   /// Done means "completed and not deleted." Trashed rows are excluded so
   /// the Done list isn't polluted by tasks the user has explicitly removed,
   /// even if a `done_at` timestamp survived the trash transition (#278).
-  /// Outcomes that should have a due-date notification: due-dated, clarified,
+  /// Outcomes that should have a due-date notification: due-dated,
   /// not done and not trashed. Someday/Maybe Outcomes stay in — only
   /// completion, deletion, trashing and removing the due date cancel it.
   Stream<List<Todo>> watchDueDateNotificationCandidates() {
@@ -552,7 +545,6 @@ EXISTS (
           ..where((t) =>
               t.dueDate.isNotNull() &
               t.doneAt.isNull() &
-              t.clarified.equals(true) &
               t.intent.equals('trash').not()))
         .watch();
   }
@@ -884,8 +876,7 @@ EXISTS (
  WHERE actions.outcome_id = todos.id AND actions.role = 'done')''';
 
   static const _needsReviewWhere = '''
-clarified = 1
-AND done_at IS NULL
+done_at IS NULL
 AND intent = 'next'
 AND (
   ($_latestActionTerminationClause IS NOT NULL
@@ -909,8 +900,7 @@ AND (
   Future<List<Todo>> getNextExcludingPersonTagged() {
     return customSelect(
       'SELECT ${todoProjectionSql('todos')} FROM todos '
-      'WHERE todos.clarified = 1 '
-      'AND todos.done_at IS NULL '
+      'WHERE todos.done_at IS NULL '
       'AND todos.intent = ? '
       'AND NOT EXISTS ('
       '  SELECT 1 FROM todo_tags tt '
@@ -1149,17 +1139,17 @@ AND (
   /// and re-clarification review.
   ///
   /// Each [RoutingKind] in [to] expresses a desired final state for the row's
-  /// clarified / intent / done_at columns; the table below is the forward
+  /// intent / done_at columns; the table below is the forward
   /// matrix that [applyRouting] enforces. `last_clarified_at` is stamped on
   /// every call.
   ///
-  /// | `to`         | clarified | intent  | done_at | current Action           |
-  /// |--------------|-----------|---------|---------|--------------------------|
-  /// | `nextAction` | true      | 'next'  | clear   | set if `actionText`, else set if Actionless and `actionTextIfActionless` |
-  /// | `waitingFor` | true      | 'next'  | clear   | same as `nextAction`     |
-  /// | `maybe`      | true      | 'maybe' | clear   | leave                    |
-  /// | `done`       | true      | leave   | now     | completed                |
-  /// | `trash`      | true      | 'trash' | leave   | leave                    |
+  /// | `to`         | intent  | done_at | current Action           |
+  /// |--------------|---------|---------|--------------------------|
+  /// | `nextAction` | 'next'  | clear   | set if `actionText`, else set if Actionless and `actionTextIfActionless` |
+  /// | `waitingFor` | 'next'  | clear   | same as `nextAction`     |
+  /// | `maybe`      | 'maybe' | clear   | leave                    |
+  /// | `done`       | leave   | now     | completed                |
+  /// | `trash`      | 'trash' | leave   | leave                    |
   ///
   /// Cleanup rule: any non-Done, non-Trash route clears `done_at` if set, so
   /// promoting a previously-completed task back to active state can't leave
@@ -1271,55 +1261,47 @@ AND (
       }
       final captured = switch (to) {
         RoutingKind.nextAction || RoutingKind.waitingFor => <String, Object?>{
-            'clarified': true,
-            'intent': 'next',
+              'intent': 'next',
             'done_at': null,
             'last_clarified_at': encodeInstant(ts),
             'updated_at': encodeInstant(ts),
           },
         RoutingKind.maybe => <String, Object?>{
-            'clarified': true,
-            'intent': 'maybe',
+              'intent': 'maybe',
             'done_at': null,
             'last_clarified_at': encodeInstant(ts),
             'updated_at': encodeInstant(ts),
           },
         RoutingKind.done => <String, Object?>{
-            'clarified': true,
-            'done_at': tsIso,
+              'done_at': tsIso,
             'last_clarified_at': encodeInstant(ts),
             'updated_at': encodeInstant(ts),
           },
         RoutingKind.trash => <String, Object?>{
-            'clarified': true,
-            'intent': 'trash',
+              'intent': 'trash',
             'last_clarified_at': encodeInstant(ts),
             'updated_at': encodeInstant(ts),
           },
       };
       final companion = switch (to) {
         RoutingKind.nextAction || RoutingKind.waitingFor => TodosCompanion(
-            clarified: const Value(true),
             intent: const Value('next'),
             doneAt: const Value(null),
             lastClarifiedAt: Value(ts),
             updatedAt: Value(ts),
           ),
         RoutingKind.maybe => TodosCompanion(
-            clarified: const Value(true),
             intent: const Value('maybe'),
             doneAt: const Value(null),
             lastClarifiedAt: Value(ts),
             updatedAt: Value(ts),
           ),
         RoutingKind.done => TodosCompanion(
-            clarified: const Value(true),
             doneAt: Value(tsIso),
             lastClarifiedAt: Value(ts),
             updatedAt: Value(ts),
           ),
         RoutingKind.trash => TodosCompanion(
-            clarified: const Value(true),
             intent: const Value('trash'),
             lastClarifiedAt: Value(ts),
             updatedAt: Value(ts),
@@ -1532,7 +1514,7 @@ AND (
   ///
   /// This is the create half of clarifying a Capture (ADR-0006): promoting a
   /// Capture produces a *new* Outcome rather than flipping the raw fragment in
-  /// place. The row lands clarified (`clarified = true`) with `last_clarified_at`
+  /// place. The row lands clarified with `last_clarified_at`
   /// stamped — Outcome creation is a clarifying micro-act per CONTEXT.md — and a
   /// default `intent = 'next'`; the caller then refines intent / Completion via
   /// [applyRouting]. Person and non-person tag associations are attached
@@ -1568,7 +1550,6 @@ AND (
         userId: Value(userId),
         createdAt: Value(ts),
         updatedAt: Value(ts),
-        clarified: const Value(true),
         lastClarifiedAt: Value(ts),
       ));
       // Creation asserts the whole row so a peer that has never seen this

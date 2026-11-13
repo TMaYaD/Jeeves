@@ -34,7 +34,6 @@ void main() {
             id: const Value('report'),
             title: const Value('Write the report'),
             userId: const Value('local'),
-            clarified: const Value(true),
             intent: const Value('next'),
             energyLevel: const Value('high'),
             timeEstimate: const Value(125),

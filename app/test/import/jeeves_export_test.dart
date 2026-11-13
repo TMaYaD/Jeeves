@@ -64,7 +64,6 @@ Future<void> _seed(GtdDatabase db, {String userId = _userId}) async {
       dueDate: Value(_utc(30, 9, 0, 0)),
       createdAt: Value(_utc(28, 5, 12, 3)),
       updatedAt: Value(_utc(28, 6, 0, 0)),
-      clarified: const Value(true),
       intent: const Value('next'),
       timeEstimate: const Value(30),
       energyLevel: const Value('medium'),
@@ -77,7 +76,6 @@ Future<void> _seed(GtdDatabase db, {String userId = _userId}) async {
       notes: const Value.absent(),
       createdAt: Value(_utc(20, 8, 0, 0)),
       doneAt: const Value('2026-07-27T10:00:00.000Z'),
-      clarified: const Value(true),
       intent: const Value('maybe'),
       userId: Value(userId)));
 
@@ -236,7 +234,7 @@ void main() {
           .cast<Map>()
           .firstWhere((r) => r['id'] == 'todo-next');
       expect(todoNext['due_date'], '2026-07-30T09:00:00.000Z');
-      expect(todoNext['clarified'], true);
+      expect(todoNext.containsKey('clarified'), isFalse);
       // A TEXT timestamp passes through untouched.
       final todoDone = (collections['todos'] as List)
           .cast<Map>()

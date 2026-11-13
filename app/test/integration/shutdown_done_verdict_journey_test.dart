@@ -34,7 +34,6 @@ Future<void> _insertOutcome(GtdDatabase db, String id) async {
   await db.into(db.todos).insert(TodosCompanion(
         id: Value(id),
         title: Value('Outcome $id'),
-        clarified: const Value(true),
         intent: const Value('next'),
         userId: const Value(_userId),
         createdAt: Value(now),

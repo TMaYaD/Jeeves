@@ -56,7 +56,6 @@ Todo _todo() => Todo(
       id: 't',
       title: 'A next action',
       createdAt: DateTime(2026, 1, 1),
-      clarified: true,
       intent: 'next',
       userId: 'u',
     );

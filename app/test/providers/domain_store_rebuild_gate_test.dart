@@ -142,7 +142,7 @@ void main() {
     return container;
   }
 
-  test('a v2 store re-projects once on the upgrade', () async {
+  test('a v2 store re-projects once on the upgrade to v6', () async {
     await seedStoreAt(2);
     final container = containerOverDirectory();
 
@@ -157,7 +157,7 @@ void main() {
     final details = await db.opened;
     expect(details.hadUpgrade, isTrue);
     expect(details.versionBefore, 2);
-    expect(details.versionNow, 5);
+    expect(details.versionNow, 6);
   });
 
   test('`opened` completes on a launch that migrates nothing', () async {

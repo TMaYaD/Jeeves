@@ -50,7 +50,6 @@ Todo _todo({
     id: id,
     title: title,
     intent: 'next',
-    clarified: true,
     createdAt: now,
     updatedAt: now,
     userId: 'local',
@@ -342,7 +341,6 @@ void main() {
             id: const Value('t12'),
             title: const Value('Task 12'),
             createdAt: Value(DateTime.now()),
-            clarified: const Value(true),
             userId: const Value('local'),
           )));
       await _pumpStep(tester, db, _manyTodos(20));

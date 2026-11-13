@@ -34,7 +34,6 @@ Future<Todo> _seedOutcome(
         id: Value(id),
         title: Value(title),
         notes: Value(notes),
-        clarified: const Value(true),
         userId: const Value(_userId),
         createdAt: Value(now),
         updatedAt: Value(now),

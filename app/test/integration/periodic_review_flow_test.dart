@@ -165,7 +165,6 @@ void main() {
       await db.into(db.todos).insert(TodosCompanion(
             id: const Value('wf1'),
             title: const Value('Delegated task'),
-            clarified: const Value(true),
             intent: const Value('next'),
             userId: const Value('local'),
             createdAt: Value(now),
@@ -183,7 +182,6 @@ void main() {
       await db.into(db.todos).insert(TodosCompanion(
             id: const Value('na1'),
             title: const Value('Plain next'),
-            clarified: const Value(true),
             intent: const Value('next'),
             userId: const Value('local'),
             createdAt: Value(now.add(const Duration(seconds: 1))),
@@ -195,7 +193,6 @@ void main() {
       await db.into(db.todos).insert(TodosCompanion(
             id: const Value('na2'),
             title: const Value('Project task'),
-            clarified: const Value(true),
             intent: const Value('next'),
             userId: const Value('local'),
             createdAt: Value(now.add(const Duration(seconds: 2))),

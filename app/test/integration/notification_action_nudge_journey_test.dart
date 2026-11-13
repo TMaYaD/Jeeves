@@ -218,7 +218,6 @@ void main() {
           id: const Value('maybe'),
           title: const Value('Someday thing'),
           userId: const Value('local'),
-          clarified: const Value(true),
           createdAt: Value(nowUtc),
           updatedAt: Value(nowUtc),
         ));
