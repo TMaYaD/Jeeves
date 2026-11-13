@@ -165,7 +165,7 @@ void main() {
     // drift runs `beforeOpen` on *every* open, so the future always resolves. A
     // completer fed only by `onUpgrade` would hang here for ever, and the app
     // would never get past the gate.
-    await seedStoreAt(5);
+    await seedStoreAt(6);
     final container = containerOverDirectory();
 
     final projected = await container.read(domainStoreRebuildProvider.future);
