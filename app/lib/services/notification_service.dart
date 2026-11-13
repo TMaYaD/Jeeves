@@ -502,6 +502,15 @@ bool _isRitualNotification(int id, String? payload) =>
     _kLegacyRitualNotificationIds.contains(id) ||
     (payload?.startsWith(_kNudgePayloadPrefix) ?? false);
 
+/// Keep-alive alarms repeat daily past the planning horizon, so they carry
+/// the ids from here up, one per Ritual.
+const kRitualKeepAliveIdBase = 500;
+
+/// Whether [id] is a Ritual's repeating keep-alive alarm.
+bool isRitualKeepAliveNotificationId(int id) =>
+    id >= kRitualKeepAliveIdBase &&
+    id < kRitualKeepAliveIdBase + RitualId.values.length;
+
 /// The id of [ritual]'s snooze alarm. One per Ritual: snoozing again moves it.
 int ritualSnoozeNotificationId(RitualId ritual) =>
     _ritualConfigs[ritual]!.snoozeId;

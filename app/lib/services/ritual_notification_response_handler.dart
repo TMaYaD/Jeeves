@@ -100,7 +100,10 @@ Future<void> handleRitualNotificationResponse(
     if (other != null &&
         other.ritual == ritual &&
         otherEdge != null &&
-        otherEdge.isAtSameMomentAs(skippedEdge)) {
+        otherEdge.isAtSameMomentAs(skippedEdge) &&
+        // A keep-alive repeats daily and its payload edge is only the one it
+        // was armed under; cancelling it would silence every later day.
+        !isRitualKeepAliveNotificationId(pending.id)) {
       await service.cancelReminder(pending.id);
     }
   }

@@ -48,7 +48,6 @@ const _kWeeklyReviewCadence = Duration(days: 7);
 // one slot per (Ritual, calendar day), the Ritual's snooze id, and a keep-alive.
 const _kDayIdBase = 100;
 const _kDayIdSlotsPerRitual = 100;
-const _kKeepAliveIdBase = 500;
 
 /// Everything the projection reads, frozen at [now].
 class NudgeNotificationFacts {
@@ -269,7 +268,7 @@ List<PlannedNudgeNotification> planNudgeNotifications(
     final entry = entryAt(
       ritual,
       instant,
-      id: _kKeepAliveIdBase + RitualId.values.indexOf(ritual),
+      id: kRitualKeepAliveIdBase + RitualId.values.indexOf(ritual),
       isKeepAlive: true,
     );
     if (entry != null) planned.add(entry);
@@ -323,8 +322,20 @@ class NudgeNotificationScheduler {
         p.id: p.payload,
     };
     final plannedIds = {for (final p in plan) p.id};
-    for (final id in pendingPayloadById.keys) {
-      if (!plannedIds.contains(id)) await _notifications.cancelReminder(id);
+    for (final MapEntry(key: id, value: payload) in pendingPayloadById.entries) {
+      if (plannedIds.contains(id)) continue;
+      // The plan only lists future instants. A one-off whose instant has just
+      // passed but is still pending was not delivered yet (the OS may deliver
+      // an inexact alarm late); it stays while its Ritual holds the surface.
+      final fireAt = parseRitualNotificationPayload(payload)?.fireAt;
+      final ritual = parseRitualNotificationPayload(payload)?.ritual;
+      final dueButUndelivered = fireAt != null &&
+          !fireAt.isAfter(facts.now) &&
+          ritual != null &&
+          ritual == head &&
+          !isRitualKeepAliveNotificationId(id);
+      if (dueButUndelivered) continue;
+      await _notifications.cancelReminder(id);
     }
     for (final entry in plan) {
       // Same id and same payload (which records the fire instant): unchanged.

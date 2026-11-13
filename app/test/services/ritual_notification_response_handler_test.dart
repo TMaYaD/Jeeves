@@ -83,6 +83,22 @@ void main() {
     expect(service.pending.containsKey(301), isFalse);
   });
 
+  test('Skip leaves the repeating keep-alive armed', () async {
+    final edge = DateTime(2026, 11, 10, 7);
+    final keepAliveId = kRitualKeepAliveIdBase +
+        RitualId.values.indexOf(RitualId.weeklyReview);
+    await service.scheduleRitualKeepAlive(
+      id: keepAliveId,
+      ritual: RitualId.weeklyReview,
+      firstFireAt: DateTime(2026, 11, 18, 9),
+      payload: payloadFor(RitualId.weeklyReview, edge),
+    );
+
+    await tap(kPeriodicReviewActionSkip, payloadFor(RitualId.weeklyReview, edge));
+
+    expect(service.pending.containsKey(keepAliveId), isTrue);
+  });
+
   test('the Weekly Review skip action reads "Skip this week"', () {
     expect(ritualSkipActionLabel(RitualId.weeklyReview), 'Skip this week');
     expect(ritualSkipActionLabel(RitualId.dailyPlanning), 'Skip today');

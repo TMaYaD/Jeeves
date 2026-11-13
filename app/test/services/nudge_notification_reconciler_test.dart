@@ -133,6 +133,24 @@ void main() {
     expect(service.delivered.map((d) => d.ritual), [RitualId.dailyPlanning]);
   });
 
+  test('keeps a due but undelivered alarm of the Ritual holding the surface',
+      () async {
+    // 18:00:30: the Evening Shutdown alarm for 18:00 is still pending because
+    // the OS delivers inexact alarms late; it must not be cancelled meanwhile.
+    final shutdownAlarm = ritualNotificationPayload(RitualId.eveningShutdown,
+        edge: _at(0, 18), snoozeMinutes: 60, fireAt: _at(0, 18));
+    await _seed(service, 260, RitualId.eveningShutdown, shutdownAlarm);
+    // The same stale shape for a Ritual that does not hold the surface goes.
+    await _seed(service, 261, RitualId.dailyPlanning,
+        ritualNotificationPayload(RitualId.dailyPlanning,
+            edge: _at(0, 8), snoozeMinutes: 60, fireAt: _at(0, 8)));
+
+    await scheduler.reconcile(_facts(now: _at(0, 18).add(const Duration(seconds: 30))));
+
+    expect(service.pending.containsKey(260), isTrue);
+    expect(service.pending.containsKey(261), isFalse);
+  });
+
   test('cancels an alarm of a Ritual that no longer notifies', () async {
     await scheduler.reconcile(_facts());
     await _seed(service, 450, RitualId.weeklyReview,
