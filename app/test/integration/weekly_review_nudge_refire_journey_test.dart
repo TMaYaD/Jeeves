@@ -17,6 +17,7 @@ import 'package:jeeves/providers/periodic_review_provider.dart';
 import 'package:jeeves/providers/synced_preferences_provider.dart';
 import 'package:jeeves/router.dart';
 import 'package:jeeves/screens/periodic_review/periodic_review_screen.dart';
+import 'package:jeeves/screens/periodic_review/steps/waiting_for_step.dart';
 import 'package:jeeves/services/notification_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -45,7 +46,10 @@ void main() {
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
     db = GtdDatabase(NativeDatabase.memory());
-    startedAt = DateTime.now();
+    // Noon of the real local day: the journeys advance hours and days, so a
+    // start near midnight would cross a day boundary the assertions don't expect.
+    final today = DateTime.now();
+    startedAt = DateTime(today.year, today.month, today.day, 12);
     advancingClock = null;
     c = ProviderContainer(overrides: [
       databaseProvider.overrideWithValue(db),
@@ -233,9 +237,8 @@ void main() {
       expect(find.byType(PeriodicReviewScreen), findsOneWidget);
       expect(c.read(periodicReviewProvider).currentStep, stepLeftAt);
       expect(banner, findsNothing);
-      expect(find.byKey(const Key('periodic_review_next_step')),
-          findsOneWidget,
-          reason: 'the reopened review renders the step it left');
+      expect(find.byType(WaitingForStep), findsOneWidget,
+          reason: 'the reopened review renders the Waiting For body');
 
       // A second unfinished exit brings the Banner back too, even after the
       // first one was swiped away.
