@@ -219,7 +219,16 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
 
       // A Bypassed signal: Outcomes the user skipped in this Planning and did
       // not plan after all.
-      final skipped = skippedTaskIds.difference(taskIds.toSet());
+      final skippedCandidates = skippedTaskIds.difference(taskIds.toSet());
+      // An Outcome deleted since it was skipped leaves neither row nor op.
+      final stillPresent = skippedCandidates.isEmpty
+          ? <String>{}
+          : (await (select(todos)
+                    ..where((t) => t.id.isIn(skippedCandidates)))
+                  .get())
+              .map((t) => t.id)
+              .toSet();
+      final skipped = skippedCandidates.intersection(stillPresent);
       final recordedAt = DateTime.parse(ts).toUtc();
       for (final taskId in skipped) {
         final bypassId = focusSessionPlanningBypassIdFor(newId, taskId);
@@ -748,6 +757,15 @@ FROM (
     ) AS floor_at
   FROM todos t
   WHERE t.intent = 'next' AND t.clarified = 1 AND t.done_at IS NULL
+    -- Next's own membership rule: the actionless PersonBlocked quadrant is
+    -- Waiting For, which Bypassed never claims.
+    AND (
+      EXISTS (SELECT 1 FROM actions ca
+              WHERE ca.outcome_id = t.id AND ca.role = 'current')
+      OR NOT EXISTS (
+        SELECT 1 FROM todo_tags tt JOIN tags tg ON tg.id = tt.tag_id
+        WHERE tt.todo_id = t.id AND tg.type = 'person')
+    )
 ) f
 JOIN (
   SELECT fst.task_id AS task_id, fs.id AS session_id, fs.started_at AS passed_at
@@ -773,6 +791,8 @@ HAVING COUNT(DISTINCT p.session_id) >= ?''';
         todos,
         attachedDatabase.actions,
         attachedDatabase.timeLogs,
+        attachedDatabase.todoTags,
+        attachedDatabase.tags,
         focusSessions,
         focusSessionTasks,
         focusSessionPlanningBypasses,

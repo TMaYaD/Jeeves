@@ -10,6 +10,7 @@ import 'action_dao.dart' show ActionDao;
 import 'capture_dao.dart' show captureOutcomeIdFor;
 import 'focus_session_dao.dart'
     show
+        FocusSessionDao,
         focusSessionPlanningBypassIdFor,
         focusSessionRescheduleIdFor;
 import 'tag_dao.dart' show todoTagIdFor;
@@ -654,11 +655,13 @@ EXISTS (
     if (previousDueDate == null || !newDueDate.isAfter(previousDueDate)) return;
     final db = attachedDatabase;
     final planRows = await db.customSelect(
+      // The globally active session is chosen first (same tie-break as every
+      // other reader), then Plan membership is tested against that one only.
       'SELECT fs.id AS session_id, fs.user_id AS user_id '
-      'FROM focus_sessions fs '
-      'JOIN focus_session_tasks fst ON fst.focus_session_id = fs.id '
-      'WHERE fs.ended_at IS NULL AND fst.task_id = ? '
-      'ORDER BY fs.started_at DESC, fs.id LIMIT 1',
+      'FROM (SELECT id, user_id FROM focus_sessions WHERE ended_at IS NULL '
+      '      ${FocusSessionDao.openSessionWinnerFirstSql} LIMIT 1) fs '
+      'WHERE EXISTS (SELECT 1 FROM focus_session_tasks fst '
+      '              WHERE fst.focus_session_id = fs.id AND fst.task_id = ?)',
       variables: [Variable<String>(todoId)],
       readsFrom: {db.focusSessions, db.focusSessionTasks},
     ).get();

@@ -59,10 +59,26 @@ class BypassedStep extends ConsumerWidget {
     final actions = ref.read(bypassActionsProvider);
 
     final todoId = todo.id;
-    VoidCallback? decide(Future<void> Function(String id) decision) =>
-        decisionPending
-            ? null
-            : () => unawaited(notifier.decideBypassed(todoId, decision));
+    Future<void> run(Future<bool> Function(String id) decision) async {
+      final messenger = ScaffoldMessenger.of(context);
+      try {
+        await notifier.decideBypassed(todoId, decision);
+      } catch (_) {
+        // The Outcome stays undecided, so the same buttons retry it.
+        messenger
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(
+            content: const Text("Couldn't save that decision. Try again."),
+            action: SnackBarAction(
+              label: 'Retry',
+              onPressed: () => unawaited(run(decision)),
+            ),
+          ));
+      }
+    }
+
+    VoidCallback? decide(Future<bool> Function(String id) decision) =>
+        decisionPending ? null : () => unawaited(run(decision));
 
     return OutcomeReviewCard(
       key: ValueKey(todo.id),

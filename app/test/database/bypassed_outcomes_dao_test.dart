@@ -30,7 +30,8 @@ void main() {
   });
   tearDown(() async => db.close());
 
-  Future<void> outcome(String id, {DateTime? dueDate}) async {
+  Future<void> outcome(String id,
+      {DateTime? dueDate, bool withAction = true}) async {
     await db.todoDao.insertOutcome(
       id: id,
       title: 'Outcome $id',
@@ -38,8 +39,38 @@ void main() {
       dueDate: dueDate,
       now: _ts,
     );
-    await seedCurrentAction(db,
-        outcomeId: id, text: 'work on $id', userId: _userId);
+    if (withAction) {
+      await seedCurrentAction(db,
+          outcomeId: id, text: 'work on $id', userId: _userId);
+    }
+  }
+
+  Future<void> personBlock(String id) async {
+    await db.into(db.tags).insert(TagsCompanion(
+          id: Value('ptag-$id'),
+          name: Value('Person $id'),
+          type: const Value('person'),
+          userId: const Value(_userId),
+        ));
+    await db.into(db.todoTags).insert(TodoTagsCompanion(
+          id: Value('tt-$id'),
+          todoId: Value(id),
+          tagId: Value('ptag-$id'),
+          userId: const Value(_userId),
+        ));
+  }
+
+  Future<void> passOver(Set<String> ids) async {
+    for (var i = 0; i < 3; i++) {
+      final sessionId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: [],
+        skippedTaskIds: ids,
+        now: _ts.add(Duration(hours: 2 * i)),
+      );
+      await db.focusSessionDao.closeSession(
+          sessionId: sessionId, now: _ts.add(Duration(hours: 2 * i + 1)));
+    }
   }
 
   Future<List<FocusSessionPlanningBypass>> bypasses() =>
@@ -61,6 +92,26 @@ void main() {
       expect(rows.map((r) => (r.taskId, r.focusSessionId)), [
         ('skip', sessionId),
       ]);
+    });
+
+    test('a skipped Outcome deleted before Start Day leaves no row and no op',
+        () async {
+      await outcome('gone');
+      await outcome('kept');
+      await db.todoDao.deleteOutcome('gone');
+      capture.clear();
+      final sessionId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: [],
+        skippedTaskIds: {'gone', 'kept'},
+        now: _ts,
+      );
+      expect((await bypasses()).map((r) => r.taskId), ['kept']);
+      expect(
+          capture
+              .forCollection(focusSessionPlanningBypassesCollection)
+              .map((o) => o.entityId),
+          [focusSessionPlanningBypassIdFor(sessionId, 'kept')]);
     });
 
     test('rows are captured under their pair-derived ids with exactly the '
@@ -127,6 +178,27 @@ void main() {
       expect(await reschedules(), isEmpty);
     });
 
+    test('with two open sessions, only the active winner\'s Plan counts',
+        () async {
+      await outcome('o', dueDate: DateTime.utc(2030, 2, 1));
+      // Older session carries the Outcome; the newer (winner) does not.
+      await db.focusSessionDao.openSession(
+          userId: _userId, taskIds: ['o'], now: _ts);
+      await db.focusSessionDao.openSession(
+          userId: _userId, taskIds: [], now: _ts.add(const Duration(hours: 1)));
+      await db.todoDao.rescheduleTask('o', DateTime.utc(2030, 3, 1));
+      expect(await reschedules(), isEmpty, reason: 'loser-only membership');
+
+      // The winner carries 'p'; the loser does not.
+      await outcome('p', dueDate: DateTime.utc(2030, 2, 1));
+      final newest = await db.focusSessionDao.openSession(
+          userId: _userId,
+          taskIds: ['p'],
+          now: _ts.add(const Duration(hours: 2)));
+      await db.todoDao.rescheduleTask('p', DateTime.utc(2030, 4, 1));
+      expect((await reschedules()).single.focusSessionId, newest);
+    });
+
     test('with no session open, or off the Plan, it does not count', () async {
       await outcome('o', dueDate: DateTime.utc(2030, 2, 1));
       await db.todoDao.rescheduleTask('o', DateTime.utc(2030, 3, 1));
@@ -140,14 +212,42 @@ void main() {
   });
 
   group('getBypassedOutcomes', () {
+    test('a pure Waiting For Outcome is excluded; a person-blocked one with a '
+        'current Action is kept; membership changes live', () async {
+      await outcome('waiting', withAction: false);
+      await personBlock('waiting');
+      await outcome('blockedWithAction');
+      await personBlock('blockedWithAction');
+      await outcome('plain');
+      await passOver({'waiting', 'blockedWithAction', 'plain'});
+
+      Future<Set<String>> ids() async => (await db.focusSessionDao
+              .getBypassedOutcomes(3))
+          .map((b) => b.outcome.id)
+          .toSet();
+      expect(await ids(), {'blockedWithAction', 'plain'});
+
+      final seen = <Set<String>>[];
+      final sub = db.focusSessionDao.watchBypassedOutcomes(3).listen(
+          (rows) => seen.add(rows.map((b) => b.outcome.id).toSet()));
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await seedCurrentAction(db,
+          outcomeId: 'waiting', text: 'now actionable', userId: _userId);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await sub.cancel();
+      expect(seen.last, {'waiting', 'blockedWithAction', 'plain'});
+      expect(seen.first, {'blockedWithAction', 'plain'});
+    });
+
     test('Someday, Done and Trash Outcomes are never candidates', () async {
       await outcome('maybe');
       await outcome('done');
+      await outcome('trash');
       for (var i = 0; i < 3; i++) {
         final id = await db.focusSessionDao.openSession(
           userId: _userId,
           taskIds: [],
-          skippedTaskIds: {'maybe', 'done'},
+          skippedTaskIds: {'maybe', 'done', 'trash'},
           now: _ts.add(Duration(hours: 2 * i)),
         );
         await db.focusSessionDao
@@ -155,6 +255,7 @@ void main() {
       }
       await db.todoDao.setIntent('maybe', Intent.maybe);
       await db.todoDao.markDone('done');
+      await db.todoDao.setIntent('trash', Intent.trash);
       expect(await db.focusSessionDao.getBypassedOutcomes(3), isEmpty);
     });
 

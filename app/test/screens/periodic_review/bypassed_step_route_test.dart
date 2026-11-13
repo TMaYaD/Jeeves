@@ -10,6 +10,7 @@ import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/providers/bypassed_outcomes_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/periodic_review_provider.dart';
 import 'package:jeeves/screens/periodic_review/periodic_review_screen.dart';
@@ -18,6 +19,22 @@ import '../../helpers/settle.dart';
 import '../../test_helpers.dart';
 
 const _userId = 'local';
+
+/// Real actions whose first Trash write fails, as a full disk would.
+class _FlakyTrashActions extends BypassActions {
+  _FlakyTrashActions(super.ref);
+  bool failNext = true;
+
+  @override
+  Future<bool> trash(String outcomeId) {
+    if (failNext) {
+      failNext = false;
+      throw StateError('disk full');
+    }
+    return super.trash(outcomeId);
+  }
+}
+
 final _start = DateTime.utc(2030, 1, 10, 9);
 
 Future<void> _stage(GtdDatabase db, List<String> ids) async {
@@ -47,11 +64,16 @@ void main() {
   late ProviderContainer container;
 
   Future<void> mount(WidgetTester tester, List<String> bypassed,
-      {int? budgetMinutes}) async {
+      {int? budgetMinutes, bool flakyTrash = false}) async {
     db = GtdDatabase(NativeDatabase.memory());
     await tester.runAsync(() => _stage(db, bypassed));
     container = ProviderContainer(
-      overrides: [databaseProvider.overrideWithValue(db)],
+      overrides: [
+        databaseProvider.overrideWithValue(db),
+        if (flakyTrash)
+          bypassActionsProvider
+              .overrideWith((ref) => _FlakyTrashActions(ref)),
+      ],
     );
     final router = GoRouter(
       initialLocation: '/periodic-review',
@@ -224,6 +246,30 @@ void main() {
     final log = await tester.runAsync(
         () => db.focusSessionDao.watchBypassDecisions().first);
     expect(log, hasLength(1), reason: 'no duplicate decision is recorded');
+    await close(tester);
+  });
+
+  testWidgets(
+      'a failed decision write explains itself, keeps the Outcome undecided '
+      'and Back-only, and a retry logs exactly once', (tester) async {
+    await mount(tester, ['a', 'b'], flakyTrash: true);
+    final first = state().bypassedNextUndecided!.id;
+
+    await tapKey(tester, 'bypassed_trash');
+    expect(find.text("Couldn't save that decision. Try again."), findsOneWidget);
+    expect(state().bypassedDecidedIds, isEmpty);
+    expect(state().bypassedNextUndecided!.id, first);
+    expect(find.text('Next step'), findsNothing);
+    expect(find.text('Back'), findsOneWidget);
+    var log = await tester.runAsync(
+        () => db.focusSessionDao.watchBypassDecisions().first);
+    expect(log, isEmpty);
+
+    await tapKey(tester, 'bypassed_trash');
+    expect(state().bypassedDecidedIds, {first});
+    log = await tester.runAsync(
+        () => db.focusSessionDao.watchBypassDecisions().first);
+    expect(log, hasLength(1));
     await close(tester);
   });
 

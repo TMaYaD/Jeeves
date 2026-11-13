@@ -119,9 +119,10 @@ void main() {
       final other = first == 'a' ? 'b' : 'a';
       final release = Completer<void>();
       var writes = 0;
-      Future<void> held(String id) async {
+      Future<bool> held(String id) async {
         writes++;
         await release.future;
+        return true;
       }
 
       final firstTap = review().decideBypassed(first, held);
@@ -148,6 +149,38 @@ void main() {
       );
       expect(state().bypassedDecidedIds, isEmpty);
       expect(state().bypassedDecisionPending, isFalse);
+    });
+
+    test('a retry after a failed write logs exactly one decision', () async {
+      await review().loadAllSnapshots();
+      await toBypassedStep();
+      final actions = container.read(bypassActionsProvider);
+      final first = state().bypassedNextUndecided!.id;
+      await expectLater(
+        review().decideBypassed(first, (_) async => throw StateError('disk')),
+        throwsStateError,
+      );
+      await review().decideBypassed(first, actions.trash);
+      expect(state().bypassedDecidedIds, {first});
+      final log = await db.focusSessionDao.watchBypassDecisions().first;
+      expect(log.where((d) => d.taskId == first), hasLength(1));
+    });
+
+    test('an Outcome deleted after the snapshot is dropped, not credited as '
+        'decided, and not logged', () async {
+      await review().loadAllSnapshots();
+      await toBypassedStep();
+      final actions = container.read(bypassActionsProvider);
+      final first = state().bypassedNextUndecided!.id;
+      final other = first == 'a' ? 'b' : 'a';
+      await db.todoDao.deleteOutcome(first);
+
+      await review().decideBypassed(first, actions.trash);
+
+      expect(state().bypassedDecidedIds, isEmpty);
+      expect(state().bypassedNav.items!.map((t) => t.id), [other]);
+      expect(state().bypassedNextUndecided!.id, other);
+      expect(await db.focusSessionDao.watchBypassDecisions().first, isEmpty);
     });
 
     test('Back never offers a decided Outcome again, in step or on '

@@ -81,13 +81,16 @@ class BypassActions {
 
   final Ref _ref;
 
-  Future<void> moveToSomedayMaybe(String outcomeId) =>
+  /// Both decisions return whether the routing landed. `false` means the
+  /// Outcome no longer exists, so nothing was routed or logged and the caller
+  /// must not credit a decision.
+  Future<bool> moveToSomedayMaybe(String outcomeId) =>
       _decide(outcomeId, BypassDecision.maybe, RoutingKind.maybe);
 
-  Future<void> trash(String outcomeId) =>
+  Future<bool> trash(String outcomeId) =>
       _decide(outcomeId, BypassDecision.trash, RoutingKind.trash);
 
-  Future<void> _decide(
+  Future<bool> _decide(
     String outcomeId,
     BypassDecision decision,
     RoutingKind routing,
@@ -95,6 +98,7 @@ class BypassActions {
     final db = _ref.read(databaseProvider);
     final userId = _ref.read(currentUserIdProvider);
     final decidedAt = DateTime.now().toUtc();
+    var landed = false;
     await db.capturing(() async {
       final routed = await _ref
           .read(clarificationServiceProvider)
@@ -122,7 +126,9 @@ class BypassActions {
         },
       );
       db.notifyFocusSessionsViewWrite();
+      landed = true;
     });
     _ref.invalidate(bypassedOutcomesProvider);
+    return landed;
   }
 }

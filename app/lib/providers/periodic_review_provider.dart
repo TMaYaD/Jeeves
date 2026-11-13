@@ -520,9 +520,13 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
   /// decision is never decided again. Only a successful write marks it
   /// decided, keyed by id, so navigation during the write cannot misattribute
   /// it.
+  ///
+  /// [decision] reports whether the write landed. When it did not (the Outcome
+  /// was deleted after the snapshot) the Outcome is removed from the step
+  /// without being credited as decided.
   Future<void> decideBypassed(
     String outcomeId,
-    Future<void> Function(String outcomeId) decision,
+    Future<bool> Function(String outcomeId) decision,
   ) async {
     if (state.bypassedDecisionPending ||
         state.bypassedDecidedIds.contains(outcomeId)) {
@@ -530,10 +534,18 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
     }
     state = state.copyWith(bypassedDecisionPending: true);
     try {
-      await decision(outcomeId);
-      state = state.copyWith(
-        bypassedDecidedIds: {...state.bypassedDecidedIds, outcomeId},
-      );
+      final landed = await decision(outcomeId);
+      if (landed) {
+        state = state.copyWith(
+          bypassedDecidedIds: {...state.bypassedDecidedIds, outcomeId},
+        );
+      } else {
+        state = state.copyWith(
+          bypassedNav: state.bypassedNav.withItems(
+            state.bypassedNav.items!.where((t) => t.id != outcomeId).toList(),
+          ),
+        );
+      }
     } finally {
       state = state.copyWith(bypassedDecisionPending: false);
     }
