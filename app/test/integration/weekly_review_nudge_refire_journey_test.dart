@@ -211,7 +211,11 @@ void main() {
       // Leave without Done.
       appRouter.go('/inbox');
       await _flush(tester);
+      // The old route is removed (and the screen disposed) a frame after its
+      // exit transition ends.
       await tester.pump(const Duration(milliseconds: 600));
+      await tester.pump(const Duration(milliseconds: 100));
+      await _flush(tester);
       expect(banner, findsOneWidget);
       expect(
           find.textContaining(RegExp(
