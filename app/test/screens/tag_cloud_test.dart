@@ -9,6 +9,7 @@ import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/screens/common/tag_management_sheet.dart';
 import 'package:jeeves/widgets/tag_text.dart';
 
+import 'package:jeeves/providers/system_trust_provider.dart';
 import 'package:jeeves/providers/auth_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_settings_provider.dart';
