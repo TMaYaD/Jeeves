@@ -50,7 +50,7 @@ flutter run -d macos
 ```
 lib/
 ├── main.dart
-├── models/           # Freezed data models (Todo, List, Reminder, Location, RecurrenceRule)
+├── models/           # Hand-written enums and value classes (no codegen)
 ├── database/         # Drift schema + DAOs, and the domain store'''s open path
 ├── sync/             # the op-log spine: capture seam, client, reducer, projector
 ├── providers/        # Riverpod providers
