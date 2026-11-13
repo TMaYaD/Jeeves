@@ -110,6 +110,10 @@ void main() {
         find.byKey(const Key('clarify_mode_tile')),
         200,
       );
+      // scrollUntilVisible stops once the tile is built, which can still be
+      // below the fold on the 800x600 surface; bring it fully on screen.
+      await tester.ensureVisible(find.byKey(const Key('clarify_mode_tile')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('clarify_mode_tile')));
       await tester.pumpAndSettle();
 
@@ -135,6 +139,10 @@ void main() {
         find.byKey(const Key('clarify_mode_tile')),
         200,
       );
+      // scrollUntilVisible stops once the tile is built, which can still be
+      // below the fold on the 800x600 surface; bring it fully on screen.
+      await tester.ensureVisible(find.byKey(const Key('clarify_mode_tile')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('clarify_mode_tile')));
       await tester.pumpAndSettle();
 
@@ -165,6 +173,10 @@ void main() {
         find.byKey(const Key('clarify_mode_tile')),
         200,
       );
+      // scrollUntilVisible stops once the tile is built, which can still be
+      // below the fold on the 800x600 surface; bring it fully on screen.
+      await tester.ensureVisible(find.byKey(const Key('clarify_mode_tile')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('clarify_mode_tile')));
       await tester.pumpAndSettle();
 
