@@ -139,7 +139,7 @@ void main() {
 
       // The Inbox is now at 50: leave the sequence; Inbox too full is gone and
       // the Weekly Review takes the slot.
-      await tester.tap(find.byKey(const Key('app_title_bar_leading')));
+      await tester.tap(find.byKey(const Key('app_title_bar_leading')).last);
       await _flush(tester);
       expect(find.byType(InboxClarifyScreen), findsNothing);
       expect(tooFull, findsNothing);
@@ -189,7 +189,7 @@ void main() {
 
       // Back before any verdict.
       await openSequence();
-      await tester.tap(find.byKey(const Key('app_title_bar_leading')));
+      await tester.tap(find.byKey(const Key('app_title_bar_leading')).last);
       await _flush(tester);
       expect(find.byType(InboxClarifyScreen), findsNothing);
       expect(appRouter.routeInformationProvider.value.uri.path, '/next');

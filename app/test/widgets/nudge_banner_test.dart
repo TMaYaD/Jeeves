@@ -110,6 +110,7 @@ void main() {
       RitualId? dismissed;
       await tester.pumpWidget(ProviderScope(
         overrides: [
+          inboxTooFullProvider.overrideWith((ref) => false),
           nudgeQueueProvider
               .overrideWith((ref) => const [RitualId.eveningShutdown]),
           nudgeBannerEnabledProvider.overrideWith((ref, r) => true),
@@ -136,6 +137,7 @@ void main() {
       RitualId? dismissed;
       await tester.pumpWidget(ProviderScope(
         overrides: [
+          inboxTooFullProvider.overrideWith((ref) => false),
           nudgeQueueProvider
               .overrideWith((ref) => const [RitualId.dailyPlanning]),
           nudgeBannerEnabledProvider.overrideWith((ref, r) => true),
@@ -162,6 +164,7 @@ void main() {
       RitualId? dismissed;
       await tester.pumpWidget(ProviderScope(
         overrides: [
+          inboxTooFullProvider.overrideWith((ref) => false),
           nudgeQueueProvider
               .overrideWith((ref) => const [RitualId.dailyPlanning]),
           nudgeBannerEnabledProvider.overrideWith((ref, r) => true),

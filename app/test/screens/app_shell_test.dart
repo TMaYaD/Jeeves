@@ -555,7 +555,9 @@ void main() {
       ]) {
         await tester.pumpWidget(
             _buildShellOnly(initialLocation: location, head: head));
-        await tester.pumpAndSettle();
+        // A Banner pulses forever; one frame is enough.
+        await tester.pump();
+        await tester.pump();
         expect(find.byKey(sunKey), findsNothing, reason: '$head at $location');
       }
     });
