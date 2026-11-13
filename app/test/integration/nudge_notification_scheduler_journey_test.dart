@@ -78,7 +78,9 @@ void main() {
     for (final entry in prefs.entries) {
       await c.read(syncedPreferencesProvider.notifier).set(entry.key, entry.value);
     }
-    c.read(nudgeNotificationSchedulerProvider);
+    // Listened to, as the app root's `ref.watch` does: a provider nobody listens
+    // to is paused, and so are the subscriptions it holds.
+    c.listen(nudgeNotificationSchedulerProvider, (_, _) {});
     await settle();
     final facts = c.read(nudgeNotificationFactsProvider);
     if (service.scheduleCalls.isEmpty) {
