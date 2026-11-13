@@ -159,6 +159,8 @@ void main() {
     await setLastCompleted(startedAt.subtract(const Duration(days: 10)));
 
     Future<void> tapKey(Key key) async {
+      // Step changes slide in; wait for the previous one before tapping.
+      await tester.pump(const Duration(milliseconds: 600));
       final finder = find.byKey(key);
       await tester.ensureVisible(finder);
       await tester.runAsync(() async {
