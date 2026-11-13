@@ -188,15 +188,20 @@ clean builds with Gradle's build cache off: A on new daemons, B and C warm on th
 same daemon (the builder keeps its daemon between builds). A build passed when it
 completed, nothing was killed for memory, memory stall time stayed at or under
 10% (`some`) and 5% (`full`), and wall time stayed within 1.5 times the 6 GB
-baseline's when host CPU and memory probes were sane before and after. The
-baseline's warm builds took 360.5 s on average, so the warm limit was 540.75 s.
-Swap-in is recorded, not judged. The per-build table is in the pull request
+baseline's. Wall time was judged on host CPU-share probes only (host memory
+probes were not available on the builder), so no build met the full probe
+condition. The baseline's warm builds took 360.5 s on average, so the warm limit
+was 540.75 s. Swap-in is recorded, not judged. The per-build table is in the pull request
 description.
 
-At 4 GB, two of three series passed; the failing one missed only wall time while
-the host's CPU share dipped. One 3 GB series failed on warm build time with sane
-probes; the other had no probes between builds, so its slow builds are not counted
-as a failure and the 3 GB result rests on one series. 2 GB failed. No build had an
+3 GB was not shown to fail: it passed the memory checks in both series (no OOM,
+worst stall 5.5%), but its warm builds took 588-639 s against the 540.75 s limit.
+Those overruns were judged on CPU-share probes only, and the first 3 GB series had
+no probes between builds, so they are observations, not qualifying failures. 4 GB
+is adopted as the smallest cap with no warm-build slowdown: it passed two of three
+series, and the failing one missed only wall time while the host's CPU share
+dipped. Lowering to 3 GB later is a separate decision that needs a host memory
+probe on the builder. 2 GB failed. No build had an
 OOM kill, and the worst stall at 4 GB was 5.6% `some`. A 4 GB warm build swaps 0.6
 to 1.1 GB; the swapfile sits on the Mac's own disk, so this costs the host some
 disk traffic.
