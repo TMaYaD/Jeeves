@@ -27,6 +27,16 @@ import java.util.UUID
  * fixtures in `app/test/fixtures/share_inbox/` document the format. The file is
  * written to `.tmp`, fsynced, then renamed, so the toast only appears once the
  * share is durable. Images go straight to `filesDir/capture_attachments/`.
+ *
+ * Dart finds these files through `getApplicationSupportDirectory()`, so the
+ * contract depends on `path_provider_android` implementing that call as
+ * `Context.filesDir` (true in 2.3.1). No automated test covers the mapping: the
+ * Dart journey test (`share_sheet_capture_journey_test.dart`) reads the
+ * fixtures from a temporary directory it injects instead. If the mapping
+ * changed, a share would still toast "Added to Inbox" and never reach the
+ * Inbox. So after a `path_provider_android` upgrade, check by hand: share to
+ * Jeeves on a device or emulator, open Jeeves, and confirm the Capture is in
+ * the Inbox (`docs/TESTING.md`, share-sheet capture).
  */
 class ShareReceiverActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
