@@ -37,7 +37,7 @@ import '../utils/uuid.dart';
 import 'package:uuid/enums.dart' show Namespace;
 
 import '../database/gtd_database.dart';
-import '../models/todo.dart' show Intent;
+import '../models/intent.dart';
 import 'jeeves_export.dart' show isJeevesExport, importJeevesExport;
 import 'nirvana_item.dart';
 import 'nirvana_parser.dart';

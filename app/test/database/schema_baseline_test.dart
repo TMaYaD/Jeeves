@@ -85,13 +85,13 @@ void main() {
     test('is 4 — three onUpgrade steps behind the fresh baseline', () async {
       final db = _openInMemory();
       addTearDown(db.close);
-      expect(db.schemaVersion, 4);
+      expect(db.schemaVersion, 5);
       // A fresh file runs onCreate at the current version, not the ladder.
       expect(
         await db.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        4,
+        5,
       );
     });
   });
@@ -300,7 +300,7 @@ void main() {
       await seed.customStatement('PRAGMA user_version = 1');
       await seed.close();
 
-      // Open 2: Drift sees user_version=1 and schemaVersion=3, so it runs the
+      // Open 2: Drift sees user_version=1 and schemaVersion=5, so it runs the
       // whole ladder — the v2 drop asserted here, and the v3 `tags` recreate the
       // group below owns.
       final upgraded = GtdDatabase(
@@ -312,7 +312,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        4,
+        5,
       );
       expect(await _columnNames(upgraded, 'todos'),
           isNot(contains('time_spent_minutes')),
@@ -439,7 +439,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        4,
+        5,
       );
       expect(await _uniqueConstraintIndexes(upgraded, 'tags'), isEmpty,
           reason: 'v3 drops UNIQUE (name, type)');
@@ -466,7 +466,43 @@ void main() {
     });
   });
 
-  group('v4 onUpgrade drops todos.clarified', () {
+  group('v4 onUpgrade adds capture_attachments', () {
+    test('a v3 store with Captures upgrades and keeps every row', () async {
+      final raw = sqlite3.openInMemory();
+      addTearDown(raw.close);
+
+      final seed = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      await seed.customStatement('DROP TABLE capture_attachments');
+      await seed.customStatement(
+        'INSERT INTO captures (id, title, created_at, user_id) '
+        "VALUES ('c1', 'Keep me', 1780000000000, 'u1')",
+      );
+      await seed.customStatement('PRAGMA user_version = 3');
+      await seed.close();
+
+      final upgraded = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      addTearDown(upgraded.close);
+
+      expect(
+        await upgraded.customSelect('PRAGMA user_version').getSingle().then(
+              (r) => r.read<int>('user_version'),
+            ),
+        5,
+      );
+      expect(await _objects(upgraded, 'table'), contains('capture_attachments'));
+      expect(await _rows(upgraded, 'captures'), hasLength(1));
+      expect(
+        await _columnNames(upgraded, 'capture_attachments'),
+        containsAll(['id', 'capture_id', 'relative_path', 'mime_type']),
+      );
+    });
+  });
+
+  group('v5 onUpgrade drops todos.clarified', () {
     test('the upgrade drops the column and preserves every row and child',
         () async {
       // One raw handle across two Drift opens, as in the v2 group.
@@ -548,7 +584,7 @@ void main() {
         for (final t in childTables) t: await _rows(seed, t),
       };
 
-      await seed.customStatement('PRAGMA user_version = 3');
+      await seed.customStatement('PRAGMA user_version = 4');
       await seed.close();
 
       final upgraded = GtdDatabase(
@@ -560,10 +596,10 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        4,
+        5,
       );
       expect(await _columnNames(upgraded, 'todos'), isNot(contains('clarified')),
-          reason: 'v4 drops the dead flag');
+          reason: 'v5 drops the dead flag');
 
       // Both rows survive — the legacy `clarified = 0` one included — with every
       // other column exactly as seeded.

@@ -19,6 +19,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/providers/evening_shutdown_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/screens/shutdown/steps/close_day_step.dart';
 import 'package:jeeves/services/notification_service.dart';
@@ -26,8 +27,24 @@ import 'package:jeeves/widgets/app_title_bar/app_title_bar.dart';
 
 import '../../test_helpers.dart';
 
-(Widget, ProviderContainer) _app(GtdDatabase db) {
+class _FailTwiceShutdown extends EveningShutdownNotifier {
+  int _failures = 0;
+
+  @override
+  Future<void> closeDay({DateTime? now}) async {
+    if (_failures < 2) {
+      _failures++;
+      throw StateError('write failed');
+    }
+    return super.closeDay(now: now);
+  }
+}
+
+(Widget, ProviderContainer) _app(GtdDatabase db,
+    {bool failTwice = false}) {
   final container = ProviderContainer(overrides: [
+    if (failTwice)
+      eveningShutdownProvider.overrideWith(_FailTwiceShutdown.new),
     databaseProvider.overrideWithValue(db),
     notificationServiceProvider.overrideWithValue(StubNotificationService()),
   ]);
@@ -87,35 +104,26 @@ void main() {
   });
 
   testWidgets(
-      'and-then-plan intent set: Close Day clears the intent, resets the '
-      'planning draft, and routes to /focus-session-planning', (tester) async {
+      'and-then-plan intent set: no animation or button; commits at once, '
+      'clears the intent, resets the planning draft and routes to '
+      '/focus-session-planning', (tester) async {
     final db = GtdDatabase(NativeDatabase.memory());
     addTearDown(db.close);
 
     final (widget, container) = _app(db);
     addTearDown(container.dispose);
 
-    // Seed the sequenced-entry intent (as the blocked-start interstitial
-    // does) and a stale planning draft that reEnterPlanning must clear.
     container.read(shutdownThenPlanProvider.notifier).set(true);
     container.read(focusSessionPlanningProvider.notifier)
       ..selectTask('stale-task')
       ..goToStep(3);
 
-    expect(container.read(shutdownThenPlanProvider), isTrue);
-    expect(
-      container.read(focusSessionPlanningProvider).pendingSelectedTaskIds,
-      contains('stale-task'),
-    );
-
     await tester.pumpWidget(widget);
-    await _revealButton(tester);
-
-    await tester.tap(find.text('Close Day'));
-    // Flush the _onCloseDay await chain: closeDay() -> set(false) ->
-    // reEnterPlanning() -> context.go(...).
-    for (var i = 0; i < 6; i++) {
+    expect(find.text('Close Day'), findsNothing);
+    expect(find.byIcon(Icons.nightlight_round), findsNothing);
+    for (var i = 0; i < 8; i++) {
       await tester.pump();
+      await tester.runAsync(() => pumpEventQueue());
     }
 
     expect(container.read(shutdownThenPlanProvider), isFalse,
@@ -125,10 +133,47 @@ void main() {
       isEmpty,
       reason: 'reEnterPlanning resets the stale planning draft',
     );
-    expect(container.read(focusSessionPlanningProvider).currentStep, 0,
-        reason: 'reEnterPlanning resets the draft to a fresh performance');
-    expect(find.text('focus-session-planning'), findsOneWidget,
-        reason: 'Close Day routes into planning instead of exiting the app');
+    expect(find.text('focus-session-planning'), findsOneWidget);
+  });
+
+  testWidgets(
+      'and-then-plan intent set, commit fails twice: ordinary Close Day step '
+      'with an enabled button after each failure; third try ends in planning', (tester) async {
+    final db = GtdDatabase(NativeDatabase.memory());
+    addTearDown(db.close);
+
+    final (widget, container) = _app(db, failTwice: true);
+    addTearDown(container.dispose);
+    container.read(shutdownThenPlanProvider.notifier).set(true);
+
+    await tester.pumpWidget(widget);
+    for (var i = 0; i < 4; i++) {
+      await tester.pump();
+      await tester.runAsync(() => pumpEventQueue());
+    }
+    await _revealButton(tester);
+
+    expect(find.byIcon(Icons.nightlight_round), findsWidgets);
+    expect(container.read(shutdownThenPlanProvider), isTrue,
+        reason: 'the flag stays set so the retry still ends in planning');
+
+    // The retry fails too: the button must stay usable, not strand the user.
+    await tester.tap(find.text('Close Day'));
+    for (var i = 0; i < 4; i++) {
+      await tester.pump();
+      await tester.runAsync(() => pumpEventQueue());
+    }
+    await _revealButton(tester);
+    expect(find.text('focus-session-planning'), findsNothing);
+    expect(container.read(shutdownThenPlanProvider), isTrue);
+
+    await tester.tap(find.text('Close Day'));
+    for (var i = 0; i < 8; i++) {
+      await tester.pump();
+      await tester.runAsync(() => pumpEventQueue());
+    }
+    expect(find.text('focus-session-planning'), findsOneWidget);
+    expect(container.read(shutdownThenPlanProvider), isFalse);
   });
 
   testWidgets(

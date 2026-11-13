@@ -27,7 +27,7 @@ import '../utils/uuid.dart';
 
 import '../database/gtd_database.dart';
 import '../models/action_draft.dart';
-import '../models/todo.dart' show RoutingKind;
+import '../models/routing_kind.dart';
 import '../providers/database_provider.dart';
 
 /// Thrown by a Capture write whose Capture is no longer in local storage. The
@@ -207,25 +207,6 @@ abstract class ClarificationService {
   /// a review card with no freshness gate.
   Future<Action?> getCurrentAction(String id);
 
-  /// Promote the `planned` Action [actionId] to `current` (ADR-0004 story 5).
-  /// Refuses when a current Action already exists — callers replace via
-  /// [supersedeAndPromote]. No-op if the row is gone or is not `planned`.
-  /// Stamps `last_clarified_at`, so promoting stays an **explicit clarifying
-  /// act, never automatic** (ADR-0004) by construction.
-  Future<void> promotePlannedAction(String actionId);
-
-  /// The "Replace current action" gesture: retire the Outcome's current Action
-  /// and promote the `planned` [actionId] to `current` in one act (ADR-0004
-  /// story 5). No-op if the row is gone or is not `planned`. Stamps.
-  ///
-  /// [expectedCurrentActionId] is the id of the current Action the caller showed
-  /// the user in the replace confirm; the write throws rather than retire a
-  /// different one if sync changed the current while the sheet was open (#723).
-  Future<void> supersedeAndPromote(
-    String actionId, {
-    String? expectedCurrentActionId,
-  });
-
   /// Commits a routing verdict: the clarify subject leaves the flow in the
   /// state [to] expresses (see [TodoDao.applyRouting] for the exact
   /// clarified / intent / done_at column matrix). Stamps
@@ -247,6 +228,14 @@ abstract class ClarificationService {
   /// only while the Outcome is Actionless, in the same transaction as the
   /// route, so a failed Action write leaves the route unapplied (#709).
   /// Mutually exclusive with [actionText]; must be non-blank.
+  ///
+  /// [promotePlannedActionId] promotes that `planned` Action to `current` (the
+  /// Next Action dialog's queue tap, ADR-0004 story 5) in the same transaction
+  /// as the route, so a failed route leaves the queue untouched (#788). With
+  /// [replacingCurrentActionId] — the current Action the user confirmed
+  /// replacing — the incumbent is superseded first; the write throws if sync
+  /// changed the current meanwhile. Next only; see [TodoDao.applyRouting].
+  ///
   /// Returns whether the routing landed. The Outcome's presence is checked
   /// inside the write's own transaction; a vanished Outcome writes nothing and
   /// returns `false`.
@@ -255,6 +244,8 @@ abstract class ClarificationService {
     required RoutingKind to,
     String? actionText,
     String? actionTextIfActionless,
+    String? promotePlannedActionId,
+    String? replacingCurrentActionId,
     Set<String>? personTagIds,
     String? userId,
   });
@@ -548,25 +539,13 @@ class DaoClarificationService implements ClarificationService {
       _db.actionDao.getCurrentAction(id);
 
   @override
-  Future<void> promotePlannedAction(String actionId) =>
-      _db.actionDao.promotePlannedAction(actionId);
-
-  @override
-  Future<void> supersedeAndPromote(
-    String actionId, {
-    String? expectedCurrentActionId,
-  }) =>
-      _db.actionDao.supersedeAndPromote(
-        actionId,
-        expectedCurrentActionId: expectedCurrentActionId,
-      );
-
-  @override
   Future<bool> clarifyToOutcome(
     String id, {
     required RoutingKind to,
     String? actionText,
     String? actionTextIfActionless,
+    String? promotePlannedActionId,
+    String? replacingCurrentActionId,
     Set<String>? personTagIds,
     String? userId,
   }) =>
@@ -575,6 +554,8 @@ class DaoClarificationService implements ClarificationService {
         to: to,
         actionText: actionText,
         actionTextIfActionless: actionTextIfActionless,
+        promotePlannedActionId: promotePlannedActionId,
+        replacingCurrentActionId: replacingCurrentActionId,
         personTagIds: personTagIds,
         userId: userId,
       );

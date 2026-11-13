@@ -15,7 +15,7 @@ library;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/gtd_database.dart';
-import '../models/todo.dart' show RoutingKind;
+import '../models/routing_kind.dart';
 import '../utils/snapshot_nav.dart';
 import 'clarify_retention_provider.dart';
 import 'database_provider.dart';
@@ -25,7 +25,7 @@ import 'synced_preferences_provider.dart';
 import 'periodic_review_settings_provider.dart';
 
 export '../database/gtd_database.dart' show Todo;
-export '../models/todo.dart' show RoutingKind;
+export '../models/routing_kind.dart';
 
 class PeriodicReviewState {
   const PeriodicReviewState({
@@ -297,32 +297,18 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
         todo.lastClarifiedAt!.isBefore(opened)).toList();
   }
 
-  Future<List<PeriodicReviewCandidate>> _candidates() async {
-    final outcomes = [
-      ...state.waitingForNav.items!,
-      ...state.nextNav.items!,
-      ...state.somedayNav.items!,
-    ];
-    final ids = outcomes.map((todo) => todo.id).toSet();
-    final planned = await _db.actionDao.getOutcomeIdsWithPlannedActions(ids);
-    final stale = await _db.todoDao.getActionTerminationStaleIds(ids);
-    PeriodicReviewCandidate outcome(Todo todo, PeriodicReviewStepKind step) {
-      final actionless = !state.actionTexts.containsKey(todo.id);
-      return PeriodicReviewCandidate(
-        step: step,
-        id: todo.id,
-        isPlanless: actionless && !planned.contains(todo.id),
-        isStale: stale.contains(todo.id),
-        isActionless: actionless,
-        lastClarifiedAt: todo.lastClarifiedAt,
-        createdAt: todo.createdAt,
-      );
-    }
+  List<PeriodicReviewCandidate> _candidates() {
+    PeriodicReviewCandidate outcome(Todo todo, PeriodicReviewStepKind step) =>
+        PeriodicReviewCandidate(
+          step: step,
+          id: todo.id,
+          lastClarifiedAt: todo.lastClarifiedAt,
+          createdAt: todo.createdAt,
+        );
     return [
       for (final id in state.inboxNav.items!)
         PeriodicReviewCandidate(
           step: PeriodicReviewStepKind.inbox, id: id,
-          isPlanless: false, isStale: false, isActionless: false,
           lastClarifiedAt: null, createdAt: _captureCreatedAtCache[id]!,
         ),
       for (final todo in state.waitingForNav.items!)
@@ -355,7 +341,7 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
         throw ArgumentError.value(budgetMinutes, 'budgetMinutes');
       }
       if (budget < count) {
-        final candidates = await _candidates();
+        final candidates = _candidates();
         final ranked = await ref.read(periodicReviewRankerProvider)
             .rank(List.unmodifiable(candidates));
         // The strategy supplies only an ordering. Canonical candidates supply
@@ -523,6 +509,13 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
   Future<void> completeReview() async {
     final settings = ref.read(periodicReviewSettingsProvider.notifier);
     await settings.completeReview();
+    await finishSession();
+  }
+
+  /// Done on a partial session: stamps the session as the last review and
+  /// ends the sitting. The durable review period stays open.
+  Future<void> completeSession() async {
+    await ref.read(periodicReviewSettingsProvider.notifier).markSessionFinished();
     await finishSession();
   }
 

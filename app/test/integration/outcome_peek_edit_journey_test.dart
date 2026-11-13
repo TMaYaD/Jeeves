@@ -17,6 +17,8 @@ import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/screens/planning/steps/plan_summary_step.dart';
 
+import 'package:jeeves/widgets/outcome_attribute_strip.dart';
+
 import '../test_helpers.dart';
 
 Future<void> _insertOutcome(GtdDatabase db, String id, String title) =>
@@ -69,6 +71,7 @@ void main() {
       await _pumpFor(tester);
       await tester.tap(find.text('Write the report'));
       await _pumpFor(tester);
+      expect(find.byType(OutcomeAttributeStrip), findsOneWidget);
       expect(find.text('Mar 15, 2030'), findsOneWidget);
       await tester.tap(find.byTooltip('Close'));
       await _pumpFor(tester);

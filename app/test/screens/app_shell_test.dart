@@ -27,12 +27,6 @@ import '../test_helpers.dart';
 class _MockFocusSessionPlanningNotifier extends FocusSessionPlanningNotifier {
   @override
   Future<void> reEnterPlanning() async {}
-
-  @override
-  Future<void> skipPlanningToday() async {}
-
-  @override
-  Future<void> snoozePlanningNotification(int minutes) async {}
 }
 
 class _MockFocusSessionPlanningSettingsNotifier

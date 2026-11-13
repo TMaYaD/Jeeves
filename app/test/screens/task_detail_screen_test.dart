@@ -11,7 +11,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:jeeves/database/daos/action_dao.dart' show TerminatedAction;
 import 'package:jeeves/database/gtd_database.dart';
-import 'package:jeeves/models/todo.dart' show Intent;
+import 'package:jeeves/models/intent.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/focus_session_provider.dart';
 import 'package:jeeves/providers/inbox_provider.dart';
@@ -25,6 +25,7 @@ import 'package:jeeves/sync/domain_op_capture.dart'
     show RecordingDomainOpCapture;
 import 'package:jeeves/widgets/app_title_bar/app_title_bar.dart';
 import 'package:jeeves/widgets/state_surfaces.dart';
+import 'package:jeeves/widgets/clarify_shared_widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../helpers/app_title_bar_test_helpers.dart';
 import '../test_helpers.dart';
@@ -1103,6 +1104,7 @@ void main() {
       await tester.tap(find.byKey(const Key('plan_add_trigger')));
       await tester.pumpAndSettle();
       expect(find.text('Add planned action'), findsWidgets);
+      expect(find.byType(ClarifyEstimatePicker), findsOneWidget);
       await tester.enterText(
           find.byKey(const Key('plan_action_text')), 'draft the brief');
       await tester.pump();

@@ -13,7 +13,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/action_draft.dart';
-import 'package:jeeves/models/todo.dart' show RoutingKind;
+import 'package:jeeves/models/routing_kind.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/services/clarification_service.dart';
 import 'package:jeeves/sync/collection_codecs.dart'

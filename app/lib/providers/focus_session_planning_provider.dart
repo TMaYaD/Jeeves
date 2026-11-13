@@ -17,13 +17,12 @@
 library;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../database/daos/focus_session_dao.dart' show SessionSettlement;
 import '../database/gtd_database.dart';
 import '../models/action_draft.dart';
 import '../models/ritual.dart';
-import '../models/todo.dart' show RoutingKind;
+import '../models/routing_kind.dart';
 import '../services/clarification_service.dart';
 import '../services/notification_service.dart';
 import '../utils/snapshot_nav.dart';
@@ -33,7 +32,7 @@ import 'clock_provider.dart';
 import 'database_provider.dart';
 import 'nudge_triggers.dart' show lastAnchorBefore;
 import 'shutdown_settings_provider.dart' show shutdownSettingsProvider;
-import 'synced_preferences_provider.dart';
+import 'synced_preferences_provider.dart' show syncedPrefs;
 
 export '../database/gtd_database.dart' show Todo, FocusSession, Tag;
 export '../database/daos/focus_session_dao.dart' show SessionSettlement;
@@ -50,8 +49,18 @@ String planningToday() {
       '${now.day.toString().padLeft(2, '0')}';
 }
 
-const _kNotificationSkippedDateKey = 'planning_notification_skipped_date';
-const _kNotificationSnoozedUntilKey = 'planning_notification_snoozed_until';
+/// `user_preferences` key holding the available time (minutes) the most
+/// recently opened session was planned with. Not a setting: it has no
+/// Settings row and exists only to pre-fill the Time step (#825).
+const kLastSessionAvailableMinutesKey =
+    'focus_session_planning_last_session_available_minutes';
+
+/// Available time shown in the Time step when no previous session recorded one.
+const int kFallbackAvailableMinutes = 480;
+
+/// Range the Time step accepts (it clamps typed values to this).
+const int _kMinAvailableMinutes = 1;
+const int _kMaxAvailableMinutes = 1440;
 
 /// Highest 0-indexed step the planning ritual reaches. Step 0 is the
 /// duration-estimate intro (#486), steps 1–5 are the working steps (Clarify
@@ -67,7 +76,10 @@ const int _maxStepIndex = 6;
 /// entry. Set true by the Daily Planning blocked-start interstitial before it
 /// routes the user to Evening Shutdown; read and cleared by the Close Day
 /// step, which — instead of exiting the app — routes into Daily Planning once
-/// the session has been reviewed and closed.
+/// the session has been reviewed and closed. While set, the Close Day step
+/// also skips its closing animation and commits immediately. Also read by the
+/// Resolve Unfinished step for the Roll Over copy. It lives for one Evening
+/// Shutdown performance: the shutdown screen clears it when left.
 ///
 /// This is a user-initiated action spread across two ceremonies, not a
 /// route-level auto-launch (REQUIREMENTS.md § Ceremonies).
@@ -81,74 +93,12 @@ class ShutdownThenPlanNotifier extends Notifier<bool> {
   bool build() => false;
 
   void set(bool value) => state = value;
-}
 
-// ---------------------------------------------------------------------------
-// Notification suppression helpers (top-level so both the settings provider
-// and notification handler can call them without a Riverpod container).
-// ---------------------------------------------------------------------------
-
-/// Returns true if the user has skipped planning notifications for today or
-/// has an active snooze that hasn't expired yet.
-bool isFocusSessionPlanningNotificationSuppressed() {
-  // This is intentionally synchronous — callers that need the persisted value
-  // should call [loadFocusSessionPlanningNotificationSuppression] first.
-  return _notificationSkippedToday || _notificationSnoozedActive;
-}
-
-/// Returns true iff the user has chosen "Skip today" (as distinct from an
-/// active snooze). The reschedule logic uses this to suppress *today*'s
-/// recurring fire while leaving tomorrow's intact — a snooze, by contrast,
-/// is satisfied by its own one-off and does not need to touch the recurring
-/// schedule.
-bool isFocusSessionPlanningNotificationSkippedToday() =>
-    _notificationSkippedToday;
-
-bool _notificationSkippedToday = false;
-bool _notificationSnoozedActive = false;
-
-/// Reads skip/snooze state from [SharedPreferences] into module-level flags.
-Future<void> loadFocusSessionPlanningNotificationSuppression() async {
-  final prefs = await SharedPreferences.getInstance();
-  final today = planningToday();
-  _notificationSkippedToday =
-      prefs.getString(_kNotificationSkippedDateKey) == today;
-
-  final snoozedUntilStr = prefs.getString(_kNotificationSnoozedUntilKey);
-  if (snoozedUntilStr != null) {
-    final snoozedUntil = DateTime.tryParse(snoozedUntilStr);
-    _notificationSnoozedActive =
-        snoozedUntil != null && DateTime.now().isBefore(snoozedUntil);
-  } else {
-    _notificationSnoozedActive = false;
-  }
-}
-
-/// Persists and activates the "skip today" suppression.
-///
-/// Dual-writes to SharedPreferences (for cold-start startup reads) and to the
-/// synced preferences store (for cross-device visibility).
-Future<void> persistFocusSessionPlanningSkipToday({Ref? ref}) async {
-  final today = planningToday();
-  final prefs = await SharedPreferences.getInstance();
-  await prefs.setString(_kNotificationSkippedDateKey, today);
-  _notificationSkippedToday = true;
-  if (ref != null) {
-    await syncedPrefs(ref).set(_kNotificationSkippedDateKey, today);
-  }
-}
-
-/// Persists and activates a snooze until [until].
-///
-/// Dual-writes to SharedPreferences (for cold-start startup reads) and to the
-/// synced preferences store (for cross-device visibility).
-Future<void> persistFocusSessionPlanningSnoozedUntil(DateTime until, {Ref? ref}) async {
-  final value = until.toIso8601String();
-  final prefs = await SharedPreferences.getInstance();
-  await prefs.setString(_kNotificationSnoozedUntilKey, value);
-  _notificationSnoozedActive = DateTime.now().isBefore(until);
-  if (ref != null) {
-    await syncedPrefs(ref).set(_kNotificationSnoozedUntilKey, value);
+  /// Drop the intent. Safe to call after the container is torn down (the
+  /// shutdown screen calls it from a microtask during unmount).
+  void clear() {
+    if (!ref.mounted) return;
+    state = false;
   }
 }
 
@@ -444,7 +394,7 @@ class ReviewActionRecord {
 class FocusSessionPlanningState {
   const FocusSessionPlanningState({
     this.currentStep = 0,
-    this.availableMinutes = 480, // 8 hours default
+    this.availableMinutes = kFallbackAvailableMinutes,
     this.availableTimeSet = false,
     this.energyLevel,
     this.inboxNav = const SnapshotNav<String>(),
@@ -575,25 +525,15 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// the branch awaits a snapshot load or is otherwise synchronous.
   bool _advancing = false;
 
+  /// Bumped whenever a performance ends and the draft is reset. A
+  /// [ensureAvailableTimePreload] that began before the reset must not apply
+  /// its (possibly stale) read to the next draft (#825).
+  int _planningGeneration = 0;
+
   @override
   FocusSessionPlanningState build() {
-    // Refresh notification-suppression flags when Drift receives cross-device
-    // sync. Banner dismiss state is now persisted by the Nudge module (see
-    // nudgeStateProvider) and no longer lives in a ValueNotifier here.
-    ref.listen(syncedPreferencesProvider, (_, next) {
-      if (next is AsyncData<SyncedPreferences>) {
-        final today = planningToday();
-        _notificationSkippedToday =
-            next.value.get<String>(_kNotificationSkippedDateKey) == today;
-
-        final snoozedUntil = DateTime.tryParse(
-          next.value.get<String>(_kNotificationSnoozedUntilKey) ?? '',
-        );
-        _notificationSnoozedActive =
-            snoozedUntil != null && DateTime.now().isBefore(snoozedUntil);
-      }
-    });
     Future.microtask(ensureRolloverPreload);
+    Future.microtask(ensureAvailableTimePreload);
     return const FocusSessionPlanningState();
   }
 
@@ -643,6 +583,33 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
         ...state.pendingSelectedTaskIds,
       ],
     );
+  }
+
+  /// Pre-fills [FocusSessionPlanningState.availableMinutes] from the available
+  /// time the previous session was planned with (#825).
+  ///
+  /// Idempotent; called at the same planning entry points as
+  /// [ensureRolloverPreload]. Applies only while the user has not edited the
+  /// time in the current draft ([FocusSessionPlanningState.availableTimeSet]
+  /// false), and never sets that flag. A missing or invalid stored value
+  /// (non-integer, outside 1–1440) yields [kFallbackAvailableMinutes].
+  Future<void> ensureAvailableTimePreload() async {
+    final generation = _planningGeneration;
+    final raw = await _db.userPreferencesDao
+        .get(_userId, kLastSessionAvailableMinutesKey);
+    if (!ref.mounted ||
+        generation != _planningGeneration ||
+        state.availableTimeSet) {
+      return;
+    }
+    final stored = raw == null ? null : int.tryParse(raw);
+    final minutes = stored != null &&
+            stored >= _kMinAvailableMinutes &&
+            stored <= _kMaxAvailableMinutes
+        ? stored
+        : kFallbackAvailableMinutes;
+    if (minutes == state.availableMinutes) return;
+    state = state.copyWith(availableMinutes: minutes);
   }
 
   // ---- Step navigation -------------------------------------------------------
@@ -716,6 +683,14 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
 
   void goToStep(int step) {
     state = state.copyWith(currentStep: step.clamp(0, _maxStepIndex));
+  }
+
+  /// Records that the user is editing the available time without changing the
+  /// value — an intermediate empty/zero entry (e.g. hours cleared mid-typing).
+  /// Stops a late [ensureAvailableTimePreload] from overwriting the field.
+  void markAvailableTimeEdited() {
+    if (state.availableTimeSet) return;
+    state = state.copyWith(availableTimeSet: true);
   }
 
   void setAvailableTime(int minutes) {
@@ -792,14 +767,15 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// Capture's own title; its tag hints seed the new Outcome's tags.
   ///
   /// Bails out without mutating state if the snapshot row no longer exists
-  /// in the DB (deleted between snapshot load and apply). Idempotent under
+  /// in the DB (deleted before or during the write). Idempotent under
   /// rapid re-taps: the cursor advance check at the end discards a second
   /// call's state mutation when the first call has already advanced.
   ///
-  /// Note: the routing write is a multi-statement transaction whose
-  /// affected-rows count says nothing about the subject in particular, so we
-  /// pre-check for row existence via [ClarificationService.captureExists] and
-  /// otherwise trust the snapshot's claim that the row exists.
+  /// Note: the routing write is a multi-statement transaction that checks for
+  /// the Capture itself and throws [CaptureNotFoundError] when it is gone. That
+  /// error is the gate: it is caught (and only it) and the step is skipped
+  /// silently, with no record and no cursor move. The Capture read below is a
+  /// data read (default title and notes), not an existence guard.
   Future<void> _routeInboxItem(
     String captureId, {
     required RoutingKind to,
@@ -808,21 +784,25 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     Set<String>? personTagIds,
   }) async {
     final idx = state.inboxNav.index;
-    final capture = await _db.captureDao.getCapture(captureId);
-    if (capture == null) return;
-    if (to == RoutingKind.trash) {
-      await _clarification.discardCapture(captureId);
-    } else {
-      await _clarification.clarifyCaptureToOutcome(
-        captureId,
-        to: to,
-        userId: _userId,
-        title: title ?? capture.title,
-        notes: capture.notes,
-        action: actionText == null ? null : ActionDraft(text: actionText),
-        personTagIds: personTagIds,
-        tagIds: await _db.captureDao.tagHintIdsForCapture(captureId),
-      );
+    try {
+      if (to == RoutingKind.trash) {
+        await _clarification.discardCapture(captureId);
+      } else {
+        final capture = await _db.captureDao.getCapture(captureId);
+        if (capture == null) return;
+        await _clarification.clarifyCaptureToOutcome(
+          captureId,
+          to: to,
+          userId: _userId,
+          title: title ?? capture.title,
+          notes: capture.notes,
+          action: actionText == null ? null : ActionDraft(text: actionText),
+          personTagIds: personTagIds,
+          tagIds: await _db.captureDao.tagHintIdsForCapture(captureId),
+        );
+      }
+    } on CaptureNotFoundError {
+      return;
     }
     if (state.inboxNav.index != idx) return;
     state = state.copyWith(
@@ -960,11 +940,12 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// write that stamps `last_clarified_at`.
   Future<void> confirmReviewItemRelevant(String id) async {
     final idx = state.reviewNav.index;
-    await _clarification.clarifyToOutcome(
+    final landed = await _clarification.clarifyToOutcome(
       id,
       to: RoutingKind.nextAction,
       userId: _userId,
     );
+    if (!landed) return;
     if (state.reviewNav.index != idx) return;
     _recordAndAdvance(
       const ReviewActionRecord(kind: ReviewActionKind.stillRelevant),
@@ -985,11 +966,12 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// path for setting the phrase.
   Future<void> markReviewItemWaitingFor(String id) async {
     final idx = state.reviewNav.index;
-    await _clarification.clarifyToOutcome(
+    final landed = await _clarification.clarifyToOutcome(
       id,
       to: RoutingKind.waitingFor,
       userId: _userId,
     );
+    if (!landed) return;
     if (state.reviewNav.index != idx) return;
     final tagIds = await _db.tagDao.getPersonTagIdsForTodo(id);
     if (state.reviewNav.index != idx) return;
@@ -1002,11 +984,12 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// "Mark done" — sets done_at and stamps last_clarified_at.
   Future<void> markReviewItemDone(String id) async {
     final idx = state.reviewNav.index;
-    await _clarification.clarifyToOutcome(
+    final landed = await _clarification.clarifyToOutcome(
       id,
       to: RoutingKind.done,
       userId: _userId,
     );
+    if (!landed) return;
     if (state.reviewNav.index != idx) return;
     _recordAndAdvance(const ReviewActionRecord(kind: ReviewActionKind.markDone));
   }
@@ -1014,11 +997,12 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// "Send to Someday" — sets intent='maybe' and stamps last_clarified_at.
   Future<void> deferReviewItemToSomeday(String id) async {
     final idx = state.reviewNav.index;
-    await _clarification.clarifyToOutcome(
+    final landed = await _clarification.clarifyToOutcome(
       id,
       to: RoutingKind.maybe,
       userId: _userId,
     );
+    if (!landed) return;
     if (state.reviewNav.index != idx) return;
     _recordAndAdvance(
       const ReviewActionRecord(kind: ReviewActionKind.sendToSomeday),
@@ -1028,11 +1012,12 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// "Trash" — sets intent='trash' and stamps last_clarified_at.
   Future<void> trashReviewItem(String id) async {
     final idx = state.reviewNav.index;
-    await _clarification.clarifyToOutcome(
+    final landed = await _clarification.clarifyToOutcome(
       id,
       to: RoutingKind.trash,
       userId: _userId,
     );
+    if (!landed) return;
     if (state.reviewNav.index != idx) return;
     _recordAndAdvance(const ReviewActionRecord(kind: ReviewActionKind.trash));
   }
@@ -1052,28 +1037,6 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   void recordReviewActionAndAdvance(ReviewActionRecord record) =>
       _recordAndAdvance(record);
 
-  // ---- Banner dismissal ------------------------------------------------------
-
-  // ---- Notification skip / snooze --------------------------------------------
-
-  /// Suppresses all planning nudges until the next calendar day and cancels
-  /// any scheduled notification for today.
-  Future<void> skipPlanningToday() async {
-    await persistFocusSessionPlanningSkipToday(ref: ref);
-    // Skip today only — leave tomorrow's recurring reminder intact.
-    await NotificationService.instance
-        .skipTodayRitualReminder(RitualId.dailyPlanning);
-  }
-
-  /// Snoozes the planning notification by [minutes] and reschedules it as a
-  /// one-off fire.
-  Future<void> snoozePlanningNotification(int minutes) async {
-    final until = DateTime.now().add(Duration(minutes: minutes));
-    await persistFocusSessionPlanningSnoozedUntil(until, ref: ref);
-    await NotificationService.instance
-        .snoozeRitualReminder(RitualId.dailyPlanning, minutes);
-  }
-
   // ---- Ritual lifecycle ------------------------------------------------------
 
   /// Opens a new [FocusSession] with the pending task list.
@@ -1088,18 +1051,29 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       userId: _userId,
       taskIds: state.pendingSelectedTaskIds,
     );
+    final plannedMinutes = state.availableMinutes;
     // A qualifying session now exists — today's DPR fire is moot. Best-effort.
     await ref
         .read(notificationServiceProvider)
         .skipTodayRitualReminder(RitualId.dailyPlanning);
+    _planningGeneration++;
     state = FocusSessionPlanningState(
       energyLevel: state.energyLevel,
       availableMinutes: state.availableMinutes,
-      availableTimeSet: state.availableTimeSet,
     );
     // Retained clarify drafts belong to the performance that produced them,
     // the same as the inbox snapshot and its cursor above.
     ref.read(clarifyRetentionProvider).clearAll();
+    // Remember this session's planned time as the next planning's default.
+    // Last, so a preference read/write failure cannot leave the opened session
+    // with its reminder unskipped or the draft unreset. Skipped when unchanged
+    // so an ordinary day authors no redundant sync op.
+    final storedMinutes = await _db.userPreferencesDao
+        .get(_userId, kLastSessionAvailableMinutesKey);
+    if (storedMinutes != plannedMinutes.toString() && ref.mounted) {
+      await syncedPrefs(ref)
+          .set(kLastSessionAvailableMinutesKey, plannedMinutes);
+    }
   }
 
   /// Resets the planning ritual to a fresh performance.
@@ -1113,11 +1087,10 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   Future<void> reEnterPlanning() async {
     final preservedEnergy = state.energyLevel;
     final preservedMinutes = state.availableMinutes;
-    final preservedTimeSet = state.availableTimeSet;
+    _planningGeneration++;
     state = FocusSessionPlanningState(
       currentStep: 0,
       availableMinutes: preservedMinutes,
-      availableTimeSet: preservedTimeSet,
       energyLevel: preservedEnergy,
     );
     // A fresh performance re-loads the inbox snapshot, so a draft left against
@@ -1129,5 +1102,6 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     // caller (close_day_step) awaits this before routing to the planning
     // screen, so the carried-over tasks are pre-selected the moment it mounts.
     await ensureRolloverPreload();
+    await ensureAvailableTimePreload();
   }
 }

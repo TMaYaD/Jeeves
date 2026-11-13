@@ -45,7 +45,7 @@ Two tiers with different jobs. The hook catches the obvious break at the moment 
 | **Fast** | `build_runner` (skipped when no codegen input changed), `flutter analyze`, and only the Flutter tests covering the staged changes. Backend keeps its whole `pytest` — it costs seconds. | `.githooks/pre-commit`, every commit |
 | **Full** | Both suites, entire | CI, every PR — `flutter-ci.yml`, `backend-ci.yml` |
 
-The Outcome due-date widget and peek journey tests also run with
+The Outcome due-date widget and peek journey tests, and the System Trust provider test (spring-forward day count), also run with
 `TZ=America/Los_Angeles` in CI to exercise the local-day boundary; the full suite
 keeps the runner's UTC timezone. See [flutter-ci.yml](../.github/workflows/flutter-ci.yml).
 
@@ -501,6 +501,7 @@ For flows that are impractical to cover with `flutter_test` / integration tests 
   adb shell screencap -p /sdcard/s.png && adb pull /sdcard/s.png /tmp/s.png
   ```
 - Use `adb shell monkey -p loonyb.in.jeeves.dev -c android.intent.category.LAUNCHER 1` to cold-launch; prefix with `adb shell am force-stop loonyb.in.jeeves.dev` for a clean start.
+- Share-sheet capture (queued natively, drained into the Inbox on next start/resume): `adb shell am start -a android.intent.action.SEND -t text/plain --es android.intent.extra.TEXT 'https://example.com' --es android.intent.extra.SUBJECT 'Title' -n loonyb.in.jeeves.dev/loonyb.in.jeeves.ShareReceiverActivity` (toast "Added to Inbox"). For an image, push a PNG and share from Photos. The receiver accepts only `content://` streams from other apps, so an `--eu android.intent.extra.STREAM file:///sdcard/x.png -t image/png` intent must toast the failure and leave `files/share_inbox` and `files/capture_attachments` untouched; so must `--eu android.intent.extra.STREAM content://<own provider authority>/x` and its user-prefixed form `content://0@<own provider authority>/x` (no native test tier runs in CI; this is the manual check). Pending files: `adb shell run-as loonyb.in.jeeves.dev ls files/share_inbox`.
 - Stream Flutter errors: `adb logcat > /tmp/jeeves.log &` then grep for `flutter:` and `AndroidRuntime`. MWA failures surface as `com.solana.mobilewalletadapter.clientlib.*` stacks.
 
 ### Inspecting the on-device database

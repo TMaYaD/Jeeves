@@ -27,7 +27,7 @@ import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
-import 'package:jeeves/models/todo.dart' show RoutingKind;
+import 'package:jeeves/models/routing_kind.dart';
 import 'package:jeeves/sync/envelope.dart' show opClassContent;
 import 'package:jeeves/sync/ids.dart'
     show jeevesWorkspaceNamespace, userPreferencesWorkspaceId;

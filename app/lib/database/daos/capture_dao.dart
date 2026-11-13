@@ -161,6 +161,21 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
     });
   }
 
+  /// Insert a Capture that arrived through the share sheet, with the optional
+  /// attachment row linking its stored image. One [capturing] scope: the Capture
+  /// authors its usual create op; the attachment is device-local and authors none.
+  Future<void> insertSharedCapture(
+    CapturesCompanion capture, {
+    CaptureAttachmentsCompanion? attachment,
+  }) async {
+    await attachedDatabase.capturing(() async {
+      await insertCapture(capture);
+      if (attachment != null) {
+        await into(attachedDatabase.captureAttachments).insert(attachment);
+      }
+    });
+  }
+
   /// The whole synced row, as the op-log fields a create asserts. Exactly
   /// `collectionCodecs[capturesCollection].columns` — the contract test pins the
   /// two sets equal, so a new synced column has one place to be added.
