@@ -114,7 +114,7 @@ To build a hybrid productivity application that merges the rigid organizational 
 * **Home Screen Widget:** Quick-capture widget for task entry without opening the app.
 * **Email-to-Inbox:** Forward emails to a dedicated address to create inbox items.
 * **Messaging Integration:** Capture tasks via messaging platforms (e.g., Telegram bot, WhatsApp).
-* **Scheduled Reminder Notifications:** Timezone-aware local push notifications for tasks with due dates, ensuring users are reminded of deadlines even when the app is closed.
+* **Due-date notifications:** A due-dated Outcome that is not done or trashed gets a local notification at 09:00 local time on its due day, titled with the Outcome and reading "Due today"; tapping it opens the Outcome. It is re-scheduled when the due date changes, the device timezone changes or the app restarts, and cancelled when the Outcome is completed, trashed, deleted or loses its due date. The nearest 50 are scheduled; further ones are scheduled when the app next opens or an Outcome changes, not as alarms fire. No actions or snooze yet.
 
 ### Epic 11: Data Portability & Migration
 **Goal:** Reduce switching costs and prevent vendor lock-in.

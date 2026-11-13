@@ -14,6 +14,10 @@ import 'package:timezone/data/latest_all.dart' as tz_data;
 import 'package:timezone/timezone.dart' as tz;
 
 import '../models/ritual.dart';
+import 'due_date_notifications.dart'
+    show
+        fireAtMillisFromNotificationPayload,
+        outcomeIdFromNotificationPayload;
 
 // Stable notification IDs.
 const _kFocusSessionPlanningNotificationId = 0;
@@ -37,6 +41,7 @@ const kPeriodicReviewActionSnooze = 'periodic_review_snooze';
 const kPeriodicReviewActionSkip = 'periodic_review_skip_today';
 
 const _kFocusId = 1001;
+const _kDueDateChannelId = 'due_dates';
 
 class NotificationService {
   NotificationService._();
@@ -131,7 +136,8 @@ class NotificationService {
   }
 
   // ---------------------------------------------------------------------------
-  // Task reminders (generic, used by future reminder feature)
+  // Due-date notifications. Named `scheduleReminder` for historical reasons;
+  // "Reminder" in CONTEXT.md is a different, Action-level concept.
   // ---------------------------------------------------------------------------
 
   Future<void> scheduleReminder({
@@ -139,18 +145,20 @@ class NotificationService {
     required String title,
     required String body,
     required DateTime scheduledAt,
+    String? payload,
   }) async {
     final scheduled = tz.TZDateTime.from(scheduledAt, tz.local);
     await _plugin.zonedSchedule(
       id: id,
       title: title,
       body: body,
+      payload: payload,
       scheduledDate: scheduled,
       notificationDetails: const NotificationDetails(
         android: AndroidNotificationDetails(
-          'task_reminders',
-          'Task Reminders',
-          channelDescription: 'Reminders for scheduled tasks',
+          _kDueDateChannelId,
+          'Due dates',
+          channelDescription: 'Outcomes that are due today',
           importance: Importance.high,
           priority: Priority.high,
         ),
@@ -158,6 +166,56 @@ class NotificationService {
       ),
       androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
     );
+  }
+
+  /// Due-date notifications the OS holds, recognised by their payload:
+  /// `pending` are still scheduled to fire; `delivered` already fired and sit
+  /// in the tray. The queries are sequential, so an alarm that fires between
+  /// them appears in both sets.
+  /// `pendingFireAtMillis` maps a pending id to the fire instant recorded in
+  /// its payload (absent for payloads that carry none).
+  Future<
+      ({
+        Set<int> pending,
+        Map<int, int> pendingFireAtMillis,
+        Set<int> delivered
+      })> dueDateNotificationsOnDevice() async {
+    final pending = <int>{};
+    final pendingFireAtMillis = <int, int>{};
+    for (final request in await _plugin.pendingNotificationRequests()) {
+      if (outcomeIdFromNotificationPayload(request.payload) != null) {
+        pending.add(request.id);
+        final millis = fireAtMillisFromNotificationPayload(request.payload);
+        if (millis != null) pendingFireAtMillis[request.id] = millis;
+      }
+    }
+    final delivered = <int>{};
+    final android = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    for (final shown
+        in await android?.getActiveNotifications() ?? const <ActiveNotification>[]) {
+      final id = shown.id;
+      // Android reports no payload for active notifications (iOS/macOS only),
+      // so recognise ours by channel, or by payload where one is present.
+      if (id != null &&
+          (shown.channelId == _kDueDateChannelId ||
+              outcomeIdFromNotificationPayload(shown.payload) != null)) {
+        delivered.add(id);
+      }
+    }
+    return (
+      pending: pending,
+      pendingFireAtMillis: pendingFireAtMillis,
+      delivered: delivered
+    );
+  }
+
+  /// Re-reads the device timezone into `tz.local`. Returns whether it changed.
+  Future<bool> refreshLocalTimezone() async {
+    final info = await FlutterTimezone.getLocalTimezone();
+    if (info.identifier == tz.local.name) return false;
+    tz.setLocalLocation(tz.getLocation(info.identifier));
+    return true;
   }
 
   // ---------------------------------------------------------------------------
