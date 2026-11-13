@@ -597,6 +597,11 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// the branch awaits a snapshot load or is otherwise synchronous.
   bool _advancing = false;
 
+  /// Bumped whenever a performance ends and the draft is reset. A
+  /// [ensureAvailableTimePreload] that began before the reset must not apply
+  /// its (possibly stale) read to the next draft (#825).
+  int _planningGeneration = 0;
+
   @override
   FocusSessionPlanningState build() {
     // Refresh notification-suppression flags when Drift receives cross-device
@@ -677,9 +682,14 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// false), and never sets that flag. A missing or invalid stored value
   /// (non-integer, outside 1–1440) yields [kFallbackAvailableMinutes].
   Future<void> ensureAvailableTimePreload() async {
+    final generation = _planningGeneration;
     final raw = await _db.userPreferencesDao
         .get(_userId, kLastSessionAvailableMinutesKey);
-    if (!ref.mounted || state.availableTimeSet) return;
+    if (!ref.mounted ||
+        generation != _planningGeneration ||
+        state.availableTimeSet) {
+      return;
+    }
     final stored = raw == null ? null : int.tryParse(raw);
     final minutes = stored != null &&
             stored >= _kMinAvailableMinutes &&
@@ -1156,6 +1166,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     await ref
         .read(notificationServiceProvider)
         .skipTodayRitualReminder(RitualId.dailyPlanning);
+    _planningGeneration++;
     state = FocusSessionPlanningState(
       energyLevel: state.energyLevel,
       availableMinutes: state.availableMinutes,
@@ -1186,6 +1197,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   Future<void> reEnterPlanning() async {
     final preservedEnergy = state.energyLevel;
     final preservedMinutes = state.availableMinutes;
+    _planningGeneration++;
     state = FocusSessionPlanningState(
       currentStep: 0,
       availableMinutes: preservedMinutes,

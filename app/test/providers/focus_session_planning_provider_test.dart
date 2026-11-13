@@ -226,6 +226,24 @@ void main() {
         expect(state.availableMinutes, 480);
       });
 
+      test('a preload whose read began before the draft reset does not apply',
+          () async {
+        final notifier = container.read(focusSessionPlanningProvider.notifier);
+        // Let the build() microtask preload settle so it cannot interfere.
+        await notifier.ensureAvailableTimePreload();
+        notifier.setAvailableTime(300);
+        // Nothing stored: a stale read would apply the 8-hour fallback.
+        final stalePreload = notifier.ensureAvailableTimePreload();
+        // Synchronously resets the draft (flag released, minutes preserved).
+        final replan = notifier.reEnterPlanning();
+        await stalePreload;
+        expect(container.read(focusSessionPlanningProvider).availableMinutes,
+            300,
+            reason: 'a read begun in the finished performance must not '
+                'overwrite the preserved minutes');
+        await replan;
+      });
+
       for (final garbage in ['"abc"', '0', '5000', '-5', '1.5']) {
         test('stored $garbage falls back to 8 hours', () async {
           await store(garbage);
