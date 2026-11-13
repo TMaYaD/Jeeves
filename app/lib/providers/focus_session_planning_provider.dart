@@ -32,6 +32,7 @@ import 'clock_provider.dart';
 import 'database_provider.dart';
 import 'nudge_triggers.dart' show lastAnchorBefore;
 import 'shutdown_settings_provider.dart' show shutdownSettingsProvider;
+import 'synced_preferences_provider.dart' show syncedPrefs;
 
 export '../database/gtd_database.dart' show Todo, FocusSession, Tag;
 export '../database/daos/focus_session_dao.dart' show SessionSettlement;
