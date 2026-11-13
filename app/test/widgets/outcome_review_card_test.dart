@@ -7,7 +7,6 @@ import 'package:jeeves/widgets/outcome_review_card.dart';
 Todo outcome({String? notes}) => Todo(
   id: 'outcome',
   title: 'Renew passport',
-  clarified: true,
   intent: 'next',
   notes: notes,
   userId: 'local',

@@ -44,7 +44,6 @@ void main() {
       await db.into(db.todos).insert(TodosCompanion(
             id: const Value('o1'),
             title: const Value('Ship the thing'),
-            clarified: const Value(true),
             intent: const Value('next'),
             userId: const Value(focusUserId),
             createdAt: Value(now),

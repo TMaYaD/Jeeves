@@ -85,13 +85,13 @@ void main() {
     test('is 4 — three onUpgrade steps behind the fresh baseline', () async {
       final db = _openInMemory();
       addTearDown(db.close);
-      expect(db.schemaVersion, 4);
+      expect(db.schemaVersion, 5);
       // A fresh file runs onCreate at the current version, not the ladder.
       expect(
         await db.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        4,
+        5,
       );
     });
   });
@@ -157,6 +157,9 @@ void main() {
           // across OS versions) and invisible to Drift; a fresh file simply
           // never has it. `done_at` is the completion record.
           'completed',
+          // Dropped by the v4 onUpgrade — "has this been clarified?" is a
+          // Capture's `clarified_at`; an Outcome is clarified by existing.
+          'clarified',
         ]))),
       );
     });
@@ -168,7 +171,6 @@ void main() {
       expect(
         await _columnNames(db, 'todos'),
         containsAll(const [
-          'clarified', // v11
           'intent', // v10
           'done_at', // v12
           'last_clarified_at', // v19
@@ -247,7 +249,6 @@ void main() {
           ));
 
       final row = await db.select(db.todos).getSingle();
-      expect(row.clarified, isTrue, reason: 'a created Outcome is clarified');
       expect(row.intent, 'next');
       expect(row.doneAt, isNull);
     });
@@ -279,15 +280,15 @@ void main() {
       // companion no longer knows it — with a non-default value that must be
       // seen to have survived (well, its row must).
       await seed.customStatement(
-        'INSERT INTO todos (id, title, user_id, created_at, intent, clarified, '
+        'INSERT INTO todos (id, title, user_id, created_at, intent, '
         '  time_spent_minutes) '
-        "VALUES ('t1', 'Ship it', 'u1', ?, 'next', 1, 42)",
+        "VALUES ('t1', 'Ship it', 'u1', ?, 'next', 42)",
         [createdMs],
       );
       await seed.customStatement(
-        'INSERT INTO todos (id, title, user_id, created_at, intent, clarified, '
+        'INSERT INTO todos (id, title, user_id, created_at, intent, '
         '  time_spent_minutes) '
-        "VALUES ('t2', 'And another', 'u1', ?, 'maybe', 0, 0)",
+        "VALUES ('t2', 'And another', 'u1', ?, 'maybe', 0)",
         [createdMs],
       );
       // A time_logs child of t1: the drop recreates `todos`, so this proves the
@@ -299,7 +300,7 @@ void main() {
       await seed.customStatement('PRAGMA user_version = 1');
       await seed.close();
 
-      // Open 2: Drift sees user_version=1 and schemaVersion=4, so it runs the
+      // Open 2: Drift sees user_version=1 and schemaVersion=5, so it runs the
       // whole ladder — the v2 drop asserted here, and the v3 `tags` recreate the
       // group below owns.
       final upgraded = GtdDatabase(
@@ -311,14 +312,14 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        4,
+        5,
       );
       expect(await _columnNames(upgraded, 'todos'),
           isNot(contains('time_spent_minutes')),
           reason: 'v2 drops the dead cache column');
 
       final rows = await upgraded
-          .customSelect('SELECT id, title, intent, clarified, user_id '
+          .customSelect('SELECT id, title, intent, user_id '
               'FROM todos ORDER BY id')
           .get();
       expect(rows.map((r) => r.read<String>('id')), ['t1', 't2'],
@@ -392,8 +393,8 @@ void main() {
         "VALUES ('tag-home', 'Home', NULL, 'context', 'u1')",
       );
       await seed.customStatement(
-        'INSERT INTO todos (id, title, user_id, created_at, intent, clarified) '
-        "VALUES ('t1', 'Ring Alice', 'u1', ?, 'next', 1)",
+        'INSERT INTO todos (id, title, user_id, created_at, intent) '
+        "VALUES ('t1', 'Ring Alice', 'u1', ?, 'next')",
         [createdMs],
       );
       await seed.customStatement(
@@ -438,7 +439,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        4,
+        5,
       );
       expect(await _uniqueConstraintIndexes(upgraded, 'tags'), isEmpty,
           reason: 'v3 drops UNIQUE (name, type)');
@@ -490,7 +491,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        4,
+        5,
       );
       expect(await _objects(upgraded, 'table'), contains('capture_attachments'));
       expect(await _rows(upgraded, 'captures'), hasLength(1));
@@ -498,6 +499,119 @@ void main() {
         await _columnNames(upgraded, 'capture_attachments'),
         containsAll(['id', 'capture_id', 'relative_path', 'mime_type']),
       );
+    });
+  });
+
+  group('v5 onUpgrade drops todos.clarified', () {
+    test('the upgrade drops the column and preserves every row and child',
+        () async {
+      // One raw handle across two Drift opens, as in the v2 group.
+      final raw = sqlite3.openInMemory();
+      addTearDown(raw.close);
+
+      final seed = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      await seed.customStatement(
+        'ALTER TABLE todos ADD COLUMN clarified '
+        'INTEGER NOT NULL DEFAULT 1 CHECK (clarified IN (0, 1))',
+      );
+
+      final createdMs =
+          DateTime.parse('2026-07-30T09:00:00.000Z').millisecondsSinceEpoch;
+      // t1 carries a non-default value in every column the migration must keep;
+      // t2 is the legacy `clarified = 0` row the migration carries as an Outcome.
+      await seed.customStatement(
+        'INSERT INTO todos (id, title, notes, priority, due_date, user_id, '
+        '  created_at, updated_at, done_at, intent, time_estimate, '
+        '  energy_level, capture_source, location_id, last_clarified_at, '
+        '  last_next_action_completion_at, clarified) '
+        "VALUES ('t1', 'Ship it', 'some notes', 3, ?, 'u1', ?, ?, "
+        "  '2026-07-31T09:00:00.000Z', 'next', 25, 'high', 'nirvana', "
+        "  'loc1', ?, ?, 1)",
+        [
+          createdMs + 5000,
+          createdMs,
+          createdMs + 1000,
+          createdMs + 2000,
+          createdMs + 3000,
+        ],
+      );
+      await seed.customStatement(
+        'INSERT INTO todos (id, title, user_id, created_at, intent, clarified) '
+        "VALUES ('t2', 'Was an inbox item', 'u1', ?, 'maybe', 0)",
+        [createdMs],
+      );
+      await seed.customStatement(
+        'INSERT INTO actions (id, outcome_id, user_id, "text", role, created_at) '
+        "VALUES ('a1', 't1', 'u1', 'Call', 'current', ?)",
+        [createdMs],
+      );
+      await seed.customStatement(
+        'INSERT INTO tags (id, name, type, user_id) '
+        "VALUES ('tag1', 'Home', 'context', 'u1')",
+      );
+      await seed.customStatement(
+        'INSERT INTO todo_tags (id, todo_id, tag_id, user_id) '
+        "VALUES ('tt1', 't1', 'tag1', 'u1')",
+      );
+      await seed.customStatement(
+        'INSERT INTO time_logs (id, user_id, task_id, started_at) '
+        "VALUES ('tl1', 'u1', 't1', '2026-07-30T09:30:00.000Z')",
+      );
+      await seed.customStatement(
+        'INSERT INTO captures (id, title, created_at, user_id) '
+        "VALUES ('c1', 'raw thought', ?, 'u1')",
+        [createdMs],
+      );
+      await seed.customStatement(
+        'INSERT INTO capture_outcomes (id, capture_id, outcome_id, created_at, '
+        '  user_id) '
+        "VALUES ('co1', 'c1', 't1', ?, 'u1')",
+        [createdMs],
+      );
+
+      Future<List<Map<String, Object?>>> todosWithoutClarified(
+        GtdDatabase db,
+      ) async => [
+            for (final row in await _rows(db, 'todos'))
+              {...row}..remove('clarified'),
+          ];
+      final todosBefore = await todosWithoutClarified(seed);
+      expect(todosBefore, hasLength(2));
+      final childTables = ['actions', 'todo_tags', 'time_logs', 'capture_outcomes'];
+      final childrenBefore = {
+        for (final t in childTables) t: await _rows(seed, t),
+      };
+
+      await seed.customStatement('PRAGMA user_version = 4');
+      await seed.close();
+
+      final upgraded = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      addTearDown(upgraded.close);
+
+      expect(
+        await upgraded.customSelect('PRAGMA user_version').getSingle().then(
+              (r) => r.read<int>('user_version'),
+            ),
+        5,
+      );
+      expect(await _columnNames(upgraded, 'todos'), isNot(contains('clarified')),
+          reason: 'v5 drops the dead flag');
+
+      // Both rows survive — the legacy `clarified = 0` one included — with every
+      // other column exactly as seeded.
+      expect(await todosWithoutClarified(upgraded), todosBefore);
+
+      // Every child still points at its parent, byte for byte.
+      for (final t in childTables) {
+        expect(await _rows(upgraded, t), childrenBefore[t],
+            reason: '$t rows survive the todos recreate');
+      }
+      expect(await _objects(upgraded, 'index'),
+          contains('idx_actions_outcome_role'));
     });
   });
 }

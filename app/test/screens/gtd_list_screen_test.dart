@@ -33,7 +33,6 @@ Todo _todo(String id, String title) => Todo(
       title: title,
       doneAt: null,
       createdAt: DateTime(2024, 1, 1),
-      clarified: true,
       intent: 'next',
       userId: kLocalUserId,
     );

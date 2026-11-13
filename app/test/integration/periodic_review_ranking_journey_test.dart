@@ -42,7 +42,6 @@ void main() {
         title: Value(id),
         userId: const Value('local'),
         intent: Value(intent),
-        clarified: const Value(true),
         createdAt: Value(baseCreatedAt.add(Duration(days: createdDay))),
         updatedAt: Value(baseCreatedAt),
       ));

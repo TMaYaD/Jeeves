@@ -35,10 +35,6 @@ TodosCompanion _capture({required String id, required String title}) {
   return TodosCompanion(
     id: Value(id),
     title: Value(title),
-    // Unclarified: the pre-split Inbox shape these service tests seed. The
-    // stampClarified test depends on it — a stamp-only write must leave
-    // `clarified` false.
-    clarified: const Value(false),
     userId: Value(_userId),
     createdAt: Value(now),
     updatedAt: Value(now),
@@ -112,7 +108,6 @@ void main() {
       );
 
       final row = await _row(db, 'a');
-      expect(row.clarified, isTrue);
       expect(row.intent, 'next');
       expect((await db.actionDao.getCurrentAction('a'))?.actionText,
           'Call Alice');
@@ -126,7 +121,6 @@ void main() {
       await service.clarifyToOutcome('a', to: RoutingKind.maybe);
 
       final row = await _row(db, 'a');
-      expect(row.clarified, isTrue);
       expect(row.intent, 'maybe');
       expect(row.doneAt, isNull);
     });
@@ -137,7 +131,6 @@ void main() {
       await service.clarifyToOutcome('a', to: RoutingKind.done);
 
       final row = await _row(db, 'a');
-      expect(row.clarified, isTrue);
       expect(row.doneAt, isNotNull);
     });
 
@@ -177,7 +170,6 @@ void main() {
       );
 
       final row = await _row(db, 'a');
-      expect(row.clarified, isTrue);
       expect(row.intent, 'next');
       expect(await service.getPersonTagIds('a'), {'alice-tag'});
     });
@@ -214,7 +206,6 @@ void main() {
 
       final row = await _row(db, 'a');
       expect(row.lastClarifiedAt, isNotNull);
-      expect(row.clarified, isFalse); // stamp-only: no routing applied
       expect(row.title, 'Item');
     });
 
@@ -270,7 +261,6 @@ void main() {
       final outcome = await _row(db, outcomeId);
       expect(outcome.id, isNot('c1'));
       expect(outcome.title, 'Draft outline');
-      expect(outcome.clarified, isTrue);
       expect(outcome.intent, 'next');
       expect((await db.actionDao.getCurrentAction(outcomeId))?.actionText,
           'Draft outline');

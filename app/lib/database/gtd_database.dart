@@ -186,7 +186,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final UserPreferencesDao userPreferencesDao = UserPreferencesDao(this);
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   /// Completes with the [OpeningDetails] of this store's one open.
   ///
@@ -254,6 +254,16 @@ class GtdDatabase extends _$GtdDatabase {
           // table. Purely additive — no existing row is touched.
           if (from < 4) {
             await m.createTable(captureAttachments);
+          }
+          // v5 (issue #823): drop `todos.clarified`. Every write path stored
+          // `true` — an unclarified item is a Capture, and "has this been
+          // clarified?" is a Capture's `clarified_at` — so the column held a
+          // constant and nothing reads it. Same recreate as v2: every row and
+          // every other column is copied unchanged, children keep their parent,
+          // and an interruption rolls the whole swap back. A row that somehow
+          // held `clarified = 0` stays an Outcome rather than being deleted.
+          if (from < 5) {
+            await m.alterTable(TableMigration(todos));
           }
         }),
       );

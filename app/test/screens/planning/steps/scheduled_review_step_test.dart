@@ -14,7 +14,6 @@ void main() {
       title: id,
       userId: 'local',
       createdAt: DateTime(2030),
-      clarified: true,
       intent: 'next',
       dueDate: due,
       timeEstimate: 30,
