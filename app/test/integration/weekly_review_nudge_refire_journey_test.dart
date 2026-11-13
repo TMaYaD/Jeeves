@@ -178,6 +178,9 @@ void main() {
       await tester.pump(const Duration(minutes: 5));
       appRouter.go('/periodic-review');
       await _flush(tester);
+      // Let the route transition finish (the Banner's pulse rules out
+      // pumpAndSettle); the footer is off-screen until then.
+      await tester.pump(const Duration(milliseconds: 600));
       expect(banner, findsNothing, reason: 'hidden while the Ceremony is open');
       await tester.ensureVisible(find.text('15 min'));
       await tester.runAsync(() async {
@@ -198,6 +201,7 @@ void main() {
       // Leave without Done.
       appRouter.go('/inbox');
       await _flush(tester);
+      await tester.pump(const Duration(milliseconds: 600));
       expect(banner, findsOneWidget);
       expect(
           find.textContaining(RegExp(
@@ -212,6 +216,7 @@ void main() {
         await pumpEventQueue();
       });
       await _flush(tester);
+      await tester.pump(const Duration(milliseconds: 600));
       expect(find.byType(PeriodicReviewScreen), findsOneWidget);
       expect(c.read(periodicReviewProvider).currentStep, stepLeftAt);
       expect(banner, findsNothing);
@@ -257,15 +262,7 @@ void main() {
       'showing a ✕', (tester) async {
     final today = DateTime(startedAt.year, startedAt.month, startedAt.day);
     startedAt = today.add(const Duration(hours: 10));
-    await db.into(db.todos).insert(TodosCompanion(
-          id: const Value('next-today'),
-          title: const Value('Next today'),
-          userId: const Value('local'),
-          intent: const Value('next'),
-          clarified: const Value(true),
-          createdAt: Value(startedAt.subtract(const Duration(hours: 1))),
-          updatedAt: Value(startedAt.subtract(const Duration(hours: 1))),
-        ));
+    await insertCapture('inbox', startedAt.subtract(const Duration(hours: 1)));
     final planningBanner = find.byKey(const Key('planning_banner_visible'));
     try {
       await pumpApp(tester);
@@ -283,8 +280,9 @@ void main() {
       await _flush(tester);
       expect(planningBanner, findsNothing);
 
-      // The next morning's planning time fires it again (10:00 + 22h30 = 08:30).
-      await tester.pump(const Duration(hours: 20, minutes: 30));
+      // The evening Shutdown time opens the next planning period: a new firing
+      // (12:00 + 6h05 = 18:05).
+      await tester.pump(const Duration(hours: 6, minutes: 5));
       await _flush(tester);
       expect(planningBanner, findsOneWidget);
     } finally {
