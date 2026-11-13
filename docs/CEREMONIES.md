@@ -192,7 +192,10 @@ fidelity**, which is the whole reason the two gestures differ:
 | Banner | ✕ | dismiss | An explicit in-app gesture; the user meant it |
 | Banner | action button | user-explicit snooze | A duration the user chose |
 | Notification | swipe away | system-implicit snooze | Low-signal — mass-dismiss fatigue makes it a poor read of intent |
-| Notification | skip | dismiss | An explicit button, cadence-flavoured copy ("Skip today") |
+| Notification | skip | dismiss | An explicit button, cadence-flavoured copy ("Skip today"; "Skip this week" for Weekly Review) |
 
-Today each Ritual schedules its own Notification. Consolidating them behind the
-queue, as the Banner already is, is the standing target.
+The Notification surface is a projection of the queue to fire instants. An OS
+notification fires while the app is not running, so the scheduler asks, for each
+Ritual's notification time over the coming week, whether that Ritual would hold
+the queue head then — over the same predicates the live queue uses, with current
+facts frozen — and arms only those. It re-plans whenever the facts change.

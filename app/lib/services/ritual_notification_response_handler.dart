@@ -1,5 +1,4 @@
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/ritual.dart';
 import '../providers/nudge_action_outbox.dart';
@@ -52,29 +51,57 @@ Future<void> handleRitualNotificationResponse(
   }
 
   final ritual = ritualAction.ritual;
-  final snoozeMinutes =
-      ritualAction.kind == RitualNotificationActionKind.snooze &&
-              ritual == RitualId.dailyPlanning
-          // Read snooze duration directly from SharedPreferences; Riverpod is
-          // not available in background-isolate notification callbacks.
-          ? await _readDefaultSnoozeDuration()
-          : 60;
+  final payload = parseRitualNotificationPayload(response.payload);
+  final tappedAt = now();
+  if (ritualAction.kind == RitualNotificationActionKind.snooze) {
+    // The duration travels in the payload: this may be a background isolate
+    // with no Riverpod container, and a notification delivered by an older
+    // build carries none, so fall back to an hour.
+    final snoozeMinutes = payload?.snoozeMinutes ?? 60;
+    final fireAt = tappedAt.add(Duration(minutes: snoozeMinutes));
+    final tappedEdge = payload?.edge;
+    await recordRitualNotificationAction(
+      ritual: ritual,
+      kind: ritualAction.kind,
+      at: tappedAt,
+      snoozeMinutes: snoozeMinutes,
+    );
+    await service.scheduleRitualNotification(
+      id: ritualSnoozeNotificationId(ritual),
+      ritual: ritual,
+      fireAt: fireAt,
+      payload: tappedEdge == null
+          ? 'nudge:${ritual.keyPrefix}'
+          : ritualNotificationPayload(
+              ritual,
+              edge: tappedEdge,
+              snoozeMinutes: snoozeMinutes,
+              fireAt: fireAt,
+            ),
+    );
+    return;
+  }
+
   await recordRitualNotificationAction(
     ritual: ritual,
     kind: ritualAction.kind,
-    at: now(),
-    snoozeMinutes: snoozeMinutes,
+    at: tappedAt,
+    snoozeMinutes: 60,
   );
-  if (ritualAction.kind == RitualNotificationActionKind.snooze) {
-    await service.snoozeRitualReminder(ritual, snoozeMinutes);
-  } else {
-    await service.skipTodayRitualReminder(ritual);
+  // Skip dismisses the Nudge's current firing, so every alarm of that firing
+  // goes — Weekly Review's one firing spans several daily alarms — and any
+  // pending snooze. Later firings keep their alarms.
+  await service.cancelReminder(ritualSnoozeNotificationId(ritual));
+  final skippedEdge = payload?.edge;
+  if (skippedEdge == null) return;
+  for (final pending in await service.pendingRitualNotifications()) {
+    final other = parseRitualNotificationPayload(pending.payload);
+    final otherEdge = other?.edge;
+    if (other != null &&
+        other.ritual == ritual &&
+        otherEdge != null &&
+        otherEdge.isAtSameMomentAs(skippedEdge)) {
+      await service.cancelReminder(pending.id);
+    }
   }
-}
-
-Future<int> _readDefaultSnoozeDuration() async {
-  final prefs = await SharedPreferences.getInstance();
-  return prefs
-          .getInt('focus_session_planning_settings_default_snooze_duration') ??
-      60;
 }

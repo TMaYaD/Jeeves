@@ -2,9 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../models/ritual.dart';
 import '../models/shutdown_settings.dart';
-import '../services/notification_service.dart';
 
 const _kShutdownTimeHour = 'shutdown_settings_time_hour';
 const _kShutdownTimeMinute = 'shutdown_settings_time_minute';
@@ -43,14 +41,12 @@ class ShutdownSettingsNotifier extends Notifier<ShutdownSettings> {
     await prefs.setInt(_kShutdownTimeHour, time.hour);
     await prefs.setInt(_kShutdownTimeMinute, time.minute);
     state = state.copyWith(shutdownTime: time);
-    await _rescheduleShutdownReminder();
   }
 
   Future<void> setNotificationEnabled(bool enabled) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kShutdownNotificationEnabled, enabled);
     state = state.copyWith(notificationEnabled: enabled);
-    await _rescheduleShutdownReminder();
   }
 
   Future<void> setBannerEnabled(bool enabled) async {
@@ -58,34 +54,4 @@ class ShutdownSettingsNotifier extends Notifier<ShutdownSettings> {
     await prefs.setBool(_kShutdownBannerEnabled, enabled);
     state = state.copyWith(bannerEnabled: enabled);
   }
-
-  Future<void> _rescheduleShutdownReminder() async {
-    final svc = ref.read(notificationServiceProvider);
-    // See focus_session_planning_settings_provider for the rationale: disabled
-    // / otherwise. A pending snooze one-off (on a separate id) is preserved
-    // while the recurring schedule is re-armed.
-    if (!state.notificationEnabled) {
-      await svc.cancelRitualReminder(RitualId.eveningShutdown);
-    } else {
-      await svc.scheduleRitualReminder(
-          RitualId.eveningShutdown, state.shutdownTime);
-    }
-  }
-}
-
-/// Restores the shutdown notification schedule on app startup.
-Future<void> initShutdownNotificationSchedule() async {
-  final prefs = await SharedPreferences.getInstance();
-  final svc = NotificationService.instance;
-  final notificationEnabled =
-      prefs.getBool(_kShutdownNotificationEnabled) ?? true;
-  if (!notificationEnabled) {
-    await svc.cancelRitualReminder(RitualId.eveningShutdown);
-    return;
-  }
-  // Re-arm the recurring schedule.
-  final hour = prefs.getInt(_kShutdownTimeHour) ?? 18;
-  final minute = prefs.getInt(_kShutdownTimeMinute) ?? 0;
-  await svc.scheduleRitualReminder(
-      RitualId.eveningShutdown, TimeOfDay(hour: hour, minute: minute));
 }

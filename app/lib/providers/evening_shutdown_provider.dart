@@ -21,9 +21,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../database/daos/focus_session_dao.dart' show SessionSettlement;
 import '../database/gtd_database.dart';
-import '../models/ritual.dart';
 import '../models/todo.dart' show RoutingKind;
-import '../services/notification_service.dart';
 import '../utils/snapshot_nav.dart';
 import 'database_provider.dart';
 import 'focus_session_planning_provider.dart'
@@ -432,18 +430,6 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
         dispositions: {...implied, ...state.dispositions},
         now: now,
       );
-      // No open session remains — today's Evening Shutdown fire is moot.
-      // Best-effort reconciliation of the OS-scheduled notification: a
-      // platform failure here must never abort the shutdown, which has
-      // already closed the session. Swallow so the completion-state update
-      // below still runs (ADR-0020).
-      try {
-        await ref
-            .read(notificationServiceProvider)
-            .skipTodayRitualReminder(RitualId.eveningShutdown);
-      } catch (_) {
-        // Best-effort OS notification reconciliation must not fail shutdown.
-      }
     }
 
     final today = planningToday();

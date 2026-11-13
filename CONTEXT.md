@@ -411,7 +411,6 @@ A platform-delivered alert (Android / iOS / web push) that surfaces a Nudge even
 - **skip** (explicit action button) — high-signal **dismiss** (current firing). User-facing copy is cadence-flavoured ("Skip today" at daily cadence, "Skip this week" at weekly).
 - **implicit swipe-away** — low-signal; mass-dismiss fatigue makes this an unreliable indicator of intent, so the surface maps it to a **system-implicit snooze** with a default duration (which the implementation may borrow from the Ritual's Cadence; see the Nudge entry).
 
-Today each Ritual schedules its own Notification; consolidating them behind the queue, as the Banner already is, is the standing target.
 _Avoid_: Push, Alert, Reminder (Reminder is a separate concept — see ambiguities)
 
 **Wizard** *(one possible implementation form for a Ceremony)*:

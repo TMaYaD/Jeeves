@@ -21,10 +21,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../database/daos/focus_session_dao.dart' show SessionSettlement;
 import '../database/gtd_database.dart';
 import '../models/action_draft.dart';
-import '../models/ritual.dart';
 import '../models/todo.dart' show RoutingKind;
 import '../services/clarification_service.dart';
-import '../services/notification_service.dart';
 import '../utils/snapshot_nav.dart';
 import 'auth_provider.dart';
 import 'clarify_retention_provider.dart';
@@ -995,10 +993,6 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       userId: _userId,
       taskIds: state.pendingSelectedTaskIds,
     );
-    // A qualifying session now exists — today's DPR fire is moot. Best-effort.
-    await ref
-        .read(notificationServiceProvider)
-        .skipTodayRitualReminder(RitualId.dailyPlanning);
     state = FocusSessionPlanningState(
       energyLevel: state.energyLevel,
       availableMinutes: state.availableMinutes,
