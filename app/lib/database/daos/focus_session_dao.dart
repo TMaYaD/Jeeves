@@ -756,7 +756,7 @@ FROM (
                 WHERE d.task_id = t.id), '')
     ) AS floor_at
   FROM todos t
-  WHERE t.intent = 'next' AND t.clarified = 1 AND t.done_at IS NULL
+  WHERE t.intent = 'next' AND t.done_at IS NULL
     -- Next's own membership rule: the actionless PersonBlocked quadrant is
     -- Waiting For, which Bypassed never claims.
     AND (
