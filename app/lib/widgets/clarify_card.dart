@@ -893,8 +893,8 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
             },
           ),
           const SizedBox(height: 12),
-          // Context row — multi-select; reuse ContextTagPickerWidget. Its
-          // "+ context" trailing affordance doubles as the optional-tag hint.
+          // Context row — applied tags plus a dotted "+" that opens the tag
+          // cloud; reuses ContextTagPickerWidget.
           ContextTagPickerWidget(
             assignedTags: contextTags,
             onAssign: (t) {

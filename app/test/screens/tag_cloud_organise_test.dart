@@ -113,4 +113,23 @@ void main() {
       expect(layout.fontSizes['b'], 12.0);
     });
   });
+
+  group('organiseTagCloud includeUnusedTags', () {
+    test('drops unused tags by default', () {
+      final layout = _organise([_twc('a', 'used', 1), _twc('b', 'idle', 0)]);
+      expect(_ids(layout), ['a']);
+    });
+
+    test('keeps unused tags, ordered last, when asked', () {
+      final layout = organiseTagCloud(
+        tags: [_twc('b', 'idle', 0), _twc('a', 'used', 1)],
+        selectedIds: const {},
+        query: '',
+        expanded: false,
+        includeUnusedTags: true,
+      );
+      expect(_ids(layout), ['a', 'b']);
+    });
+  });
 }
+

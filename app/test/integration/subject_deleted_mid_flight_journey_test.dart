@@ -121,6 +121,10 @@ void main() {
               .overrideWith((_) => Stream.value(const [])),
           projectTagsProvider.overrideWith((_) => Stream.value(seeded.projects)),
           contextTagsProvider.overrideWith((_) => Stream.value(seeded.contexts)),
+          contextTagsWithCountProvider.overrideWith((_) => Stream.value([
+                for (final t in seeded.contexts)
+                  TagWithCount(tag: t, count: 0),
+              ])),
         ],
         child: MaterialApp.router(routerConfig: router),
       ));
@@ -444,7 +448,7 @@ Future<void> _openContextTagEditor(WidgetTester tester) async {
 Future<void> _tapFirstContextTag(WidgetTester tester) async {
   await tester.tap(find
       .descendant(
-          of: find.byType(ContextTagPickerWidget),
+          of: find.byKey(const Key('context_tag_picker_cloud')),
           matching: find.byType(TagText))
       .first);
 }

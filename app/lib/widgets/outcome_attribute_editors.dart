@@ -19,7 +19,8 @@ void showOutcomeContextTagEditor(BuildContext context, String todoId) {
     backgroundColor: Colors.white,
     builder: (ctx) => Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom + 24, left: 24, right: 24, top: 24),
-      child: Column(
+      child: SingleChildScrollView(
+       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -33,6 +34,7 @@ void showOutcomeContextTagEditor(BuildContext context, String todoId) {
               final contextTags =
                   tags.where((t) => t.type == 'context').toList();
               return ContextTagPickerWidget(
+                cloudInitiallyOpen: true,
                 assignedTags: contextTags,
                 onAssign: (tag) =>
                     ref
@@ -48,6 +50,7 @@ void showOutcomeContextTagEditor(BuildContext context, String todoId) {
             },
           ),
         ],
+       ),
       ),
     ),
   );

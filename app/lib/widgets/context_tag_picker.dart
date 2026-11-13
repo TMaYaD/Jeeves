@@ -2,27 +2,31 @@ import 'package:drift/drift.dart' show Value;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../database/daos/tag_dao.dart' show TagWithCount;
 import '../database/gtd_database.dart';
 import '../providers/database_provider.dart';
 import '../providers/tags_provider.dart';
 import '../utils/tag_colors.dart';
+import 'dotted_add_button.dart';
+import 'tag_cloud_view.dart';
 import 'tag_list.dart';
 
-/// Multi-select tag list for context tags.
-///
-/// Tags are rendered via [TagList] / [TagText] so the visual language matches
-/// the rest of the app.  Long-pressing a tag opens a palette color picker.
+/// Context-tag editor: the applied tags and a dotted `+` that reveals the
+/// searchable tag cloud (the drawer's cloud, plus `Add "<name>"` for a name no
+/// tag has yet). Long-pressing a tag opens a palette color picker.
 class ContextTagPickerWidget extends ConsumerStatefulWidget {
   const ContextTagPickerWidget({
     super.key,
     required this.assignedTags,
     required this.onAssign,
     required this.onRemove,
+    this.cloudInitiallyOpen = false,
   });
 
   final List<Tag> assignedTags;
   final ValueChanged<Tag> onAssign;
   final ValueChanged<Tag> onRemove;
+  final bool cloudInitiallyOpen;
 
   @override
   ConsumerState<ContextTagPickerWidget> createState() =>
@@ -31,97 +35,55 @@ class ContextTagPickerWidget extends ConsumerStatefulWidget {
 
 class _ContextTagPickerWidgetState
     extends ConsumerState<ContextTagPickerWidget> {
-  bool _creatingNew = false;
-  final _newContextController = TextEditingController();
-
-  @override
-  void dispose() {
-    _newContextController.dispose();
-    super.dispose();
-  }
+  late bool _cloudOpen = widget.cloudInitiallyOpen;
 
   @override
   Widget build(BuildContext context) {
-    final allContextsAsync = ref.watch(contextTagsProvider);
-    final allContexts = allContextsAsync.asData?.value ?? [];
     final assignedIds = widget.assignedTags.map((t) => t.id).toSet();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         TagList(
-          tags: allContexts,
-          selectedIds: assignedIds,
-          onTap: (tag) {
-            if (assignedIds.contains(tag.id)) {
-              widget.onRemove(tag);
-            } else {
-              widget.onAssign(tag);
-            }
-          },
+          tags: widget.assignedTags,
+          spacing: 12,
+          runSpacing: 8,
+          onTap: widget.onRemove,
+          onDismiss: widget.onRemove,
           onLongPress: (tag) => _showColorPicker(context, tag),
-          trailing: _creatingNew
-              ? SizedBox(
-                  width: 160,
-                  child: TextField(
-                    controller: _newContextController,
-                    autofocus: true,
-                    decoration: const InputDecoration(
-                      prefixText: '@',
-                      hintText: 'context',
-                      border: OutlineInputBorder(),
-                      contentPadding:
-                          EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      isDense: true,
-                    ),
-                    onSubmitted: _createContext,
-                  ),
-                )
-              : GestureDetector(
-                  onTap: () => setState(() => _creatingNew = true),
-                  child: const Text(
-                    '+ context',
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF9CA3AF),
-                    ),
-                  ),
-                ),
+          trailing: DottedAddButton(
+            key: const Key('context_tag_picker_add'),
+            onTap: () => setState(() => _cloudOpen = !_cloudOpen),
+          ),
         ),
-        if (_creatingNew)
+        if (_cloudOpen)
           Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                FilledButton(
-                  onPressed: () =>
-                      _createContext(_newContextController.text),
-                  child: const Text('Add'),
-                ),
-                const SizedBox(width: 8),
-                TextButton(
-                  onPressed: () => setState(() {
-                    _creatingNew = false;
-                    _newContextController.clear();
-                  }),
-                  child: const Text('Cancel'),
-                ),
-              ],
+            padding: const EdgeInsets.only(top: 12),
+            child: Consumer(
+              builder: (context, ref, _) {
+                final tags =
+                    ref.watch(contextTagsWithCountProvider).asData?.value ??
+                        const <TagWithCount>[];
+                return TagCloudView(
+                  key: const Key('context_tag_picker_cloud'),
+                  tags: tags,
+                  selectedIds: assignedIds,
+                  includeUnusedTags: true,
+                  alwaysOfferFindField: true,
+                  onTap: (tag) => assignedIds.contains(tag.id)
+                      ? widget.onRemove(tag)
+                      : widget.onAssign(tag),
+                  onLongPress: (tag) => _showColorPicker(context, tag),
+                  onCreateTag: _createContext,
+                );
+              },
             ),
           ),
       ],
     );
   }
 
-  Future<void> _createContext(String value) async {
-    final name = value.trim();
-    if (name.isEmpty) return;
-    setState(() {
-      _creatingNew = false;
-      _newContextController.clear();
-    });
+  Future<void> _createContext(String name) async {
     final tag =
         await ref.read(tagNotifierProvider).createTag(name, 'context');
     widget.onAssign(tag);

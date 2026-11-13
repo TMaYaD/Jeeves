@@ -23,6 +23,7 @@ import '../../widgets/outcome_attribute_strip.dart';
 import '../../widgets/outcome_plan_section.dart';
 import '../../widgets/person_tag_picker.dart';
 import '../../widgets/project_picker.dart';
+import '../../widgets/dotted_add_button.dart';
 import '../../widgets/tag_list.dart';
 import '../../widgets/task_status_row.dart';
 
@@ -327,17 +328,8 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                         spacing: 12,
                         runSpacing: 8,
                         onTap: (_) => showOutcomeContextTagEditor(context, widget.todoId),
-                        trailing: GestureDetector(
+                        trailing: DottedAddButton(
                           onTap: () => showOutcomeContextTagEditor(context, widget.todoId),
-                          child: Container(
-                            width: 24,
-                            height: 24,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              border: Border.all(color: const Color(0xFFD1D5DB)),
-                            ),
-                            child: const Icon(Icons.add, size: 16, color: Color(0xFF9CA3AF)),
-                          ),
                         ),
                       ),
                       const SizedBox(height: 16),
