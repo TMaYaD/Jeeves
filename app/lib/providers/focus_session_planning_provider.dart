@@ -1151,15 +1151,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       userId: _userId,
       taskIds: state.pendingSelectedTaskIds,
     );
-    // Remember this session's planned time as the next planning's default.
-    // Skipped when unchanged so an ordinary day authors no redundant sync op.
     final plannedMinutes = state.availableMinutes;
-    final storedMinutes = await _db.userPreferencesDao
-        .get(_userId, kLastSessionAvailableMinutesKey);
-    if (storedMinutes != plannedMinutes.toString() && ref.mounted) {
-      await syncedPrefs(ref)
-          .set(kLastSessionAvailableMinutesKey, plannedMinutes);
-    }
     // A qualifying session now exists — today's DPR fire is moot. Best-effort.
     await ref
         .read(notificationServiceProvider)
@@ -1171,6 +1163,16 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     // Retained clarify drafts belong to the performance that produced them,
     // the same as the inbox snapshot and its cursor above.
     ref.read(clarifyRetentionProvider).clearAll();
+    // Remember this session's planned time as the next planning's default.
+    // Last, so a preference read/write failure cannot leave the opened session
+    // with its reminder unskipped or the draft unreset. Skipped when unchanged
+    // so an ordinary day authors no redundant sync op.
+    final storedMinutes = await _db.userPreferencesDao
+        .get(_userId, kLastSessionAvailableMinutesKey);
+    if (storedMinutes != plannedMinutes.toString() && ref.mounted) {
+      await syncedPrefs(ref)
+          .set(kLastSessionAvailableMinutesKey, plannedMinutes);
+    }
   }
 
   /// Resets the planning ritual to a fresh performance.
