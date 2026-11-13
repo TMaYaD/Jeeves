@@ -543,6 +543,19 @@ EXISTS (
   /// Done means "completed and not deleted." Trashed rows are excluded so
   /// the Done list isn't polluted by tasks the user has explicitly removed,
   /// even if a `done_at` timestamp survived the trash transition (#278).
+  /// Outcomes that should have a due-date notification: due-dated, clarified,
+  /// not done and not trashed. Someday/Maybe Outcomes stay in — only
+  /// completion, deletion, trashing and removing the due date cancel it.
+  Stream<List<Todo>> watchDueDateNotificationCandidates() {
+    return (select(todos)
+          ..where((t) =>
+              t.dueDate.isNotNull() &
+              t.doneAt.isNull() &
+              t.clarified.equals(true) &
+              t.intent.equals('trash').not()))
+        .watch();
+  }
+
   Stream<List<Todo>> watchDone() {
     return customSelect(
       'SELECT ${todoProjectionSql('todos')} FROM todos '

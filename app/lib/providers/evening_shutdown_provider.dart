@@ -23,6 +23,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../database/daos/focus_session_dao.dart' show SessionSettlement;
 import '../database/gtd_database.dart';
 import '../models/ritual.dart';
+import '../models/todo.dart' show RoutingKind;
 import '../services/notification_service.dart';
 import '../utils/snapshot_nav.dart';
 import 'database_provider.dart';
@@ -398,6 +399,37 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
   void deferTask(String id) {
     _setDisposition(id, _kDispMaybe);
     nextUnfinishedTask();
+  }
+
+  /// Records that the user gave [id] a verdict from the re-clarify sheet
+  /// (Outcome achieved / More to do / Waiting / Someday). The sheet has already
+  /// written the verdict, so this only updates ritual state: it drops the task
+  /// from the frozen list (the verdict is final, like one given in-session) and
+  /// holds the Disposition the verdict implies — `nextAction → rollover`,
+  /// `waitingFor` / `maybe → leave` — or none for `done`, so Close Day is never
+  /// handed a Disposition for a completed Outcome.
+  void recordVerdict(String id, RoutingKind verdict) {
+    final disposition = switch (verdict) {
+      RoutingKind.nextAction => _kDispRollover,
+      RoutingKind.waitingFor || RoutingKind.maybe => _kDispLeave,
+      RoutingKind.done => null,
+      _ => throw ArgumentError.value(verdict, 'verdict', 'not offered here'),
+    };
+    final dispositions = {...state.dispositions}..remove(id);
+    if (disposition != null) dispositions[id] = disposition;
+
+    final nav = state.unfinishedNav;
+    final removedIndex = (nav.items ?? const <Todo>[]).indexWhere((t) => t.id == id);
+    final items = [...?nav.items]..removeWhere((t) => t.id == id);
+    // Removing an earlier item shifts the cursor's target back by one.
+    var index = nav.index;
+    if (removedIndex >= 0 && removedIndex < index) index -= 1;
+    index = index.clamp(0, items.length);
+    state = state.copyWith(
+      dispositions: dispositions,
+      unfinishedNav: nav.copyWith(items: items, index: index),
+    );
+    if (state.unfinishedNav.isComplete) advanceStep();
   }
 
   void _setDisposition(String id, String disposition) {
