@@ -271,7 +271,12 @@ void main() {
   testWidgets(
       'a short session finished with Done clears the Banner; it returns seven '
       'days later', (tester) async {
-    await insertCapture('inbox', startedAt.subtract(const Duration(days: 20)));
+    // More Captures than a 15-minute session holds (7 items), so the session is
+    // genuinely partial.
+    for (var i = 0; i < 8; i++) {
+      await insertCapture(
+          'inbox-$i', startedAt.subtract(const Duration(days: 20)));
+    }
     await setLastCompleted(startedAt.subtract(const Duration(days: 10)));
     // Start a 15-minute session, leave it, then finish it with Done, before
     // the app mounts: the review was due, and Done stamps the last review.
@@ -280,6 +285,8 @@ void main() {
     await tester.runAsync(() async {
       ceremony.enter(RitualId.weeklyReview);
       await review.startSession(budgetMinutes: 15);
+      expect(c.read(periodicReviewProvider).isFinalSession, isFalse,
+          reason: 'eight Captures exceed a 15-minute session');
       ceremony.exit(RitualId.weeklyReview);
       await review.completeSession();
     });
