@@ -120,15 +120,12 @@ class TagManagementSheet extends ConsumerWidget {
               final newName = controller.text.trim();
               if (newName.isEmpty) return;
               try {
-                // A name already held by another entry of this kind would make
-                // the DAO fold this one into it. Ask first: the merge cannot be
-                // undone and must not happen by surprise.
-                final sameKind = await container
-                    .read(tagsWithCountByTypeProvider(tag.type).future);
-                final taken = sameKind
-                    .map((e) => e.tag)
-                    .where((t) => t.id != tag.id && t.name == newName)
-                    .firstOrNull;
+                // The write itself reports a namesake (check and write share
+                // one transaction), so a collision that appeared after the
+                // list was last read still reaches the user as a question.
+                final taken = await container
+                    .read(tagNotifierProvider)
+                    .renameUnlessTaken(tag.id, newName);
                 if (taken != null) {
                   if (!ctx.mounted) return;
                   final confirm = await showDialog<bool>(
@@ -153,8 +150,6 @@ class TagManagementSheet extends ConsumerWidget {
                   );
                   if (confirm != true) return;
                   await container.read(tagNotifierProvider).merge(tag.id, taken.id);
-                } else {
-                  await container.read(tagNotifierProvider).rename(tag.id, newName);
                 }
                 if (ctx.mounted) Navigator.pop(ctx);
               } catch (_) {

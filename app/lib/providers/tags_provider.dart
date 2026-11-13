@@ -80,6 +80,22 @@ class TagNotifier {
     await db.tagDao.rename(tagId, trimmed);
   }
 
+  /// Rename without ever merging: returns the same-kind entry already holding
+  /// [newName] (nothing written) so the caller can confirm a [merge], or null
+  /// when the rename was written. The check and write are one transaction.
+  Future<Tag?> renameUnlessTaken(String tagId, String newName) async {
+    final trimmed = newName.trim();
+    if (trimmed.isEmpty || trimmed.length > 100) {
+      throw ArgumentError.value(
+        newName,
+        'newName',
+        'Tag name must be between 1 and 100 characters.',
+      );
+    }
+    final db = _ref.read(databaseProvider);
+    return db.tagDao.renameUnlessTaken(tagId, trimmed);
+  }
+
   /// Update the colour of a tag. Pass null to clear it.
   Future<void> updateColor(String tagId, String? color) {
     final db = _ref.read(databaseProvider);

@@ -286,6 +286,35 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
     });
   }
 
+  /// Rename a tag like [rename], but never merge: when another tag of the same
+  /// type already owns [newName], nothing is written and that tag is returned
+  /// so the caller can ask the user before merging. Returns null when the
+  /// rename was written (or was a no-op for an unknown tag or unchanged name).
+  ///
+  /// The collision check and the write share one transaction, so a namesake
+  /// that arrives after the caller last looked cannot be merged silently.
+  Future<Tag?> renameUnlessTaken(String tagId, String newName) {
+    final trimmed = newName.trim();
+    return attachedDatabase.capturing(() async {
+      final current = await (select(tags)..where((t) => t.id.equals(tagId)))
+          .getSingleOrNull();
+      if (current == null || current.name == trimmed) return null;
+
+      final conflict = await (select(tags)
+            ..where((t) =>
+                t.name.equals(trimmed) &
+                t.type.equals(current.type) &
+                t.id.equals(tagId).not())
+            ..orderBy([(t) => OrderingTerm.asc(t.id)])
+            ..limit(1))
+          .getSingleOrNull();
+      if (conflict != null) return conflict;
+
+      await upsertTag(TagsCompanion(id: Value(tagId), name: Value(trimmed)));
+      return null;
+    });
+  }
+
   /// Update the colour of a tag; pass null to clear it.
   Future<void> updateColor(String tagId, String? color) => upsertTag(
         TagsCompanion(id: Value(tagId), color: Value(color)),

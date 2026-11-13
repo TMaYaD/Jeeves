@@ -19,6 +19,25 @@ void main() {
     setUp(() => db = _openInMemory());
     tearDown(() => db.close());
 
+    test('renameUnlessTaken reports a namesake and writes nothing', () async {
+      for (final (id, name) in [('n1', 'Alice'), ('n2', 'Alise')]) {
+        await db.tagDao.upsertTag(TagsCompanion(
+          id: Value(id),
+          name: Value(name),
+          type: const Value('person'),
+          userId: const Value(_userId),
+        ));
+      }
+      final taken = await db.tagDao.renameUnlessTaken('n2', ' Alice ');
+      expect(taken?.id, 'n1');
+      final rows = await db.select(db.tags).get();
+      expect({for (final t in rows) t.id: t.name}, {'n1': 'Alice', 'n2': 'Alise'});
+
+      expect(await db.tagDao.renameUnlessTaken('n2', 'Alicia'), isNull);
+      expect((await (db.select(db.tags)..where((t) => t.id.equals('n2'))).getSingle()).name,
+          'Alicia');
+    });
+
     test('upsertTag creates a new tag', () async {
       await db.tagDao.upsertTag(TagsCompanion(
         id: const Value('t1'),

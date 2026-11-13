@@ -151,6 +151,49 @@ void main() {
     await dispose(tester);
   });
 
+  // The namesake is committed straight to the store after the dialog opened
+  // and before Save, so no cached list can have seen it: the write itself must
+  // report the collision.
+  Future<void> renameWithLateNamesake(WidgetTester tester) async {
+    await _tag(db, 'a2', 'Alise', 'person');
+    await pump(tester, TagManagementKind.people);
+    await tester.tap(find.byKey(const Key('tag_management_row_a2')));
+    await _settle(tester);
+    await tester.tap(find.widgetWithText(ListTile, 'Rename'));
+    await _settle(tester);
+    await tester.enterText(find.byType(TextField), 'Alice');
+    await tester.runAsync(() => _tag(db, 'a1', 'Alice', 'person'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+    await _settle(tester);
+    expect(find.text('Name already in use'), findsOneWidget);
+  }
+
+  testWidgets('a namesake arriving before Save is asked about, then kept '
+      'on cancel', (tester) async {
+    await renameWithLateNamesake(tester);
+    final confirmDialog = find.ancestor(
+        of: find.text('Name already in use'), matching: find.byType(AlertDialog));
+    await tester.tap(find.descendant(
+        of: confirmDialog, matching: find.widgetWithText(TextButton, 'Cancel')));
+    await _settle(tester);
+    final rows = await tester.runAsync(() => db.select(db.tags).get());
+    expect({for (final t in rows!) t.id: t.name}, {'a1': 'Alice', 'a2': 'Alise'});
+    await dispose(tester);
+  });
+
+  testWidgets('a namesake arriving before Save merges on confirm',
+      (tester) async {
+    await renameWithLateNamesake(tester);
+    final confirmDialog = find.ancestor(
+        of: find.text('Name already in use'), matching: find.byType(AlertDialog));
+    await tester.tap(find.descendant(
+        of: confirmDialog, matching: find.widgetWithText(FilledButton, 'Merge')));
+    await _settle(tester);
+    final rows = await tester.runAsync(() => db.select(db.tags).get());
+    expect(rows!.map((t) => t.id), ['a1']);
+    await dispose(tester);
+  });
+
   testWidgets('a plain rename saves after the sheet has closed',
       (tester) async {
     await _tag(db, 'a2', 'Alise', 'person');
