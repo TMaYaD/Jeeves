@@ -1048,6 +1048,11 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     await _db.focusSessionDao.openSession(
       userId: _userId,
       taskIds: state.pendingSelectedTaskIds,
+      // The Outcomes the user tapped Skip on (the set the skipped list shows):
+      // each counts as a pass-over toward Bypassed.
+      skippedTaskIds: state.reviewedTaskIds
+          .where((id) => !state.pendingSelectedTaskIds.contains(id))
+          .toSet(),
     );
     final plannedMinutes = state.availableMinutes;
     _planningGeneration++;

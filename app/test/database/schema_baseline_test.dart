@@ -85,13 +85,13 @@ void main() {
     test('is 4 — three onUpgrade steps behind the fresh baseline', () async {
       final db = _openInMemory();
       addTearDown(db.close);
-      expect(db.schemaVersion, 5);
+      expect(db.schemaVersion, 6);
       // A fresh file runs onCreate at the current version, not the ladder.
       expect(
         await db.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        5,
+        6,
       );
     });
   });
@@ -300,7 +300,7 @@ void main() {
       await seed.customStatement('PRAGMA user_version = 1');
       await seed.close();
 
-      // Open 2: Drift sees user_version=1 and schemaVersion=5, so it runs the
+      // Open 2: Drift sees user_version=1 and schemaVersion=6, so it runs the
       // whole ladder — the v2 drop asserted here, and the v3 `tags` recreate the
       // group below owns.
       final upgraded = GtdDatabase(
@@ -312,7 +312,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        5,
+        6,
       );
       expect(await _columnNames(upgraded, 'todos'),
           isNot(contains('time_spent_minutes')),
@@ -439,7 +439,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        5,
+        6,
       );
       expect(await _uniqueConstraintIndexes(upgraded, 'tags'), isEmpty,
           reason: 'v3 drops UNIQUE (name, type)');
@@ -475,6 +475,14 @@ void main() {
         NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
       );
       await seed.customStatement('DROP TABLE capture_attachments');
+      // A genuine v3 store predates the v6 Bypassed tables too.
+      for (final table in const [
+        'focus_session_planning_bypasses',
+        'focus_session_reschedules',
+        'outcome_bypass_decisions',
+      ]) {
+        await seed.customStatement('DROP TABLE $table');
+      }
       await seed.customStatement(
         'INSERT INTO captures (id, title, created_at, user_id) '
         "VALUES ('c1', 'Keep me', 1780000000000, 'u1')",
@@ -491,7 +499,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        5,
+        6,
       );
       expect(await _objects(upgraded, 'table'), contains('capture_attachments'));
       expect(await _rows(upgraded, 'captures'), hasLength(1));
@@ -596,7 +604,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        5,
+        6,
       );
       expect(await _columnNames(upgraded, 'todos'), isNot(contains('clarified')),
           reason: 'v5 drops the dead flag');
@@ -613,5 +621,110 @@ void main() {
       expect(await _objects(upgraded, 'index'),
           contains('idx_actions_outcome_role'));
     });
+  });
+
+  group('v6 onUpgrade adds the Bypassed tables', () {
+    const bypassedTables = [
+      'focus_session_planning_bypasses',
+      'focus_session_reschedules',
+      'outcome_bypass_decisions',
+    ];
+
+    // Upgrades from each starting schema keep every row and end up shaped
+    // exactly like a fresh v6 store.
+    for (final fromVersion in [3, 4, 5]) {
+      test('a v$fromVersion store upgrades, keeps every row and matches fresh v6',
+          () async {
+        final raw = sqlite3.openInMemory();
+        addTearDown(raw.close);
+
+        final seed = GtdDatabase(
+          NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+        );
+        var seedClosed = false;
+        Future<void> closeSeed() async {
+          if (seedClosed) return;
+          seedClosed = true;
+          await seed.close();
+        }
+
+        addTearDown(closeSeed);
+        for (final table in bypassedTables) {
+          await seed.customStatement('DROP TABLE $table');
+        }
+        if (fromVersion == 3) {
+          await seed.customStatement('DROP TABLE capture_attachments');
+        }
+        final createdMs =
+            DateTime.parse('2026-07-30T09:00:00.000Z').millisecondsSinceEpoch;
+        if (fromVersion < 5) {
+          // Stores before v5 still carry the dead `todos.clarified` column.
+          await seed.customStatement(
+            'ALTER TABLE todos ADD COLUMN clarified '
+            'INTEGER NOT NULL DEFAULT 1 CHECK (clarified IN (0, 1))',
+          );
+        }
+        await seed.customStatement(
+          'INSERT INTO todos (id, title, user_id, created_at, intent) '
+          "VALUES ('t1', 'Renew passport', 'u1', ?, 'next')",
+          [createdMs],
+        );
+        await seed.customStatement(
+          'INSERT INTO captures (id, title, created_at, user_id) '
+          "VALUES ('c1', 'Keep me', ?, 'u1')",
+          [createdMs],
+        );
+        if (fromVersion == 4) {
+          await seed.customStatement(
+            'INSERT INTO capture_attachments '
+            '(id, capture_id, relative_path, mime_type, created_at, user_id) '
+            "VALUES ('a1', 'c1', 'p/a1.jpg', 'image/jpeg', ?, 'u1')",
+            [createdMs],
+          );
+        }
+        // The v5 step drops `clarified`; every other column must survive.
+        final todosBefore = [
+          for (final row in await _rows(seed, 'todos'))
+            {...row}..remove('clarified'),
+        ];
+        final capturesBefore = await _rows(seed, 'captures');
+        final attachmentsBefore = fromVersion == 4
+            ? await _rows(seed, 'capture_attachments')
+            : <Map<String, Object?>>[];
+        await seed.customStatement('PRAGMA user_version = $fromVersion');
+        await closeSeed();
+
+        final upgraded = GtdDatabase(
+          NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+        );
+        addTearDown(upgraded.close);
+        final fresh = GtdDatabase(NativeDatabase.memory());
+        addTearDown(fresh.close);
+
+        expect(
+          await upgraded.customSelect('PRAGMA user_version').getSingle().then(
+                (r) => r.read<int>('user_version'),
+              ),
+          6,
+        );
+        expect(await _rows(upgraded, 'todos'), todosBefore);
+        expect(await _rows(upgraded, 'captures'), capturesBefore);
+        if (fromVersion == 4) {
+          expect(await _rows(upgraded, 'capture_attachments'),
+              attachmentsBefore);
+        }
+        for (final table in bypassedTables) {
+          expect(await _rows(upgraded, table), isEmpty);
+        }
+
+        final freshTables = await _objects(fresh, 'table');
+        expect(await _objects(upgraded, 'table'), freshTables);
+        for (final table in freshTables) {
+          expect(await _columnNames(upgraded, table),
+              await _columnNames(fresh, table),
+              reason: 'columns of $table match a fresh v6 store');
+        }
+      });
+    }
   });
 }

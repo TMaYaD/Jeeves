@@ -114,8 +114,8 @@ _Avoid_: Categorising (narrower — covers only one mode of Organising), Filing,
 An Outcome whose `last_clarified_at < last_action_completion_at` — the current Action has terminated since the user last thought about the Outcome. The strongest "pick this up next clarification" signal.
 
 **Bypassed** *(derived predicate)*:
-An Outcome passed over in Daily Planning the configured number of times (default 3) without a decision. The Weekly Review's Bypassed step asks one decision per Outcome — Someday/Maybe or Trash — and Daily Planning never marks or holds them. Mechanism: TMaYaD/Jeeves#107; surface: [docs/DESIGN.md § Guardrails](docs/DESIGN.md#guardrails--nudges-never-blocks).
-_Avoid_: Stale, stale task (a different predicate — the Action terminated)
+An Outcome on Next that FocusSessions have passed over at least the configured number of times (default 3) since the user last engaged with it, completed one of its Actions, or decided it. A session passes an Outcome over by skipping it in Daily Planning, leaving it untouched on a closed Plan, or pushing its due date later. Decided in the Weekly Review: Someday/Maybe or Trash. Mechanism: CEREMONIES.md § Weekly Review sessions. Not **Stale**. Surface: [docs/DESIGN.md § Guardrails](docs/DESIGN.md#guardrails--nudges-never-blocks).
+_Avoid_: Stale (a different predicate), Rotting, "stale task"
 
 **Actionless** *(derived predicate)*:
 An Outcome with no current Action. May still have planned Actions (the user has externalised thinking but not committed to engagement) or none (planless).

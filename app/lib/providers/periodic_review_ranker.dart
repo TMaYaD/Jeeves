@@ -9,7 +9,7 @@ List<int> weeklyReviewBudgetOptions(int itemCount) => [
     if (minutes < itemCount * kWeeklyReviewMinutesPerItem) minutes,
 ];
 
-enum PeriodicReviewStepKind { inbox, waitingFor, next, someday }
+enum PeriodicReviewStepKind { inbox, bypassed, waitingFor, next, someday }
 
 class PeriodicReviewCandidate {
   const PeriodicReviewCandidate({
@@ -33,7 +33,7 @@ final periodicReviewRankerProvider = Provider<PeriodicReviewRanker>(
   (ref) => const FreshnessPeriodicReviewRanker(),
 );
 
-/// Inbox first, then least recently clarified; see CEREMONIES.md, Weekly Review sessions.
+/// Inbox first, then Bypassed Outcomes, then least recently clarified; see CEREMONIES.md, Weekly Review sessions.
 class FreshnessPeriodicReviewRanker implements PeriodicReviewRanker {
   const FreshnessPeriodicReviewRanker();
 
@@ -43,6 +43,9 @@ class FreshnessPeriodicReviewRanker implements PeriodicReviewRanker {
       final aIsInbox = a.step == PeriodicReviewStepKind.inbox;
       final bIsInbox = b.step == PeriodicReviewStepKind.inbox;
       if (aIsInbox != bIsInbox) return aIsInbox ? -1 : 1;
+      final aIsBypassed = a.step == PeriodicReviewStepKind.bypassed;
+      final bIsBypassed = b.step == PeriodicReviewStepKind.bypassed;
+      if (aIsBypassed != bIsBypassed) return aIsBypassed ? -1 : 1;
       final aClarified = a.lastClarifiedAt;
       final bClarified = b.lastClarifiedAt;
       var order = aClarified == null
