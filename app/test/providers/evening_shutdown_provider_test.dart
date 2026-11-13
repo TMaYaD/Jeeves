@@ -13,6 +13,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/models/todo.dart' show RoutingKind;
 import 'package:jeeves/providers/evening_shutdown_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart'
     show activeSessionSettlementsProvider;
@@ -22,27 +23,11 @@ import '../test_helpers.dart';
 // Must match currentUserIdProvider.build() default so the notifier finds tasks.
 const _uid = 'local';
 
-// Stub: skip platform-channel calls in the notification helpers but exercise
-// the SharedPreferences side effects that real code paths perform.
-class _StubShutdownNotifier extends EveningShutdownNotifier {
-  @override
-  Future<void> skipShutdownToday() async {
-    await persistShutdownSkipToday();
-  }
-
-  @override
-  Future<void> snoozeShutdownNotification(int minutes) async {
-    final until = DateTime.now().add(Duration(minutes: minutes));
-    await persistShutdownSnoozedUntil(until);
-  }
-}
-
 ProviderContainer _container(GtdDatabase db) => ProviderContainer(
       overrides: [
         databaseProvider.overrideWithValue(db),
         notificationServiceProvider
             .overrideWithValue(StubNotificationService()),
-        eveningShutdownProvider.overrideWith(() => _StubShutdownNotifier()),
       ],
     );
 
@@ -57,7 +42,6 @@ ProviderContainer _containerWithSettlements(
         databaseProvider.overrideWithValue(db),
         notificationServiceProvider
             .overrideWithValue(StubNotificationService()),
-        eveningShutdownProvider.overrideWith(() => _StubShutdownNotifier()),
         activeSessionSettlementsProvider.overrideWith((_) => settlements),
       ],
     );
@@ -1047,6 +1031,79 @@ void main() {
       expect(snapshotAfter.length, equals(2),
           reason: 'snapshot must not drift after DB changes');
       expect(snapshotAfter.map((t) => t.id), containsAll(['t1', 't2']));
+    });
+  });
+
+  group('EveningShutdownNotifier.recordVerdict', () {
+    late GtdDatabase db;
+    late ProviderContainer container;
+
+    setUp(() async {
+      db = GtdDatabase(NativeDatabase.memory());
+      container = _container(db);
+      for (final id in ['a', 'b', 'c']) {
+        await _insertTodo(db, id: id);
+      }
+      await _openSessionWith(db, ['a', 'b', 'c']);
+      await container
+          .read(eveningShutdownProvider.notifier)
+          .loadUnfinishedSnapshot();
+    });
+
+    tearDown(() async {
+      container.dispose();
+      await db.close();
+    });
+
+    List<String> ids() => container
+        .read(eveningShutdownProvider)
+        .unfinishedNav
+        .items!
+        .map((t) => t.id)
+        .toList();
+
+    test('implies rollover / leave / leave for the non-done verdicts', () {
+      final n = container.read(eveningShutdownProvider.notifier);
+      n.recordVerdict('a', RoutingKind.nextAction);
+      n.recordVerdict('b', RoutingKind.waitingFor);
+      n.recordVerdict('c', RoutingKind.maybe);
+      expect(container.read(eveningShutdownProvider).dispositions,
+          {'a': 'rollover', 'b': 'leave', 'c': 'leave'});
+    });
+
+    test('done clears a Disposition held earlier and drops the task', () {
+      final n = container.read(eveningShutdownProvider.notifier);
+      n.rolloverTask('a');
+      n.previousUnfinishedTask();
+      n.recordVerdict('a', RoutingKind.done);
+      final state = container.read(eveningShutdownProvider);
+      expect(state.dispositions.containsKey('a'), isFalse);
+      expect(ids(), ['b', 'c']);
+      expect(state.unfinishedNav.current!.id, 'b');
+    });
+
+    test('mid-list verdict keeps the cursor on the following task', () {
+      final n = container.read(eveningShutdownProvider.notifier);
+      n.nextUnfinishedTask();
+      n.recordVerdict('b', RoutingKind.done);
+      expect(ids(), ['a', 'c']);
+      expect(container.read(eveningShutdownProvider).unfinishedNav.current!.id,
+          'c');
+    });
+
+    test('verdict on the last task advances the ritual', () {
+      final n = container.read(eveningShutdownProvider.notifier);
+      n.goToStep(1);
+      n.nextUnfinishedTask();
+      n.nextUnfinishedTask();
+      n.recordVerdict('c', RoutingKind.done);
+      expect(container.read(eveningShutdownProvider).currentStep, 2);
+    });
+
+    test('trash is rejected', () {
+      final n = container.read(eveningShutdownProvider.notifier);
+      expect(() => n.recordVerdict('a', RoutingKind.trash),
+          throwsArgumentError);
     });
   });
 }
