@@ -137,7 +137,7 @@ NudgeSurfaceContent nudgeSurfaceContent(WidgetRef ref, NudgeSurfaceHead head) {
               .captureDao
               .oldestInboxCaptureId();
           if (!context.mounted) return;
-          context.go(id == null ? '/inbox' : inboxClarifySequenceLocation(id));
+          context.push(id == null ? '/inbox' : inboxClarifySequenceLocation(id));
         },
       );
     case RitualHead(:final ritual):

@@ -71,10 +71,6 @@ void main() {
         updatedAt: Value(createdAt),
       ));
 
-  Future<void> setLastCompleted(DateTime at) => c
-      .read(syncedPreferencesProvider.notifier)
-      .set('periodic_review_last_completed_at', at.toUtc().toIso8601String());
-
   /// Mounts the app on the Inbox with a clock that follows the test's fake
   /// time, so only elapsed time (never a provider override) moves the Nudge.
   Future<void> pumpApp(WidgetTester tester) async {
@@ -170,6 +166,73 @@ void main() {
       await _flush(tester);
       expect(
           appRouter.routeInformationProvider.value.uri.path,
+          '/focus-session-planning');
+    } finally {
+      await tearDownApp(tester);
+    }
+  });
+
+  testWidgets(
+      'Back and Skip from the clarification sequence return to the page the '
+      'Banner was tapped on, before and after a verdict', (tester) async {
+    await seedFiftyOneCaptures();
+    try {
+      await pumpApp(tester);
+      appRouter.go('/next');
+      await _flush(tester);
+
+      Future<void> openSequence() async {
+        await tester.tap(find.text('At once  →'));
+        await _flush(tester);
+        expect(find.byType(InboxClarifyScreen), findsOneWidget);
+      }
+
+      // Back before any verdict.
+      await openSequence();
+      await tester.tap(find.byKey(const Key('app_title_bar_leading')));
+      await _flush(tester);
+      expect(find.byType(InboxClarifyScreen), findsNothing);
+      expect(appRouter.routeInformationProvider.value.uri.path, '/next');
+
+      // Skip before any verdict.
+      await openSequence();
+      await tester.tap(find.text('Skip'));
+      await _flush(tester);
+      expect(find.byType(InboxClarifyScreen), findsNothing);
+      expect(appRouter.routeInformationProvider.value.uri.path, '/next');
+
+      // After a verdict the sequence advances; one Back still leaves it.
+      await openSequence();
+      await tester.tap(find.text('Next Action'));
+      await _flush(tester);
+      await tester.tap(find.text('Save'));
+      await _flush(tester);
+      expect(find.text('Capture c01'), findsOneWidget);
+      await tester.tap(find.text('Skip'));
+      await _flush(tester);
+      expect(find.byType(InboxClarifyScreen), findsNothing);
+      expect(appRouter.routeInformationProvider.value.uri.path, '/next');
+    } finally {
+      await tearDownApp(tester);
+    }
+  });
+
+  testWidgets(
+      'Daily Planning at the head of the Now screen: the empty-state button '
+      'opens Daily Planning', (tester) async {
+    // One recent Capture: Inbox is far under 50 and no Weekly Review is due,
+    // so Daily Planning (past its anchor, no session yet) is the head.
+    await insertCapture('c00', startedAt);
+    try {
+      await pumpApp(tester);
+      appRouter.go('/focus');
+      await _flush(tester);
+      expect(tooFull, findsNothing);
+      expect(find.byKey(const Key('nudge_empty_state')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('nudge_empty_state_button')));
+      await _flush(tester);
+      expect(appRouter.routeInformationProvider.value.uri.path,
           '/focus-session-planning');
     } finally {
       await tearDownApp(tester);
