@@ -2,7 +2,8 @@ import 'package:flutter/material.dart' hide Intent;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/gtd_database.dart';
-import '../models/todo.dart' show Intent, RoutingKind;
+import '../models/intent.dart';
+import '../models/routing_kind.dart';
 import '../providers/task_detail_provider.dart';
 import 'person_tag_picker.dart';
 

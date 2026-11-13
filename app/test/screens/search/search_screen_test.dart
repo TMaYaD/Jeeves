@@ -49,7 +49,6 @@ Todo _fakeTodo() => Todo(
       dueDate: null,
       createdAt: DateTime(2024, 1, 1),
       updatedAt: null,
-      clarified: false,
       intent: 'next',
       timeEstimate: null,
       energyLevel: null,

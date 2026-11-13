@@ -28,7 +28,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sqlite_async/sqlite_async.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
-import 'package:jeeves/models/todo.dart' show RoutingKind;
+import 'package:jeeves/models/routing_kind.dart';
 
 Future<void> _waitUntil(
   bool Function() condition, {
@@ -74,12 +74,12 @@ void main() {
   test(
     'clarify-routing an Outcome refreshes the Next watcher',
     () async {
-      // Seed an unclarified row directly (the pre-split Inbox shape); it is
-      // absent from Next until routing flips clarified + intent.
+      // Seed a Maybe Outcome directly; it is absent from Next until routing
+      // sets its intent.
       await db.into(db.todos).insert(TodosCompanion(
         id: const Value('t1'),
         title: const Value('Draft the quarterly plan'),
-        clarified: const Value(false),
+        intent: const Value('maybe'),
         createdAt: Value(DateTime.now()),
         userId: const Value('user-1'),
       ));
@@ -88,7 +88,7 @@ void main() {
       final subNext = db.todoDao.watchNext().listen(next.add);
       addTearDown(() => subNext.cancel());
 
-      // Initial state: nothing on Next (the row is still unclarified).
+      // Initial state: nothing on Next (the row is still Maybe).
       await _waitUntil(() => next.isNotEmpty);
       expect(next.last, isEmpty);
 

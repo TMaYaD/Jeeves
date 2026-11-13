@@ -1,4 +1,4 @@
-import 'package:drift/drift.dart' show Value;
+import 'package:drift/drift.dart' show Value, Variable;
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
@@ -7,7 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/action_draft.dart' show ActionDraft;
-import 'package:jeeves/models/todo.dart' show RoutingKind;
+import 'package:jeeves/models/routing_kind.dart';
 import 'package:jeeves/providers/clarify_retention_provider.dart';
 import 'package:jeeves/providers/clock_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
@@ -137,6 +137,107 @@ void main() {
       await db.close();
     });
 
+    group('available time default (#825)', () {
+      Future<String?> storedValue() => db.userPreferencesDao
+          .get('local', 'focus_session_planning_last_session_available_minutes');
+
+      Future<void> store(String json) => db.userPreferencesDao.set('local',
+          'focus_session_planning_last_session_available_minutes', json);
+
+      test('no stored value falls back to 8 hours, flag unset', () async {
+        final notifier = container.read(focusSessionPlanningProvider.notifier);
+        await notifier.ensureAvailableTimePreload();
+        final state = container.read(focusSessionPlanningProvider);
+        expect(state.availableMinutes, 480);
+        expect(state.availableTimeSet, isFalse);
+      });
+
+      test('stored value is applied without setting the flag', () async {
+        await store('330');
+        final notifier = container.read(focusSessionPlanningProvider.notifier);
+        await notifier.ensureAvailableTimePreload();
+        final state = container.read(focusSessionPlanningProvider);
+        expect(state.availableMinutes, 330);
+        expect(state.availableTimeSet, isFalse);
+      });
+
+      test('startDay writes the key; unchanged value is not rewritten',
+          () async {
+        final notifier = container.read(focusSessionPlanningProvider.notifier);
+        notifier.setAvailableTime(300);
+        await notifier.startDay();
+        expect(await storedValue(), '300');
+        final firstUpdatedAt = (await db.customSelect(
+          'SELECT updated_at FROM user_preferences WHERE "key" = ?',
+          variables: [
+            Variable('focus_session_planning_last_session_available_minutes')
+          ],
+        ).getSingle())
+            .data['updated_at'];
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+        await db.focusSessionDao.closeSession(
+          sessionId: (await db.focusSessionDao.getActiveSession())!.id,
+        );
+        await notifier.startDay();
+        final secondUpdatedAt = (await db.customSelect(
+          'SELECT updated_at FROM user_preferences WHERE "key" = ?',
+          variables: [
+            Variable('focus_session_planning_last_session_available_minutes')
+          ],
+        ).getSingle())
+            .data['updated_at'];
+        expect(secondUpdatedAt, firstUpdatedAt);
+      });
+
+      test('the user edit in the current draft survives a preload', () async {
+        await store('330');
+        final notifier = container.read(focusSessionPlanningProvider.notifier);
+        notifier.setAvailableTime(90);
+        await notifier.ensureAvailableTimePreload();
+        expect(
+            container.read(focusSessionPlanningProvider).availableMinutes, 90);
+      });
+
+      test('an empty edit marks the time edited so a preload leaves it', () async {
+        await store('330');
+        final notifier = container.read(focusSessionPlanningProvider.notifier);
+        notifier.markAvailableTimeEdited();
+        await notifier.ensureAvailableTimePreload();
+        final state = container.read(focusSessionPlanningProvider);
+        expect(state.availableTimeSet, isTrue);
+        expect(state.availableMinutes, 480);
+      });
+
+      test('a preload whose read began before the draft reset does not apply',
+          () async {
+        final notifier = container.read(focusSessionPlanningProvider.notifier);
+        // Let the build() microtask preload settle so it cannot interfere.
+        await notifier.ensureAvailableTimePreload();
+        notifier.setAvailableTime(300);
+        // Nothing stored: a stale read would apply the 8-hour fallback.
+        final stalePreload = notifier.ensureAvailableTimePreload();
+        // Synchronously resets the draft (flag released, minutes preserved).
+        final replan = notifier.reEnterPlanning();
+        await stalePreload;
+        expect(container.read(focusSessionPlanningProvider).availableMinutes,
+            300,
+            reason: 'a read begun in the finished performance must not '
+                'overwrite the preserved minutes');
+        await replan;
+      });
+
+      for (final garbage in ['"abc"', '0', '5000', '-5', '1.5']) {
+        test('stored $garbage falls back to 8 hours', () async {
+          await store(garbage);
+          final notifier =
+              container.read(focusSessionPlanningProvider.notifier);
+          await notifier.ensureAvailableTimePreload();
+          expect(container.read(focusSessionPlanningProvider).availableMinutes,
+              480);
+        });
+      }
+    });
+
     test('startDay preserves energyLevel and availableMinutes', () async {
       final notifier = container.read(focusSessionPlanningProvider.notifier);
 
@@ -150,8 +251,9 @@ void main() {
           reason: 'startDay should not clear energy level');
       expect(stateAfterStart.availableMinutes, 300,
           reason: 'startDay should not clear available minutes');
-      expect(stateAfterStart.availableTimeSet, isTrue,
-          reason: 'startDay should not clear availableTimeSet flag');
+      expect(stateAfterStart.availableTimeSet, isFalse,
+          reason: 'startDay releases the explicit-edit flag so the next '
+              'planning re-reads the stored default');
     });
 
     test('reEnterPlanning restores energy and time after startDay', () async {
@@ -168,8 +270,8 @@ void main() {
           reason: 'reEnterPlanning should restore energy from before startDay');
       expect(state.availableMinutes, 360,
           reason: 'reEnterPlanning should restore available minutes');
-      expect(state.availableTimeSet, isTrue,
-          reason: 'reEnterPlanning should restore availableTimeSet flag');
+      expect(state.availableTimeSet, isFalse,
+          reason: 'reEnterPlanning releases the explicit-edit flag');
       expect(state.currentStep, 0,
           reason: 'reEnterPlanning should reset to step 0');
     });
@@ -259,8 +361,7 @@ void main() {
 
       expect(await db.captureDao.outcomeIdsForCapture('item-1'), hasLength(1),
           reason: 'a raced double-tap must not carve two Outcomes');
-      final row = (await _outcomeOf(db, 'item-1'))!;
-      expect(row.clarified, isTrue);
+      expect(await _outcomeOf(db, 'item-1'), isNotNull);
     });
   });
 
@@ -370,7 +471,6 @@ void main() {
       expect(state.inboxRoutings[0], equals(RoutingKind.nextAction));
 
       final row = (await _outcomeOf(db, 'item-1'))!;
-      expect(row.clarified, isTrue);
       expect((await db.actionDao.getCurrentAction(row.id))?.actionText,
           'Test item',
           reason: 'the routed title becomes the Outcome next action');
@@ -389,7 +489,6 @@ void main() {
       expect(state.inboxRoutings[0], equals(RoutingKind.maybe));
 
       final row = (await _outcomeOf(db, 'item-1'))!;
-      expect(row.clarified, isTrue);
       expect(row.intent, 'maybe');
     });
 
@@ -421,7 +520,7 @@ void main() {
       // After Back, the prior routing remains in DB and in inboxRoutings so
       // the "previously selected" affordance can render.
       final afterBack = (await _outcomeOf(db, 'item-1'))!;
-      expect(afterBack.clarified, isTrue,
+      expect(afterBack.lastClarifiedAt, isNotNull,
           reason: 'Back must not revert DB state');
       expect(afterBack.intent, 'maybe');
       var state = container.read(focusSessionPlanningProvider);
@@ -431,7 +530,6 @@ void main() {
       await notifier.processInboxItem('item-1', title: 'Test item');
 
       final row = (await _outcomeOf(db, 'item-1'))!;
-      expect(row.clarified, isTrue);
       expect(row.intent, 'next',
           reason: 'revert restored prior intent before re-routing');
       expect(row.doneAt, isNull);
@@ -478,7 +576,6 @@ void main() {
 
       final row = (await _outcomeOf(db, 'item-1'))!;
       expect(row.doneAt, isNull);
-      expect(row.clarified, isTrue);
     });
 
     test('re-tapping the same destination is a net no-op on routing flags',
@@ -495,8 +592,6 @@ void main() {
       await notifier.processInboxItem('item-1', title: 'Test item'); // same destination
 
       final afterRow = (await _outcomeOf(db, 'item-1'))!;
-
-      expect(afterRow.clarified, equals(beforeRow.clarified));
       expect(afterRow.intent, equals(beforeRow.intent));
       expect(afterRow.doneAt, equals(beforeRow.doneAt));
 
@@ -740,7 +835,6 @@ void main() {
         id: const Value('actionless-1'),
         title: const Value('Actionless task'),
         userId: const Value('local'),
-        clarified: const Value(true),
         createdAt: Value(now),
         // no Action row seeded → Actionless
       ));
@@ -769,7 +863,6 @@ void main() {
         id: const Value('actionless-1'),
         title: const Value('Actionless task'),
         userId: const Value('local'),
-        clarified: const Value(true),
         createdAt: Value(now),
         // no Action row seeded → Actionless
       ));
@@ -813,7 +906,6 @@ void main() {
         id: const Value('actionless-2'),
         title: const Value('Actionless task'),
         userId: const Value('local'),
-        clarified: const Value(true),
         createdAt: Value(now),
       ));
       final notifier = container.read(focusSessionPlanningProvider.notifier);
@@ -855,7 +947,6 @@ void main() {
         id: Value(id),
         title: const Value('Stale task'),
         userId: const Value(userId),
-        clarified: const Value(true),
         createdAt: Value(now),
         lastClarifiedAt: Value(clarifiedAt),
       ));
@@ -888,7 +979,6 @@ void main() {
         id: Value(id),
         title: const Value('Actionless task'),
         userId: const Value(userId),
-        clarified: const Value(true),
         createdAt: Value(now),
         // no Action row seeded → Actionless
       ));
@@ -1191,7 +1281,6 @@ void main() {
       await db.into(db.todos).insert(TodosCompanion(
         id: Value(id),
         title: Value('Task $id'),
-        clarified: const Value(true),
         userId: const Value('local'),
         createdAt: Value(now),
         updatedAt: Value(now),
@@ -1289,7 +1378,6 @@ void main() {
       await db.into(db.todos).insert(TodosCompanion(
         id: Value(id),
         title: Value('Task $id'),
-        clarified: const Value(true),
         userId: const Value('local'),
         createdAt: Value(now),
         updatedAt: Value(now),
@@ -1599,7 +1687,6 @@ void main() {
         id: const Value('kept'),
         title: const Value('Kept Actionless'),
         userId: const Value(userId),
-        clarified: const Value(true),
         createdAt: Value(keptAt),
         lastClarifiedAt: Value(keptAt.toUtc()),
       ));

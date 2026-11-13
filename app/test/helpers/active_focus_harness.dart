@@ -84,7 +84,6 @@ Future<Todo> insertFocusTodo(
         id: Value(id),
         title: Value(title),
         notes: Value(notes),
-        clarified: const Value(true),
         intent: const Value('next'),
         userId: const Value(focusUserId),
         createdAt: Value(now),

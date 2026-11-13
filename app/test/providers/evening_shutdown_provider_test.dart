@@ -13,7 +13,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
-import 'package:jeeves/models/todo.dart' show RoutingKind;
+import 'package:jeeves/models/routing_kind.dart';
 import 'package:jeeves/providers/evening_shutdown_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart'
     show activeSessionSettlementsProvider;
@@ -56,7 +56,6 @@ Future<String> _insertTodo(
   await db.into(db.todos).insert(TodosCompanion(
         id: Value(id),
         title: Value('Task $id'),
-        clarified: const Value(true),
         intent: Value(intent),
         doneAt: Value(doneAt),
         userId: const Value(_uid),

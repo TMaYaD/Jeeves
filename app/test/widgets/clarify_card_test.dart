@@ -646,7 +646,6 @@ void main() {
       await db.into(db.todos).insert(TodosCompanion(
             id: const Value('rc-mirror-1'),
             title: const Value('Plan party'),
-            clarified: const Value(true),
             intent: const Value('next'),
             userId: const Value(_userId),
             createdAt: Value(now),

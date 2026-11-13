@@ -33,7 +33,6 @@ Future<Todo> _insertTodo(
   GtdDatabase db, {
   required String id,
   String title = 'Task',
-  bool clarified = true,
   String intent = 'next',
   String? doneAt,
 }) async {
@@ -41,7 +40,6 @@ Future<Todo> _insertTodo(
   await db.into(db.todos).insert(TodosCompanion(
         id: Value(id),
         title: Value(title),
-        clarified: Value(clarified),
         intent: Value(intent),
         doneAt: doneAt != null ? Value(doneAt) : const Value.absent(),
         userId: const Value(_userId),
@@ -1124,7 +1122,6 @@ void main() {
 
       final row = await db.todoDao.getTodo('bs1');
       expect(row?.intent, 'next');
-      expect(row?.clarified, isTrue);
       expect(row?.lastClarifiedAt, isNotNull);
       expect((await db.actionDao.getCurrentAction('bs1'))?.actionText,
           'Call the dentist',

@@ -15,7 +15,6 @@ Future<void> _insert(
   GtdDatabase db,
   String id, {
   String intent = 'next',
-  bool clarified = true,
   bool withAction = false,
   bool personBlocked = false,
   String? doneAt,
@@ -24,7 +23,6 @@ Future<void> _insert(
   await db.into(db.todos).insert(TodosCompanion(
         id: Value(id),
         title: Value('Outcome $id'),
-        clarified: Value(clarified),
         intent: Value(intent),
         doneAt: Value(doneAt),
         userId: const Value(_userId),
@@ -73,7 +71,14 @@ void main() {
     await _insert(db, 'done-someday',
         intent: 'maybe', doneAt: DateTime.now().toIso8601String());
     await _insert(db, 'trash', intent: 'trash');
-    await _insert(db, 'unclarified', intent: 'maybe', clarified: false);
+    // An Inbox Capture is not an Outcome, whatever its title says.
+    await db.captureDao.insertCapture(CapturesCompanion(
+      id: const Value('inbox-capture'),
+      title: const Value('Inbox capture'),
+      userId: const Value(_userId),
+      createdAt: Value(DateTime.now()),
+      updatedAt: Value(DateTime.now()),
+    ));
 
     expect(await ids(), {'someday', 'waiting'});
   });

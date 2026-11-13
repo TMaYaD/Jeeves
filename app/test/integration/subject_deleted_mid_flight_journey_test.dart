@@ -19,7 +19,7 @@ import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
-import 'package:jeeves/models/todo.dart' show Intent;
+import 'package:jeeves/models/intent.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/inbox_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';

@@ -45,7 +45,6 @@ void main() {
           TodosCompanion(
             id: const Value('passport'),
             title: const Value('Renew passport'),
-            clarified: const Value(true),
             intent: const Value('next'),
             userId: const Value('local'),
             createdAt: Value(now),

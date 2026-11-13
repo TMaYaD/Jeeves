@@ -64,7 +64,6 @@ void main() {
       await db.into(db.todos).insert(TodosCompanion(
             id: Value(id),
             title: Value('Outcome $id'),
-            clarified: const Value(true),
             userId: const Value('local'),
             createdAt: Value(now),
             updatedAt: Value(now),

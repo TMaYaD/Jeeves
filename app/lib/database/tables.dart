@@ -33,11 +33,6 @@ class Todos extends Table {
   /// ISO-8601 UTC timestamp; non-null when the task has been completed.
   TextColumn get doneAt => text().nullable()();
 
-  /// Whether this todo has been clarified (processed out of inbox).
-  /// false = still in inbox; true = clarified and assigned to a GTD list.
-  BoolColumn get clarified =>
-      boolean().withDefault(const Constant(true)).clientDefault(() => true)();
-
   /// Orthogonal intent: next | maybe | trash (migration 0015).
   TextColumn get intent => text()
       .clientDefault(() => 'next')
@@ -62,7 +57,7 @@ class Todos extends Table {
   /// Stamped by the DAO whenever the user performs an act of *thinking about
   /// the Outcome* per CONTEXT.md ("Clarification stamps last_clarified_at per
   /// micro-act"). Stamping writes include:
-  ///   - Outcome creation (Capture → clarified=true)
+  ///   - Outcome creation (Capture → Outcome)
   ///   - title / notes / Intent / due-date edits
   ///   - any Action mutation (next-action text, energy, time-estimate, …)
   ///   - PersonBlocker (person-tag) add / remove

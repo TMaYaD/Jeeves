@@ -26,13 +26,13 @@ part 'tag_dao.g.dart';
 String todoTagIdFor(String todoId, String tagId) =>
     uuid.v5(Namespace.url.value, 'jeeves://todo_tag/$todoId/$tagId');
 
-/// A [Tag] together with the count of active (clarified, not-done) tasks.
+/// A [Tag] together with the count of active (not-done) tasks.
 class TagWithCount {
   const TagWithCount({required this.tag, required this.count});
 
   final Tag tag;
 
-  /// Number of active (clarified and not done) todos assigned this tag.
+  /// Number of active (not done) todos assigned this tag.
   final int count;
 }
 
@@ -115,7 +115,7 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
 
   /// Stream of tags of [type] paired with their active-task count.
   ///
-  /// "Active" means clarified=1 (not in inbox) and done_at IS NULL.  Tags
+  /// "Active" means done_at IS NULL (Inbox Captures are not todos).  Tags
   /// with zero active tasks return count = 0 and are still included so the
   /// cloud can show them as demoted/faded rather than vanishing mid-session.
   Stream<List<TagWithCount>> watchTagsWithActiveCount(String type) {
@@ -124,7 +124,7 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
       'COUNT(t.id) AS active_count '
       'FROM tags '
       'LEFT JOIN todo_tags tt ON tt.tag_id = tags.id '
-      'LEFT JOIN todos t ON t.id = tt.todo_id AND t.done_at IS NULL AND t.clarified = 1 '
+      'LEFT JOIN todos t ON t.id = tt.todo_id AND t.done_at IS NULL '
       'WHERE tags.type = ? '
       'GROUP BY tags.id '
       'ORDER BY tags.name',

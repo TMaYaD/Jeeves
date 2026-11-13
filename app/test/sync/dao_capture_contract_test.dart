@@ -23,7 +23,8 @@ import 'package:jeeves/database/daos/focus_session_dao.dart'
     show focusSessionDispositionIdFor;
 import 'package:jeeves/database/daos/tag_dao.dart' show todoTagIdFor;
 import 'package:jeeves/database/gtd_database.dart';
-import 'package:jeeves/models/todo.dart' show Intent, RoutingKind;
+import 'package:jeeves/models/intent.dart';
+import 'package:jeeves/models/routing_kind.dart';
 import 'package:jeeves/sync/collection_codecs.dart';
 import 'package:jeeves/sync/domain_op_capture.dart';
 import 'package:jeeves/sync/ids.dart'
@@ -84,7 +85,7 @@ void main() {
       expect(op.fields['user_id'], _userId);
       expect(op.fields['created_at'], '2026-07-28T09:00:00.000Z');
       expect(op.fields['intent'], 'next');
-      expect(op.fields['clarified'], isTrue);
+      expect(op.fields.containsKey('clarified'), isFalse);
       // Exactly the synced columns — no more, no less — so a peer can build the
       // row and nothing off-contract slips onto the wire.
       final expected = collectionCodecs[todosCollection]!.columns.keys.toSet();
@@ -106,6 +107,28 @@ void main() {
       expect(op.tombstone, isFalse);
       expect(op.fields['intent'], 'trash');
     });
+
+    test('markDone writes no clarified field', () async {
+      final id = await seedOutcome();
+      capture.clear();
+      await db.todoDao.markDone(id);
+      for (final op in capture.forCollection(todosCollection)) {
+        expect(op.fields.containsKey('clarified'), isFalse);
+      }
+    });
+
+    for (final kind in RoutingKind.values) {
+      test('applyRouting(${kind.name}) writes no clarified field', () async {
+        final id = await seedOutcome();
+        capture.clear();
+        await db.todoDao.applyRouting(id, to: kind, now: _ts);
+        final ops = capture.forCollection(todosCollection);
+        expect(ops, isNotEmpty);
+        for (final op in ops) {
+          expect(op.fields.containsKey('clarified'), isFalse);
+        }
+      });
+    }
 
     test('applyRouting restores out of Trash on the same seam', () async {
       final id = await seedOutcome();

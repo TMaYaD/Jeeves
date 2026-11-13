@@ -21,7 +21,6 @@ Future<void> _insertTodo(GtdDatabase db,
   await db.into(db.todos).insert(TodosCompanion(
     id: Value(id),
     title: Value(title),
-    clarified: const Value(true),
     userId: const Value(_userId),
     createdAt: Value(now),
     updatedAt: Value(now),
@@ -1095,13 +1094,13 @@ void main() {
 
     test(
         'excludes a rolled-over Outcome later Trashed, moved to Someday/Maybe, '
-        'completed or unclarified; keeps one still on Next', () async {
-      for (final id in ['keep', 'trashed', 'maybe', 'done', 'unclarified']) {
+        'or completed; keeps one still on Next', () async {
+      for (final id in ['keep', 'trashed', 'maybe', 'done']) {
         await _insertTodo(db, id: id, title: id);
       }
       final sessionId = await db.focusSessionDao.openSession(
         userId: _userId,
-        taskIds: ['keep', 'trashed', 'maybe', 'done', 'unclarified'],
+        taskIds: ['keep', 'trashed', 'maybe', 'done'],
         now: DateTime(2026, 4, 29, 9, 0),
       );
       await db.focusSessionDao.reviewAndCloseSession(
@@ -1111,12 +1110,9 @@ void main() {
           'trashed': 'rollover',
           'maybe': 'rollover',
           'done': 'rollover',
-          'unclarified': 'rollover',
         },
         now: DateTime(2026, 4, 29, 17, 0),
       );
-      await db.customStatement(
-          "UPDATE todos SET clarified = 0 WHERE id = 'unclarified'");
       await db.customStatement(
           "UPDATE todos SET intent = 'trash' WHERE id = 'trashed'");
       await db.customStatement(
