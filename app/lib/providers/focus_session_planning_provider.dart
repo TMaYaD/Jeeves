@@ -62,7 +62,9 @@ const int _maxStepIndex = 6;
 /// entry. Set true by the Daily Planning blocked-start interstitial before it
 /// routes the user to Evening Shutdown; read and cleared by the Close Day
 /// step, which — instead of exiting the app — routes into Daily Planning once
-/// the session has been reviewed and closed.
+/// the session has been reviewed and closed. Also read by the Resolve
+/// Unfinished step for the Roll Over copy. It lives for one Evening Shutdown
+/// performance: the shutdown screen clears it when left.
 ///
 /// This is a user-initiated action spread across two ceremonies, not a
 /// route-level auto-launch (REQUIREMENTS.md § Ceremonies).
@@ -76,6 +78,13 @@ class ShutdownThenPlanNotifier extends Notifier<bool> {
   bool build() => false;
 
   void set(bool value) => state = value;
+
+  /// Drop the intent. Safe to call after the container is torn down (the
+  /// shutdown screen calls it from a microtask during unmount).
+  void clear() {
+    if (!ref.mounted) return;
+    state = false;
+  }
 }
 
 // ---------------------------------------------------------------------------
