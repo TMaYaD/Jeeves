@@ -356,8 +356,10 @@ final contentFiringEdgeProvider =
 );
 
 TriggerState _wrContentStateTrigger(Ref ref) {
-  if (ref.watch(wrContentFiringProvider) != true) return TriggerState.idle;
+  // Watch the edge tracker before the early return: it only sees a genuine
+  // false→true transition if it is alive while the predicate is still false.
   final edge = ref.watch(contentFiringEdgeProvider);
+  if (ref.watch(wrContentFiringProvider) != true) return TriggerState.idle;
   // While firing the tracker has stamped an edge; fall back defensively to
   // start-of-today (kept boundary-reactive via _now) if it has not yet.
   return TriggerState(
