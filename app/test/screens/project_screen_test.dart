@@ -5,7 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
-import 'package:jeeves/models/todo.dart' show Intent;
+import 'package:jeeves/models/intent.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/screens/project/project_screen.dart';
 import '../helpers/record_surface_test_helpers.dart';

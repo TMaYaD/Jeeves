@@ -28,7 +28,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sqlite_async/sqlite_async.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
-import 'package:jeeves/models/todo.dart' show RoutingKind;
+import 'package:jeeves/models/routing_kind.dart';
 
 Future<void> _waitUntil(
   bool Function() condition, {

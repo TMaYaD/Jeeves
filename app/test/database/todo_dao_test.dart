@@ -5,7 +5,8 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
-import 'package:jeeves/models/todo.dart';
+import 'package:jeeves/models/intent.dart';
+import 'package:jeeves/models/routing_kind.dart';
 import 'package:jeeves/sync/domain_op_capture.dart'
     show RecordingDomainOpCapture;
 import '../test_helpers.dart';
