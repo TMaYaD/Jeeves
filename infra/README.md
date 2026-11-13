@@ -137,7 +137,7 @@ Recovery options, in order of preference:
 ## The `jeeves-builder` Android build VM
 
 A VirtualBox guest on the Mac that runs the Android toolchain the host cannot:
-Ubuntu 24.04, 2 vCPU, 6 GB RAM, Temurin JDK 17 at `~/jdk17`, Android SDK at
+Ubuntu 24.04, 2 vCPU, 4 GB RAM, Temurin JDK 17 at `~/jdk17`, Android SDK at
 `~/Android/sdk`, Flutter at `~/flutter`. Both versions track the pins CI uses —
 `java-version: 17` in the workflows and `app/.fvmrc` for Flutter — so a mismatch
 here means one of those moved.
@@ -162,52 +162,61 @@ exists, so a replacement key has to be installed from `runcmd`.
 
 ### Memory cap and rollback
 
-The VM retains **6144 MB** with its existing 8 GB guest swapfile. An integer-GB
-search from 2 to 6 on commit `0a4951f` rejected every lower cap under the fixed
-criteria below. The 6 GB baseline passed; 6 GB remains the fallback rather than
-a claim that it passed a same-daemon confirmation. This search recovers no
-additional host memory relative to its starting 6 GB cap.
+The VM runs at **4096 MB** with its 8 GB guest swapfile. VirtualBox commits the
+whole cap to the host at boot, so 4 GB instead of 8 GB (the original size) frees
+4 GB of the 16 GB host. Two rounds of integer-GB search from 2 to 6 GB, on
+commit `0a4951f` with real profile APK builds, set the number.
 
-The workload used Flutter 3.47.2, Gradle 9.8.2, AGP 9.5.1 and Kotlin 2.4.21.
-Each build ran `flutter clean`, dependency resolution, launcher-icon generation,
-code generation and the profile arm64 dev APK command with verbose output.
-Gradle's build cache was disabled through a temporary guest-only setting;
-downloaded dependencies stayed cached. The repository's 8 GB Gradle heap ceiling
-remained in force.
+**Guest heap setting.** The guest's `~/.gradle/gradle.properties` holds two
+lines and nothing else:
 
-| Cap | Build | Wall seconds | Peak anonymous MB | Swap-in MB | Stall some/full | OOM kills | Verdict |
-|---|---|---:|---:|---:|---|---:|---|
-| 6 GB | Baseline | 582 | 3791 | 0 | 0.039% / 0.026% | 0 | PASS |
-| 2 GB | Trial | 679 | 1680 | 1267 | 5.708% / 3.465% | 0 | FAIL |
-| 4 GB | Trial | 514 | 2957 | 20 | 0.867% / 0.695% | 0 | PASS |
-| 3 GB | Trial | 546 | 2592 | 124 | 2.516% / 1.762% | 0 | PASS |
-| 3 GB | Same-daemon confirmation | 449 | 2608 | 1336 | 4.519% / 2.686% | 0 | FAIL |
-| 4 GB | Repeat trial after reboot | 573 | 3495 | 128 | 1.942% / 1.517% | 0 | PASS |
-| 4 GB | Same-daemon confirmation | 446 | 3337 | 1412 | 4.269% / 3.070% | 0 | FAIL |
-| 5 GB | Trial | 523 | 3495 | 0.06 | 0.101% / 0.056% | 0 | PASS |
-| 5 GB | Same-daemon confirmation | 361 | 4067 | 272.4 | 7.004% / 3.093% | 0 | FAIL |
+```
+org.gradle.jvmargs=-Xmx2g -XX:MaxMetaspaceSize=4G -XX:ReservedCodeCacheSize=512m -XX:+HeapDumpOnOutOfMemoryError
+kotlin.daemon.jvmargs=-Xmx1g
+```
 
-Every completed build produced a fresh 40,949,537-byte APK, with app Kotlin and
-dex tasks executed and no `FROM-CACHE` tasks. Passing limits were no OOM or Java
-memory failure, at most 256 MB swap-in, at most 10% `some` and 5% `full` memory
-stall time, and at most 1.5 times baseline wall time when host CPU and paging
-probes read SANE at both ends. Confirmation used a second clean build on the
-same boot and Gradle daemon; its wall time was not judged. The temporary
-cache override was removed after the experiment.
+It caps the Gradle and Kotlin daemons at 2 GB and 1 GB. The repository allows
+each daemon 8 GB (the Kotlin daemon inherits it), and the first round showed the
+idle daemons holding 2.8 to 4.1 GB at every cap, which paged out and back in on
+every second build. The file lives only in the guest: a rebuilt VM needs it
+recreated, and the repository's own `-Xmx8G` is unchanged for CI and developers.
+If a Java `OutOfMemoryError` appears on a guest that is not short of memory,
+raise these two `-Xmx` values, not the cap.
 
-### Risks
+**How the cap was measured.** A series is one fresh boot at a cap, then three
+clean builds with Gradle's build cache off: A on new daemons, B and C warm on the
+same daemon (the builder keeps its daemon between builds). Each build ran
+`flutter clean`, dependency resolution, icon and code generation, then the
+profile arm64 dev APK. A build passed when it completed, nothing was killed for
+memory, memory stall time stayed at or under 10% (`some`) and 5% (`full`), and
+wall time stayed within 1.5 times the 6 GB baseline's (605 s fresh; 541 s warm)
+when the host CPU probe was sane. Swap-in is recorded, not judged.
 
-These measurements cover one pinned commit and APK workload, not future build
-growth or `flutter test`. The confirmation failures show that a successful
-fresh-boot build alone is insufficient. The 5 GB confirmation missed the
-256 MB swap-in limit by 6.4%; the limit was kept unchanged. Swap occupancy is
-not swap-in; cold pages in the swapfile are recorded but are not themselves a failure.
+| Cap | Series | Fresh A | Warm B | Warm C | Result |
+|---|---|---:|---:|---:|---|
+| 6 GB | baseline | 605 s | 391 s | 330 s | reference, stall under 0.3% |
+| 2 GB | 1 | 527 s | 551 s | 640 s | FAIL (C stall 10.01%, warm time) |
+| 3 GB | 1 | 891 s | 628 s | 588 s | warm time over limit, host probes incomplete |
+| 3 GB | 2 | 678 s | 639 s | 540 s | FAIL (warm time) |
+| 4 GB | 1 | 611 s | 517 s | 501 s | PASS |
+| 4 GB | 2 | 938 s | 584 s | 585 s | FAIL (time only; host share dipped to 35-60%) |
+| 4 GB | 3 | 653 s | 472 s | 469 s | PASS |
 
-If a later build shows guest swap-in, memory stalls or an OOM kill, raise the cap
-by 1 GB and check the build again. Rollback is 6144 MB. Before each transition,
-wait for no build and a one-minute guest load below 0.5; wait up to 180 seconds
-for genuine `poweroff` after ACPI shutdown. Do not force shutdown or use saved
-state. Then change memory and boot:
+4 GB passed two of three series; 3 GB failed both. No build at any cap had an OOM
+kill, and the worst stall at 4 GB was 5.6% `some`. A 4 GB build swaps 0.6 to
+1.1 GB per warm build; the swapfile sits on the Mac's own disk, so this costs the
+host some disk traffic.
+
+**What this does not show.** One pinned commit and the APK build only (not
+`flutter test`); wall time moves with host load (the same 4 GB cap ran warm
+builds in 469 to 585 s); host swap traffic per build was not measured. Full
+
+**Raise the cap** by 1 GB if a build shows an OOM kill, a stopped daemon or
+memory stall above the limits, and check the build again.
+
+**Rollback** to the former 6144 MB is one power transition. Wait for no build and
+a one-minute guest load below 0.5; wait up to 180 seconds for genuine `poweroff`
+after ACPI shutdown. Do not force shutdown or use saved state.
 
 ```bash
 VBoxManage controlvm jeeves-builder acpipowerbutton
@@ -216,8 +225,7 @@ VBoxManage modifyvm jeeves-builder --memory 6144
 VBoxManage startvm jeeves-builder --type headless
 ```
 
-Check SSH, guest memory and the 8 GB `/swapfile` after boot. Host RSS and paging
-depend on other workloads and are not proof of physical memory recovered by a cap change alone.
+Check SSH, guest memory and the 8 GB `/swapfile` after boot.
 
 ### Build
 
