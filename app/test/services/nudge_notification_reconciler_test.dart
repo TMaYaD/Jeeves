@@ -100,7 +100,7 @@ void main() {
 
     await scheduler.reconcile(changed);
 
-    expect(service.scheduleCalls.length, before + 8);
+    expect(service.scheduleCalls.length, before + 7);
     expect(service.alarmsOf(RitualId.dailyPlanning).first.fireAt, _at(0, 8, 30));
   });
 

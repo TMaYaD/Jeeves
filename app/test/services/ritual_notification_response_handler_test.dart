@@ -57,7 +57,7 @@ void main() {
     await arm(300, DateTime(2026, 11, 11, 9)); // inside 08:05 + 60 min
     await arm(301, DateTime(2026, 11, 12, 9)); // tomorrow
 
-    await tap(kNotificationActionSnooze,
+    await tap(kPeriodicReviewActionSnooze,
         payloadFor(RitualId.weeklyReview, DateTime(2026, 11, 10, 7)));
 
     expect(service.pending.containsKey(300), isFalse);
