@@ -169,7 +169,7 @@ void main() {
     await tester.tap(find.text('Next step'));
     await _pumpFrames(tester);
     if (unfinished) {
-      await tester.tap(find.text('Roll Over to Tomorrow'));
+      await tester.tap(find.text('Roll Over'));
     }
     // Only a few frames: no waiting out the 1.6 s entrance.
     await tester.pump();
