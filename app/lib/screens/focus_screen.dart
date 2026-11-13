@@ -58,11 +58,11 @@ class FocusScreen extends ConsumerWidget {
                   // (issue #460) becomes unreproducible.
                   final planningDone = activeSession != null;
                   // The "Begin Evening Shutdown" entry is shown once the user
-                  // is in an open focus session with at least one task on it.
+                  // is in an open focus session (its Plan may be empty).
                   // Derived from the shared provider so the shutdown callout
                   // and the title bar's Re-plan action can't drift (#499).
                   final showShutdownEntry =
-                      ref.watch(hasOpenSessionWithTasksProvider);
+                      ref.watch(hasOpenSessionProvider);
                   // Tasks carried over ('rollover') from the last closed
                   // session — only while no session is open.
                   final carriedOver = planningDone

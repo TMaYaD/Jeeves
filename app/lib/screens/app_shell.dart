@@ -83,12 +83,12 @@ class AppShell extends ConsumerWidget {
         : null;
 
     // The Now route offers Re-plan as a shared-title-bar page action while the
-    // user is in an open session carrying tasks (the shutdown-callout state,
+    // user is in an open session (the shutdown-callout state,
     // #499) — mirroring the Inbox badge: the same route-derived condition,
     // supplied top-down to the bar rather than hand-rolled inside the screen.
     // Every other shell route supplies none.
     final showReplan =
-        location == '/focus' && ref.watch(hasOpenSessionWithTasksProvider);
+        location == '/focus' && ref.watch(hasOpenSessionProvider);
     final pageActions = showReplan
         ? [
             AppTitleBarAction(
