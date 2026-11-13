@@ -194,9 +194,17 @@ void main() {
       expect(c.read(periodicReviewProvider).sessionStarted, isTrue);
       expect(c.read(periodicReviewProvider).currentStep,
           PeriodicReviewNotifier.kStepInbox);
-      await tapKey(find.byKey(const Key('periodic_review_skip')).evaluate().isNotEmpty
-          ? const Key('periodic_review_skip')
-          : const Key('periodic_review_next_step'));
+      // Skip walks the Inbox cursor; Next step crosses into step 2.
+      for (var taps = 0;
+          c.read(periodicReviewProvider).currentStep <
+                  PeriodicReviewNotifier.kStepWaitingFor &&
+              taps < 6;
+          taps++) {
+        await tester.pump(const Duration(milliseconds: 600));
+        await tapKey(find.byKey(const Key('periodic_review_skip')).evaluate().isNotEmpty
+            ? const Key('periodic_review_skip')
+            : const Key('periodic_review_next_step'));
+      }
       const stepLeftAt = PeriodicReviewNotifier.kStepWaitingFor;
       expect(c.read(periodicReviewProvider).currentStep, stepLeftAt);
 
