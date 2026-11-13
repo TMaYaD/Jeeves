@@ -181,23 +181,34 @@ void main() {
 
     test('with two open sessions, only the active winner\'s Plan counts',
         () async {
-      await outcome('o', dueDate: DateTime.utc(2030, 2, 1));
-      // Older session carries the Outcome; the newer (winner) does not.
-      await db.focusSessionDao.openSession(
-          userId: _userId, taskIds: ['o'], now: _ts);
-      await db.focusSessionDao.openSession(
-          userId: _userId, taskIds: [], now: _ts.add(const Duration(hours: 1)));
-      await db.todoDao.rescheduleTask('o', DateTime.utc(2030, 3, 1));
+      // Sync can land two open sessions; open them past the writer's guard.
+      Future<void> project(String id, DateTime startedAt, List<String> plan) async {
+        await db.into(db.focusSessions).insert(FocusSessionsCompanion(
+              id: Value(id),
+              userId: const Value(_userId),
+              startedAt: Value(startedAt.toIso8601String()),
+              endedAt: const Value(null),
+            ));
+        for (final taskId in plan) {
+          await db.into(db.focusSessionTasks).insert(FocusSessionTasksCompanion(
+                focusSessionId: Value(id),
+                taskId: Value(taskId),
+                position: const Value(0),
+                userId: const Value(_userId),
+              ));
+        }
+      }
+
+      await outcome('onlyOlder', dueDate: DateTime.utc(2030, 2, 1));
+      await outcome('onlyNewer', dueDate: DateTime.utc(2030, 2, 1));
+      await project('older', _ts, ['onlyOlder']);
+      await project('newer', _ts.add(const Duration(hours: 1)), ['onlyNewer']);
+
+      await db.todoDao.rescheduleTask('onlyOlder', DateTime.utc(2030, 3, 1));
       expect(await reschedules(), isEmpty, reason: 'loser-only membership');
 
-      // The winner carries 'p'; the loser does not.
-      await outcome('p', dueDate: DateTime.utc(2030, 2, 1));
-      final newest = await db.focusSessionDao.openSession(
-          userId: _userId,
-          taskIds: ['p'],
-          now: _ts.add(const Duration(hours: 2)));
-      await db.todoDao.rescheduleTask('p', DateTime.utc(2030, 4, 1));
-      expect((await reschedules()).single.focusSessionId, newest);
+      await db.todoDao.rescheduleTask('onlyNewer', DateTime.utc(2030, 3, 1));
+      expect((await reschedules()).single.focusSessionId, 'newer');
     });
 
     test('with no session open, or off the Plan, it does not count', () async {
