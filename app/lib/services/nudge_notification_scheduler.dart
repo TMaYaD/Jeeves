@@ -174,6 +174,31 @@ RitualId? notifyingRitualAt(DateTime instant, NudgeNotificationFacts facts) {
   return null;
 }
 
+const _kOutrankScanWindow = Duration(hours: 24);
+const _kOutrankScanStep = Duration(minutes: 5);
+
+/// The first instant within a day after [from] (scanned in five-minute steps)
+/// when a Ritual of higher priority than [ritual] has its Nudge visible on the
+/// Notification surface, or null. Baked into the notification payload so a
+/// background Snooze, which has no Nudge facts, can tell its expiry would be
+/// outranked.
+DateTime? outrankedFromInstant(
+  RitualId ritual,
+  DateTime from,
+  NudgeNotificationFacts facts,
+) {
+  final higher = ritualsByPriority
+      .takeWhile((r) => r != ritual)
+      .where(facts.isEnabled)
+      .toList();
+  if (higher.isEmpty) return null;
+  final end = from.add(_kOutrankScanWindow);
+  for (var t = from; !t.isAfter(end); t = t.add(_kOutrankScanStep)) {
+    if (higher.any((r) => nudgeVisibleAtInstant(r, t, facts))) return t;
+  }
+  return null;
+}
+
 /// One alarm the OS should hold.
 class PlannedNudgeNotification {
   const PlannedNudgeNotification({
@@ -223,6 +248,7 @@ List<PlannedNudgeNotification> planNudgeNotifications(
         edge: edge,
         snoozeMinutes: facts.snoozeMinutes[ritual] ?? 60,
         fireAt: instant,
+        outrankedFrom: outrankedFromInstant(ritual, instant, facts),
       ),
     );
   }

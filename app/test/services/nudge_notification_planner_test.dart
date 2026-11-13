@@ -139,6 +139,27 @@ void main() {
       expect(parsed.fireAt, _at(0, 8));
     });
 
+    test('records when a higher-priority Ritual\'s Nudge takes the head', () {
+      // Weekly Review falls due at 08:30; its own notification is at 18:00.
+      final plan = planNudgeNotifications(_facts(
+        enabled: _allEnabled,
+        weeklyReviewHour: 18,
+        weeklyReviewLastCompleted: _at(-7, 8, 30),
+      ));
+
+      final planning = _of(plan, RitualId.dailyPlanning)
+          .firstWhere((p) => p.fireAt == _at(0, 8));
+      expect(parseRitualNotificationPayload(planning.payload)!.outrankedFrom,
+          _at(0, 8, 30));
+    });
+
+    test('records nothing when no higher-priority Nudge appears soon', () {
+      final plan = planNudgeNotifications(_facts());
+
+      expect(parseRitualNotificationPayload(plan.first.payload)!.outrankedFrom,
+          isNull);
+    });
+
     test('a bare payload from an older build still resolves to its Ritual', () {
       final parsed = parseRitualNotificationPayload('nudge:shutdown')!;
 

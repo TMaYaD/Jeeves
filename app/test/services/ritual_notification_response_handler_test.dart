@@ -89,49 +89,37 @@ void main() {
     expect(service.pending.containsKey(302), isTrue);
   });
 
-  test('Snooze does not arm an expiry alarm while a higher-priority Ritual '
-      'has an alarm planned before it', () async {
-    // Weekly Review became due at 08:30 and holds the head from then; its 09:00
-    // alarm is pending. Daily Planning snoozed at 08:05 would expire at 09:05.
-    await service.scheduleRitualNotification(
-      id: 300,
-      ritual: RitualId.weeklyReview,
-      fireAt: DateTime(2026, 11, 11, 9),
-      payload: ritualNotificationPayload(RitualId.weeklyReview,
-          edge: DateTime(2026, 11, 11, 8, 30),
-          snoozeMinutes: 60,
-          fireAt: DateTime(2026, 11, 11, 9)),
-    );
+  String planningPayload({DateTime? outrankedFrom}) => ritualNotificationPayload(
+        RitualId.dailyPlanning,
+        edge: DateTime(2026, 11, 11, 8),
+        snoozeMinutes: 60,
+        fireAt: DateTime(2026, 11, 11, 8),
+        outrankedFrom: outrankedFrom,
+      );
 
+  test('Snooze does not arm an expiry alarm once a higher-priority Ritual '
+      'holds the head, even with nothing of it pending', () async {
+    // Weekly Review became due at 08:30 (its notification is at 18:00, or was
+    // already delivered); Daily Planning snoozed at 08:05 expires at 09:05.
     await tap(kNotificationActionSnooze,
-        payloadFor(RitualId.dailyPlanning, DateTime(2026, 11, 11, 8)));
+        planningPayload(outrankedFrom: DateTime(2026, 11, 11, 8, 30)));
 
     expect(
         service.pending
             .containsKey(ritualSnoozeNotificationId(RitualId.dailyPlanning)),
         isFalse);
-    expect(service.pending.containsKey(300), isTrue);
   });
 
-  test('Snooze still arms when the higher-priority alarm falls after the expiry',
-      () async {
-    await service.scheduleRitualNotification(
-      id: 300,
-      ritual: RitualId.weeklyReview,
-      fireAt: DateTime(2026, 11, 11, 18),
-      payload: ritualNotificationPayload(RitualId.weeklyReview,
-          edge: DateTime(2026, 11, 11, 8, 30),
-          snoozeMinutes: 60,
-          fireAt: DateTime(2026, 11, 11, 18)),
-    );
-
+  test('Snooze still arms when the higher-priority Ritual takes the head only '
+      'after the expiry', () async {
     await tap(kNotificationActionSnooze,
-        payloadFor(RitualId.dailyPlanning, DateTime(2026, 11, 11, 8)));
+        planningPayload(outrankedFrom: DateTime(2026, 11, 11, 9, 30)));
 
+    final alarm =
+        service.pending[ritualSnoozeNotificationId(RitualId.dailyPlanning)]!;
     expect(
-        service.pending
-            .containsKey(ritualSnoozeNotificationId(RitualId.dailyPlanning)),
-        isTrue);
+        parseRitualNotificationPayload(alarm.payload)!.outrankedFrom,
+        DateTime(2026, 11, 11, 9, 30));
   });
 
   test('Snooze on a notification from an older build falls back to an hour',

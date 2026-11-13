@@ -496,10 +496,13 @@ String ritualSkipActionLabel(RitualId ritual) =>
     _ritualConfigs[ritual]!.skipLabel;
 
 /// What a Ritual notification's payload says. Format:
-/// `nudge:<keyPrefix>|edge=<iso>|snooze=<minutes>|at=<epoch ms>` — `edge` is
-/// the Nudge firing the notification belongs to (Skip cancels the other
-/// pending alarms of the same firing), `snooze` is how long Snooze hides it,
-/// `at` is the instant it was scheduled for. Notifications already in the tray
+/// `nudge:<keyPrefix>|edge=<iso>|snooze=<minutes>|at=<epoch ms>[|out=<epoch ms>]`
+/// — `edge` is the Nudge firing the notification belongs to (Skip cancels the
+/// other pending alarms of the same firing), `snooze` is how long Snooze hides
+/// it, `at` is the instant it was scheduled for, `out` is the first instant
+/// after that when a higher-priority Ritual's Nudge becomes visible and takes
+/// the Notification surface (absent when none does soon). A background Snooze
+/// has no database, so this is what tells it the Ritual would be outranked. Notifications already in the tray
 /// from older builds carry the bare `nudge:<keyPrefix>`; every field is then
 /// null.
 class RitualNotificationPayload {
@@ -508,12 +511,14 @@ class RitualNotificationPayload {
     this.edge,
     this.snoozeMinutes,
     this.fireAt,
+    this.outrankedFrom,
   });
 
   final RitualId ritual;
   final DateTime? edge;
   final int? snoozeMinutes;
   final DateTime? fireAt;
+  final DateTime? outrankedFrom;
 }
 
 String ritualNotificationPayload(
@@ -521,11 +526,13 @@ String ritualNotificationPayload(
   required DateTime edge,
   required int snoozeMinutes,
   required DateTime fireAt,
+  DateTime? outrankedFrom,
 }) =>
     '$_kNudgePayloadPrefix${ritual.keyPrefix}'
     '|edge=${edge.toUtc().toIso8601String()}'
     '|snooze=$snoozeMinutes'
-    '|at=${fireAt.millisecondsSinceEpoch}';
+    '|at=${fireAt.millisecondsSinceEpoch}'
+    '${outrankedFrom == null ? '' : '|out=${outrankedFrom.millisecondsSinceEpoch}'}';
 
 /// Parses either payload form. Null when [payload] is not a Ritual payload.
 RitualNotificationPayload? parseRitualNotificationPayload(String? payload) {
@@ -544,6 +551,7 @@ RitualNotificationPayload? parseRitualNotificationPayload(String? payload) {
   }
 
   final atMillis = int.tryParse(field('at') ?? '');
+  final outMillis = int.tryParse(field('out') ?? '');
   return RitualNotificationPayload(
     ritual: ritual,
     edge: DateTime.tryParse(field('edge') ?? ''),
@@ -551,6 +559,9 @@ RitualNotificationPayload? parseRitualNotificationPayload(String? payload) {
     fireAt: atMillis == null
         ? null
         : DateTime.fromMillisecondsSinceEpoch(atMillis),
+    outrankedFrom: outMillis == null
+        ? null
+        : DateTime.fromMillisecondsSinceEpoch(outMillis),
   );
 }
 

@@ -67,17 +67,12 @@ Future<void> handleRitualNotificationResponse(
       snoozeMinutes: snoozeMinutes,
     );
     final pendingAlarms = await service.pendingRitualNotifications();
-    // A higher-priority Ritual with an alarm planned by the expiry holds the
-    // queue head then, so the planner has already chosen it over this one.
-    final outranked = pendingAlarms.any((pending) {
-      final other = parseRitualNotificationPayload(pending.payload);
-      final otherFireAt = other?.fireAt;
-      return other != null &&
-          otherFireAt != null &&
-          !otherFireAt.isAfter(fireAt) &&
-          ritualsByPriority.indexOf(other.ritual) <
-              ritualsByPriority.indexOf(ritual);
-    });
+    // The payload records when a higher-priority Ritual's Nudge takes the
+    // Notification surface, judged from Nudge facts when the alarm was
+    // planned. Nothing the OS holds is consulted: that Ritual's notification
+    // may be later in the day, or already delivered.
+    final outrankedFrom = payload?.outrankedFrom;
+    final outranked = outrankedFrom != null && !outrankedFrom.isAfter(fireAt);
     if (!outranked) {
       await service.scheduleRitualNotification(
         id: ritualSnoozeNotificationId(ritual),
@@ -90,6 +85,7 @@ Future<void> handleRitualNotificationResponse(
                 edge: tappedEdge,
                 snoozeMinutes: snoozeMinutes,
                 fireAt: fireAt,
+                outrankedFrom: outrankedFrom,
               ),
       );
     }
