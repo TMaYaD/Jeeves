@@ -99,7 +99,7 @@ void main() {
     // Search ignores case and a leading @; a tag nobody uses is findable and
     // needs no Add.
     await tester.enterText(
-        find.byKey(const Key('tag_cloud_find_field')), '@ZZ-UN');
+        find.byKey(const Key('tag_cloud_find_field')), '@ZZ-UNUSED');
     await _pumpFor(tester);
     expect(chipInCloud('zz-unused'), findsOneWidget);
     expect(find.byKey(const Key('tag_cloud_add_tag')), findsNothing);
