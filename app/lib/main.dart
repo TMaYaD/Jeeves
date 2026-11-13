@@ -1,9 +1,11 @@
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'capture/share_inbox_host.dart';
 import 'models/ritual.dart';
 import 'providers/auth_provider.dart';
 import 'providers/database_provider.dart';
@@ -15,6 +17,7 @@ import 'providers/periodic_review_settings_provider.dart';
 import 'providers/sync_lifecycle_provider.dart';
 import 'providers/shutdown_settings_provider.dart';
 import 'router.dart';
+import 'services/due_date_notifications.dart';
 import 'services/notification_service.dart';
 
 Future<void> main() async {
@@ -80,10 +83,13 @@ void _handleNotificationResponse(NotificationResponse response) async {
       if (response.payload == 'focus') {
         appRouter.go('/focus/active');
       } else {
+        final outcomeId = outcomeIdFromNotificationPayload(response.payload);
         final ritual = ritualIdFromNotificationPayload(response.payload);
-        appRouter.go(ritual != null
-            ? ritualNotificationRoute(ritual)
-            : '/inbox');
+        appRouter.go(outcomeId != null
+            ? '/task/$outcomeId'
+            : ritual != null
+                ? ritualNotificationRoute(ritual)
+                : '/inbox');
       }
 
     case kNotificationActionSnooze:
@@ -161,6 +167,10 @@ class JeevesApp extends ConsumerWidget {
     // interrupted initial upload and subscribes.  Nothing else reads it, so
     // without this read it stays lazy and the device never syncs.
     ref.watch(syncLifecycleProvider);
+
+    // Keeps a notification scheduled for each due-dated Outcome (09:00 on its
+    // due day). Nothing else reads it, so without this watch it never runs.
+    ref.watch(dueDateNotificationReconcilerProvider);
     return MaterialApp.router(
       title: 'Jeeves',
       theme: ThemeData(
@@ -170,6 +180,11 @@ class JeevesApp extends ConsumerWidget {
         scaffoldBackgroundColor: Colors.white,
       ),
       routerConfig: appRouter,
+      // Only Android has a share-sheet receiver that queues shares.
+      builder: (context, child) =>
+          !kIsWeb && defaultTargetPlatform == TargetPlatform.android
+              ? ShareInboxHost(child: child ?? const SizedBox.shrink())
+              : child ?? const SizedBox.shrink(),
     );
   }
 }
