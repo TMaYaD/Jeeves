@@ -59,8 +59,13 @@ class BypassedStep extends ConsumerWidget {
     final actions = ref.read(bypassActionsProvider);
 
     final todoId = todo.id;
-    Future<void> run(Future<bool> Function(String id) decision) async {
-      final messenger = ScaffoldMessenger.of(context);
+    // The messenger is resolved while this step is mounted and handed down the
+    // retry chain: the snackbar outlives the step (Back unmounts it), so Retry
+    // must not look it up through this widget's context again.
+    Future<void> run(
+      ScaffoldMessengerState messenger,
+      Future<bool> Function(String id) decision,
+    ) async {
       try {
         await notifier.decideBypassed(todoId, decision);
       } catch (_) {
@@ -71,14 +76,16 @@ class BypassedStep extends ConsumerWidget {
             content: const Text("Couldn't save that decision. Try again."),
             action: SnackBarAction(
               label: 'Retry',
-              onPressed: () => unawaited(run(decision)),
+              onPressed: () => unawaited(run(messenger, decision)),
             ),
           ));
       }
     }
 
     VoidCallback? decide(Future<bool> Function(String id) decision) =>
-        decisionPending ? null : () => unawaited(run(decision));
+        decisionPending
+            ? null
+            : () => unawaited(run(ScaffoldMessenger.of(context), decision));
 
     return OutcomeReviewCard(
       key: ValueKey(todo.id),

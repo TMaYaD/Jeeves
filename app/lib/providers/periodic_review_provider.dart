@@ -533,6 +533,7 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
       return;
     }
     state = state.copyWith(bypassedDecisionPending: true);
+    var stepVanished = false;
     try {
       final landed = await decision(outcomeId);
       if (landed) {
@@ -545,10 +546,16 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
             state.bypassedNav.items!.where((t) => t.id != outcomeId).toList(),
           ),
         );
+        // The step is shown only while the session holds a Bypassed Outcome.
+        // If this was the last one, the visible step list just lost it, so
+        // move on and keep the step index in line with what is on screen.
+        stepVanished =
+            !_hasBypassedStep && state.currentStep == kStepBypassed;
       }
     } finally {
       state = state.copyWith(bypassedDecisionPending: false);
     }
+    if (stepVanished) await goToStep(kStepWaitingFor);
   }
 
   void advanceWaitingFor() =>

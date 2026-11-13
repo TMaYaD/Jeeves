@@ -273,6 +273,51 @@ void main() {
     await close(tester);
   });
 
+  testWidgets(
+      'the snackbar Retry still works after Back unmounts the step, and logs '
+      'exactly once', (tester) async {
+    await mount(tester, ['a', 'b'], flakyTrash: true);
+    final first = state().bypassedNextUndecided!.id;
+
+    await tapKey(tester, 'bypassed_trash');
+    expect(find.text("Couldn't save that decision. Try again."), findsOneWidget);
+
+    // Back leaves the step; the snackbar outlives it.
+    await tester.tap(find.text('Back'));
+    await settleWithRealAsync(tester, rounds: 2);
+    expect(state().currentStep, PeriodicReviewNotifier.kStepInbox);
+    expect(find.byKey(const Key('bypassed_trash')), findsNothing);
+
+    await tester.tap(find.text('Retry'));
+    await settleWithRealAsync(tester, rounds: 2);
+    expect(tester.takeException(), isNull);
+    expect(state().bypassedDecidedIds, {first});
+    final log = await tester.runAsync(
+        () => db.focusSessionDao.watchBypassDecisions().first);
+    expect(log, hasLength(1));
+    await close(tester);
+  });
+
+  testWidgets(
+      'deleting the only Bypassed Outcome mid-step moves to Waiting For, '
+      'records no decision, and Back skips the vanished step', (tester) async {
+    await mount(tester, ['a']);
+    await tester.runAsync(() => db.todoDao.deleteOutcome('a'));
+
+    await tapKey(tester, 'bypassed_trash');
+    expect(state().bypassedDecidedIds, isEmpty);
+    expect(state().currentStep, PeriodicReviewNotifier.kStepWaitingFor);
+    expect(find.text('Decide Bypassed Outcomes'), findsNothing);
+    expect(find.textContaining('of 4'), findsOneWidget);
+    final log = await tester.runAsync(
+        () => db.focusSessionDao.watchBypassDecisions().first);
+    expect(log, isEmpty);
+
+    await container.read(periodicReviewProvider.notifier).previousStep();
+    expect(state().currentStep, PeriodicReviewNotifier.kStepInbox);
+    await close(tester);
+  });
+
   testWidgets('a session with no Bypassed Outcome shows four steps',
       (tester) async {
     await mount(tester, []);
