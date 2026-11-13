@@ -20,7 +20,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/gtd_database.dart';
 import '../models/action_draft.dart';
-import '../models/todo.dart' show RoutingKind;
+import '../models/routing_kind.dart';
 import '../providers/auth_provider.dart';
 import '../services/clarification_service.dart';
 import 'app_title_bar/app_title_bar.dart';
@@ -30,7 +30,7 @@ import 'next_action_dialog.dart';
 import 'person_tag_picker.dart';
 import 'replace_current_action_sheet.dart';
 
-export '../models/todo.dart' show RoutingKind;
+export '../models/routing_kind.dart';
 
 /// User-visible "process to" actions.
 ///

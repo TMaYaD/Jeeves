@@ -3,7 +3,8 @@ library;
 
 import 'package:drift/drift.dart';
 
-import '../../models/todo.dart' show Intent, RoutingKind;
+import '../../models/intent.dart';
+import '../../models/routing_kind.dart';
 import '../../sync/collection_codecs.dart';
 import '../gtd_database.dart';
 import 'action_dao.dart' show ActionDao;

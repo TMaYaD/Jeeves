@@ -27,7 +27,7 @@ import '../utils/uuid.dart';
 
 import '../database/gtd_database.dart';
 import '../models/action_draft.dart';
-import '../models/todo.dart' show RoutingKind;
+import '../models/routing_kind.dart';
 import '../providers/database_provider.dart';
 
 /// Thrown by a Capture write whose Capture is no longer in local storage. The
