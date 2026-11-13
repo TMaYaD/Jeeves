@@ -18,7 +18,7 @@ PeriodicReviewCandidate candidate(
 void main() {
   const ranker = FreshnessPeriodicReviewRanker();
 
-  test('Inbox first, then every step interleaves by least recent clarification', () async {
+  test('Inbox first, then Bypassed, then every step interleaves by least recent clarification', () async {
     final day = DateTime.utc(2026, 3, 10);
     final inputs = [
       candidate('someday-oldest', step: PeriodicReviewStepKind.someday,
@@ -31,8 +31,10 @@ void main() {
           created: day.add(const Duration(days: 5))),
       candidate('capture-early', step: PeriodicReviewStepKind.inbox, created: day),
       candidate('someday-recent', step: PeriodicReviewStepKind.someday, clarified: day),
+      candidate('bypassed', step: PeriodicReviewStepKind.bypassed,
+          clarified: day.subtract(const Duration(days: 1))),
     ];
-    const expected = ['capture-early', 'capture-late', 'next-never',
+    const expected = ['capture-early', 'capture-late', 'bypassed', 'next-never',
       'someday-oldest', 'next-old', 'waiting-recent', 'someday-recent'];
     for (var seed = 0; seed < 10; seed++) {
       final shuffled = [...inputs]..shuffle(Random(seed));

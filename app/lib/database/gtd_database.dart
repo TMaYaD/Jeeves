@@ -39,7 +39,7 @@ export 'tables.dart';
 part 'gtd_database.g.dart';
 
 @DriftDatabase(
-  tables: [Todos, Tags, TodoTags, TimeLogs, FocusSessions, FocusSessionTasks, FocusSessionDispositions, UserPreferences, Captures, CaptureAttachments, CaptureOutcomes, CaptureTags, Actions],
+  tables: [Todos, Tags, TodoTags, TimeLogs, FocusSessions, FocusSessionTasks, FocusSessionDispositions, FocusSessionPlanningBypasses, FocusSessionReschedules, OutcomeBypassDecisions, UserPreferences, Captures, CaptureAttachments, CaptureOutcomes, CaptureTags, Actions],
   daos: [TagDao, TodoDao, TimeLogDao, FocusSessionDao, CaptureDao, ActionDao],
 )
 class GtdDatabase extends _$GtdDatabase {
@@ -186,7 +186,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final UserPreferencesDao userPreferencesDao = UserPreferencesDao(this);
 
   @override
-  int get schemaVersion => 5;
+  int get schemaVersion => 6;
 
   /// Completes with the [OpeningDetails] of this store's one open.
   ///
@@ -264,6 +264,13 @@ class GtdDatabase extends _$GtdDatabase {
           // held `clarified = 0` stays an Outcome rather than being deleted.
           if (from < 5) {
             await m.alterTable(TableMigration(todos));
+          }
+          // v6 (issue #107): the Bypassed Outcome tables. Created only;
+          // nothing is dropped or altered, so no row of an existing store moves.
+          if (from < 6) {
+            await m.createTable(focusSessionPlanningBypasses);
+            await m.createTable(focusSessionReschedules);
+            await m.createTable(outcomeBypassDecisions);
           }
         }),
       );
@@ -351,6 +358,9 @@ class GtdDatabase extends _$GtdDatabase {
         const TableUpdate('focus_sessions'),
         const TableUpdate('focus_session_tasks'),
         const TableUpdate('focus_session_dispositions'),
+        const TableUpdate('focus_session_planning_bypasses'),
+        const TableUpdate('focus_session_reschedules'),
+        const TableUpdate('outcome_bypass_decisions'),
       });
 
   /// The [notifyTodosViewWrite] analogue for `user_preferences`.
