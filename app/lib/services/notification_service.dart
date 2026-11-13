@@ -495,30 +495,51 @@ int ritualSnoozeNotificationId(RitualId ritual) =>
 String ritualSkipActionLabel(RitualId ritual) =>
     _ritualConfigs[ritual]!.skipLabel;
 
+/// One stretch of time during which a higher-priority Ritual's Nudge holds the
+/// Notification surface. Start inclusive, end exclusive.
+typedef RitualOutrankedInterval = ({DateTime start, DateTime end});
+
 /// What a Ritual notification's payload says. Format:
-/// `nudge:<keyPrefix>|edge=<iso>|snooze=<minutes>|at=<epoch ms>[|out=<epoch ms>]`
+/// `nudge:<keyPrefix>|edge=<iso>|snooze=<minutes>|at=<epoch ms>`
+/// `[|cover=<epoch ms>|out=<start ms>-<end ms>,...]`
 /// — `edge` is the Nudge firing the notification belongs to (Skip cancels the
 /// other pending alarms of the same firing), `snooze` is how long Snooze hides
-/// it, `at` is the instant it was scheduled for, `out` is the first instant
-/// after that when a higher-priority Ritual's Nudge becomes visible and takes
-/// the Notification surface (absent when none does soon). A background Snooze
-/// has no database, so this is what tells it the Ritual would be outranked. Notifications already in the tray
-/// from older builds carry the bare `nudge:<keyPrefix>`; every field is then
-/// null.
+/// it, `at` is the instant it was scheduled for. `cover` and `out` let a
+/// background Snooze, which has no database, tell whether the Ritual would hold
+/// the surface at its expiry: `out` lists every stretch up to `cover` when a
+/// higher-priority Ritual's Nudge holds it, judged from Nudge facts when the
+/// alarm was planned; past `cover` nothing is known. Notifications already in
+/// the tray from older builds carry the bare `nudge:<keyPrefix>`; every field
+/// is then null.
 class RitualNotificationPayload {
   const RitualNotificationPayload({
     required this.ritual,
     this.edge,
     this.snoozeMinutes,
     this.fireAt,
-    this.outrankedFrom,
+    this.coveredUntil,
+    this.outranked = const [],
   });
 
   final RitualId ritual;
   final DateTime? edge;
   final int? snoozeMinutes;
   final DateTime? fireAt;
-  final DateTime? outrankedFrom;
+
+  /// End of the window [outranked] describes; null when the payload carries
+  /// no queue facts.
+  final DateTime? coveredUntil;
+  final List<RitualOutrankedInterval> outranked;
+
+  /// Whether [ritual] may notify at [instant]. Null when the payload cannot
+  /// say (no queue facts, or [instant] is past what they cover).
+  bool? mayNotifyAt(DateTime instant) {
+    final cover = coveredUntil;
+    if (cover == null) return null;
+    if (instant.isAfter(cover)) return false;
+    return !outranked.any(
+        (i) => !instant.isBefore(i.start) && instant.isBefore(i.end));
+  }
 }
 
 String ritualNotificationPayload(
@@ -526,13 +547,15 @@ String ritualNotificationPayload(
   required DateTime edge,
   required int snoozeMinutes,
   required DateTime fireAt,
-  DateTime? outrankedFrom,
+  DateTime? coveredUntil,
+  List<RitualOutrankedInterval> outranked = const [],
 }) =>
     '$_kNudgePayloadPrefix${ritual.keyPrefix}'
     '|edge=${edge.toUtc().toIso8601String()}'
     '|snooze=$snoozeMinutes'
     '|at=${fireAt.millisecondsSinceEpoch}'
-    '${outrankedFrom == null ? '' : '|out=${outrankedFrom.millisecondsSinceEpoch}'}';
+    '${coveredUntil == null ? '' : '|cover=${coveredUntil.millisecondsSinceEpoch}'}'
+    '${outranked.isEmpty ? '' : '|out=${outranked.map((i) => '${i.start.millisecondsSinceEpoch}-${i.end.millisecondsSinceEpoch}').join(',')}'}';
 
 /// Parses either payload form. Null when [payload] is not a Ritual payload.
 RitualNotificationPayload? parseRitualNotificationPayload(String? payload) {
@@ -550,18 +573,26 @@ RitualNotificationPayload? parseRitualNotificationPayload(String? payload) {
     return null;
   }
 
-  final atMillis = int.tryParse(field('at') ?? '');
-  final outMillis = int.tryParse(field('out') ?? '');
+  DateTime? millis(String? raw) {
+    final value = int.tryParse(raw ?? '');
+    return value == null ? null : DateTime.fromMillisecondsSinceEpoch(value);
+  }
+
+  final intervals = <RitualOutrankedInterval>[];
+  for (final pair in (field('out') ?? '').split(',')) {
+    final ends = pair.split('-');
+    if (ends.length != 2) continue;
+    final start = millis(ends[0]);
+    final end = millis(ends[1]);
+    if (start != null && end != null) intervals.add((start: start, end: end));
+  }
   return RitualNotificationPayload(
     ritual: ritual,
     edge: DateTime.tryParse(field('edge') ?? ''),
     snoozeMinutes: int.tryParse(field('snooze') ?? ''),
-    fireAt: atMillis == null
-        ? null
-        : DateTime.fromMillisecondsSinceEpoch(atMillis),
-    outrankedFrom: outMillis == null
-        ? null
-        : DateTime.fromMillisecondsSinceEpoch(outMillis),
+    fireAt: millis(field('at')),
+    coveredUntil: millis(field('cover')),
+    outranked: intervals,
   );
 }
 

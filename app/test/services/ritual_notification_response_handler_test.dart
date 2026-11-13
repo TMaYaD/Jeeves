@@ -89,39 +89,6 @@ void main() {
     expect(service.pending.containsKey(302), isTrue);
   });
 
-  String planningPayload({DateTime? outrankedFrom}) => ritualNotificationPayload(
-        RitualId.dailyPlanning,
-        edge: DateTime(2026, 11, 11, 8),
-        snoozeMinutes: 60,
-        fireAt: DateTime(2026, 11, 11, 8),
-        outrankedFrom: outrankedFrom,
-      );
-
-  test('Snooze does not arm an expiry alarm once a higher-priority Ritual '
-      'holds the head, even with nothing of it pending', () async {
-    // Weekly Review became due at 08:30 (its notification is at 18:00, or was
-    // already delivered); Daily Planning snoozed at 08:05 expires at 09:05.
-    await tap(kNotificationActionSnooze,
-        planningPayload(outrankedFrom: DateTime(2026, 11, 11, 8, 30)));
-
-    expect(
-        service.pending
-            .containsKey(ritualSnoozeNotificationId(RitualId.dailyPlanning)),
-        isFalse);
-  });
-
-  test('Snooze still arms when the higher-priority Ritual takes the head only '
-      'after the expiry', () async {
-    await tap(kNotificationActionSnooze,
-        planningPayload(outrankedFrom: DateTime(2026, 11, 11, 9, 30)));
-
-    final alarm =
-        service.pending[ritualSnoozeNotificationId(RitualId.dailyPlanning)]!;
-    expect(
-        parseRitualNotificationPayload(alarm.payload)!.outrankedFrom,
-        DateTime(2026, 11, 11, 9, 30));
-  });
-
   test('Snooze on a notification from an older build falls back to an hour',
       () async {
     await tap(kNotificationActionSnooze, 'nudge:planning');

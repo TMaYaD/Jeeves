@@ -174,29 +174,67 @@ RitualId? notifyingRitualAt(DateTime instant, NudgeNotificationFacts facts) {
   return null;
 }
 
-const _kOutrankScanWindow = Duration(hours: 24);
-const _kOutrankScanStep = Duration(minutes: 5);
+const _kOutrankScanStep = Duration(minutes: 1);
+const _kOutrankBoundaryPrecision = Duration(seconds: 1);
 
-/// The first instant within a day after [from] (scanned in five-minute steps)
-/// when a Ritual of higher priority than [ritual] has its Nudge visible on the
-/// Notification surface, or null. Baked into the notification payload so a
-/// background Snooze, which has no Nudge facts, can tell its expiry would be
-/// outranked.
-DateTime? outrankedFromInstant(
+/// How far past the horizon a payload's queue facts reach.
+const _kPayloadCoverDays = kNudgeNotificationHorizonDays + 1;
+
+/// Every stretch from `facts.now` to [until] when a Ritual of higher priority
+/// than [ritual] has its Nudge on the Notification surface. Scanned by the
+/// minute, with each transition then bisected to the second, so a boundary
+/// between samples is not rounded onto the next one. Baked into the
+/// notification payload so a background Snooze, which has no Nudge facts, can
+/// tell whether its expiry would be outranked.
+List<RitualOutrankedInterval> outrankedIntervals(
   RitualId ritual,
-  DateTime from,
+  DateTime until,
   NudgeNotificationFacts facts,
 ) {
   final higher = ritualsByPriority
       .takeWhile((r) => r != ritual)
       .where(facts.isEnabled)
       .toList();
-  if (higher.isEmpty) return null;
-  final end = from.add(_kOutrankScanWindow);
-  for (var t = from; !t.isAfter(end); t = t.add(_kOutrankScanStep)) {
-    if (higher.any((r) => nudgeVisibleAtInstant(r, t, facts))) return t;
+  if (higher.isEmpty) return const [];
+  bool outranked(DateTime t) =>
+      higher.any((r) => nudgeVisibleAtInstant(r, t, facts));
+
+  DateTime transition(DateTime before, DateTime after, bool afterState) {
+    var lo = before;
+    var hi = after;
+    while (hi.difference(lo) > _kOutrankBoundaryPrecision) {
+      final mid = lo.add(Duration(microseconds: hi.difference(lo).inMicroseconds ~/ 2));
+      if (outranked(mid) == afterState) {
+        hi = mid;
+      } else {
+        lo = mid;
+      }
+    }
+    return hi;
   }
-  return null;
+
+  final intervals = <RitualOutrankedInterval>[];
+  var previous = facts.now;
+  var previousState = outranked(previous);
+  DateTime? openStart = previousState ? previous : null;
+  for (var t = previous.add(_kOutrankScanStep);; t = t.add(_kOutrankScanStep)) {
+    final sample = t.isAfter(until) ? until : t;
+    final state = outranked(sample);
+    if (state != previousState) {
+      final at = transition(previous, sample, state);
+      if (state) {
+        openStart = at;
+      } else {
+        intervals.add((start: openStart!, end: at));
+        openStart = null;
+      }
+    }
+    previous = sample;
+    previousState = state;
+    if (!sample.isBefore(until)) break;
+  }
+  if (openStart != null) intervals.add((start: openStart, end: until));
+  return intervals;
 }
 
 /// One alarm the OS should hold.
@@ -230,6 +268,8 @@ List<PlannedNudgeNotification> planNudgeNotifications(
 ) {
   final now = facts.now;
   final planned = <PlannedNudgeNotification>[];
+  final coveredUntil = now.add(const Duration(days: _kPayloadCoverDays));
+  final outrankedByRitual = <RitualId, List<RitualOutrankedInterval>>{};
 
   PlannedNudgeNotification? entryAt(
     RitualId ritual,
@@ -248,7 +288,9 @@ List<PlannedNudgeNotification> planNudgeNotifications(
         edge: edge,
         snoozeMinutes: facts.snoozeMinutes[ritual] ?? 60,
         fireAt: instant,
-        outrankedFrom: outrankedFromInstant(ritual, instant, facts),
+        coveredUntil: coveredUntil,
+        outranked: outrankedByRitual[ritual] ??=
+            outrankedIntervals(ritual, coveredUntil, facts),
       ),
     );
   }

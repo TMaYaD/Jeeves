@@ -67,13 +67,14 @@ Future<void> handleRitualNotificationResponse(
       snoozeMinutes: snoozeMinutes,
     );
     final pendingAlarms = await service.pendingRitualNotifications();
-    // The payload records when a higher-priority Ritual's Nudge takes the
+    // The payload records when a higher-priority Ritual's Nudge holds the
     // Notification surface, judged from Nudge facts when the alarm was
     // planned. Nothing the OS holds is consulted: that Ritual's notification
-    // may be later in the day, or already delivered.
-    final outrankedFrom = payload?.outrankedFrom;
-    final outranked = outrankedFrom != null && !outrankedFrom.isAfter(fireAt);
-    if (!outranked) {
+    // may be later in the day, or already delivered. Past what the payload
+    // covers nothing is known, so no expiry alarm is armed; the next replan
+    // restores the reminder.
+    final mayNotify = payload?.mayNotifyAt(fireAt);
+    if (mayNotify != false) {
       await service.scheduleRitualNotification(
         id: ritualSnoozeNotificationId(ritual),
         ritual: ritual,
@@ -85,7 +86,8 @@ Future<void> handleRitualNotificationResponse(
                 edge: tappedEdge,
                 snoozeMinutes: snoozeMinutes,
                 fireAt: fireAt,
-                outrankedFrom: outrankedFrom,
+                coveredUntil: payload!.coveredUntil,
+                outranked: payload.outranked,
               ),
       );
     }
