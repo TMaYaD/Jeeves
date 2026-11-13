@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/ritual.dart';
 import '../providers/nudge_action_outbox.dart';
+import 'due_date_notifications.dart' show outcomeIdFromNotificationPayload;
 import 'notification_service.dart';
 
 /// Handles a tap on a notification or one of its action buttons (foreground and
@@ -38,9 +39,13 @@ Future<void> handleRitualNotificationResponse(
       if (response.payload == 'focus') {
         navigate('/focus/active');
       } else {
+        final outcomeId = outcomeIdFromNotificationPayload(response.payload);
         final ritual = ritualIdFromNotificationPayload(response.payload);
-        navigate(
-            ritual != null ? ritualNotificationRoute(ritual) : '/inbox');
+        navigate(outcomeId != null
+            ? '/task/$outcomeId'
+            : ritual != null
+                ? ritualNotificationRoute(ritual)
+                : '/inbox');
       }
     }
     return;

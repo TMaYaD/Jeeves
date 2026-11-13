@@ -15,6 +15,7 @@ import 'providers/onboarding_provider.dart';
 import 'providers/sync_lifecycle_provider.dart';
 import 'providers/shutdown_settings_provider.dart';
 import 'router.dart';
+import 'services/due_date_notifications.dart';
 import 'services/notification_service.dart';
 import 'services/ritual_notification_response_handler.dart';
 
@@ -101,6 +102,9 @@ class JeevesApp extends ConsumerWidget {
     // isolate) reach the Nudge's dismiss / snooze state, and live legacy
     // suppression is carried over once.
     ref.watch(nudgeActionOutboxDrainerProvider);
+    // Keeps a notification scheduled for each due-dated Outcome (09:00 on its
+    // due day). Nothing else reads it, so without this watch it never runs.
+    ref.watch(dueDateNotificationReconcilerProvider);
     return MaterialApp.router(
       title: 'Jeeves',
       theme: ThemeData(

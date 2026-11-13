@@ -52,6 +52,12 @@
             android:name="flutterEmbedding"
             android:value="2" />
 
+        <!-- Receives scheduled alarms (zonedSchedule); the plugin does not
+             declare it for us. -->
+        <receiver
+            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver"
+            android:exported="false" />
+
         <!-- Reschedules planning notifications after device reboot.
              Paired with the RECEIVE_BOOT_COMPLETED permission above. -->
         <receiver
