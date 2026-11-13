@@ -27,8 +27,6 @@ import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/screens/task_detail/task_detail_screen.dart';
 import 'package:jeeves/widgets/clarify_shared_widgets.dart'
     show kEstimateOptionsMinutes;
-import 'package:jeeves/widgets/context_tag_picker.dart'
-    show ContextTagPickerWidget;
 import 'package:jeeves/widgets/meta_chip.dart' show formatMinutesLabel;
 import 'package:jeeves/widgets/tag_list.dart' show TagList;
 import 'package:jeeves/widgets/tag_text.dart' show TagText;

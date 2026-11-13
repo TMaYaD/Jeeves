@@ -2,7 +2,6 @@ import 'package:drift/drift.dart' show Value;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../database/daos/tag_dao.dart' show TagWithCount;
 import '../database/gtd_database.dart';
 import '../providers/database_provider.dart';
 import '../providers/tags_provider.dart';
