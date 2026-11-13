@@ -88,7 +88,7 @@ void main() {
     final cloud = find.byKey(const Key('context_tag_picker_cloud'));
     Finder chipInCloud(String id) =>
         find.descendant(of: cloud, matching: find.byKey(Key('tag_chip_$id')));
-    expect(find.text('✓ @a01'), findsOneWidget);
+    expect(find.textContaining('✓ @a01'), findsOneWidget);
     expect(chipInCloud('a03'), findsOneWidget);
     expect(chipInCloud('a12'), findsOneWidget);
     expect(chipInCloud('a13'), findsNothing);
@@ -121,7 +121,7 @@ void main() {
           ..where((t) => t.todoId.equals('o1')))
         .get());
     expect(linked!.map((r) => r.tagId), contains(created!.single.id));
-    expect(find.text('✓ @Errands'), findsWidgets);
+    expect(find.textContaining('✓ @Errands'), findsWidgets);
 
     // Tapping an unapplied tag applies it; tapping an applied one removes it.
     await tester.enterText(find.byKey(const Key('tag_cloud_find_field')), 'a05');

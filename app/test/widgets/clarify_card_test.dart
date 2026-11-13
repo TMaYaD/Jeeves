@@ -933,7 +933,9 @@ void main() {
       await refreshTags(tester, 'orth-$intent');
       await expectInvariants();
 
-      // Assign project.
+      // Assign project (scroll back up past the open tag cloud).
+      await tester.scrollUntilVisible(find.text('No project'), -200,
+          scrollable: find.byType(Scrollable).first);
       await tester.tap(find.text('No project'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Website').last);
