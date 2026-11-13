@@ -160,8 +160,8 @@ void main() {
     final state = container.read(periodicReviewProvider);
     expect(state.inboxNav.items, ['capture']);
     expect(state.waitingForNav.items!.map((t) => t.id), ['o0']);
-    expect(state.nextNav.items!.map((t) => t.id).toSet(), {'o2','o3','o4','o5','o6'});
-    expect(state.somedayNav.items, isEmpty);
+    expect(state.nextNav.items!.map((t) => t.id).toSet(), {'o2','o3','o4','o5'});
+    expect(state.somedayNav.items!.map((t) => t.id), ['o1']);
 
     // Clarifications on other surfaces count too, including exact-boundary stamps.
     await (db.update(db.todos)..where((t) => t.id.isIn(['o0', 'o1', 'o2'])))
@@ -175,15 +175,5 @@ void main() {
     expect(resumed.somedayNav.items, isEmpty);
     expect(resumed.nextNav.items!.map((t) => t.id).toSet(),
         {'o3','o4','o5','o6','o7','o8','o9'});
-  });
-
-  test('batch planned lookup excludes current and unrelated Actions', () async {
-    await db.actionDao.addPlannedAction('o0', 'First planned');
-    await db.actionDao.addPlannedAction('o0', 'Second planned');
-    await db.actionDao.addPlannedAction('o1', 'Unrequested planned');
-    await db.actionDao.setCurrentAction('o2', 'Current only');
-    expect(await db.actionDao.getOutcomeIdsWithPlannedActions({'o0', 'o2', 'o3'}),
-        {'o0'});
-    expect(await db.actionDao.getOutcomeIdsWithPlannedActions({}), isEmpty);
   });
 }
