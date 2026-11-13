@@ -16,6 +16,7 @@ import 'package:jeeves/providers/nudge_provider.dart';
 import 'package:jeeves/providers/periodic_review_provider.dart';
 import 'package:jeeves/providers/synced_preferences_provider.dart';
 import 'package:jeeves/router.dart';
+import 'package:jeeves/screens/periodic_review/periodic_review_screen.dart';
 import 'package:jeeves/services/notification_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -139,29 +140,63 @@ void main() {
   });
 
   testWidgets(
-      'leaving a started session brings the Banner back at once, in continue '
-      'wording, even after a swipe earlier that day', (tester) async {
+      'leaving a started 15-minute session on step 2 brings the Banner back at '
+      'once, in continue wording, even after a swipe earlier that day; the '
+      'Banner reopens the review at that step', (tester) async {
     await insertCapture('inbox', startedAt.subtract(const Duration(days: 20)));
+    // Ten Next Outcomes make a 15-minute session a partial one.
+    for (var index = 0; index < 10; index++) {
+      await db.into(db.todos).insert(TodosCompanion(
+            id: Value('outcome-$index'),
+            title: Value('Outcome $index'),
+            userId: const Value('local'),
+            intent: const Value('next'),
+            clarified: const Value(true),
+            createdAt: Value(startedAt.subtract(const Duration(days: 30))),
+            updatedAt: Value(startedAt.subtract(const Duration(days: 30))),
+          ));
+    }
     await setLastCompleted(startedAt.subtract(const Duration(days: 10)));
+
+    Future<void> tapKey(Key key) async {
+      final finder = find.byKey(key);
+      await tester.ensureVisible(finder);
+      await tester.runAsync(() async {
+        await tester.tap(finder);
+        await pumpEventQueue();
+      });
+      await _flush(tester);
+    }
+
     try {
       await pumpApp(tester);
       await swipeAway(tester);
       expect(banner, findsNothing);
 
+      // Open the Weekly Review by route (the Banner is swiped away), pick the
+      // 15-minute session and move on to step 2.
       await tester.pump(const Duration(minutes: 5));
-      final ceremony = c.read(ceremonyInProgressProvider.notifier);
-      final review = c.read(periodicReviewProvider.notifier);
-      // What the Weekly Review screen does on entry, then the user starts a
-      // 15-minute session and moves on.
-      ceremony.enter(RitualId.weeklyReview);
-      await tester.runAsync(() => review.startSession(budgetMinutes: 15));
+      appRouter.go('/periodic-review');
       await _flush(tester);
-      final stepLeftAt = c.read(periodicReviewProvider).currentStep;
-      expect(c.read(periodicReviewProvider).sessionStarted, isTrue);
       expect(banner, findsNothing, reason: 'hidden while the Ceremony is open');
+      await tester.ensureVisible(find.text('15 min'));
+      await tester.runAsync(() async {
+        await tester.tap(find.text('15 min'));
+        await pumpEventQueue();
+      });
+      await _flush(tester);
+      await tapKey(const Key('periodic_review_next_step'));
+      expect(c.read(periodicReviewProvider).sessionStarted, isTrue);
+      expect(c.read(periodicReviewProvider).currentStep,
+          PeriodicReviewNotifier.kStepInbox);
+      await tapKey(find.byKey(const Key('periodic_review_skip')).evaluate().isNotEmpty
+          ? const Key('periodic_review_skip')
+          : const Key('periodic_review_next_step'));
+      const stepLeftAt = PeriodicReviewNotifier.kStepWaitingFor;
+      expect(c.read(periodicReviewProvider).currentStep, stepLeftAt);
 
-      // Leave without Done (the screen's dispose).
-      ceremony.exit(RitualId.weeklyReview);
+      // Leave without Done.
+      appRouter.go('/inbox');
       await _flush(tester);
       expect(banner, findsOneWidget);
       expect(
@@ -171,13 +206,14 @@ void main() {
       expect(find.textContaining(RegExp(r'^(Push on|Carry on|On we go)')),
           findsOneWidget);
 
-      // Reopening resumes at the step it left: nothing reset the notifier.
-      expect(c.read(periodicReviewProvider).currentStep, stepLeftAt);
-
-      // Finishing the session with Done ends the Unfinished Trigger, and the
-      // review is not due again for seven days.
-      await tester.runAsync(() => review.completeSession());
+      // Tapping the Banner reopens the review at the step it left.
+      await tester.runAsync(() async {
+        await tester.tap(banner);
+        await pumpEventQueue();
+      });
       await _flush(tester);
+      expect(find.byType(PeriodicReviewScreen), findsOneWidget);
+      expect(c.read(periodicReviewProvider).currentStep, stepLeftAt);
       expect(banner, findsNothing);
     } finally {
       await tearDownApp(tester);
@@ -211,6 +247,46 @@ void main() {
       await tester.pump(const Duration(days: 1, minutes: 1));
       await _flush(tester);
       expect(banner, findsOneWidget);
+    } finally {
+      await tearDownApp(tester);
+    }
+  });
+
+  testWidgets(
+      'a swipe hides the Daily Planning Banner until its next firing, never '
+      'showing a ✕', (tester) async {
+    final today = DateTime(startedAt.year, startedAt.month, startedAt.day);
+    startedAt = today.add(const Duration(hours: 10));
+    await db.into(db.todos).insert(TodosCompanion(
+          id: const Value('next-today'),
+          title: const Value('Next today'),
+          userId: const Value('local'),
+          intent: const Value('next'),
+          clarified: const Value(true),
+          createdAt: Value(startedAt.subtract(const Duration(hours: 1))),
+          updatedAt: Value(startedAt.subtract(const Duration(hours: 1))),
+        ));
+    final planningBanner = find.byKey(const Key('planning_banner_visible'));
+    try {
+      await pumpApp(tester);
+      expect(planningBanner, findsOneWidget);
+      expect(find.byIcon(Icons.close), findsNothing);
+
+      await tester.drag(planningBanner, const Offset(-300, 0));
+      await _flush(tester);
+      expect(planningBanner, findsNothing);
+      expect(c.read(nudgeStateProvider(RitualId.dailyPlanning)).dismissedAt,
+          isNotNull);
+
+      // Still hidden later the same day.
+      await tester.pump(const Duration(hours: 2));
+      await _flush(tester);
+      expect(planningBanner, findsNothing);
+
+      // The next morning's planning time fires it again (10:00 + 22h30 = 08:30).
+      await tester.pump(const Duration(hours: 20, minutes: 30));
+      await _flush(tester);
+      expect(planningBanner, findsOneWidget);
     } finally {
       await tearDownApp(tester);
     }
