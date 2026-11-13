@@ -282,8 +282,10 @@ void main() {
     await tapKey(tester, 'bypassed_trash');
     expect(find.text("Couldn't save that decision. Try again."), findsOneWidget);
 
-    // Back leaves the step; the snackbar outlives it.
-    await tester.tap(find.text('Back'));
+    // Back leaves the step; the snackbar outlives it. The snackbar covers the
+    // footer's Back button, so navigate through the notifier, which is what
+    // that button calls.
+    await container.read(periodicReviewProvider.notifier).previousStep();
     await settleWithRealAsync(tester, rounds: 2);
     expect(state().currentStep, PeriodicReviewNotifier.kStepInbox);
     expect(find.byKey(const Key('bypassed_trash')), findsNothing);
