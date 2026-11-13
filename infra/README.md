@@ -163,8 +163,8 @@ exists, so a replacement key has to be installed from `runcmd`.
 ### Memory cap and rollback
 
 The VM runs at **4096 MB** with its 8 GB guest swapfile. VirtualBox commits the
-whole cap to the host at boot, so 4 GB instead of 8 GB (the original size) frees
-4 GB of the 16 GB host. Two rounds of integer-GB search from 2 to 6 GB, on
+whole cap to the host at boot, so the configured cap drops 4 GB from the original 8 GB on
+the 16 GB host; the host-memory recovery itself was not measured. Two rounds of integer-GB search from 2 to 6 GB, on
 commit `0a4951f` with real profile APK builds, set the number.
 
 **Guest heap setting.** The guest's `~/.gradle/gradle.properties` holds two
@@ -185,38 +185,35 @@ raise these two `-Xmx` values, not the cap.
 
 **How the cap was measured.** A series is one fresh boot at a cap, then three
 clean builds with Gradle's build cache off: A on new daemons, B and C warm on the
-same daemon (the builder keeps its daemon between builds). Each build ran
-`flutter clean`, dependency resolution, icon and code generation, then the
-profile arm64 dev APK. A build passed when it completed, nothing was killed for
-memory, memory stall time stayed at or under 10% (`some`) and 5% (`full`), and
-wall time stayed within 1.5 times the 6 GB baseline's (605 s fresh; 541 s warm)
-when the host CPU probe was sane. Swap-in is recorded, not judged.
+same daemon (the builder keeps its daemon between builds). A build passed when it
+completed, nothing was killed for memory, memory stall time stayed at or under
+10% (`some`) and 5% (`full`), and wall time stayed within 1.5 times the 6 GB
+baseline's when host CPU and memory probes were sane before and after. The
+baseline's warm builds took 360.5 s on average, so the warm limit was 540.75 s.
+Swap-in is recorded, not judged. The per-build table is in the pull request
+description.
 
-| Cap | Series | Fresh A | Warm B | Warm C | Result |
-|---|---|---:|---:|---:|---|
-| 6 GB | baseline | 605 s | 391 s | 330 s | reference, stall under 0.3% |
-| 2 GB | 1 | 527 s | 551 s | 640 s | FAIL (C stall 10.01%, warm time) |
-| 3 GB | 1 | 891 s | 628 s | 588 s | warm time over limit, host probes incomplete |
-| 3 GB | 2 | 678 s | 639 s | 540 s | FAIL (warm time) |
-| 4 GB | 1 | 611 s | 517 s | 501 s | PASS |
-| 4 GB | 2 | 938 s | 584 s | 585 s | FAIL (time only; host share dipped to 35-60%) |
-| 4 GB | 3 | 653 s | 472 s | 469 s | PASS |
-
-4 GB passed two of three series; 3 GB failed both. No build at any cap had an OOM
-kill, and the worst stall at 4 GB was 5.6% `some`. A 4 GB build swaps 0.6 to
-1.1 GB per warm build; the swapfile sits on the Mac's own disk, so this costs the
-host some disk traffic.
+At 4 GB, two of three series passed; the failing one missed only wall time while
+the host's CPU share dipped. One 3 GB series failed on warm build time with sane
+probes; the other had no probes between builds, so its slow builds are not counted
+as a failure and the 3 GB result rests on one series. 2 GB failed. No build had an
+OOM kill, and the worst stall at 4 GB was 5.6% `some`. A 4 GB warm build swaps 0.6
+to 1.1 GB; the swapfile sits on the Mac's own disk, so this costs the host some
+disk traffic.
 
 **What this does not show.** One pinned commit and the APK build only (not
-`flutter test`); wall time moves with host load (the same 4 GB cap ran warm
-builds in 469 to 585 s); host swap traffic per build was not measured. Full
+`flutter test`); wall time moves with host load; only host CPU was probed, not
+host swap traffic or memory pressure, per build; the builder lock was not held
+continuously during the experiment.
 
 **Raise the cap** by 1 GB if a build shows an OOM kill, a stopped daemon or
 memory stall above the limits, and check the build again.
 
-**Rollback** to the former 6144 MB is one power transition. Wait for no build and
-a one-minute guest load below 0.5; wait up to 180 seconds for genuine `poweroff`
-after ACPI shutdown. Do not force shutdown or use saved state.
+**Rollback** to the former 6144 MB is one power transition. Take the builder lock
+(`tools/builder_run.py`) and hold it through the idle check, shutdown, resize,
+restart and verification, so no build starts in between. Check a one-minute guest
+load below 0.5; wait up to 180 seconds for genuine `poweroff` after ACPI
+shutdown. Do not force shutdown or use saved state.
 
 ```bash
 VBoxManage controlvm jeeves-builder acpipowerbutton
