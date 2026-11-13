@@ -40,9 +40,8 @@ NudgeNotificationFacts _facts({
       sessionIsOpen: sessionIsOpen,
     ),
     wr: WrFacts(
-      hasAnyItem: true,
-      lastCompleted:
-          weeklyReviewLastCompleted ?? now.subtract(const Duration(days: 2)),
+      dueAt: (weeklyReviewLastCompleted ?? now.subtract(const Duration(days: 2)))
+          .add(const Duration(days: 7)),
     ),
     weeklyReviewHour: 18,
     weeklyReviewMinute: 0,
@@ -166,5 +165,112 @@ void main() {
     // Snoozed again from the 09:05 alarm at 09:06 -> 10:06, then 23:00 Thursday.
     expect(again.mayNotifyAt(_at(1, 8, 45)), isFalse);
     expect(again.mayNotifyAt(_at(0, 10, 6)), isTrue);
+  });
+
+  group('exact ownership boundaries', () {
+    NudgeNotificationFacts custom({
+      required DateTime now,
+      required Map<RitualId, bool> enabled,
+      int planningMinute = 0,
+      int shutdownHour = 18,
+      int shutdownMinute = 0,
+      int planningSnoozeMinutes = 60,
+      Map<RitualId, NudgeState> nudgeState = const {},
+      bool sessionIsOpen = false,
+      DateTime? weeklyReviewDueAt,
+    }) =>
+        NudgeNotificationFacts(
+          now: now,
+          notificationEnabled: enabled,
+          nudgeState: nudgeState,
+          inProgress: const {},
+          dpr: DprFacts(
+            planningHour: planningMinute == 1 ? 23 : 8,
+            planningMinute: planningMinute,
+            shutdownHour: shutdownHour,
+            shutdownMinute: shutdownMinute,
+            hasAnyItem: true,
+            hasInboxOrNext: true,
+          ),
+          es: EsFacts(
+            shutdownHour: shutdownHour,
+            shutdownMinute: shutdownMinute,
+            sessionIsOpen: sessionIsOpen,
+          ),
+          wr: WrFacts(dueAt: weeklyReviewDueAt),
+          weeklyReviewHour: 9,
+          weeklyReviewMinute: 0,
+          snoozeMinutes: {RitualId.dailyPlanning: planningSnoozeMinutes},
+        );
+
+    test('an ownership interval shorter than the scan step is not lost',
+        () async {
+      // Evening Shutdown, snoozed to 23:59:30 from a retained notification,
+      // holds the surface for [23:59:30, midnight): no minute sample lands in
+      // it. Daily Planning's 23:44:40 Snooze expires at 23:59:40, inside it.
+      final facts = custom(
+        now: DateTime(2026, 11, 11, 23, 0, 10),
+        enabled: const {
+          RitualId.dailyPlanning: true,
+          RitualId.eveningShutdown: true,
+          RitualId.weeklyReview: false,
+        },
+        planningMinute: 1,
+        shutdownHour: 23,
+        shutdownMinute: 59,
+        planningSnoozeMinutes: 15,
+        sessionIsOpen: true,
+        nudgeState: {
+          RitualId.eveningShutdown:
+              NudgeState(snoozedUntil: DateTime(2026, 11, 11, 23, 59, 30)),
+        },
+      );
+      final alarmAt = DateTime(2026, 11, 11, 23, 1);
+      await snoozePlanningAlarm(
+        facts,
+        alarmAt: alarmAt,
+        tappedAt: DateTime(2026, 11, 11, 23, 44, 40),
+      );
+      expect(snoozeArmed(), isFalse,
+          reason: '23:59:40 is inside Evening Shutdown\'s visibility');
+    });
+
+    test('a boundary is recorded to the instant, not a later sample', () {
+      final facts = custom(
+        now: DateTime(2026, 11, 11, 7),
+        enabled: allEnabled,
+        weeklyReviewDueAt: DateTime(2026, 11, 11, 9, 1),
+      );
+      final intervals =
+          outrankedIntervals(RitualId.dailyPlanning, facts.now.add(const Duration(days: 1)), facts);
+      expect(intervals.first.start, DateTime(2026, 11, 11, 9, 1));
+    });
+
+    test('coverage ends exclusively: an expiry exactly at the end arms nothing',
+        () async {
+      // Weekly Review falls due 08:30 on the first day and stays due, so the
+      // outranked stretch runs to the payload's coverage end.
+      final now = DateTime(2026, 11, 11, 7);
+      final facts = custom(
+        now: now,
+        enabled: allEnabled,
+        weeklyReviewDueAt: DateTime(2026, 11, 11, 8, 30),
+      );
+      final alarm = planNudgeNotifications(facts).firstWhere(
+          (p) => p.ritual == RitualId.dailyPlanning && p.fireAt == DateTime(2026, 11, 11, 8));
+      final cover = parseRitualNotificationPayload(alarm.payload)!.coveredUntil!;
+      await handleRitualNotificationResponse(
+        NotificationResponse(
+          notificationResponseType:
+              NotificationResponseType.selectedNotificationAction,
+          actionId: kNotificationActionSnooze,
+          payload: alarm.payload,
+        ),
+        service: service,
+        navigate: (_) {},
+        now: () => cover.subtract(const Duration(minutes: 60)),
+      );
+      expect(snoozeArmed(), isFalse);
+    });
   });
 }

@@ -35,8 +35,7 @@ NudgeNotificationFacts _facts({
     ),
     es: EsFacts(shutdownHour: 18, shutdownMinute: 0, sessionIsOpen: sessionIsOpen),
     wr: WrFacts(
-      hasAnyItem: true,
-      lastCompleted: instant.subtract(const Duration(days: 2)),
+      dueAt: instant.add(const Duration(days: 5)),
     ),
     weeklyReviewHour: 9,
     weeklyReviewMinute: 0,

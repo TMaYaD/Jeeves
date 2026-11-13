@@ -37,12 +37,11 @@ import '../providers/nudge_triggers.dart';
 import '../providers/onboarding_provider.dart';
 import '../providers/periodic_review_settings_provider.dart';
 import '../providers/shutdown_settings_provider.dart';
+import '../providers/system_trust_provider.dart' show weeklyReviewDueAtProvider;
 import 'notification_service.dart';
 
 /// How many days ahead (today included) one-off alarms are planned.
 const kNudgeNotificationHorizonDays = 7;
-
-const _kWeeklyReviewCadence = Duration(days: 7);
 
 // Ritual notification ids live below 10000 (the due-date range starts there):
 // one slot per (Ritual, calendar day) and the Ritual's snooze id.
@@ -62,7 +61,7 @@ class NudgeNotificationFacts {
     required this.weeklyReviewHour,
     required this.weeklyReviewMinute,
     required this.snoozeMinutes,
-    this.weeklyReviewOpenSince,
+    this.unfinishedReviewLeftAt,
   });
 
   final DateTime now;
@@ -82,8 +81,9 @@ class NudgeNotificationFacts {
   final int weeklyReviewHour;
   final int weeklyReviewMinute;
 
-  /// Start of the active Weekly Review period, if one is open.
-  final DateTime? weeklyReviewOpenSince;
+  /// When the user left a started Weekly Review session without finishing it,
+  /// if one is unfinished (the Unfinished Trigger's input).
+  final DateTime? unfinishedReviewLeftAt;
 
   /// Minutes Snooze hides the Ritual's Nudge, carried in each payload.
   final Map<RitualId, int> snoozeMinutes;
@@ -115,32 +115,21 @@ DateTime? nudgeFiringEdgeAt(
     case RitualId.eveningShutdown:
       return esFiringEdgeAt(instant, facts.es);
     case RitualId.weeklyReview:
-      final lastCompleted = facts.wr.lastCompleted;
-      final openSince = facts.weeklyReviewOpenSince;
-      final reviewOpen =
-          openSince != null && instant.isBefore(openSince.add(_kWeeklyReviewCadence));
-      final due = reviewOpen ||
-          lastCompleted == null ||
-          !instant.isBefore(lastCompleted.add(_kWeeklyReviewCadence));
-      // Mirrors the live Trigger: an open review is due before the next
-      // cadence boundary, where the predicate has no edge yet.
-      final cadenceEdge = !due
-          ? null
-          : wrFiringEdgeAt(
-                instant,
-                WrFacts(
-                  hasAnyItem: facts.wr.hasAnyItem,
-                  lastCompleted: lastCompleted,
-                ),
-              ) ??
-              (facts.wr.hasAnyItem
-                  ? lastCompleted?.add(_kWeeklyReviewCadence)
-                  : null);
-      final contentEdge =
-          facts.wr.hasAnyItem ? facts.wr.contentFiringEdge : null;
-      if (cadenceEdge == null) return contentEdge;
-      if (contentEdge == null) return cadenceEdge;
-      return contentEdge.isAfter(cadenceEdge) ? contentEdge : cadenceEdge;
+      final cadenceOrContentEdge = wrFiringEdgeAt(instant, facts.wr);
+      // The Unfinished Trigger fires from the instant a started session was
+      // left, afresh each day: its edge is the later of that instant and the
+      // start of the day.
+      final leftAt = facts.unfinishedReviewLeftAt;
+      DateTime? unfinishedEdge;
+      if (leftAt != null && !instant.isBefore(leftAt)) {
+        final startOfDay = DateTime(instant.year, instant.month, instant.day);
+        unfinishedEdge = leftAt.isAfter(startOfDay) ? leftAt : startOfDay;
+      }
+      if (cadenceOrContentEdge == null) return unfinishedEdge;
+      if (unfinishedEdge == null) return cadenceOrContentEdge;
+      return unfinishedEdge.isAfter(cadenceOrContentEdge)
+          ? unfinishedEdge
+          : cadenceOrContentEdge;
   }
 }
 
@@ -175,17 +164,59 @@ RitualId? notifyingRitualAt(DateTime instant, NudgeNotificationFacts facts) {
 }
 
 const _kOutrankScanStep = Duration(minutes: 1);
-const _kOutrankBoundaryPrecision = Duration(seconds: 1);
+const _kOutrankBoundaryPrecision = Duration(microseconds: 1);
 
 /// How far past the horizon a payload's queue facts reach.
 const _kPayloadCoverDays = kNudgeNotificationHorizonDays + 1;
 
+/// The instants in `(facts.now, until]` at which a Ritual's Nudge visibility
+/// can change by itself, as the frozen facts stand: each local midnight, each
+/// Trigger anchor time of every day, the Weekly Review due instant, the moment
+/// an unfinished review was left, and every pending snooze expiry. Visibility
+/// is constant between two of these, so sampling both sides of each finds
+/// every ownership interval however short.
+List<DateTime> _visibilityChangeCandidates(
+  DateTime until,
+  NudgeNotificationFacts facts,
+) {
+  final candidates = <DateTime>[];
+  void add(DateTime? t) {
+    if (t != null && t.isAfter(facts.now) && !t.isAfter(until)) {
+      candidates.add(t);
+    }
+  }
+
+  for (final state in facts.nudgeState.values) {
+    add(state.snoozedUntil);
+  }
+  add(facts.wr.dueAt);
+  add(facts.unfinishedReviewLeftAt);
+  add(facts.wr.contentFiringEdge);
+  final anchorTimes = [
+    (hour: 0, minute: 0),
+    (hour: facts.dpr.planningHour, minute: facts.dpr.planningMinute),
+    (hour: facts.dpr.shutdownHour, minute: facts.dpr.shutdownMinute),
+    (hour: facts.es.shutdownHour, minute: facts.es.shutdownMinute),
+  ];
+  final lastDay = DateTime(until.year, until.month, until.day);
+  for (var day = DateTime(facts.now.year, facts.now.month, facts.now.day);
+      !day.isAfter(lastDay);
+      day = DateTime(day.year, day.month, day.day + 1)) {
+    for (final time in anchorTimes) {
+      add(DateTime(day.year, day.month, day.day, time.hour, time.minute));
+    }
+  }
+  return candidates;
+}
+
 /// Every stretch from `facts.now` to [until] when a Ritual of higher priority
-/// than [ritual] has its Nudge on the Notification surface. Scanned by the
-/// minute, with each transition then bisected to the second, so a boundary
-/// between samples is not rounded onto the next one. Baked into the
-/// notification payload so a background Snooze, which has no Nudge facts, can
-/// tell whether its expiry would be outranked.
+/// than [ritual] has its Nudge on the Notification surface, as half-open
+/// `[start, end)` intervals. Samples the minute grid plus both sides of every
+/// instant visibility can change at, then bisects each transition to the
+/// microsecond, so neither a short interval between grid points nor a boundary
+/// between samples is lost or rounded. Baked into the notification payload so a
+/// background Snooze, which has no Nudge facts, can tell whether its expiry
+/// would be outranked.
 List<RitualOutrankedInterval> outrankedIntervals(
   RitualId ritual,
   DateTime until,
@@ -213,12 +244,24 @@ List<RitualOutrankedInterval> outrankedIntervals(
     return hi;
   }
 
+  final samples = <DateTime>{until};
+  for (var t = facts.now.add(_kOutrankScanStep);
+      t.isBefore(until);
+      t = t.add(_kOutrankScanStep)) {
+    samples.add(t);
+  }
+  for (final candidate in _visibilityChangeCandidates(until, facts)) {
+    samples.add(candidate);
+    final justBefore = candidate.subtract(_kOutrankBoundaryPrecision);
+    if (justBefore.isAfter(facts.now)) samples.add(justBefore);
+  }
+  final ordered = samples.toList()..sort();
+
   final intervals = <RitualOutrankedInterval>[];
   var previous = facts.now;
   var previousState = outranked(previous);
   DateTime? openStart = previousState ? previous : null;
-  for (var t = previous.add(_kOutrankScanStep);; t = t.add(_kOutrankScanStep)) {
-    final sample = t.isAfter(until) ? until : t;
+  for (final sample in ordered) {
     final state = outranked(sample);
     if (state != previousState) {
       final at = transition(previous, sample, state);
@@ -231,7 +274,6 @@ List<RitualOutrankedInterval> outrankedIntervals(
     }
     previous = sample;
     previousState = state;
-    if (!sample.isBefore(until)) break;
   }
   if (openStart != null) intervals.add((start: openStart, end: until));
   return intervals;
@@ -493,14 +535,13 @@ final nudgeNotificationFactsProvider = Provider<NudgeNotificationFacts?>((ref) {
       sessionIsOpen: session.requireValue != null,
     ),
     wr: WrFacts(
-      hasAnyItem: hasAnyItem.requireValue,
-      lastCompleted: ref.watch(periodicReviewLastCompletedProvider),
+      dueAt: ref.watch(weeklyReviewDueAtProvider),
       contentFiringEdge:
           ref.watch(wrContentFiringProvider) == true ? contentEdge : null,
     ),
     weeklyReviewHour: review.notificationTime.hour,
     weeklyReviewMinute: review.notificationTime.minute,
-    weeklyReviewOpenSince: ref.watch(periodicReviewOpenSinceProvider),
+    unfinishedReviewLeftAt: ref.watch(unfinishedReviewLeftAtProvider),
     snoozeMinutes: {
       RitualId.dailyPlanning: planning.defaultSnoozeDuration,
       RitualId.eveningShutdown: 60,

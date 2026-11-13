@@ -501,7 +501,8 @@ typedef RitualOutrankedInterval = ({DateTime start, DateTime end});
 
 /// What a Ritual notification's payload says. Format:
 /// `nudge:<keyPrefix>|edge=<iso>|snooze=<minutes>|at=<epoch ms>`
-/// `[|cover=<epoch ms>|out=<start ms>-<end ms>,...]`
+/// `[|cover=<epoch ms>|out=<start ms>-<end ms>,...]` (stretches are rounded
+/// outward to the millisecond)
 /// — `edge` is the Nudge firing the notification belongs to (Skip cancels the
 /// other pending alarms of the same firing), `snooze` is how long Snooze hides
 /// it, `at` is the instant it was scheduled for. `cover` and `out` let a
@@ -536,7 +537,9 @@ class RitualNotificationPayload {
   bool? mayNotifyAt(DateTime instant) {
     final cover = coveredUntil;
     if (cover == null) return null;
-    if (instant.isAfter(cover)) return false;
+    // Coverage ends exclusively, as do the outranked stretches that run to it:
+    // at [cover] itself ownership is unknown, so the Ritual may not notify.
+    if (!instant.isBefore(cover)) return false;
     return !outranked.any(
         (i) => !instant.isBefore(i.start) && instant.isBefore(i.end));
   }
@@ -555,7 +558,7 @@ String ritualNotificationPayload(
     '|snooze=$snoozeMinutes'
     '|at=${fireAt.millisecondsSinceEpoch}'
     '${coveredUntil == null ? '' : '|cover=${coveredUntil.millisecondsSinceEpoch}'}'
-    '${outranked.isEmpty ? '' : '|out=${outranked.map((i) => '${i.start.millisecondsSinceEpoch}-${i.end.millisecondsSinceEpoch}').join(',')}'}';
+    '${outranked.isEmpty ? '' : '|out=${outranked.map((i) => '${i.start.millisecondsSinceEpoch}-${(i.end.microsecondsSinceEpoch + 999) ~/ 1000}').join(',')}'}';
 
 /// Parses either payload form. Null when [payload] is not a Ritual payload.
 RitualNotificationPayload? parseRitualNotificationPayload(String? payload) {
