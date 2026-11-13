@@ -177,7 +177,6 @@ void main() {
           id: const Value('maybe'),
           title: const Value('Someday thing'),
           userId: const Value('local'),
-          clarified: const Value(true),
           createdAt: Value(at(0, 9).toUtc()),
           updatedAt: Value(at(0, 9).toUtc()),
         ));
