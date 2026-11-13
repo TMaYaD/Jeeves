@@ -200,7 +200,12 @@ void main() {
     await skipToSummary(tester);
     await tap(tester, find.byKey(const Key('periodic_review_done')));
     expect(container.read(periodicReviewLastCompletedProvider), isNotNull);
-    expect(container.read(periodicReviewIsDueProvider), isFalse);
+    // Read in the real zone: the provider arms a week-long timer, which the
+    // test binding's fake clock would report as still pending.
+    expect(
+        await tester.runAsync(
+            () async => container.read(periodicReviewIsDueProvider)),
+        isFalse);
     await tester.pumpWidget(const SizedBox.shrink());
     await settleWithRealAsync(tester);
   });

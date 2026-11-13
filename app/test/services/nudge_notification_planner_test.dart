@@ -10,16 +10,26 @@ import 'package:jeeves/services/nudge_notification_scheduler.dart';
 DateTime _at(int dayOffset, int hour, [int minute = 0]) =>
     DateTime(2026, 11, 11 + dayOffset, hour, minute);
 
+/// Weekly Review's notifications are off unless a test turns them on: it falls
+/// due inside the seven-day horizon by default and, from then on, outranks
+/// Daily Planning at every instant after its Trigger edge.
+const _withoutWeeklyReview = {
+  RitualId.dailyPlanning: true,
+  RitualId.eveningShutdown: true,
+  RitualId.weeklyReview: false,
+};
+const _allEnabled = {
+  RitualId.dailyPlanning: true,
+  RitualId.eveningShutdown: true,
+  RitualId.weeklyReview: true,
+};
+
 NudgeNotificationFacts _facts({
   DateTime? now,
   int planningHour = 8,
   int shutdownHour = 18,
   int weeklyReviewHour = 9,
-  Map<RitualId, bool> enabled = const {
-    RitualId.dailyPlanning: true,
-    RitualId.eveningShutdown: true,
-    RitualId.weeklyReview: true,
-  },
+  Map<RitualId, bool> enabled = _withoutWeeklyReview,
   Map<RitualId, NudgeState> nudgeState = const {},
   Set<RitualId> inProgress = const {},
   bool hasAnyItem = true,
@@ -75,7 +85,7 @@ void main() {
           [for (var d = 0; d < 7; d++) _at(d, 8)]);
       expect(dpr.where((p) => p.isKeepAlive).map((p) => p.fireAt), [_at(7, 8)],
           reason: 'the keep-alive starts where the horizon ends');
-      expect(plan.length, 8, reason: 'ES has no open session, WR is not due');
+      expect(plan.length, 8, reason: 'ES has no open session, WR is off');
     });
 
     test('a Ritual with notifications off gets neither alarms nor keep-alive',
@@ -149,6 +159,7 @@ void main() {
       final plan = planNudgeNotifications(_facts(
         planningHour: 9,
         weeklyReviewLastCompleted: _at(-9, 7),
+        enabled: _allEnabled,
       ));
 
       expect(_of(plan, RitualId.weeklyReview).first.fireAt, _at(0, 9));
@@ -162,6 +173,7 @@ void main() {
         sessionIsOpen: true,
         latestSessionStartedAt: _at(0, 6),
         weeklyReviewLastCompleted: _at(-9, 7),
+        enabled: _allEnabled,
       ));
 
       expect(_of(plan, RitualId.weeklyReview), isNotEmpty);
@@ -228,6 +240,7 @@ void main() {
       // Due since 10 Nov 07:00; refires at 17 Nov 07:00.
       final plan = planNudgeNotifications(_facts(
         weeklyReviewLastCompleted: _at(-8, 7),
+        enabled: _allEnabled,
         nudgeState: {
           RitualId.weeklyReview: NudgeState(dismissedAt: _at(0, 6)),
         },

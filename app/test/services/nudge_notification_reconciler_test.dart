@@ -11,15 +11,16 @@ DateTime _at(int dayOffset, int hour, [int minute = 0]) =>
 
 NudgeNotificationFacts _facts({
   DateTime? now,
-  bool weeklyReviewDue = false,
 }) {
   final instant = now ?? _at(0, 7);
   return NudgeNotificationFacts(
     now: instant,
+    // Weekly Review is off: with it on, it falls due inside the horizon and
+    // outranks Daily Planning from then on.
     notificationEnabled: const {
       RitualId.dailyPlanning: true,
       RitualId.eveningShutdown: true,
-      RitualId.weeklyReview: true,
+      RitualId.weeklyReview: false,
     },
     nudgeState: const {},
     inProgress: const {},
@@ -34,7 +35,7 @@ NudgeNotificationFacts _facts({
     es: const EsFacts(shutdownHour: 18, shutdownMinute: 0, sessionIsOpen: false),
     wr: WrFacts(
       hasAnyItem: true,
-      lastCompleted: instant.subtract(Duration(days: weeklyReviewDue ? 9 : 2)),
+      lastCompleted: instant.subtract(const Duration(days: 2)),
     ),
     weeklyReviewHour: 9,
     weeklyReviewMinute: 0,
@@ -126,7 +127,7 @@ void main() {
       ..add((id: 7, ritual: RitualId.weeklyReview))
       ..add((id: 130, ritual: RitualId.dailyPlanning));
 
-    // 08:30: Planning is firing; Weekly Review is not due.
+    // 08:30: Planning is firing; Weekly Review's notifications are off.
     await scheduler.reconcile(_facts(now: _at(0, 8, 30)));
 
     expect(service.delivered.map((d) => d.ritual), [RitualId.dailyPlanning]);
@@ -141,7 +142,7 @@ void main() {
     await scheduler.reconcile(_facts());
 
     expect(service.alarmsOf(RitualId.weeklyReview), isEmpty,
-        reason: 'Weekly Review is not due, so its stale alarm is cancelled');
+        reason: 'Weekly Review notifications are off, so its stale alarm is cancelled');
   });
 
   test('enqueue reconciles in the background and settled() waits for it',

@@ -7,6 +7,10 @@ import 'package:jeeves/models/ritual.dart';
 import 'package:jeeves/providers/ceremony_in_progress_provider.dart';
 import 'package:jeeves/providers/clock_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/providers/focus_session_planning_provider.dart'
+    show activeSessionProvider;
+import 'package:jeeves/providers/gtd_lists_provider.dart';
+import 'package:jeeves/providers/onboarding_provider.dart';
 import 'package:jeeves/providers/nudge_provider.dart';
 import 'package:jeeves/providers/periodic_review_settings_provider.dart';
 import 'package:jeeves/providers/synced_preferences_provider.dart';
@@ -46,6 +50,12 @@ void main() {
     required DateTime now,
     Map<String, Object> prefs = const {},
   }) async {
+    // A never-reviewed Weekly Review is due from the start and would outrank
+    // everything else, so unless a test sets its history it was just reviewed.
+    prefs = {
+      'periodic_review_last_completed_at': now.toIso8601String(),
+      ...prefs,
+    };
     var current = now;
     clockFn = () => current;
     SharedPreferences.setMockInitialValues({});
@@ -70,6 +80,17 @@ void main() {
     }
     c.read(nudgeNotificationSchedulerProvider);
     await settle();
+    final facts = c.read(nudgeNotificationFactsProvider);
+    if (service.scheduleCalls.isEmpty) {
+      fail('the scheduler armed nothing after boot; facts: '
+          '${facts == null ? 'null (an input is still loading: '
+              'session=${c.read(activeSessionProvider)}, '
+              'latest=${c.read(latestSessionStartedAtProvider)}, '
+              'items=${c.read(hasAnyItemProvider)}, '
+              'inbox=${c.read(unfilteredInboxProvider)}, '
+              'next=${c.read(unfilteredNextProvider)})' : 'present, plan has '
+              '${planNudgeNotifications(facts).length} entries'}');
+    }
   }
 
   void setClock(DateTime now) => clockFn = () => now;
