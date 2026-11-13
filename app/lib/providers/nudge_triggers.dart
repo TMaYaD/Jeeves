@@ -380,25 +380,19 @@ TriggerState _wrContentStateTrigger(Ref ref) {
 /// instant is held in memory on this device and ends when a session is
 /// finished, matching the in-progress hygiene rule it complements.
 class UnfinishedReviewLeftAtNotifier extends Notifier<DateTime?> {
-  bool _wasInProgress = false;
-  DateTime? _leftAt;
-
   @override
   DateTime? build() {
     final inProgress =
         ref.watch(ceremonyInProgressForProvider(RitualId.weeklyReview));
     final started = ref
         .watch(periodicReviewProvider.select((state) => state.sessionStarted));
-    final wasInProgress = _wasInProgress;
-    _wasInProgress = inProgress;
-
-    if (!started) {
-      _leftAt = null;
-      return null;
-    }
-    if (inProgress) return null;
-    if (wasInProgress) _leftAt = ref.read(clockProvider)();
-    return _leftAt ??= ref.read(clockProvider)();
+    if (!started || inProgress) return null;
+    // The Ceremony tracker records every exit, so a second exit after a
+    // reopen is seen even though nothing watched this provider meanwhile.
+    return ref
+            .read(ceremonyInProgressProvider.notifier)
+            .lastExitedAt(RitualId.weeklyReview) ??
+        ref.read(clockProvider)();
   }
 }
 

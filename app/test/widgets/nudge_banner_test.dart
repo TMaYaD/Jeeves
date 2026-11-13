@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
@@ -125,6 +126,33 @@ void main() {
       // `pumpAndSettle` never returns. One frame is enough to flush the drag.
       await tester.pump();
       expect(dismissed, RitualId.eveningShutdown);
+    });
+
+    testWidgets('Escape on the focused button dismisses without opening',
+        (tester) async {
+      RitualId? dismissed;
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          nudgeQueueProvider
+              .overrideWith((ref) => const [RitualId.dailyPlanning]),
+          nudgeBannerEnabledProvider.overrideWith((ref, r) => true),
+          nudgeActionsProvider.overrideWith(
+            (ref) => _RecordingNudgeActions(
+              ref,
+              onDismiss: (r) => dismissed = r,
+            ),
+          ),
+        ],
+        child: MaterialApp.router(routerConfig: _router()),
+      ));
+      await tester.pump();
+      // Tab moves focus onto the Banner's button.
+      await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      expect(dismissed, RitualId.dailyPlanning);
+      expect(find.text('planning'), findsNothing);
     });
 
     testWidgets('a short drag does not dismiss', (tester) async {

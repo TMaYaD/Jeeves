@@ -10,6 +10,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/semantics.dart' show CustomSemanticsAction;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -464,10 +465,15 @@ class _BannerContentState extends State<_BannerContent>
         ),
       ),
     );
-    return Semantics(
+    return CallbackShortcuts(
+      // Keyboard dismissal: Escape or Delete while a Banner control has focus.
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.escape): widget.onDismiss,
+        const SingleActivator(LogicalKeyboardKey.delete): widget.onDismiss,
+      },
+      child: Semantics(
       customSemanticsActions: {
-        const CustomSemanticsAction(label: 'Dismiss for today'):
-            widget.onDismiss,
+        const CustomSemanticsAction(label: 'Dismiss'): widget.onDismiss,
       },
       child: GestureDetector(
         onTap: widget.onTap,
@@ -479,6 +485,7 @@ class _BannerContentState extends State<_BannerContent>
           offset: Offset(_dragOffset, 0),
           child: content,
         ),
+      ),
       ),
     );
   }

@@ -234,6 +234,33 @@ void main() {
       expect(find.byType(PeriodicReviewScreen), findsOneWidget);
       expect(c.read(periodicReviewProvider).currentStep, stepLeftAt);
       expect(banner, findsNothing);
+      expect(find.byKey(const Key('periodic_review_next_step')),
+          findsOneWidget,
+          reason: 'the reopened review renders the step it left');
+
+      // A second unfinished exit brings the Banner back too, even after the
+      // first one was swiped away.
+      appRouter.go('/inbox');
+      await _flush(tester);
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pump(const Duration(milliseconds: 100));
+      await _flush(tester);
+      expect(banner, findsOneWidget);
+      await swipeAway(tester);
+      expect(banner, findsNothing);
+
+      await tester.pump(const Duration(minutes: 5));
+      appRouter.go('/periodic-review');
+      await _flush(tester);
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(banner, findsNothing);
+      appRouter.go('/inbox');
+      await _flush(tester);
+      await tester.pump(const Duration(milliseconds: 600));
+      await tester.pump(const Duration(milliseconds: 100));
+      await _flush(tester);
+      expect(banner, findsOneWidget,
+          reason: 'every unfinished exit returns the Banner at once');
     } finally {
       await tearDownApp(tester);
     }
