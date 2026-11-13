@@ -1,6 +1,11 @@
 /// Final step of the shutdown ritual: moon-rise animation, Jeeves phrase, and
 /// the terminal "Close Day" button. Tapping the button commits dispositions,
 /// fades the screen to black, and exits the app.
+///
+/// When Daily Planning launched the shutdown (`shutdownThenPlanProvider` set
+/// at mount), the step shows no animation and no button: it commits at once
+/// and continues straight into planning. If that commit fails, the ordinary
+/// step with its enabled "Close Day" button appears so the user can retry.
 library;
 
 import 'dart:math';
@@ -31,6 +36,15 @@ class _CloseDayStepState extends ConsumerState<CloseDayStep>
   bool _fadingOut = false;
   bool _closing = false;
 
+  /// Decided once at mount: the flag is cleared mid-flight by [_onCloseDay],
+  /// so it must not be watched.
+  late bool _skipAnimation;
+
+  /// Whether Daily Planning launched this shutdown. Unlike [_skipAnimation]
+  /// it never changes, so a failed commit cannot turn later retries into
+  /// ordinary exceptions.
+  late final bool _enteredFromPlanning;
+
   static const _phrases = [
     'Another day superbly managed, sir. Pleasant dreams.',
     'Capital effort today, sir. I shall stand down for the evening.',
@@ -56,6 +70,15 @@ class _CloseDayStepState extends ConsumerState<CloseDayStep>
     _fade = Tween<double>(begin: 0, end: 1).animate(
       CurvedAnimation(parent: _controller, curve: Curves.easeIn),
     );
+    _enteredFromPlanning = ref.read(shutdownThenPlanProvider);
+    _skipAnimation = _enteredFromPlanning;
+    if (_skipAnimation) {
+      // closeDay() mutates provider state, which Riverpod forbids in initState.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _onCloseDay();
+      });
+      return;
+    }
     _controller.forward().then((_) {
       if (mounted) setState(() => _showButton = true);
     });
@@ -72,7 +95,25 @@ class _CloseDayStepState extends ConsumerState<CloseDayStep>
     setState(() => _closing = true);
     // Read the sequenced-entry intent before closeDay resets ceremony state.
     final thenPlan = ref.read(shutdownThenPlanProvider);
-    await ref.read(eveningShutdownProvider.notifier).closeDay();
+    try {
+      await ref.read(eveningShutdownProvider.notifier).closeDay();
+    } catch (_) {
+      if (!mounted) return;
+      if (!_enteredFromPlanning) {
+        setState(() => _closing = false);
+        rethrow;
+      }
+      // Sequenced path failed: show the ordinary step so there is a control
+      // to retry with, after every failure. The flag stays set, so a retry
+      // still ends in planning.
+      _controller.value = 1;
+      setState(() {
+        _skipAnimation = false;
+        _closing = false;
+        _showButton = true;
+      });
+      return;
+    }
     if (!mounted) return;
     if (thenPlan) {
       // Sequenced Shutdown → Daily Planning (ADR-0020, ruling 4): route into
@@ -88,6 +129,9 @@ class _CloseDayStepState extends ConsumerState<CloseDayStep>
 
   @override
   Widget build(BuildContext context) {
+    if (_skipAnimation) {
+      return const Material(color: Colors.white, child: SizedBox.expand());
+    }
     return Material(
       color: const Color(0xFF0D1B2A),
       child: AnimatedOpacity(

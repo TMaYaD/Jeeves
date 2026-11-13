@@ -62,9 +62,10 @@ const int _maxStepIndex = 6;
 /// entry. Set true by the Daily Planning blocked-start interstitial before it
 /// routes the user to Evening Shutdown; read and cleared by the Close Day
 /// step, which — instead of exiting the app — routes into Daily Planning once
-/// the session has been reviewed and closed. Also read by the Resolve
-/// Unfinished step for the Roll Over copy. It lives for one Evening Shutdown
-/// performance: the shutdown screen clears it when left.
+/// the session has been reviewed and closed. While set, the Close Day step
+/// also skips its closing animation and commits immediately. Also read by the
+/// Resolve Unfinished step for the Roll Over copy. It lives for one Evening
+/// Shutdown performance: the shutdown screen clears it when left.
 ///
 /// This is a user-initiated action spread across two ceremonies, not a
 /// route-level auto-launch (REQUIREMENTS.md § Ceremonies).
