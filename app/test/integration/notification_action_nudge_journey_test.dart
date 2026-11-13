@@ -116,7 +116,7 @@ void main() {
     await db.close();
   });
 
-  test('Daily Planning Skip hides the banner until the next firing', () async {
+  test('Daily Planning Skip hides the banner until the next planning anchor', () async {
     var now = DateTime(2026, 11, 11, 9); // after the 08:00 planning anchor
     await boot(clock: () => now, itemCreatedAt: now);
     final sub = c.listen(nudgeVisibleProvider(RitualId.dailyPlanning), (_, _) {});
@@ -128,8 +128,15 @@ void main() {
     expect(service.skipped, [RitualId.dailyPlanning]);
     expect(sub.read(), isFalse, reason: 'Skip must reach the Nudge');
 
-    // The evening anchor opens the next planning period: a new firing.
+    // From the evening Shutdown time the banner stays hidden overnight.
     now = DateTime(2026, 11, 11, 18, 5);
+    c.invalidate(nudgeBoundaryTickProvider);
+    await settle();
+    expect(sub.read(), isFalse,
+        reason: 'Daily Planning is idle from Shutdown time to the next anchor');
+
+    // The next morning's planning anchor is a new firing.
+    now = DateTime(2026, 11, 12, 8, 5);
     c.invalidate(nudgeBoundaryTickProvider);
     await settle();
     expect(sub.read(), isTrue,
