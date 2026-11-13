@@ -25,9 +25,10 @@ import 'package:jeeves/providers/gtd_lists_provider.dart';
 import 'package:jeeves/providers/nudge_clock_provider.dart';
 import 'package:jeeves/providers/nudge_triggers.dart';
 import 'package:jeeves/providers/onboarding_provider.dart';
-import 'package:jeeves/providers/periodic_review_settings_provider.dart';
 import 'package:jeeves/models/nudge_predicates.dart';
 import 'package:jeeves/providers/shutdown_settings_provider.dart';
+import 'package:jeeves/providers/system_trust_provider.dart'
+    show weeklyReviewDueAtProvider;
 
 class _StubPlanningSettings extends FocusSessionPlanningSettingsNotifier {
   _StubPlanningSettings(this._time);
@@ -35,6 +36,13 @@ class _StubPlanningSettings extends FocusSessionPlanningSettingsNotifier {
   @override
   FocusSessionPlanningSettings build() =>
       FocusSessionPlanningSettings(planningTime: _time);
+}
+
+class _StubLeftAt extends UnfinishedReviewLeftAtNotifier {
+  _StubLeftAt(this._leftAt);
+  final DateTime? _leftAt;
+  @override
+  DateTime? build() => _leftAt;
 }
 
 class _StubShutdownSettings extends ShutdownSettingsNotifier {
@@ -104,45 +112,127 @@ Future<TriggerState> _readTrigger(
 
 void main() {
   group('Weekly Review Cadence Trigger', () {
-    final lastCompleted = DateTime(2026, 5, 1, 12);
-    final due = lastCompleted.add(const Duration(days: 7));
+    final due = DateTime(2026, 5, 8, 12);
 
-    for (final elapsed in [
-      Duration.zero,
-      const Duration(days: 6, hours: 23),
-      const Duration(days: 7),
-    ]) {
-      test('reports the current cadence edge at due + $elapsed', () async {
-        final c = ProviderContainer(overrides: [
-          clockProvider.overrideWithValue(() => due.add(elapsed)),
-          nudgeBoundaryTickProvider.overrideWithValue(0),
-          periodicReviewOpenSinceProvider.overrideWithValue(null),
-          periodicReviewLastCompletedProvider.overrideWithValue(lastCompleted),
-          hasAnyItemProvider.overrideWith((ref) => Stream.value(true)),
-          ceremonyInProgressForProvider.overrideWith((ref, r) => false),
-        ]);
-        addTearDown(c.dispose);
-        final trigger = await _readTrigger(c, RitualId.weeklyReview);
-        expect(trigger.isFiring, isTrue);
-        expect(trigger.firingSince,
-            elapsed.inDays < 7 ? due : due.add(const Duration(days: 7)));
-      });
-    }
-
-    test('never completed keeps the start-of-today edge', () async {
-      final now = DateTime(2026, 5, 20, 15);
-      final c = ProviderContainer(overrides: [
+    ProviderContainer container({
+      required DateTime now,
+      required DateTime? dueAt,
+    }) {
+      return ProviderContainer(overrides: [
         clockProvider.overrideWithValue(() => now),
         nudgeBoundaryTickProvider.overrideWithValue(0),
-        periodicReviewOpenSinceProvider.overrideWithValue(null),
-        periodicReviewLastCompletedProvider.overrideWithValue(null),
-        hasAnyItemProvider.overrideWith((ref) => Stream.value(true)),
+        weeklyReviewDueAtProvider.overrideWithValue(dueAt),
         ceremonyInProgressForProvider.overrideWith((ref, r) => false),
       ]);
+    }
+
+    test('idle before the review falls due', () async {
+      final c = container(
+          now: due.subtract(const Duration(hours: 1)), dueAt: due);
+      addTearDown(c.dispose);
+      expect((await _readTrigger(c, RitualId.weeklyReview)).isFiring, isFalse);
+    });
+
+    test('on the due day the edge is the due instant', () async {
+      final c = container(
+          now: due.add(const Duration(hours: 3)), dueAt: due);
       addTearDown(c.dispose);
       final trigger = await _readTrigger(c, RitualId.weeklyReview);
       expect(trigger.isFiring, isTrue);
-      expect(trigger.firingSince, DateTime(2026, 5, 20));
+      expect(trigger.firingSince, due);
+    });
+
+    for (final days in [1, 3, 12]) {
+      test('$days day(s) late the edge is the start of today', () async {
+        final now = due.add(Duration(days: days, hours: 3));
+        final c = container(now: now, dueAt: due);
+        addTearDown(c.dispose);
+        final trigger = await _readTrigger(c, RitualId.weeklyReview);
+        expect(trigger.isFiring, isTrue);
+        expect(trigger.firingSince, DateTime(now.year, now.month, now.day));
+      });
+    }
+
+    test('a swipe holds for the day and the next day releases it', () async {
+      final now = due.add(const Duration(days: 2, hours: 3));
+      final c = container(now: now, dueAt: due);
+      addTearDown(c.dispose);
+      final edge = (await _readTrigger(c, RitualId.weeklyReview)).firingSince;
+      final swipedAt = now.add(const Duration(hours: 1));
+      expect(
+          nudgeVisibleAt(swipedAt, edge, NudgeState(dismissedAt: swipedAt), null),
+          isFalse);
+      final tomorrow = DateTime(now.year, now.month, now.day + 1);
+      final c2 = container(
+          now: tomorrow.add(const Duration(hours: 9)), dueAt: due);
+      addTearDown(c2.dispose);
+      final nextEdge =
+          (await _readTrigger(c2, RitualId.weeklyReview)).firingSince;
+      expect(
+          nudgeVisibleAt(tomorrow.add(const Duration(hours: 9)), nextEdge,
+              NudgeState(dismissedAt: swipedAt), null),
+          isTrue);
+    });
+  });
+
+  group('Weekly Review Unfinished Trigger', () {
+    ProviderContainer container({
+      required DateTime? leftAt,
+      required DateTime now,
+    }) {
+      return ProviderContainer(overrides: [
+        clockProvider.overrideWithValue(() => now),
+        nudgeBoundaryTickProvider.overrideWithValue(0),
+        unfinishedReviewLeftAtProvider.overrideWith(() => _StubLeftAt(leftAt)),
+        cadenceTriggerProvider.overrideWith((ref, r) => TriggerState.idle),
+        contentStateTriggerProvider.overrideWith((ref, r) => TriggerState.idle),
+      ]);
+    }
+
+    test('idle when no session is unfinished', () {
+      final c = container(leftAt: null, now: DateTime(2026, 5, 20, 10));
+      addTearDown(c.dispose);
+      expect(c.read(unfinishedReviewTriggerProvider).isFiring, isFalse);
+    });
+
+    test('fires from the instant the session was left', () {
+      final leftAt = DateTime(2026, 5, 20, 9, 30);
+      final c = container(leftAt: leftAt, now: DateTime(2026, 5, 20, 10));
+      addTearDown(c.dispose);
+      final trigger = c.read(unfinishedReviewTriggerProvider);
+      expect(trigger.isFiring, isTrue);
+      expect(trigger.firingSince, leftAt);
+    });
+
+    test('a swipe earlier the same day does not hide a later unfinished review',
+        () {
+      final leftAt = DateTime(2026, 5, 20, 9, 30);
+      final c = container(leftAt: leftAt, now: DateTime(2026, 5, 20, 10));
+      addTearDown(c.dispose);
+      final edge = c.read(unfinishedReviewTriggerProvider).firingSince;
+      expect(
+        nudgeVisibleAt(DateTime(2026, 5, 20, 10), edge,
+            NudgeState(dismissedAt: DateTime(2026, 5, 20, 8)), null),
+        isTrue,
+      );
+    });
+
+    test('left yesterday, the edge is the start of today', () {
+      final c = container(
+          leftAt: DateTime(2026, 5, 19, 22), now: DateTime(2026, 5, 20, 10));
+      addTearDown(c.dispose);
+      expect(c.read(unfinishedReviewTriggerProvider).firingSince,
+          DateTime(2026, 5, 20));
+    });
+
+    test('is part of the Weekly Review Triggers only', () {
+      final c = container(
+          leftAt: DateTime(2026, 5, 20, 9), now: DateTime(2026, 5, 20, 10));
+      addTearDown(c.dispose);
+      expect(c.read(triggersForRitualProvider(RitualId.dailyPlanning)),
+          hasLength(2));
+      expect(c.read(triggersForRitualProvider(RitualId.weeklyReview)),
+          hasLength(3));
     });
   });
 
@@ -254,30 +344,6 @@ void main() {
       final t = await _readTrigger(c, RitualId.eveningShutdown);
       expect(t.isFiring, isTrue);
       expect(t.firingSince, DateTime(2026, 5, 20, 18, 0));
-    });
-  });
-  group('Weekly Review Cadence Trigger — early open review', () {
-    test('keeps firing at lastCompleted + 7d while an early review is open',
-        () async {
-      // Completed Monday; a partial review opened Wednesday keeps the review
-      // "due" in periodicReviewIsDueProvider before the seven-day boundary.
-      final completed = DateTime(2026, 5, 18, 9, 0);
-      final now = DateTime(2026, 5, 20, 10, 0);
-      final c = ProviderContainer(overrides: [
-        clockProvider.overrideWithValue(() => now),
-        nudgeBoundaryTickProvider.overrideWithValue(0),
-        periodicReviewIsDueProvider.overrideWithValue(true),
-        periodicReviewLastCompletedProvider.overrideWithValue(completed),
-        hasAnyItemProvider.overrideWith((ref) => Stream.value(true)),
-        ceremonyInProgressForProvider.overrideWith((ref, r) => false),
-      ]);
-      addTearDown(c.dispose);
-      final t = await _readTrigger(c, RitualId.weeklyReview);
-      final edge = completed.add(const Duration(days: 7));
-      expect(t.isFiring, isTrue);
-      expect(t.firingSince, edge);
-      expect(nudgeVisibleAt(now, t.firingSince, const NudgeState(), null),
-          isTrue);
     });
   });
 }

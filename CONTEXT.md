@@ -20,7 +20,6 @@ The current known divergences:
 
 - **Next** (domain) is rendered as "Next Action" in UI copy when referring to the current-role Action of an Outcome on the Next List.
 - A FocusSession's **Plan** (domain) is rendered with cadence-flavoured copy ("Today's Plan" at the daily cadence).
-- A Nudge's `dismissed` / `completed` states (domain) are rendered with cadence-flavoured copy ("Not today" / "Not this week" / etc.) in Banner and Notification surfaces.
 - Daily Planning labels its undecided pool **"Up Next"**: a view of Next, energy-filtered and net of what is already picked or skipped. It is not the List, so it does not carry the List name.
 - **Focus** (domain — the FocusSession's execution home screen) is rendered as **"Now"** in UI copy. "Now" answers *what am I doing?* alongside Next (*what could I do?*) and Someday/Maybe (*what might I do eventually?*); internal identifiers stay Focus / FocusSession, and the cadence remains daily by default. (Ruled in the epic #35 design review — see the decision comments on TMaYaD/Jeeves#35.)
 
@@ -399,7 +398,7 @@ The shared storage row backing several conceptual entities, discriminated by a `
 _Avoid_: (none — Tag is the canonical name for the storage)
 
 **Banner** *(an in-app surface for a Nudge)*:
-A persistent, single-occupancy visual element rendered at the top of shell-hosted screens. The Banner consumes the head of the **Nudge queue** (Conceptual tier) — when the queue is non-empty, the Banner renders the highest-priority visible Nudge; when the queue is empty, the Banner is absent. The Banner ✕ is a high-signal in-app gesture and maps to a Nudge **dismiss** (suppress the current firing — re-surfaces on the next Trigger firing edge of the same Nudge). Tapping the body opens the underlying Ceremony. User-facing dismissal copy is cadence-flavoured ("Not today" at daily cadence, "Not this week" at weekly), but the underlying state transition is the same.
+A persistent, single-occupancy visual element rendered at the top of shell-hosted screens. The Banner consumes the head of the **Nudge queue** (Conceptual tier) — when the queue is non-empty, the Banner renders the highest-priority visible Nudge; when the queue is empty, the Banner is absent. A horizontal swipe is a high-signal in-app gesture and maps to a Nudge **dismiss** (suppress the current firing — re-surfaces on the next Trigger firing edge of the same Nudge). No Banner carries a ✕. Tapping the body opens the underlying Ceremony.
 _Avoid_: Toast (transient), Snackbar (transient), Alert (overloaded)
 
 **Notification** *(an OS-level surface for a Nudge)*:
