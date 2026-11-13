@@ -1,11 +1,15 @@
 import 'package:drift/drift.dart' show Value;
-import 'package:flutter/widgets.dart' show Widget;
+import 'package:flutter/material.dart' hide Intent;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/intent.dart';
+import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/screens/project/project_screen.dart';
 import '../helpers/record_surface_test_helpers.dart';
+import '../helpers/settle.dart';
 import '../test_helpers.dart';
 
 Future<void> _tag(GtdDatabase db, String todoId, String tagId,
@@ -75,11 +79,70 @@ void main() {
 
     testWidgets('shows the empty state for a project with no Outcomes',
         (tester) async {
+      await db.tagDao.upsertTag(const TagsCompanion(
+          id: Value('proj'),
+          name: Value('proj'),
+          type: Value('project'),
+          userId: Value('local')));
       await tester.pumpWidget(buildScreen());
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
 
       expect(find.text('No Outcomes in this project'), findsOneWidget);
+
+      await disposeScreen(tester);
+    });
+
+    // The shared harness has no Next Actions route, so a redirect would have
+    // nowhere to land. This one does, and the assertions name the destination.
+    Widget buildScreenWithNextActions() {
+      final router = GoRouter(
+        initialLocation: '/projects/proj',
+        routes: [
+          GoRoute(
+            path: '/projects/proj',
+            builder: (_, _) => const ProjectScreen(projectTagId: 'proj'),
+          ),
+          GoRoute(
+            path: '/next-actions',
+            builder: (_, _) => const Scaffold(body: Text('Next Actions page')),
+          ),
+        ],
+      );
+      return ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: MaterialApp.router(routerConfig: router),
+      );
+    }
+
+    testWidgets('leaves for Next Actions when its project does not exist',
+        (tester) async {
+      // No `proj` tag row: the project was merged away or deleted elsewhere.
+      await tester.pumpWidget(buildScreenWithNextActions());
+      await settleWithRealAsync(tester, rounds: 2);
+
+      expect(find.text('Next Actions page'), findsOneWidget);
+      expect(find.text('No Outcomes in this project'), findsNothing);
+
+      await disposeScreen(tester);
+    });
+
+    testWidgets('leaves for Next Actions when its project is deleted while '
+        'the page is open', (tester) async {
+      await db.tagDao.upsertTag(const TagsCompanion(
+          id: Value('proj'),
+          name: Value('proj'),
+          type: Value('project'),
+          userId: Value('local')));
+      await tester.pumpWidget(buildScreenWithNextActions());
+      await settleWithRealAsync(tester, rounds: 2);
+      expect(find.text('No Outcomes in this project'), findsOneWidget);
+      expect(find.text('Next Actions page'), findsNothing);
+
+      await tester.runAsync(() => db.tagDao.deleteTag('proj'));
+      await settleWithRealAsync(tester, rounds: 2);
+
+      expect(find.text('Next Actions page'), findsOneWidget);
 
       await disposeScreen(tester);
     });

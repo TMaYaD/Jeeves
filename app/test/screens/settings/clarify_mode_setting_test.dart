@@ -7,6 +7,7 @@ import 'package:jeeves/models/clarify_mode.dart';
 import 'package:jeeves/models/ritual.dart';
 import 'package:jeeves/providers/clarify_mode_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/providers/nudge_clock_provider.dart';
 import 'package:jeeves/providers/synced_preferences_provider.dart';
 import 'package:jeeves/screens/settings/settings_screen.dart';
 import 'package:jeeves/services/notification_service.dart';
@@ -55,6 +56,7 @@ Future<ProviderContainer> _pumpSettings(
   addTearDown(db.close);
   final container = ProviderContainer(
     overrides: [
+      nudgeBoundaryTickProvider.overrideWithValue(0),
       databaseProvider.overrideWithValue(db),
       notificationServiceProvider.overrideWithValue(_StubNotificationService()),
     ],
@@ -108,6 +110,10 @@ void main() {
         find.byKey(const Key('clarify_mode_tile')),
         200,
       );
+      // scrollUntilVisible stops once the tile is built, which can still be
+      // below the fold on the 800x600 surface; bring it fully on screen.
+      await tester.ensureVisible(find.byKey(const Key('clarify_mode_tile')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('clarify_mode_tile')));
       await tester.pumpAndSettle();
 
@@ -133,6 +139,10 @@ void main() {
         find.byKey(const Key('clarify_mode_tile')),
         200,
       );
+      // scrollUntilVisible stops once the tile is built, which can still be
+      // below the fold on the 800x600 surface; bring it fully on screen.
+      await tester.ensureVisible(find.byKey(const Key('clarify_mode_tile')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('clarify_mode_tile')));
       await tester.pumpAndSettle();
 
@@ -163,6 +173,10 @@ void main() {
         find.byKey(const Key('clarify_mode_tile')),
         200,
       );
+      // scrollUntilVisible stops once the tile is built, which can still be
+      // below the fold on the 800x600 surface; bring it fully on screen.
+      await tester.ensureVisible(find.byKey(const Key('clarify_mode_tile')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('clarify_mode_tile')));
       await tester.pumpAndSettle();
 

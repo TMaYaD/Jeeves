@@ -156,8 +156,13 @@ void main() {
     expect(find.textContaining('Tomorrow', findRichText: true), findsNothing);
 
     // Resolving the last Outcome advances to Close Day on its own.
+    // A shutdown launched by Daily Planning commits without a Close Day
+    // step: flush the commit and the re-entry on the real event loop.
     await tapText(tester, 'Roll Over');
-    await tapCloseDay(tester);
+    for (var i = 0; i < 4; i++) {
+      await tester.runAsync(() => pumpEventQueue());
+      await tester.pump();
+    }
 
     await expectRolledOverAndSessionClosed(tester);
     expect(container.read(shutdownThenPlanProvider), isFalse);

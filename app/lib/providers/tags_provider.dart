@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/daos/tag_dao.dart' show TagWithCount;
 import '../database/gtd_database.dart';
+import 'tag_filter_provider.dart';
 import 'auth_provider.dart';
 import 'database_provider.dart';
 
@@ -29,6 +30,14 @@ final personTagsProvider = StreamProvider<List<Tag>>((ref) {
 final contextTagsWithCountProvider = StreamProvider<List<TagWithCount>>((ref) {
   final db = ref.watch(databaseProvider);
   return db.tagDao.watchTagsWithActiveCount('context');
+});
+
+/// Tags of one [type] (`context`, `project` or `person`) with their
+/// active-Outcome counts — the rows of the management list screen.
+final tagsWithCountByTypeProvider =
+    StreamProvider.family<List<TagWithCount>, String>((ref, type) {
+  final db = ref.watch(databaseProvider);
+  return db.tagDao.watchTagsWithActiveCount(type);
 });
 
 /// Exposes tag mutation operations.
@@ -71,6 +80,22 @@ class TagNotifier {
     await db.tagDao.rename(tagId, trimmed);
   }
 
+  /// Rename without ever merging: returns the same-kind entry already holding
+  /// [newName] (nothing written) so the caller can confirm a [merge], or null
+  /// when the rename was written. The check and write are one transaction.
+  Future<Tag?> renameUnlessTaken(String tagId, String newName) async {
+    final trimmed = newName.trim();
+    if (trimmed.isEmpty || trimmed.length > 100) {
+      throw ArgumentError.value(
+        newName,
+        'newName',
+        'Tag name must be between 1 and 100 characters.',
+      );
+    }
+    final db = _ref.read(databaseProvider);
+    return db.tagDao.renameUnlessTaken(tagId, trimmed);
+  }
+
   /// Update the colour of a tag. Pass null to clear it.
   Future<void> updateColor(String tagId, String? color) {
     final db = _ref.read(databaseProvider);
@@ -78,8 +103,27 @@ class TagNotifier {
   }
 
   /// Merge [sourceTagId] into [targetTagId], reassigning all associations.
-  Future<void> merge(String sourceTagId, String targetTagId) {
+  ///
+  /// If the merged-away tag was in the active tag filter it is swapped for the
+  /// target, so list providers keep returning the user's intended results.
+  Future<void> merge(String sourceTagId, String targetTagId) async {
     final db = _ref.read(databaseProvider);
-    return db.tagDao.merge(sourceTagId, targetTagId);
+    await db.tagDao.merge(sourceTagId, targetTagId);
+    final filter = _ref.read(tagFilterProvider);
+    if (filter.contains(sourceTagId)) {
+      final notifier = _ref.read(tagFilterProvider.notifier);
+      notifier.toggle(sourceTagId);
+      if (!filter.contains(targetTagId)) notifier.toggle(targetTagId);
+    }
+  }
+
+  /// Delete [tagId] from every Outcome and Capture that carried it; the
+  /// Outcomes and Captures stay. Drops it from the active tag filter.
+  Future<void> delete(String tagId) async {
+    final db = _ref.read(databaseProvider);
+    await db.tagDao.deleteTag(tagId);
+    if (_ref.read(tagFilterProvider).contains(tagId)) {
+      _ref.read(tagFilterProvider.notifier).toggle(tagId);
+    }
   }
 }

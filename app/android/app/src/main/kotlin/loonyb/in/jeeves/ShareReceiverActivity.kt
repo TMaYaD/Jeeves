@@ -1,7 +1,9 @@
 package loonyb.`in`.jeeves
 
 import android.app.Activity
+import android.content.ContentResolver
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -27,6 +29,16 @@ import java.util.UUID
  * fixtures in `app/test/fixtures/share_inbox/` document the format. The file is
  * written to `.tmp`, fsynced, then renamed, so the toast only appears once the
  * share is durable. Images go straight to `filesDir/capture_attachments/`.
+ *
+ * Dart finds these files through `getApplicationSupportDirectory()`, so the
+ * contract depends on `path_provider_android` implementing that call as
+ * `Context.filesDir` (true in 2.3.1). No automated test covers the mapping: the
+ * Dart journey test (`share_sheet_capture_journey_test.dart`) reads the
+ * fixtures from a temporary directory it injects instead. If the mapping
+ * changed, a share would still toast "Added to Inbox" and never reach the
+ * Inbox. So after a `path_provider_android` upgrade, check by hand: share to
+ * Jeeves on a device or emulator, open Jeeves, and confirm the Capture is in
+ * the Inbox (`docs/TESTING.md`, share-sheet capture).
  */
 class ShareReceiverActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -66,6 +78,7 @@ class ShareReceiverActivity : Activity() {
         val text = sharedIntent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
         val subject = sharedIntent.getCharSequenceExtra(Intent.EXTRA_SUBJECT)?.toString()
         val stream = streamUri(sharedIntent)
+        if (stream != null) requireForeignContentUri(stream)
         if (text.isNullOrBlank() && subject.isNullOrBlank() && stream == null) {
             throw IllegalArgumentException("nothing to capture")
         }
@@ -113,6 +126,30 @@ class ShareReceiverActivity : Activity() {
             storedImage?.delete()
             throw error
         }
+    }
+
+    /**
+     * Input contract: a shared stream must be a `content://` Uri served by another
+     * app. Any other scheme, or a Uri on one of Jeeves' own providers, is refused
+     * before anything is written.
+     */
+    private fun requireForeignContentUri(stream: Uri) {
+        if (stream.scheme != ContentResolver.SCHEME_CONTENT) {
+            throw SecurityException("only content:// streams are accepted")
+        }
+        val rawAuthority = stream.authority ?: throw SecurityException("stream has no authority")
+        // A content Uri may carry a "userId@" prefix; providers are looked up by
+        // the part after the last '@'.
+        val authority = rawAuthority.substringAfterLast('@')
+        // Own providers are enumerated rather than resolving the authority: another
+        // app's provider may be invisible to us under package visibility rules.
+        val ownProviders = packageManager
+            .getPackageInfo(packageName, PackageManager.GET_PROVIDERS)
+            .providers.orEmpty()
+        val ownsAuthority = ownProviders.any { provider ->
+            provider.authority?.split(';')?.any { it.equals(authority, ignoreCase = true) } == true
+        }
+        if (ownsAuthority) throw SecurityException("stream authority belongs to Jeeves")
     }
 
     @Suppress("DEPRECATION")

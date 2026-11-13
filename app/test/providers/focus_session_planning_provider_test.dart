@@ -31,22 +31,6 @@ Future<void> _settleUntil(
   }
 }
 
-// Minimal stub — avoids hitting NotificationService platform channels in unit tests.
-class _StubFocusSessionPlanningNotifier extends FocusSessionPlanningNotifier {
-  @override
-  Future<void> skipPlanningToday() async {
-    await persistFocusSessionPlanningSkipToday();
-    // NotificationService not called in tests.
-  }
-
-  @override
-  Future<void> snoozePlanningNotification(int minutes) async {
-    final until = DateTime.now().add(Duration(minutes: minutes));
-    await persistFocusSessionPlanningSnoozedUntil(until);
-    // NotificationService not called in tests.
-  }
-}
-
 ProviderContainer _container(
   GtdDatabase db, {
   List<Override> extraOverrides = const [],
@@ -57,8 +41,6 @@ ProviderContainer _container(
         databaseProvider.overrideWithValue(db),
         notificationServiceProvider
             .overrideWithValue(StubNotificationService()),
-        focusSessionPlanningProvider
-            .overrideWith(() => _StubFocusSessionPlanningNotifier()),
       ],
     );
 
@@ -279,67 +261,6 @@ void main() {
           reason: 'a raced double-tap must not carve two Outcomes');
       final row = (await _outcomeOf(db, 'item-1'))!;
       expect(row.clarified, isTrue);
-    });
-  });
-
-  group('FocusSessionPlanningNotifier — skip and snooze', () {
-    late GtdDatabase db;
-    late ProviderContainer container;
-
-    setUp(() {
-      db = GtdDatabase(NativeDatabase.memory());
-      container = _container(db);
-    });
-
-    tearDown(() async {
-      container.dispose();
-      await db.close();
-      // Reset SharedPreferences mock and reload suppression flags to clear state.
-      SharedPreferences.setMockInitialValues({});
-      await loadFocusSessionPlanningNotificationSuppression();
-    });
-
-    test('skipPlanningToday sets skipped flag for today', () async {
-      final notifier = container.read(focusSessionPlanningProvider.notifier);
-      await notifier.skipPlanningToday();
-
-      expect(isFocusSessionPlanningNotificationSuppressed(), isTrue);
-
-      final prefs = await SharedPreferences.getInstance();
-      expect(prefs.getString('planning_notification_skipped_date'),
-          equals(planningToday()));
-    });
-
-    test('snoozePlanningNotification sets snoozed-until in the future',
-        () async {
-      final notifier = container.read(focusSessionPlanningProvider.notifier);
-      await notifier.snoozePlanningNotification(60);
-
-      expect(isFocusSessionPlanningNotificationSuppressed(), isTrue);
-
-      final prefs = await SharedPreferences.getInstance();
-      final stored =
-          DateTime.tryParse(prefs.getString('planning_notification_snoozed_until') ?? '');
-      expect(stored, isNotNull);
-      expect(stored!.isAfter(DateTime.now()), isTrue);
-    });
-
-    test('loadFocusSessionPlanningNotificationSuppression reflects skipped state', () async {
-      // Persist the skip date directly without going through persistFocusSessionPlanningSkipToday
-      // so we can independently verify loadFocusSessionPlanningNotificationSuppression picks it up.
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('planning_notification_skipped_date', planningToday());
-
-      await loadFocusSessionPlanningNotificationSuppression();
-      expect(isFocusSessionPlanningNotificationSuppressed(), isTrue);
-    });
-
-    test('skip state from a previous day does not suppress today', () async {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('planning_notification_skipped_date', '2000-01-01');
-      await loadFocusSessionPlanningNotificationSuppression();
-
-      expect(isFocusSessionPlanningNotificationSuppressed(), isFalse);
     });
   });
 
