@@ -27,11 +27,6 @@ class FocusScreen extends ConsumerWidget {
     // before #693 and what AC4 preserves.
     final settlements = ref.watch(activeSessionSettlementsProvider).value ??
         const <String, SessionSettlement>{};
-    // The session's Review surface (Plan plus anything engaged off-Plan). Null
-    // until the stream first emits: an unknown surface must never read as an
-    // empty one, or the first frame would offer "End Session" past an
-    // unfinished Outcome (#885).
-    final reviewSurface = ref.watch(activeSessionReviewSurfaceProvider).value;
 
     return Scaffold(
       body: SafeArea(
@@ -159,9 +154,9 @@ class FocusScreen extends ConsumerWidget {
                           // harmlessly falls through to the Plan-the-Day CTA.
                           if (showShutdownEntry && activeSession != null)
                             _PrimaryCallout(
-                              kind: focusCalloutKindFor(reviewSurface, settlements),
+                              kind: focusCalloutKindFor(tasks, settlements),
                               onTap: () => _beginShutdown(
-                                  context, ref, reviewSurface, activeSession),
+                                  context, ref, tasks, activeSession),
                             )
                           else
                             FilledButton(
@@ -227,7 +222,7 @@ class FocusScreen extends ConsumerWidget {
     context.go('/focus-session-planning');
   }
 
-  /// Either ends the session cleanly (every Outcome on the Review surface done) or routes the user into
+  /// Either ends the session cleanly (all tasks done) or routes the user into
   /// the evening-shutdown ritual where they assign dispositions to unfinished
   /// tasks. The session is only closed by [closeSession] / the ritual itself.
   ///
@@ -241,12 +236,10 @@ class FocusScreen extends ConsumerWidget {
   Future<void> _beginShutdown(
     BuildContext context,
     WidgetRef ref,
-    List<Todo>? reviewSurface,
+    List<Todo> tasks,
     FocusSession session,
   ) async {
-    // Not loaded == something may be outstanding: go through the wizard.
-    final allDone =
-        reviewSurface != null && reviewSurface.every((t) => t.doneAt != null);
+    final allDone = tasks.every((t) => t.doneAt != null);
     if (allDone) {
       final db = ref.read(databaseProvider);
       await db.focusSessionDao.closeSession(sessionId: session.id);
@@ -495,12 +488,9 @@ class _SectionLabel extends StatelessWidget {
 @visibleForTesting
 enum FocusCalloutKind { beginShutdown, wrapUp, endSession }
 
-/// The footer's kind for [reviewSurface] (the session's Plan plus every Outcome
-/// engaged off-Plan; null while not yet loaded) given [settlements].
+/// The footer's kind for [tasks] (the session's Plan) given [settlements].
 ///
-/// * an unloaded surface → [FocusCalloutKind.beginShutdown]: unknown is never
-///   treated as empty;
-/// * every Outcome's Completion recorded → [FocusCalloutKind.endSession], the one
+/// * every task's Completion recorded → [FocusCalloutKind.endSession], the one
 ///   state `closeSession` may be reached from (see [FocusScreen._beginShutdown]);
 /// * every task **Settled**, not all done → [FocusCalloutKind.wrapUp]: the user
 ///   is finished for the day, and the emphasis says so, but the tap still opens
@@ -508,14 +498,11 @@ enum FocusCalloutKind { beginShutdown, wrapUp, endSession }
 /// * anything outstanding → [FocusCalloutKind.beginShutdown].
 @visibleForTesting
 FocusCalloutKind focusCalloutKindFor(
-  List<Todo>? reviewSurface,
+  List<Todo> tasks,
   Map<String, SessionSettlement> settlements,
 ) {
-  if (reviewSurface == null) return FocusCalloutKind.beginShutdown;
-  if (reviewSurface.every((t) => t.doneAt != null)) {
-    return FocusCalloutKind.endSession;
-  }
-  if (reviewSurface.every((t) => settlements.containsKey(t.id))) {
+  if (tasks.every((t) => t.doneAt != null)) return FocusCalloutKind.endSession;
+  if (tasks.every((t) => settlements.containsKey(t.id))) {
     return FocusCalloutKind.wrapUp;
   }
   return FocusCalloutKind.beginShutdown;
