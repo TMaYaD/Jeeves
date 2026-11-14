@@ -392,10 +392,14 @@ void main() {
 
       // A failing lookup releases the guard, so a retry opens the sequence.
       gated.failNext = true;
-      await tester.tap(button);
-      await _flush(tester);
+      final lookupErrors = <Object>[];
+      await runZonedGuarded(() async {
+        await tester.tap(button);
+        await _flush(tester);
+      }, (error, _) => lookupErrors.add(error));
+      expect(lookupErrors, hasLength(1),
+          reason: 'the failed lookup surfaces; it is not swallowed');
       expect(find.byType(InboxClarifyScreen), findsNothing);
-      tester.takeException();
       await tester.tap(button);
       await _flush(tester);
       expect(gated.lookups, 3);
