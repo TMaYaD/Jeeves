@@ -289,9 +289,10 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
 
   /// Closes [sessionId] only when nothing on its Review surface lacks a
   /// Completion, deciding from the store at call time rather than from any list
-  /// a screen holds. Returns whether the session was closed; a refusal writes
-  /// nothing. An empty surface counts as nothing to dispose, and an already
-  /// closed session stays a no-op (it reports closed only if it was open).
+  /// a screen holds. Returns false when something is unfinished (a refusal writes
+  /// nothing), true when nothing is left to dispose. An empty surface counts as
+  /// nothing to dispose; an already closed session is a no-op write and also
+  /// reports true, since there is nothing left to close.
   Future<bool> closeSessionIfNothingToDispose({
     required String sessionId,
     DateTime? now,

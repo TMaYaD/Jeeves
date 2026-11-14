@@ -92,6 +92,7 @@ class _Harness {
             // Stand-in for the planning route: it keeps the open-session
             // stream live while Now is unmounted, as the real one does.
             ref.watch(activeSessionProvider);
+            ref.watch(focusSessionPlanningProvider);
             return const Scaffold(body: Text('planning'));
           }),
         ),
@@ -144,8 +145,8 @@ void main() {
   });
 
   testWidgets(
-      'Start Day route: back on Now with the new session and the old empty '
-      'list, End Session leaves the session open', (tester) async {
+      'Start Day route: back on Now after startDay(), End Session leaves the '
+      'planned session open', (tester) async {
     final harness = _Harness(db);
     await tester.pumpWidget(harness.app());
     await settleWithRealAsync(tester);
@@ -155,9 +156,14 @@ void main() {
     await settleWithRealAsync(tester);
     expect(find.text('planning'), findsOneWidget);
 
-    // Start Day (stand-in): a session opens while Now is unmounted.
+    // Start Day: the real planning notifier's startDay() opens the session
+    // while Now is unmounted (only the planning screen's widgets are stood in).
+    final planning = ProviderScope.containerOf(
+            tester.element(find.text('planning')))
+        .read(focusSessionPlanningProvider.notifier);
+    planning.selectTask('plan');
     await tester.runAsync(() async {
-      await db.focusSessionDao.openSession(userId: _userId, taskIds: ['plan']);
+      await planning.startDay();
       await pumpEventQueue();
     });
     await tester.pump();
@@ -171,9 +177,9 @@ void main() {
         ProviderScope.containerOf(tester.element(find.byType(FocusScreen)));
     expect(container.read(activeSessionProvider).value, isNotNull,
         reason: 'guard: Now already has the new session');
-    // CI showed the list provider is NOT stale here: it keeps its subscription
-    // while Now is unmounted and has already re-queried (it holds the Plan).
-    // The test stays as a pin on the Start Day route.
+    // The list provider keeps its subscription while Now is unmounted, so it
+    // is not stale on this route; the test pins that the planned session stays
+    // open after the tap.
 
     await harness.tapFooter(tester);
     await settleWithRealAsync(tester);

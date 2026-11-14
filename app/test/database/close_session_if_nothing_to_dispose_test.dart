@@ -2,6 +2,7 @@ import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/sync/domain_op_capture.dart';
 
 import '../test_helpers.dart';
 
@@ -23,8 +24,12 @@ Future<void> _outcome(GtdDatabase db, String id, {bool done = false}) async {
 void main() {
   setUpAll(configureSqliteForTests);
 
+  late RecordingDomainOpCapture capture;
   late GtdDatabase db;
-  setUp(() => db = GtdDatabase(NativeDatabase.memory()));
+  setUp(() {
+    capture = RecordingDomainOpCapture();
+    db = GtdDatabase(NativeDatabase.memory(), opCapture: capture);
+  });
   tearDown(() async => db.close());
 
   Future<bool> tryClose(String sessionId) => db.focusSessionDao
@@ -55,8 +60,10 @@ void main() {
     await _outcome(db, 'plan');
     final id = await db.focusSessionDao
         .openSession(userId: _userId, taskIds: ['plan']);
+    capture.clear();
     expect(await tryClose(id), isFalse);
     expect(await isOpen(), isTrue);
+    expect(capture.recorded, isEmpty, reason: 'a refusal authors no op');
   });
 
   test('an unfinished off-Plan Outcome refuses and leaves the session open',
@@ -67,7 +74,18 @@ void main() {
         .openSession(userId: _userId, taskIds: ['plan']);
     await db.focusSessionDao.setCurrentTask(sessionId: id, taskId: 'off');
     await db.focusSessionDao.setCurrentTask(sessionId: id, taskId: null);
+    capture.clear();
     expect(await tryClose(id), isFalse);
     expect(await isOpen(), isTrue);
+    expect(capture.recorded, isEmpty, reason: 'a refusal authors no op');
+  });
+
+  test('an already closed session stays closed and authors no op', () async {
+    final id = await db.focusSessionDao.openSession(userId: _userId, taskIds: []);
+    await db.focusSessionDao.closeSession(sessionId: id);
+    capture.clear();
+    await tryClose(id);
+    expect(await isOpen(), isFalse);
+    expect(capture.recorded, isEmpty);
   });
 }
