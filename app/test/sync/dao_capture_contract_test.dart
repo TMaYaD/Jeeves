@@ -552,6 +552,36 @@ void main() {
       expect(byKey[todoTagIdFor(outcome, first)], isTrue);
       expect(byKey[todoTagIdFor(outcome, second)], isFalse);
     });
+
+    test('the bulk Tag and Project batches author todo_tags ops only', () async {
+      final a = await seedOutcome(id: 'a');
+      final b = await seedOutcome(id: 'b');
+      final tag = await db.tagDao.findOrCreateTag('home', 'context', _userId);
+      final project = await db.tagDao.findOrCreateTag('P', 'project', _userId);
+      capture.clear();
+
+      await db.tagDao.assignTagToOutcomes({a, b}, tag, _userId);
+      await db.tagDao.setProjectForOutcomes({a, b}, project, _userId);
+      await db.tagDao.removeTagFromOutcomes({a, b}, tag);
+
+      expect(capture.recorded.map((o) => o.collection).toSet(),
+          {todoTagsCollection});
+      expect(capture.forCollection(todoTagsCollection), hasLength(6));
+    });
+  });
+
+  group('bulk routing', () {
+    test('applyRoutingToOutcomes authors one todos op per landed Outcome',
+        () async {
+      final a = await seedOutcome(id: 'a');
+      final b = await seedOutcome(id: 'b');
+      capture.clear();
+      await db.todoDao.applyRoutingToOutcomes({a, b, 'gone'},
+          to: RoutingKind.maybe, now: _ts);
+      final ops = capture.forCollection(todosCollection);
+      expect(ops, hasLength(2));
+      expect(ops.map((o) => o.entityId).toSet(), {a, b});
+    });
   });
 
   group('capture_dao', () {

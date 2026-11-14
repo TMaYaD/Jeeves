@@ -67,6 +67,9 @@ class ProjectPickerWidget extends ConsumerWidget {
     WidgetRef ref,
     List<Tag> projects,
   ) async {
+    // Read before the dialog await: the picker (e.g. in a bulk-selection bar)
+    // can be disposed while the dialog is open, which invalidates `ref`.
+    final tagNotifier = ref.read(tagNotifierProvider);
     final result = await showDialog<_ProjectPickerResult>(
       context: context,
       builder: (ctx) => _ProjectPickerDialog(
@@ -80,9 +83,7 @@ class ProjectPickerWidget extends ConsumerWidget {
     } else if (result.tag != null) {
       onAssign(result.tag!);
     } else if (result.newName != null) {
-      final tag = await ref
-          .read(tagNotifierProvider)
-          .createTag(result.newName!, 'project');
+      final tag = await tagNotifier.createTag(result.newName!, 'project');
       onAssign(tag);
     }
   }
