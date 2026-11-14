@@ -271,7 +271,7 @@ class NotificationService {
       title: cfg.title,
       body: cfg.body,
       payload: payload,
-      scheduledDate: tz.TZDateTime.from(fireAt, tz.local),
+      scheduledDate: ritualAlarmScheduledDate(fireAt),
       notificationDetails: _ritualNotificationDetails(cfg),
       // Exact when the OS already permits it, so a reminder lands at its
       // configured minute; otherwise Android may deliver it late.
@@ -729,6 +729,15 @@ AndroidScheduleMode ritualAndroidScheduleMode({required bool canExact}) =>
     canExact
         ? AndroidScheduleMode.exactAllowWhileIdle
         : AndroidScheduleMode.inexactAllowWhileIdle;
+
+/// The alarm time for a Ritual reminder, as an absolute instant in UTC.
+///
+/// Does not read `tz.local`, which only `main()` initialises: Snooze and Skip
+/// taps run in a background isolate where it is unset and would throw. Correct
+/// only for one-off alarms; wrong for a recurring (`matchDateTimeComponents`)
+/// alarm, which needs the local zone.
+tz.TZDateTime ritualAlarmScheduledDate(DateTime fireAt) =>
+    tz.TZDateTime.from(fireAt, tz.UTC);
 
 final notificationServiceProvider = Provider<NotificationService>((ref) {
   return NotificationService.instance;
