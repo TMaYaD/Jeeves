@@ -30,7 +30,11 @@ class _WaitingForScreenState extends ConsumerState<WaitingForScreen> {
     });
   }
 
-  void _clear() => setState(() => _selectedIds = {});
+  // Also runs after an awaited bulk write; the screen may be gone by then.
+  void _clear() {
+    if (!mounted) return;
+    setState(() => _selectedIds = {});
+  }
 
   @override
   Widget build(BuildContext context) {

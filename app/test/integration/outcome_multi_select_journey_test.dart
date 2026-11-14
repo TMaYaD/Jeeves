@@ -17,6 +17,7 @@ import 'package:jeeves/models/routing_kind.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/screens/done/done_screen.dart';
 import 'package:jeeves/screens/next/next_screen.dart';
+import 'package:jeeves/screens/trash/trash_screen.dart';
 import 'package:jeeves/screens/waiting_for/waiting_for_screen.dart';
 import 'package:jeeves/sync/collection_codecs.dart';
 import 'package:jeeves/sync/domain_op_capture.dart';
@@ -84,6 +85,7 @@ void main() {
           routes: [
             GoRoute(path: '/next', builder: (_, _) => const NextScreen()),
             GoRoute(path: '/done', builder: (_, _) => const DoneScreen()),
+            GoRoute(path: '/trash', builder: (_, _) => const TrashScreen()),
             GoRoute(
                 path: '/waiting-for',
                 builder: (_, _) => const WaitingForScreen()),
@@ -252,6 +254,51 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(await tagIdsOf(tester, 'o1'), isEmpty);
     expect(capture.recorded, isEmpty);
+  });
+
+  testWidgets('creating a New project after the selection vanished writes nothing',
+      (tester) async {
+    await pumpApp(tester);
+    await tester.longPress(find.text('Outcome o1'));
+    await _settle(tester);
+    await tester.tap(find.text('Project'));
+    await _settle(tester);
+    await tester.tap(find.text('New project'));
+    await _settle(tester);
+    await tester.enterText(find.byType(TextField), 'Fresh');
+    // Sync removes the only selected Outcome, disposing the picker, while
+    // the dialog is still open.
+    await _real(tester, () => db.todoDao.deleteOutcome('o1'));
+    await _settle(tester);
+    capture.clear();
+    await tester.tap(find.text('Create'));
+    await _settle(tester);
+    expect(tester.takeException(), isNull);
+    expect(await tagIdsOf(tester, 'o1'), isEmpty);
+    expect(capture.forCollection(todoTagsCollection), isEmpty);
+  });
+
+  testWidgets('navigating away while a status batch writes does not throw',
+      (tester) async {
+    await pumpApp(tester);
+    await tester.longPress(find.text('Outcome o1'));
+    await _settle(tester);
+    await tester.tap(find.text('Status'));
+    await _settle(tester);
+    await tester.tap(find.text('Someday/Maybe'));
+    await tester.pump();
+    GoRouter.of(tester.element(find.byType(Scaffold).first)).go('/done');
+    await _settle(tester);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('the Trash list offers no selection', (tester) async {
+    await _real(tester, () => db.todoDao.applyRouting('o1',
+        to: RoutingKind.trash, now: DateTime.utc(2026, 7, 29, 9)));
+    await pumpApp(tester, start: '/trash');
+    await tester.longPress(find.text('Outcome o1'));
+    await _settle(tester);
+    expect(find.textContaining('selected'), findsNothing);
   });
 
   testWidgets('the Done list offers no selection', (tester) async {
