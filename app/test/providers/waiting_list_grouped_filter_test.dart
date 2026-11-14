@@ -55,17 +55,32 @@ void main() {
     );
     addTearDown(container.dispose);
 
-    Future<List<String>> personNames() async {
-      final grouped = await container.read(waitingListGroupedProvider.future);
-      return grouped.keys.map((t) => t.name).toList();
+    // Hold a listener so the stream stays subscribed across filter changes.
+    final subscription = container.listen(
+      waitingListGroupedProvider,
+      (_, _) {},
+    );
+    addTearDown(subscription.close);
+
+    // Poll the latest emission until it matches; drift streams deliver on
+    // real async turns, so a short delay lets re-subscription settle.
+    Future<void> expectPeople(List<String> expected) async {
+      List<String>? actual;
+      for (var attempt = 0; attempt < 100; attempt++) {
+        final grouped = container.read(waitingListGroupedProvider).value;
+        actual = grouped?.keys.map((t) => t.name).toList();
+        if (actual != null && actual.join(',') == expected.join(',')) return;
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(actual, expected);
     }
 
-    expect(await personNames(), ['Alice', 'Bob']);
+    await expectPeople(['Alice', 'Bob']);
 
     container.read(tagFilterProvider.notifier).toggle('ctx');
-    expect(await personNames(), ['Alice']);
+    await expectPeople(['Alice']);
 
     container.read(tagFilterProvider.notifier).clear();
-    expect(await personNames(), ['Alice', 'Bob']);
+    await expectPeople(['Alice', 'Bob']);
   });
 }
