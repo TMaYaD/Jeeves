@@ -219,8 +219,11 @@ void main() {
     await settle();
     expect(unfinished(), isFalse);
 
-    final nextDayNoon = noon.add(const Duration(days: 1));
-    clockOverride = () => nextDayNoon;
+    // The session above started at the real wall-clock time, not the test
+    // clock, so go two days on: a later ES anchor than any wall-clock hour can
+    // put that session on the near side of.
+    final nextPeriodNoon = noon.add(const Duration(days: 2));
+    clockOverride = () => nextPeriodNoon;
     c.invalidate(nudgeBoundaryTickProvider);
     await settle();
     expect(c.read(nudgeVisibleProvider(RitualId.dailyPlanning)), isTrue,
