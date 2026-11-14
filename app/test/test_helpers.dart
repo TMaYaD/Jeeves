@@ -97,6 +97,21 @@ class RecordingNotificationService extends NotificationService {
   /// Every schedule call, in order, for tests asserting on churn.
   final scheduleCalls = <int>[];
 
+  /// What the OS reports for notification permission.
+  bool notificationsAllowed = true;
+
+  /// How many times a permission request was made.
+  int permissionRequests = 0;
+
+  @override
+  Future<bool> areNotificationsAllowed() async => notificationsAllowed;
+
+  @override
+  Future<bool> requestPermissions() async {
+    permissionRequests++;
+    return notificationsAllowed;
+  }
+
   @override
   Future<void> scheduleRitualNotification({
     required int id,
