@@ -172,8 +172,12 @@ void main() {
       router.go('/focus-session-planning');
       for (var i = 0; i < 20; i++) {
         await turn();
+        await tester.pump(const Duration(milliseconds: 100));
       }
-      expect(find.text(_interstitial), findsOneWidget);
+      expect(find.text(_interstitial, skipOffstage: false), findsOneWidget,
+          reason: 'on screen: ${tester.widgetList<Text>(find.byType(Text, skipOffstage: false)).map((t) => t.data).toList()}, '
+              'planning route mounted: ${find.byType(FocusSessionPlanningScreen).evaluate().isNotEmpty}, '
+              'started session id: ${containerOf(tester).read(focusSessionPlanningProvider).startedSessionId}');
     });
   });
 }
