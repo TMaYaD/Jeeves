@@ -433,7 +433,19 @@ EXISTS (
   /// Each todo appears once per person-tag it carries.  A todo with two
   /// person-tags appears in two entries.  Results are ordered by tag name
   /// then todo creation date — insertion order matches the grouped view.
-  Stream<Map<Tag, List<Todo>>> watchPersonTaggedGrouped() {
+  ///
+  /// When [tagIds] is non-empty only todos carrying **all** specified
+  /// (context/filter) tags are included (AND semantics), as in
+  /// [watchPersonTagged].
+  Stream<Map<Tag, List<Todo>>> watchPersonTaggedGrouped({
+    Set<String> tagIds = const {},
+  }) {
+    final tagFilterSql = tagIds.isEmpty
+        ? ''
+        : 'AND (SELECT COUNT(DISTINCT tag_id) FROM todo_tags '
+            '     WHERE todo_id = todos.id '
+            '       AND tag_id IN (${List.filled(tagIds.length, '?').join(', ')})'
+            ') = ${tagIds.length} ';
     return customSelect(
       // Shared Todo projection (Action-grain energy/time via D2) plus the
       // person-tag columns this grouped view needs.
@@ -445,10 +457,12 @@ EXISTS (
       'JOIN tags tg ON tg.id = tt.tag_id AND tg.type = ? '
       'WHERE todos.done_at IS NULL '
       '  AND todos.intent = ? '
+      '$tagFilterSql'
       'ORDER BY tg.name, todos.created_at',
       variables: [
         Variable('person'),
         Variable('next'),
+        ...tagIds.map(Variable.new),
       ],
       readsFrom: {todos, todoTags, tags, actions},
     ).watch().map((rows) {
