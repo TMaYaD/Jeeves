@@ -98,6 +98,8 @@ void main() {
     await db.tagDao.assignTag('b', 'bob', _userId);
   });
 
+  tearDown(() => db.close());
+
   testWidgets('selecting a tag narrows the page; Clear all restores it',
       (tester) async {
     final ctxTag =
@@ -185,9 +187,6 @@ void main() {
     debugPrint('journey: dispose');
     // Dispose in the real zone so drift's subscription cleanup can finish.
     await tester.pumpWidget(const SizedBox());
-    await tester.runAsync(() async {
-      await pumpEventQueue();
-      await db.close();
-    });
+    await tester.runAsync(pumpEventQueue);
   });
 }
