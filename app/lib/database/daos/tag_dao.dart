@@ -622,4 +622,105 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
       await assignTag(todoId, newProjectTagId, userId);
     });
   }
+
+  // ── Bulk Organising (list multi-select) ────────────────────────────────────
+  //
+  // Each method is ONE `capturing` scope = one transaction: a throw rolls the
+  // whole batch back and authors no ops. An id with no `todos` row is skipped
+  // inside that transaction (#444 / #446 / #447), so a row deleted underneath
+  // an open sheet writes nothing. None of them touches `todos`: Organising
+  // never stamps `last_clarified_at`.
+
+  Future<Set<String>> _presentOutcomeIds(Set<String> outcomeIds) async {
+    if (outcomeIds.isEmpty) return <String>{};
+    final rows = await (select(todos)..where((t) => t.id.isIn(outcomeIds)))
+        .map((t) => t.id)
+        .get();
+    return rows.toSet();
+  }
+
+  Future<Tag?> _tagOfTypeOrNull(String tagId) =>
+      (select(tags)..where((t) => t.id.equals(tagId))).getSingleOrNull();
+
+  /// Adds the [tagId] Tag (a `context`-typed tag) to every present Outcome in
+  /// [outcomeIds]. Returns the ids written; empty if the Tag is gone.
+  ///
+  /// Throws [ArgumentError] for a `person` or `project` tag: a person tag is a
+  /// PersonBlocker (a Clarification, owned by the status action) and a project
+  /// tag must go through [setProjectForOutcomes]'s single-Project rule.
+  Future<Set<String>> assignTagToOutcomes(
+      Set<String> outcomeIds, String tagId, String userId) async {
+    final written = <String>{};
+    await attachedDatabase.capturing(() async {
+      final tag = await _tagOfTypeOrNull(tagId);
+      if (tag == null) return;
+      _requireBulkTagType(tag);
+      for (final id in await _presentOutcomeIds(outcomeIds)) {
+        await assignTag(id, tagId, userId);
+        written.add(id);
+      }
+    });
+    if (written.isNotEmpty) {
+      attachedDatabase.notifyTodosViewWrite(includeTodoTags: true);
+    }
+    return written;
+  }
+
+  /// Removes the [tagId] Tag from every Outcome in [outcomeIds] that holds it,
+  /// authoring a tombstone per removed junction (none for an Outcome that never
+  /// held it). Returns the ids it was removed from. Same type guard as
+  /// [assignTagToOutcomes].
+  Future<Set<String>> removeTagFromOutcomes(
+      Set<String> outcomeIds, String tagId) async {
+    final removed = <String>{};
+    await attachedDatabase.capturing(() async {
+      final tag = await _tagOfTypeOrNull(tagId);
+      if (tag != null) _requireBulkTagType(tag);
+      final present = await _presentOutcomeIds(outcomeIds);
+      if (present.isEmpty) return;
+      final held = await (select(todoTags)
+            ..where((tt) => tt.tagId.equals(tagId) & tt.todoId.isIn(present)))
+          .get();
+      for (final row in held) {
+        await (delete(todoTags)..where((tt) => tt.id.equals(row.id))).go();
+        _tombstoneTodoTag(row.todoId, tagId);
+        removed.add(row.todoId);
+      }
+    });
+    if (removed.isNotEmpty) {
+      attachedDatabase.notifyTodosViewWrite(includeTodoTags: true);
+    }
+    return removed;
+  }
+
+  /// Makes [projectTagId] the one Project of every present Outcome in
+  /// [outcomeIds] (the body of [enforceSingleProject], per Outcome). Returns the
+  /// ids written; empty if the Project tag is gone.
+  Future<Set<String>> setProjectForOutcomes(
+      Set<String> outcomeIds, String projectTagId, String userId) async {
+    final written = <String>{};
+    await attachedDatabase.capturing(() async {
+      final tag = await _tagOfTypeOrNull(projectTagId);
+      if (tag == null) return;
+      if (tag.type != 'project') {
+        throw ArgumentError.value(
+            projectTagId, 'projectTagId', 'is not a project tag');
+      }
+      for (final id in await _presentOutcomeIds(outcomeIds)) {
+        await enforceSingleProject(id, userId, projectTagId);
+        written.add(id);
+      }
+    });
+    if (written.isNotEmpty) {
+      attachedDatabase.notifyTodosViewWrite(includeTodoTags: true);
+    }
+    return written;
+  }
+
+  static void _requireBulkTagType(Tag tag) {
+    if (tag.type == 'person' || tag.type == 'project') {
+      throw ArgumentError.value(tag.id, 'tagId',
+          'bulk tag edits do not accept a ${tag.type} tag');
+    }
+  }
 }

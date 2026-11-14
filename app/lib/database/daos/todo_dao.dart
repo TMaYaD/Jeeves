@@ -1223,157 +1223,244 @@ AND (
       }
     }
     final ts = (now ?? DateTime.now()).toUtc();
-    final tsIso = ts.toIso8601String();
-    var wroteFallbackAction = false;
-    // Only the Next / Waiting For arms carry a next-action phrase, and only
-    // when the caller passes one; those are the arms that write the Action row.
-    // An absent [actionText] leaves the Action untouched.
-    final touchesAction = (to == RoutingKind.nextAction ||
-            to == RoutingKind.waitingFor) &&
-        actionText != null;
-    var actionTerminated = false;
-    var logChanged = false;
-    var promotedPlannedAction = false;
-    final landed = await attachedDatabase.capturing(() async {
-      if (!await _todoRowExists(todoId)) return false;
-      if (promotePlannedActionId != null) {
-        // The queue promote shares this transaction, so a failed route write
-        // rolls the promote (and any supersede) back (#788). Runs before the
-        // routing UPDATE; its own guards throw on a stale confirm.
-        final actionDao = attachedDatabase.actionDao;
-        final effect = replacingCurrentActionId == null
-            ? await actionDao.applyPromotePlannedAction(promotePlannedActionId,
-                ts: ts)
-            : await actionDao.applySupersedeAndPromote(promotePlannedActionId,
-                expectedCurrentActionId: replacingCurrentActionId, ts: ts);
-        // Land only once the chosen Action is this Outcome's current one.
-        final current = await actionDao.getCurrentAction(todoId);
-        if (current?.id != promotePlannedActionId) {
-          // `false` must mean nothing was written.
-          if (effect.changed) {
-            throw StateError('applyRouting: promoted Action '
-                '$promotePlannedActionId does not belong to Outcome $todoId');
-          }
-          return false;
-        }
-        promotedPlannedAction = effect.changed;
-        logChanged = logChanged || effect.logChanged;
-      }
-      final captured = switch (to) {
-        RoutingKind.nextAction || RoutingKind.waitingFor => <String, Object?>{
-              'intent': 'next',
-            'done_at': null,
-            'last_clarified_at': encodeInstant(ts),
-            'updated_at': encodeInstant(ts),
-          },
-        RoutingKind.maybe => <String, Object?>{
-              'intent': 'maybe',
-            'done_at': null,
-            'last_clarified_at': encodeInstant(ts),
-            'updated_at': encodeInstant(ts),
-          },
-        RoutingKind.done => <String, Object?>{
-              'done_at': tsIso,
-            'last_clarified_at': encodeInstant(ts),
-            'updated_at': encodeInstant(ts),
-          },
-        RoutingKind.trash => <String, Object?>{
-              'intent': 'trash',
-            'last_clarified_at': encodeInstant(ts),
-            'updated_at': encodeInstant(ts),
-          },
-      };
-      final companion = switch (to) {
-        RoutingKind.nextAction || RoutingKind.waitingFor => TodosCompanion(
-            intent: const Value('next'),
-            doneAt: const Value(null),
-            lastClarifiedAt: Value(ts),
-            updatedAt: Value(ts),
-          ),
-        RoutingKind.maybe => TodosCompanion(
-            intent: const Value('maybe'),
-            doneAt: const Value(null),
-            lastClarifiedAt: Value(ts),
-            updatedAt: Value(ts),
-          ),
-        RoutingKind.done => TodosCompanion(
-            doneAt: Value(tsIso),
-            lastClarifiedAt: Value(ts),
-            updatedAt: Value(ts),
-          ),
-        RoutingKind.trash => TodosCompanion(
-            intent: const Value('trash'),
-            lastClarifiedAt: Value(ts),
-            updatedAt: Value(ts),
-          ),
-      };
-      await (update(todos)..where((t) => t.id.equals(todoId))).write(companion);
-      _captureTodo(todoId, captured);
-
-      if (touchesAction) {
-        final normalised = _normaliseText(actionText);
-        if (normalised == null) {
-          // Blank supersedes the current Action, closing its open log (#476).
-          final effect = await attachedDatabase.actionDao
-              .applySupersedeCurrentAction(todoId, ts: ts);
-          logChanged = logChanged || effect.logChanged;
-        } else {
-          await attachedDatabase.actionDao
-              .applySetCurrentAction(todoId, normalised, ts: ts);
-        }
-      }
-
-      if (actionTextIfActionless != null) {
-        // Guarded fallback (the title-as-action mirror): in this same
-        // transaction, so a failed Action write rolls the route back (#709).
-        // An existing `current` Action — deliberate or just synced — wins.
-        final current =
-            await attachedDatabase.actionDao.getCurrentAction(todoId);
-        if (current == null) {
-          await attachedDatabase.actionDao.applySetCurrentAction(
-              todoId, actionTextIfActionless.trim(),
-              ts: ts);
-          wroteFallbackAction = true;
-        }
-      }
-
-      if (to == RoutingKind.done) {
-        // Achieving the Outcome closes the current Action (ADR-0001 story 4) —
-        // the same cascade markDone runs, sharing one apply-variant.
-        final effect = await attachedDatabase.actionDao
-            .applyCompleteCurrentAction(todoId, ts: ts);
-        actionTerminated = effect.changed;
-        logChanged = logChanged || effect.logChanged;
-      }
-
-      if (personTagIds != null) {
-        if (userId == null) {
-          throw ArgumentError(
-            'userId is required when personTagIds is provided',
-          );
-        }
-        await setPersonTagsForTodo(todoId, personTagIds, userId);
-      }
-      return true;
-    });
+    final effects = _RoutingEffects(
+      // Only the Next / Waiting For arms carry a next-action phrase, and only
+      // when the caller passes one; those are the arms that write the Action
+      // row. An absent [actionText] leaves the Action untouched.
+      touchesAction: (to == RoutingKind.nextAction ||
+              to == RoutingKind.waitingFor) &&
+          actionText != null,
+    );
+    final landed = await attachedDatabase.capturing(
+      () => _routeWithinTransaction(
+        todoId,
+        to: to,
+        ts: ts,
+        effects: effects,
+        actionText: actionText,
+        actionTextIfActionless: actionTextIfActionless,
+        promotePlannedActionId: promotePlannedActionId,
+        replacingCurrentActionId: replacingCurrentActionId,
+        personTagIds: personTagIds,
+        userId: userId,
+      ),
+    );
     if (!landed) return false;
+    _notifyRoutingLanded(effects, personTagsTouched: personTagIds != null);
+    return true;
+  }
 
+  /// Routes every Outcome in [outcomeIds] to [to] in ONE transaction (bulk
+  /// status change from a list's multi-select).
+  ///
+  /// Each Outcome goes through the same body as [applyRouting] — so the same
+  /// matrix, the same `last_clarified_at` stamp and the same Done cascade — and
+  /// an id with no `todos` row is skipped inside the transaction, writing
+  /// nothing (#444). Any throw rolls the whole batch back and authors no ops.
+  /// View notifications fire once, after the commit; looping the public
+  /// [applyRouting] instead would notify before the batch commits.
+  ///
+  /// Returns the ids the routing landed on.
+  Future<Set<String>> applyRoutingToOutcomes(
+    Set<String> outcomeIds, {
+    required RoutingKind to,
+    Set<String>? personTagIds,
+    String? userId,
+    DateTime? now,
+  }) async {
+    if (outcomeIds.isEmpty) return <String>{};
+    final ts = (now ?? DateTime.now()).toUtc();
+    final effects = _RoutingEffects();
+    final landedIds = <String>{};
+    await attachedDatabase.capturing(() async {
+      // A Person picked in a modal may have been sync-deleted since. Routing
+      // would then drop the old PersonBlockers and add none, so refuse the
+      // whole batch before any write.
+      if (to == RoutingKind.waitingFor &&
+          personTagIds != null &&
+          personTagIds.isNotEmpty) {
+        final present = await (select(tags)
+              ..where((t) => t.type.equals('person') & t.id.isIn(personTagIds)))
+            .map((t) => t.id)
+            .get();
+        if (present.toSet().length != personTagIds.length) {
+          throw const StalePersonSelectionException();
+        }
+      }
+      for (final id in outcomeIds) {
+        final landed = await _routeWithinTransaction(
+          id,
+          to: to,
+          ts: ts,
+          effects: effects,
+          personTagIds: personTagIds,
+          userId: userId,
+        );
+        if (landed) landedIds.add(id);
+      }
+    });
+    if (landedIds.isEmpty) return landedIds;
+    _notifyRoutingLanded(effects, personTagsTouched: personTagIds != null);
+    return landedIds;
+  }
+
+  /// The transaction body of [applyRouting], shared with
+  /// [applyRoutingToOutcomes]. Must run inside a `capturing` scope. Returns
+  /// `false` having written nothing when the Outcome is absent.
+  Future<bool> _routeWithinTransaction(
+    String todoId, {
+    required RoutingKind to,
+    required DateTime ts,
+    required _RoutingEffects effects,
+    String? actionText,
+    String? actionTextIfActionless,
+    String? promotePlannedActionId,
+    String? replacingCurrentActionId,
+    Set<String>? personTagIds,
+    String? userId,
+  }) async {
+    final tsIso = ts.toIso8601String();
+    if (!await _todoRowExists(todoId)) return false;
+    if (promotePlannedActionId != null) {
+      // The queue promote shares this transaction, so a failed route write
+      // rolls the promote (and any supersede) back (#788). Runs before the
+      // routing UPDATE; its own guards throw on a stale confirm.
+      final actionDao = attachedDatabase.actionDao;
+      final effect = replacingCurrentActionId == null
+          ? await actionDao.applyPromotePlannedAction(promotePlannedActionId,
+              ts: ts)
+          : await actionDao.applySupersedeAndPromote(promotePlannedActionId,
+              expectedCurrentActionId: replacingCurrentActionId, ts: ts);
+      // Land only once the chosen Action is this Outcome's current one.
+      final current = await actionDao.getCurrentAction(todoId);
+      if (current?.id != promotePlannedActionId) {
+        // `false` must mean nothing was written.
+        if (effect.changed) {
+          throw StateError('applyRouting: promoted Action '
+              '$promotePlannedActionId does not belong to Outcome $todoId');
+        }
+        return false;
+      }
+      effects.promotedPlannedAction =
+          effects.promotedPlannedAction || effect.changed;
+      effects.logChanged = effects.logChanged || effect.logChanged;
+    }
+    final captured = switch (to) {
+      RoutingKind.nextAction || RoutingKind.waitingFor => <String, Object?>{
+            'intent': 'next',
+          'done_at': null,
+          'last_clarified_at': encodeInstant(ts),
+          'updated_at': encodeInstant(ts),
+        },
+      RoutingKind.maybe => <String, Object?>{
+            'intent': 'maybe',
+          'done_at': null,
+          'last_clarified_at': encodeInstant(ts),
+          'updated_at': encodeInstant(ts),
+        },
+      RoutingKind.done => <String, Object?>{
+            'done_at': tsIso,
+          'last_clarified_at': encodeInstant(ts),
+          'updated_at': encodeInstant(ts),
+        },
+      RoutingKind.trash => <String, Object?>{
+            'intent': 'trash',
+          'last_clarified_at': encodeInstant(ts),
+          'updated_at': encodeInstant(ts),
+        },
+    };
+    final companion = switch (to) {
+      RoutingKind.nextAction || RoutingKind.waitingFor => TodosCompanion(
+          intent: const Value('next'),
+          doneAt: const Value(null),
+          lastClarifiedAt: Value(ts),
+          updatedAt: Value(ts),
+        ),
+      RoutingKind.maybe => TodosCompanion(
+          intent: const Value('maybe'),
+          doneAt: const Value(null),
+          lastClarifiedAt: Value(ts),
+          updatedAt: Value(ts),
+        ),
+      RoutingKind.done => TodosCompanion(
+          doneAt: Value(tsIso),
+          lastClarifiedAt: Value(ts),
+          updatedAt: Value(ts),
+        ),
+      RoutingKind.trash => TodosCompanion(
+          intent: const Value('trash'),
+          lastClarifiedAt: Value(ts),
+          updatedAt: Value(ts),
+        ),
+    };
+    await (update(todos)..where((t) => t.id.equals(todoId))).write(companion);
+    _captureTodo(todoId, captured);
+
+    if (effects.touchesAction && actionText != null) {
+      final normalised = _normaliseText(actionText);
+      if (normalised == null) {
+        // Blank supersedes the current Action, closing its open log (#476).
+        final effect = await attachedDatabase.actionDao
+            .applySupersedeCurrentAction(todoId, ts: ts);
+        effects.logChanged = effects.logChanged || effect.logChanged;
+      } else {
+        await attachedDatabase.actionDao
+            .applySetCurrentAction(todoId, normalised, ts: ts);
+      }
+    }
+
+    if (actionTextIfActionless != null) {
+      // Guarded fallback (the title-as-action mirror): in this same
+      // transaction, so a failed Action write rolls the route back (#709).
+      // An existing `current` Action — deliberate or just synced — wins.
+      final current =
+          await attachedDatabase.actionDao.getCurrentAction(todoId);
+      if (current == null) {
+        await attachedDatabase.actionDao.applySetCurrentAction(
+            todoId, actionTextIfActionless.trim(),
+            ts: ts);
+        effects.wroteFallbackAction = true;
+      }
+    }
+
+    if (to == RoutingKind.done) {
+      // Achieving the Outcome closes the current Action (ADR-0001 story 4) —
+      // the same cascade markDone runs, sharing one apply-variant.
+      final effect = await attachedDatabase.actionDao
+          .applyCompleteCurrentAction(todoId, ts: ts);
+      effects.actionTerminated = effects.actionTerminated || effect.changed;
+      effects.logChanged = effects.logChanged || effect.logChanged;
+    }
+
+    if (personTagIds != null) {
+      if (userId == null) {
+        throw ArgumentError(
+          'userId is required when personTagIds is provided',
+        );
+      }
+      await setPersonTagsForTodo(todoId, personTagIds, userId);
+    }
+    return true;
+  }
+
+  /// Fires the view notifications a landed routing owes, once per commit.
+  void _notifyRoutingLanded(_RoutingEffects effects,
+      {required bool personTagsTouched}) {
     // Notify explicitly so the Inbox / Next lists refresh even when the
     // write touched a table they do not name — and so they do not depend solely
     // on the async update bridge, which was observed silent on the first cold
     // start of a new planning day (#342). Person-tag edits also touch
     // `todo_tags`, so refresh those watchers too.
-    attachedDatabase.notifyTodosViewWrite(includeTodoTags: personTagIds != null);
-    if (touchesAction ||
-        actionTerminated ||
-        wroteFallbackAction ||
-        promotedPlannedAction) {
+    attachedDatabase.notifyTodosViewWrite(includeTodoTags: personTagsTouched);
+    if (effects.touchesAction ||
+        effects.actionTerminated ||
+        effects.wroteFallbackAction ||
+        effects.promotedPlannedAction) {
       attachedDatabase.notifyActionsViewWrite();
     }
     // A supersede or completion in the cascade closes the current Action's open
     // TimeLog (#476); `time_logs` is a view too, so notify its watchers.
-    if (logChanged) attachedDatabase.notifyTimeLogsViewWrite();
-    return true;
+    if (effects.logChanged) attachedDatabase.notifyTimeLogsViewWrite();
   }
 
   static String? _normaliseText(String text) {
@@ -1696,4 +1783,23 @@ AND (
       return 1;
     });
   }
+}
+
+/// Mutable effect flags one routing leaves for the caller's notifications.
+class _RoutingEffects {
+  _RoutingEffects({this.touchesAction = false});
+
+  final bool touchesAction;
+  bool wroteFallbackAction = false;
+  bool actionTerminated = false;
+  bool logChanged = false;
+  bool promotedPlannedAction = false;
+}
+
+/// Thrown by [TodoDao.applyRoutingToOutcomes] when a requested Person no
+/// longer exists. The whole batch is rolled back; nothing was written.
+class StalePersonSelectionException implements Exception {
+  const StalePersonSelectionException();
+  @override
+  String toString() => 'A selected Person no longer exists';
 }
