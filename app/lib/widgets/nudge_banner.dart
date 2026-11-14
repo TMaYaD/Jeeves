@@ -160,7 +160,7 @@ NudgeSurfaceContent nudgeSurfaceContent(WidgetRef ref, NudgeSurfaceHead head) {
           daysLate: ref.watch(weeklyReviewDaysLateProvider),
         );
       } else if (ref.watch(unfinishedCeremonyTriggerProvider(ritual)).isFiring) {
-        quip = unfinishedCeremonyQuip(ritual);
+        quip = _unfinishedCeremonyQuip(ritual);
       } else {
         quip = skin.quipForToday();
       }
@@ -438,7 +438,7 @@ _Quip _inboxTooFullPair({required int count, required int seed}) {
 
 /// The continue wording for a Ritual left unfinished. One first line and the
 /// button only: no second line exists until the Product Owner supplies one.
-_Quip unfinishedCeremonyQuip(RitualId ritual) => switch (ritual) {
+_Quip _unfinishedCeremonyQuip(RitualId ritual) => switch (ritual) {
       RitualId.dailyPlanning =>
         const _Quip('Daily Planning, sir. Unfinished.', '', 'Push on  →'),
       RitualId.eveningShutdown =>
