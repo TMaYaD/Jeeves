@@ -51,6 +51,11 @@ void main() {
       await tester.pumpWidget(ProviderScope(
         overrides: [
           inboxTooFullProvider.overrideWith((ref) => false),
+          // Daily Planning's and Evening Shutdown's Unfinished Trigger reads the
+          // live session stream, which hangs a widget test (docs/TESTING.md);
+          // its own behaviour is covered in unfinished_ceremony_*_test.dart.
+          unfinishedCeremonyTriggerProvider
+              .overrideWith((ref, r) => TriggerState.idle),
           nudgeQueueProvider.overrideWith((ref) => const <RitualId>[]),
           nudgeBannerEnabledProvider.overrideWith((ref, r) => true),
         ],
@@ -70,6 +75,11 @@ void main() {
       await tester.pumpWidget(ProviderScope(
         overrides: [
           inboxTooFullProvider.overrideWith((ref) => false),
+          // Daily Planning's and Evening Shutdown's Unfinished Trigger reads the
+          // live session stream, which hangs a widget test (docs/TESTING.md);
+          // its own behaviour is covered in unfinished_ceremony_*_test.dart.
+          unfinishedCeremonyTriggerProvider
+              .overrideWith((ref, r) => TriggerState.idle),
           nudgeQueueProvider.overrideWith(
             (ref) => const [RitualId.dailyPlanning, RitualId.eveningShutdown],
           ),
@@ -88,6 +98,11 @@ void main() {
       await tester.pumpWidget(ProviderScope(
         overrides: [
           inboxTooFullProvider.overrideWith((ref) => false),
+          // Daily Planning's and Evening Shutdown's Unfinished Trigger reads the
+          // live session stream, which hangs a widget test (docs/TESTING.md);
+          // its own behaviour is covered in unfinished_ceremony_*_test.dart.
+          unfinishedCeremonyTriggerProvider
+              .overrideWith((ref, r) => TriggerState.idle),
           nudgeQueueProvider.overrideWith(
             (ref) => const [RitualId.weeklyReview, RitualId.dailyPlanning],
           ),
@@ -111,6 +126,11 @@ void main() {
       await tester.pumpWidget(ProviderScope(
         overrides: [
           inboxTooFullProvider.overrideWith((ref) => false),
+          // Daily Planning's and Evening Shutdown's Unfinished Trigger reads the
+          // live session stream, which hangs a widget test (docs/TESTING.md);
+          // its own behaviour is covered in unfinished_ceremony_*_test.dart.
+          unfinishedCeremonyTriggerProvider
+              .overrideWith((ref, r) => TriggerState.idle),
           nudgeQueueProvider
               .overrideWith((ref) => const [RitualId.eveningShutdown]),
           nudgeBannerEnabledProvider.overrideWith((ref, r) => true),
@@ -138,6 +158,11 @@ void main() {
       await tester.pumpWidget(ProviderScope(
         overrides: [
           inboxTooFullProvider.overrideWith((ref) => false),
+          // Daily Planning's and Evening Shutdown's Unfinished Trigger reads the
+          // live session stream, which hangs a widget test (docs/TESTING.md);
+          // its own behaviour is covered in unfinished_ceremony_*_test.dart.
+          unfinishedCeremonyTriggerProvider
+              .overrideWith((ref, r) => TriggerState.idle),
           nudgeQueueProvider
               .overrideWith((ref) => const [RitualId.dailyPlanning]),
           nudgeBannerEnabledProvider.overrideWith((ref, r) => true),
@@ -165,6 +190,11 @@ void main() {
       await tester.pumpWidget(ProviderScope(
         overrides: [
           inboxTooFullProvider.overrideWith((ref) => false),
+          // Daily Planning's and Evening Shutdown's Unfinished Trigger reads the
+          // live session stream, which hangs a widget test (docs/TESTING.md);
+          // its own behaviour is covered in unfinished_ceremony_*_test.dart.
+          unfinishedCeremonyTriggerProvider
+              .overrideWith((ref, r) => TriggerState.idle),
           nudgeQueueProvider
               .overrideWith((ref) => const [RitualId.dailyPlanning]),
           nudgeBannerEnabledProvider.overrideWith((ref, r) => true),
@@ -190,6 +220,11 @@ void main() {
         await tester.pumpWidget(ProviderScope(
           overrides: [
             inboxTooFullProvider.overrideWith((ref) => false),
+          // Daily Planning's and Evening Shutdown's Unfinished Trigger reads the
+          // live session stream, which hangs a widget test (docs/TESTING.md);
+          // its own behaviour is covered in unfinished_ceremony_*_test.dart.
+          unfinishedCeremonyTriggerProvider
+              .overrideWith((ref, r) => TriggerState.idle),
             nudgeQueueProvider.overrideWith((ref) => [ritual]),
             nudgeBannerEnabledProvider.overrideWith((ref, r) => true),
             weeklyReviewDaysLateProvider.overrideWith((ref) => 0),
@@ -218,6 +253,11 @@ void main() {
       await tester.pumpWidget(ProviderScope(
         overrides: [
           inboxTooFullProvider.overrideWith((ref) => false),
+          // Daily Planning's and Evening Shutdown's Unfinished Trigger reads the
+          // live session stream, which hangs a widget test (docs/TESTING.md);
+          // its own behaviour is covered in unfinished_ceremony_*_test.dart.
+          unfinishedCeremonyTriggerProvider
+              .overrideWith((ref, r) => TriggerState.idle),
             nudgeQueueProvider.overrideWith((ref) => const [RitualId.weeklyReview]),
           nudgeBannerEnabledProvider.overrideWith((ref, r) => true),
           weeklyReviewDaysLateProvider.overrideWith((ref) => daysLate),

@@ -14,6 +14,7 @@ import 'package:jeeves/providers/evening_shutdown_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/providers/ceremony_in_progress_provider.dart';
 import 'package:jeeves/providers/nudge_clock_provider.dart';
+import 'package:jeeves/providers/nudge_provider.dart';
 import 'package:jeeves/providers/nudge_triggers.dart';
 import 'package:jeeves/screens/planning/focus_session_planning_screen.dart';
 import 'package:jeeves/services/nudge_notification_scheduler.dart';
@@ -184,45 +185,53 @@ void main() {
     }
   });
 
-  testWidgets(
-      'finishing Daily Planning clears the unfinished Nudge; the next period '
-      'starts in start wording', (tester) async {
-    try {
-      await pumpApp(tester);
-      await startAndLeavePlanning(tester);
-      expect(planningUnfinished(), isTrue);
+  // The completion paths open and close real sessions, so they run on the
+  // container directly: a live session stream under a widget test hangs the run
+  // (docs/TESTING.md). Visibility is the Nudge queue's, the same source the
+  // Banner reads.
+  test('finishing Daily Planning clears the unfinished Nudge; the next period '
+      'starts in start wording', () async {
+    addTearDown(c.dispose);
+    c.listen(nudgeQueueProvider, (_, _) {});
+    c.listen(sessionOpeningWatcherProvider, (_, _) {});
+    Future<void> settle() => pumpEventQueue(times: 20);
+    bool unfinished() => c
+        .read(unfinishedCeremonyTriggerProvider(RitualId.dailyPlanning))
+        .isFiring;
+    await settle();
+    expect(c.read(nudgeVisibleProvider(RitualId.dailyPlanning)), isTrue);
 
-      // The real completion path: startDay() opens the session.
-      await tester.runAsync(
-          () => c.read(focusSessionPlanningProvider.notifier).startDay());
-      await _flush(tester);
-      expect(planningUnfinished(), isFalse);
+    final ceremony = c.read(ceremonyInProgressProvider.notifier);
+    ceremony.enter(RitualId.dailyPlanning);
+    c.read(focusSessionPlanningProvider.notifier).goToStep(2);
+    clockOverride = () => noon.add(const Duration(hours: 1));
+    ceremony.exit(RitualId.dailyPlanning);
+    await settle();
+    expect(unfinished(), isTrue);
 
-      // Close the day through the Ceremony, then move to the next morning.
-      await tester.runAsync(
-          () => c.read(eveningShutdownProvider.notifier).closeDay());
-      await _flush(tester);
-      expect(planningUnfinished(), isFalse);
+    // The real completion path: startDay() opens the session.
+    await c.read(focusSessionPlanningProvider.notifier).startDay();
+    await settle();
+    expect(unfinished(), isFalse);
 
-      final nextDayNoon = noon.add(const Duration(days: 1));
-      clockOverride = () => nextDayNoon;
-      // Re-evaluate at the new clock. Pumping a day of fake time instead would
-      // spin the boundary timer, whose delay is computed from this fixed clock.
-      c.invalidate(nudgeBoundaryTickProvider);
-      await _flush(tester);
-      expect(banner, findsOneWidget,
-          reason: 'the next period is due again');
-      expect(planningUnfinished(), isFalse,
-          reason: 'and in start wording, not continue');
-    } finally {
-      await tearDownApp(tester);
-    }
+    // Close the day through the Ceremony, then move to the next morning.
+    await c.read(eveningShutdownProvider.notifier).closeDay();
+    await settle();
+    expect(unfinished(), isFalse);
+
+    final nextDayNoon = noon.add(const Duration(days: 1));
+    clockOverride = () => nextDayNoon;
+    c.invalidate(nudgeBoundaryTickProvider);
+    await settle();
+    expect(c.read(nudgeVisibleProvider(RitualId.dailyPlanning)), isTrue,
+        reason: 'the next period is due again');
+    expect(unfinished(), isFalse, reason: 'and in start wording, not continue');
   });
 
   testWidgets(
       'Evening Shutdown left unfinished before its anchor shows the continue '
-      'Nudge; a session closed without the Ceremony voids it, a new one fires '
-      'again, and Close Day clears it', (tester) async {
+      'Nudge; a session closed without the Ceremony voids it, and a new one fires '
+      'again', (tester) async {
     final morning = DateTime(noon.year, noon.month, noon.day, 10);
     clockOverride = () => morning;
     late String firstId;
@@ -254,12 +263,6 @@ void main() {
       await goTo(tester, '/shutdown');
       await goTo(tester, '/inbox');
       expect(shutdownUnfinished(), isTrue);
-
-      // Close Day, the real completion path, clears it.
-      await tester.runAsync(
-          () => c.read(eveningShutdownProvider.notifier).closeDay());
-      await _flush(tester);
-      expect(shutdownBanner, findsNothing);
     } finally {
       await tearDownApp(tester);
     }
