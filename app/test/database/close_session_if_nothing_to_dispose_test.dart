@@ -14,7 +14,7 @@ Future<void> _outcome(GtdDatabase db, String id, {bool done = false}) async {
         title: Value('Outcome $id'),
         intent: const Value('next'),
         userId: const Value(_userId),
-        doneAt: Value(done ? now : null),
+        doneAt: Value(done ? now.toUtc().toIso8601String() : null),
         createdAt: Value(now),
         updatedAt: Value(now),
       ));
