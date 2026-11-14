@@ -157,21 +157,32 @@ void main() {
       // Hold the database so the advance into Review cannot finish its reads
       // until both session events have been observed.
       final releaseDatabase = Completer<void>();
-      final heldTransaction =
-          db.transaction(() async => releaseDatabase.future);
-      final advancing = planning.advanceStep();
+      final transactionEntered = Completer<void>();
+      final heldTransaction = db.uncapturedTransaction(() async {
+        transactionEntered.complete();
+        await releaseDatabase.future;
+      });
+      try {
+        await transactionEntered.future;
+        final advancing = planning.advanceStep();
 
-      sessionEvents.add(opened);
-      await pumpEventQueue(times: 10);
-      expect(gated.read(focusSessionPlanningProvider).startedPastIntro, isFalse);
-      sessionEvents.add(null);
-      await pumpEventQueue(times: 10);
+        sessionEvents.add(opened);
+        await pumpEventQueue(times: 10);
+        expect(
+            gated.read(focusSessionPlanningProvider).startedPastIntro, isFalse);
+        sessionEvents.add(null);
+        await pumpEventQueue(times: 10);
 
-      releaseDatabase.complete();
-      await heldTransaction;
-      await advancing;
-      await pumpEventQueue(times: 10);
-      expect(gated.read(focusSessionPlanningProvider).startedPastIntro, isFalse);
+        releaseDatabase.complete();
+        await heldTransaction;
+        await advancing;
+        await pumpEventQueue(times: 10);
+        expect(
+            gated.read(focusSessionPlanningProvider).startedPastIntro, isFalse);
+      } finally {
+        if (!releaseDatabase.isCompleted) releaseDatabase.complete();
+        await heldTransaction;
+      }
 
       ceremony.exit(ritual);
       expect(gated.read(unfinishedCeremonyTriggerProvider(ritual)).isFiring,
