@@ -8,6 +8,8 @@
 /// in-memory notifier, so it survives process death (ADR-0020).
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:jeeves/widgets/outcome_row.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -64,6 +66,8 @@ Widget _buildScreen({
   FocusSession? activeSession,
   List<Todo> rolloverTasks = const [],
   Map<String, SessionSettlement> settlements = const {},
+  List<Todo>? reviewSurface,
+  Stream<List<Todo>>? reviewSurfaceStream,
 }) {
   final router = GoRouter(
     initialLocation: '/focus',
@@ -83,6 +87,9 @@ Widget _buildScreen({
     overrides: [
       activeSessionTasksProvider.overrideWith(
         (_) => Stream.value(tasks),
+      ),
+      activeSessionReviewSurfaceProvider.overrideWith(
+        (_) => reviewSurfaceStream ?? Stream.value(reviewSurface ?? tasks),
       ),
       activeSessionProvider.overrideWith(
         (_) => Stream.value(activeSession),
@@ -309,7 +316,80 @@ void main() {
     expect(find.text('Plan the Day'), findsNothing);
   });
 
+  testWidgets(
+      'Plan all done but an unfinished off-Plan Outcome on the Review surface '
+      '→ Begin Evening Shutdown, never End Session (#885)', (tester) async {
+    final done = DateTime.now().toUtc().toIso8601String();
+    await tester.pumpWidget(_buildScreen(
+      activeSession: _openSession(),
+      tasks: [_todo('a', 'Planned', doneAt: done)],
+      reviewSurface: [
+        _todo('a', 'Planned', doneAt: done),
+        _todo('z', 'Off-Plan'),
+      ],
+    ));
+    await tester.pump();
+
+    expect(find.text('Begin Evening Shutdown'), findsOneWidget);
+    expect(find.text('End Session'), findsNothing);
+  });
+
+  testWidgets(
+      'a Review surface that has not emitted yet never reads as empty → '
+      'Begin Evening Shutdown, not End Session (#885)', (tester) async {
+    await tester.pumpWidget(_buildScreen(
+      activeSession: _openSession(),
+      reviewSurfaceStream: StreamController<List<Todo>>().stream,
+    ));
+    await tester.pump();
+
+    expect(find.text('Begin Evening Shutdown'), findsOneWidget);
+    expect(find.text('End Session'), findsNothing);
+  });
+
   group('focusCalloutKindFor', () {
+    Todo offPlan(String id, {String? doneAt}) =>
+        _todo(id, 'Off $id', doneAt: doneAt);
+
+    test('Plan done + unfinished un-Settled off-Plan Outcome → beginShutdown',
+        () {
+      final done = DateTime.now().toUtc().toIso8601String();
+      expect(
+        focusCalloutKindFor(
+          [_todo('a', 'A', doneAt: done), offPlan('z')],
+          const {'a': SessionSettlement.done},
+        ),
+        FocusCalloutKind.beginShutdown,
+      );
+    });
+
+    test('Plan done + off-Plan Outcome Settled but not done → wrapUp', () {
+      final done = DateTime.now().toUtc().toIso8601String();
+      expect(
+        focusCalloutKindFor(
+          [_todo('a', 'A', doneAt: done), offPlan('z')],
+          const {'a': SessionSettlement.done, 'z': SessionSettlement.next},
+        ),
+        FocusCalloutKind.wrapUp,
+      );
+    });
+
+    test('whole surface done → endSession', () {
+      final done = DateTime.now().toUtc().toIso8601String();
+      expect(
+        focusCalloutKindFor(
+          [_todo('a', 'A', doneAt: done), offPlan('z', doneAt: done)],
+          const {},
+        ),
+        FocusCalloutKind.endSession,
+      );
+    });
+
+    test('surface not loaded → beginShutdown', () {
+      expect(focusCalloutKindFor(null, const {}),
+          FocusCalloutKind.beginShutdown);
+    });
+
     test('an empty Plan → endSession (nothing to dispose)', () {
       expect(focusCalloutKindFor(const [], const {}),
           FocusCalloutKind.endSession);

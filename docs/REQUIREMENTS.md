@@ -57,7 +57,7 @@ To build a hybrid productivity application that merges the rigid organizational 
     * **Roll Over** — the task stays on Next and is pre-checked in the next plan summary.
     * **Leave** — return the task to Next without any change.
     * **Maybe** — defer the task to Someday/Maybe.
-    Done tasks are shown in a read-only section with no chips. The "Close Session" button is disabled until all pending tasks have been assigned a disposition. If all tasks are already done, the session closes immediately without showing the review screen. Each Disposition is kept with the closed FocusSession as a historical record; a task without one has not been reviewed.
+    Done tasks are shown in a read-only section with no chips. The "Close Session" button is disabled until all pending tasks have been assigned a disposition. If every Outcome on the Plan, and every Outcome engaged off-Plan during the session, is already done, the session closes immediately without showing the review screen; otherwise the user goes through Evening Shutdown so each unfinished Outcome gets a Disposition. Each Disposition is kept with the closed FocusSession as a historical record; a task without one has not been reviewed.
 
 ### Epic 3: Dynamic Timeboxing & Pomodoro Engine
 **Goal:** Adapt rigid time constraints to varying task lengths.
