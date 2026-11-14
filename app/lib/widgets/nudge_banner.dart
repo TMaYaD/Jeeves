@@ -29,7 +29,6 @@ import '../providers/shutdown_settings_provider.dart';
 import '../providers/system_trust_provider.dart'
     show
         inboxTooFullProvider,
-        kInboxTooFullCaptureLimit,
         unprocessedCaptureCountProvider,
         weeklyReviewDaysLateProvider;
 import '../screens/inbox/inbox_clarify_screen.dart'
@@ -395,13 +394,18 @@ const _inboxTooFullSkin = _Skin(
   pulses: false,
 );
 
-/// Inbox too full line pairs. `%N` stands for the Capture count, `%L` for the
-/// limit. Every pair must state both.
-// TODO(copy): the real pool (Jeeves voice, every pair giving the count and the
-// 50) comes from the board owner. This single neutral pair is a placeholder
-// and must not merge.
+/// Inbox too full line pairs. `%N` stands for the Capture count. The limit is
+/// never named: line one says the count is too many, line two encourages
+/// running through the Captures.
 const kInboxTooFullLinePairs = <(String, String)>[
-  ('The Inbox holds %N Captures, sir.', 'The limit is %L.'),
+  (
+    '%N Captures is rather too many, sir.',
+    'Shall we run through them together?',
+  ),
+  ('%N Captures, sir. That is too many.', 'One at a time, they go quickly.'),
+  ('The Inbox holds %N, sir. Too many.', 'A few minutes will see it clear.'),
+  ('Forgive me, sir: %N is too many.', 'Let us take them one by one.'),
+  ('%N Captures waiting, sir. Too many.', 'Each one sorted is off your mind.'),
 ];
 
 /// The Bertie button, from the shipped pool.
@@ -409,9 +413,7 @@ const _inboxTooFullButton = 'At once  →';
 
 _Quip _inboxTooFullPair({required int count, required int seed}) {
   final pair = kInboxTooFullLinePairs[seed % kInboxTooFullLinePairs.length];
-  String fill(String line) => line
-      .replaceAll('%N', '$count')
-      .replaceAll('%L', '$kInboxTooFullCaptureLimit');
+  String fill(String line) => line.replaceAll('%N', '$count');
   return _Quip(fill(pair.$1), fill(pair.$2), _inboxTooFullButton);
 }
 

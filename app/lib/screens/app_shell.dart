@@ -113,8 +113,7 @@ class AppShell extends ConsumerWidget {
                 AppTitleBarAction(
                   key: const Key('focus_plan_the_day'),
                   icon: Icons.wb_sunny_outlined,
-                  // TODO(copy): label from the design canvas; this reuses the
-                  // Now screen's existing "Plan the Day" wording.
+                  // One action, one name: the Now screen uses the same label.
                   label: 'Plan the Day',
                   onPressed: () => context.go('/focus-session-planning'),
                 ),
