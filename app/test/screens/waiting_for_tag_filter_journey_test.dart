@@ -104,7 +104,6 @@ void main() {
       (tester) async {
     final ctxTag =
         Tag(id: 'ctx', name: 'errand', type: 'context', userId: _userId);
-    debugPrint('journey: mount');
     final router = GoRouter(
       initialLocation: '/waiting-for',
       routes: [
@@ -148,20 +147,16 @@ void main() {
     );
     await _pumpFor(tester, 5);
 
-    debugPrint('journey: first assert');
     expect(find.byType(OutcomeRow), findsNWidgets(2));
     expect(find.text('Alice'), findsOneWidget);
     expect(find.text('Bob'), findsOneWidget);
     expect(find.byKey(const Key('active_filter_clear_all')), findsNothing);
 
-    debugPrint('journey: drawer open');
     // Select the tag through the drawer's tag cloud, as a user would.
     await tester.tap(find.byKey(appTitleBarLeadingKey));
     await _pumpFor(tester, 3);
-    debugPrint('journey: ensureVisible');
     await tester.ensureVisible(find.byKey(const Key('tag_chip_ctx')));
     await _pumpFor(tester, 3);
-    debugPrint('journey: chip tap');
     await tester.tap(find.byKey(const Key('tag_chip_ctx')));
     await _pumpFor(tester, 5);
 
@@ -171,11 +166,9 @@ void main() {
     expect(find.text('Return the drill'), findsNothing);
     expect(find.text('Bob'), findsNothing);
 
-    debugPrint('journey: scrim tap');
     // Dismiss the drawer by tapping its scrim, then clear from the page.
     await tester.tapAt(const Offset(780, 300));
     await _pumpFor(tester, 3);
-    debugPrint('journey: clear all');
     await tester.tap(find.byKey(const Key('active_filter_clear_all')));
     await _pumpFor(tester, 5);
 
@@ -184,7 +177,6 @@ void main() {
     expect(find.text('Bob'), findsOneWidget);
     expect(find.byKey(const Key('active_filter_clear_all')), findsNothing);
 
-    debugPrint('journey: dispose');
     // Dispose in the real zone so drift's subscription cleanup can finish.
     await tester.pumpWidget(const SizedBox());
     // Disposing the shell closes drift's query stream, which schedules a
