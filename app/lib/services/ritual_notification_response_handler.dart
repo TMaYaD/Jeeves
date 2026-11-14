@@ -90,6 +90,10 @@ Future<void> handleRitualNotificationResponse(
                 outranked: payload.outranked,
               ),
       );
+    } else {
+      // No replacement: an earlier Snooze alarm would ring inside this
+      // Snooze's window, so it goes too.
+      await service.cancelReminder(ritualSnoozeNotificationId(ritual));
     }
     // Snooze hides the Ritual until [fireAt]: an alarm already planned inside
     // that window would still ring, including an overdue one the OS has not

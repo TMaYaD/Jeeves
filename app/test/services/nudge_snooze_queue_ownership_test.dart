@@ -153,6 +153,35 @@ void main() {
     expect(snoozeArmed(), isFalse);
   });
 
+  test('a denied replacement Snooze cancels the earlier Snooze alarm',
+      () async {
+    // Weekly Review is due at 09:30. The first Snooze (08:05 -> 09:05) arms;
+    // a second retained notification snoozed at 08:40 -> 09:40 is outranked,
+    // and the 09:05 alarm must not ring inside the renewed Snooze window.
+    final facts =
+        _facts(enabled: allEnabled, weeklyReviewLastCompleted: _at(-7, 9, 30));
+    await snoozePlanningAlarm(facts,
+        alarmAt: _at(0, 8), tappedAt: _at(0, 8, 5));
+    expect(snoozeArmed(), isTrue, reason: '09:05 is before 09:30');
+    await snoozePlanningAlarm(facts,
+        alarmAt: _at(0, 8), tappedAt: _at(0, 8, 40));
+    expect(snoozeArmed(), isFalse,
+        reason: '09:40 is outranked, so the 09:05 alarm is cancelled');
+  });
+
+  test('an allowed replacement Snooze replaces the earlier one', () async {
+    final facts =
+        _facts(enabled: allEnabled, weeklyReviewLastCompleted: _at(-7, 12));
+    await snoozePlanningAlarm(facts,
+        alarmAt: _at(0, 8), tappedAt: _at(0, 8, 5));
+    await snoozePlanningAlarm(facts,
+        alarmAt: _at(0, 8), tappedAt: _at(0, 8, 40));
+    expect(
+        service.pending[ritualSnoozeNotificationId(RitualId.dailyPlanning)]
+            ?.fireAt,
+        _at(0, 9, 40));
+  });
+
   test('a repeated Snooze keeps the same facts', () async {
     await snoozePlanningAlarm(
       _facts(enabled: allEnabled, weeklyReviewLastCompleted: _at(-6, 8, 30)),
