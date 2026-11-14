@@ -187,6 +187,11 @@ void main() {
     debugPrint('journey: dispose');
     // Dispose in the real zone so drift's subscription cleanup can finish.
     await tester.pumpWidget(const SizedBox());
+    // Disposing the shell closes drift's query stream, which schedules a
+    // zero-duration timer on the fake clock; flush it before the binding
+    // checks for pending timers.
+    await tester.pump(const Duration(milliseconds: 10));
     await tester.runAsync(pumpEventQueue);
+    await tester.pump(const Duration(milliseconds: 10));
   });
 }
