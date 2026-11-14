@@ -8,7 +8,11 @@ import '../../widgets/tag_cloud_view.dart';
 import 'tag_management_sheet.dart';
 
 export '../../widgets/tag_cloud_view.dart'
-    show organiseTagCloud, TagCloudLayout, tagCloudCollapsedCap;
+    show
+        cleanTagCloudQuery,
+        organiseTagCloud,
+        TagCloudLayout,
+        tagCloudCollapsedCap;
 
 /// Bumped by the shell each time the drawer closes. The drawer keeps its
 /// child mounted while closed, so [TagCloud] listens to this to drop its find
