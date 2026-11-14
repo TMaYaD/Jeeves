@@ -78,6 +78,23 @@ void main() {
     await unmount(tester);
   });
 
+  testWidgets('collapsed + exposes a named, tappable button to semantics',
+      (tester) async {
+    final handle = tester.ensureSemantics();
+    await mount(tester, const []);
+
+    expect(
+      tester.getSemantics(find.byKey(const Key('context_tag_picker_add'))),
+      matchesSemantics(
+        label: 'Add context tag',
+        isButton: true,
+        hasTapAction: true,
+      ),
+    );
+    handle.dispose();
+    await unmount(tester);
+  });
+
   testWidgets('tapping an applied chip removes it', (tester) async {
     final home = (await tester.runAsync(() => _insertContext(db, 'home')))!;
     await mount(tester, [home]);

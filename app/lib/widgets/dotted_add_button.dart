@@ -3,21 +3,34 @@ import 'package:flutter/material.dart';
 /// A 24 px dotted-circle `+` — the "add" affordance beside a row of applied
 /// tags.
 class DottedAddButton extends StatelessWidget {
-  const DottedAddButton({super.key, required this.onTap});
+  const DottedAddButton({
+    super.key,
+    required this.onTap,
+    this.semanticLabel = 'Add context tag',
+  });
 
   final VoidCallback onTap;
 
+  /// Accessible name announced by screen readers.
+  final String semanticLabel;
+
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
+    return Semantics(
+      button: true,
+      label: semanticLabel,
+      excludeSemantics: true,
       onTap: onTap,
-      child: CustomPaint(
-        painter: _DottedCirclePainter(),
-        child: const SizedBox(
-          width: 24,
-          height: 24,
-          child: Icon(Icons.add, size: 16, color: Color(0xFF9CA3AF)),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: CustomPaint(
+          painter: _DottedCirclePainter(),
+          child: const SizedBox(
+            width: 24,
+            height: 24,
+            child: Icon(Icons.add, size: 16, color: Color(0xFF9CA3AF)),
+          ),
         ),
       ),
     );
