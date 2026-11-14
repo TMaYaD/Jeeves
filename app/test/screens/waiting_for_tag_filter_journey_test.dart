@@ -1,7 +1,7 @@
 /// Journey for #889: the Waiting For page follows the sticky tag filter.
 ///
 /// Real in-memory store, real `waitingListGroupedProvider`, real
-/// `ActiveFilterBar`. The store is staged in `setUp` (outside FakeAsync) and
+/// `AppShell` drawer tag cloud and `ActiveFilterBar`. The store is staged in `setUp` (outside FakeAsync) and
 /// the drift streams are advanced with `settleWithRealAsync`, per
 /// docs/TESTING.md.
 @TestOn('!browser')
@@ -12,16 +12,38 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
-import 'package:jeeves/providers/tag_filter_provider.dart';
+import 'package:jeeves/models/focus_session_planning_settings.dart';
+import 'package:jeeves/models/ritual.dart';
+import 'package:jeeves/providers/auth_provider.dart';
+import 'package:jeeves/providers/focus_session_planning_settings_provider.dart';
+import 'package:jeeves/providers/nudge_provider.dart';
+import 'package:jeeves/providers/periodic_review_settings_provider.dart';
+import 'package:jeeves/screens/app_shell.dart';
 import 'package:jeeves/screens/waiting_for/waiting_for_screen.dart';
+import 'package:jeeves/widgets/app_title_bar/app_title_bar.dart';
 import 'package:jeeves/widgets/outcome_row.dart';
 
 import '../helpers/settle.dart';
 import '../test_helpers.dart';
 
 const _userId = 'test-user';
+
+class _NoAuthNotifier extends AuthNotifier {
+  @override
+  Future<String?> build() async => null;
+  @override
+  Future<void> logout() async {}
+}
+
+/// Keeps the planning banner's infinite pulse from blocking pumpAndSettle.
+class _NoBannerSettingsNotifier extends FocusSessionPlanningSettingsNotifier {
+  @override
+  FocusSessionPlanningSettings build() =>
+      const FocusSessionPlanningSettings(bannerEnabled: false);
+}
 
 Future<void> _insertTag(GtdDatabase db, String id, String name, String type) =>
     db.tagDao.upsertTag(TagsCompanion(
@@ -61,10 +83,31 @@ void main() {
 
   testWidgets('selecting a tag narrows the page; Clear all restores it',
       (tester) async {
+    final router = GoRouter(
+      initialLocation: '/waiting-for',
+      routes: [
+        ShellRoute(
+          builder: (context, state, child) => AppShell(child: child),
+          routes: [
+            GoRoute(
+              path: '/waiting-for',
+              builder: (_, _) => const WaitingForScreen(),
+            ),
+          ],
+        ),
+      ],
+    );
     await tester.pumpWidget(
       ProviderScope(
-        overrides: [databaseProvider.overrideWithValue(db)],
-        child: const MaterialApp(home: WaitingForScreen()),
+        overrides: [
+          databaseProvider.overrideWithValue(db),
+          authTokenProvider.overrideWith(() => _NoAuthNotifier()),
+          focusSessionPlanningSettingsProvider
+              .overrideWith(() => _NoBannerSettingsNotifier()),
+          periodicReviewBannerEnabledProvider.overrideWith((_) => false),
+          nudgeQueueProvider.overrideWith((ref) => const <RitualId>[]),
+        ],
+        child: MaterialApp.router(routerConfig: router),
       ),
     );
     await settleWithRealAsync(tester, rounds: 5);
@@ -74,10 +117,12 @@ void main() {
     expect(find.text('Bob'), findsOneWidget);
     expect(find.byKey(const Key('active_filter_clear_all')), findsNothing);
 
-    // The drawer's chip tap is a toggle on the shared filter provider.
-    final container =
-        ProviderScope.containerOf(tester.element(find.byType(WaitingForScreen)));
-    container.read(tagFilterProvider.notifier).toggle('ctx');
+    // Select the tag through the drawer's tag cloud, as a user would.
+    await tester.tap(find.byKey(appTitleBarLeadingKey));
+    await settleWithRealAsync(tester, rounds: 3);
+    await tester.ensureVisible(find.byKey(const Key('tag_chip_ctx')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('tag_chip_ctx')));
     await settleWithRealAsync(tester, rounds: 5);
 
     expect(find.byType(OutcomeRow), findsOneWidget);
@@ -86,6 +131,9 @@ void main() {
     expect(find.text('Return the drill'), findsNothing);
     expect(find.text('Bob'), findsNothing);
 
+    // Dismiss the drawer by tapping its scrim, then clear from the page.
+    await tester.tapAt(const Offset(780, 300));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('active_filter_clear_all')));
     await settleWithRealAsync(tester, rounds: 5);
 
