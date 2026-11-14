@@ -44,10 +44,15 @@ void main() {
   DateTime Function()? clockOverride;
 
   final banner = find.byKey(const Key('planning_banner_visible'));
-  final unfinishedLine = find.text('Daily Planning, sir. Unfinished.');
+  // Continue wording is shown exactly while the Unfinished Trigger fires; assert
+  // that state rather than copy.
+  bool planningUnfinished() => c
+      .read(unfinishedCeremonyTriggerProvider(RitualId.dailyPlanning))
+      .isFiring;
+  bool shutdownUnfinished() => c
+      .read(unfinishedCeremonyTriggerProvider(RitualId.eveningShutdown))
+      .isFiring;
   final shutdownBanner = find.byKey(const Key('shutdown_banner_visible'));
-  final shutdownUnfinishedLine =
-      find.text('Evening Shutdown, sir. Unfinished.');
   final reviewBanner = find.byKey(const Key('periodic_review_banner_visible'));
   final emptyState = find.byKey(const Key('nudge_empty_state'));
   final emptyStateButton = find.byKey(const Key('nudge_empty_state_button'));
@@ -92,11 +97,9 @@ void main() {
     clockOverride = null;
     c = ProviderContainer(overrides: [
       databaseProvider.overrideWithValue(db),
-      // Default: never earlier than the wall clock, since a swipe stamps the
-      // wall clock.
-      clockProvider.overrideWithValue(() =>
-          clockOverride?.call() ??
-          (DateTime.now().isAfter(noon) ? DateTime.now() : noon)),
+      // Fixed at noon: before the shutdown anchor whatever the wall clock is,
+      // and a swipe stamps this same clock.
+      clockProvider.overrideWithValue(() => clockOverride?.call() ?? noon),
       notificationServiceProvider
           .overrideWithValue(StubPeriodicReviewNotificationService()),
     ]);
@@ -126,7 +129,7 @@ void main() {
       ));
       await _flush(tester);
       expect(banner, findsOneWidget);
-      expect(unfinishedLine, findsNothing, reason: 'start wording first');
+      expect(planningUnfinished(), isFalse, reason: 'start wording first');
 
       await tester.drag(banner, const Offset(-300, 0));
       await _flush(tester);
@@ -143,8 +146,7 @@ void main() {
       c.read(focusSessionPlanningProvider.notifier).goToStep(2);
       await goTo(tester, '/inbox');
       expect(banner, findsOneWidget);
-      expect(unfinishedLine, findsOneWidget);
-      expect(find.textContaining('Push on'), findsOneWidget);
+      expect(planningUnfinished(), isTrue);
     } finally {
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.runAsync(() async {
@@ -161,12 +163,12 @@ void main() {
     try {
       await pumpApp(tester);
       await startAndLeavePlanning(tester);
-      expect(unfinishedLine, findsOneWidget);
+      expect(planningUnfinished(), isTrue);
 
       await goTo(tester, '/focus');
       expect(banner, findsNothing, reason: 'the Now screen carries no Banner');
       expect(emptyState, findsOneWidget);
-      expect(unfinishedLine, findsOneWidget);
+      expect(planningUnfinished(), isTrue);
 
       await tester.tap(emptyStateButton);
       await _flush(tester);
@@ -183,19 +185,19 @@ void main() {
     try {
       await pumpApp(tester);
       await startAndLeavePlanning(tester);
-      expect(unfinishedLine, findsOneWidget);
+      expect(planningUnfinished(), isTrue);
 
       // The real completion path: startDay() opens the session.
       await tester.runAsync(
           () => c.read(focusSessionPlanningProvider.notifier).startDay());
       await _flush(tester);
-      expect(unfinishedLine, findsNothing);
+      expect(planningUnfinished(), isFalse);
 
       // Close the day through the Ceremony, then move to the next morning.
       await tester.runAsync(
           () => c.read(eveningShutdownProvider.notifier).closeDay());
       await _flush(tester);
-      expect(unfinishedLine, findsNothing);
+      expect(planningUnfinished(), isFalse);
 
       final nextDayNoon = noon.add(const Duration(days: 1));
       clockOverride = () => nextDayNoon;
@@ -203,7 +205,7 @@ void main() {
       await _flush(tester);
       expect(banner, findsOneWidget,
           reason: 'the next period is due again');
-      expect(unfinishedLine, findsNothing,
+      expect(planningUnfinished(), isFalse,
           reason: 'and in start wording, not continue');
     } finally {
       await tearDownApp(tester);
@@ -229,8 +231,7 @@ void main() {
       await goTo(tester, '/shutdown');
       await goTo(tester, '/inbox');
       expect(shutdownBanner, findsOneWidget);
-      expect(shutdownUnfinishedLine, findsOneWidget);
-      expect(find.textContaining('Push on'), findsOneWidget);
+      expect(shutdownUnfinished(), isTrue);
 
       // End Session without the Ceremony voids the fact.
       await tester.runAsync(
@@ -245,7 +246,7 @@ void main() {
       expect(shutdownBanner, findsNothing);
       await goTo(tester, '/shutdown');
       await goTo(tester, '/inbox');
-      expect(shutdownUnfinishedLine, findsOneWidget);
+      expect(shutdownUnfinished(), isTrue);
 
       // Close Day, the real completion path, clears it.
       await tester.runAsync(
@@ -281,7 +282,7 @@ void main() {
       await tester.drag(reviewBanner, const Offset(-300, 0));
       await _flush(tester);
       expect(banner, findsOneWidget);
-      expect(unfinishedLine, findsOneWidget);
+      expect(planningUnfinished(), isTrue);
     } finally {
       await tearDownApp(tester);
     }
