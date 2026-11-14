@@ -110,24 +110,15 @@ final activeSessionProvider = StreamProvider<FocusSession?>((ref) {
   return db.focusSessionDao.watchActiveSession();
 });
 
-/// Counts FocusSession openings seen on this device and voids Daily Planning's
-/// started latch on each one. Kept alive by the Nudge triggers, not by the
-/// planning notifier (which must not subscribe to the live stream).
-final sessionOpeningCountProvider =
-    NotifierProvider<SessionOpeningCountNotifier, int>(
-        SessionOpeningCountNotifier.new);
-
-class SessionOpeningCountNotifier extends Notifier<int> {
-  @override
-  int build() {
-    ref.listen(activeSessionProvider, (_, next) {
-      if (next.asData?.value == null) return;
-      state = state + 1;
-      ref.read(focusSessionPlanningProvider.notifier).voidStartedLatch();
-    });
-    return 0;
-  }
-}
+/// Tells the planning notifier each time a FocusSession opens on this device.
+/// Kept alive by the Nudge triggers, not by the planning notifier (which must
+/// not subscribe to the live stream).
+final sessionOpeningWatcherProvider = Provider<void>((ref) {
+  ref.listen(activeSessionProvider, (_, next) {
+    if (next.asData?.value == null) return;
+    ref.read(focusSessionPlanningProvider.notifier).noteSessionOpened();
+  });
+});
 
 /// Stream of [Todo] rows that are part of the user's active session, ordered
 /// by their session position.
@@ -570,26 +561,26 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     // Deliberately no subscription to [activeSessionProvider] here: it is a
     // live Drift watch, and every widget test that builds this notifier would
     // hang in pumpAndSettle (docs/TESTING.md). The void-on-session-open rule
-    // lives in [sessionOpeningCountProvider], which only the Nudge triggers keep
-    // alive, and calls [voidStartedLatch].
+    // lives in [sessionOpeningWatcherProvider], which only the Nudge triggers
+    // keep alive, and calls [noteSessionOpened].
     return const FocusSessionPlanningState();
   }
 
-  /// Voids the started latch: a FocusSession opened, which finishes Daily
-  /// Planning for good, so this draft must not read as unfinished once that
-  /// session later closes without the Ceremony.
-  void voidStartedLatch() {
+  /// Session openings reported by [sessionOpeningWatcherProvider]. A step
+  /// advance that began before one must not restore the started latch it
+  /// voided, even if that session has already closed again by the time the
+  /// advance resumes.
+  int _sessionOpeningsSeen = 0;
+
+  /// A FocusSession opened, which finishes Daily Planning for good: void the
+  /// started latch so this draft does not read as unfinished once that session
+  /// later closes without the Ceremony.
+  void noteSessionOpened() {
+    _sessionOpeningsSeen++;
     if (state.startedPastIntro) {
       state = state.copyWith(startedPastIntro: false);
     }
   }
-
-  /// Session openings seen so far by the Nudge triggers, or 0 when nothing
-  /// keeps the counter alive (no subscription is created by asking).
-  int get _sessionOpeningsSeen =>
-      ref.exists(sessionOpeningCountProvider)
-          ? ref.read(sessionOpeningCountProvider)
-          : 0;
 
   GtdDatabase get _db => ref.read(databaseProvider);
   ClarificationService get _clarification =>

@@ -38,7 +38,7 @@ import 'focus_session_planning_provider.dart'
     show
         activeSessionProvider,
         focusSessionPlanningProvider,
-        sessionOpeningCountProvider;
+        sessionOpeningWatcherProvider;
 import 'focus_session_planning_settings_provider.dart'
     show focusSessionPlanningSettingsProvider;
 import 'gtd_lists_provider.dart';
@@ -437,7 +437,7 @@ final unfinishedCeremonyLeftAtProvider =
   switch (ritual) {
     case RitualId.dailyPlanning:
       // Keeps the session-opening watcher (which voids the latch) alive.
-      ref.watch(sessionOpeningCountProvider);
+      ref.watch(sessionOpeningWatcherProvider);
       started = ref.watch(focusSessionPlanningProvider
           .select((state) => state.startedPastIntro));
     case RitualId.eveningShutdown:
