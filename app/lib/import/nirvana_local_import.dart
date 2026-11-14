@@ -37,7 +37,7 @@ import '../utils/uuid.dart';
 import 'package:uuid/enums.dart' show Namespace;
 
 import '../database/gtd_database.dart';
-import '../models/todo.dart' show Intent;
+import '../models/intent.dart';
 import 'jeeves_export.dart' show isJeevesExport, importJeevesExport;
 import 'nirvana_item.dart';
 import 'nirvana_parser.dart';
@@ -173,7 +173,7 @@ Future<ImportResult> importNirvanaLocally({
         final now = _importInstant();
 
         // Unclarified Nirvana rows (Inbox and any unrecognised state) become
-        // Captures, not `clarified = false` todos (issue #184, ADR-0006). Their
+        // Captures, not unclarified todos (issue #184, ADR-0006). Their
         // tag links become Capture tag hints — mirroring Alembic 0026 step 3,
         // which copies `todo_tags` of migrated rows into `capture_tags`.
         if (!item.clarified) {
@@ -234,7 +234,6 @@ Future<ImportResult> importNirvanaLocally({
           doneAt: item.doneAt != null
               ? Value(item.doneAt!.toUtc().toIso8601String())
               : const Value(null),
-          clarified: Value(item.clarified),
           dueDate: Value(dueDate),
           timeEstimate: Value(item.timeEstimate),
           energyLevel: Value(item.energyLevel),

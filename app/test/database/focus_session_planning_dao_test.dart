@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/daos/focus_session_dao.dart'
     show SessionSettlement;
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/routing_kind.dart';
 import '../test_helpers.dart';
 
 GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
@@ -21,7 +22,6 @@ Future<void> _insertTodo(GtdDatabase db,
   await db.into(db.todos).insert(TodosCompanion(
     id: Value(id),
     title: Value(title),
-    clarified: const Value(true),
     userId: const Value(_userId),
     createdAt: Value(now),
     updatedAt: Value(now),
@@ -1093,6 +1093,41 @@ void main() {
       expect(tasks.single.title, 'B');
     });
 
+    test(
+        'excludes a rolled-over Outcome later Trashed, moved to Someday/Maybe, '
+        'or completed; keeps one still on Next', () async {
+      for (final id in ['keep', 'trashed', 'maybe', 'done']) {
+        await _insertTodo(db, id: id, title: id);
+      }
+      final sessionId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: ['keep', 'trashed', 'maybe', 'done'],
+        now: DateTime(2026, 4, 29, 9, 0),
+      );
+      await db.focusSessionDao.reviewAndCloseSession(
+        sessionId: sessionId,
+        dispositions: {
+          'keep': 'rollover',
+          'trashed': 'rollover',
+          'maybe': 'rollover',
+          'done': 'rollover',
+        },
+        now: DateTime(2026, 4, 29, 17, 0),
+      );
+      await db.customStatement(
+          "UPDATE todos SET intent = 'trash' WHERE id = 'trashed'");
+      await db.customStatement(
+          "UPDATE todos SET intent = 'maybe' WHERE id = 'maybe'");
+      await db.customStatement(
+          "UPDATE todos SET done_at = '2026-04-30T09:00:00.000Z' "
+          "WHERE id = 'done'");
+
+      final tasks = await db.focusSessionDao
+          .watchLastClosedSessionRolloverTasks()
+          .first;
+      expect(tasks.map((t) => t.id), ['keep']);
+    });
+
     test('re-emits when a session closes', () async {
       await _insertTodo(db, id: 'x', title: 'X');
       final stream =
@@ -1285,6 +1320,24 @@ void main() {
       await completeActionInSession(sessionId, 'X');
       await reclarifyAt('X', anchorAt.add(const Duration(seconds: 5)));
       await setIntent('X', 'maybe');
+
+      expect(
+        await db.focusSessionDao.getActiveSessionSettlements(),
+        {'X': SessionSettlement.someday},
+      );
+    });
+
+    test(
+        'a bulk move to Someday settles a planned Outcome whose Action was '
+        'completed in-session (the bulk route stamps the re-clarification)',
+        () async {
+      await _insertTodo(db, id: 'X', title: 'X');
+      final sessionId = await openWith(['X']);
+      await completeActionInSession(sessionId, 'X');
+
+      await db.todoDao.applyRoutingToOutcomes({'X'},
+          to: RoutingKind.maybe,
+          now: anchorAt.add(const Duration(seconds: 5)));
 
       expect(
         await db.focusSessionDao.getActiveSessionSettlements(),
@@ -1619,7 +1672,7 @@ void main() {
           contains('N'));
       expect((await db.todoDao.watchPersonTagged().first).map((t) => t.id),
           contains('W'));
-      expect((await db.todoDao.watchMaybe().first), isEmpty);
+      expect((await db.todoDao.watchSomedayMaybe().first), isEmpty);
 
       expect(await db.select(db.todos).get(), equals(before),
           reason: 'reading Settlements must never write through');

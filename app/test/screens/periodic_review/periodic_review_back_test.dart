@@ -76,6 +76,21 @@ void main() {
     setUp(() => db = GtdDatabase(NativeDatabase.memory()));
     tearDown(() async => db.close());
 
+    testWidgets('Next step and summary use the List name', (tester) async {
+      final (widget, container) = _app(db);
+      addTearDown(container.dispose);
+      await tester.pumpWidget(widget);
+      await _settle(tester);
+      final notifier = container.read(periodicReviewProvider.notifier);
+      await notifier.goToStep(PeriodicReviewNotifier.kStepNext);
+      await _settle(tester);
+      expect(find.text('Review Next'), findsOneWidget);
+      await notifier.goToStep(PeriodicReviewNotifier.kStepSummary);
+      await _settle(tester);
+      expect(find.text('Next routed'), findsOneWidget);
+      await _dispose(tester);
+    });
+
     testWidgets(
         'system back mid-step mirrors footer Back: retreats the item cursor '
         'and keeps the step', (tester) async {

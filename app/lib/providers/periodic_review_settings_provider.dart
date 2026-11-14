@@ -3,103 +3,29 @@
 ///
 /// Storage-side keys live under the `periodic_review_*` namespace; user-
 /// visible copy uses "Weekly Review". Cadence is hardcoded at 7 days; the
-/// notification fires daily at the configured time and the banner's `isDue`
-/// predicate gates relevance.
+/// notification is a projection of the Nudge queue (see
+/// `nudge_notification_scheduler.dart`).
 library;
 
 import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
-import '../models/ritual.dart';
-import '../services/notification_service.dart';
 import 'clock_provider.dart';
-import 'focus_session_planning_provider.dart' show planningToday;
 import 'gtd_lists_provider.dart' show Capture, Todo;
 import 'synced_preferences_provider.dart';
+import 'system_trust_provider.dart' show weeklyReviewDueAtProvider;
 
 const kPeriodicReviewOpenSinceKey = 'periodic_review_open_since';
 
 const _kLastCompletedAtKey = 'periodic_review_last_completed_at';
+const _kLastSessionFinishedAtKey = 'periodic_review_last_session_finished_at';
 const _kBannerEnabledKey = 'periodic_review_banner_enabled';
 const _kNotificationEnabledKey = 'periodic_review_notification_enabled';
 const _kNotificationHourKey = 'periodic_review_notification_hour';
 const _kNotificationMinuteKey = 'periodic_review_notification_minute';
-const _kNotificationSkippedDateKey =
-    'periodic_review_notification_skipped_date';
-const _kNotificationSnoozedUntilKey =
-    'periodic_review_notification_snoozed_until';
-
 const int _kCadenceDays = 7;
-
-// ---------------------------------------------------------------------------
-// Notification suppression helpers
-// ---------------------------------------------------------------------------
-
-bool _periodicReviewNotificationSkippedToday = false;
-bool _periodicReviewNotificationSnoozedActive = false;
-
-bool _parseSnoozedActive(String? snoozedUntilStr) {
-  if (snoozedUntilStr == null) return false;
-  final snoozedUntil = DateTime.tryParse(snoozedUntilStr);
-  return snoozedUntil != null && DateTime.now().isBefore(snoozedUntil);
-}
-
-/// Returns true if the user has skipped/snoozed the periodic-review
-/// notification for today.
-bool isPeriodicReviewNotificationSuppressedToday() =>
-    _periodicReviewNotificationSkippedToday ||
-    _periodicReviewNotificationSnoozedActive;
-
-/// Returns true iff the user tapped "Skip today" (as distinct from an active
-/// snooze). The reschedule logic uses this to suppress *today*'s recurring
-/// fire while leaving tomorrow's intact; the snooze is satisfied by its own
-/// one-off and does not need to touch the recurring schedule.
-bool isPeriodicReviewNotificationSkippedToday() =>
-    _periodicReviewNotificationSkippedToday;
-
-/// Reads periodic-review skip/snooze state from [SharedPreferences] into
-/// module-level flags. Call once on startup before scheduling.
-Future<void> loadPeriodicReviewNotificationSuppression() async {
-  final prefs = await SharedPreferences.getInstance();
-  final today = planningToday();
-  _periodicReviewNotificationSkippedToday =
-      prefs.getString(_kNotificationSkippedDateKey) == today;
-  _periodicReviewNotificationSnoozedActive = _parseSnoozedActive(
-    prefs.getString(_kNotificationSnoozedUntilKey),
-  );
-}
-
-/// Persists and activates the "skip periodic review today" suppression.
-///
-/// Dual-writes to SharedPreferences (startup reads) and synced preferences
-/// (cross-device visibility). Pass [ref] to enable the Drift write.
-Future<void> persistPeriodicReviewSkipToday({Ref? ref}) async {
-  final today = planningToday();
-  final prefs = await SharedPreferences.getInstance();
-  await prefs.setString(_kNotificationSkippedDateKey, today);
-  _periodicReviewNotificationSkippedToday = true;
-  if (ref != null) {
-    await syncedPrefs(ref).set(_kNotificationSkippedDateKey, today);
-  }
-}
-
-/// Persists and activates a periodic-review snooze until [until].
-///
-/// Dual-writes to SharedPreferences (startup reads) and synced preferences
-/// (cross-device visibility). Pass [ref] to enable the Drift write.
-Future<void> persistPeriodicReviewSnoozedUntil(DateTime until,
-    {Ref? ref}) async {
-  final value = until.toIso8601String();
-  final prefs = await SharedPreferences.getInstance();
-  await prefs.setString(_kNotificationSnoozedUntilKey, value);
-  _periodicReviewNotificationSnoozedActive = DateTime.now().isBefore(until);
-  if (ref != null) {
-    await syncedPrefs(ref).set(_kNotificationSnoozedUntilKey, value);
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Derived providers — read straight from synced preferences
@@ -112,6 +38,19 @@ final periodicReviewLastCompletedProvider = Provider<DateTime?>((ref) {
       .asData
       ?.value
       .get<String>(_kLastCompletedAtKey);
+  if (raw == null) return null;
+  return DateTime.tryParse(raw);
+});
+
+/// UTC timestamp of the last review session finished with Done, partial or
+/// final, or null if none. Unlike the completion stamp it never closes the
+/// review period; it only moves the Weekly Review's due date.
+final periodicReviewLastSessionFinishedProvider = Provider<DateTime?>((ref) {
+  final raw = ref
+      .watch(syncedPreferencesProvider)
+      .asData
+      ?.value
+      .get<String>(_kLastSessionFinishedAtKey);
   if (raw == null) return null;
   return DateTime.tryParse(raw);
 });
@@ -132,22 +71,21 @@ final periodicReviewOpenSinceProvider = Provider<DateTime?>((ref) {
   return opened;
 });
 
-/// True when the review is due (never completed, or > [_kCadenceDays] old).
+/// True when the Weekly Review is due: [weeklyReviewDueAtProvider] has
+/// passed. The Notification reads this; the Banner's Cadence Trigger reads the
+/// same due instant. An open review period does not make the review due, so a
+/// finished short session clears both until seven days after it.
 final periodicReviewIsDueProvider = Provider<bool>((ref) {
+  final due = ref.watch(weeklyReviewDueAtProvider);
+  if (due == null) return false;
   final now = ref.watch(clockProvider)();
-  if (ref.watch(periodicReviewOpenSinceProvider) != null) return true;
-  final last = ref.watch(periodicReviewLastCompletedProvider);
-  if (last == null) return true;
-  final due = last.add(const Duration(days: _kCadenceDays));
-  if (now.isBefore(due)) {
-    // Not due yet — re-evaluate exactly when the cadence boundary passes, so a
-    // Weekly Review Nudge surfaces reactively the moment it becomes due rather
-    // than waiting for an unrelated rebuild. One timer, cancelled on dispose.
-    final timer = Timer(due.difference(now), ref.invalidateSelf);
-    ref.onDispose(timer.cancel);
-    return false;
-  }
-  return true;
+  if (!now.isBefore(due)) return true;
+  // Not due yet — re-evaluate exactly when the due instant passes, so the
+  // Nudge surfaces reactively the moment the review falls due rather than
+  // waiting for an unrelated rebuild. One timer, cancelled on dispose.
+  final timer = Timer(due.difference(now), ref.invalidateSelf);
+  ref.onDispose(timer.cancel);
+  return false;
 });
 
 /// Whether the Weekly Review banner is enabled (defaults to true).
@@ -227,40 +165,11 @@ class PeriodicReviewSettingsNotifier
   PeriodicReviewSettings build() {
     ref.listen(syncedPreferencesProvider, (_, next) {
       if (next is AsyncData<SyncedPreferences>) {
-        _refreshNotificationSuppression(next.value);
         state = _fromPrefs(next.value);
-        _rescheduleNotification();
       }
     });
     final current = ref.read(syncedPreferencesProvider).asData?.value;
-    // Seed the suppression flags from the current snapshot before the
-    // initial reschedule below; the listener above only fires on later
-    // synced-prefs events, so without this the first reschedule would
-    // see stale process defaults and ignore a persisted skip-today /
-    // active snooze.
-    if (current != null) {
-      _refreshNotificationSuppression(current);
-    } else {
-      // No snapshot yet — reset suppression to defaults so the initial
-      // reschedule below doesn't act on stale module-level globals left from a
-      // prior provider lifecycle.
-      _periodicReviewNotificationSkippedToday = false;
-      _periodicReviewNotificationSnoozedActive = false;
-    }
-    final initial = current != null ? _fromPrefs(current) : _defaults();
-    // The listener above only fires on subsequent prefs changes, so kick off
-    // an initial reschedule once the notifier is constructed.
-    Future.microtask(_rescheduleNotification);
-    return initial;
-  }
-
-  void _refreshNotificationSuppression(SyncedPreferences prefs) {
-    final today = planningToday();
-    _periodicReviewNotificationSkippedToday =
-        prefs.get<String>(_kNotificationSkippedDateKey) == today;
-    _periodicReviewNotificationSnoozedActive = _parseSnoozedActive(
-      prefs.get<String>(_kNotificationSnoozedUntilKey),
-    );
+    return current != null ? _fromPrefs(current) : _defaults();
   }
 
   static PeriodicReviewSettings _defaults() => const PeriodicReviewSettings(
@@ -283,9 +192,18 @@ class PeriodicReviewSettingsNotifier
   /// device LWW + tombstone semantics from synced-prefs ensure all devices
   /// suppress the banner on their next sync.
   Future<void> completeReview() async {
+    final stamp = ref.read(clockProvider)().toUtc().toIso8601String();
+    await syncedPrefs(ref).set(_kLastCompletedAtKey, stamp);
+    await syncedPrefs(ref).set(_kLastSessionFinishedAtKey, stamp);
+  }
+
+  /// Stamps the current UTC timestamp as the last finished session. A partial
+  /// session's Done calls this; it leaves the completion stamp, and so the
+  /// open review period, alone.
+  Future<void> markSessionFinished() async {
     await syncedPrefs(ref).set(
-      _kLastCompletedAtKey,
-      DateTime.now().toUtc().toIso8601String(),
+      _kLastSessionFinishedAtKey,
+      ref.read(clockProvider)().toUtc().toIso8601String(),
     );
   }
 
@@ -300,29 +218,5 @@ class PeriodicReviewSettingsNotifier
   Future<void> setNotificationTime(TimeOfDay time) async {
     await syncedPrefs(ref).set(_kNotificationHourKey, time.hour);
     await syncedPrefs(ref).set(_kNotificationMinuteKey, time.minute);
-  }
-
-  Future<void> _rescheduleNotification() async {
-    final svc = ref.read(notificationServiceProvider);
-    // Priority order:
-    //   1. Notifications disabled — kill recurring and snooze ids together.
-    //      Must come first so a still-active snooze cannot keep firing after
-    //      the user turns notifications off.
-    //   2. Skipped today — cancel today's snooze id only; the recurring
-    //      schedule keeps firing tomorrow via matchDateTimeComponents.
-    //   3. Due and not suppressed — arm the recurring reminder.
-    //   4. Not due — drop the recurring; a pending snooze (if any) stays.
-    final isDue = ref.read(periodicReviewIsDueProvider);
-    if (!state.notificationEnabled) {
-      await svc.cancelRitualReminder(RitualId.weeklyReview);
-    } else if (isPeriodicReviewNotificationSkippedToday()) {
-      await svc.skipTodayRitualReminder(RitualId.weeklyReview);
-    } else if (isDue) {
-      await svc.scheduleRitualReminder(
-          RitualId.weeklyReview, state.notificationTime);
-    } else {
-      // Not due — drop the recurring, but leave a pending snooze alone.
-      await svc.cancelRecurringRitualReminder(RitualId.weeklyReview);
-    }
   }
 }

@@ -23,8 +23,9 @@ import 'package:jeeves/database/daos/focus_session_dao.dart'
     show focusSessionDispositionIdFor;
 import 'package:jeeves/database/daos/tag_dao.dart' show todoTagIdFor;
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/intent.dart';
+import 'package:jeeves/models/routing_kind.dart';
 import 'package:jeeves/models/time_context.dart';
-import 'package:jeeves/models/todo.dart' show Intent, RoutingKind;
 import 'package:jeeves/sync/collection_codecs.dart';
 import 'package:jeeves/sync/domain_op_capture.dart';
 import 'package:jeeves/sync/ids.dart'
@@ -59,6 +60,15 @@ void main() {
     return id;
   }
 
+  Future<void> seedCapture() async {
+    await db.captureDao.insertCapture(CapturesCompanion(
+      id: const Value('c1'),
+      title: const Value('a thought'),
+      userId: const Value(_userId),
+      createdAt: Value(_ts),
+    ));
+  }
+
   CapturedOp only(String collection) {
     final ops = capture.forCollection(collection);
     expect(ops, hasLength(1), reason: 'expected exactly one $collection op');
@@ -76,7 +86,7 @@ void main() {
       expect(op.fields['user_id'], _userId);
       expect(op.fields['created_at'], '2026-07-28T09:00:00.000Z');
       expect(op.fields['intent'], 'next');
-      expect(op.fields['clarified'], isTrue);
+      expect(op.fields.containsKey('clarified'), isFalse);
       // Exactly the synced columns — no more, no less — so a peer can build the
       // row and nothing off-contract slips onto the wire.
       final expected = collectionCodecs[todosCollection]!.columns.keys.toSet();
@@ -98,6 +108,28 @@ void main() {
       expect(op.tombstone, isFalse);
       expect(op.fields['intent'], 'trash');
     });
+
+    test('markDone writes no clarified field', () async {
+      final id = await seedOutcome();
+      capture.clear();
+      await db.todoDao.markDone(id);
+      for (final op in capture.forCollection(todosCollection)) {
+        expect(op.fields.containsKey('clarified'), isFalse);
+      }
+    });
+
+    for (final kind in RoutingKind.values) {
+      test('applyRouting(${kind.name}) writes no clarified field', () async {
+        final id = await seedOutcome();
+        capture.clear();
+        await db.todoDao.applyRouting(id, to: kind, now: _ts);
+        final ops = capture.forCollection(todosCollection);
+        expect(ops, isNotEmpty);
+        for (final op in ops) {
+          expect(op.fields.containsKey('clarified'), isFalse);
+        }
+      });
+    }
 
     test('applyRouting restores out of Trash on the same seam', () async {
       final id = await seedOutcome();
@@ -253,6 +285,44 @@ void main() {
       expect(op.fields.keys.toSet(),
           collectionCodecs[todosCollection]!.columns.keys.toSet());
     });
+    test('applyRouting with a queue promote authors ops only when it lands (#788)',
+        () async {
+      final id = await seedOutcome();
+      await db.todoDao.setIntent(id, Intent.maybe, now: _ts);
+      await seedPlannedAction(db,
+          outcomeId: id,
+          text: 'Step one',
+          userId: _userId,
+          id: 'p1',
+          position: 0);
+      capture.clear();
+
+      await db.customStatement(
+          'CREATE TRIGGER todos_route_fails BEFORE UPDATE OF intent ON todos '
+          "BEGIN SELECT RAISE(ABORT, 'route is unwritable'); END");
+      await expectLater(
+        db.todoDao.applyRouting(id,
+            to: RoutingKind.nextAction, promotePlannedActionId: 'p1', now: _ts),
+        throwsA(anything),
+      );
+      expect(capture.forCollection(todosCollection), isEmpty);
+      expect(capture.forCollection(actionsCollection), isEmpty,
+          reason: 'a rolled-back promote authors no op');
+
+      await db.customStatement('DROP TRIGGER todos_route_fails');
+      await db.todoDao.applyRouting(id,
+          to: RoutingKind.nextAction, promotePlannedActionId: 'p1', now: _ts);
+      final op = only(todosCollection);
+      expect(op.fields['intent'], 'next');
+      expect(op.fields['last_clarified_at'], isNotNull);
+      expect(
+          capture
+              .forCollection(actionsCollection)
+              .firstWhere((o) => o.entityId == 'p1')
+              .fields['role'],
+          'current');
+    });
+
 
     test('upsertOutcome asserts only the present fields when it updates',
         () async {
@@ -445,6 +515,44 @@ void main() {
       );
     });
 
+    test('merge also moves Capture hints and tombstones the source hint',
+        () async {
+      await seedCapture();
+      final source = await db.tagDao.findOrCreateTag('a', 'context', _userId);
+      final target = await db.tagDao.findOrCreateTag('b', 'context', _userId);
+      await db.captureDao.assignTagHint('c1', source, _userId);
+      capture.clear();
+
+      await db.tagDao.merge(source, target);
+      final byKey = {
+        for (final op in capture.forCollection(captureTagsCollection))
+          op.entityId: op.tombstone,
+      };
+      expect(byKey[captureTagIdFor('c1', source)], isTrue);
+      expect(byKey[captureTagIdFor('c1', target)], isFalse);
+    });
+
+    test('deleteTag tombstones the tag and every junction of both kinds',
+        () async {
+      final outcome = await seedOutcome();
+      await seedCapture();
+      final tag = await db.tagDao.findOrCreateTag('a', 'person', _userId);
+      await db.tagDao.assignTag(outcome, tag, _userId);
+      await db.captureDao.assignTagHint('c1', tag, _userId);
+      capture.clear();
+
+      await db.tagDao.deleteTag(tag);
+      final byKey = {
+        for (final op in capture.recorded)
+          '${op.collection}/${op.entityId}': op.tombstone,
+      };
+      expect(byKey['$tagsCollection/$tag'], isTrue);
+      expect(byKey['$todoTagsCollection/${todoTagIdFor(outcome, tag)}'], isTrue);
+      expect(
+          byKey['$captureTagsCollection/${captureTagIdFor('c1', tag)}'], isTrue);
+      expect(byKey, hasLength(3));
+    });
+
     test('enforceSingleProject tombstones the displaced project link', () async {
       final outcome = await seedOutcome();
       final first = await db.tagDao.findOrCreateTag('p1', 'project', _userId);
@@ -459,18 +567,39 @@ void main() {
       expect(byKey[todoTagIdFor(outcome, first)], isTrue);
       expect(byKey[todoTagIdFor(outcome, second)], isFalse);
     });
+
+    test('the bulk Tag and Project batches author todo_tags ops only', () async {
+      final a = await seedOutcome(id: 'a');
+      final b = await seedOutcome(id: 'b');
+      final tag = await db.tagDao.findOrCreateTag('home', 'context', _userId);
+      final project = await db.tagDao.findOrCreateTag('P', 'project', _userId);
+      capture.clear();
+
+      await db.tagDao.assignTagToOutcomes({a, b}, tag, _userId);
+      await db.tagDao.setProjectForOutcomes({a, b}, project, _userId);
+      await db.tagDao.removeTagFromOutcomes({a, b}, tag);
+
+      expect(capture.recorded.map((o) => o.collection).toSet(),
+          {todoTagsCollection});
+      expect(capture.forCollection(todoTagsCollection), hasLength(6));
+    });
+  });
+
+  group('bulk routing', () {
+    test('applyRoutingToOutcomes authors one todos op per landed Outcome',
+        () async {
+      final a = await seedOutcome(id: 'a');
+      final b = await seedOutcome(id: 'b');
+      capture.clear();
+      await db.todoDao.applyRoutingToOutcomes({a, b, 'gone'},
+          to: RoutingKind.maybe, now: _ts);
+      final ops = capture.forCollection(todosCollection);
+      expect(ops, hasLength(2));
+      expect(ops.map((o) => o.entityId).toSet(), {a, b});
+    });
   });
 
   group('capture_dao', () {
-    Future<void> seedCapture() async {
-      await db.captureDao.insertCapture(CapturesCompanion(
-        id: const Value('c1'),
-        title: const Value('a thought'),
-        userId: const Value(_userId),
-        createdAt: Value(_ts),
-      ));
-    }
-
     test('insertCapture asserts the whole row', () async {
       await seedCapture();
       expect(only(capturesCollection).fields.keys.toSet(),

@@ -15,4 +15,6 @@
     <style name="NormalTheme" parent="@android:style/Theme.Light.NoTitleBar">
         <item name="android:windowBackground">?android:colorBackground</item>
     </style>
+    <!-- Share receiver: invisible, so the sharing app stays on screen. -->
+    <style name="ShareReceiverTheme" parent="@android:style/Theme.Translucent.NoTitleBar" />
 </resources>

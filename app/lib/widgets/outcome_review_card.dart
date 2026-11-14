@@ -23,7 +23,7 @@ class OutcomeReviewCard extends StatelessWidget {
   final Widget actions;
 
   /// Current Action rendered between the title and the notes — used by
-  /// the Next Actions step to surface the Outcome's current Action.
+  /// the Next step to surface the Outcome's current Action.
   final String? currentActionText;
 
   /// Person tags rendered as small chips above the title. The Waiting For

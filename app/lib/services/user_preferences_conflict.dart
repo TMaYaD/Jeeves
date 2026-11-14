@@ -43,6 +43,7 @@ library;
 import 'dart:convert';
 
 import '../models/clarify_mode.dart' show kClarifyModePrefKey;
+import '../models/bypassed_outcome.dart' show kBypassThresholdPrefKey;
 
 /// How two conflicting rows for the same `user_preferences` key are reconciled.
 enum ConflictStrategy {
@@ -105,6 +106,8 @@ const preferenceConflictRegistry = <String, ConflictStrategy>{
   // both modes read the same many-to-many storage, so an arbitration that lands
   // on either value leaves every Capture and link valid (issue #433).
   kClarifyModePrefKey: ConflictStrategy.lww,
+  // A scalar setting: the latest value on any device is the right winner.
+  kBypassThresholdPrefKey: ConflictStrategy.lww,
 };
 
 /// Returns the [ConflictStrategy] for [key].

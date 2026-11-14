@@ -24,7 +24,8 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
-import 'package:jeeves/models/todo.dart' show Intent, RoutingKind;
+import 'package:jeeves/models/intent.dart';
+import 'package:jeeves/models/routing_kind.dart';
 import 'package:jeeves/sync/envelope.dart';
 import 'package:jeeves/sync/hlc.dart';
 import 'package:jeeves/sync/ids.dart' show jeevesWorkspaceNamespace;
@@ -60,6 +61,9 @@ const _tables = <String, Set<String>>{
   'focus_sessions': {},
   'focus_session_tasks': {},
   'focus_session_dispositions': {},
+  'focus_session_planning_bypasses': {},
+  'focus_session_reschedules': {},
+  'outcome_bypass_decisions': {},
   'time_logs': {},
   'user_preferences': {},
 };

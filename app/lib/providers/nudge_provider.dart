@@ -21,12 +21,18 @@
 /// until the next Trigger firing edge.
 library;
 
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../models/nudge_predicates.dart';
 import '../models/ritual.dart';
 import 'ceremony_in_progress_provider.dart';
+import 'clock_provider.dart';
 import 'nudge_triggers.dart';
 import 'synced_preferences_provider.dart';
+
+export '../models/nudge_predicates.dart' show NudgeState;
 
 // ---------------------------------------------------------------------------
 // Key helpers
@@ -34,48 +40,6 @@ import 'synced_preferences_provider.dart';
 
 String _dismissedAtKey(RitualId ritual) => '${ritual.keyPrefix}_nudge_dismissed_at';
 String _snoozedUntilKey(RitualId ritual) => '${ritual.keyPrefix}_nudge_snoozed_until';
-
-// ---------------------------------------------------------------------------
-// NudgeState
-// ---------------------------------------------------------------------------
-
-/// Persisted Nudge state for one Ritual. The `visible` flag is *computed*
-/// from this state combined with Trigger state and the in-progress flag — it
-/// is not part of the persisted record.
-class NudgeState {
-  const NudgeState({this.dismissedAt, this.snoozedUntil});
-
-  /// Timestamp of the most recent user-dismiss. The Nudge stays hidden until
-  /// any Trigger's `firingSince` advances past this.
-  final DateTime? dismissedAt;
-
-  /// Snooze expiry. `null` means no snooze; a value in the past has expired
-  /// and is treated as `null` for visibility purposes (kept around so a
-  /// future "reactivate snooze" UX can read it).
-  final DateTime? snoozedUntil;
-
-  NudgeState copyWith({
-    DateTime? dismissedAt,
-    DateTime? snoozedUntil,
-    bool clearDismissedAt = false,
-    bool clearSnoozedUntil = false,
-  }) {
-    return NudgeState(
-      dismissedAt: clearDismissedAt ? null : (dismissedAt ?? this.dismissedAt),
-      snoozedUntil:
-          clearSnoozedUntil ? null : (snoozedUntil ?? this.snoozedUntil),
-    );
-  }
-
-  @override
-  bool operator ==(Object other) =>
-      other is NudgeState &&
-      other.dismissedAt == dismissedAt &&
-      other.snoozedUntil == snoozedUntil;
-
-  @override
-  int get hashCode => Object.hash(dismissedAt, snoozedUntil);
-}
 
 // ---------------------------------------------------------------------------
 // NudgeState provider (persisted, per-Ritual)
@@ -124,17 +88,18 @@ final nudgeVisibleProvider =
   if (firingEdge == null) return false;
 
   final s = ref.watch(nudgeStateProvider(ritual));
-  final now = DateTime.now();
+  final now = ref.watch(clockProvider)();
 
-  // Snooze blocks visibility until expiry.
-  if (s.snoozedUntil != null && now.isBefore(s.snoozedUntil!)) return false;
-
-  // Dismiss blocks until a Trigger refires past the dismiss time.
-  if (s.dismissedAt != null && !s.dismissedAt!.isBefore(firingEdge)) {
-    return false;
+  // Snooze blocks visibility until expiry. Re-evaluate at the expiry instant:
+  // nothing else changes when a snooze runs out, so without this the Nudge
+  // would stay hidden until some unrelated rebuild.
+  final snoozedUntil = s.snoozedUntil;
+  if (snoozedUntil != null && now.isBefore(snoozedUntil)) {
+    final timer = Timer(snoozedUntil.difference(now), ref.invalidateSelf);
+    ref.onDispose(timer.cancel);
   }
 
-  return true;
+  return nudgeVisibleAt(now, firingEdge, s, null);
 });
 
 // ---------------------------------------------------------------------------
@@ -149,21 +114,25 @@ class NudgeActions {
 
   final Ref _ref;
 
-  /// Stamps `dismissed_at = now`. Suppresses the Nudge until any Trigger
-  /// firing edge advances past `now`. See CONTEXT.md's **Nudge** entry.
-  Future<void> dismiss(RitualId ritual) async {
+  /// Stamps `dismissed_at = at` (default: now). Suppresses the Nudge until
+  /// any Trigger firing edge advances past `at`. See CONTEXT.md's **Nudge**
+  /// entry. Pass [at] when replaying an action taken earlier (a notification
+  /// button tapped in a background isolate): the instant the user acted, not
+  /// the instant it was recorded, decides which firings it covers.
+  Future<void> dismiss(RitualId ritual, {DateTime? at}) async {
     await syncedPrefs(_ref).set(
       _dismissedAtKey(ritual),
-      DateTime.now().toUtc().toIso8601String(),
+      (at ?? _ref.read(clockProvider)()).toUtc().toIso8601String(),
     );
   }
 
-  /// Stamps `snoozed_until = now + [duration]`. Hides the Nudge until
-  /// that timestamp regardless of Trigger refires.
-  Future<void> snooze(RitualId ritual, Duration duration) async {
+  /// Stamps `snoozed_until = at + [duration]` ([at] defaults to now). Hides
+  /// the Nudge until that timestamp regardless of Trigger refires.
+  Future<void> snooze(RitualId ritual, Duration duration,
+      {DateTime? at}) async {
     await syncedPrefs(_ref).set(
       _snoozedUntilKey(ritual),
-      DateTime.now().toUtc().add(duration).toIso8601String(),
+      (at ?? _ref.read(clockProvider)()).toUtc().add(duration).toIso8601String(),
     );
   }
 

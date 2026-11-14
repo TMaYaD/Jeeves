@@ -47,7 +47,6 @@ Future<void> _insertTodo(
   await db.into(db.todos).insert(TodosCompanion(
     id: Value(id),
     title: Value(title),
-    clarified: const Value(true),
     intent: Value(intent),
     userId: const Value(_userId),
     createdAt: Value(now),
@@ -278,7 +277,7 @@ void main() {
           await (db.select(db.todos)..where((t) => t.id.equals('Z')))
               .getSingle();
       expect(after.intent, equals('maybe'));
-      final maybeList = await db.todoDao.watchMaybe().first;
+      final maybeList = await db.todoDao.watchSomedayMaybe().first;
       expect(maybeList.map((t) => t.id), contains('Z'));
 
       // The disposition itself is durably stored off the Plan.

@@ -122,7 +122,10 @@ class DomainProjector {
     }
     if (collections.contains(focusSessionsCollection) ||
         collections.contains(focusSessionTasksCollection) ||
-        collections.contains(focusSessionDispositionsCollection)) {
+        collections.contains(focusSessionDispositionsCollection) ||
+        collections.contains(focusSessionPlanningBypassesCollection) ||
+        collections.contains(focusSessionReschedulesCollection) ||
+        collections.contains(outcomeBypassDecisionsCollection)) {
       domain.notifyFocusSessionsViewWrite();
     }
     if (collections.contains(userPreferencesCollection)) {

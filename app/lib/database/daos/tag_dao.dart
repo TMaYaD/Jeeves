@@ -26,13 +26,13 @@ part 'tag_dao.g.dart';
 String todoTagIdFor(String todoId, String tagId) =>
     uuid.v5(Namespace.url.value, 'jeeves://todo_tag/$todoId/$tagId');
 
-/// A [Tag] together with the count of active (clarified, not-done) tasks.
+/// A [Tag] together with the count of active (not-done) tasks.
 class TagWithCount {
   const TagWithCount({required this.tag, required this.count});
 
   final Tag tag;
 
-  /// Number of active (clarified and not done) todos assigned this tag.
+  /// Number of active (not done) todos assigned this tag.
   final int count;
 }
 
@@ -115,7 +115,7 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
 
   /// Stream of tags of [type] paired with their active-task count.
   ///
-  /// "Active" means clarified=1 (not in inbox) and done_at IS NULL.  Tags
+  /// "Active" means done_at IS NULL (Inbox Captures are not todos).  Tags
   /// with zero active tasks return count = 0 and are still included so the
   /// cloud can show them as demoted/faded rather than vanishing mid-session.
   Stream<List<TagWithCount>> watchTagsWithActiveCount(String type) {
@@ -124,7 +124,7 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
       'COUNT(t.id) AS active_count '
       'FROM tags '
       'LEFT JOIN todo_tags tt ON tt.tag_id = tags.id '
-      'LEFT JOIN todos t ON t.id = tt.todo_id AND t.done_at IS NULL AND t.clarified = 1 '
+      'LEFT JOIN todos t ON t.id = tt.todo_id AND t.done_at IS NULL '
       'WHERE tags.type = ? '
       'GROUP BY tags.id '
       'ORDER BY tags.name',
@@ -295,6 +295,35 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
     });
   }
 
+  /// Rename a tag like [rename], but never merge: when another tag of the same
+  /// type already owns [newName], nothing is written and that tag is returned
+  /// so the caller can ask the user before merging. Returns null when the
+  /// rename was written (or was a no-op for an unknown tag or unchanged name).
+  ///
+  /// The collision check and the write share one transaction, so a namesake
+  /// that arrives after the caller last looked cannot be merged silently.
+  Future<Tag?> renameUnlessTaken(String tagId, String newName) {
+    final trimmed = newName.trim();
+    return attachedDatabase.capturing(() async {
+      final current = await (select(tags)..where((t) => t.id.equals(tagId)))
+          .getSingleOrNull();
+      if (current == null || current.name == trimmed) return null;
+
+      final conflict = await (select(tags)
+            ..where((t) =>
+                t.name.equals(trimmed) &
+                t.type.equals(current.type) &
+                t.id.equals(tagId).not())
+            ..orderBy([(t) => OrderingTerm.asc(t.id)])
+            ..limit(1))
+          .getSingleOrNull();
+      if (conflict != null) return conflict;
+
+      await upsertTag(TagsCompanion(id: Value(tagId), name: Value(trimmed)));
+      return null;
+    });
+  }
+
   /// Update the colour of a tag; pass null to clear it.
   Future<void> updateColor(String tagId, String? color) => upsertTag(
         TagsCompanion(id: Value(tagId), color: Value(color)),
@@ -320,17 +349,15 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   /// Merge [sourceTagId] into [targetTagId] — the *user's* deliberate fold, as
   /// opposed to [foldDuplicateTags]' automatic one.
   ///
-  /// Re-assigns all `todo_tags` rows that reference [sourceTagId] to
-  /// [targetTagId] (idempotent via [assignTag]), then deletes the source tag
-  /// and its junction rows atomically.
-  ///
-  /// **It repoints only `todo_tags`, so it orphans the source tag's
-  /// `capture_tags` rows** — with FK enforcement off (#637) that is a silently
-  /// invisible tag hint rather than an error. [repointTagReferences] is the shared
-  /// helper that covers both junctions; switching this method onto it is #645.
+  /// Repoints every `todo_tags` row **and** every `capture_tags` row that
+  /// references [sourceTagId] to [targetTagId] (an item holding both ends up
+  /// with exactly one link to the target), then deletes the source tag. Colour
+  /// and name of the target are kept.
   ///
   /// Throws [ArgumentError] if [sourceTagId] equals [targetTagId] — a
-  /// self-merge would silently delete the tag and strip every association.
+  /// self-merge would silently delete the tag and strip every association — or
+  /// if either tag is missing or the two differ in `type`: a project folded
+  /// into a person is never what the user meant.
   Future<void> merge(String sourceTagId, String targetTagId) {
     if (sourceTagId == targetTagId) {
       throw ArgumentError.value(
@@ -340,24 +367,65 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
       );
     }
     return attachedDatabase.capturing(() async {
-      final sourceTodoTags = await (select(todoTags)
-            ..where((tt) => tt.tagId.equals(sourceTagId)))
-          .get();
-      for (final tt in sourceTodoTags) {
-        await assignTag(tt.todoId, targetTagId, tt.userId);
+      final source = await (select(tags)..where((t) => t.id.equals(sourceTagId)))
+          .getSingleOrNull();
+      final target = await (select(tags)..where((t) => t.id.equals(targetTagId)))
+          .getSingleOrNull();
+      if (source == null || target == null) {
+        throw ArgumentError.value(
+          source == null ? sourceTagId : targetTagId,
+          source == null ? 'sourceTagId' : 'targetTagId',
+          'Tag does not exist',
+        );
       }
-      await (delete(todoTags)
-            ..where((tt) => tt.tagId.equals(sourceTagId)))
-          .go();
-      // Cascade set, enumerated at capture time: the log has no FK cascade, so
-      // every junction the source tag held is tombstoned explicitly alongside
-      // the tag itself.
-      for (final tt in sourceTodoTags) {
-        _tombstoneTodoTag(tt.todoId, sourceTagId);
+      if (source.type != target.type) {
+        throw ArgumentError.value(
+          targetTagId,
+          'targetTagId',
+          'Source and target tags must have the same type',
+        );
       }
+      await _repointTagReferences(from: sourceTagId, to: targetTagId);
       await (delete(tags)..where((t) => t.id.equals(sourceTagId))).go();
       attachedDatabase.opCapture
           .tombstone(collection: tagsCollection, entityId: sourceTagId);
+      attachedDatabase.notifyTodosViewWrite(includeTodoTags: true);
+      attachedDatabase.notifyCapturesViewWrite();
+    });
+  }
+
+  /// Delete [tagId] outright — the *user's* deliberate removal of a Tag,
+  /// Project or Person from every Outcome and Capture hint that carried it.
+  /// The Outcomes and Captures themselves stay.
+  ///
+  /// The op log has no foreign-key cascade, so every junction row the tag held
+  /// (`todo_tags` and `capture_tags`) is tombstoned explicitly alongside the
+  /// tag. Does not stamp `last_clarified_at`: removing an entry from a
+  /// management list is not thinking about each Outcome. Returns without
+  /// writing when [tagId] is unknown.
+  Future<void> deleteTag(String tagId) {
+    return attachedDatabase.capturing(() async {
+      final existing = await (select(tags)..where((t) => t.id.equals(tagId)))
+          .getSingleOrNull();
+      if (existing == null) return;
+      final todoJunctions =
+          await (select(todoTags)..where((tt) => tt.tagId.equals(tagId))).get();
+      final captureJunctions = await (select(captureTags)
+            ..where((ct) => ct.tagId.equals(tagId)))
+          .get();
+      await (delete(todoTags)..where((tt) => tt.tagId.equals(tagId))).go();
+      await (delete(captureTags)..where((ct) => ct.tagId.equals(tagId))).go();
+      for (final row in todoJunctions) {
+        _tombstoneTodoTag(row.todoId, tagId);
+      }
+      for (final row in captureJunctions) {
+        _tombstoneCaptureTag(row.captureId, tagId);
+      }
+      await (delete(tags)..where((t) => t.id.equals(tagId))).go();
+      attachedDatabase.opCapture
+          .tombstone(collection: tagsCollection, entityId: tagId);
+      attachedDatabase.notifyTodosViewWrite(includeTodoTags: true);
+      attachedDatabase.notifyCapturesViewWrite();
     });
   }
 
@@ -478,8 +546,7 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   /// assignment or tag hint. Each junction's identity is its pair, so the row
   /// moves by inserting the derived id for `(parent, to)` and deleting the old
   /// one; a `(parent, to)` row that already existed collapses under the primary
-  /// key via `INSERT OR REPLACE`. `[TagDao.merge]` still repoints only
-  /// `todo_tags`; switching it onto this helper is #645.
+  /// key via `INSERT OR REPLACE`.
   Future<void> _repointTagReferences({
     required String from,
     required String to,
@@ -563,5 +630,106 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
 
       await assignTag(todoId, newProjectTagId, userId);
     });
+  }
+
+  // ── Bulk Organising (list multi-select) ────────────────────────────────────
+  //
+  // Each method is ONE `capturing` scope = one transaction: a throw rolls the
+  // whole batch back and authors no ops. An id with no `todos` row is skipped
+  // inside that transaction (#444 / #446 / #447), so a row deleted underneath
+  // an open sheet writes nothing. None of them touches `todos`: Organising
+  // never stamps `last_clarified_at`.
+
+  Future<Set<String>> _presentOutcomeIds(Set<String> outcomeIds) async {
+    if (outcomeIds.isEmpty) return <String>{};
+    final rows = await (select(todos)..where((t) => t.id.isIn(outcomeIds)))
+        .map((t) => t.id)
+        .get();
+    return rows.toSet();
+  }
+
+  Future<Tag?> _tagOfTypeOrNull(String tagId) =>
+      (select(tags)..where((t) => t.id.equals(tagId))).getSingleOrNull();
+
+  /// Adds the [tagId] Tag (a `context`-typed tag) to every present Outcome in
+  /// [outcomeIds]. Returns the ids written; empty if the Tag is gone.
+  ///
+  /// Throws [ArgumentError] for a `person` or `project` tag: a person tag is a
+  /// PersonBlocker (a Clarification, owned by the status action) and a project
+  /// tag must go through [setProjectForOutcomes]'s single-Project rule.
+  Future<Set<String>> assignTagToOutcomes(
+      Set<String> outcomeIds, String tagId, String userId) async {
+    final written = <String>{};
+    await attachedDatabase.capturing(() async {
+      final tag = await _tagOfTypeOrNull(tagId);
+      if (tag == null) return;
+      _requireBulkTagType(tag);
+      for (final id in await _presentOutcomeIds(outcomeIds)) {
+        await assignTag(id, tagId, userId);
+        written.add(id);
+      }
+    });
+    if (written.isNotEmpty) {
+      attachedDatabase.notifyTodosViewWrite(includeTodoTags: true);
+    }
+    return written;
+  }
+
+  /// Removes the [tagId] Tag from every Outcome in [outcomeIds] that holds it,
+  /// authoring a tombstone per removed junction (none for an Outcome that never
+  /// held it). Returns the ids it was removed from. Same type guard as
+  /// [assignTagToOutcomes].
+  Future<Set<String>> removeTagFromOutcomes(
+      Set<String> outcomeIds, String tagId) async {
+    final removed = <String>{};
+    await attachedDatabase.capturing(() async {
+      final tag = await _tagOfTypeOrNull(tagId);
+      if (tag != null) _requireBulkTagType(tag);
+      final present = await _presentOutcomeIds(outcomeIds);
+      if (present.isEmpty) return;
+      final held = await (select(todoTags)
+            ..where((tt) => tt.tagId.equals(tagId) & tt.todoId.isIn(present)))
+          .get();
+      for (final row in held) {
+        await (delete(todoTags)..where((tt) => tt.id.equals(row.id))).go();
+        _tombstoneTodoTag(row.todoId, tagId);
+        removed.add(row.todoId);
+      }
+    });
+    if (removed.isNotEmpty) {
+      attachedDatabase.notifyTodosViewWrite(includeTodoTags: true);
+    }
+    return removed;
+  }
+
+  /// Makes [projectTagId] the one Project of every present Outcome in
+  /// [outcomeIds] (the body of [enforceSingleProject], per Outcome). Returns the
+  /// ids written; empty if the Project tag is gone.
+  Future<Set<String>> setProjectForOutcomes(
+      Set<String> outcomeIds, String projectTagId, String userId) async {
+    final written = <String>{};
+    await attachedDatabase.capturing(() async {
+      final tag = await _tagOfTypeOrNull(projectTagId);
+      if (tag == null) return;
+      if (tag.type != 'project') {
+        throw ArgumentError.value(
+            projectTagId, 'projectTagId', 'is not a project tag');
+      }
+      for (final id in await _presentOutcomeIds(outcomeIds)) {
+        await enforceSingleProject(id, userId, projectTagId);
+        written.add(id);
+      }
+    });
+    if (written.isNotEmpty) {
+      attachedDatabase.notifyTodosViewWrite(includeTodoTags: true);
+    }
+    return written;
+  }
+
+  static void _requireBulkTagType(Tag tag) {
+    if (tag.type == 'person' || tag.type == 'project') {
+      throw ArgumentError.value(tag.id, 'tagId',
+          'bulk tag edits do not accept a ${tag.type} tag');
+    }
   }
 }

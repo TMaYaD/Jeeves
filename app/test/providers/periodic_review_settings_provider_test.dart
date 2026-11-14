@@ -1,10 +1,12 @@
 import 'package:drift/native.dart';
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/periodic_review_settings_provider.dart';
 import 'package:jeeves/providers/synced_preferences_provider.dart';
+import 'package:jeeves/providers/system_trust_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../helpers/periodic_review_test_helpers.dart';
@@ -20,12 +22,56 @@ void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
   group('PeriodicReviewSettings derived providers', () {
-    test('isDue is true when last completion key is unset', () async {
+    test('isDue is false for a new user with no items', () async {
       final c = _container();
       addTearDown(c.dispose);
 
       await c.read(syncedPreferencesProvider.future);
+      c.listen(neverReviewedBaselineProvider, (_, _) {});
+      await c.read(neverReviewedBaselineProvider.future);
+      expect(c.read(periodicReviewIsDueProvider), isFalse);
+    });
+
+    test('isDue is true once the first item is seven days old', () async {
+      final db = GtdDatabase(NativeDatabase.memory());
+      final c = createPeriodicReviewTestContainer(db);
+      addTearDown(c.dispose);
+      addTearDown(db.close);
+
+      final sevenDaysAgo =
+          DateTime.now().toUtc().subtract(const Duration(days: 7, minutes: 1));
+      await db.captureDao.insertCapture(CapturesCompanion(
+        id: const Value('first'),
+        title: const Value('First capture'),
+        userId: const Value('local'),
+        createdAt: Value(sevenDaysAgo),
+        updatedAt: Value(sevenDaysAgo),
+      ));
+      await c.read(syncedPreferencesProvider.future);
+      c.listen(neverReviewedBaselineProvider, (_, _) {});
+      await c.read(neverReviewedBaselineProvider.future);
       expect(c.read(periodicReviewIsDueProvider), isTrue);
+    });
+
+    test('isDue is false when the first item is under seven days old',
+        () async {
+      final db = GtdDatabase(NativeDatabase.memory());
+      final c = createPeriodicReviewTestContainer(db);
+      addTearDown(c.dispose);
+      addTearDown(db.close);
+
+      final sixDaysAgo = DateTime.now().toUtc().subtract(const Duration(days: 6));
+      await db.captureDao.insertCapture(CapturesCompanion(
+        id: const Value('first'),
+        title: const Value('First capture'),
+        userId: const Value('local'),
+        createdAt: Value(sixDaysAgo),
+        updatedAt: Value(sixDaysAgo),
+      ));
+      await c.read(syncedPreferencesProvider.future);
+      c.listen(neverReviewedBaselineProvider, (_, _) {});
+      await c.read(neverReviewedBaselineProvider.future);
+      expect(c.read(periodicReviewIsDueProvider), isFalse);
     });
 
     test('isDue is true when last completion is exactly 7 days ago', () async {

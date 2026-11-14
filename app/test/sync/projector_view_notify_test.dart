@@ -114,7 +114,6 @@ void main() {
         'title': title,
         'created_at': '2026-07-28T09:00:00.000Z',
         'user_id': _userId,
-        'clarified': true,
         'intent': 'next',
       };
 
@@ -129,6 +128,23 @@ void main() {
     await projector.project(await reduce('todos', id, outcomeFields('Ship it')));
     await waitUntil(() => seen.last.length == 1);
     expect(seen.last.single.id, id);
+  });
+
+  test('an Outcome from an older build asserting `clarified` still projects',
+      () async {
+    // The field was retired from the codec; ops already on the log keep
+    // carrying it and must be ignored, whatever its value.
+    for (final legacyValue in [true, false]) {
+      final id = _id('legacy-$legacyValue');
+      await projector.project(await reduce('todos', id, {
+        ...outcomeFields('Legacy $legacyValue'),
+        'clarified': legacyValue,
+      }));
+      final row = await (domain.select(domain.todos)
+            ..where((t) => t.id.equals(id)))
+          .getSingle();
+      expect(row.title, 'Legacy $legacyValue');
+    }
   });
 
   test('a projected Action reaches the actions watcher', () async {

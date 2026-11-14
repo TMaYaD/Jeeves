@@ -39,7 +39,7 @@ export 'tables.dart';
 part 'gtd_database.g.dart';
 
 @DriftDatabase(
-  tables: [Todos, Tags, TodoTags, TimeLogs, FocusSessions, FocusSessionTasks, FocusSessionDispositions, UserPreferences, Captures, CaptureOutcomes, CaptureTags, Actions],
+  tables: [Todos, Tags, TodoTags, TimeLogs, FocusSessions, FocusSessionTasks, FocusSessionDispositions, FocusSessionPlanningBypasses, FocusSessionReschedules, OutcomeBypassDecisions, UserPreferences, Captures, CaptureAttachments, CaptureOutcomes, CaptureTags, Actions],
   daos: [TagDao, TodoDao, TimeLogDao, FocusSessionDao, CaptureDao, ActionDao],
 )
 class GtdDatabase extends _$GtdDatabase {
@@ -186,7 +186,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final UserPreferencesDao userPreferencesDao = UserPreferencesDao(this);
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 7;
 
   /// Completes with the [OpeningDetails] of this store's one open.
   ///
@@ -250,12 +250,34 @@ class GtdDatabase extends _$GtdDatabase {
           if (from < 3) {
             await m.alterTable(TableMigration(tags));
           }
-          // v4 (issue #238): `actions.time_context`, the TimeContext on an
+          // v4 (share-sheet capture): add the device-local `capture_attachments`
+          // table. Purely additive — no existing row is touched.
+          if (from < 4) {
+            await m.createTable(captureAttachments);
+          }
+          // v5 (issue #823): drop `todos.clarified`. Every write path stored
+          // `true` — an unclarified item is a Capture, and "has this been
+          // clarified?" is a Capture's `clarified_at` — so the column held a
+          // constant and nothing reads it. Same recreate as v2: every row and
+          // every other column is copied unchanged, children keep their parent,
+          // and an interruption rolls the whole swap back. A row that somehow
+          // held `clarified = 0` stays an Outcome rather than being deleted.
+          if (from < 5) {
+            await m.alterTable(TableMigration(todos));
+          }
+          // v6 (issue #107): the Bypassed Outcome tables. Created only;
+          // nothing is dropped or altered, so no row of an existing store moves.
+          if (from < 6) {
+            await m.createTable(focusSessionPlanningBypasses);
+            await m.createTable(focusSessionReschedules);
+            await m.createTable(outcomeBypassDecisions);
+          }
+          // v7 (issue #238): `actions.time_context`, the TimeContext on an
           // Action. A nullable `ADD COLUMN` — no table rebuild, every existing
           // row reads NULL ("not gated"), nothing is lost. Guarded on the
           // column's absence so a store that already carries it (a rebuilt
           // fixture, a half-applied earlier attempt) does not fail the ladder.
-          if (from < 4) {
+          if (from < 7) {
             final existing = await m.database
                 .customSelect('PRAGMA table_info(actions)')
                 .get();
@@ -349,6 +371,9 @@ class GtdDatabase extends _$GtdDatabase {
         const TableUpdate('focus_sessions'),
         const TableUpdate('focus_session_tasks'),
         const TableUpdate('focus_session_dispositions'),
+        const TableUpdate('focus_session_planning_bypasses'),
+        const TableUpdate('focus_session_reschedules'),
+        const TableUpdate('outcome_bypass_decisions'),
       });
 
   /// The [notifyTodosViewWrite] analogue for `user_preferences`.

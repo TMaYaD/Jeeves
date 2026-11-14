@@ -17,7 +17,6 @@ void main() {
       title: 'Report',
       userId: 'local',
       createdAt: DateTime(2030),
-      clarified: true,
       intent: 'next',
       energyLevel: 'high',
       timeEstimate: 125,

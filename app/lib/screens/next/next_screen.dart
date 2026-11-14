@@ -11,7 +11,7 @@ class NextScreen extends StatelessWidget {
     return GtdListScreen(
       provider: nextProvider,
       emptyIcon: Icons.task_alt,
-      emptyTitle: 'No next actions',
+      emptyTitle: 'Nothing on Next',
       emptySubtitle: 'Clarify an inbox item to add one.',
     );
   }

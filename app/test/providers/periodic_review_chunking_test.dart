@@ -9,6 +9,7 @@ import 'package:jeeves/providers/periodic_review_provider.dart';
 import 'package:jeeves/providers/periodic_review_ranker.dart';
 import 'package:jeeves/providers/periodic_review_settings_provider.dart';
 import 'package:jeeves/providers/synced_preferences_provider.dart';
+import 'package:jeeves/providers/system_trust_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../test_helpers.dart';
@@ -47,7 +48,6 @@ void main() {
         title: Value('Outcome $index'),
         userId: const Value('local'),
         intent: const Value('next'),
-        clarified: const Value(true),
         createdAt: Value(now.subtract(Duration(days: 20 - index))),
         updatedAt: Value(now),
       ));
@@ -88,6 +88,9 @@ void main() {
     await notifier.finishSession();
     expect(container.read(periodicReviewLastCompletedProvider), isNull);
     expect(container.read(periodicReviewProvider).currentStep, 0);
+    // Due by the never-reviewed baseline (the oldest Outcome is 20 days old).
+    container.listen(neverReviewedBaselineProvider, (_, _) {});
+    await container.read(neverReviewedBaselineProvider.future);
     expect(container.read(periodicReviewIsDueProvider), isTrue);
   });
 
@@ -156,8 +159,8 @@ void main() {
     final state = container.read(periodicReviewProvider);
     expect(state.inboxNav.items, ['capture']);
     expect(state.waitingForNav.items!.map((t) => t.id), ['o0']);
-    expect(state.nextNav.items!.map((t) => t.id).toSet(), {'o2','o3','o4','o5','o6'});
-    expect(state.somedayNav.items, isEmpty);
+    expect(state.nextNav.items!.map((t) => t.id).toSet(), {'o2','o3','o4','o5'});
+    expect(state.somedayNav.items!.map((t) => t.id), ['o1']);
 
     // Clarifications on other surfaces count too, including exact-boundary stamps.
     await (db.update(db.todos)..where((t) => t.id.isIn(['o0', 'o1', 'o2'])))
@@ -171,15 +174,5 @@ void main() {
     expect(resumed.somedayNav.items, isEmpty);
     expect(resumed.nextNav.items!.map((t) => t.id).toSet(),
         {'o3','o4','o5','o6','o7','o8','o9'});
-  });
-
-  test('batch planned lookup excludes current and unrelated Actions', () async {
-    await db.actionDao.addPlannedAction('o0', 'First planned');
-    await db.actionDao.addPlannedAction('o0', 'Second planned');
-    await db.actionDao.addPlannedAction('o1', 'Unrequested planned');
-    await db.actionDao.setCurrentAction('o2', 'Current only');
-    expect(await db.actionDao.getOutcomeIdsWithPlannedActions({'o0', 'o2', 'o3'}),
-        {'o0'});
-    expect(await db.actionDao.getOutcomeIdsWithPlannedActions({}), isEmpty);
   });
 }

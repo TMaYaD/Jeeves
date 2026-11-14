@@ -28,7 +28,6 @@ void main() {
             id: const Value('passport'),
             title: const Value('Renew passport'),
             notes: const Value('Bring the original documents'),
-            clarified: const Value(true),
             intent: const Value('next'),
             userId: const Value('local'),
             createdAt: Value(now),
@@ -88,7 +87,12 @@ void main() {
     expect(find.text('Renew passport'), findsOneWidget);
     expect(find.text('Call the passport office'), findsOneWidget);
     expect(find.text('Bring the original documents'), findsOneWidget);
+    // The Done button above makes the card taller than the test surface;
+    // centre the target so the footer does not cover it.
     await tester.ensureVisible(find.text('Defer until a later day'));
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(ListView).last, const Offset(0, -120));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Defer until a later day'));
     await settleWithRealAsync(tester);
     expect(

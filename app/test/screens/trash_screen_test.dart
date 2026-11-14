@@ -2,7 +2,7 @@ import 'package:flutter/widgets.dart' show Widget;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
-import 'package:jeeves/models/todo.dart' show Intent;
+import 'package:jeeves/models/intent.dart';
 import 'package:jeeves/screens/trash/trash_screen.dart';
 import '../helpers/record_surface_test_helpers.dart';
 import '../test_helpers.dart';

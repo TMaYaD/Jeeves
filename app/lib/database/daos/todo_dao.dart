@@ -3,11 +3,17 @@ library;
 
 import 'package:drift/drift.dart';
 
-import '../../models/todo.dart' show Intent, RoutingKind;
+import '../../models/intent.dart';
+import '../../models/routing_kind.dart';
 import '../../sync/collection_codecs.dart';
 import '../gtd_database.dart';
 import 'action_dao.dart' show ActionDao;
 import 'capture_dao.dart' show captureOutcomeIdFor;
+import 'focus_session_dao.dart'
+    show
+        FocusSessionDao,
+        focusSessionPlanningBypassIdFor,
+        focusSessionRescheduleIdFor;
 import 'tag_dao.dart' show todoTagIdFor;
 import 'time_log_dao.dart' show TimeLogDao;
 
@@ -32,7 +38,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
 
   /// The whole synced row, as the op-log fields a create asserts. Read off the
   /// stored [row] rather than the caller's companion, so client defaults
-  /// (`id`, `intent`, `clarified`) are carried at the value SQLite settled on.
+  /// (`id`, `intent`) are carried at the value SQLite settled on.
   ///
   /// Exactly `collectionCodecs[todosCollection].columns` — the contract test
   /// pins the two sets equal, so a new synced column has one place to be added.
@@ -44,7 +50,6 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
         'created_at': encodeInstant(row.createdAt),
         'updated_at': encodeInstant(row.updatedAt),
         'done_at': row.doneAt,
-        'clarified': row.clarified,
         'intent': row.intent,
         'time_estimate': row.timeEstimate,
         'energy_level': row.energyLevel,
@@ -69,7 +74,6 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
         if (companion.updatedAt.present)
           'updated_at': encodeInstant(companion.updatedAt.value),
         if (companion.doneAt.present) 'done_at': companion.doneAt.value,
-        if (companion.clarified.present) 'clarified': companion.clarified.value,
         if (companion.intent.present) 'intent': companion.intent.value,
         if (companion.timeEstimate.present)
           'time_estimate': companion.timeEstimate.value,
@@ -118,7 +122,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
           await (select(todos)..where((t) => t.id.equals(id))).getSingleOrNull();
       if (existing == null) {
         await into(todos).insert(createColumns.copyWith(id: Value(id)));
-        // Read back rather than trust the companion: `clarified` and `intent`
+        // Read back rather than trust the companion: `intent`
         // can come from client defaults, and the create assertion must carry
         // the value the row actually holds.
         final created =
@@ -175,7 +179,7 @@ class TodoDao extends DatabaseAccessor<GtdDatabase> with _$TodoDaoMixin {
   /// `time_spent_minutes` column used to hide (issue #604).
   static String todoProjectionSql(String t) =>
       '$t.id, $t.title, $t.notes, $t.priority, $t.due_date, $t.created_at, '
-      '$t.updated_at, $t.done_at, $t.clarified, $t.intent, '
+      '$t.updated_at, $t.done_at, $t.intent, '
       '${effectiveTimeEstimateSql(t)} AS time_estimate, '
       '${effectiveEnergyLevelSql(t)} AS energy_level, '
       '$t.capture_source, $t.location_id, $t.user_id, $t.last_clarified_at, '
@@ -241,12 +245,12 @@ EXISTS (
   )
 )''';
 
-  /// Stream of clarified, non-done todos filtered by [intent] and, optionally,
+  /// Stream of non-done todos filtered by [intent] and, optionally,
   /// by an AND-set of [tagIds].
   ///
   /// The tag-filter shape (`COUNT(DISTINCT tag_id) = n` over `todo_tags`) is
   /// the single source of truth for "all of these tags" semantics. Callers
-  /// like [watchNext] and [watchMaybe] vary only by [intent]; if the
+  /// like [watchNext] and [watchSomedayMaybe] vary only by [intent]; if the
   /// filter ever needs to change (ANY-of-tags, null-handling on the join, …)
   /// the change happens here, once.
   ///
@@ -272,7 +276,7 @@ EXISTS (
     if (tagIds.isEmpty) {
       return customSelect(
         'SELECT ${todoProjectionSql('todos')} FROM todos '
-        'WHERE clarified = 1 AND done_at IS NULL AND intent = ?'
+        'WHERE done_at IS NULL AND intent = ?'
         '$extraWhere '
         'ORDER BY created_at',
         variables: [intentVar],
@@ -285,8 +289,7 @@ EXISTS (
     final placeholders = List.filled(n, '?').join(', ');
     return customSelect(
       'SELECT ${todoProjectionSql('todos')} FROM todos '
-      'WHERE todos.clarified = 1 '
-      'AND todos.done_at IS NULL '
+      'WHERE todos.done_at IS NULL '
       'AND todos.intent = ? '
       'AND (SELECT COUNT(DISTINCT tag_id) FROM todo_tags '
       '     WHERE todo_id = todos.id '
@@ -305,7 +308,7 @@ EXISTS (
   /// matches.
   ///
   /// ```text
-  /// clarified ∧ done_at IS NULL ∧
+  /// done_at IS NULL ∧
   ///   (intent='maybe' ∨ (intent='next' ∧ actionless ∧ PersonBlocked))
   /// ```
   ///
@@ -316,7 +319,7 @@ EXISTS (
   Stream<List<Todo>> watchOffUpNextPlanningCandidates() {
     return customSelect(
       'SELECT ${todoProjectionSql('todos')} FROM todos '
-      "WHERE clarified = 1 AND done_at IS NULL AND ("
+      "WHERE done_at IS NULL AND ("
       "intent = 'maybe' OR "
       "(intent = 'next' AND NOT $_excludeActionlessPersonBlockedClause)) "
       'ORDER BY created_at',
@@ -329,7 +332,7 @@ EXISTS (
   /// The Next List rule is:
   ///
   /// ```text
-  /// Next = intent='next' ∧ clarified ∧ done_at IS NULL ∧
+  /// Next = intent='next' ∧ done_at IS NULL ∧
   ///        (has a current Action ∨ no PersonBlocker on the Outcome)
   /// ```
   ///
@@ -359,7 +362,7 @@ EXISTS (
   }
 
   /// Stream of every active Outcome carrying [projectTagId], whatever its
-  /// Intent (`next` or `maybe`): clarified, not done, not trashed.
+  /// Intent (`next` or `maybe`): not done, not trashed.
   ///
   /// Unlike [watchNext] this applies no Next List rule and no context-tag
   /// filter — a Project's page answers "what is in this project", so a
@@ -367,7 +370,7 @@ EXISTS (
   Stream<List<Todo>> watchByProject(String projectTagId) {
     return customSelect(
       'SELECT ${todoProjectionSql('todos')} FROM todos '
-      'WHERE clarified = 1 AND done_at IS NULL '
+      'WHERE done_at IS NULL '
       "AND intent IN ('next', 'maybe') "
       'AND EXISTS (SELECT 1 FROM todo_tags tt '
       '            WHERE tt.todo_id = todos.id AND tt.tag_id = ?) '
@@ -379,7 +382,7 @@ EXISTS (
 
   /// Stream of "Waiting For" todos.
   ///
-  /// Returns clarified, non-done, intent='next' todos that have at least one
+  /// Returns non-done, intent='next' todos that have at least one
   /// person-typed tag. When [tagIds] is non-empty only todos carrying **all**
   /// specified (context/filter) tags are returned (AND semantics).
   ///
@@ -394,8 +397,7 @@ EXISTS (
         'SELECT DISTINCT ${todoProjectionSql('todos')} FROM todos '
         'JOIN todo_tags tt ON tt.todo_id = todos.id '
         'JOIN tags tg ON tg.id = tt.tag_id AND tg.type = ? '
-        'WHERE todos.clarified = 1 '
-        'AND todos.done_at IS NULL '
+        'WHERE todos.done_at IS NULL '
         'AND todos.intent = ? '
         'ORDER BY todos.created_at',
         variables: [
@@ -411,8 +413,7 @@ EXISTS (
       'SELECT DISTINCT ${todoProjectionSql('todos')} FROM todos '
       'JOIN todo_tags tt ON tt.todo_id = todos.id '
       'JOIN tags tg ON tg.id = tt.tag_id AND tg.type = ? '
-      'WHERE todos.clarified = 1 '
-      'AND todos.done_at IS NULL '
+      'WHERE todos.done_at IS NULL '
       'AND todos.intent = ? '
       'AND (SELECT COUNT(DISTINCT tag_id) FROM todo_tags '
       '     WHERE todo_id = todos.id '
@@ -432,7 +433,19 @@ EXISTS (
   /// Each todo appears once per person-tag it carries.  A todo with two
   /// person-tags appears in two entries.  Results are ordered by tag name
   /// then todo creation date — insertion order matches the grouped view.
-  Stream<Map<Tag, List<Todo>>> watchPersonTaggedGrouped() {
+  ///
+  /// When [tagIds] is non-empty only todos carrying **all** specified
+  /// (context/filter) tags are included (AND semantics), as in
+  /// [watchPersonTagged].
+  Stream<Map<Tag, List<Todo>>> watchPersonTaggedGrouped({
+    Set<String> tagIds = const {},
+  }) {
+    final tagFilterSql = tagIds.isEmpty
+        ? ''
+        : 'AND (SELECT COUNT(DISTINCT tag_id) FROM todo_tags '
+            '     WHERE todo_id = todos.id '
+            '       AND tag_id IN (${List.filled(tagIds.length, '?').join(', ')})'
+            ') = ${tagIds.length} ';
     return customSelect(
       // Shared Todo projection (Action-grain energy/time via D2) plus the
       // person-tag columns this grouped view needs.
@@ -442,13 +455,14 @@ EXISTS (
       'FROM todos '
       'JOIN todo_tags tt ON tt.todo_id = todos.id '
       'JOIN tags tg ON tg.id = tt.tag_id AND tg.type = ? '
-      'WHERE todos.clarified = 1 '
-      '  AND todos.done_at IS NULL '
+      'WHERE todos.done_at IS NULL '
       '  AND todos.intent = ? '
+      '$tagFilterSql'
       'ORDER BY tg.name, todos.created_at',
       variables: [
         Variable('person'),
         Variable('next'),
+        ...tagIds.map(Variable.new),
       ],
       readsFrom: {todos, todoTags, tags, actions},
     ).watch().map((rows) {
@@ -469,10 +483,10 @@ EXISTS (
 
   /// Stream of maybe-intent todos (intent = 'maybe', done_at IS NULL).
   ///
-  /// Only clarified (processed) todos are returned.  When [tagIds] is
+  /// Every todo is an Outcome, so all are eligible.  When [tagIds] is
   /// non-empty only todos carrying **all** specified tags are returned
   /// (AND semantics).
-  Stream<List<Todo>> watchMaybe({Set<String> tagIds = const {}}) {
+  Stream<List<Todo>> watchSomedayMaybe({Set<String> tagIds = const {}}) {
     return _watchByIntentAndTags(intent: Intent.maybe, tagIds: tagIds);
   }
 
@@ -501,7 +515,7 @@ EXISTS (
     var logChanged = false;
     await attachedDatabase.capturing(() async {
       affected = await customUpdate(
-        'UPDATE todos SET done_at = ?, updated_at = ?, clarified = 1, last_clarified_at = ? '
+        'UPDATE todos SET done_at = ?, updated_at = ?, last_clarified_at = ? '
         'WHERE id = ?',
         variables: [
           Variable(tsIso),
@@ -517,7 +531,6 @@ EXISTS (
           // `done_at` is a TEXT column: its stored string travels opaque.
           'done_at': tsIso,
           'updated_at': encodeInstant(ts),
-          'clarified': true,
           'last_clarified_at': encodeInstant(ts),
         });
       }
@@ -538,6 +551,18 @@ EXISTS (
   /// Done means "completed and not deleted." Trashed rows are excluded so
   /// the Done list isn't polluted by tasks the user has explicitly removed,
   /// even if a `done_at` timestamp survived the trash transition (#278).
+  /// Outcomes that should have a due-date notification: due-dated,
+  /// not done and not trashed. Someday/Maybe Outcomes stay in — only
+  /// completion, deletion, trashing and removing the due date cancel it.
+  Stream<List<Todo>> watchDueDateNotificationCandidates() {
+    return (select(todos)
+          ..where((t) =>
+              t.dueDate.isNotNull() &
+              t.doneAt.isNull() &
+              t.intent.equals('trash').not()))
+        .watch();
+  }
+
   Stream<List<Todo>> watchDone() {
     return customSelect(
       'SELECT ${todoProjectionSql('todos')} FROM todos '
@@ -610,6 +635,7 @@ EXISTS (
     // op disagreeing.
     final ts = (now ?? DateTime.now()).toUtc();
     await attachedDatabase.capturing(() async {
+      await _recordRescheduleIfMovedLater(id, newDueDate, ts);
       await (update(todos)..where((t) => t.id.equals(id))).write(TodosCompanion(
         // Store UTC so Drift's storeDateTimeAsText path emits a standard
         // ISO-8601 string (no leading-space offset). An offset-bearing spelling
@@ -627,6 +653,63 @@ EXISTS (
       });
       attachedDatabase.notifyTodosViewWrite();
     });
+  }
+
+  /// A Bypassed signal: records that the due date of [todoId] was pushed
+  /// **later** while the Outcome sits on the Plan of the open FocusSession.
+  ///
+  /// Counts only an *existing* due date moved later — a first due date, a clear
+  /// or an earlier date is not a pass-over — and only with a session open and
+  /// the Outcome on its Plan. Lives here, not in a screen, so every edit surface
+  /// (Outcome detail, peek sheet, clarify card) counts the same way. Must run
+  /// inside the caller's capturing scope and **before** the due-date write,
+  /// because it reads the date being replaced.
+  Future<void> _recordRescheduleIfMovedLater(
+    String todoId,
+    DateTime newDueDate,
+    DateTime recordedAt,
+  ) async {
+    final previous = await (select(todos)..where((t) => t.id.equals(todoId)))
+        .getSingleOrNull();
+    final previousDueDate = previous?.dueDate;
+    if (previousDueDate == null || !newDueDate.isAfter(previousDueDate)) return;
+    final db = attachedDatabase;
+    final planRows = await db.customSelect(
+      // The globally active session is chosen first (same tie-break as every
+      // other reader), then Plan membership is tested against that one only.
+      'SELECT fs.id AS session_id, fs.user_id AS user_id '
+      'FROM (SELECT id, user_id FROM focus_sessions WHERE ended_at IS NULL '
+      '      ${FocusSessionDao.openSessionWinnerFirstSql} LIMIT 1) fs '
+      'WHERE EXISTS (SELECT 1 FROM focus_session_tasks fst '
+      '              WHERE fst.focus_session_id = fs.id AND fst.task_id = ?)',
+      variables: [Variable<String>(todoId)],
+      readsFrom: {db.focusSessions, db.focusSessionTasks},
+    ).get();
+    if (planRows.isEmpty) return;
+    final sessionId = planRows.first.read<String>('session_id');
+    final userId = planRows.first.read<String>('user_id');
+    final rescheduleId = focusSessionRescheduleIdFor(sessionId, todoId);
+    final at = recordedAt.toUtc();
+    await db.into(db.focusSessionReschedules).insert(
+          FocusSessionReschedulesCompanion(
+            id: Value(rescheduleId),
+            focusSessionId: Value(sessionId),
+            taskId: Value(todoId),
+            recordedAt: Value(at),
+            userId: Value(userId),
+          ),
+          mode: InsertMode.insertOrReplace,
+        );
+    db.opCapture.write(
+      collection: focusSessionReschedulesCollection,
+      entityId: rescheduleId,
+      fields: {
+        'focus_session_id': sessionId,
+        'task_id': todoId,
+        'recorded_at': encodeInstant(at),
+        'user_id': userId,
+      },
+    );
   }
 
   /// Whether the `todos` row [todoId] is present. Called inside a write's
@@ -807,8 +890,7 @@ EXISTS (
  WHERE actions.outcome_id = todos.id AND actions.role = 'done')''';
 
   static const _needsReviewWhere = '''
-clarified = 1
-AND done_at IS NULL
+done_at IS NULL
 AND intent = 'next'
 AND (
   ($_latestActionTerminationClause IS NOT NULL
@@ -826,14 +908,13 @@ AND (
 )''';
 
   /// One-shot snapshot of active next-action todos that carry **no** person-
-  /// typed tag. Used by the Weekly Review wizard's Next Actions step; the
+  /// typed tag. Used by the Weekly Review wizard's Next step; the
   /// person-tag exclusion keeps it disjoint from Waiting For's snapshot so
   /// each task surfaces in at most one wizard step.
   Future<List<Todo>> getNextExcludingPersonTagged() {
     return customSelect(
       'SELECT ${todoProjectionSql('todos')} FROM todos '
-      'WHERE todos.clarified = 1 '
-      'AND todos.done_at IS NULL '
+      'WHERE todos.done_at IS NULL '
       'AND todos.intent = ? '
       'AND NOT EXISTS ('
       '  SELECT 1 FROM todo_tags tt '
@@ -1072,17 +1153,17 @@ AND (
   /// and re-clarification review.
   ///
   /// Each [RoutingKind] in [to] expresses a desired final state for the row's
-  /// clarified / intent / done_at columns; the table below is the forward
+  /// intent / done_at columns; the table below is the forward
   /// matrix that [applyRouting] enforces. `last_clarified_at` is stamped on
   /// every call.
   ///
-  /// | `to`         | clarified | intent  | done_at | current Action           |
-  /// |--------------|-----------|---------|---------|--------------------------|
-  /// | `nextAction` | true      | 'next'  | clear   | set if `actionText`, else set if Actionless and `actionTextIfActionless` |
-  /// | `waitingFor` | true      | 'next'  | clear   | same as `nextAction`     |
-  /// | `maybe`      | true      | 'maybe' | clear   | leave                    |
-  /// | `done`       | true      | leave   | now     | completed                |
-  /// | `trash`      | true      | 'trash' | leave   | leave                    |
+  /// | `to`         | intent  | done_at | current Action           |
+  /// |--------------|---------|---------|--------------------------|
+  /// | `nextAction` | 'next'  | clear   | set if `actionText`, else set if Actionless and `actionTextIfActionless` |
+  /// | `waitingFor` | 'next'  | clear   | same as `nextAction`     |
+  /// | `maybe`      | 'maybe' | clear   | leave                    |
+  /// | `done`       | leave   | now     | completed                |
+  /// | `trash`      | 'trash' | leave   | leave                    |
   ///
   /// Cleanup rule: any non-Done, non-Trash route clears `done_at` if set, so
   /// promoting a previously-completed task back to active state can't leave
@@ -1103,6 +1184,16 @@ AND (
   /// All writes run inside a single transaction so a failure leaves the row
   /// in its prior state.
   ///
+  /// [promotePlannedActionId] folds the Next Action dialog's queue promote into
+  /// the same transaction as the route (#788): the planned Action becomes
+  /// `current` (via [ActionDao.applyPromotePlannedAction], which refuses to
+  /// replace an existing current), or — when [replacingCurrentActionId] names
+  /// the current Action the user confirmed replacing — supersedes it first
+  /// (which throws if sync changed the current meanwhile). Only valid for
+  /// `nextAction`; exclusive with the two action-text parameters. The route
+  /// lands only if the chosen Action ends up the Outcome's current one; if the
+  /// planned row vanished, nothing is written and this returns `false`.
+  ///
   /// Returns `true` iff the routing landed. The Outcome's presence is checked
   /// inside that transaction; an absent row (hard-deleted since the caller
   /// looked) writes nothing — no Action, no person tags, no notifies — and
@@ -1112,10 +1203,25 @@ AND (
     required RoutingKind to,
     String? actionText,
     String? actionTextIfActionless,
+    String? promotePlannedActionId,
+    String? replacingCurrentActionId,
     Set<String>? personTagIds,
     String? userId,
     DateTime? now,
   }) async {
+    if (promotePlannedActionId != null) {
+      if (to != RoutingKind.nextAction) {
+        throw ArgumentError.value(to, 'to',
+            'promotePlannedActionId is only valid for nextAction');
+      }
+      if (actionText != null || actionTextIfActionless != null) {
+        throw ArgumentError('promotePlannedActionId is mutually exclusive '
+            'with actionText and actionTextIfActionless');
+      }
+    } else if (replacingCurrentActionId != null) {
+      throw ArgumentError(
+          'replacingCurrentActionId requires promotePlannedActionId');
+    }
     if (actionTextIfActionless != null) {
       if (to != RoutingKind.nextAction && to != RoutingKind.waitingFor) {
         throw ArgumentError.value(to, 'to',
@@ -1131,138 +1237,244 @@ AND (
       }
     }
     final ts = (now ?? DateTime.now()).toUtc();
-    final tsIso = ts.toIso8601String();
-    var wroteFallbackAction = false;
-    // Only the Next / Waiting For arms carry a next-action phrase, and only
-    // when the caller passes one; those are the arms that write the Action row.
-    // An absent [actionText] leaves the Action untouched.
-    final touchesAction = (to == RoutingKind.nextAction ||
-            to == RoutingKind.waitingFor) &&
-        actionText != null;
-    var actionTerminated = false;
-    var logChanged = false;
-    final landed = await attachedDatabase.capturing(() async {
-      if (!await _todoRowExists(todoId)) return false;
-      final captured = switch (to) {
-        RoutingKind.nextAction || RoutingKind.waitingFor => <String, Object?>{
-            'clarified': true,
-            'intent': 'next',
-            'done_at': null,
-            'last_clarified_at': encodeInstant(ts),
-            'updated_at': encodeInstant(ts),
-          },
-        RoutingKind.maybe => <String, Object?>{
-            'clarified': true,
-            'intent': 'maybe',
-            'done_at': null,
-            'last_clarified_at': encodeInstant(ts),
-            'updated_at': encodeInstant(ts),
-          },
-        RoutingKind.done => <String, Object?>{
-            'clarified': true,
-            'done_at': tsIso,
-            'last_clarified_at': encodeInstant(ts),
-            'updated_at': encodeInstant(ts),
-          },
-        RoutingKind.trash => <String, Object?>{
-            'clarified': true,
-            'intent': 'trash',
-            'last_clarified_at': encodeInstant(ts),
-            'updated_at': encodeInstant(ts),
-          },
-      };
-      final companion = switch (to) {
-        RoutingKind.nextAction || RoutingKind.waitingFor => TodosCompanion(
-            clarified: const Value(true),
-            intent: const Value('next'),
-            doneAt: const Value(null),
-            lastClarifiedAt: Value(ts),
-            updatedAt: Value(ts),
-          ),
-        RoutingKind.maybe => TodosCompanion(
-            clarified: const Value(true),
-            intent: const Value('maybe'),
-            doneAt: const Value(null),
-            lastClarifiedAt: Value(ts),
-            updatedAt: Value(ts),
-          ),
-        RoutingKind.done => TodosCompanion(
-            clarified: const Value(true),
-            doneAt: Value(tsIso),
-            lastClarifiedAt: Value(ts),
-            updatedAt: Value(ts),
-          ),
-        RoutingKind.trash => TodosCompanion(
-            clarified: const Value(true),
-            intent: const Value('trash'),
-            lastClarifiedAt: Value(ts),
-            updatedAt: Value(ts),
-          ),
-      };
-      await (update(todos)..where((t) => t.id.equals(todoId))).write(companion);
-      _captureTodo(todoId, captured);
-
-      if (touchesAction) {
-        final normalised = _normaliseText(actionText);
-        if (normalised == null) {
-          // Blank supersedes the current Action, closing its open log (#476).
-          final effect = await attachedDatabase.actionDao
-              .applySupersedeCurrentAction(todoId, ts: ts);
-          logChanged = logChanged || effect.logChanged;
-        } else {
-          await attachedDatabase.actionDao
-              .applySetCurrentAction(todoId, normalised, ts: ts);
-        }
-      }
-
-      if (actionTextIfActionless != null) {
-        // Guarded fallback (the title-as-action mirror): in this same
-        // transaction, so a failed Action write rolls the route back (#709).
-        // An existing `current` Action — deliberate or just synced — wins.
-        final current =
-            await attachedDatabase.actionDao.getCurrentAction(todoId);
-        if (current == null) {
-          await attachedDatabase.actionDao.applySetCurrentAction(
-              todoId, actionTextIfActionless.trim(),
-              ts: ts);
-          wroteFallbackAction = true;
-        }
-      }
-
-      if (to == RoutingKind.done) {
-        // Achieving the Outcome closes the current Action (ADR-0001 story 4) —
-        // the same cascade markDone runs, sharing one apply-variant.
-        final effect = await attachedDatabase.actionDao
-            .applyCompleteCurrentAction(todoId, ts: ts);
-        actionTerminated = effect.changed;
-        logChanged = logChanged || effect.logChanged;
-      }
-
-      if (personTagIds != null) {
-        if (userId == null) {
-          throw ArgumentError(
-            'userId is required when personTagIds is provided',
-          );
-        }
-        await setPersonTagsForTodo(todoId, personTagIds, userId);
-      }
-      return true;
-    });
+    final effects = _RoutingEffects(
+      // Only the Next / Waiting For arms carry a next-action phrase, and only
+      // when the caller passes one; those are the arms that write the Action
+      // row. An absent [actionText] leaves the Action untouched.
+      touchesAction: (to == RoutingKind.nextAction ||
+              to == RoutingKind.waitingFor) &&
+          actionText != null,
+    );
+    final landed = await attachedDatabase.capturing(
+      () => _routeWithinTransaction(
+        todoId,
+        to: to,
+        ts: ts,
+        effects: effects,
+        actionText: actionText,
+        actionTextIfActionless: actionTextIfActionless,
+        promotePlannedActionId: promotePlannedActionId,
+        replacingCurrentActionId: replacingCurrentActionId,
+        personTagIds: personTagIds,
+        userId: userId,
+      ),
+    );
     if (!landed) return false;
+    _notifyRoutingLanded(effects, personTagsTouched: personTagIds != null);
+    return true;
+  }
 
-    // Notify explicitly so the Inbox / Next Actions lists refresh even when the
+  /// Routes every Outcome in [outcomeIds] to [to] in ONE transaction (bulk
+  /// status change from a list's multi-select).
+  ///
+  /// Each Outcome goes through the same body as [applyRouting] — so the same
+  /// matrix, the same `last_clarified_at` stamp and the same Done cascade — and
+  /// an id with no `todos` row is skipped inside the transaction, writing
+  /// nothing (#444). Any throw rolls the whole batch back and authors no ops.
+  /// View notifications fire once, after the commit; looping the public
+  /// [applyRouting] instead would notify before the batch commits.
+  ///
+  /// Returns the ids the routing landed on.
+  Future<Set<String>> applyRoutingToOutcomes(
+    Set<String> outcomeIds, {
+    required RoutingKind to,
+    Set<String>? personTagIds,
+    String? userId,
+    DateTime? now,
+  }) async {
+    if (outcomeIds.isEmpty) return <String>{};
+    final ts = (now ?? DateTime.now()).toUtc();
+    final effects = _RoutingEffects();
+    final landedIds = <String>{};
+    await attachedDatabase.capturing(() async {
+      // A Person picked in a modal may have been sync-deleted since. Routing
+      // would then drop the old PersonBlockers and add none, so refuse the
+      // whole batch before any write.
+      if (to == RoutingKind.waitingFor &&
+          personTagIds != null &&
+          personTagIds.isNotEmpty) {
+        final present = await (select(tags)
+              ..where((t) => t.type.equals('person') & t.id.isIn(personTagIds)))
+            .map((t) => t.id)
+            .get();
+        if (present.toSet().length != personTagIds.length) {
+          throw const StalePersonSelectionException();
+        }
+      }
+      for (final id in outcomeIds) {
+        final landed = await _routeWithinTransaction(
+          id,
+          to: to,
+          ts: ts,
+          effects: effects,
+          personTagIds: personTagIds,
+          userId: userId,
+        );
+        if (landed) landedIds.add(id);
+      }
+    });
+    if (landedIds.isEmpty) return landedIds;
+    _notifyRoutingLanded(effects, personTagsTouched: personTagIds != null);
+    return landedIds;
+  }
+
+  /// The transaction body of [applyRouting], shared with
+  /// [applyRoutingToOutcomes]. Must run inside a `capturing` scope. Returns
+  /// `false` having written nothing when the Outcome is absent.
+  Future<bool> _routeWithinTransaction(
+    String todoId, {
+    required RoutingKind to,
+    required DateTime ts,
+    required _RoutingEffects effects,
+    String? actionText,
+    String? actionTextIfActionless,
+    String? promotePlannedActionId,
+    String? replacingCurrentActionId,
+    Set<String>? personTagIds,
+    String? userId,
+  }) async {
+    final tsIso = ts.toIso8601String();
+    if (!await _todoRowExists(todoId)) return false;
+    if (promotePlannedActionId != null) {
+      // The queue promote shares this transaction, so a failed route write
+      // rolls the promote (and any supersede) back (#788). Runs before the
+      // routing UPDATE; its own guards throw on a stale confirm.
+      final actionDao = attachedDatabase.actionDao;
+      final effect = replacingCurrentActionId == null
+          ? await actionDao.applyPromotePlannedAction(promotePlannedActionId,
+              ts: ts)
+          : await actionDao.applySupersedeAndPromote(promotePlannedActionId,
+              expectedCurrentActionId: replacingCurrentActionId, ts: ts);
+      // Land only once the chosen Action is this Outcome's current one.
+      final current = await actionDao.getCurrentAction(todoId);
+      if (current?.id != promotePlannedActionId) {
+        // `false` must mean nothing was written.
+        if (effect.changed) {
+          throw StateError('applyRouting: promoted Action '
+              '$promotePlannedActionId does not belong to Outcome $todoId');
+        }
+        return false;
+      }
+      effects.promotedPlannedAction =
+          effects.promotedPlannedAction || effect.changed;
+      effects.logChanged = effects.logChanged || effect.logChanged;
+    }
+    final captured = switch (to) {
+      RoutingKind.nextAction || RoutingKind.waitingFor => <String, Object?>{
+            'intent': 'next',
+          'done_at': null,
+          'last_clarified_at': encodeInstant(ts),
+          'updated_at': encodeInstant(ts),
+        },
+      RoutingKind.maybe => <String, Object?>{
+            'intent': 'maybe',
+          'done_at': null,
+          'last_clarified_at': encodeInstant(ts),
+          'updated_at': encodeInstant(ts),
+        },
+      RoutingKind.done => <String, Object?>{
+            'done_at': tsIso,
+          'last_clarified_at': encodeInstant(ts),
+          'updated_at': encodeInstant(ts),
+        },
+      RoutingKind.trash => <String, Object?>{
+            'intent': 'trash',
+          'last_clarified_at': encodeInstant(ts),
+          'updated_at': encodeInstant(ts),
+        },
+    };
+    final companion = switch (to) {
+      RoutingKind.nextAction || RoutingKind.waitingFor => TodosCompanion(
+          intent: const Value('next'),
+          doneAt: const Value(null),
+          lastClarifiedAt: Value(ts),
+          updatedAt: Value(ts),
+        ),
+      RoutingKind.maybe => TodosCompanion(
+          intent: const Value('maybe'),
+          doneAt: const Value(null),
+          lastClarifiedAt: Value(ts),
+          updatedAt: Value(ts),
+        ),
+      RoutingKind.done => TodosCompanion(
+          doneAt: Value(tsIso),
+          lastClarifiedAt: Value(ts),
+          updatedAt: Value(ts),
+        ),
+      RoutingKind.trash => TodosCompanion(
+          intent: const Value('trash'),
+          lastClarifiedAt: Value(ts),
+          updatedAt: Value(ts),
+        ),
+    };
+    await (update(todos)..where((t) => t.id.equals(todoId))).write(companion);
+    _captureTodo(todoId, captured);
+
+    if (effects.touchesAction && actionText != null) {
+      final normalised = _normaliseText(actionText);
+      if (normalised == null) {
+        // Blank supersedes the current Action, closing its open log (#476).
+        final effect = await attachedDatabase.actionDao
+            .applySupersedeCurrentAction(todoId, ts: ts);
+        effects.logChanged = effects.logChanged || effect.logChanged;
+      } else {
+        await attachedDatabase.actionDao
+            .applySetCurrentAction(todoId, normalised, ts: ts);
+      }
+    }
+
+    if (actionTextIfActionless != null) {
+      // Guarded fallback (the title-as-action mirror): in this same
+      // transaction, so a failed Action write rolls the route back (#709).
+      // An existing `current` Action — deliberate or just synced — wins.
+      final current =
+          await attachedDatabase.actionDao.getCurrentAction(todoId);
+      if (current == null) {
+        await attachedDatabase.actionDao.applySetCurrentAction(
+            todoId, actionTextIfActionless.trim(),
+            ts: ts);
+        effects.wroteFallbackAction = true;
+      }
+    }
+
+    if (to == RoutingKind.done) {
+      // Achieving the Outcome closes the current Action (ADR-0001 story 4) —
+      // the same cascade markDone runs, sharing one apply-variant.
+      final effect = await attachedDatabase.actionDao
+          .applyCompleteCurrentAction(todoId, ts: ts);
+      effects.actionTerminated = effects.actionTerminated || effect.changed;
+      effects.logChanged = effects.logChanged || effect.logChanged;
+    }
+
+    if (personTagIds != null) {
+      if (userId == null) {
+        throw ArgumentError(
+          'userId is required when personTagIds is provided',
+        );
+      }
+      await setPersonTagsForTodo(todoId, personTagIds, userId);
+    }
+    return true;
+  }
+
+  /// Fires the view notifications a landed routing owes, once per commit.
+  void _notifyRoutingLanded(_RoutingEffects effects,
+      {required bool personTagsTouched}) {
+    // Notify explicitly so the Inbox / Next lists refresh even when the
     // write touched a table they do not name — and so they do not depend solely
     // on the async update bridge, which was observed silent on the first cold
     // start of a new planning day (#342). Person-tag edits also touch
     // `todo_tags`, so refresh those watchers too.
-    attachedDatabase.notifyTodosViewWrite(includeTodoTags: personTagIds != null);
-    if (touchesAction || actionTerminated || wroteFallbackAction) {
+    attachedDatabase.notifyTodosViewWrite(includeTodoTags: personTagsTouched);
+    if (effects.touchesAction ||
+        effects.actionTerminated ||
+        effects.wroteFallbackAction ||
+        effects.promotedPlannedAction) {
       attachedDatabase.notifyActionsViewWrite();
     }
     // A supersede or completion in the cascade closes the current Action's open
     // TimeLog (#476); `time_logs` is a view too, so notify its watchers.
-    if (logChanged) attachedDatabase.notifyTimeLogsViewWrite();
-    return true;
+    if (effects.logChanged) attachedDatabase.notifyTimeLogsViewWrite();
   }
 
   static String? _normaliseText(String text) {
@@ -1365,6 +1577,9 @@ AND (
     };
     var actionTouched = false;
     await attachedDatabase.capturing(() async {
+      if (dueDate != null) {
+        await _recordRescheduleIfMovedLater(todoId, dueDate, ts);
+      }
       await (update(todos)..where((t) => t.id.equals(todoId))).write(companion);
       _captureTodo(todoId, captured);
       if (touchesMetadata) {
@@ -1400,7 +1615,7 @@ AND (
   ///
   /// This is the create half of clarifying a Capture (ADR-0006): promoting a
   /// Capture produces a *new* Outcome rather than flipping the raw fragment in
-  /// place. The row lands clarified (`clarified = true`) with `last_clarified_at`
+  /// place. The row lands clarified with `last_clarified_at`
   /// stamped — Outcome creation is a clarifying micro-act per CONTEXT.md — and a
   /// default `intent = 'next'`; the caller then refines intent / Completion via
   /// [applyRouting]. Person and non-person tag associations are attached
@@ -1436,7 +1651,6 @@ AND (
         userId: Value(userId),
         createdAt: Value(ts),
         updatedAt: Value(ts),
-        clarified: const Value(true),
         lastClarifiedAt: Value(ts),
       ));
       // Creation asserts the whole row so a peer that has never seen this
@@ -1518,6 +1732,36 @@ AND (
         fields: {'action_id': null},
       );
     }
+    // The Bypassed rows about this Outcome go with it: every read of them
+    // joins `todos`, so a survivor could never surface, but it would linger.
+    final db = attachedDatabase;
+    final bypassRows = await (db.select(db.focusSessionPlanningBypasses)
+          ..where((b) => b.taskId.equals(id)))
+        .get();
+    for (final row in bypassRows) {
+      capture.tombstone(
+        collection: focusSessionPlanningBypassesCollection,
+        entityId: focusSessionPlanningBypassIdFor(row.focusSessionId, id),
+      );
+    }
+    final rescheduleRows = await (db.select(db.focusSessionReschedules)
+          ..where((r) => r.taskId.equals(id)))
+        .get();
+    for (final row in rescheduleRows) {
+      capture.tombstone(
+        collection: focusSessionReschedulesCollection,
+        entityId: focusSessionRescheduleIdFor(row.focusSessionId, id),
+      );
+    }
+    final decisionRows = await (db.select(db.outcomeBypassDecisions)
+          ..where((d) => d.taskId.equals(id)))
+        .get();
+    for (final row in decisionRows) {
+      capture.tombstone(
+        collection: outcomeBypassDecisionsCollection,
+        entityId: row.id,
+      );
+    }
     capture.tombstone(collection: todosCollection, entityId: id);
   }
 
@@ -1537,10 +1781,39 @@ AND (
       // `ON DELETE CASCADE` already removed the row; the connector's fatal-4xx
       // path skips those harmlessly (docs/SYNC.md).
       await (delete(actions)..where((a) => a.outcomeId.equals(id))).go();
+      final db = attachedDatabase;
+      await (db.delete(db.focusSessionPlanningBypasses)
+            ..where((b) => b.taskId.equals(id)))
+          .go();
+      await (db.delete(db.focusSessionReschedules)
+            ..where((r) => r.taskId.equals(id)))
+          .go();
+      await (db.delete(db.outcomeBypassDecisions)
+            ..where((d) => d.taskId.equals(id)))
+          .go();
       await (delete(todos)..where((t) => t.id.equals(id))).go();
       attachedDatabase.notifyTodosViewWrite();
       attachedDatabase.notifyActionsViewWrite();
       return 1;
     });
   }
+}
+
+/// Mutable effect flags one routing leaves for the caller's notifications.
+class _RoutingEffects {
+  _RoutingEffects({this.touchesAction = false});
+
+  final bool touchesAction;
+  bool wroteFallbackAction = false;
+  bool actionTerminated = false;
+  bool logChanged = false;
+  bool promotedPlannedAction = false;
+}
+
+/// Thrown by [TodoDao.applyRoutingToOutcomes] when a requested Person no
+/// longer exists. The whole batch is rolled back; nothing was written.
+class StalePersonSelectionException implements Exception {
+  const StalePersonSelectionException();
+  @override
+  String toString() => 'A selected Person no longer exists';
 }

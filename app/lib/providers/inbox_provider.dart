@@ -31,6 +31,13 @@ class InboxNotifier {
 
   final Ref _ref;
 
+  /// The oldest Capture still in the Inbox, skipping [excludingId], or null
+  /// when none is left. Drives Inbox clarification one Capture at a time.
+  Future<String?> oldestInboxCaptureId({String? excludingId}) => _ref
+      .read(databaseProvider)
+      .captureDao
+      .oldestInboxCaptureId(excludingId: excludingId);
+
   /// Quick-add: records a raw [title] as a new Capture, unclarified.
   ///
   /// Captures — not Outcomes — are what quick-add produces (ADR-0006): the

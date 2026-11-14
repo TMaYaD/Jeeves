@@ -137,7 +137,7 @@ Recovery options, in order of preference:
 ## The `jeeves-builder` Android build VM
 
 A VirtualBox guest on the Mac that runs the Android toolchain the host cannot:
-Ubuntu 24.04, 2 vCPU, 6 GB RAM, Temurin JDK 17 at `~/jdk17`, Android SDK at
+Ubuntu 24.04, 2 vCPU, 4 GB RAM, Temurin JDK 17 at `~/jdk17`, Android SDK at
 `~/Android/sdk`, Flutter at `~/flutter`. Both versions track the pins CI uses —
 `java-version: 17` in the workflows and `app/.fvmrc` for Flutter — so a mismatch
 here means one of those moved.
@@ -145,7 +145,7 @@ here means one of those moved.
 ### Start, stop, reach
 
 ```bash
-VBoxManage startvm jeeves-builder --type headless   # allow ~4 min to boot
+VBoxManage startvm jeeves-builder --type headless   # SSH normally answers in ~20s
 ssh -i ~/.ssh/id_ed25519 -p 2222 paperclipai@127.0.0.1
 VBoxManage controlvm jeeves-builder acpipowerbutton  # graceful shutdown
 ```
@@ -160,6 +160,75 @@ ISO carries its public half. Regenerating that host key locks the VM out, and
 re-seeding does not fix it: cloud-init skips `users:` for a user that already
 exists, so a replacement key has to be installed from `runcmd`.
 
+### Memory cap and rollback
+
+The VM runs at **4096 MB** with its 8 GB guest swapfile. VirtualBox commits the
+whole cap to the host at boot, so the configured cap drops 4 GB from the original 8 GB on
+the 16 GB host; the host-memory recovery itself was not measured. Two rounds of integer-GB search from 2 to 6 GB, on
+commit `0a4951f` with real profile APK builds, set the number.
+
+**Guest heap setting.** The guest's `~/.gradle/gradle.properties` holds two
+lines and nothing else:
+
+```
+org.gradle.jvmargs=-Xmx2g -XX:MaxMetaspaceSize=4G -XX:ReservedCodeCacheSize=512m -XX:+HeapDumpOnOutOfMemoryError
+kotlin.daemon.jvmargs=-Xmx1g
+```
+
+It caps the Gradle and Kotlin daemons at 2 GB and 1 GB. The repository allows
+each daemon 8 GB (the Kotlin daemon inherits it), and the first round showed the
+idle daemons holding 2.8 to 4.1 GB at every cap, which paged out and back in on
+every second build. The file lives only in the guest: a rebuilt VM needs it
+recreated, and the repository's own `-Xmx8G` is unchanged for CI and developers.
+If a Java `OutOfMemoryError` appears on a guest that is not short of memory,
+raise these two `-Xmx` values, not the cap.
+
+**How the cap was measured.** A series is one fresh boot at a cap, then three
+clean builds with Gradle's build cache off: A on new daemons, B and C warm on the
+same daemon (the builder keeps its daemon between builds). A build passed when it
+completed, nothing was killed for memory, memory stall time stayed at or under
+10% (`some`) and 5% (`full`), and wall time stayed within 1.5 times the 6 GB
+baseline's. Wall time was judged on host CPU-share probes only (host memory
+probes were not available on the builder), so no build met the full probe
+condition. The baseline's warm builds took 360.5 s on average, so the warm limit
+was 540.75 s. Swap-in is recorded, not judged. The per-build table is in the pull request
+description.
+
+3 GB was not shown to fail: it passed the memory checks in both series (no OOM,
+worst stall 5.5%), but its warm builds took 588-639 s against the 540.75 s limit.
+Those overruns were judged on CPU-share probes only, and the first 3 GB series had
+no probes between builds, so they are observations, not qualifying failures. 4 GB
+is adopted as the smallest cap with no warm-build slowdown: it passed two of three
+series, and the failing one missed only wall time while the host's CPU share
+dipped. Lowering to 3 GB later is a separate decision that needs a host memory
+probe on the builder. 2 GB failed. No build had an
+OOM kill, and the worst stall at 4 GB was 5.6% `some`. A 4 GB warm build swaps 0.6
+to 1.1 GB; the swapfile sits on the Mac's own disk, so this costs the host some
+disk traffic.
+
+**What this does not show.** One pinned commit and the APK build only (not
+`flutter test`); wall time moves with host load; only host CPU was probed, not
+host swap traffic or memory pressure, per build; the builder lock was not held
+continuously during the experiment.
+
+**Raise the cap** by 1 GB if a build shows an OOM kill, a stopped daemon or
+memory stall above the limits, and check the build again.
+
+**Rollback** to the former 6144 MB is one power transition. Take the builder lock
+(`tools/builder_run.py`) and hold it through the idle check, shutdown, resize,
+restart and verification, so no build starts in between. Check a one-minute guest
+load below 0.5; wait up to 180 seconds for genuine `poweroff` after ACPI
+shutdown. Do not force shutdown or use saved state.
+
+```bash
+VBoxManage controlvm jeeves-builder acpipowerbutton
+# Poll showvminfo until VMState="poweroff" before proceeding.
+VBoxManage modifyvm jeeves-builder --memory 6144
+VBoxManage startvm jeeves-builder --type headless
+```
+
+Check SSH, guest memory and the 8 GB `/swapfile` after boot.
+
 ### Build
 
 `~/.jeeves_env` exports `JAVA_HOME`, `ANDROID_HOME`/`ANDROID_SDK_ROOT` and
@@ -167,9 +236,9 @@ exists, so a replacement key has to be installed from `runcmd`.
 line sits *above* Ubuntu's non-interactive early-return, so `ssh host '<cmd>'`
 gets the toolchain too — move it below and every non-login command loses `java`.
 
-The VM holds no GitHub credential and no `.git`; the Mac fetches and pushes and
-the VM only compiles. Sync the Mac's current tree over first, or the build
-compiles whatever was synced last. The excludes keep `.git` out and leave the
+Fetch and push on the Mac; the VM compiles the source synced to it. Use a clean
+export of a pinned commit when the host checkout is shared between runs. Sync
+that tree first, or the build compiles whatever was synced last. The excludes keep `.git` out and leave the
 guest's build output and caches alone, so the next build stays warm:
 
 ```bash
@@ -204,7 +273,7 @@ Gradle distribution, resolving dependencies, installing CMake and dexing every
 external library — not throughput, and Dart-side work is only ~1.3× slower even
 cold. So the thing to protect is the Gradle cache and daemon: leave the VM
 running between builds rather than starting clean. The cold column is a first
-build on empty caches, not a measurement of `flutter clean`, which was not timed.
+build on empty caches, separate from the clean rebuilds measured above.
 Treat all three columns as ceilings rather than benchmarks
 anyway; the host is a dual-core i5 shared with the agent fleet, and when it
 runs short of memory it swaps, which stops the guest for tens of seconds at a

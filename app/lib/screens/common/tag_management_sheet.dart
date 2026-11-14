@@ -2,10 +2,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../database/gtd_database.dart' show Tag;
-import '../../providers/tag_filter_provider.dart';
 import '../../providers/tags_provider.dart';
 
-/// A bottom sheet with rename, recolour, and merge actions for a [tag].
+/// The user-facing noun for a tag row of [type]: `context` rows are "tags",
+/// `project` rows "projects" and `person` rows "people" (singular "person").
+String tagKindNoun(String type) => switch (type) {
+      'project' => 'project',
+      'person' => 'person',
+      _ => 'tag',
+    };
+
+/// A bottom sheet with rename, recolour (tags only), merge and delete actions
+/// for a [tag] — which may be a tag, a project or a person.
 class TagManagementSheet extends ConsumerWidget {
   const TagManagementSheet({super.key, required this.tag});
 
@@ -51,18 +59,21 @@ class TagManagementSheet extends ConsumerWidget {
               icon: Icons.edit_outlined,
               label: 'Rename',
               onTap: () {
+                final container = ProviderScope.containerOf(context);
                 Navigator.pop(context);
-                _showRenameDialog(context, ref);
+                _showRenameDialog(context, container);
               },
             ),
-            _ActionTile(
-              icon: Icons.palette_outlined,
-              label: 'Recolour',
-              onTap: () {
-                Navigator.pop(context);
-                _showRecolourDialog(context, ref);
-              },
-            ),
+            if (tag.type == 'context')
+              _ActionTile(
+                icon: Icons.palette_outlined,
+                label: 'Recolour',
+                onTap: () {
+                  final container = ProviderScope.containerOf(context);
+                  Navigator.pop(context);
+                  _showRecolourDialog(context, container);
+                },
+              ),
             _ActionTile(
               icon: Icons.merge_outlined,
               label: 'Merge into…',
@@ -71,18 +82,28 @@ class TagManagementSheet extends ConsumerWidget {
                 _showMergeSheet(context, ref);
               },
             ),
+            _ActionTile(
+              icon: Icons.delete_outline,
+              label: 'Delete',
+              onTap: () {
+                final container = ProviderScope.containerOf(context);
+                Navigator.pop(context);
+                _showDeleteDialog(context, container);
+              },
+            ),
           ],
         ),
       ),
     );
   }
 
-  void _showRenameDialog(BuildContext context, WidgetRef ref) {
+  void _showRenameDialog(BuildContext context, ProviderContainer container) {
+    final noun = tagKindNoun(tag.type);
     final controller = TextEditingController(text: tag.name);
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Rename tag'),
+        title: Text('Rename $noun'),
         content: TextField(
           controller: controller,
           autofocus: true,
@@ -99,12 +120,42 @@ class TagManagementSheet extends ConsumerWidget {
               final newName = controller.text.trim();
               if (newName.isEmpty) return;
               try {
-                await ref.read(tagNotifierProvider).rename(tag.id, newName);
+                // The write itself reports a namesake (check and write share
+                // one transaction), so a collision that appeared after the
+                // list was last read still reaches the user as a question.
+                final taken = await container
+                    .read(tagNotifierProvider)
+                    .renameUnlessTaken(tag.id, newName);
+                if (taken != null) {
+                  if (!ctx.mounted) return;
+                  final confirm = await showDialog<bool>(
+                    context: ctx,
+                    builder: (confirmCtx) => AlertDialog(
+                      title: const Text('Name already in use'),
+                      content: Text(
+                        'There is already a $noun named "${taken.name}". '
+                        'Merge "${tag.name}" into it? This cannot be undone.',
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(confirmCtx, false),
+                          child: const Text('Cancel'),
+                        ),
+                        FilledButton(
+                          onPressed: () => Navigator.pop(confirmCtx, true),
+                          child: const Text('Merge'),
+                        ),
+                      ],
+                    ),
+                  );
+                  if (confirm != true) return;
+                  await container.read(tagNotifierProvider).merge(tag.id, taken.id);
+                }
                 if (ctx.mounted) Navigator.pop(ctx);
               } catch (_) {
                 if (!ctx.mounted) return;
                 ScaffoldMessenger.of(ctx).showSnackBar(
-                  const SnackBar(content: Text('Could not rename tag')),
+                  SnackBar(content: Text('Could not rename $noun')),
                 );
               }
             },
@@ -115,7 +166,45 @@ class TagManagementSheet extends ConsumerWidget {
     );
   }
 
-  void _showRecolourDialog(BuildContext context, WidgetRef ref) {
+  void _showDeleteDialog(BuildContext context, ProviderContainer container) {
+    final noun = tagKindNoun(tag.type);
+    final consequence = switch (tag.type) {
+      'project' => 'Its outcomes stay, without a project.',
+      'person' => 'Outcomes waiting on them stop waiting; the outcomes stay.',
+      _ => 'It is removed from every item that carries it; the items stay.',
+    };
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Delete $noun'),
+        content: Text(
+          'Delete "${tag.name}"? $consequence This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              try {
+                await container.read(tagNotifierProvider).delete(tag.id);
+                if (ctx.mounted) Navigator.pop(ctx);
+              } catch (_) {
+                if (!ctx.mounted) return;
+                ScaffoldMessenger.of(ctx).showSnackBar(
+                  SnackBar(content: Text('Could not delete $noun')),
+                );
+              }
+            },
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showRecolourDialog(BuildContext context, ProviderContainer container) {
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -139,7 +228,7 @@ class TagManagementSheet extends ConsumerWidget {
                   child: GestureDetector(
                     onTap: () async {
                       try {
-                        await ref
+                        await container
                             .read(tagNotifierProvider)
                             .updateColor(tag.id, null);
                         if (ctx.mounted) Navigator.pop(ctx);
@@ -173,7 +262,7 @@ class TagManagementSheet extends ConsumerWidget {
                 child: GestureDetector(
                   onTap: () async {
                     try {
-                      await ref
+                      await container
                           .read(tagNotifierProvider)
                           .updateColor(tag.id, hex);
                       if (ctx.mounted) Navigator.pop(ctx);
@@ -250,7 +339,8 @@ class _MergeTargetSheet extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final tagsAsync = ref.watch(contextTagsProvider);
+    final noun = tagKindNoun(source.type);
+    final tagsAsync = ref.watch(tagsWithCountByTypeProvider(source.type));
 
     return SafeArea(
       child: Padding(
@@ -280,7 +370,10 @@ class _MergeTargetSheet extends ConsumerWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              'All tasks tagged "${source.name}" will be re-tagged.',
+              noun == 'tag'
+                  ? 'All tasks tagged "${source.name}" will be re-tagged.'
+                  : 'Everything linked to "${source.name}" moves to the '
+                      '$noun you pick.',
               style:
                   const TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
             ),
@@ -289,17 +382,20 @@ class _MergeTargetSheet extends ConsumerWidget {
               loading: () =>
                   const Center(child: CircularProgressIndicator()),
               error: (e, s) =>
-                  const Text('Could not load tags'),
+                  Text('Could not load ${noun == 'person' ? 'people' : '${noun}s'}'),
               data: (allTags) {
                 final targets = allTags
+                    .map((e) => e.tag)
                     .where((t) => t.id != source.id)
                     .toList();
                 if (targets.isEmpty) {
-                  return const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 12),
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
                     child: Text(
-                      'No other tags to merge into.',
-                      style: TextStyle(color: Color(0xFF9CA3AF)),
+                      noun == 'person'
+                          ? 'No other people to merge into.'
+                          : 'No other ${noun}s to merge into.',
+                      style: const TextStyle(color: Color(0xFF9CA3AF)),
                     ),
                   );
                 }
@@ -345,18 +441,6 @@ class _MergeTargetSheet extends ConsumerWidget {
                             await ref
                                 .read(tagNotifierProvider)
                                 .merge(source.id, target.id);
-                            // If the merged-away tag was in the active
-                            // filter, swap it for the target so DAO watchers
-                            // keep returning the user's intended results.
-                            final filter = ref.read(tagFilterProvider);
-                            if (filter.contains(source.id)) {
-                              final notifier =
-                                  ref.read(tagFilterProvider.notifier);
-                              notifier.toggle(source.id);
-                              if (!filter.contains(target.id)) {
-                                notifier.toggle(target.id);
-                              }
-                            }
                             if (context.mounted) Navigator.pop(context);
                           } catch (_) {
                             if (!context.mounted) return;

@@ -14,6 +14,10 @@ import 'package:timezone/data/latest_all.dart' as tz_data;
 import 'package:timezone/timezone.dart' as tz;
 
 import '../models/ritual.dart';
+import 'due_date_notifications.dart'
+    show
+        fireAtMillisFromNotificationPayload,
+        outcomeIdFromNotificationPayload;
 
 // Stable notification IDs.
 const _kFocusSessionPlanningNotificationId = 0;
@@ -37,6 +41,7 @@ const kPeriodicReviewActionSnooze = 'periodic_review_snooze';
 const kPeriodicReviewActionSkip = 'periodic_review_skip_today';
 
 const _kFocusId = 1001;
+const _kDueDateChannelId = 'due_dates';
 
 class NotificationService {
   NotificationService._();
@@ -92,7 +97,7 @@ class NotificationService {
             DarwinNotificationAction.plain(
                 kPeriodicReviewActionSnooze, 'Snooze'),
             DarwinNotificationAction.plain(
-                kPeriodicReviewActionSkip, 'Skip today'),
+                kPeriodicReviewActionSkip, 'Skip this week'),
           ],
         ),
       ],
@@ -102,6 +107,28 @@ class NotificationService {
       onDidReceiveNotificationResponse: onNotificationResponse,
       onDidReceiveBackgroundNotificationResponse: onNotificationResponse,
     );
+  }
+
+  /// Whether the OS currently lets Jeeves show notifications. Unlike
+  /// [requestPermissions] this never prompts, so it can be re-read on resume
+  /// after the user changes the setting in system settings.
+  Future<bool> areNotificationsAllowed() async {
+    final android = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    if (android != null) {
+      return await android.areNotificationsEnabled() ?? false;
+    }
+    final iOS = _plugin.resolvePlatformSpecificImplementation<
+        IOSFlutterLocalNotificationsPlugin>();
+    if (iOS != null) {
+      return (await iOS.checkPermissions())?.isEnabled ?? false;
+    }
+    final macOS = _plugin.resolvePlatformSpecificImplementation<
+        MacOSFlutterLocalNotificationsPlugin>();
+    if (macOS != null) {
+      return (await macOS.checkPermissions())?.isEnabled ?? false;
+    }
+    return false;
   }
 
   Future<bool> requestPermissions() async {
@@ -131,7 +158,8 @@ class NotificationService {
   }
 
   // ---------------------------------------------------------------------------
-  // Task reminders (generic, used by future reminder feature)
+  // Due-date notifications. Named `scheduleReminder` for historical reasons;
+  // "Reminder" in CONTEXT.md is a different, Action-level concept.
   // ---------------------------------------------------------------------------
 
   Future<void> scheduleReminder({
@@ -139,18 +167,20 @@ class NotificationService {
     required String title,
     required String body,
     required DateTime scheduledAt,
+    String? payload,
   }) async {
     final scheduled = tz.TZDateTime.from(scheduledAt, tz.local);
     await _plugin.zonedSchedule(
       id: id,
       title: title,
       body: body,
+      payload: payload,
       scheduledDate: scheduled,
       notificationDetails: const NotificationDetails(
         android: AndroidNotificationDetails(
-          'task_reminders',
-          'Task Reminders',
-          channelDescription: 'Reminders for scheduled tasks',
+          _kDueDateChannelId,
+          'Due dates',
+          channelDescription: 'Outcomes that are due today',
           importance: Importance.high,
           priority: Priority.high,
         ),
@@ -160,6 +190,56 @@ class NotificationService {
     );
   }
 
+  /// Due-date notifications the OS holds, recognised by their payload:
+  /// `pending` are still scheduled to fire; `delivered` already fired and sit
+  /// in the tray. The queries are sequential, so an alarm that fires between
+  /// them appears in both sets.
+  /// `pendingFireAtMillis` maps a pending id to the fire instant recorded in
+  /// its payload (absent for payloads that carry none).
+  Future<
+      ({
+        Set<int> pending,
+        Map<int, int> pendingFireAtMillis,
+        Set<int> delivered
+      })> dueDateNotificationsOnDevice() async {
+    final pending = <int>{};
+    final pendingFireAtMillis = <int, int>{};
+    for (final request in await _plugin.pendingNotificationRequests()) {
+      if (outcomeIdFromNotificationPayload(request.payload) != null) {
+        pending.add(request.id);
+        final millis = fireAtMillisFromNotificationPayload(request.payload);
+        if (millis != null) pendingFireAtMillis[request.id] = millis;
+      }
+    }
+    final delivered = <int>{};
+    final android = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    for (final shown
+        in await android?.getActiveNotifications() ?? const <ActiveNotification>[]) {
+      final id = shown.id;
+      // Android reports no payload for active notifications (iOS/macOS only),
+      // so recognise ours by channel, or by payload where one is present.
+      if (id != null &&
+          (shown.channelId == _kDueDateChannelId ||
+              outcomeIdFromNotificationPayload(shown.payload) != null)) {
+        delivered.add(id);
+      }
+    }
+    return (
+      pending: pending,
+      pendingFireAtMillis: pendingFireAtMillis,
+      delivered: delivered
+    );
+  }
+
+  /// Re-reads the device timezone into `tz.local`. Returns whether it changed.
+  Future<bool> refreshLocalTimezone() async {
+    final info = await FlutterTimezone.getLocalTimezone();
+    if (info.identifier == tz.local.name) return false;
+    tz.setLocalLocation(tz.getLocation(info.identifier));
+    return true;
+  }
+
   // ---------------------------------------------------------------------------
   // Ritual notifications — unified surface for every Ritual's Nudge.
   // The per-Ritual notification IDs, channel IDs, titles, action IDs, and
@@ -167,59 +247,67 @@ class NotificationService {
   // Ritual is one entry in that matrix, not five new methods.
   // ---------------------------------------------------------------------------
 
-  /// Schedules (or re-schedules) [ritual]'s recurring daily reminder at [time].
-  /// Uses [DateTimeComponents.time] so the OS reschedules it automatically
-  /// each day without any app interaction.
-  Future<void> scheduleRitualReminder(RitualId ritual, TimeOfDay time) async {
+  /// Whether the OS lets Jeeves set exact alarms right now. Ritual alarms are
+  /// scheduled exact only then; the scheduler re-reads this so alarms armed
+  /// inexact are replaced once the permission appears.
+  Future<bool> canScheduleExactRitualNotifications() async {
+    final android = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    return await android?.canScheduleExactNotifications() ?? false;
+  }
+
+  /// Schedules one Ritual notification at [fireAt]. [id] decides what it
+  /// replaces: scheduling again under the same id moves the alarm.
+  Future<void> scheduleRitualNotification({
+    required int id,
+    required RitualId ritual,
+    required DateTime fireAt,
+    required String payload,
+  }) async {
     final cfg = _ritualConfigs[ritual]!;
+    final canExact = await canScheduleExactRitualNotifications();
     await _plugin.zonedSchedule(
-      id: cfg.recurringId,
+      id: id,
       title: cfg.title,
       body: cfg.body,
-      payload: cfg.payload,
-      scheduledDate: _nextInstanceOf(time),
+      payload: payload,
+      scheduledDate: tz.TZDateTime.from(fireAt, tz.local),
       notificationDetails: _ritualNotificationDetails(cfg),
-      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-      matchDateTimeComponents: DateTimeComponents.time,
+      // Exact when the OS already permits it, so a reminder lands at its
+      // configured minute; otherwise Android may deliver it late.
+      androidScheduleMode: ritualAndroidScheduleMode(canExact: canExact),
     );
   }
 
-  /// Schedules a one-off snooze fire [minutes] from now. Leaves the recurring
-  /// daily schedule untouched so tomorrow's reminder still fires.
-  Future<void> snoozeRitualReminder(RitualId ritual, int minutes) async {
-    final cfg = _ritualConfigs[ritual]!;
-    await _plugin.cancel(id: cfg.snoozeId);
-    final fireAt = tz.TZDateTime.now(tz.local).add(Duration(minutes: minutes));
-    await _plugin.zonedSchedule(
-      id: cfg.snoozeId,
-      title: cfg.title,
-      body: cfg.body,
-      payload: cfg.payload,
-      scheduledDate: fireAt,
-      notificationDetails: _ritualNotificationDetails(cfg),
-      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-    );
+  /// Ritual notifications the OS still has scheduled: everything with a
+  /// `nudge:` payload, plus the fixed ids earlier builds armed (which carry
+  /// the same payload prefix, or none when scheduled before payloads existed).
+  Future<List<({int id, String? payload})>> pendingRitualNotifications() async {
+    return [
+      for (final request in await _plugin.pendingNotificationRequests())
+        if (_isRitualNotification(request.id, request.payload))
+          (id: request.id, payload: request.payload),
+    ];
   }
 
-  /// Cancels both the recurring daily reminder and any pending snooze for
-  /// [ritual]. Use when notifications are fully disabled by the user.
-  Future<void> cancelRitualReminder(RitualId ritual) async {
-    final cfg = _ritualConfigs[ritual]!;
-    await _plugin.cancel(id: cfg.recurringId);
-    await _plugin.cancel(id: cfg.snoozeId);
-  }
-
-  /// Cancels only the recurring daily reminder, leaving any pending snooze
-  /// intact. Use when notifications are temporarily suppressed but the
-  /// user-requested one-off snooze should still fire.
-  Future<void> cancelRecurringRitualReminder(RitualId ritual) async {
-    await _plugin.cancel(id: _ritualConfigs[ritual]!.recurringId);
-  }
-
-  /// Cancels only the pending snooze (the "Skip today" notification action).
-  /// The recurring daily schedule still fires tomorrow.
-  Future<void> skipTodayRitualReminder(RitualId ritual) async {
-    await _plugin.cancel(id: _ritualConfigs[ritual]!.snoozeId);
+  /// Ritual notifications sitting in the tray. iOS reports the payload; Android
+  /// reports none, so the Ritual is then recognised by its channel.
+  Future<List<({int id, RitualId ritual})>> deliveredRitualNotifications() async {
+    final delivered = <({int id, RitualId ritual})>[];
+    for (final shown in await _plugin.getActiveNotifications()) {
+      final id = shown.id;
+      if (id == null) continue;
+      RitualId? ritual = ritualIdFromNotificationPayload(shown.payload);
+      if (ritual == null) {
+        for (final entry in _ritualConfigs.entries) {
+          if (entry.value.androidChannelId == shown.channelId) {
+            ritual = entry.key;
+          }
+        }
+      }
+      if (ritual != null) delivered.add((id: id, ritual: ritual));
+    }
+    return delivered;
   }
 
   Future<void> cancelReminder(int id) async {
@@ -355,16 +443,6 @@ class NotificationService {
   // Helpers
   // ---------------------------------------------------------------------------
 
-  tz.TZDateTime _nextInstanceOf(TimeOfDay time) {
-    final now = tz.TZDateTime.now(tz.local);
-    var scheduled = tz.TZDateTime(
-        tz.local, now.year, now.month, now.day, time.hour, time.minute);
-    if (scheduled.isBefore(now)) {
-      scheduled = scheduled.add(const Duration(days: 1));
-    }
-    return scheduled;
-  }
-
   NotificationDetails _ritualNotificationDetails(
       _RitualNotificationConfig cfg) {
     return NotificationDetails(
@@ -375,9 +453,10 @@ class NotificationService {
         importance: cfg.androidImportance,
         priority: cfg.androidPriority,
         actions: [
-          AndroidNotificationAction(cfg.openAction, cfg.openLabel),
+          AndroidNotificationAction(cfg.openAction, cfg.openLabel,
+              showsUserInterface: true),
           AndroidNotificationAction(cfg.snoozeAction, 'Snooze'),
-          AndroidNotificationAction(cfg.skipAction, 'Skip today'),
+          AndroidNotificationAction(cfg.skipAction, cfg.skipLabel),
         ],
       ),
       iOS: DarwinNotificationDetails(categoryIdentifier: cfg.iOSCategoryId),
@@ -401,7 +480,7 @@ class _RitualNotificationConfig {
     required this.snoozeAction,
     required this.skipAction,
     required this.openLabel,
-    required this.payload,
+    this.skipLabel = 'Skip today',
   });
 
   final int recurringId;
@@ -418,25 +497,169 @@ class _RitualNotificationConfig {
   final String snoozeAction;
   final String skipAction;
   final String openLabel;
-
-  /// Stable string identifying the Ritual on a notification body tap
-  /// (`response.actionId == null`). The action-handler maps it back to a
-  /// `RitualId` via [ritualIdFromNotificationPayload].
-  final String payload;
+  final String skipLabel;
 }
 
 /// Prefix on every Ritual notification's payload. Picked to be distinct from
 /// the Pomodoro sprint notifications, which use payload `'focus'`.
 const _kNudgePayloadPrefix = 'nudge:';
 
+/// Ids earlier builds armed for the Rituals (recurring and snooze). The
+/// scheduler owns them: it cancels any it did not plan.
+const _kLegacyRitualNotificationIds = {0, 1, 4, 5, 6, 7};
+
+bool _isRitualNotification(int id, String? payload) =>
+    _kLegacyRitualNotificationIds.contains(id) ||
+    isLegacyKeepAliveNotificationId(id) ||
+    (payload?.startsWith(_kNudgePayloadPrefix) ?? false);
+
+/// An earlier build of this scheduler armed one repeating alarm per Ritual
+/// from here up. Nothing arms them now; the reconciler cancels any left over.
+const _kLegacyKeepAliveIdBase = 500;
+
+/// Whether [id] is one of those retired repeating alarms.
+bool isLegacyKeepAliveNotificationId(int id) =>
+    id >= _kLegacyKeepAliveIdBase &&
+    id < _kLegacyKeepAliveIdBase + RitualId.values.length;
+
+/// The id of [ritual]'s snooze alarm. One per Ritual: snoozing again moves it.
+int ritualSnoozeNotificationId(RitualId ritual) =>
+    _ritualConfigs[ritual]!.snoozeId;
+
+/// The label of [ritual]'s Skip action button.
+String ritualSkipActionLabel(RitualId ritual) =>
+    _ritualConfigs[ritual]!.skipLabel;
+
+/// One stretch of time during which a higher-priority Ritual's Nudge holds the
+/// Notification surface. Start inclusive, end exclusive.
+typedef RitualOutrankedInterval = ({DateTime start, DateTime end});
+
+/// What a Ritual notification's payload says. Format:
+/// `nudge:<keyPrefix>|edge=<iso>|snooze=<minutes>|at=<epoch ms>`
+/// `[|cover=<epoch ms>|out=<start ms>-<end ms>,...]` (stretches are rounded
+/// outward to the millisecond)
+/// — `edge` is the Nudge firing the notification belongs to (Skip cancels the
+/// other pending alarms of the same firing), `snooze` is how long Snooze hides
+/// it, `at` is the instant it was scheduled for. `cover` and `out` let a
+/// background Snooze, which has no database, tell whether the Ritual would hold
+/// the surface at its expiry: `out` lists every stretch up to `cover` when a
+/// higher-priority Ritual's Nudge holds it, judged from Nudge facts when the
+/// alarm was planned; past `cover` nothing is known. Notifications already in
+/// the tray from older builds carry the bare `nudge:<keyPrefix>`; every field
+/// is then null.
+class RitualNotificationPayload {
+  const RitualNotificationPayload({
+    required this.ritual,
+    this.edge,
+    this.snoozeMinutes,
+    this.fireAt,
+    this.coveredUntil,
+    this.outranked = const [],
+  });
+
+  final RitualId ritual;
+  final DateTime? edge;
+  final int? snoozeMinutes;
+  final DateTime? fireAt;
+
+  /// End of the window [outranked] describes; null when the payload carries
+  /// no queue facts.
+  final DateTime? coveredUntil;
+  final List<RitualOutrankedInterval> outranked;
+
+  /// Whether [ritual] may notify at [instant]. Null when the payload cannot
+  /// say (no queue facts, or [instant] is past what they cover).
+  bool? mayNotifyAt(DateTime instant) {
+    final cover = coveredUntil;
+    if (cover == null) return null;
+    // Coverage ends exclusively, as do the outranked stretches that run to it:
+    // at [cover] itself ownership is unknown, so the Ritual may not notify.
+    if (!instant.isBefore(cover)) return false;
+    return !outranked.any(
+        (i) => !instant.isBefore(i.start) && instant.isBefore(i.end));
+  }
+}
+
+String ritualNotificationPayload(
+  RitualId ritual, {
+  required DateTime edge,
+  required int snoozeMinutes,
+  required DateTime fireAt,
+  DateTime? coveredUntil,
+  List<RitualOutrankedInterval> outranked = const [],
+}) =>
+    '$_kNudgePayloadPrefix${ritual.keyPrefix}'
+    '|edge=${edge.toUtc().toIso8601String()}'
+    '|snooze=$snoozeMinutes'
+    '|at=${fireAt.millisecondsSinceEpoch}'
+    '${coveredUntil == null ? '' : '|cover=${coveredUntil.millisecondsSinceEpoch}'}'
+    '${outranked.isEmpty ? '' : '|out=${outranked.map((i) => '${i.start.millisecondsSinceEpoch}-${(i.end.microsecondsSinceEpoch + 999) ~/ 1000}').join(',')}'}';
+
+/// Parses either payload form. Null when [payload] is not a Ritual payload.
+RitualNotificationPayload? parseRitualNotificationPayload(String? payload) {
+  if (payload == null || !payload.startsWith(_kNudgePayloadPrefix)) return null;
+  final parts = payload.substring(_kNudgePayloadPrefix.length).split('|');
+  RitualId? ritual;
+  for (final r in RitualId.values) {
+    if (r.keyPrefix == parts.first) ritual = r;
+  }
+  if (ritual == null) return null;
+  String? field(String name) {
+    for (final part in parts.skip(1)) {
+      if (part.startsWith('$name=')) return part.substring(name.length + 1);
+    }
+    return null;
+  }
+
+  DateTime? millis(String? raw) {
+    final value = int.tryParse(raw ?? '');
+    return value == null ? null : DateTime.fromMillisecondsSinceEpoch(value);
+  }
+
+  final intervals = <RitualOutrankedInterval>[];
+  for (final pair in (field('out') ?? '').split(',')) {
+    final ends = pair.split('-');
+    if (ends.length != 2) continue;
+    final start = millis(ends[0]);
+    final end = millis(ends[1]);
+    if (start != null && end != null) intervals.add((start: start, end: end));
+  }
+  return RitualNotificationPayload(
+    ritual: ritual,
+    edge: DateTime.tryParse(field('edge') ?? ''),
+    snoozeMinutes: int.tryParse(field('snooze') ?? ''),
+    fireAt: millis(field('at')),
+    coveredUntil: millis(field('cover')),
+    outranked: intervals,
+  );
+}
+
 /// Maps a notification payload back to its [RitualId] for body-tap routing
 /// in the notification-action handler. Returns null when the payload is
 /// absent or does not look like a Nudge payload (e.g. a sprint notification).
-RitualId? ritualIdFromNotificationPayload(String? payload) {
-  if (payload == null || !payload.startsWith(_kNudgePayloadPrefix)) return null;
-  final prefix = payload.substring(_kNudgePayloadPrefix.length);
-  for (final r in RitualId.values) {
-    if (r.keyPrefix == prefix) return r;
+RitualId? ritualIdFromNotificationPayload(String? payload) =>
+    parseRitualNotificationPayload(payload)?.ritual;
+
+/// What a Ritual notification action button does.
+enum RitualNotificationActionKind { open, snooze, skip }
+
+/// Resolves a notification action ID to its Ritual and verb through the
+/// per-Ritual config matrix. Returns null for an unknown ID, so a stale action
+/// on an already-delivered notification is ignored rather than misrouted.
+({RitualId ritual, RitualNotificationActionKind kind})?
+    ritualNotificationActionFor(String? actionId) {
+  if (actionId == null) return null;
+  for (final entry in _ritualConfigs.entries) {
+    final cfg = entry.value;
+    if (actionId == cfg.openAction) {
+      return (ritual: entry.key, kind: RitualNotificationActionKind.open);
+    }
+    if (actionId == cfg.snoozeAction) {
+      return (ritual: entry.key, kind: RitualNotificationActionKind.snooze);
+    }
+    if (actionId == cfg.skipAction) {
+      return (ritual: entry.key, kind: RitualNotificationActionKind.skip);
+    }
   }
   return null;
 }
@@ -465,7 +688,6 @@ const _ritualConfigs = <RitualId, _RitualNotificationConfig>{
     snoozeAction: kNotificationActionSnooze,
     skipAction: kNotificationActionSkip,
     openLabel: 'Open',
-    payload: '${_kNudgePayloadPrefix}planning',
   ),
   RitualId.eveningShutdown: _RitualNotificationConfig(
     recurringId: _kShutdownNotificationId,
@@ -482,7 +704,6 @@ const _ritualConfigs = <RitualId, _RitualNotificationConfig>{
     snoozeAction: kShutdownNotificationActionSnooze,
     skipAction: kShutdownNotificationActionSkip,
     openLabel: 'Open',
-    payload: '${_kNudgePayloadPrefix}shutdown',
   ),
   RitualId.weeklyReview: _RitualNotificationConfig(
     recurringId: _kPeriodicReviewNotificationId,
@@ -499,9 +720,15 @@ const _ritualConfigs = <RitualId, _RitualNotificationConfig>{
     snoozeAction: kPeriodicReviewActionSnooze,
     skipAction: kPeriodicReviewActionSkip,
     openLabel: 'Start Review',
-    payload: '${_kNudgePayloadPrefix}periodic_review',
+    skipLabel: 'Skip this week',
   ),
 };
+
+/// The Android alarm mode for a Ritual reminder.
+AndroidScheduleMode ritualAndroidScheduleMode({required bool canExact}) =>
+    canExact
+        ? AndroidScheduleMode.exactAllowWhileIdle
+        : AndroidScheduleMode.inexactAllowWhileIdle;
 
 final notificationServiceProvider = Provider<NotificationService>((ref) {
   return NotificationService.instance;

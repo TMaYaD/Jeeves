@@ -2,7 +2,7 @@
 ///
 /// Time-based Trigger predicates (see `nudge_triggers.dart`) compare the
 /// current instant against scheduled boundaries — the day boundary, the
-/// Evening Shutdown anchor, the Weekly Review cadence-due instant. Sampling
+/// Evening Shutdown anchor, the Weekly Review cadence boundaries. Sampling
 /// `DateTime.now()` directly inside those Providers makes them un-reactive:
 /// Riverpod never re-evaluates them when a boundary passes, so a predicate's
 /// false→true edge is only observed when some unrelated rebuild happens to
@@ -14,7 +14,7 @@
 /// - [nudgeBoundaryTickProvider] — a coarse reactive signal that the
 ///   time-based Trigger Providers `ref.watch`. It schedules a single [Timer]
 ///   that fires at the *next* relevant boundary across all Rituals (next day
-///   boundary, today's Evening Shutdown anchor, the Weekly Review due instant),
+///   boundary, today's Evening Shutdown anchor, the next Weekly Review period boundary),
 ///   bumps the tick, and re-arms. Watching it re-evaluates a Trigger exactly
 ///   when a boundary crosses — not on a per-second cadence — so there is no
 ///   rebuild storm and unrelated Providers are untouched.
@@ -25,9 +25,12 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'clock_provider.dart';
+import 'focus_session_planning_settings_provider.dart'
+    show focusSessionPlanningSettingsProvider;
 import 'periodic_review_settings_provider.dart'
     show periodicReviewLastCompletedProvider;
 import 'shutdown_settings_provider.dart' show shutdownSettingsProvider;
+import 'system_trust_provider.dart' show weeklyReviewDueAtProvider;
 
 // ---------------------------------------------------------------------------
 // Boundary scheduling
@@ -64,13 +67,18 @@ DateTime _todayAt(DateTime now, int hour, int minute) {
 ///   - the next day boundary (DPR / WR `firingSince` and the content-state
 ///     per-day stamp all key off start-of-day);
 ///   - today's Evening Shutdown anchor, if still in the future (ES flips at it);
-///   - the Weekly Review cadence-due instant (`lastCompleted + 7d`), if still
-///     in the future (WR's due predicate flips at it).
+///   - today's planning anchor, if still in the future (Daily Planning, idle
+///     overnight, can fire again from it);
+///   - the next Weekly Review seven-day boundary from the due instant
+///     (WR becomes due at the first, then refires at each subsequent boundary).
 DateTime nextNudgeBoundary(
   DateTime now, {
   required int shutdownHour,
   required int shutdownMinute,
-  required DateTime? weeklyReviewLastCompleted,
+  int? planningHour,
+  int? planningMinute,
+  required DateTime? weeklyReviewDueAt,
+  DateTime? weeklyReviewLastCompleted,
 }) {
   var next = _nextDayBoundary(now);
 
@@ -79,11 +87,37 @@ DateTime nextNudgeBoundary(
     next = shutdownAnchor;
   }
 
-  if (weeklyReviewLastCompleted != null) {
-    final due = weeklyReviewLastCompleted
-        .add(const Duration(days: _kWeeklyReviewCadenceDays));
+  // Daily Planning is idle from the Shutdown anchor until the planning anchor,
+  // so the planning anchor is the instant it can start firing again.
+  if (planningHour != null && planningMinute != null) {
+    final planningAnchor = _todayAt(now, planningHour, planningMinute);
+    if (planningAnchor.isAfter(now) && planningAnchor.isBefore(next)) {
+      next = planningAnchor;
+    }
+  }
+
+  if (weeklyReviewDueAt != null) {
+    final elapsedPeriods =
+        now.difference(weeklyReviewDueAt).inDays ~/ _kWeeklyReviewCadenceDays;
+    final nextPeriod = now.isBefore(weeklyReviewDueAt) ? 0 : elapsedPeriods + 1;
+    final due = weeklyReviewDueAt
+        .add(Duration(days: _kWeeklyReviewCadenceDays * nextPeriod));
     if (due.isAfter(now) && due.isBefore(next)) {
       next = due;
+    }
+  }
+
+  // The shipped Weekly Review Trigger still refires from the last completion,
+  // which a partial review does not move; keep that boundary until the nudge
+  // story changes it.
+  if (weeklyReviewLastCompleted != null) {
+    final elapsedPeriods = now.difference(weeklyReviewLastCompleted).inDays ~/
+        _kWeeklyReviewCadenceDays;
+    final nextPeriod = elapsedPeriods < 0 ? 1 : elapsedPeriods + 1;
+    final refire = weeklyReviewLastCompleted
+        .add(Duration(days: _kWeeklyReviewCadenceDays * nextPeriod));
+    if (refire.isAfter(now) && refire.isBefore(next)) {
+      next = refire;
     }
   }
 
@@ -95,7 +129,7 @@ DateTime nextNudgeBoundary(
 ///
 /// On each build it computes [nextNudgeBoundary] from the current clock and the
 /// boundary-relevant settings ([shutdownSettingsProvider],
-/// [periodicReviewLastCompletedProvider]) it watches, then schedules a single
+/// [weeklyReviewDueAtProvider]) it watches, then schedules a single
 /// [Timer] to [Ref.invalidateSelf] at that instant. Re-building recomputes the
 /// next boundary and re-arms — so exactly one timer is ever pending, and it
 /// fires once per boundary rather than once per tick. When a watched setting
@@ -110,13 +144,19 @@ DateTime nextNudgeBoundary(
 final nudgeBoundaryTickProvider = Provider<int>((ref) {
   final now = ref.watch(clockProvider)();
   final shutdown = ref.watch(shutdownSettingsProvider).shutdownTime;
-  final lastReview = ref.watch(periodicReviewLastCompletedProvider);
+  final planningTime =
+      ref.watch(focusSessionPlanningSettingsProvider).planningTime;
+  final dueAt = ref.watch(weeklyReviewDueAtProvider);
+  final lastCompleted = ref.watch(periodicReviewLastCompletedProvider);
 
   final next = nextNudgeBoundary(
     now,
     shutdownHour: shutdown.hour,
     shutdownMinute: shutdown.minute,
-    weeklyReviewLastCompleted: lastReview,
+    planningHour: planningTime.hour,
+    planningMinute: planningTime.minute,
+    weeklyReviewDueAt: dueAt,
+    weeklyReviewLastCompleted: lastCompleted,
   );
 
   final delay = next.difference(now);

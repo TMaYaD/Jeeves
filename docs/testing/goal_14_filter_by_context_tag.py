@@ -20,7 +20,7 @@ Flow:
      Energy, Time, Review, finishing planning to return to /focus.
   6. Open drawer.
   7. ASSERT: tag chip "@<name> (1)" is visible in the tag cloud.
-  8. Tap the chip (selects the filter). Tap "Next Actions" in the drawer.
+  8. Tap the chip (selects the filter). Tap "Next" in the drawer.
   9. ASSERT: only "CtxFilter_G14" is shown; "Clear all" / "@<name>"
      filter chip is visible above the list.
  10. Tap "Clear all" and ASSERT the list shows more than one item again.
@@ -115,10 +115,10 @@ def main():
     chip = d(descriptionMatches=rf"@{CTX} \(\d+\)")
     assert chip.exists, f"Expected @{CTX} chip in tag cloud"
 
-    # 8. Tap chip → tap Next Actions
+    # 8. Tap chip → tap Next
     chip.click()
     time.sleep(0.6)
-    d(descriptionContains="Next Actions").click()
+    d(description="Next").click()
     time.sleep(1.5)
 
     # 9. ASSERT only the filtered task is visible

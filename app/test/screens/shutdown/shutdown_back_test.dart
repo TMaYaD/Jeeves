@@ -28,7 +28,6 @@ Future<void> _insertTodo(GtdDatabase db, String id) async {
   await db.into(db.todos).insert(TodosCompanion(
     id: Value(id),
     title: Value('Task $id'),
-    clarified: const Value(true),
     userId: const Value(_userId),
     createdAt: Value(now),
     updatedAt: Value(now),
@@ -92,6 +91,8 @@ void main() {
       final notifier = container.read(eveningShutdownProvider.notifier);
       notifier.goToStep(1);
       await _settle(tester);
+      expect(find.text('Return to Next'), findsOneWidget);
+      expect(find.text('Move to Someday/Maybe'), findsOneWidget);
       notifier.nextUnfinishedTask();
       await tester.pumpAndSettle();
 

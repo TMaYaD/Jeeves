@@ -7,7 +7,8 @@ import '../database/daos/capture_dao.dart' show CarvedOutcome;
 import '../database/gtd_database.dart';
 import '../models/action_draft.dart';
 import '../models/time_context.dart';
-import '../models/todo.dart' show Intent, RoutingKind;
+import '../models/intent.dart';
+import '../models/routing_kind.dart';
 import 'auth_provider.dart';
 import 'database_provider.dart';
 

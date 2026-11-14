@@ -420,6 +420,65 @@ void main() {
     });
   });
 
+  group('rename, merge and delete from the management screens', () {
+    test('reach the other device: no reference to a merged or deleted entry',
+        () async {
+      final workspace = await SimWorkspace.create();
+      addTearDown(workspace.close);
+      final a = workspace.a;
+      final b = workspace.b;
+      await workspace.syncAll();
+
+      final renamed = _id('manage-renamed');
+      final mergedAway = _id('manage-merged-away');
+      final survivor = _id('manage-survivor');
+      final deleted = _id('manage-deleted');
+      await tagWithId(a, renamed, name: 'Alise');
+      await tagWithId(a, mergedAway, name: 'Garden', type: 'project');
+      await tagWithId(a, survivor, name: 'Yard', type: 'project');
+      await tagWithId(a, deleted, name: 'errand', type: 'context');
+      final outcomeOne = await outcomeOn(a, 'manage-one');
+      final outcomeTwo = await outcomeOn(a, 'manage-two');
+      await a.domain.tagDao.assignTag(outcomeOne, renamed, _userId);
+      await a.domain.tagDao.assignTag(outcomeOne, mergedAway, _userId);
+      await a.domain.tagDao.assignTag(outcomeTwo, survivor, _userId);
+      await a.domain.tagDao.assignTag(outcomeTwo, mergedAway, _userId);
+      await a.domain.tagDao.assignTag(outcomeTwo, deleted, _userId);
+      final captureId = _id('manage-capture');
+      await a.domain.captureDao.insertCapture(CapturesCompanion(
+        id: Value(captureId),
+        title: const Value('A thought'),
+        captureSource: const Value('manual'),
+        userId: const Value(_userId),
+        createdAt: Value(a.clock.asDateTime),
+        updatedAt: Value(a.clock.asDateTime),
+      ));
+      await a.domain.captureDao.assignTagHint(captureId, mergedAway, _userId);
+      await a.domain.captureDao.assignTagHint(captureId, deleted, _userId);
+      await settle([a, b]);
+
+      a.clock.advance(1000);
+      await a.domain.tagDao.rename(renamed, 'Alicia');
+      await a.domain.tagDao.merge(mergedAway, survivor);
+      await a.domain.tagDao.deleteTag(deleted);
+      await settle([a, b]);
+
+      final tagsOnB = await domainRows(b.domain, 'tags');
+      expect(tagsOnB.map((r) => r['id']).toSet(), {renamed, survivor});
+      expect(tagsOnB.firstWhere((r) => r['id'] == renamed)['name'], 'Alicia');
+      final junctionsOnB = await domainRows(b.domain, 'todo_tags');
+      expect(junctionsOnB.map((r) => r['tag_id']).toSet(),
+          {renamed, survivor});
+      final hintsOnB = await domainRows(b.domain, 'capture_tags');
+      expect(hintsOnB.map((r) => r['tag_id']).toList(), [survivor]);
+
+      await expectConverged([a, b], 'tags');
+      await expectConverged([a, b], 'todo_tags');
+      await expectConverged([a, b], 'capture_tags');
+      await expectReducedStateAgrees([a, b]);
+    });
+  });
+
   group('three devices, three duplicates', () {
     test(
         'every assignment lands on the global MIN(id), including one asserted '

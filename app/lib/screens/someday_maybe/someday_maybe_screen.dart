@@ -9,9 +9,9 @@ class SomedayMaybeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return GtdListScreen(
-      provider: maybeProvider,
+      provider: somedayMaybeProvider,
       emptyIcon: Icons.bedtime_outlined,
-      emptyTitle: 'Nothing in Maybe',
+      emptyTitle: 'Nothing in Someday/Maybe',
       emptySubtitle: 'Park ideas you might revisit later here.',
     );
   }

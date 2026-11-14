@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/daos/capture_dao.dart';
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/sync/domain_op_capture.dart';
 import '../test_helpers.dart';
 
 GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
@@ -314,6 +315,30 @@ void main() {
         isNot(captureOutcomeIdFor('c1', 'o2')),
       );
       expect(captureTagIdFor('c1', 't1'), captureTagIdFor('c1', 't1'));
+    });
+  });
+
+  group('insertSharedCapture', () {
+    test('inserts the Capture and its attachment; only the Capture authors an op',
+        () async {
+      final recording = RecordingDomainOpCapture();
+      final db = GtdDatabase(NativeDatabase.memory(), opCapture: recording);
+      addTearDown(db.close);
+
+      await db.captureDao.insertSharedCapture(
+        _capture(id: 'c1', title: 'Shared', captureSource: 'share_sheet'),
+        attachment: CaptureAttachmentsCompanion(
+          captureId: const Value('c1'),
+          relativePath: const Value('capture_attachments/c1.png'),
+          mimeType: const Value('image/png'),
+          createdAt: Value(DateTime.now()),
+          userId: const Value(_userId),
+        ),
+      );
+
+      expect(await db.select(db.captures).get(), hasLength(1));
+      expect(await db.select(db.captureAttachments).get(), hasLength(1));
+      expect(recording.keys, ['captures/c1']);
     });
   });
 }

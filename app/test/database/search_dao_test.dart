@@ -30,7 +30,6 @@ Future<void> _insertTodo(
     energyLevel: Value(energyLevel),
     timeEstimate: Value(timeEstimate),
     dueDate: Value(dueDate),
-    clarified: const Value(true),
     userId: const Value(_user),
     createdAt: Value(now),
     updatedAt: Value(now),

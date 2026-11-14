@@ -14,7 +14,8 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
-import 'package:jeeves/models/todo.dart' show Intent, RoutingKind;
+import 'package:jeeves/models/intent.dart';
+import 'package:jeeves/models/routing_kind.dart';
 import '../test_helpers.dart';
 
 const _userId = 'test-user';
@@ -37,7 +38,6 @@ Future<void> _seedClarifiedOutcome(
         id: Value(id),
         title: Value('Outcome $id'),
         userId: const Value(_userId),
-        clarified: const Value(true),
         intent: const Value('next'),
         createdAt: Value(_t0),
         lastClarifiedAt: Value(lastClarifiedAt ?? _t1),

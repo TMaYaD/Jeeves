@@ -33,11 +33,6 @@ class Todos extends Table {
   /// ISO-8601 UTC timestamp; non-null when the task has been completed.
   TextColumn get doneAt => text().nullable()();
 
-  /// Whether this todo has been clarified (processed out of inbox).
-  /// false = still in inbox; true = clarified and assigned to a GTD list.
-  BoolColumn get clarified =>
-      boolean().withDefault(const Constant(true)).clientDefault(() => true)();
-
   /// Orthogonal intent: next | maybe | trash (migration 0015).
   TextColumn get intent => text()
       .clientDefault(() => 'next')
@@ -62,7 +57,7 @@ class Todos extends Table {
   /// Stamped by the DAO whenever the user performs an act of *thinking about
   /// the Outcome* per CONTEXT.md ("Clarification stamps last_clarified_at per
   /// micro-act"). Stamping writes include:
-  ///   - Outcome creation (Capture → clarified=true)
+  ///   - Outcome creation (Capture → Outcome)
   ///   - title / notes / Intent / due-date edits
   ///   - any Action mutation (next-action text, energy, time-estimate, …)
   ///   - PersonBlocker (person-tag) add / remove
@@ -167,7 +162,7 @@ class FocusSessionTasks extends Table {
   /// ADR-0002); their Dispositions live in [FocusSessionDispositions] instead.
   /// NULL = not yet reviewed (active session) or done task.
   /// 'rollover' = carry forward to next session's pre-selected list.
-  /// 'leave' = return to Next Actions (no mutation on todos).
+  /// 'leave' = return to Next (no mutation on todos).
   /// 'maybe' = defer; FocusSessionReviewNotifier writes intent='maybe' to todos.
   TextColumn get disposition => text().nullable()();
 
@@ -220,6 +215,63 @@ class FocusSessionDispositions extends Table {
 
   @override
   Set<Column<Object>> get primaryKey => {focusSessionId, taskId};
+}
+
+// ---------------------------------------------------------------------------
+// Bypassed signals (CONTEXT.md § Engagement, Bypassed)
+// ---------------------------------------------------------------------------
+
+/// A FocusSession's Daily Planning passed an Outcome over **without putting it
+/// on the Plan**: the user tapped Skip on it. Written by
+/// `FocusSessionDao.openSession`, in the same scope as the Plan, so an abandoned
+/// Planning performance records nothing. One row per (FocusSession, Outcome).
+@DataClassName('FocusSessionPlanningBypass')
+class FocusSessionPlanningBypasses extends Table {
+  /// Sync row identifier, derived from the pair
+  /// (`focusSessionPlanningBypassIdFor`).
+  TextColumn get id => text().unique()();
+  TextColumn get focusSessionId => text().references(FocusSessions, #id)();
+  TextColumn get taskId => text().references(Todos, #id)();
+
+  DateTimeColumn get recordedAt => dateTime()();
+  TextColumn get userId => text()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {focusSessionId, taskId};
+}
+
+/// An Outcome's existing due date was moved **later** while the Outcome was on
+/// the Plan of the open FocusSession. One row per (FocusSession, Outcome):
+/// repeated edits collapse onto it and refresh `recorded_at`.
+@DataClassName('FocusSessionReschedule')
+class FocusSessionReschedules extends Table {
+  /// Sync row identifier, derived from the pair
+  /// (`focusSessionRescheduleIdFor`).
+  TextColumn get id => text().unique()();
+  TextColumn get focusSessionId => text().references(FocusSessions, #id)();
+  TextColumn get taskId => text().references(Todos, #id)();
+  DateTimeColumn get recordedAt => dateTime()();
+  TextColumn get userId => text()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {focusSessionId, taskId};
+}
+
+/// The decision log of the Weekly Review's Bypassed step: one row per Outcome the user moved to
+/// Someday/Maybe or Trashed from it. An event log, so the id is random. The
+/// latest row for an Outcome is part of its Bypassed floor.
+@DataClassName('OutcomeBypassDecision')
+class OutcomeBypassDecisions extends Table {
+  TextColumn get id => text().clientDefault(() => uuid.v4())();
+  TextColumn get taskId => text().references(Todos, #id)();
+
+  /// `maybe` | `trash`.
+  TextColumn get decision => text()();
+  DateTimeColumn get decidedAt => dateTime()();
+  TextColumn get userId => text()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {id};
 }
 
 // ---------------------------------------------------------------------------
@@ -350,6 +402,26 @@ class Captures extends Table {
 // ---------------------------------------------------------------------------
 // capture_outcomes  (provenance join: which Outcomes a Capture clarified into)
 // ---------------------------------------------------------------------------
+
+/// A file attached to a Capture — today, an image shared in through the
+/// Android share sheet. The bytes live in app-private storage at
+/// `relative_path` (relative to the application support directory).
+///
+/// **Device-local: no sync codec, no op.** The image bytes never replicate, so a
+/// replicated row would dangle on every peer. A domain store rebuilt from the op
+/// log therefore loses these links (the files stay on disk).
+class CaptureAttachments extends Table {
+  TextColumn get id => text().clientDefault(() => uuid.v4())();
+  TextColumn get captureId =>
+      text().references(Captures, #id, onDelete: KeyAction.cascade)();
+  TextColumn get relativePath => text()();
+  TextColumn get mimeType => text()();
+  DateTimeColumn get createdAt => dateTime()();
+  TextColumn get userId => text()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {id};
+}
 
 /// Many-to-many provenance link between a [Captures] row and an Outcome
 /// (`todos`). The join *is* the provenance — "this Outcome was captured from

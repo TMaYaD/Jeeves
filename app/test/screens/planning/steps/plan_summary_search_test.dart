@@ -26,7 +26,6 @@ Todo _todo(String id, String title, {String intent = 'next'}) {
     id: id,
     title: title,
     intent: intent,
-    clarified: true,
     createdAt: now,
     updatedAt: now,
     userId: 'local',

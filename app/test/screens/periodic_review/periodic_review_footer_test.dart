@@ -50,7 +50,6 @@ Future<void> _insertWaitingFor(
   await db.into(db.todos).insert(TodosCompanion(
         id: Value(id),
         title: Value('Delegated $id'),
-        clarified: const Value(true),
         intent: const Value('next'),
         userId: const Value('local'),
         createdAt: Value(now),

@@ -4,9 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/clarify_mode.dart';
-import 'package:jeeves/models/ritual.dart';
 import 'package:jeeves/providers/clarify_mode_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/providers/nudge_clock_provider.dart';
 import 'package:jeeves/providers/synced_preferences_provider.dart';
 import 'package:jeeves/screens/settings/settings_screen.dart';
 import 'package:jeeves/services/notification_service.dart';
@@ -18,19 +18,7 @@ class _StubNotificationService extends NotificationService {
   _StubNotificationService() : super.forTesting();
 
   @override
-  Future<void> scheduleRitualReminder(RitualId ritual, TimeOfDay time) async {}
-
-  @override
-  Future<void> cancelRitualReminder(RitualId ritual) async {}
-
-  @override
-  Future<void> cancelRecurringRitualReminder(RitualId ritual) async {}
-
-  @override
-  Future<void> snoozeRitualReminder(RitualId ritual, int minutes) async {}
-
-  @override
-  Future<void> skipTodayRitualReminder(RitualId ritual) async {}
+  Future<bool> areNotificationsAllowed() async => true;
 
   @override
   Future<void> cancelReminder(int id) async {}
@@ -55,6 +43,7 @@ Future<ProviderContainer> _pumpSettings(
   addTearDown(db.close);
   final container = ProviderContainer(
     overrides: [
+      nudgeBoundaryTickProvider.overrideWithValue(0),
       databaseProvider.overrideWithValue(db),
       notificationServiceProvider.overrideWithValue(_StubNotificationService()),
     ],
@@ -108,6 +97,10 @@ void main() {
         find.byKey(const Key('clarify_mode_tile')),
         200,
       );
+      // scrollUntilVisible stops once the tile is built, which can still be
+      // below the fold on the 800x600 surface; bring it fully on screen.
+      await tester.ensureVisible(find.byKey(const Key('clarify_mode_tile')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('clarify_mode_tile')));
       await tester.pumpAndSettle();
 
@@ -133,6 +126,10 @@ void main() {
         find.byKey(const Key('clarify_mode_tile')),
         200,
       );
+      // scrollUntilVisible stops once the tile is built, which can still be
+      // below the fold on the 800x600 surface; bring it fully on screen.
+      await tester.ensureVisible(find.byKey(const Key('clarify_mode_tile')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('clarify_mode_tile')));
       await tester.pumpAndSettle();
 
@@ -163,6 +160,10 @@ void main() {
         find.byKey(const Key('clarify_mode_tile')),
         200,
       );
+      // scrollUntilVisible stops once the tile is built, which can still be
+      // below the fold on the 800x600 surface; bring it fully on screen.
+      await tester.ensureVisible(find.byKey(const Key('clarify_mode_tile')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('clarify_mode_tile')));
       await tester.pumpAndSettle();
 

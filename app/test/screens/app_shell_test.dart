@@ -27,12 +27,6 @@ import '../test_helpers.dart';
 class _MockFocusSessionPlanningNotifier extends FocusSessionPlanningNotifier {
   @override
   Future<void> reEnterPlanning() async {}
-
-  @override
-  Future<void> skipPlanningToday() async {}
-
-  @override
-  Future<void> snoozePlanningNotification(int minutes) async {}
 }
 
 class _MockFocusSessionPlanningSettingsNotifier
@@ -69,6 +63,7 @@ Widget _buildShellOnly({
   List<Todo> sessionTasks = const [],
   FocusSessionPlanningSettings planningSettings =
       const FocusSessionPlanningSettings(bannerEnabled: false),
+  NudgeSurfaceHead? head,
 }) {
   return ProviderScope(
     overrides: [
@@ -77,11 +72,11 @@ Widget _buildShellOnly({
           .overrideWith((_) => inboxStream ?? Stream.value(items)),
       nextProvider.overrideWith((_) => Stream.value([])),
       waitingForProvider.overrideWith((_) => Stream.value([])),
-      maybeProvider.overrideWith((_) => Stream.value([])),
+      somedayMaybeProvider.overrideWith((_) => Stream.value([])),
       projectTagsProvider.overrideWith((_) => Stream.value(projectTags)),
       contextTagsProvider.overrideWith((_) => Stream.value([])),
       // The Now route's Re-plan page action derives from these two providers
-      // (via hasOpenSessionWithTasksProvider). Default them so the derived
+      // (via hasOpenSessionProvider). Default them so the derived
       // provider never reaches the un-overridden databaseProvider — the
       // route-title iteration test mounts every shell route, /focus included.
       activeSessionProvider.overrideWith((_) => Stream.value(activeSession)),
@@ -96,6 +91,7 @@ Widget _buildShellOnly({
       // test does not mock. Force the queue empty so the banner is a no-op
       // and the test's focus on shell structure is preserved.
       nudgeQueueProvider.overrideWith((ref) => const <RitualId>[]),
+      nudgeSurfaceHeadProvider.overrideWith((ref) => head),
     ],
     child: MaterialApp(
       home: Builder(
@@ -120,8 +116,8 @@ Widget _buildShellOnly({
                     builder: (_, _) => const Scaffold(body: Text('Inbox body')),
                   ),
                   GoRoute(
-                    path: '/next-actions',
-                    builder: (_, _) => const Scaffold(body: Text('Next Actions body')),
+                    path: '/next',
+                    builder: (_, _) => const Scaffold(body: Text('Next body')),
                   ),
                   GoRoute(
                     path: '/projects/:id',
@@ -172,7 +168,6 @@ Todo _todo(String id, String title) => Todo(
       title: title,
       createdAt: DateTime.now(),
       doneAt: null,
-      clarified: true,
       intent: 'next',
       userId: 'test-user',
     );
@@ -255,9 +250,9 @@ void main() {
     // at the bottom of the scrollable nav column, so their tiles need the
     // drawer scrolled before they are tappable.
     const cases = <({String label, String body, bool scroll})>[
-      (label: 'Next Actions', body: 'Next Actions body', scroll: false),
+      (label: 'Next', body: 'Next body', scroll: false),
       (label: 'Waiting For', body: 'Waiting For body', scroll: false),
-      (label: 'Maybe', body: 'Someday body', scroll: false),
+      (label: 'Someday/Maybe', body: 'Someday body', scroll: false),
       (label: 'Now', body: 'Focus body', scroll: false),
       (label: 'Done', body: 'Done body', scroll: true),
       (label: 'Trash', body: 'Trash body', scroll: true),
@@ -412,7 +407,7 @@ void main() {
     testWidgets('is absent on non-inbox routes even with captures',
         (tester) async {
       await tester.pumpWidget(_buildShellOnly(
-        initialLocation: '/next-actions',
+        initialLocation: '/next',
         items: [
           Capture(
             id: 'a',
@@ -511,6 +506,76 @@ void main() {
     });
   });
 
+  group('Now-route nudge: no Banner, and the sun action', () {
+    const sunKey = Key('focus_plan_the_day');
+
+    testWidgets('no Banner on /focus, a Banner on /next, same head',
+        (tester) async {
+      const head = RitualHead(RitualId.dailyPlanning);
+      await tester.pumpWidget(
+          _buildShellOnly(initialLocation: '/focus', head: head));
+      await tester.pumpAndSettle();
+      expect(find.byType(NudgeBanner), findsNothing);
+
+      await tester.pumpWidget(
+          _buildShellOnly(initialLocation: '/next', head: head));
+      await tester.pump();
+      expect(find.byKey(const Key('planning_banner_visible')), findsOneWidget);
+    });
+
+    testWidgets(
+        'while the Weekly Review holds the empty state the sun action opens '
+        'Daily Planning', (tester) async {
+      await tester.pumpWidget(_buildShellOnly(
+        initialLocation: '/focus',
+        head: const RitualHead(RitualId.weeklyReview),
+      ));
+      await tester.pumpAndSettle();
+      expect(await findBarAction(tester, sunKey), findsOneWidget);
+      await tester.tap(await findBarAction(tester, sunKey));
+      await tester.pumpAndSettle();
+      expect(find.text('Planning body'), findsOneWidget);
+    });
+
+    testWidgets('Inbox too full also offers the sun action', (tester) async {
+      await tester.pumpWidget(_buildShellOnly(
+        initialLocation: '/focus',
+        head: const InboxTooFullHead(),
+      ));
+      await tester.pumpAndSettle();
+      expect(await findBarAction(tester, sunKey), findsOneWidget);
+    });
+
+    testWidgets('no sun action with a Daily Planning head, no head, or off Now',
+        (tester) async {
+      for (final (head, location) in <(NudgeSurfaceHead?, String)>[
+        (const RitualHead(RitualId.dailyPlanning), '/focus'),
+        (null, '/focus'),
+        (const RitualHead(RitualId.weeklyReview), '/next'),
+      ]) {
+        await tester.pumpWidget(
+            _buildShellOnly(initialLocation: location, head: head));
+        // A Banner pulses forever; one frame is enough.
+        await tester.pump();
+        await tester.pump();
+        expect(find.byKey(sunKey), findsNothing, reason: '$head at $location');
+      }
+    });
+
+    testWidgets('an open session with tasks keeps Re-plan, not the sun action',
+        (tester) async {
+      await tester.pumpWidget(_buildShellOnly(
+        initialLocation: '/focus',
+        activeSession: _openSession(),
+        sessionTasks: [_todo('t1', 'Planned task')],
+        head: const RitualHead(RitualId.weeklyReview),
+      ));
+      await tester.pumpAndSettle();
+      expect(await findBarAction(tester, _replanKey), findsOneWidget);
+      expect(find.byKey(sunKey), findsNothing);
+    });
+  });
+
   group('Now-route Re-plan page action (#499)', () {
     testWidgets(
         'shows Re-plan in the shared bar on /focus with an open session '
@@ -527,9 +592,8 @@ void main() {
 
     testWidgets('is absent in each negative gate state on /focus',
         (tester) async {
-      // The gate is "open session AND >= 1 task". Its three negatives all
-      // withhold the action: no session (with tasks), a session with no tasks,
-      // and neither.
+      // The gate is "open session". Both negatives withhold the action: no
+      // session with tasks present, and no session at all.
       const cases = <({FocusSession? session, bool withTask, String desc})>[
         (session: null, withTask: true, desc: 'no session, tasks present'),
         (session: null, withTask: false, desc: 'no session, no tasks'),
@@ -544,22 +608,23 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.byKey(_replanKey), findsNothing, reason: c.desc);
       }
+    });
 
-      // Open session but zero tasks — the third negative.
+    testWidgets('is present for an open session with an empty Plan', (tester) async {
       await tester.pumpWidget(_buildShellOnly(
         initialLocation: '/focus',
         activeSession: _openSession(),
         sessionTasks: const [],
       ));
       await tester.pumpAndSettle();
-      expect(find.byKey(_replanKey), findsNothing,
-          reason: 'open session, no tasks');
+
+      expect(await findBarAction(tester, _replanKey), findsOneWidget);
     });
 
     testWidgets('is absent on non-Now routes even with an open session+tasks',
         (tester) async {
       await tester.pumpWidget(_buildShellOnly(
-        initialLocation: '/next-actions',
+        initialLocation: '/next',
         activeSession: _openSession(),
         sessionTasks: [_todo('t1', 'Planned task')],
       ));

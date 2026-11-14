@@ -20,7 +20,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/gtd_database.dart';
 import '../models/action_draft.dart';
-import '../models/todo.dart' show RoutingKind;
+import '../models/routing_kind.dart';
 import '../providers/auth_provider.dart';
 import '../services/clarification_service.dart';
 import 'app_title_bar/app_title_bar.dart';
@@ -30,7 +30,7 @@ import 'next_action_dialog.dart';
 import 'person_tag_picker.dart';
 import 'replace_current_action_sheet.dart';
 
-export '../models/todo.dart' show RoutingKind;
+export '../models/routing_kind.dart';
 
 /// User-visible "process to" actions.
 ///
@@ -958,14 +958,19 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
   }
 
   /// Promote the chosen planned [actionId] to `current` and route the Outcome
-  /// to Next (issue #723).
+  /// to Next (issue #723) as **one write** (#788).
   ///
-  /// The promote/supersede primitives touch only `actions` + stamp; the
-  /// `_commit(nextAction)` leg is what writes `intent='next'`, `clarified`,
-  /// `done_at=null` (with `actionText: null`, so the just-promoted Action is
-  /// left untouched — `applyRouting.touchesAction` needs a non-null phrase).
-  /// Without it a Someday/Maybe promote would flip a planned row up while the
+  /// The promote (or supersede-and-promote) and the route share a single
+  /// transaction inside `applyRouting`, so a failure leaves the queue, the
+  /// incumbent Action and the Outcome's intent exactly as they were; the throw
+  /// lands in `_runOnce` (write-failed snackbar) before any notify. Without the
+  /// route a Someday/Maybe promote would flip a planned row up while the
   /// Outcome stayed on Someday.
+  ///
+  /// `clarifyToOutcome` returns `false` — nothing written — when the chosen
+  /// row vanished (removed on another device between the snapshot and the
+  /// tap) or the Outcome did: the item is left unresolved and recoverable
+  /// rather than stranded on Next without the Action the user picked.
   Future<void> _promoteFromQueue(String actionId, List<Action> planned) async {
     // Only an Outcome can have a queue; the dialog never returns a promote for
     // a Capture (its queue is always empty), so this is defensively no-op there.
@@ -973,57 +978,32 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     final outcomeId = widget.subject.id;
 
     // Load the current Action fresh: the queue snapshot is from dialog-open
-    // time, and a `current` may have synced in since.
+    // time, and a `current` may have synced in since. It only decides whether
+    // to confirm; the write re-checks it inside the transaction.
     final current = await _clarification.getCurrentAction(outcomeId);
-    if (current == null) {
-      await _clarification.promotePlannedAction(actionId);
-      // No-op guard (issue #723 §2). A planned row removed on another device
-      // between the snapshot and the tap promotes nothing; a `_commit` here
-      // would strand a still-Actionless Outcome on Next, where the review
-      // predicate re-surfaces it once the review interval lapses. Re-read and
-      // commit only when a current Action now exists — else leave the item
-      // untouched (recoverable; the user can retry).
-      final promoted = await _clarification.getCurrentAction(outcomeId);
-      if (promoted == null) return;
-      if (!await _commit(RoutingKind.nextAction)) return;
-      await _notifyAfterRoute(ProcessAction.nextActionDialog);
-      return;
+    if (current != null) {
+      // Replacing a current Action is an explicit act: the shared "Replace
+      // current action" confirm, never a silent supersede.
+      if (!mounted) return;
+      final chosen = planned.where((a) => a.id == actionId);
+      final confirmed = await showReplaceCurrentActionSheet(
+        context,
+        currentText: current.actionText,
+        newText: chosen.isEmpty ? '' : chosen.first.actionText,
+      );
+      if (!confirmed || !mounted) return; // declined — unresolved, no notify
     }
-
-    // A current Action exists: replacing it is an explicit act, so it routes
-    // through the shared "Replace current action" confirm rather than a silent
-    // supersede.
-    if (!mounted) return;
-    final chosen = planned.where((a) => a.id == actionId);
-    final confirmed = await showReplaceCurrentActionSheet(
-      context,
-      currentText: current.actionText,
-      newText: chosen.isEmpty ? '' : chosen.first.actionText,
+    // `replacingCurrentActionId` closes the confirm-time window: if sync swapped
+    // the current Action while the sheet was open the write throws rather than
+    // retire an Action the user never saw. With no current shown, the write
+    // refuses if one has since appeared.
+    final landed = await _clarification.clarifyToOutcome(
+      outcomeId,
+      to: RoutingKind.nextAction,
+      promotePlannedActionId: actionId,
+      replacingCurrentActionId: current?.id,
     );
-    if (!confirmed || !mounted) return; // declined — item unresolved, no notify
-    // The Outcome may have been hard-deleted while the confirm was open. Its
-    // planned Actions went with it, so the supersede below is a no-op and the
-    // re-read returns before `_commit`; `_commit` itself gates the notify.
-    // `applySupersedeAndPromote` early-returns before retiring the incumbent if
-    // the planned row vanished, so a no-op there leaves the current Action
-    // intact. And `expectedCurrentActionId` closes the confirm-time window: if
-    // sync swapped the current Action while the sheet was open, the write throws
-    // rather than retire the Action the user never saw — the throw lands in
-    // `_runOnce` (write-failed snackbar) before `_commit` / notify, so no route
-    // commits and a retry re-reads the fresh current.
-    await _clarification.supersedeAndPromote(
-      actionId,
-      expectedCurrentActionId: current.id,
-    );
-    // No-op guard, symmetric to the Actionless branch above: if that vanished-
-    // row no-op happened, the incumbent is still current and routing/notifying
-    // would report a replacement that never landed — on Someday, jumping the
-    // Outcome to Next while keeping the very Action the user meant to replace.
-    // Route only once the chosen row is actually current; else leave the item
-    // unresolved (recoverable; a retry re-reads the fresh queue).
-    final promoted = await _clarification.getCurrentAction(outcomeId);
-    if (promoted == null || promoted.id != actionId) return;
-    if (!await _commit(RoutingKind.nextAction)) return;
+    if (!landed) return;
     await _notifyAfterRoute(ProcessAction.nextActionDialog);
   }
 

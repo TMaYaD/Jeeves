@@ -11,7 +11,6 @@ Todo _todo({
     id: 't',
     title: 'task',
     intent: 'next',
-    clarified: true,
     createdAt: now,
     updatedAt: now,
     userId: 'u',

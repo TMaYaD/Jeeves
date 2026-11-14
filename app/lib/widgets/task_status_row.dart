@@ -2,7 +2,8 @@ import 'package:flutter/material.dart' hide Intent;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/gtd_database.dart';
-import '../models/todo.dart' show Intent, RoutingKind;
+import '../models/intent.dart';
+import '../models/routing_kind.dart';
 import '../providers/task_detail_provider.dart';
 import 'person_tag_picker.dart';
 
@@ -79,7 +80,7 @@ class TaskStatusRow extends ConsumerWidget {
       final names = personTags.map((t) => t.name).join(' & ');
       return 'Waiting For $names';
     }
-    return 'Next Actions';
+    return 'Next';
   }
 
   Color _dotColor(List<Tag> personTags) {
@@ -148,12 +149,12 @@ class _StatusMenuSheet extends ConsumerWidget {
                   await notifier.clearAllPersonTags();
                 },
               ),
-            // Next Actions — only shown when currently in Someday/Maybe
+            // Next — only shown when currently in Someday/Maybe
             if (isMaybe)
               ListTile(
                 leading: const Icon(Icons.check_circle_outline,
                     color: Color(0xFF10B981)),
-                title: const Text('Next Actions'),
+                title: const Text('Next'),
                 onTap: () async {
                   Navigator.pop(context);
                   await notifier.setIntent(Intent.next);

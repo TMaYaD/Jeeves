@@ -9,8 +9,9 @@ import '../providers/focus_session_provider.dart';
 import '../providers/focus_settings_provider.dart';
 import '../providers/sprint_timer_provider.dart'
     show findBatchingCandidates, sprintTimerProvider;
-import '../services/notification_service.dart' show notificationServiceProvider;
 import '../widgets/meta_chip.dart';
+import '../widgets/nudge_banner.dart'
+    show InboxTooFullHead, NudgeEmptyState, RitualHead, nudgeSurfaceHeadProvider;
 import '../widgets/outcome_row.dart';
 
 class FocusScreen extends ConsumerWidget {
@@ -29,6 +30,11 @@ class FocusScreen extends ConsumerWidget {
     // before #693 and what AC4 preserves.
     final settlements = ref.watch(activeSessionSettlementsProvider).value ??
         const <String, SessionSettlement>{};
+    // The session's Review surface (Plan plus anything engaged off-Plan). Null
+    // until the stream first emits: an unknown surface must never read as an
+    // empty one, or the first frame would offer "End Session" past an
+    // unfinished Outcome (#885).
+    final reviewSurface = ref.watch(activeSessionReviewSurfaceProvider).value;
 
     return Scaffold(
       body: SafeArea(
@@ -58,11 +64,11 @@ class FocusScreen extends ConsumerWidget {
                   // (issue #460) becomes unreproducible.
                   final planningDone = activeSession != null;
                   // The "Begin Evening Shutdown" entry is shown once the user
-                  // is in an open focus session with at least one task on it.
+                  // is in an open focus session (its Plan may be empty).
                   // Derived from the shared provider so the shutdown callout
                   // and the title bar's Re-plan action can't drift (#499).
                   final showShutdownEntry =
-                      ref.watch(hasOpenSessionWithTasksProvider);
+                      ref.watch(hasOpenSessionProvider);
                   // Tasks carried over ('rollover') from the last closed
                   // session — only while no session is open.
                   final carriedOver = planningDone
@@ -71,6 +77,18 @@ class FocusScreen extends ConsumerWidget {
                               .watch(lastClosedSessionRolloverTasksProvider)
                               .value ??
                           const <Todo>[]);
+                  // The nudge that holds the Today's Tasks empty state: Inbox
+                  // too full, the Weekly Review or Daily Planning, while no
+                  // open session carries tasks. Evening Shutdown and no head
+                  // keep the existing content.
+                  final surfaceHead = ref.watch(nudgeSurfaceHeadProvider);
+                  final nudgeHead = sortedTasks.isEmpty &&
+                          (surfaceHead is InboxTooFullHead ||
+                              (surfaceHead is RitualHead &&
+                                  surfaceHead.ritual !=
+                                      RitualId.eveningShutdown))
+                      ? surfaceHead
+                      : null;
                   return ListView(
                         physics: const ClampingScrollPhysics(),
                         padding: const EdgeInsets.symmetric(
@@ -131,6 +149,12 @@ class FocusScreen extends ConsumerWidget {
                                 settlement: settlements[t.id],
                               ),
                             )
+                          else if (sortedTasks.isEmpty && nudgeHead != null)
+                            Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(vertical: 16),
+                              child: NudgeEmptyState(head: nudgeHead),
+                            )
                           else if (sortedTasks.isEmpty)
                             Padding(
                               padding:
@@ -156,11 +180,11 @@ class FocusScreen extends ConsumerWidget {
                           // harmlessly falls through to the Plan-the-Day CTA.
                           if (showShutdownEntry && activeSession != null)
                             _PrimaryCallout(
-                              kind: focusCalloutKindFor(tasks, settlements),
+                              kind: focusCalloutKindFor(reviewSurface, settlements),
                               onTap: () => _beginShutdown(
-                                  context, ref, tasks, activeSession),
+                                  context, ref, reviewSurface, activeSession),
                             )
-                          else
+                          else if (nudgeHead == null)
                             FilledButton(
                               onPressed: () => _replanDay(context, ref),
                               style: FilledButton.styleFrom(
@@ -224,7 +248,7 @@ class FocusScreen extends ConsumerWidget {
     context.go('/focus-session-planning');
   }
 
-  /// Either ends the session cleanly (all tasks done) or routes the user into
+  /// Either ends the session cleanly (every Outcome on the Review surface done) or routes the user into
   /// the evening-shutdown ritual where they assign dispositions to unfinished
   /// tasks. The session is only closed by [closeSession] / the ritual itself.
   ///
@@ -238,17 +262,15 @@ class FocusScreen extends ConsumerWidget {
   Future<void> _beginShutdown(
     BuildContext context,
     WidgetRef ref,
-    List<Todo> tasks,
+    List<Todo>? reviewSurface,
     FocusSession session,
   ) async {
-    final allDone = tasks.every((t) => t.doneAt != null);
+    // Not loaded == something may be outstanding: go through the wizard.
+    final allDone =
+        reviewSurface != null && reviewSurface.every((t) => t.doneAt != null);
     if (allDone) {
       final db = ref.read(databaseProvider);
       await db.focusSessionDao.closeSession(sessionId: session.id);
-      // No open session — today's Evening Shutdown fire is moot. Best-effort.
-      await ref
-          .read(notificationServiceProvider)
-          .skipTodayRitualReminder(RitualId.eveningShutdown);
       if (!context.mounted) return;
       context.go('/inbox');
     } else {
@@ -494,9 +516,12 @@ class _SectionLabel extends StatelessWidget {
 @visibleForTesting
 enum FocusCalloutKind { beginShutdown, wrapUp, endSession }
 
-/// The footer's kind for [tasks] (the session's Plan) given [settlements].
+/// The footer's kind for [reviewSurface] (the session's Plan plus every Outcome
+/// engaged off-Plan; null while not yet loaded) given [settlements].
 ///
-/// * every task's Completion recorded → [FocusCalloutKind.endSession], the one
+/// * an unloaded surface → [FocusCalloutKind.beginShutdown]: unknown is never
+///   treated as empty;
+/// * every Outcome's Completion recorded → [FocusCalloutKind.endSession], the one
 ///   state `closeSession` may be reached from (see [FocusScreen._beginShutdown]);
 /// * every task **Settled**, not all done → [FocusCalloutKind.wrapUp]: the user
 ///   is finished for the day, and the emphasis says so, but the tap still opens
@@ -504,11 +529,14 @@ enum FocusCalloutKind { beginShutdown, wrapUp, endSession }
 /// * anything outstanding → [FocusCalloutKind.beginShutdown].
 @visibleForTesting
 FocusCalloutKind focusCalloutKindFor(
-  List<Todo> tasks,
+  List<Todo>? reviewSurface,
   Map<String, SessionSettlement> settlements,
 ) {
-  if (tasks.every((t) => t.doneAt != null)) return FocusCalloutKind.endSession;
-  if (tasks.every((t) => settlements.containsKey(t.id))) {
+  if (reviewSurface == null) return FocusCalloutKind.beginShutdown;
+  if (reviewSurface.every((t) => t.doneAt != null)) {
+    return FocusCalloutKind.endSession;
+  }
+  if (reviewSurface.every((t) => settlements.containsKey(t.id))) {
     return FocusCalloutKind.wrapUp;
   }
   return FocusCalloutKind.beginShutdown;

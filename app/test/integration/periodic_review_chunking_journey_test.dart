@@ -48,7 +48,6 @@ void main() {
         title: Value('Outcome $index'),
         userId: const Value('local'),
         intent: const Value('next'),
-        clarified: const Value(true),
         createdAt: Value(createdAt.add(Duration(days: index))),
         updatedAt: Value(createdAt),
       ));
@@ -167,7 +166,10 @@ void main() {
     await skipToSummary(tester);
     await tap(tester, find.byKey(const Key('periodic_review_done')));
     expect(container.read(periodicReviewLastCompletedProvider), isNull);
-    expect(container.read(periodicReviewIsDueProvider), isTrue);
+    // A finished short session counts as the last Weekly Review: the review
+    // period stays open but the review is no longer due.
+    expect(container.read(periodicReviewLastSessionFinishedProvider), isNotNull);
+    expect(container.read(periodicReviewIsDueProvider), isFalse);
     expect(container.read(syncedPreferencesProvider).requireValue
         .get<String>('periodic_review_open_since'), isNotNull);
 
@@ -200,7 +202,12 @@ void main() {
     await skipToSummary(tester);
     await tap(tester, find.byKey(const Key('periodic_review_done')));
     expect(container.read(periodicReviewLastCompletedProvider), isNotNull);
-    expect(container.read(periodicReviewIsDueProvider), isFalse);
+    // Read in the real zone: the provider arms a week-long timer, which the
+    // test binding's fake clock would report as still pending.
+    expect(
+        await tester.runAsync(
+            () async => container.read(periodicReviewIsDueProvider)),
+        isFalse);
     await tester.pumpWidget(const SizedBox.shrink());
     await settleWithRealAsync(tester);
   });

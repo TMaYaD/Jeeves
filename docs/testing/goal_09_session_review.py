@@ -12,7 +12,7 @@ Flow:
   1. From /focus → tap "Begin Evening Shutdown".
   2. Step 1 "Review Your Day" → tap Next.
   3. Step 2 "Resolve Unfinished" → for each unfinished task, pick a
-     disposition (Roll Over / Return to Next Actions / Defer).
+     disposition (Roll Over / Return to Next / Defer).
   4. Step 3 "Close Day" → tap Close Day; the moon-rise animation plays
      and the app process exits.
   5. Re-launch and verify the shutdown banner has stood down (post-state).
@@ -25,7 +25,7 @@ PKG = "loonyb.in.jeeves"
 
 # Disposition names as they appear in the resolution buttons.
 ROLL_OVER = "Roll Over to Tomorrow"
-LEAVE     = "Return to Next Actions"
+LEAVE     = "Return to Next"
 MAYBE     = "Defer until a later day"
 
 

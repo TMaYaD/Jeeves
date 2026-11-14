@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Jeeves</string>
+    <string name="share_added_to_inbox">Added to Inbox</string>
+    <string name="share_failed">Couldn\'t add to Inbox</string>
 </resources>

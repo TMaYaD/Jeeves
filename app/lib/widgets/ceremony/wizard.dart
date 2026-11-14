@@ -23,7 +23,7 @@
 /// - [ListItemFooter] — Back + a `Skip` (secondary) / `Next step` (primary)
 ///   swap inside a fixed-size slot, internalising the per-item-cursor
 ///   contract that previously leaked into the wizard. Used by every
-///   list-driven step (Inbox, Task Review, Waiting For, Next Actions,
+///   list-driven step (Inbox, Task Review, Waiting For, Next,
 ///   Someday/Maybe).
 ///
 /// Steps that drive advance entirely from in-body actions (Evening

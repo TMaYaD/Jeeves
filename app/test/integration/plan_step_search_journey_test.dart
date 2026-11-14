@@ -35,7 +35,6 @@ Future<void> _insert(
   await db.into(db.todos).insert(TodosCompanion(
         id: Value(id),
         title: Value('Outcome $id'),
-        clarified: const Value(true),
         intent: Value(intent),
         doneAt: Value(doneAt),
         energyLevel: Value(energyLevel),

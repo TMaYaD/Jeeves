@@ -17,6 +17,7 @@ class TrashScreen extends StatelessWidget {
     return GtdListScreen(
       provider: trashProvider,
       showFilterBar: false,
+      selectable: false,
       emptyIcon: Icons.delete_outline,
       emptyTitle: 'Trash is empty',
       emptySubtitle:

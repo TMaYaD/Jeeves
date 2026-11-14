@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../models/ritual.dart';
 import '../providers/focus_session_planning_provider.dart';
 import '../providers/inbox_provider.dart';
 import '../providers/gtd_lists_provider.dart';
@@ -24,9 +25,9 @@ import 'sync_health/sync_health_screen.dart';
 const Map<String, String> shellRouteTitles = {
   '/inbox': 'Inbox',
   '/focus': 'Now',
-  '/next-actions': 'Next Actions',
+  '/next': 'Next',
   '/waiting-for': 'Waiting For',
-  '/someday-maybe': 'Maybe',
+  '/someday-maybe': 'Someday/Maybe',
   '/done': 'Done',
   '/trash': 'Trash',
 };
@@ -83,12 +84,21 @@ class AppShell extends ConsumerWidget {
         : null;
 
     // The Now route offers Re-plan as a shared-title-bar page action while the
-    // user is in an open session carrying tasks (the shutdown-callout state,
+    // user is in an open session (the shutdown-callout state,
     // #499) — mirroring the Inbox badge: the same route-derived condition,
     // supplied top-down to the bar rather than hand-rolled inside the screen.
     // Every other shell route supplies none.
     final showReplan =
-        location == '/focus' && ref.watch(hasOpenSessionWithTasksProvider);
+        location == '/focus' && ref.watch(hasOpenSessionProvider);
+    // While Inbox too full or the Weekly Review holds the Today's Tasks empty
+    // state, the same slot offers Daily Planning, which that nudge has pushed
+    // out of the empty state. Exclusive with Re-plan: the empty state only
+    // renders without an open session.
+    final head = ref.watch(nudgeSurfaceHeadProvider);
+    final planningPushedOut = location == '/focus' &&
+        !showReplan &&
+        (head is InboxTooFullHead ||
+            (head is RitualHead && head.ritual == RitualId.weeklyReview));
     final pageActions = showReplan
         ? [
             AppTitleBarAction(
@@ -98,7 +108,17 @@ class AppShell extends ConsumerWidget {
               onPressed: () => context.go('/focus-session-planning'),
             ),
           ]
-        : const <AppTitleBarAction>[];
+        : planningPushedOut
+            ? [
+                AppTitleBarAction(
+                  key: const Key('focus_plan_the_day'),
+                  icon: Icons.wb_sunny_outlined,
+                  // One action, one name: the Now screen uses the same label.
+                  label: 'Plan the Day',
+                  onPressed: () => context.go('/focus-session-planning'),
+                ),
+              ]
+            : const <AppTitleBarAction>[];
 
     return Shortcuts(
       shortcuts: {
@@ -138,7 +158,9 @@ class AppShell extends ConsumerWidget {
           ),
           body: Column(
             children: [
-              const NudgeBanner(),
+              // The Now screen carries its nudge in the Today's Tasks empty
+              // state instead of a Banner.
+              if (location != '/focus') const NudgeBanner(),
               Expanded(child: child),
             ],
           ),
@@ -157,7 +179,8 @@ class CustomDrawer extends ConsumerWidget {
     final inboxCount = ref.watch(inboxItemsProvider).asData?.value.length ?? 0;
     final nextCount = ref.watch(nextProvider).asData?.value.length ?? 0;
     final waitingForCount = ref.watch(waitingForProvider).asData?.value.length ?? 0;
-    final maybeCount = ref.watch(maybeProvider).asData?.value.length ?? 0;
+    final somedayMaybeCount =
+        ref.watch(somedayMaybeProvider).asData?.value.length ?? 0;
     final syncAsync = ref.watch(syncStatusProvider);
     // A throwing health read is a red indicator with nothing behind it: we do
     // not know what to report, so the tile must not offer to explain.
@@ -235,8 +258,8 @@ class CustomDrawer extends ConsumerWidget {
                       location: location),
                   _buildNavItem(context,
                       icon: Icons.check_circle_outline,
-                      title: 'Next Actions',
-                      path: '/next-actions',
+                      title: 'Next',
+                      path: '/next',
                       location: location,
                       count: nextCount),
                   _buildNavItem(context,
@@ -247,10 +270,10 @@ class CustomDrawer extends ConsumerWidget {
                       count: waitingForCount),
                   _buildNavItem(context,
                       icon: Icons.star_border,
-                      title: 'Maybe',
+                      title: 'Someday/Maybe',
                       path: '/someday-maybe',
                       location: location,
-                      count: maybeCount),
+                      count: somedayMaybeCount),
                   const SizedBox(height: 8),
                   const Divider(height: 1, color: Color(0xFFF3F4F6)),
                   const SizedBox(height: 8),

@@ -8,6 +8,8 @@
 /// in-memory notifier, so it survives process death (ADR-0020).
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:jeeves/widgets/outcome_row.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -16,6 +18,10 @@ import 'package:go_router/go_router.dart';
 import 'package:jeeves/models/focus_settings.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/providers/focus_settings_provider.dart';
+import 'package:jeeves/providers/nudge_triggers.dart';
+import 'package:jeeves/providers/system_trust_provider.dart';
+import 'package:jeeves/models/ritual.dart';
+import 'package:jeeves/widgets/nudge_banner.dart';
 import 'package:jeeves/screens/focus_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -55,7 +61,6 @@ Todo _todo(String id, String title, {String? doneAt}) => Todo(
       title: title,
       createdAt: DateTime.now(),
       doneAt: doneAt,
-      clarified: true,
       intent: 'next',
       userId: 'test-user',
     );
@@ -65,6 +70,9 @@ Widget _buildScreen({
   FocusSession? activeSession,
   List<Todo> rolloverTasks = const [],
   Map<String, SessionSettlement> settlements = const {},
+  NudgeSurfaceHead? head,
+  List<Todo>? reviewSurface,
+  Stream<List<Todo>>? reviewSurfaceStream,
 }) {
   final router = GoRouter(
     initialLocation: '/focus',
@@ -85,12 +93,19 @@ Widget _buildScreen({
       activeSessionTasksProvider.overrideWith(
         (_) => Stream.value(tasks),
       ),
+      activeSessionReviewSurfaceProvider.overrideWith(
+        (_) => reviewSurfaceStream ?? Stream.value(reviewSurface ?? tasks),
+      ),
       activeSessionProvider.overrideWith(
         (_) => Stream.value(activeSession),
       ),
       lastClosedSessionRolloverTasksProvider.overrideWith(
         (_) => Stream.value(rolloverTasks),
       ),
+      // The Weekly Review empty state reads both; unoverridden they build a
+      // real database.
+      weeklyReviewDaysLateProvider.overrideWith((ref) => null),
+      unfinishedReviewTriggerProvider.overrideWith((ref) => TriggerState.idle),
       // `Stream.value` is the documented override shape for a StreamProvider
       // backed by a live Drift watch (docs/TESTING.md § Frontend).
       activeSessionSettlementsProvider.overrideWith(
@@ -99,6 +114,10 @@ Widget _buildScreen({
       focusSessionPlanningProvider
           .overrideWith(() => _MockFocusSessionPlanningNotifier()),
       focusSettingsProvider.overrideWith(() => _MockFocusSettingsNotifier()),
+      nudgeSurfaceHeadProvider.overrideWith((ref) => head),
+      // The Inbox too full empty state reads the Capture count; unoverridden
+      // it reaches the live Drift-backed inbox provider.
+      unprocessedCaptureCountProvider.overrideWith((ref) => 51),
     ],
     child: MaterialApp.router(routerConfig: router),
   );
@@ -158,7 +177,7 @@ void main() {
       activeSession: _openSession(),
       tasks: [Todo(
         id: 'long', title: 'Write the report', userId: 'test-user',
-        createdAt: DateTime(2030), clarified: true, intent: 'next',
+        createdAt: DateTime(2030), intent: 'next',
         timeEstimate: 125, dueDate: DateTime(2030, 3, 15),
       )],
     ));
@@ -300,7 +319,95 @@ void main() {
     expect(find.text('End Session'), findsNothing);
   });
 
+  testWidgets(
+      'open session with an empty Plan shows End Session, not Plan the Day',
+      (tester) async {
+    await tester.pumpWidget(_buildScreen(activeSession: _openSession()));
+    await tester.pump();
+
+    expect(find.text('End Session'), findsOneWidget);
+    expect(find.text('Plan the Day'), findsNothing);
+  });
+
+  testWidgets(
+      'Plan all done but an unfinished off-Plan Outcome on the Review surface '
+      '→ Begin Evening Shutdown, never End Session (#885)', (tester) async {
+    final done = DateTime.now().toUtc().toIso8601String();
+    await tester.pumpWidget(_buildScreen(
+      activeSession: _openSession(),
+      tasks: [_todo('a', 'Planned', doneAt: done)],
+      reviewSurface: [
+        _todo('a', 'Planned', doneAt: done),
+        _todo('z', 'Off-Plan'),
+      ],
+    ));
+    await tester.pump();
+
+    expect(find.text('Begin Evening Shutdown'), findsOneWidget);
+    expect(find.text('End Session'), findsNothing);
+  });
+
+  testWidgets(
+      'a Review surface that has not emitted yet never reads as empty → '
+      'Begin Evening Shutdown, not End Session (#885)', (tester) async {
+    await tester.pumpWidget(_buildScreen(
+      activeSession: _openSession(),
+      reviewSurfaceStream: StreamController<List<Todo>>().stream,
+    ));
+    await tester.pump();
+
+    expect(find.text('Begin Evening Shutdown'), findsOneWidget);
+    expect(find.text('End Session'), findsNothing);
+  });
+
   group('focusCalloutKindFor', () {
+    Todo offPlan(String id, {String? doneAt}) =>
+        _todo(id, 'Off $id', doneAt: doneAt);
+
+    test('Plan done + unfinished un-Settled off-Plan Outcome → beginShutdown',
+        () {
+      final done = DateTime.now().toUtc().toIso8601String();
+      expect(
+        focusCalloutKindFor(
+          [_todo('a', 'A', doneAt: done), offPlan('z')],
+          const {'a': SessionSettlement.done},
+        ),
+        FocusCalloutKind.beginShutdown,
+      );
+    });
+
+    test('Plan done + off-Plan Outcome Settled but not done → wrapUp', () {
+      final done = DateTime.now().toUtc().toIso8601String();
+      expect(
+        focusCalloutKindFor(
+          [_todo('a', 'A', doneAt: done), offPlan('z')],
+          const {'a': SessionSettlement.done, 'z': SessionSettlement.next},
+        ),
+        FocusCalloutKind.wrapUp,
+      );
+    });
+
+    test('whole surface done → endSession', () {
+      final done = DateTime.now().toUtc().toIso8601String();
+      expect(
+        focusCalloutKindFor(
+          [_todo('a', 'A', doneAt: done), offPlan('z', doneAt: done)],
+          const {},
+        ),
+        FocusCalloutKind.endSession,
+      );
+    });
+
+    test('surface not loaded → beginShutdown', () {
+      expect(focusCalloutKindFor(null, const {}),
+          FocusCalloutKind.beginShutdown);
+    });
+
+    test('an empty Plan → endSession (nothing to dispose)', () {
+      expect(focusCalloutKindFor(const [], const {}),
+          FocusCalloutKind.endSession);
+    });
+
     Todo task(String id, {String? doneAt}) => _todo(id, 'Task $id', doneAt: doneAt);
     final done = DateTime.now().toUtc().toIso8601String();
 
@@ -348,5 +455,56 @@ void main() {
 
     expect(find.byIcon(Icons.more_vert), findsNothing);
     expect(find.text('Re-plan'), findsNothing);
+  });
+
+  group('Today\'s Tasks empty state carries the nudge head', () {
+    Future<void> pump(WidgetTester tester, NudgeSurfaceHead? head,
+        {List<Todo> tasks = const [], FocusSession? session}) async {
+      await tester.pumpWidget(
+          _buildScreen(head: head, tasks: tasks, activeSession: session));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('Daily Planning head: its Bertie button opens Daily Planning',
+        (tester) async {
+      await pump(tester, const RitualHead(RitualId.dailyPlanning));
+      expect(find.byKey(const Key('nudge_empty_state')), findsOneWidget);
+      expect(find.text('Plan the Day'), findsNothing);
+      expect(find.byType(Dismissible), findsNothing);
+      await tester.tap(find.byKey(const Key('nudge_empty_state_button')));
+      await tester.pumpAndSettle();
+      expect(find.text('planning'), findsOneWidget);
+    });
+
+    testWidgets('Weekly Review head shows its own button', (tester) async {
+      await pump(tester, const RitualHead(RitualId.weeklyReview));
+      expect(find.byKey(const Key('nudge_empty_state')), findsOneWidget);
+      expect(find.text('Plan the Day'), findsNothing);
+    });
+
+    testWidgets('Inbox too full head shows its count', (tester) async {
+      await pump(tester, const InboxTooFullHead());
+      expect(find.byKey(const Key('nudge_empty_state')), findsOneWidget);
+      expect(find.text('At once  →'), findsOneWidget);
+    });
+
+    testWidgets('no head keeps the Plan the Day button', (tester) async {
+      await pump(tester, null);
+      expect(find.byKey(const Key('nudge_empty_state')), findsNothing);
+      expect(find.text('Plan the Day'), findsOneWidget);
+    });
+
+    testWidgets('an Evening Shutdown head keeps the existing content',
+        (tester) async {
+      await pump(tester, const RitualHead(RitualId.eveningShutdown));
+      expect(find.byKey(const Key('nudge_empty_state')), findsNothing);
+      expect(find.text('Plan the Day'), findsOneWidget);
+    });
+
+    testWidgets('an open session with tasks shows no nudge', (tester) async {
+      await pump(tester, const InboxTooFullHead(),
+          tasks: [_todo('t1', 'Write report')], session: _openSession());
+      expect(find.byKey(const Key('nudge_empty_state')), findsNothing);
+    });
   });
 }

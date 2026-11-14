@@ -19,31 +19,29 @@ dependencies:
 
   # State management
   flutter_riverpod: ^3.4.3
-  riverpod_annotation: ^4.0.7
   meta: ^1.17.0
 
   # Local storage (offline-first)
-  drift: ^2.35.3
+  drift: ^2.35.4
   # Bridges Drift to a sqlite_async connection, which is what the domain store
   # (`database/domain_store_io.dart`) is opened over: one shared connection with
   # a proper write lock, and an update stream that names the tables a write
   # touched so live queries refresh.
   drift_sqlite_async: ^0.3.1
   # Imported directly for `SqliteDatabase` in the domain store's open path.
-  sqlite_async: ^0.14.5
+  sqlite_async: ^0.14.8
   sqlite3_flutter_libs: ^0.6.0+eol
   path_provider: ^2.1.6
   path: ^1.9.0
 
   # HTTP / API
   dio: ^5.11.1
-  retrofit: ^4.10.0
   # The op-log sync stack's realtime signal socket (dio does not speak
   # WebSocket).
   web_socket_channel: ^3.0.3
 
   # Notifications
-  flutter_local_notifications: ^22.3.0
+  flutter_local_notifications: ^23.0.0
   flutter_timezone: ^5.1.1
   timezone: ^0.11.2
   # firebase_messaging: ^16.1.3   # Uncomment when Firebase is configured
@@ -65,10 +63,10 @@ dependencies:
   # Local key-value persistence (planning ritual state)
   shared_preferences: ^2.5.6
   # Reads the installed package's versionName/versionCode for Settings → About.
-  package_info_plus: ^10.2.1
+  package_info_plus: ^10.2.2
 
   # File import
-  file_picker: ^13.1.0
+  file_picker: ^13.3.2
 
   # Encrypted token storage (JWT)
   flutter_secure_storage: ^11.2.0
@@ -83,8 +81,6 @@ dependencies:
   # resolution risk and only makes the import honest.
   collection: ^1.19.0
   uuid: ^4.6.0
-  freezed_annotation: ^3.1.0
-  json_annotation: ^4.12.0
   intl: ^0.20.3
   flutter_markdown_plus: ^1.0.12
   url_launcher: ^6.3.3
@@ -102,19 +98,15 @@ dependencies:
   # every other database failure by SQLite's extended result code, so it imports
   # the exception type directly. Already in the graph under drift, so making it
   # direct adds no resolution risk.
-  sqlite3: ^3.5.2
+  sqlite3: ^3.9.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   fake_async: ^1.3.3
   flutter_lints: ^6.0.0
-  build_runner: ^2.15.1
-  freezed: ^4.0.1
-  json_serializable: ^6.15.2
-  riverpod_generator: ^4.0.9
-  drift_dev: ^2.35.2
-  retrofit_generator: ^10.3.3
+  build_runner: ^2.17.1
+  drift_dev: ^2.35.3
   # Icon generation: flavored configs live in flutter_launcher_icons-<flavor>.yaml
   # at app/ root (per-flavor is the format flutter_launcher_icons supports; see
   # https://pub.dev/packages/flutter_launcher_icons). Regenerate with:

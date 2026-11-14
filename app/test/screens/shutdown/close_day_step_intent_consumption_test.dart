@@ -19,6 +19,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/providers/evening_shutdown_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/screens/shutdown/steps/close_day_step.dart';
 import 'package:jeeves/services/notification_service.dart';
@@ -26,8 +27,50 @@ import 'package:jeeves/widgets/app_title_bar/app_title_bar.dart';
 
 import '../../test_helpers.dart';
 
-(Widget, ProviderContainer) _app(GtdDatabase db) {
+class _FailTwiceShutdown extends EveningShutdownNotifier {
+  int _failures = 0;
+
+  @override
+  Future<void> closeDay({DateTime? now}) async {
+    if (_failures < 2) {
+      _failures++;
+      throw StateError('write failed');
+    }
+    return super.closeDay(now: now);
+  }
+}
+
+class _CountingShutdown extends EveningShutdownNotifier {
+  int closeDayCallCount = 0;
+
+  @override
+  Future<void> closeDay({DateTime? now}) {
+    closeDayCallCount++;
+    return super.closeDay(now: now);
+  }
+}
+
+class _FailingReEnterPlanningNotifier extends FocusSessionPlanningNotifier {
+  int reEnterCallCount = 0;
+
+  @override
+  Future<void> reEnterPlanning() async {
+    reEnterCallCount++;
+    throw StateError('planning preload failed');
+  }
+}
+
+(Widget, ProviderContainer) _app(GtdDatabase db,
+    {bool failTwice = false,
+    _CountingShutdown? countingShutdown,
+    FocusSessionPlanningNotifier Function()? planningNotifierFactory}) {
   final container = ProviderContainer(overrides: [
+    if (failTwice)
+      eveningShutdownProvider.overrideWith(_FailTwiceShutdown.new),
+    if (countingShutdown != null)
+      eveningShutdownProvider.overrideWith(() => countingShutdown),
+    if (planningNotifierFactory != null)
+      focusSessionPlanningProvider.overrideWith(planningNotifierFactory),
     databaseProvider.overrideWithValue(db),
     notificationServiceProvider.overrideWithValue(StubNotificationService()),
   ]);
@@ -87,35 +130,26 @@ void main() {
   });
 
   testWidgets(
-      'and-then-plan intent set: Close Day clears the intent, resets the '
-      'planning draft, and routes to /focus-session-planning', (tester) async {
+      'and-then-plan intent set: no animation or button; commits at once, '
+      'clears the intent, resets the planning draft and routes to '
+      '/focus-session-planning', (tester) async {
     final db = GtdDatabase(NativeDatabase.memory());
     addTearDown(db.close);
 
     final (widget, container) = _app(db);
     addTearDown(container.dispose);
 
-    // Seed the sequenced-entry intent (as the blocked-start interstitial
-    // does) and a stale planning draft that reEnterPlanning must clear.
     container.read(shutdownThenPlanProvider.notifier).set(true);
     container.read(focusSessionPlanningProvider.notifier)
       ..selectTask('stale-task')
       ..goToStep(3);
 
-    expect(container.read(shutdownThenPlanProvider), isTrue);
-    expect(
-      container.read(focusSessionPlanningProvider).pendingSelectedTaskIds,
-      contains('stale-task'),
-    );
-
     await tester.pumpWidget(widget);
-    await _revealButton(tester);
-
-    await tester.tap(find.text('Close Day'));
-    // Flush the _onCloseDay await chain: closeDay() -> set(false) ->
-    // reEnterPlanning() -> context.go(...).
-    for (var i = 0; i < 6; i++) {
+    expect(find.text('Close Day'), findsNothing);
+    expect(find.byIcon(Icons.nightlight_round), findsNothing);
+    for (var i = 0; i < 8; i++) {
       await tester.pump();
+      await tester.runAsync(() => pumpEventQueue());
     }
 
     expect(container.read(shutdownThenPlanProvider), isFalse,
@@ -125,10 +159,47 @@ void main() {
       isEmpty,
       reason: 'reEnterPlanning resets the stale planning draft',
     );
-    expect(container.read(focusSessionPlanningProvider).currentStep, 0,
-        reason: 'reEnterPlanning resets the draft to a fresh performance');
-    expect(find.text('focus-session-planning'), findsOneWidget,
-        reason: 'Close Day routes into planning instead of exiting the app');
+    expect(find.text('focus-session-planning'), findsOneWidget);
+  });
+
+  testWidgets(
+      'and-then-plan intent set, commit fails twice: ordinary Close Day step '
+      'with an enabled button after each failure; third try ends in planning', (tester) async {
+    final db = GtdDatabase(NativeDatabase.memory());
+    addTearDown(db.close);
+
+    final (widget, container) = _app(db, failTwice: true);
+    addTearDown(container.dispose);
+    container.read(shutdownThenPlanProvider.notifier).set(true);
+
+    await tester.pumpWidget(widget);
+    for (var i = 0; i < 4; i++) {
+      await tester.pump();
+      await tester.runAsync(() => pumpEventQueue());
+    }
+    await _revealButton(tester);
+
+    expect(find.byIcon(Icons.nightlight_round), findsWidgets);
+    expect(container.read(shutdownThenPlanProvider), isTrue,
+        reason: 'the flag stays set so the retry still ends in planning');
+
+    // The retry fails too: the button must stay usable, not strand the user.
+    await tester.tap(find.text('Close Day'));
+    for (var i = 0; i < 4; i++) {
+      await tester.pump();
+      await tester.runAsync(() => pumpEventQueue());
+    }
+    await _revealButton(tester);
+    expect(find.text('focus-session-planning'), findsNothing);
+    expect(container.read(shutdownThenPlanProvider), isTrue);
+
+    await tester.tap(find.text('Close Day'));
+    for (var i = 0; i < 8; i++) {
+      await tester.pump();
+      await tester.runAsync(() => pumpEventQueue());
+    }
+    expect(find.text('focus-session-planning'), findsOneWidget);
+    expect(container.read(shutdownThenPlanProvider), isFalse);
   });
 
   testWidgets(
@@ -169,5 +240,51 @@ void main() {
     // AnimationController is disposed cleanly instead of racing closeApp().
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
+  });
+
+  testWidgets(
+      'and-then-plan intent set but reEnterPlanning throws: the user still '
+      'reaches planning and the shutdown is committed exactly once (#874)',
+      (tester) async {
+    final db = GtdDatabase(NativeDatabase.memory());
+    addTearDown(db.close);
+
+    final sessionId = await db.focusSessionDao.openSession(
+      userId: 'test-user',
+      taskIds: const [],
+    );
+
+    final failingNotifier = _FailingReEnterPlanningNotifier();
+    final countingShutdown = _CountingShutdown();
+    final (widget, container) = _app(db,
+        countingShutdown: countingShutdown,
+        planningNotifierFactory: () => failingNotifier);
+    addTearDown(container.dispose);
+
+    container.read(shutdownThenPlanProvider.notifier).set(true);
+
+    // The sequenced path commits automatically at mount: no button is shown.
+    await tester.pumpWidget(widget);
+    expect(find.text('Close Day'), findsNothing);
+    for (var i = 0; i < 8; i++) {
+      await tester.pump();
+      await tester.runAsync(() => pumpEventQueue());
+    }
+
+    expect(failingNotifier.reEnterCallCount, 1);
+    expect(tester.takeException(), isNull,
+        reason: 'the preload failure must not escape the handler');
+    expect(find.text('focus-session-planning'), findsOneWidget,
+        reason: 'a failed preload still routes into Daily Planning, whose '
+            'mount re-runs the rollover preload');
+    expect(container.read(shutdownThenPlanProvider), isFalse);
+    expect(countingShutdown.closeDayCallCount, 1,
+        reason: 'the shutdown commit is not repeated');
+
+    final session = await (db.select(db.focusSessions)
+          ..where((s) => s.id.equals(sessionId)))
+        .getSingle();
+    expect(session.endedAt, isNotNull,
+        reason: 'the shutdown commit persisted despite the preload failure');
   });
 }

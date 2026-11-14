@@ -62,7 +62,6 @@ void main() {
           title: const Value('Outcome'),
           userId: const Value('u1'),
           createdAt: Value(DateTime.parse('2026-07-01T09:00:00.000Z')),
-          clarified: const Value(true),
         ));
   });
 

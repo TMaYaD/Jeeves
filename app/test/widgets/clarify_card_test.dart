@@ -292,6 +292,9 @@ Widget _harness(
       ),
       personTagsProvider.overrideWith((_) => Stream.value(personTags)),
       contextTagsProvider.overrideWith((_) => Stream.value(contextTags)),
+      contextTagsWithCountProvider.overrideWith((_) => Stream.value([
+        for (final t in contextTags) TagWithCount(tag: t, count: 0),
+      ])),
       projectTagsProvider.overrideWith((_) => Stream.value(projectTags)),
       taskTagsProvider(todo.id).overrideWith(
         (_) => taskTagsStream ?? Stream.value(const <Tag>[]),
@@ -355,6 +358,9 @@ Widget _captureHarness(
         carvedOutcomesProvider(capture.id).overrideWith((_) => carvedOutcomes),
       personTagsProvider.overrideWith((_) => Stream.value(personTags)),
       contextTagsProvider.overrideWith((_) => Stream.value(contextTags)),
+      contextTagsWithCountProvider.overrideWith((_) => Stream.value([
+        for (final t in contextTags) TagWithCount(tag: t, count: 0),
+      ])),
       projectTagsProvider.overrideWith((_) => Stream.value(projectTags)),
     ],
     child: MaterialApp(
@@ -596,6 +602,7 @@ void main() {
       ));
       await _pumpFrames(tester, frames: 5);
 
+      await _openContextCloud(tester);
       await tester.ensureVisible(find.text('@work'));
       await tester.pump(const Duration(milliseconds: 50));
       await tester.tap(find.text('@work'));
@@ -646,7 +653,6 @@ void main() {
       await db.into(db.todos).insert(TodosCompanion(
             id: const Value('rc-mirror-1'),
             title: const Value('Plan party'),
-            clarified: const Value(true),
             intent: const Value('next'),
             userId: const Value(_userId),
             createdAt: Value(now),
@@ -759,7 +765,7 @@ void main() {
       // Project picker's optional-state affordance.
       expect(find.text('No project'), findsOneWidget);
       // Context picker's "add a tag" placeholder chip.
-      expect(find.text('+ context'), findsOneWidget);
+      expect(find.byKey(const Key('context_tag_picker_add')), findsOneWidget);
     });
 
     testWidgets('assigning a context tag persists via DAO and renders selected',
@@ -775,6 +781,7 @@ void main() {
       ));
       await tester.pumpAndSettle();
 
+      await _openContextCloud(tester);
       await tester.tap(find.text('@home'));
       await tester.pumpAndSettle();
       await refreshTags(tester, 't-ctx-assign');
@@ -798,8 +805,8 @@ void main() {
       ));
       await tester.pumpAndSettle();
 
-      // Tapping the already-selected chip toggles it off.
-      await tester.tap(find.text('✓ @home'));
+      // Tapping the applied chip in the picker's row removes it.
+      await tester.tap(find.text('@home'));
       await tester.pumpAndSettle();
       await refreshTags(tester, 't-ctx-remove');
 
@@ -914,6 +921,7 @@ void main() {
       }
 
       // Assign context.
+      await _openContextCloud(tester);
       await tester.tap(find.text('@home'));
       await tester.pumpAndSettle();
       await refreshTags(tester, 'orth-$intent');
@@ -925,7 +933,9 @@ void main() {
       await refreshTags(tester, 'orth-$intent');
       await expectInvariants();
 
-      // Assign project.
+      // Assign project (scroll back up past the open tag cloud).
+      await tester.scrollUntilVisible(find.text('No project'), -200,
+          scrollable: find.byType(Scrollable).first);
       await tester.tap(find.text('No project'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Website').last);
@@ -955,6 +965,7 @@ void main() {
       ));
       await tester.pumpAndSettle();
 
+      await _openContextCloud(tester);
       await tester.tap(find.text('@home'));
       await tester.pumpAndSettle();
       await refreshTags(tester, 't-autosave');
@@ -1545,6 +1556,7 @@ void main() {
         matching: find.text('High'),
       ));
       await tester.pump();
+      expect(find.byType(ClarifyEstimatePicker), findsOneWidget);
       await tester.tap(find.text('30m'));
       await tester.pump();
 
@@ -1971,4 +1983,15 @@ void main() {
       expect(await db.todoDao.getPersonTagIdsForTodo(outcomeId), {'alice'});
     });
   });
+}
+
+/// Opens the context picker's tag cloud (the dotted `+`), without settling:
+/// callers that pump frames by hand must not wait on live streams.
+Future<void> _openContextCloud(WidgetTester tester) async {
+  final plus = find.byKey(const Key('context_tag_picker_add'));
+  await tester.ensureVisible(plus);
+  await tester.pump(const Duration(milliseconds: 50));
+  await tester.tap(plus);
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 50));
 }

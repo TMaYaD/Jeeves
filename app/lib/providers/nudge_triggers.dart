@@ -3,7 +3,8 @@
 /// conceptual definition and `docs/adr/0008-cadence-as-anchor-with-period.md`
 /// for the Cadence-as-anchor-with-period decision.
 ///
-/// Two concrete shapes:
+/// Three concrete shapes (the third, the Unfinished Trigger, is Weekly
+/// Review's alone):
 ///
 /// - **Cadence Trigger** — fires once per anchor-to-anchor period. The
 ///   predicate combines "current time has crossed into a new period",
@@ -27,6 +28,7 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../models/nudge_predicates.dart';
 import '../models/ritual.dart';
 import 'ceremony_in_progress_provider.dart';
 import 'clock_provider.dart';
@@ -37,13 +39,12 @@ import 'focus_session_planning_settings_provider.dart'
 import 'gtd_lists_provider.dart';
 import 'nudge_clock_provider.dart';
 import 'onboarding_provider.dart';
+import 'periodic_review_provider.dart' show periodicReviewProvider;
 import 'periodic_review_settings_provider.dart'
-    show
-        emptyActionableBannerTrigger,
-        periodicReviewIsDueProvider,
-        periodicReviewLastCompletedProvider;
+    show emptyActionableBannerTrigger;
 import 'shutdown_settings_provider.dart' show shutdownSettingsProvider;
 import 'synced_preferences_provider.dart';
+import 'system_trust_provider.dart' show weeklyReviewDueAtProvider;
 
 // ---------------------------------------------------------------------------
 // TriggerState
@@ -154,16 +155,15 @@ final qualifyingSessionTodayProvider = StreamProvider<bool>((ref) {
 ///
 /// Per-Ritual predicate sketches:
 ///   - DPR: now ≥ today's DPR anchor AND no qualifying session (none started
-///     since the last ES anchor) AND DPR not in-progress. Fires even on a day
-///     whose plan+shutdown both completed, once past the ES anchor (the ES
-///     anchor starts the next planning period); with a stale open session it
-///     fires alongside ES, which wins via queue ordering.
-///     firingSince = later of (today's DPR anchor, last ES anchor).
+///     since the last ES anchor) AND DPR not in-progress AND now is before the
+///     last ES anchor of the day; from the ES anchor until the next DPR anchor
+///     it is idle, so the banner stays hidden overnight.
+///     firingSince = today's DPR anchor.
 ///   - ES:  FS active AND now ≥ shutdown anchor AND ES not in-progress.
 ///     firingSince = today's shutdown anchor.
-///   - WR:  (no prior completion OR now ≥ last completion + 7d) AND
-///     WR not in-progress.
-///     firingSince = last completion + 7d (or app start if never completed).
+///   - WR:  review due (now ≥ `weeklyReviewDueAtProvider`) AND WR not in-progress.
+///     firingSince = later of the due instant and the start of today, so the
+///     Nudge returns daily while due.
 final cadenceTriggerProvider =
     Provider.family<TriggerState, RitualId>((ref, ritual) {
   if (ref.watch(ceremonyInProgressForProvider(ritual))) return TriggerState.idle;
@@ -175,76 +175,57 @@ final cadenceTriggerProvider =
   };
 });
 
+TriggerState _stateForEdge(DateTime? edge) => edge == null
+    ? TriggerState.idle
+    : TriggerState(isFiring: true, firingSince: edge);
+
 TriggerState _dprCadenceTrigger(Ref ref) {
   final now = _now(ref);
-
-  // Past-anchor gate (ADR-0020): no nagging before today's DPR anchor.
-  final dprAnchor = ref.watch(planningAnchorProvider);
-  if (now.isBefore(dprAnchor)) return TriggerState.idle;
-
-  // Day-attribution precondition: suppress while a qualifying session exists
-  // (one started since the last ES anchor — open *or* already closed). Defer
-  // until the stream has emitted at least once, otherwise we'd flash a DPR
-  // firing state during cold start before it resolves. Note the deliberate
-  // absence of a "no session open" precondition: a *stale* open session
-  // (started before the last ES anchor) does not qualify, so DPR re-arms for
-  // it and fires alongside ES — Evening Shutdown wins via queue ordering.
   final qualifying = ref.watch(qualifyingSessionTodayProvider);
-  if (!qualifying.hasValue) return TriggerState.idle;
-  if (qualifying.requireValue) return TriggerState.idle;
-
-  // Content precondition: DPR is meaningful only when there is something
-  // to plan. hasAnyItem gates the onboarding state; inbox-or-next non-empty
-  // gates the "everything is done already" state.
   final hasAnyItem = ref.watch(hasAnyItemProvider);
-  if (!hasAnyItem.hasValue || !hasAnyItem.requireValue) return TriggerState.idle;
   final inbox = ref.watch(unfilteredInboxProvider);
   final next = ref.watch(unfilteredNextProvider);
-  if (!inbox.hasValue || !next.hasValue) return TriggerState.idle;
-  if (inbox.requireValue.isEmpty && next.requireValue.isEmpty) {
+  // Loading is not an empty database: avoid flashing a firing state at startup.
+  if (!qualifying.hasValue ||
+      !hasAnyItem.hasValue ||
+      !inbox.hasValue ||
+      !next.hasValue) {
     return TriggerState.idle;
   }
-
-  // firingSince = the later of today's DPR anchor and the last ES anchor, so a
-  // morning dismiss does not suppress the fresh post-ES-anchor re-arm edge.
-  final lastEs = ref.watch(lastShutdownAnchorProvider);
-  final since = dprAnchor.isAfter(lastEs) ? dprAnchor : lastEs;
-  return TriggerState(isFiring: true, firingSince: since);
+  final planningTime =
+      ref.watch(focusSessionPlanningSettingsProvider).planningTime;
+  final shutdownTime = ref.watch(shutdownSettingsProvider).shutdownTime;
+  return _stateForEdge(dprFiringEdgeAt(now, DprFacts.forCurrentPeriod(
+    planningHour: planningTime.hour,
+    planningMinute: planningTime.minute,
+    shutdownHour: shutdownTime.hour,
+    shutdownMinute: shutdownTime.minute,
+    qualifyingSessionExists: qualifying.requireValue,
+    hasAnyItem: hasAnyItem.requireValue,
+    hasInboxOrNext: inbox.requireValue.isNotEmpty || next.requireValue.isNotEmpty,
+  )));
 }
 
 TriggerState _esCadenceTrigger(Ref ref) {
   final now = _now(ref);
   final session = ref.watch(activeSessionProvider);
   if (!session.hasValue) return TriggerState.idle;
-  // World-state precondition: a FocusSession must be active. ES is the
-  // Review phase of the active session.
-  if (session.requireValue == null) return TriggerState.idle;
-
-  final shutdownSettings = ref.watch(shutdownSettingsProvider);
-  final anchor = _todayAt(now,
-      shutdownSettings.shutdownTime.hour, shutdownSettings.shutdownTime.minute);
-  if (now.isBefore(anchor)) return TriggerState.idle;
-
-  return TriggerState(isFiring: true, firingSince: anchor);
+  final shutdownTime = ref.watch(shutdownSettingsProvider).shutdownTime;
+  return _stateForEdge(esFiringEdgeAt(now, EsFacts(
+    shutdownHour: shutdownTime.hour,
+    shutdownMinute: shutdownTime.minute,
+    sessionIsOpen: session.requireValue != null,
+  )));
 }
 
 TriggerState _wrCadenceTrigger(Ref ref) {
+  // `_now` re-evaluates at every local midnight and at the due instant (the
+  // boundary tick), so the daily return needs no timer of its own. The due
+  // instant is the single due predicate's input; it is null with no items yet.
   final now = _now(ref);
-  if (!ref.watch(periodicReviewIsDueProvider)) return TriggerState.idle;
-
-  // Content precondition: WR has nothing to review in the onboarding state.
-  final hasAnyItem = ref.watch(hasAnyItemProvider);
-  if (!hasAnyItem.hasValue || !hasAnyItem.requireValue) return TriggerState.idle;
-
-  final lastCompleted = ref.watch(periodicReviewLastCompletedProvider);
-  // firingSince: when the cadence-due edge would have fired. For a
-  // never-completed Ritual we report start-of-today (the predicate has
-  // been true since whenever the app booted today; start-of-today is a
-  // stable, surface-friendly stamp).
-  final since = lastCompleted == null
-      ? _startOfToday(now)
-      : lastCompleted.add(const Duration(days: 7));
-  return TriggerState(isFiring: true, firingSince: since);
+  final dueAt = ref.watch(weeklyReviewDueAtProvider);
+  if (dueAt == null || now.isBefore(dueAt)) return TriggerState.idle;
+  return _stateForEdge(wrFiringEdgeAt(now, WrFacts(dueAt: dueAt)));
 }
 
 // ---------------------------------------------------------------------------
@@ -287,7 +268,7 @@ final wrContentFiringProvider = Provider<bool?>((ref) {
   final inbox = ref.watch(unfilteredInboxProvider);
   final next = ref.watch(unfilteredNextProvider);
   final waiting = ref.watch(unfilteredWaitingForProvider);
-  final maybe = ref.watch(unfilteredMaybeProvider);
+  final maybe = ref.watch(unfilteredSomedayMaybeProvider);
   if (!hasAnyItem.hasValue ||
       !inbox.hasValue ||
       !next.hasValue ||
@@ -374,8 +355,10 @@ final contentFiringEdgeProvider =
 );
 
 TriggerState _wrContentStateTrigger(Ref ref) {
-  if (ref.watch(wrContentFiringProvider) != true) return TriggerState.idle;
+  // Watch the edge tracker before the early return: it only sees a genuine
+  // false→true transition if it is alive while the predicate is still false.
   final edge = ref.watch(contentFiringEdgeProvider);
+  if (ref.watch(wrContentFiringProvider) != true) return TriggerState.idle;
   // While firing the tracker has stamped an edge; fall back defensively to
   // start-of-today (kept boundary-reactive via _now) if it has not yet.
   return TriggerState(
@@ -383,6 +366,55 @@ TriggerState _wrContentStateTrigger(Ref ref) {
     firingSince: edge ?? _startOfToday(_now(ref)),
   );
 }
+
+// ---------------------------------------------------------------------------
+// Unfinished Trigger
+// ---------------------------------------------------------------------------
+
+/// The instant the user left a Weekly Review session without finishing it, or
+/// null while no session is unfinished.
+///
+/// A session is unfinished when it was started (`sessionStarted`) and its
+/// Ceremony is no longer in progress (the screen was left) without Done. The
+/// instant is held in memory on this device and ends when a session is
+/// finished, matching the in-progress hygiene rule it complements.
+class UnfinishedReviewLeftAtNotifier extends Notifier<DateTime?> {
+  @override
+  DateTime? build() {
+    final inProgress =
+        ref.watch(ceremonyInProgressForProvider(RitualId.weeklyReview));
+    final started = ref
+        .watch(periodicReviewProvider.select((state) => state.sessionStarted));
+    if (!started || inProgress) return null;
+    // The Ceremony tracker records every exit, so a second exit after a
+    // reopen is seen even though nothing watched this provider meanwhile.
+    return ref
+            .read(ceremonyInProgressProvider.notifier)
+            .lastExitedAt(RitualId.weeklyReview) ??
+        ref.read(clockProvider)();
+  }
+}
+
+final unfinishedReviewLeftAtProvider =
+    NotifierProvider<UnfinishedReviewLeftAtNotifier, DateTime?>(
+  UnfinishedReviewLeftAtNotifier.new,
+);
+
+/// The Weekly Review **Unfinished Trigger**: fires while a started session has
+/// been left without Done, whether or not the review is due. `firingSince` is
+/// the later of the instant it was left and the start of today, so a swipe
+/// earlier today does not hide a review left after it, and the Nudge returns
+/// the next day while the session stays unfinished.
+final unfinishedReviewTriggerProvider = Provider<TriggerState>((ref) {
+  final now = _now(ref);
+  final leftAt = ref.watch(unfinishedReviewLeftAtProvider);
+  if (leftAt == null) return TriggerState.idle;
+  final startOfToday = _startOfToday(now);
+  return TriggerState(
+    isFiring: true,
+    firingSince: leftAt.isAfter(startOfToday) ? leftAt : startOfToday,
+  );
+});
 
 // ---------------------------------------------------------------------------
 // Aggregate helpers
@@ -395,6 +427,8 @@ final triggersForRitualProvider =
   return [
     ref.watch(cadenceTriggerProvider(ritual)),
     ref.watch(contentStateTriggerProvider(ritual)),
+    if (ritual == RitualId.weeklyReview)
+      ref.watch(unfinishedReviewTriggerProvider),
   ];
 });
 

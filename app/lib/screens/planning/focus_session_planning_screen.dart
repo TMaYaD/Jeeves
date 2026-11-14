@@ -85,7 +85,10 @@ class _FocusSessionPlanningScreenState
       // built notifier, which build()'s once-per-process microtask misses.
       // Fire-and-forget: the method is idempotent, guards against an open
       // session, and its reviewed-ids merge keeps deselected tasks out.
-      ref.read(focusSessionPlanningProvider.notifier).ensureRolloverPreload();
+      final planning = ref.read(focusSessionPlanningProvider.notifier);
+      planning.ensureRolloverPreload();
+      // Pre-fill the Time step from the previous session's available time.
+      planning.ensureAvailableTimePreload();
     });
   }
 

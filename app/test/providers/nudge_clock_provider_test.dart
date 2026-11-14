@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/providers/clock_provider.dart';
 import 'package:jeeves/providers/nudge_clock_provider.dart';
 import 'package:jeeves/providers/periodic_review_settings_provider.dart';
+import 'package:jeeves/providers/system_trust_provider.dart';
 
 void main() {
   group('nextNudgeBoundary', () {
@@ -11,14 +12,26 @@ void main() {
         'boundary', () {
       final now = DateTime(2026, 6, 29, 10, 0);
       final next = nextNudgeBoundary(now,
-          shutdownHour: 17, shutdownMinute: 0, weeklyReviewLastCompleted: null);
+          shutdownHour: 17, shutdownMinute: 0, weeklyReviewDueAt: null);
       expect(next, DateTime(2026, 6, 29, 17, 0));
+    });
+
+    test('picks today\'s planning anchor when it is the earliest future '
+        'boundary', () {
+      final now = DateTime(2026, 6, 29, 6, 0);
+      final next = nextNudgeBoundary(now,
+          shutdownHour: 17,
+          shutdownMinute: 0,
+          planningHour: 8,
+          planningMinute: 30,
+          weeklyReviewDueAt: null);
+      expect(next, DateTime(2026, 6, 29, 8, 30));
     });
 
     test('falls back to the next day boundary once the anchor has passed', () {
       final now = DateTime(2026, 6, 29, 18, 0);
       final next = nextNudgeBoundary(now,
-          shutdownHour: 17, shutdownMinute: 0, weeklyReviewLastCompleted: null);
+          shutdownHour: 17, shutdownMinute: 0, weeklyReviewDueAt: null);
       expect(next, DateTime(2026, 6, 30));
     });
 
@@ -28,57 +41,74 @@ void main() {
       // shutdown anchor and tonight's midnight.
       final last = DateTime(2026, 6, 22, 12, 0);
       final next = nextNudgeBoundary(now,
-          shutdownHour: 17, shutdownMinute: 0, weeklyReviewLastCompleted: last);
+          shutdownHour: 17, shutdownMinute: 0, weeklyReviewDueAt: last.add(const Duration(days: 7)));
       expect(next, DateTime(2026, 6, 29, 12, 0));
+    });
+
+    test('schedules subsequent weekly-review refires before other boundaries', () {
+      final last = DateTime(2026, 6, 15, 12);
+      final next = nextNudgeBoundary(DateTime(2026, 6, 29, 11),
+          shutdownHour: 17, shutdownMinute: 0, weeklyReviewDueAt: last.add(const Duration(days: 7)));
+      expect(next, DateTime(2026, 6, 29, 12));
     });
 
     test('ignores a weekly-review due instant that is already in the past', () {
       final now = DateTime(2026, 6, 29, 10, 0);
       final last = DateTime(2026, 6, 1, 9, 0); // due long ago
       final next = nextNudgeBoundary(now,
-          shutdownHour: 23, shutdownMinute: 0, weeklyReviewLastCompleted: last);
+          shutdownHour: 23, shutdownMinute: 0, weeklyReviewDueAt: last.add(const Duration(days: 7)));
       // Past due instant is skipped; the 23:00 anchor is the earliest future one.
       expect(next, DateTime(2026, 6, 29, 23, 0));
     });
   });
 
-  group('periodicReviewIsDueProvider — reactive to the cadence boundary', () {
-    test('its scheduled boundary Timer fires at last + 7d and flips to due', () {
+  group('periodicReviewIsDueProvider — reactive to the due instant', () {
+    test('its scheduled Timer fires at the due instant and flips to due', () {
       fakeAsync((async) {
-        final last = DateTime(2026, 6, 23, 10, 0); // due exactly at 6/30 10:00
-        var now = DateTime(2026, 6, 29, 10, 0); // one day before the boundary
+        final due = DateTime(2026, 6, 30, 10, 0);
+        var now = DateTime(2026, 6, 29, 10, 0); // one day before the due instant
 
         final container = ProviderContainer(overrides: [
           clockProvider.overrideWithValue(() => now),
-          periodicReviewOpenSinceProvider.overrideWithValue(null),
-          periodicReviewLastCompletedProvider.overrideWithValue(last),
+          weeklyReviewDueAtProvider.overrideWithValue(due),
         ]);
         addTearDown(container.dispose);
 
         // Building the provider schedules a Timer for the exact due instant.
         expect(container.read(periodicReviewIsDueProvider), isFalse);
 
-        // One second short of the cutoff: the timer has not fired, still not due.
+        // One second short of the due instant: not due yet.
         now = DateTime(2026, 6, 30, 9, 59, 59);
         async.elapse(const Duration(days: 1) - const Duration(seconds: 1));
         expect(container.read(periodicReviewIsDueProvider), isFalse);
 
-        // Cross the exact cutoff: the scheduled Timer fires invalidateSelf and
-        // the predicate re-evaluates to due — no manual invalidation.
+        // Cross the due instant: the Timer fires invalidateSelf and the
+        // predicate re-evaluates to due — no manual invalidation.
         now = DateTime(2026, 6, 30, 10, 0);
         async.elapse(const Duration(seconds: 1));
         expect(container.read(periodicReviewIsDueProvider), isTrue);
       });
     });
 
-    test('is due immediately when never completed', () {
+    test('is due at and after the due instant', () {
+      final due = DateTime(2026, 6, 30, 10, 0);
+      for (final now in [due, due.add(const Duration(days: 30))]) {
+        final container = ProviderContainer(overrides: [
+          clockProvider.overrideWithValue(() => now),
+          weeklyReviewDueAtProvider.overrideWithValue(due),
+        ]);
+        addTearDown(container.dispose);
+        expect(container.read(periodicReviewIsDueProvider), isTrue);
+      }
+    });
+
+    test('is not due when there is no due instant (no items yet)', () {
       final container = ProviderContainer(overrides: [
         clockProvider.overrideWithValue(() => DateTime(2026, 6, 29)),
-        periodicReviewOpenSinceProvider.overrideWithValue(null),
-          periodicReviewLastCompletedProvider.overrideWithValue(null),
+        weeklyReviewDueAtProvider.overrideWithValue(null),
       ]);
       addTearDown(container.dispose);
-      expect(container.read(periodicReviewIsDueProvider), isTrue);
+      expect(container.read(periodicReviewIsDueProvider), isFalse);
     });
   });
 }

@@ -32,7 +32,6 @@ Future<void> _insertMaybe(GtdDatabase db, String id) async {
         title: Value('Maybe $id'),
         userId: const Value('local'),
         intent: const Value('maybe'),
-        clarified: const Value(true),
         createdAt: Value(now),
         updatedAt: Value(now),
       ));
@@ -81,7 +80,7 @@ void main() {
       expect(nav.isEmpty, isTrue);
     });
 
-    test('loadSomedaySnapshot populates somedayNav from maybeProvider',
+    test('loadSomedaySnapshot populates somedayNav from somedayMaybeProvider',
         () async {
       await _insertMaybe(db, 's1');
       await _insertMaybe(db, 's2');

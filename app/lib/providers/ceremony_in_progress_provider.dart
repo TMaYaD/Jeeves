@@ -13,6 +13,7 @@ library;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/ritual.dart';
+import 'clock_provider.dart';
 
 /// The set of Rituals whose Ceremony is currently in progress.
 ///
@@ -21,6 +22,14 @@ import '../models/ritual.dart';
 class CeremonyInProgressNotifier extends Notifier<Set<RitualId>> {
   @override
   Set<RitualId> build() => const <RitualId>{};
+
+  final Map<RitualId, DateTime> _lastExitedAt = {};
+
+  /// The instant [ritual]'s Ceremony was last left, or null if it has not been
+  /// left on this device. Recorded on every exit, so a reader that was not
+  /// watching while the Ceremony was open (nothing is, on its own route) still
+  /// sees the latest exit rather than an earlier one.
+  DateTime? lastExitedAt(RitualId ritual) => _lastExitedAt[ritual];
 
   /// Mark [ritual]'s Ceremony performance as in progress. Idempotent.
   void enter(RitualId ritual) {
@@ -40,6 +49,7 @@ class CeremonyInProgressNotifier extends Notifier<Set<RitualId>> {
   void exit(RitualId ritual) {
     if (!ref.mounted) return;
     if (!state.contains(ritual)) return;
+    _lastExitedAt[ritual] = ref.read(clockProvider)();
     state = state.where((r) => r != ritual).toSet();
   }
 }
