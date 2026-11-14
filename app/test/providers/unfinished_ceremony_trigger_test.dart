@@ -4,6 +4,8 @@
 /// clock is controlled.
 library;
 
+import 'dart:async';
+
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -123,6 +125,57 @@ void main() {
 
       ceremony.exit(ritual);
       expect(trigger(ritual).isFiring, isFalse);
+    });
+
+    test('a session that opens and closes while the advance is still reading '
+        'does not get its voided latch restored', () async {
+      final session =
+          await db.focusSessionDao.openSession(userId: 'local', taskIds: []);
+      final opened = await db.focusSessionDao.watchActiveSession().first;
+      await db.focusSessionDao.closeSession(sessionId: session);
+
+      final sessionEvents = StreamController<FocusSession?>();
+      addTearDown(sessionEvents.close);
+      final gated = ProviderContainer(overrides: [
+        databaseProvider.overrideWithValue(db),
+        clockProvider.overrideWithValue(() => now),
+        nudgeBoundaryTickProvider.overrideWithValue(0),
+        activeSessionProvider.overrideWith((ref) => sessionEvents.stream),
+      ]);
+      addTearDown(gated.dispose);
+      gated.listen(activeSessionProvider, (_, _) {});
+      gated.listen(unfinishedCeremonyTriggerProvider(ritual), (_, _) {});
+      sessionEvents.add(null);
+      await pumpEventQueue(times: 10);
+
+      final ceremony = gated.read(ceremonyInProgressProvider.notifier);
+      final planning = gated.read(focusSessionPlanningProvider.notifier);
+      ceremony.enter(ritual);
+      planning.goToStep(1);
+      expect(gated.read(focusSessionPlanningProvider).startedPastIntro, isTrue);
+
+      // Hold the database so the advance into Review cannot finish its reads
+      // until both session events have been observed.
+      final releaseDatabase = Completer<void>();
+      final heldTransaction =
+          db.transaction(() async => releaseDatabase.future);
+      final advancing = planning.advanceStep();
+
+      sessionEvents.add(opened);
+      await pumpEventQueue(times: 10);
+      expect(gated.read(focusSessionPlanningProvider).startedPastIntro, isFalse);
+      sessionEvents.add(null);
+      await pumpEventQueue(times: 10);
+
+      releaseDatabase.complete();
+      await heldTransaction;
+      await advancing;
+      await pumpEventQueue(times: 10);
+      expect(gated.read(focusSessionPlanningProvider).startedPastIntro, isFalse);
+
+      ceremony.exit(ritual);
+      expect(gated.read(unfinishedCeremonyTriggerProvider(ritual)).isFiring,
+          isFalse);
     });
 
     test('advancing while a session is already open does not latch', () async {

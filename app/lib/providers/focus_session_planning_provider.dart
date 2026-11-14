@@ -544,6 +544,11 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// its (possibly stale) read to the next draft (#825).
   int _planningGeneration = 0;
 
+  /// Bumped every time a session is seen open. A step advance that began
+  /// before it must not restore the started latch the opening voided, even if
+  /// that session has already closed again by the time the advance resumes.
+  int _sessionOpenedCount = 0;
+
   @override
   FocusSessionPlanningState build() {
     Future.microtask(ensureRolloverPreload);
@@ -552,7 +557,9 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     // good, so a draft started before it must not read as unfinished once that
     // session later closes without this Ceremony.
     ref.listen(activeSessionProvider, (_, next) {
-      if (next.asData?.value != null && state.startedPastIntro) {
+      if (next.asData?.value == null) return;
+      _sessionOpenedCount++;
+      if (state.startedPastIntro) {
         state = state.copyWith(startedPastIntro: false);
       }
     });
@@ -639,6 +646,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   Future<void> advanceStep() async {
     if (_advancing) return;
     _advancing = true;
+    final sessionOpenedCountAtStart = _sessionOpenedCount;
     try {
       final next = state.currentStep + 1;
       if (next == 2) {
@@ -679,8 +687,11 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
         );
       }
       // The awaits above can span a session opening through sync, which voids
-      // the latch; do not restore it from the pre-await decision.
-      final sessionOpenNow = ref.read(activeSessionProvider).asData?.value != null;
+      // the latch; do not restore it from the pre-await decision — not even
+      // when that session has closed again before this point.
+      final sessionOpenNow =
+          ref.read(activeSessionProvider).asData?.value != null ||
+              _sessionOpenedCount != sessionOpenedCountAtStart;
       state = state.copyWith(
         currentStep: next.clamp(0, _maxStepIndex),
         startedPastIntro:
