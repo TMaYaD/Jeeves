@@ -13,8 +13,20 @@ void main() {
     hasInboxOrNext: true,
   );
 
+  test('Daily Planning still fires when planning and shutdown times are equal', () {
+    const sameTime = DprFacts(
+      planningHour: 18,
+      planningMinute: 0,
+      shutdownHour: 18,
+      shutdownMinute: 0,
+      hasAnyItem: true,
+      hasInboxOrNext: true,
+    );
+    expect(dprFiringEdgeAt(evening, sameTime), evening);
+  });
+
   test(
-    'Daily Planning fires exactly at its anchor and refires at shutdown',
+    'Daily Planning fires at its anchor and is idle from shutdown until the next anchor',
     () {
       expect(
         dprFiringEdgeAt(
@@ -24,7 +36,18 @@ void main() {
         isNull,
       );
       expect(dprFiringEdgeAt(morning, ready), morning);
-      expect(dprFiringEdgeAt(evening, ready), evening);
+      expect(
+        dprFiringEdgeAt(evening.subtract(const Duration(microseconds: 1)), ready),
+        morning,
+      );
+      expect(dprFiringEdgeAt(evening, ready), isNull);
+      expect(dprFiringEdgeAt(DateTime(2026, 5, 20, 23, 59), ready), isNull);
+      final nextMorning = morning.add(const Duration(days: 1));
+      expect(
+        dprFiringEdgeAt(nextMorning.subtract(const Duration(minutes: 1)), ready),
+        isNull,
+      );
+      expect(dprFiringEdgeAt(nextMorning, ready), nextMorning);
     },
   );
 
@@ -128,7 +151,7 @@ void main() {
       ),
       isNull,
     );
-    expect(dprFiringEdgeAt(evening, ready), evening);
+    expect(dprFiringEdgeAt(evening, ready), isNull);
   });
 
   test('Weekly Review is idle before it falls due', () {

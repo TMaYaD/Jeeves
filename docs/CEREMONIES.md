@@ -129,7 +129,7 @@ lifecycle gates:
 
 | Ritual | Predicate |
 |---|---|
-| Daily Planning | Past today's planning anchor, and no qualifying session exists since the last Evening Shutdown anchor |
+| Daily Planning | Past today's planning anchor, before the next Evening Shutdown anchor, and no qualifying session exists since the last Evening Shutdown anchor |
 | Evening Shutdown | The ES period has turned, a FocusSession is active, and ES has not been completed this period |
 
 Evening Shutdown needs an active session because it *is* that session's Review
@@ -137,10 +137,14 @@ phase — without one it has nothing to operate on.
 
 The Daily Planning gate is the subtle one. Day attribution is anchor-based, so a
 session started since the last ES anchor means this period's planning already
-happened and the Nudge stands down. A **stale** open session — started *before* the
-last ES anchor — does not qualify, so Daily Planning re-arms and fires alongside
-Evening Shutdown. Evening Shutdown wins that contest by priority, which is the
-intended outcome: the user must close the stale session before opening a new one.
+happened and the Nudge stands down. From the ES anchor until the next planning
+anchor Daily Planning is idle whatever the session state. A **stale** open
+session — started *before* the last ES anchor — does not qualify, so Daily
+Planning fires at the next planning anchor; Evening Shutdown, not Daily Planning,
+asks the user to close it
+([ADR-0020](adr/0020-sessions-never-auto-close-anchor-day-attribution.md)).
+When the planning and ES times are equal, the planning anchor wins and the Nudge
+can still fire.
 
 ## Cadence
 
@@ -176,9 +180,8 @@ Weekly Review  >  Evening Shutdown  >  Daily Planning
 
 Weekly Review ranks highest because it restores the trusted state the other two
 operate on — planning against a stale Next list violates the method. Evening
-Shutdown outranks Daily Planning for the case above: when both fire, the user has
-a stale session open and must close it before opening a new one, so the shutdown
-is the only one of the two they can act on.
+Shutdown outranks Daily Planning
+([ADR-0020](adr/0020-sessions-never-auto-close-anchor-day-attribution.md)).
 
 Surfaces consume the queue rather than reading Nudges directly:
 

@@ -151,8 +151,7 @@ void main() {
 
     test('orders visible Rituals by priority — WR > ES > DPR', () {
       // Evening Shutdown outranks Daily Planning: "Shutdown wins" while a
-      // session is open (ADR-0020). The two only fire together on a stale open
-      // session, where the ES nudge must lead.
+      // session is open (ADR-0020). The priority holds even if both are visible.
       final c = makeContainer({
         RitualId.eveningShutdown,
         RitualId.weeklyReview,

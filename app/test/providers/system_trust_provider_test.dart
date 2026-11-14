@@ -8,8 +8,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/focus_session_planning_settings.dart';
 import 'package:jeeves/providers/clock_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/providers/focus_session_planning_settings_provider.dart';
 import 'package:jeeves/providers/gtd_lists_provider.dart'
     show unfilteredInboxProvider;
 import 'package:jeeves/providers/nudge_clock_provider.dart';
@@ -26,6 +28,14 @@ import '../test_helpers.dart';
 
 const _lastCompletedKey = 'periodic_review_last_completed_at';
 const _sessionFinishedKey = 'periodic_review_last_session_finished_at';
+// The boundary tick reads the planning time; keep this test off the real
+// synced-preferences store and use the default settings.
+class _DefaultPlanningSettingsNotifier
+    extends FocusSessionPlanningSettingsNotifier {
+  @override
+  FocusSessionPlanningSettings build() => const FocusSessionPlanningSettings();
+}
+
 final _lastReviewed = DateTime.utc(2026, 3, 1, 9);
 final _due = _lastReviewed.add(const Duration(days: 7));
 final _doneAt = DateTime.utc(2026, 3, 4, 15, 30);
@@ -307,6 +317,8 @@ void main() {
         var clock = _due.subtract(const Duration(minutes: 5));
         final c = ProviderContainer(overrides: [
           clockProvider.overrideWithValue(() => clock),
+          focusSessionPlanningSettingsProvider
+              .overrideWith(_DefaultPlanningSettingsNotifier.new),
           weeklyReviewDueAtProvider.overrideWithValue(_due),
           periodicReviewLastCompletedProvider.overrideWithValue(null),
         ]);

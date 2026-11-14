@@ -308,7 +308,7 @@ void main() {
   });
 
   testWidgets(
-      'a swipe hides the Daily Planning Banner until its next firing, never '
+      'a swipe hides the Daily Planning Banner until its next planning anchor, never '
       'showing a ✕', (tester) async {
     final today = DateTime(startedAt.year, startedAt.month, startedAt.day);
     startedAt = today.add(const Duration(hours: 10));
@@ -330,9 +330,15 @@ void main() {
       await _flush(tester);
       expect(planningBanner, findsNothing);
 
-      // The evening Shutdown time opens the next planning period: a new firing
-      // (12:00 + 6h05 = 18:05).
+      // Past the evening Shutdown time (12:00 + 6h05 = 18:05) it stays hidden
+      // overnight: Daily Planning is idle until the next planning anchor.
       await tester.pump(const Duration(hours: 6, minutes: 5));
+      await _flush(tester);
+      expect(planningBanner, findsNothing);
+
+      // The next morning's planning anchor (08:00) is a new firing
+      // (18:05 + 14h = 08:05).
+      await tester.pump(const Duration(hours: 14));
       await _flush(tester);
       expect(planningBanner, findsOneWidget);
     } finally {

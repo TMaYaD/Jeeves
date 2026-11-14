@@ -16,6 +16,18 @@ void main() {
       expect(next, DateTime(2026, 6, 29, 17, 0));
     });
 
+    test('picks today\'s planning anchor when it is the earliest future '
+        'boundary', () {
+      final now = DateTime(2026, 6, 29, 6, 0);
+      final next = nextNudgeBoundary(now,
+          shutdownHour: 17,
+          shutdownMinute: 0,
+          planningHour: 8,
+          planningMinute: 30,
+          weeklyReviewDueAt: null);
+      expect(next, DateTime(2026, 6, 29, 8, 30));
+    });
+
     test('falls back to the next day boundary once the anchor has passed', () {
       final now = DateTime(2026, 6, 29, 18, 0);
       final next = nextNudgeBoundary(now,
