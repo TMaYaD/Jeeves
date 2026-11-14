@@ -3,6 +3,8 @@
 // its button opens Inbox clarification one Capture at a time, oldest first;
 // at 50 it is gone and the Weekly Review shows. The Now screen carries the
 // nudge in its empty state, never a Banner.
+import 'dart:async';
+
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -11,6 +13,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/clock_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/providers/inbox_provider.dart';
+import 'package:jeeves/providers/nudge_clock_provider.dart';
 import 'package:jeeves/providers/synced_preferences_provider.dart';
 import 'package:jeeves/router.dart';
 import 'package:jeeves/screens/inbox/inbox_clarify_screen.dart';
@@ -31,6 +35,26 @@ Future<void> _flush(WidgetTester tester) async {
   // disposed route's providers leave behind; far short of any Nudge boundary.
   await tester.pump(const Duration(milliseconds: 500));
   await tester.pump(const Duration(milliseconds: 1));
+}
+
+/// Inbox lookup the test releases by hand, so overlapping taps land while the
+/// lookup is still pending. [failNext] makes the next lookup throw.
+class _GatedInbox extends InboxNotifier {
+  _GatedInbox(super.ref);
+  Completer<void> gate = Completer<void>();
+  bool failNext = false;
+  int lookups = 0;
+
+  @override
+  Future<String?> oldestInboxCaptureId({String? excludingId}) async {
+    lookups++;
+    await gate.future;
+    if (failNext) {
+      failNext = false;
+      throw StateError('lookup failed');
+    }
+    return super.oldestInboxCaptureId(excludingId: excludingId);
+  }
 }
 
 void main() {
@@ -292,6 +316,90 @@ void main() {
       await _flush(tester);
       expect(find.byKey(const Key('nudge_empty_state')), findsNothing);
       expect(find.text('Plan the Day'), findsOneWidget);
+    } finally {
+      await tearDownApp(tester);
+    }
+  });
+
+  testWidgets(
+      'an open session with an empty Plan and 51 Captures: no Banner, the '
+      'Inbox button leads the empty state and End Session stays',
+      (tester) async {
+    await seedFiftyOneCaptures();
+    await db.focusSessionDao.openSession(userId: 'local', taskIds: []);
+    c.dispose();
+    c = ProviderContainer(overrides: [
+      databaseProvider.overrideWithValue(db),
+      clockProvider.overrideWithValue(() => startedAt),
+      notificationServiceProvider
+          .overrideWithValue(StubPeriodicReviewNotificationService()),
+      nudgeBoundaryTickProvider.overrideWithValue(0),
+    ]);
+    await c.read(syncedPreferencesProvider.future);
+    try {
+      await pumpApp(tester);
+      appRouter.go('/focus');
+      await _flush(tester);
+      expect(tooFull, findsNothing);
+      expect(find.byKey(const Key('nudge_empty_state')), findsOneWidget);
+      expect(find.text('End Session'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('nudge_empty_state_button')));
+      await _flush(tester);
+      expect(find.byType(InboxClarifyScreen), findsOneWidget);
+      expect(find.text('Capture c00'), findsOneWidget);
+    } finally {
+      await tearDownApp(tester);
+    }
+  });
+
+  testWidgets(
+      'overlapping Banner taps push one clarification route, and a failed '
+      'lookup does not lock the Banner', (tester) async {
+    await seedFiftyOneCaptures();
+    late _GatedInbox gated;
+    c.dispose();
+    c = ProviderContainer(overrides: [
+      databaseProvider.overrideWithValue(db),
+      clockProvider.overrideWithValue(() => startedAt),
+      notificationServiceProvider
+          .overrideWithValue(StubPeriodicReviewNotificationService()),
+      nudgeBoundaryTickProvider.overrideWithValue(0),
+      inboxNotifierProvider.overrideWith((ref) => gated = _GatedInbox(ref)),
+    ]);
+    await c.read(syncedPreferencesProvider.future);
+    try {
+      await pumpApp(tester);
+      appRouter.go('/next');
+      await _flush(tester);
+
+      // Two activations before the lookup completes: one route.
+      final button = find.text('At once  →');
+      await tester.tap(button);
+      await tester.pump();
+      await tester.tap(button);
+      await tester.pump();
+      gated.gate.complete();
+      await _flush(tester);
+      expect(gated.lookups, 1, reason: 'the second tap is ignored');
+      expect(find.byType(InboxClarifyScreen), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('app_title_bar_leading')).last);
+      await _flush(tester);
+      expect(find.byType(InboxClarifyScreen), findsNothing,
+          reason: 'one Back restores the origin');
+      expect(appRouter.routeInformationProvider.value.uri.path, '/next');
+
+      // A failing lookup releases the guard, so a retry opens the sequence.
+      gated.failNext = true;
+      await tester.tap(button);
+      await _flush(tester);
+      expect(find.byType(InboxClarifyScreen), findsNothing);
+      tester.takeException();
+      await tester.tap(button);
+      await _flush(tester);
+      expect(gated.lookups, 3);
+      expect(find.byType(InboxClarifyScreen), findsOneWidget);
     } finally {
       await tearDownApp(tester);
     }
