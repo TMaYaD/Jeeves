@@ -97,13 +97,23 @@ void main() {
         final switchFinder = find.byKey(Key(toggle));
         await tester.scrollUntilVisible(switchFinder, 200);
         await tester.pumpAndSettle();
-        final rowsWhenOn = find.byKey(rowKey).evaluate().length;
-        expect(rowsWhenOn, greaterThan(0));
+        // The settings list is lazy, so count only a row sitting directly
+        // under this switch, not one belonging to a neighbouring Ritual.
+        bool rowDirectlyBelowSwitch() {
+          final switchBottom = tester.getBottomLeft(switchFinder.first).dy;
+          return find.byKey(rowKey).evaluate().any((element) {
+            final rowTop = tester.getTopLeft(find.byElementPredicate(
+                (e) => e == element)).dy;
+            return rowTop >= switchBottom - 1 && rowTop - switchBottom < 40;
+          });
+        }
+
+        expect(rowDirectlyBelowSwitch(), isTrue);
 
         await tester.tap(switchFinder);
         await tester.pumpAndSettle();
-        expect(find.byKey(rowKey).evaluate().length, rowsWhenOn - 1,
-            reason: 'switching this reminder off removes its row only');
+        expect(rowDirectlyBelowSwitch(), isFalse,
+            reason: 'switching this reminder off removes its row');
       });
     }
   });
