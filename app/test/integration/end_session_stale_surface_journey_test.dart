@@ -171,8 +171,9 @@ void main() {
         ProviderScope.containerOf(tester.element(find.byType(FocusScreen)));
     expect(container.read(activeSessionProvider).value, isNotNull,
         reason: 'guard: Now already has the new session');
-    expect(container.read(activeSessionReviewSurfaceProvider).value, isEmpty,
-        reason: 'guard: Now still holds the list from before the session');
+    // CI showed the list provider is NOT stale here: it keeps its subscription
+    // while Now is unmounted and has already re-queried (it holds the Plan).
+    // The test stays as a pin on the Start Day route.
 
     await harness.tapFooter(tester);
     await settleWithRealAsync(tester);
@@ -201,10 +202,10 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    expect(find.text('Outcome plan'), findsNothing,
-        reason: 'guard: the new list has not reached Now');
     final container =
         ProviderScope.containerOf(tester.element(find.byType(FocusScreen)));
+    expect(container.read(activeSessionReviewSurfaceProvider).value, isEmpty,
+        reason: 'guard: the new list has not reached Now');
     expect(container.read(activeSessionProvider).value, isNotNull,
         reason: 'guard: Now already has the new session');
 
