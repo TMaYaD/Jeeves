@@ -21,10 +21,11 @@ import '../test_helpers.dart';
 /// show, not even for a frame, although the open-session stream now carries the
 /// session this very performance opened.
 ///
-/// The open-session stream is the real database's, bridged out of the fake
-/// clock (a live Drift `watch()` inside widget fake time hangs the run, see
-/// docs/TESTING.md), and a frame is pumped after every single real-async turn
-/// so a redraw can land between the session opening and Start Day navigating.
+/// The screen's open-session stream is fed from the real database after every
+/// single real-async turn (a one-shot read, because a live Drift `watch()`
+/// inside widget fake time hangs the run, see docs/TESTING.md), and a frame is
+/// pumped after each, so a redraw can land between the session opening and
+/// Start Day navigating.
 const _focusKey = Key('focus_route');
 
 void main() {
@@ -34,13 +35,7 @@ void main() {
       '"session is open" page in any frame', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final db = GtdDatabase(NativeDatabase.memory());
-    final openSessions = StreamController<FocusSession?>();
-    StreamSubscription<FocusSession?>? bridge;
-    await tester.runAsync(() async {
-      bridge = db.focusSessionDao.watchActiveSession().listen(
-            openSessions.add,
-          );
-    });
+    final openSessions = StreamController<FocusSession?>()..add(null);
     final container = ProviderContainer(overrides: [
       databaseProvider.overrideWithValue(db),
       notificationServiceProvider
@@ -62,28 +57,27 @@ void main() {
       expect(find.text('Start Day'), findsOneWidget);
 
       await tester.tap(find.text('Start Day'));
+      String? lastSeenSessionId;
       for (var turn = 0; turn < 200; turn++) {
         await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        final session = await tester.runAsync(db.focusSessionDao.getActiveSession);
+        if (session?.id != lastSeenSessionId) {
+          lastSeenSessionId = session?.id;
+          openSessions.add(session);
+        }
         await tester.pump();
         expect(find.text('Close your current session first'), findsNothing,
             reason: 'frame after real-async turn $turn');
         if (find.byKey(_focusKey).evaluate().isNotEmpty) break;
       }
       expect(find.byKey(_focusKey), findsOneWidget);
-      final session = await tester.runAsync(db.focusSessionDao.getActiveSession);
-      expect(session, isNotNull, reason: 'the session was opened');
+      expect(lastSeenSessionId, isNotNull, reason: 'the session was opened');
     } finally {
       await tester.pumpWidget(const SizedBox.shrink());
-      // The container's stream listener lives in the fake-async zone, so
-      // awaiting the controller's close here would never complete: drop the
-      // listener first and let the close finish on its own.
       container.dispose();
-      await tester.runAsync(() async {
-        await bridge?.cancel();
-        unawaited(openSessions.close());
-        await db.close();
-      });
+      unawaited(openSessions.close());
+      await tester.runAsync(db.close);
       router.dispose();
     }
-  });
+  }, timeout: const Timeout(Duration(seconds: 90)));
 }
