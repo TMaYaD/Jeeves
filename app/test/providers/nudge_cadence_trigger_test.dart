@@ -239,7 +239,6 @@ void main() {
       }
     });
   });
-  });
 
   group('Daily Planning Cadence Trigger — ES-anchor attribution', () {
     test('idle before today\'s DPR anchor (no pre-anchor nagging)', () async {
