@@ -9,6 +9,7 @@ import 'dart:async';
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/ritual.dart';
 import 'package:jeeves/providers/ceremony_in_progress_provider.dart';
@@ -22,6 +23,7 @@ import 'package:jeeves/providers/nudge_triggers.dart';
 import '../test_helpers.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(configureSqliteForTests);
 
   late GtdDatabase db;
@@ -29,6 +31,7 @@ void main() {
   late DateTime now;
 
   setUp(() {
+    SharedPreferences.setMockInitialValues({});
     db = GtdDatabase(NativeDatabase.memory());
     now = DateTime(2026, 5, 8, 16);
     c = ProviderContainer(overrides: [
@@ -112,7 +115,7 @@ void main() {
       final planning = c.read(focusSessionPlanningProvider.notifier);
       ceremony.enter(ritual);
       planning.goToStep(1);
-      expect(c.read(focusSessionPlanningProvider).startedPastIntro, isTrue);
+      expect(c.read(dailyPlanningStartedProvider), isTrue);
 
       // The session opens (as through sync) while the advance into Review is
       // reading from the database.
@@ -121,7 +124,7 @@ void main() {
       await pumpEventQueue(times: 10);
       await advancing;
       await pumpEventQueue(times: 10);
-      expect(c.read(focusSessionPlanningProvider).startedPastIntro, isFalse);
+      expect(c.read(dailyPlanningStartedProvider), isFalse);
 
       ceremony.exit(ritual);
       expect(trigger(ritual).isFiring, isFalse);
@@ -152,7 +155,7 @@ void main() {
       final planning = gated.read(focusSessionPlanningProvider.notifier);
       ceremony.enter(ritual);
       planning.goToStep(1);
-      expect(gated.read(focusSessionPlanningProvider).startedPastIntro, isTrue);
+      expect(gated.read(dailyPlanningStartedProvider), isTrue);
 
       // Hold the database so the advance into Review cannot finish its reads
       // until both session events have been observed.
@@ -169,7 +172,7 @@ void main() {
         sessionEvents.add(opened);
         await pumpEventQueue(times: 10);
         expect(
-            gated.read(focusSessionPlanningProvider).startedPastIntro, isFalse);
+            gated.read(dailyPlanningStartedProvider), isFalse);
         sessionEvents.add(null);
         await pumpEventQueue(times: 10);
 
@@ -178,7 +181,7 @@ void main() {
         await advancing;
         await pumpEventQueue(times: 10);
         expect(
-            gated.read(focusSessionPlanningProvider).startedPastIntro, isFalse);
+            gated.read(dailyPlanningStartedProvider), isFalse);
       } finally {
         if (!releaseDatabase.isCompleted) releaseDatabase.complete();
         await heldTransaction;
@@ -195,9 +198,9 @@ void main() {
       planning.goToStep(1);
       await db.focusSessionDao.openSession(userId: 'local', taskIds: []);
       await pumpEventQueue(times: 10);
-      expect(c.read(focusSessionPlanningProvider).startedPastIntro, isFalse);
+      expect(c.read(dailyPlanningStartedProvider), isFalse);
       await planning.advanceStep();
-      expect(c.read(focusSessionPlanningProvider).startedPastIntro, isFalse);
+      expect(c.read(dailyPlanningStartedProvider), isFalse);
     });
 
     test('resetting the draft voids it', () async {

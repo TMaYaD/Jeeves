@@ -110,13 +110,48 @@ final activeSessionProvider = StreamProvider<FocusSession?>((ref) {
   return db.focusSessionDao.watchActiveSession();
 });
 
-/// Tells the planning notifier each time a FocusSession opens on this device.
-/// Kept alive by the Nudge triggers, not by the planning notifier (which must
-/// not subscribe to the live stream).
+/// True once the user has proceeded past Daily Planning's intro, for the life of
+/// the draft. A latch, not a step test: backing out of a started performance
+/// passes through the intro, so the step at the moment of leaving says nothing.
+/// [FocusSessionPlanningNotifier.startDay] and `reEnterPlanning` clear it with
+/// the draft; any FocusSession opening clears it for good.
+///
+/// Its own provider rather than a field of the planning state, so the Nudge
+/// triggers can read it without building the planning notifier (and its
+/// database preloads), and without subscribing to the live session stream.
+final dailyPlanningStartedProvider =
+    NotifierProvider<DailyPlanningStartedNotifier, bool>(
+        DailyPlanningStartedNotifier.new);
+
+class DailyPlanningStartedNotifier extends Notifier<bool> {
+  int _sessionOpeningsSeen = 0;
+
+  /// Session openings reported so far. A step advance that began before one
+  /// must not restore the latch it voided, even if that session has already
+  /// closed again by the time the advance resumes.
+  int get sessionOpeningsSeen => _sessionOpeningsSeen;
+
+  @override
+  bool build() => false;
+
+  void latch() => state = true;
+
+  void clear() => state = false;
+
+  /// A FocusSession opened, which finishes Daily Planning for good.
+  void noteSessionOpened() {
+    _sessionOpeningsSeen++;
+    state = false;
+  }
+}
+
+/// Tells [dailyPlanningStartedProvider] each time a FocusSession opens on this
+/// device. Kept alive by the Nudge triggers, not by the planning notifier
+/// (which must not subscribe to the live stream).
 final sessionOpeningWatcherProvider = Provider<void>((ref) {
   ref.listen(activeSessionProvider, (_, next) {
     if (next.asData?.value == null) return;
-    ref.read(focusSessionPlanningProvider.notifier).noteSessionOpened();
+    ref.read(dailyPlanningStartedProvider.notifier).noteSessionOpened();
   });
 });
 
@@ -420,17 +455,10 @@ class FocusSessionPlanningState {
     this.reviewPersonTags = const {},
     this.reviewActionTexts = const {},
     this.reviewStaleIds = const {},
-    this.startedPastIntro = false,
   });
 
   final int currentStep;
 
-  /// True once the user has proceeded past the intro, for the life of this
-  /// draft. A latch, not a step test: backing out of a started performance
-  /// passes through the intro, so the step at the moment of leaving says
-  /// nothing. [FocusSessionPlanningNotifier.startDay] and
-  /// [FocusSessionPlanningNotifier.reEnterPlanning] reset it with the draft.
-  final bool startedPastIntro;
   final int availableMinutes;
 
   /// True once the user has explicitly set available time (not the default).
@@ -514,10 +542,8 @@ class FocusSessionPlanningState {
     Map<String, List<Tag>>? reviewPersonTags,
     Map<String, String>? reviewActionTexts,
     Set<String>? reviewStaleIds,
-    bool? startedPastIntro,
   }) =>
       FocusSessionPlanningState(
-        startedPastIntro: startedPastIntro ?? this.startedPastIntro,
         currentStep: currentStep ?? this.currentStep,
         availableMinutes: availableMinutes ?? this.availableMinutes,
         availableTimeSet: availableTimeSet ?? this.availableTimeSet,
@@ -562,25 +588,12 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     // live Drift watch, and every widget test that builds this notifier would
     // hang in pumpAndSettle (docs/TESTING.md). The void-on-session-open rule
     // lives in [sessionOpeningWatcherProvider], which only the Nudge triggers
-    // keep alive, and calls [noteSessionOpened].
+    // keep alive, and tells [dailyPlanningStartedProvider].
     return const FocusSessionPlanningState();
   }
 
-  /// Session openings reported by [sessionOpeningWatcherProvider]. A step
-  /// advance that began before one must not restore the started latch it
-  /// voided, even if that session has already closed again by the time the
-  /// advance resumes.
-  int _sessionOpeningsSeen = 0;
-
-  /// A FocusSession opened, which finishes Daily Planning for good: void the
-  /// started latch so this draft does not read as unfinished once that session
-  /// later closes without the Ceremony.
-  void noteSessionOpened() {
-    _sessionOpeningsSeen++;
-    if (state.startedPastIntro) {
-      state = state.copyWith(startedPastIntro: false);
-    }
-  }
+  DailyPlanningStartedNotifier get _started =>
+      ref.read(dailyPlanningStartedProvider.notifier);
 
   GtdDatabase get _db => ref.read(databaseProvider);
   ClarificationService get _clarification =>
@@ -662,7 +675,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   Future<void> advanceStep() async {
     if (_advancing) return;
     _advancing = true;
-    final sessionOpeningsAtStart = _sessionOpeningsSeen;
+    final sessionOpeningsAtStart = _started.sessionOpeningsSeen;
     try {
       final next = state.currentStep + 1;
       if (next == 2) {
@@ -705,16 +718,13 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       // The awaits above can span a session opening through sync, which voids
       // the latch; do not restore it from the pre-await decision — not even
       // when that session has closed again before this point.
-      final needsLatch = !state.startedPastIntro && next > 0;
+      final needsLatch = !ref.read(dailyPlanningStartedProvider) && next > 0;
       final sessionOpenNow = needsLatch &&
-          (_sessionOpeningsSeen != sessionOpeningsAtStart ||
+          (_started.sessionOpeningsSeen != sessionOpeningsAtStart ||
               await _db.focusSessionDao.getActiveSession() != null);
       if (!ref.mounted) return;
-      state = state.copyWith(
-        currentStep: next.clamp(0, _maxStepIndex),
-        startedPastIntro:
-            state.startedPastIntro || (next > 0 && !sessionOpenNow),
-      );
+      if (needsLatch && !sessionOpenNow) _started.latch();
+      state = state.copyWith(currentStep: next.clamp(0, _maxStepIndex));
       // Hold the guard through the rest of the current event-loop turn so a
       // second call from the same tap burst is dropped even on the branch
       // with no snapshot load to await.
@@ -740,10 +750,8 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   }
 
   void goToStep(int step) {
-    state = state.copyWith(
-      currentStep: step.clamp(0, _maxStepIndex),
-      startedPastIntro: state.startedPastIntro || step > 0,
-    );
+    if (step > 0) _started.latch();
+    state = state.copyWith(currentStep: step.clamp(0, _maxStepIndex));
   }
 
   /// Records that the user is editing the available time without changing the
@@ -1119,6 +1127,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     );
     final plannedMinutes = state.availableMinutes;
     _planningGeneration++;
+    _started.clear();
     state = FocusSessionPlanningState(
       energyLevel: state.energyLevel,
       availableMinutes: state.availableMinutes,
@@ -1150,6 +1159,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     final preservedEnergy = state.energyLevel;
     final preservedMinutes = state.availableMinutes;
     _planningGeneration++;
+    _started.clear();
     state = FocusSessionPlanningState(
       currentStep: 0,
       availableMinutes: preservedMinutes,

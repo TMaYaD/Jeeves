@@ -13,6 +13,7 @@ import 'package:jeeves/models/ritual.dart';
 import 'package:jeeves/providers/evening_shutdown_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/providers/ceremony_in_progress_provider.dart';
+import 'package:jeeves/providers/nudge_clock_provider.dart';
 import 'package:jeeves/providers/nudge_triggers.dart';
 import 'package:jeeves/screens/planning/focus_session_planning_screen.dart';
 import 'package:jeeves/services/nudge_notification_scheduler.dart';
@@ -205,7 +206,9 @@ void main() {
 
       final nextDayNoon = noon.add(const Duration(days: 1));
       clockOverride = () => nextDayNoon;
-      await tester.pump(const Duration(days: 1));
+      // Re-evaluate at the new clock. Pumping a day of fake time instead would
+      // spin the boundary timer, whose delay is computed from this fixed clock.
+      c.invalidate(nudgeBoundaryTickProvider);
       await _flush(tester);
       expect(banner, findsOneWidget,
           reason: 'the next period is due again');
