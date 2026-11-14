@@ -74,10 +74,13 @@ void main() {
       expect(session, isNotNull, reason: 'the session was opened');
     } finally {
       await tester.pumpWidget(const SizedBox.shrink());
+      // The container's stream listener lives in the fake-async zone, so
+      // awaiting the controller's close here would never complete: drop the
+      // listener first and let the close finish on its own.
+      container.dispose();
       await tester.runAsync(() async {
         await bridge?.cancel();
-        await openSessions.close();
-        container.dispose();
+        unawaited(openSessions.close());
         await db.close();
       });
       router.dispose();
