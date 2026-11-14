@@ -135,6 +135,10 @@ void main() {
       await _flush(tester);
       expect(banner, findsNothing);
 
+      // The swipe was stamped at noon. Visibility needs the dismissal strictly
+      // before the firing edge, so the leave below must happen later.
+      clockOverride = () => noon.add(const Duration(hours: 1));
+
       // Opening the intro and leaving is not a start.
       await goTo(tester, '/focus-session-planning');
       expect(banner, findsNothing, reason: 'hidden while the Ceremony is open');
