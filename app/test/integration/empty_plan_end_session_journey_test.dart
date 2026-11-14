@@ -14,6 +14,7 @@ import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/providers/nudge_clock_provider.dart';
 import 'package:jeeves/screens/focus_screen.dart';
 import 'package:jeeves/services/notification_service.dart';
 import '../helpers/settle.dart';
@@ -32,6 +33,8 @@ void main() {
     container = ProviderContainer(overrides: [
       databaseProvider.overrideWithValue(db),
       notificationServiceProvider.overrideWithValue(StubNotificationService()),
+      // A fixed tick: the live provider arms a real boundary timer.
+      nudgeBoundaryTickProvider.overrideWithValue(0),
     ]);
   });
 

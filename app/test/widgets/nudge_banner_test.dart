@@ -316,7 +316,7 @@ void main() {
           findsNothing);
     });
 
-    testWidgets('states the Capture count and the limit', (tester) async {
+    testWidgets('states the Capture count and never names the limit', (tester) async {
       await pump(tester, count: 73);
       final text = tester
           .widgetList<Text>(find.descendant(
@@ -324,7 +324,7 @@ void main() {
           .map((t) => t.data)
           .join(' ');
       expect(text, contains('73'));
-      expect(text, contains('50'));
+      expect(text, isNot(contains('50')));
     });
 
     testWidgets('is untinted: white, no ✕, no pulse', (tester) async {
