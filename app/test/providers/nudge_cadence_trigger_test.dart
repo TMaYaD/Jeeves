@@ -266,11 +266,11 @@ void main() {
       expect((await _readTrigger(c, RitualId.dailyPlanning)).isFiring, isFalse);
     });
 
-    test('re-arms after a completed plan+shutdown once past the ES anchor',
+    test('stays idle overnight after a completed plan+shutdown (past ES anchor)',
         () async {
       // Planned 08:30, shut down 18:10; clock 18:30. The closed session started
-      // before today's 18:00 ES anchor, so it no longer qualifies — DPR
-      // re-arms, firingSince = 18:00 (so a morning dismiss doesn't suppress it).
+      // before today's 18:00 ES anchor, so it no longer qualifies — but the
+      // next planning period only opens at the next DPR anchor, so DPR is idle.
       final c = _makeContainer(
         now: DateTime(2026, 5, 20, 18, 30),
         planningTime: const TimeOfDay(hour: 8, minute: 30),
@@ -279,8 +279,7 @@ void main() {
       );
       addTearDown(c.dispose);
       final t = await _readTrigger(c, RitualId.dailyPlanning);
-      expect(t.isFiring, isTrue);
-      expect(t.firingSince, DateTime(2026, 5, 20, 18, 0));
+      expect(t.isFiring, isFalse);
     });
 
     test('defers (idle) while content is empty', () async {
@@ -293,8 +292,8 @@ void main() {
     });
   });
 
-  group('Stale open session — DPR and ES both fire, ES leads', () {
-    test('past both anchors: DPR fires (no qualifying) AND ES fires', () async {
+  group('Stale open session — only ES fires past shutdown', () {
+    test('past both anchors: DPR idle (past ES anchor) AND ES fires', () async {
       // Session opened yesterday, still open; clock 18:30 today; anchors 08:00
       // / 18:00. It started before today\'s ES anchor, so does not qualify.
       final c = _makeContainer(
@@ -306,7 +305,8 @@ void main() {
 
       final dpr = await _readTrigger(c, RitualId.dailyPlanning);
       final es = await _readTrigger(c, RitualId.eveningShutdown);
-      expect(dpr.isFiring, isTrue, reason: 'stale open session re-arms DPR');
+      expect(dpr.isFiring, isFalse,
+          reason: 'DPR stays idle from the ES anchor to the next DPR anchor');
       expect(es.isFiring, isTrue, reason: 'session open past shutdown anchor');
       // ES leads DPR in the queue — pinned by ritual_test / nudge_provider_test
       // ("Shutdown wins", ADR-0020).

@@ -21,10 +21,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../database/daos/focus_session_dao.dart' show SessionSettlement;
 import '../database/gtd_database.dart';
 import '../models/action_draft.dart';
-import '../models/ritual.dart';
 import '../models/routing_kind.dart';
 import '../services/clarification_service.dart';
-import '../services/notification_service.dart';
 import '../utils/snapshot_nav.dart';
 import 'auth_provider.dart';
 import 'clarify_retention_provider.dart';
@@ -132,20 +130,16 @@ final activeSessionSettlementsProvider =
   return db.focusSessionDao.watchActiveSessionSettlements();
 });
 
-/// True iff the user is in an open [FocusSession] that carries at least one
-/// task — the exact condition the Now screen calls `showShutdownEntry`
-/// (`planningDone && sortedTasks.isNotEmpty`). It gates both the Now screen's
-/// shutdown callout and its shared-title-bar Re-plan page action, so deriving
-/// them from one provider keeps the two from drifting (issue #499).
+/// True iff the user is in an open [FocusSession] — with or without tasks on
+/// its Plan (an empty Plan is reachable via "Start Day"). It gates both the Now
+/// screen's shutdown callout and its shared-title-bar Re-plan page action, so
+/// deriving them from one provider keeps the two from drifting (issue #499).
 ///
 /// `.value` (not `.asData?.value`) retains the last-rendered value across a
 /// transient loading/error state, so the derived bar action doesn't flicker
 /// away during a brief re-subscription — the same idiom the Inbox badge uses.
-final hasOpenSessionWithTasksProvider = Provider<bool>((ref) {
-  final session = ref.watch(activeSessionProvider).value;
-  final tasks =
-      ref.watch(activeSessionTasksProvider).value ?? const <Todo>[];
-  return session != null && tasks.isNotEmpty;
+final hasOpenSessionProvider = Provider<bool>((ref) {
+  return ref.watch(activeSessionProvider).value != null;
 });
 
 /// Stream of the tasks carried over ('rollover' disposition) from the most
@@ -1057,10 +1051,6 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
           .toSet(),
     );
     final plannedMinutes = state.availableMinutes;
-    // A qualifying session now exists — today's DPR fire is moot. Best-effort.
-    await ref
-        .read(notificationServiceProvider)
-        .skipTodayRitualReminder(RitualId.dailyPlanning);
     _planningGeneration++;
     state = FocusSessionPlanningState(
       energyLevel: state.energyLevel,

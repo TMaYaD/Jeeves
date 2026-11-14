@@ -9,7 +9,6 @@ import '../providers/focus_session_provider.dart';
 import '../providers/focus_settings_provider.dart';
 import '../providers/sprint_timer_provider.dart'
     show findBatchingCandidates, sprintTimerProvider;
-import '../services/notification_service.dart' show notificationServiceProvider;
 import '../widgets/meta_chip.dart';
 import '../widgets/nudge_banner.dart'
     show InboxTooFullHead, NudgeEmptyState, RitualHead, nudgeSurfaceHeadProvider;
@@ -60,11 +59,11 @@ class FocusScreen extends ConsumerWidget {
                   // (issue #460) becomes unreproducible.
                   final planningDone = activeSession != null;
                   // The "Begin Evening Shutdown" entry is shown once the user
-                  // is in an open focus session with at least one task on it.
+                  // is in an open focus session (its Plan may be empty).
                   // Derived from the shared provider so the shutdown callout
                   // and the title bar's Re-plan action can't drift (#499).
                   final showShutdownEntry =
-                      ref.watch(hasOpenSessionWithTasksProvider);
+                      ref.watch(hasOpenSessionProvider);
                   // Tasks carried over ('rollover') from the last closed
                   // session — only while no session is open.
                   final carriedOver = planningDone
@@ -266,10 +265,6 @@ class FocusScreen extends ConsumerWidget {
     if (allDone) {
       final db = ref.read(databaseProvider);
       await db.focusSessionDao.closeSession(sessionId: session.id);
-      // No open session — today's Evening Shutdown fire is moot. Best-effort.
-      await ref
-          .read(notificationServiceProvider)
-          .skipTodayRitualReminder(RitualId.eveningShutdown);
       if (!context.mounted) return;
       context.go('/inbox');
     } else {

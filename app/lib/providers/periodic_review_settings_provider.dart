@@ -3,8 +3,8 @@
 ///
 /// Storage-side keys live under the `periodic_review_*` namespace; user-
 /// visible copy uses "Weekly Review". Cadence is hardcoded at 7 days; the
-/// notification fires daily at the configured time and the banner's `isDue`
-/// predicate gates relevance.
+/// notification is a projection of the Nudge queue (see
+/// `nudge_notification_scheduler.dart`).
 library;
 
 import 'dart:async';
@@ -12,8 +12,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../models/ritual.dart';
-import '../services/notification_service.dart';
 import 'clock_provider.dart';
 import 'gtd_lists_provider.dart' show Capture, Todo;
 import 'synced_preferences_provider.dart';
@@ -168,15 +166,10 @@ class PeriodicReviewSettingsNotifier
     ref.listen(syncedPreferencesProvider, (_, next) {
       if (next is AsyncData<SyncedPreferences>) {
         state = _fromPrefs(next.value);
-        _rescheduleNotification();
       }
     });
     final current = ref.read(syncedPreferencesProvider).asData?.value;
-    final initial = current != null ? _fromPrefs(current) : _defaults();
-    // The listener above only fires on subsequent prefs changes, so kick off
-    // an initial reschedule once the notifier is constructed.
-    Future.microtask(_rescheduleNotification);
-    return initial;
+    return current != null ? _fromPrefs(current) : _defaults();
   }
 
   static PeriodicReviewSettings _defaults() => const PeriodicReviewSettings(
@@ -225,25 +218,5 @@ class PeriodicReviewSettingsNotifier
   Future<void> setNotificationTime(TimeOfDay time) async {
     await syncedPrefs(ref).set(_kNotificationHourKey, time.hour);
     await syncedPrefs(ref).set(_kNotificationMinuteKey, time.minute);
-  }
-
-  Future<void> _rescheduleNotification() async {
-    final svc = ref.read(notificationServiceProvider);
-    // Priority order:
-    //   1. Notifications disabled — kill recurring and snooze ids together.
-    //      Must come first so a still-active snooze cannot keep firing after
-    //      the user turns notifications off.
-    //   2. Due — arm the recurring reminder.
-    //   3. Not due — drop the recurring; a pending snooze (if any) stays.
-    final isDue = ref.read(periodicReviewIsDueProvider);
-    if (!state.notificationEnabled) {
-      await svc.cancelRitualReminder(RitualId.weeklyReview);
-    } else if (isDue) {
-      await svc.scheduleRitualReminder(
-          RitualId.weeklyReview, state.notificationTime);
-    } else {
-      // Not due — drop the recurring, but leave a pending snooze alone.
-      await svc.cancelRecurringRitualReminder(RitualId.weeklyReview);
-    }
   }
 }

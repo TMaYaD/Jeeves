@@ -190,6 +190,9 @@ Widget _card(
         clarificationServiceProvider.overrideWithValue(clarificationService),
       personTagsProvider.overrideWith((_) => Stream.value(const <Tag>[])),
       contextTagsProvider.overrideWith((_) => Stream.value(contextTags)),
+      contextTagsWithCountProvider.overrideWith((_) => Stream.value([
+        for (final t in contextTags) TagWithCount(tag: t, count: 0),
+      ])),
       projectTagsProvider.overrideWith((_) => Stream.value(const <Tag>[])),
     ],
     child: MaterialApp(
@@ -314,6 +317,7 @@ void main() {
       ));
       await _pumpFrames(tester, frames: 5);
 
+      await _openContextCloud(tester);
       await tester.ensureVisible(find.text('@work'));
       await tester.pump(const Duration(milliseconds: 50));
       await tester.tap(find.text('@work'));
@@ -545,3 +549,14 @@ void main() {
 }
 
 void _noop() {}
+
+/// Opens the context picker's tag cloud (the dotted `+`), without settling:
+/// callers that pump frames by hand must not wait on live streams.
+Future<void> _openContextCloud(WidgetTester tester) async {
+  final plus = find.byKey(const Key('context_tag_picker_add'));
+  await tester.ensureVisible(plus);
+  await tester.pump(const Duration(milliseconds: 50));
+  await tester.tap(plus);
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 50));
+}

@@ -119,7 +119,15 @@ class _CloseDayStepState extends ConsumerState<CloseDayStep>
       // Sequenced Shutdown → Daily Planning (ADR-0020, ruling 4): route into
       // planning with a fresh performance instead of exiting the app.
       ref.read(shutdownThenPlanProvider.notifier).set(false);
-      await ref.read(focusSessionPlanningProvider.notifier).reEnterPlanning();
+      // The shutdown is already committed and the intent consumed, so a
+      // failed preload must not strand the user here (#874). Route into
+      // planning regardless: the planning screen's mount re-runs the
+      // idempotent rollover preload, so nothing is lost.
+      try {
+        await ref.read(focusSessionPlanningProvider.notifier).reEnterPlanning();
+      } catch (error, stackTrace) {
+        debugPrint('Planning preload failed after Close Day: $error\n$stackTrace');
+      }
       if (!mounted) return;
       context.go('/focus-session-planning');
       return;

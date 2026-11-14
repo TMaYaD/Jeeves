@@ -76,7 +76,7 @@ Widget _buildShellOnly({
       projectTagsProvider.overrideWith((_) => Stream.value(projectTags)),
       contextTagsProvider.overrideWith((_) => Stream.value([])),
       // The Now route's Re-plan page action derives from these two providers
-      // (via hasOpenSessionWithTasksProvider). Default them so the derived
+      // (via hasOpenSessionProvider). Default them so the derived
       // provider never reaches the un-overridden databaseProvider — the
       // route-title iteration test mounts every shell route, /focus included.
       activeSessionProvider.overrideWith((_) => Stream.value(activeSession)),
@@ -592,9 +592,8 @@ void main() {
 
     testWidgets('is absent in each negative gate state on /focus',
         (tester) async {
-      // The gate is "open session AND >= 1 task". Its three negatives all
-      // withhold the action: no session (with tasks), a session with no tasks,
-      // and neither.
+      // The gate is "open session". Both negatives withhold the action: no
+      // session with tasks present, and no session at all.
       const cases = <({FocusSession? session, bool withTask, String desc})>[
         (session: null, withTask: true, desc: 'no session, tasks present'),
         (session: null, withTask: false, desc: 'no session, no tasks'),
@@ -609,16 +608,17 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.byKey(_replanKey), findsNothing, reason: c.desc);
       }
+    });
 
-      // Open session but zero tasks — the third negative.
+    testWidgets('is present for an open session with an empty Plan', (tester) async {
       await tester.pumpWidget(_buildShellOnly(
         initialLocation: '/focus',
         activeSession: _openSession(),
         sessionTasks: const [],
       ));
       await tester.pumpAndSettle();
-      expect(find.byKey(_replanKey), findsNothing,
-          reason: 'open session, no tasks');
+
+      expect(await findBarAction(tester, _replanKey), findsOneWidget);
     });
 
     testWidgets('is absent on non-Now routes even with an open session+tasks',

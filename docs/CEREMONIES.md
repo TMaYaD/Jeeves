@@ -129,7 +129,7 @@ lifecycle gates:
 
 | Ritual | Predicate |
 |---|---|
-| Daily Planning | Past today's planning anchor, and no qualifying session exists since the last Evening Shutdown anchor |
+| Daily Planning | Past today's planning anchor, before the next Evening Shutdown anchor, and no qualifying session exists since the last Evening Shutdown anchor |
 | Evening Shutdown | The ES period has turned, a FocusSession is active, and ES has not been completed this period |
 
 Evening Shutdown needs an active session because it *is* that session's Review
@@ -137,10 +137,14 @@ phase — without one it has nothing to operate on.
 
 The Daily Planning gate is the subtle one. Day attribution is anchor-based, so a
 session started since the last ES anchor means this period's planning already
-happened and the Nudge stands down. A **stale** open session — started *before* the
-last ES anchor — does not qualify, so Daily Planning re-arms and fires alongside
-Evening Shutdown. Evening Shutdown wins that contest by priority, which is the
-intended outcome: the user must close the stale session before opening a new one.
+happened and the Nudge stands down. From the ES anchor until the next planning
+anchor Daily Planning is idle whatever the session state. A **stale** open
+session — started *before* the last ES anchor — does not qualify, so Daily
+Planning fires at the next planning anchor; Evening Shutdown, not Daily Planning,
+asks the user to close it
+([ADR-0020](adr/0020-sessions-never-auto-close-anchor-day-attribution.md)).
+When the planning and ES times are equal, the planning anchor wins and the Nudge
+can still fire.
 
 ## Cadence
 
@@ -176,9 +180,8 @@ Weekly Review  >  Evening Shutdown  >  Daily Planning
 
 Weekly Review ranks highest because it restores the trusted state the other two
 operate on — planning against a stale Next list violates the method. Evening
-Shutdown outranks Daily Planning for the case above: when both fire, the user has
-a stale session open and must close it before opening a new one, so the shutdown
-is the only one of the two they can act on.
+Shutdown outranks Daily Planning
+([ADR-0020](adr/0020-sessions-never-auto-close-anchor-day-attribution.md)).
 
 **Inbox too full** sits ahead of the queue, not in it. It is not a Ritual: it has
 no Trigger, no dismiss or snooze, and no Notification, and it clears the moment
@@ -217,7 +220,12 @@ fidelity**, which is the whole reason the two gestures differ:
 | Banner | horizontal swipe | dismiss | An explicit in-app gesture; the user meant it |
 | Banner | action button | user-explicit snooze | A duration the user chose |
 | Notification | swipe away | system-implicit snooze | Low-signal — mass-dismiss fatigue makes it a poor read of intent |
-| Notification | skip | dismiss | An explicit button, cadence-flavoured copy ("Skip today") |
+| Notification | skip | dismiss | An explicit button, cadence-flavoured copy ("Skip today"; "Skip this week" for Weekly Review) |
 
-Today each Ritual schedules its own Notification. Consolidating them behind the
-queue, as the Banner already is, is the standing target.
+The Notification surface is a projection of the queue to fire instants. An OS
+notification fires while the app is not running, so the scheduler asks, for each
+Ritual's notification time over the coming week, whether that Ritual would hold
+the queue head then — over the same predicates the live queue uses, with current
+facts frozen — and arms only those. It re-plans whenever the facts change and
+whenever the app opens or resumes. Reminders are planned seven days ahead and no
+further, so they stop if the app is not opened for seven days.
