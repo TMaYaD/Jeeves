@@ -1089,6 +1089,19 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     }
   }
 
+  /// Forgets the session this performance opened. Called when the planning
+  /// screen leaves the tree, so the blocked-start gate's allowance for "the
+  /// session Start Day just opened" ends with that performance and a later
+  /// visit (Re-plan while the session is open) meets the Shutdown-first gate.
+  void clearStartedSession() {
+    if (!ref.mounted || state.startedSessionId == null) return;
+    state = FocusSessionPlanningState(
+      currentStep: state.currentStep,
+      energyLevel: state.energyLevel,
+      availableMinutes: state.availableMinutes,
+    );
+  }
+
   /// Resets the planning ritual to a fresh performance.
   ///
   /// Task selections are **cleared** so the user can re-plan from scratch.

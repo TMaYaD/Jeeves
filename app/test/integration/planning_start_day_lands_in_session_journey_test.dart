@@ -7,16 +7,20 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/models/ritual.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
+import 'package:jeeves/providers/nudge_provider.dart';
+import 'package:jeeves/providers/system_trust_provider.dart';
 import 'package:jeeves/screens/planning/focus_session_planning_screen.dart';
 import 'package:jeeves/services/notification_service.dart';
+import 'package:jeeves/widgets/nudge_banner.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../helpers/periodic_review_test_helpers.dart';
 import '../helpers/settle.dart';
 import '../test_helpers.dart';
 
-/// Row 19: with no carried-over session, tapping Start Day lands in the
+/// Row 19: with no session left open from an earlier day, tapping Start Day lands in the
 /// session just planned. The "Close your current session first" page must never
 /// show, not even for a frame, although the open-session stream now carries the
 /// session this very performance opened.
@@ -30,12 +34,22 @@ import '../test_helpers.dart';
 /// flushes: the test therefore drains it before closing the database, even
 /// when an expectation has already failed, or `db.close()` would wait forever.
 const _focusKey = Key('focus_route');
+const _interstitial = 'Close your current session first';
 
 void main() {
   setUpAll(configureSqliteForTests);
 
-  testWidgets('row 19: Start Day lands in the new session, with no '
-      '"session is open" page in any frame', (tester) async {
+  /// Mounts the real planning route (reached from [initialLocation]) over a
+  /// real database, runs [body], then tears everything down with the shared
+  /// test budget: the Start Day transaction is drained first, so closing the
+  /// database cannot wait on it.
+  Future<void> withHarness(
+    WidgetTester tester, {
+    required String initialLocation,
+    required Future<void> Function(
+            GoRouter router, Future<void> Function() turn)
+        body,
+  }) async {
     SharedPreferences.setMockInitialValues({});
     final db = GtdDatabase(NativeDatabase.memory());
     final openSessions = StreamController<FocusSession?>();
@@ -51,9 +65,20 @@ void main() {
       // The draft resets to the intro step, whose counts are a live Drift read.
       focusSessionPlanningIntroCountsProvider
           .overrideWith((ref) async => (inboxCount: 0, reviewCount: 0)),
+      // The Now screen's banner shows Daily Planning; what puts it there is
+      // pinned by the banner row tests.
+      inboxTooFullProvider.overrideWith((ref) => false),
+      nudgeQueueProvider
+          .overrideWith((ref) => const <RitualId>[RitualId.dailyPlanning]),
+      nudgeBannerEnabledProvider.overrideWith((ref, r) => true),
     ]);
-    final router = GoRouter(routes: [
-      GoRoute(path: '/', builder: (_, _) => const FocusSessionPlanningScreen()),
+    final router = GoRouter(initialLocation: initialLocation, routes: [
+      GoRoute(
+          path: '/',
+          builder: (_, _) => const Scaffold(body: NudgeBanner())),
+      GoRoute(
+          path: '/focus-session-planning',
+          builder: (_, _) => const FocusSessionPlanningScreen()),
       GoRoute(
           path: '/focus', builder: (_, _) => const SizedBox(key: _focusKey)),
     ]);
@@ -69,18 +94,7 @@ void main() {
         container: container,
         child: MaterialApp.router(routerConfig: router),
       ));
-      container.read(focusSessionPlanningProvider.notifier).goToStep(6);
-      await settleWithRealAsync(tester);
-      expect(find.text('Start Day'), findsOneWidget);
-
-      await tester.tap(find.text('Start Day'));
-      for (var i = 0; i < 300; i++) {
-        await turn();
-        expect(find.text('Close your current session first'), findsNothing,
-            reason: 'frame after real-async turn $i');
-        if (find.byKey(_focusKey).evaluate().isNotEmpty) break;
-      }
-      expect(find.byKey(_focusKey), findsOneWidget);
+      await body(router, turn);
     } finally {
       for (var i = 0; i < 60; i++) {
         await turn();
@@ -91,9 +105,75 @@ void main() {
         await pumpEventQueue();
         await bridge?.cancel();
         unawaited(openSessions.close());
-        await db.close().timeout(const Duration(seconds: 10), onTimeout: () {});
+        await db.close();
       });
       router.dispose();
     }
-  }, timeout: const Timeout(Duration(seconds: 90)));
+  }
+
+  /// Taps Start Day on the last step and checks every frame until the Now
+  /// route shows: the interstitial must never appear.
+  Future<void> startDayAndLand(
+      WidgetTester tester, Future<void> Function() turn) async {
+    await tester.tap(find.text('Start Day'));
+    for (var i = 0; i < 300; i++) {
+      await turn();
+      expect(find.text(_interstitial), findsNothing,
+          reason: 'frame after real-async turn $i');
+      if (find.byKey(_focusKey).evaluate().isNotEmpty) break;
+    }
+    expect(find.byKey(_focusKey), findsOneWidget);
+  }
+
+  ProviderContainer containerOf(WidgetTester tester) =>
+      ProviderScope.containerOf(tester.element(find.byType(MaterialApp)));
+
+  testWidgets('row 19: banner, Daily Planning, Start Day lands in the new '
+      'session, with no "session is open" page in any frame', (tester) async {
+    await withHarness(tester, initialLocation: '/', body: (router, turn) async {
+      expect(find.byKey(const Key('planning_banner_visible')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('planning_banner_visible')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      containerOf(tester)
+          .read(focusSessionPlanningProvider.notifier)
+          .goToStep(6);
+      await settleWithRealAsync(tester);
+      expect(find.text('Start Day'), findsOneWidget);
+      await startDayAndLand(tester, turn);
+    });
+  });
+
+  testWidgets('row 19 (frame by frame): Start Day on the planning route',
+      (tester) async {
+    await withHarness(tester,
+        initialLocation: '/focus-session-planning',
+        body: (router, turn) async {
+      containerOf(tester)
+          .read(focusSessionPlanningProvider.notifier)
+          .goToStep(6);
+      await settleWithRealAsync(tester);
+      expect(find.text('Start Day'), findsOneWidget);
+      await startDayAndLand(tester, turn);
+    });
+  });
+
+  testWidgets('re-entering planning after Start Day, while that '
+      'session is open, meets the Shutdown-first page', (tester) async {
+    await withHarness(tester,
+        initialLocation: '/focus-session-planning',
+        body: (router, turn) async {
+      containerOf(tester)
+          .read(focusSessionPlanningProvider.notifier)
+          .goToStep(6);
+      await settleWithRealAsync(tester);
+      await startDayAndLand(tester, turn);
+
+      router.go('/focus-session-planning');
+      for (var i = 0; i < 20; i++) {
+        await turn();
+      }
+      expect(find.text(_interstitial), findsOneWidget);
+    });
+  });
 }

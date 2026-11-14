@@ -130,7 +130,7 @@ void main() {
     expect(await bannerAt(at(11, 23, 30)), isNull);
   });
 
-  test('row 9: carried-over session: Evening Shutdown through the Night',
+  test('row 9: session left open from an earlier day: Evening Shutdown through the Night',
       () async {
     await open(at(10, 10));
     expect(await bannerAt(at(10, 23, 30)), RitualId.eveningShutdown);
@@ -138,18 +138,18 @@ void main() {
     expect(await bannerAt(at(11, 3)), RitualId.eveningShutdown);
   });
 
-  test('row 10: carried-over session, Day: Evening Shutdown, not Plan your day',
+  test('row 10: session left open from an earlier day, Day: Evening Shutdown, not Plan your day',
       () async {
     await open(at(10, 10));
     expect(await bannerAt(at(11, 9)), RitualId.eveningShutdown);
   });
 
-  test('row 11: carried-over session, Evening: Evening Shutdown', () async {
+  test('row 11: session left open from an earlier day, Evening: Evening Shutdown', () async {
     await open(at(10, 10));
     expect(await bannerAt(at(11, 19)), RitualId.eveningShutdown);
   });
 
-  test('row 12: carried-over session closed in the Day: Plan your day appears',
+  test('row 12: session left open from an earlier day, closed in the Day: Plan your day appears',
       () async {
     final id = await open(at(10, 10));
     expect(await bannerAt(at(11, 9)), RitualId.eveningShutdown);
@@ -157,7 +157,7 @@ void main() {
     expect(await bannerAt(at(11, 9, 31)), RitualId.dailyPlanning);
   });
 
-  test('row 13: swiped carried-over banner returns at the next planning and '
+  test('row 13: swiped banner for a session left open returns at the next planning and '
       'shutdown times', () async {
     await open(at(10, 10));
     expect(await bannerAt(at(11, 9)), RitualId.eveningShutdown);
