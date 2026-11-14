@@ -97,8 +97,10 @@ class OutcomeSelectionBar extends ConsumerWidget {
                     ),
                 ],
               ),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              // Wrap, not Row: the three actions flow onto a second line rather
+              // than overflow on a narrow phone.
+              Wrap(
+                alignment: WrapAlignment.spaceEvenly,
                 children: [
                   ProjectPickerWidget(
                     currentProjectTag: null,
