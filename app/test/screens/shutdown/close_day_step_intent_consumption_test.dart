@@ -40,11 +40,37 @@ class _FailTwiceShutdown extends EveningShutdownNotifier {
   }
 }
 
+class _CountingShutdown extends EveningShutdownNotifier {
+  int closeDayCallCount = 0;
+
+  @override
+  Future<void> closeDay({DateTime? now}) {
+    closeDayCallCount++;
+    return super.closeDay(now: now);
+  }
+}
+
+class _FailingReEnterPlanningNotifier extends FocusSessionPlanningNotifier {
+  int reEnterCallCount = 0;
+
+  @override
+  Future<void> reEnterPlanning() async {
+    reEnterCallCount++;
+    throw StateError('planning preload failed');
+  }
+}
+
 (Widget, ProviderContainer) _app(GtdDatabase db,
-    {bool failTwice = false}) {
+    {bool failTwice = false,
+    _CountingShutdown? countingShutdown,
+    FocusSessionPlanningNotifier Function()? planningNotifierFactory}) {
   final container = ProviderContainer(overrides: [
     if (failTwice)
       eveningShutdownProvider.overrideWith(_FailTwiceShutdown.new),
+    if (countingShutdown != null)
+      eveningShutdownProvider.overrideWith(() => countingShutdown),
+    if (planningNotifierFactory != null)
+      focusSessionPlanningProvider.overrideWith(planningNotifierFactory),
     databaseProvider.overrideWithValue(db),
     notificationServiceProvider.overrideWithValue(StubNotificationService()),
   ]);
@@ -214,5 +240,51 @@ void main() {
     // AnimationController is disposed cleanly instead of racing closeApp().
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
+  });
+
+  testWidgets(
+      'and-then-plan intent set but reEnterPlanning throws: the user still '
+      'reaches planning and the shutdown is committed exactly once (#874)',
+      (tester) async {
+    final db = GtdDatabase(NativeDatabase.memory());
+    addTearDown(db.close);
+
+    final sessionId = await db.focusSessionDao.openSession(
+      userId: 'test-user',
+      taskIds: const [],
+    );
+
+    final failingNotifier = _FailingReEnterPlanningNotifier();
+    final countingShutdown = _CountingShutdown();
+    final (widget, container) = _app(db,
+        countingShutdown: countingShutdown,
+        planningNotifierFactory: () => failingNotifier);
+    addTearDown(container.dispose);
+
+    container.read(shutdownThenPlanProvider.notifier).set(true);
+
+    // The sequenced path commits automatically at mount: no button is shown.
+    await tester.pumpWidget(widget);
+    expect(find.text('Close Day'), findsNothing);
+    for (var i = 0; i < 8; i++) {
+      await tester.pump();
+      await tester.runAsync(() => pumpEventQueue());
+    }
+
+    expect(failingNotifier.reEnterCallCount, 1);
+    expect(tester.takeException(), isNull,
+        reason: 'the preload failure must not escape the handler');
+    expect(find.text('focus-session-planning'), findsOneWidget,
+        reason: 'a failed preload still routes into Daily Planning, whose '
+            'mount re-runs the rollover preload');
+    expect(container.read(shutdownThenPlanProvider), isFalse);
+    expect(countingShutdown.closeDayCallCount, 1,
+        reason: 'the shutdown commit is not repeated');
+
+    final session = await (db.select(db.focusSessions)
+          ..where((s) => s.id.equals(sessionId)))
+        .getSingle();
+    expect(session.endedAt, isNotNull,
+        reason: 'the shutdown commit persisted despite the preload failure');
   });
 }

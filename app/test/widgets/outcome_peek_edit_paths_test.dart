@@ -123,6 +123,35 @@ void main() {
     await _unmount(tester);
   });
 
+  testWidgets('a name no tag has offers Add, which creates and applies it',
+      (tester) async {
+    final todo = await _seedOutcome(db, 'c2');
+    final before = await _row(tester, db, 'c2');
+    await tester.pumpWidget(_harness(db, todo));
+    await _open(tester);
+
+    await tester.tap(find.byKey(const Key('outcome_peek_add_context')));
+    await _settle(tester);
+    await tester.enterText(
+        find.byKey(const Key('tag_cloud_find_field')), '@Errands');
+    await _settle(tester);
+    expect(find.text('Add "Errands"'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('tag_cloud_add_tag')));
+    await _settle(tester);
+
+    final created = await tester.runAsync(() => (db.select(db.tags)
+          ..where((t) => t.name.equals('Errands') & t.type.equals('context')))
+        .get());
+    expect(created, hasLength(1));
+    final assigned = await tester.runAsync(() => (db.select(db.todoTags)
+          ..where((t) => t.todoId.equals('c2')))
+        .get());
+    expect(assigned!.map((r) => r.tagId), [created!.single.id]);
+    expect((await _row(tester, db, 'c2')).lastClarifiedAt,
+        before.lastClarifiedAt);
+    await _unmount(tester);
+  });
+
   testWidgets('choosing a person under Waiting for assigns and stamps',
       (tester) async {
     final todo = await _seedOutcome(db, 'p1');
