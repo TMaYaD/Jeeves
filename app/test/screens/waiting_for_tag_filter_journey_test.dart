@@ -18,7 +18,11 @@ import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/models/focus_session_planning_settings.dart';
 import 'package:jeeves/models/ritual.dart';
 import 'package:jeeves/providers/auth_provider.dart';
+import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_settings_provider.dart';
+import 'package:jeeves/providers/gtd_lists_provider.dart';
+import 'package:jeeves/providers/inbox_provider.dart';
+import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/nudge_provider.dart';
 import 'package:jeeves/providers/periodic_review_settings_provider.dart';
 import 'package:jeeves/screens/app_shell.dart';
@@ -35,6 +39,11 @@ class _NoAuthNotifier extends AuthNotifier {
   Future<String?> build() async => null;
   @override
   Future<void> logout() async {}
+}
+
+class _MockFocusSessionPlanningNotifier extends FocusSessionPlanningNotifier {
+  @override
+  Future<void> reEnterPlanning() async {}
 }
 
 /// Keeps the planning banner's infinite pulse from blocking pumpAndSettle.
@@ -91,6 +100,9 @@ void main() {
 
   testWidgets('selecting a tag narrows the page; Clear all restores it',
       (tester) async {
+    const ctxTag =
+        Tag(id: 'ctx', name: 'errand', type: 'context', userId: _userId);
+    debugPrint('journey: mount');
     final router = GoRouter(
       initialLocation: '/waiting-for',
       routes: [
@@ -110,6 +122,20 @@ void main() {
         overrides: [
           databaseProvider.overrideWithValue(db),
           authTokenProvider.overrideWith(() => _NoAuthNotifier()),
+          // The shell's other list/count streams are not under test; left
+          // real they start store reads inside FakeAsync (docs/TESTING.md).
+          inboxItemsProvider.overrideWith((_) => Stream.value([])),
+          nextProvider.overrideWith((_) => Stream.value([])),
+          waitingForProvider.overrideWith((_) => Stream.value([])),
+          somedayMaybeProvider.overrideWith((_) => Stream.value([])),
+          projectTagsProvider.overrideWith((_) => Stream.value([])),
+          contextTagsProvider.overrideWith((_) => Stream.value([ctxTag])),
+          contextTagsWithCountProvider.overrideWith(
+              (_) => Stream.value([TagWithCount(tag: ctxTag, count: 1)])),
+          focusSessionPlanningSelectedTasksProvider
+              .overrideWith((_) => Stream.value([])),
+          focusSessionPlanningProvider
+              .overrideWith(() => _MockFocusSessionPlanningNotifier()),
           focusSessionPlanningSettingsProvider
               .overrideWith(() => _NoBannerSettingsNotifier()),
           periodicReviewBannerEnabledProvider.overrideWith((_) => false),
@@ -120,16 +146,20 @@ void main() {
     );
     await _pumpFor(tester, 5);
 
+    debugPrint('journey: first assert');
     expect(find.byType(OutcomeRow), findsNWidgets(2));
     expect(find.text('Alice'), findsOneWidget);
     expect(find.text('Bob'), findsOneWidget);
     expect(find.byKey(const Key('active_filter_clear_all')), findsNothing);
 
+    debugPrint('journey: drawer open');
     // Select the tag through the drawer's tag cloud, as a user would.
     await tester.tap(find.byKey(appTitleBarLeadingKey));
     await _pumpFor(tester, 3);
+    debugPrint('journey: ensureVisible');
     await tester.ensureVisible(find.byKey(const Key('tag_chip_ctx')));
     await _pumpFor(tester, 3);
+    debugPrint('journey: chip tap');
     await tester.tap(find.byKey(const Key('tag_chip_ctx')));
     await _pumpFor(tester, 5);
 
@@ -139,9 +169,11 @@ void main() {
     expect(find.text('Return the drill'), findsNothing);
     expect(find.text('Bob'), findsNothing);
 
+    debugPrint('journey: scrim tap');
     // Dismiss the drawer by tapping its scrim, then clear from the page.
     await tester.tapAt(const Offset(780, 300));
     await _pumpFor(tester, 3);
+    debugPrint('journey: clear all');
     await tester.tap(find.byKey(const Key('active_filter_clear_all')));
     await _pumpFor(tester, 5);
 
@@ -150,6 +182,7 @@ void main() {
     expect(find.text('Bob'), findsOneWidget);
     expect(find.byKey(const Key('active_filter_clear_all')), findsNothing);
 
+    debugPrint('journey: dispose');
     // Dispose in the real zone so drift's subscription cleanup can finish.
     await tester.pumpWidget(const SizedBox());
     await tester.runAsync(() async {
