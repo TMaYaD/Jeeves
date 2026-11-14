@@ -8,6 +8,8 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/daos/tag_dao.dart' show todoTagIdFor;
+import 'package:jeeves/database/daos/todo_dao.dart'
+    show StalePersonSelectionException;
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/routing_kind.dart';
 import 'package:jeeves/sync/collection_codecs.dart';
@@ -233,6 +235,30 @@ void main() {
       final tomb = capture.forCollection(todoTagsCollection).single;
       expect(tomb.tombstone, isTrue);
       expect(tomb.entityId, todoTagIdFor('a', kim));
+    });
+
+    test('a deleted Person refuses the whole Waiting For batch', () async {
+      await seed(['a', 'b']);
+      final sam = await db.tagDao.findOrCreateTag('Sam', 'person', _userId);
+      final kim = await db.tagDao.findOrCreateTag('Kim', 'person', _userId);
+      await db.tagDao.assignTag('a', sam, _userId);
+      await db.tagDao.deleteTag(kim);
+      capture.clear();
+      final before = await row('a');
+
+      await expectLater(
+        db.todoDao.applyRoutingToOutcomes({'a', 'b'},
+            to: RoutingKind.waitingFor,
+            personTagIds: {kim},
+            userId: _userId,
+            now: _bulkTs),
+        throwsA(isA<StalePersonSelectionException>()),
+      );
+
+      expect(await tagIdsOf('a'), {sam});
+      expect((await row('a')).intent, before.intent);
+      expect((await row('a')).lastClarifiedAt, before.lastClarifiedAt);
+      expect(capture.recorded, isEmpty);
     });
 
     test('a failure part-way rolls the whole batch back and authors no ops',

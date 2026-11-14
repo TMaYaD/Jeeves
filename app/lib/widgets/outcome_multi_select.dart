@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../database/daos/todo_dao.dart' show StalePersonSelectionException;
 import '../database/gtd_database.dart';
 import '../models/routing_kind.dart';
 import '../providers/auth_provider.dart';
@@ -247,17 +248,25 @@ Future<void> _showStatusSheet(BuildContext context, GtdDatabase database,
     if (!context.mounted) return;
   }
   final dao = database.todoDao;
-  await dao.applyRoutingToOutcomes(
-    ids,
-    to: choice,
-    // Next clears PersonBlockers and Waiting For replaces them, so the status
-    // pill reads the chosen status afterwards; the other routes keep them.
-    personTagIds: switch (choice) {
-      RoutingKind.nextAction => const <String>{},
-      RoutingKind.waitingFor => people,
-      _ => null,
-    },
-    userId: userId,
-  );
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  try {
+    await dao.applyRoutingToOutcomes(
+      ids,
+      to: choice,
+      // Next clears PersonBlockers and Waiting For replaces them, so the status
+      // pill reads the chosen status afterwards; the other routes keep them.
+      personTagIds: switch (choice) {
+        RoutingKind.nextAction => const <String>{},
+        RoutingKind.waitingFor => people,
+        _ => null,
+      },
+      userId: userId,
+    );
+  } on StalePersonSelectionException {
+    // Nothing was written; keep the selection so the user can choose again.
+    messenger?.showSnackBar(const SnackBar(
+        content: Text('That Person no longer exists. Choose again.')));
+    return;
+  }
   onDone();
 }

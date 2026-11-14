@@ -1273,6 +1273,20 @@ AND (
     final effects = _RoutingEffects();
     final landedIds = <String>{};
     await attachedDatabase.capturing(() async {
+      // A Person picked in a modal may have been sync-deleted since. Routing
+      // would then drop the old PersonBlockers and add none, so refuse the
+      // whole batch before any write.
+      if (to == RoutingKind.waitingFor &&
+          personTagIds != null &&
+          personTagIds.isNotEmpty) {
+        final present = await (select(tags)
+              ..where((t) => t.type.equals('person') & t.id.isIn(personTagIds)))
+            .map((t) => t.id)
+            .get();
+        if (present.toSet().length != personTagIds.length) {
+          throw const StalePersonSelectionException();
+        }
+      }
       for (final id in outcomeIds) {
         final landed = await _routeWithinTransaction(
           id,
@@ -1780,4 +1794,12 @@ class _RoutingEffects {
   bool actionTerminated = false;
   bool logChanged = false;
   bool promotedPlannedAction = false;
+}
+
+/// Thrown by [TodoDao.applyRoutingToOutcomes] when a requested Person no
+/// longer exists. The whole batch is rolled back; nothing was written.
+class StalePersonSelectionException implements Exception {
+  const StalePersonSelectionException();
+  @override
+  String toString() => 'A selected Person no longer exists';
 }
