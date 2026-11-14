@@ -1327,7 +1327,8 @@ AND (
         }
         return false;
       }
-      effects.promotedPlannedAction = effect.changed;
+      effects.promotedPlannedAction =
+          effects.promotedPlannedAction || effect.changed;
       effects.logChanged = effects.logChanged || effect.logChanged;
     }
     final captured = switch (to) {
@@ -1413,7 +1414,7 @@ AND (
       // the same cascade markDone runs, sharing one apply-variant.
       final effect = await attachedDatabase.actionDao
           .applyCompleteCurrentAction(todoId, ts: ts);
-      effects.actionTerminated = effect.changed;
+      effects.actionTerminated = effects.actionTerminated || effect.changed;
       effects.logChanged = effects.logChanged || effect.logChanged;
     }
 

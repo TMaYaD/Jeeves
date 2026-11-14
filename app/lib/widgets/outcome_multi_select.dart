@@ -58,6 +58,10 @@ class OutcomeSelectionBar extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final count = selectedIds.length;
     final allSelected = count >= allIds.length;
+    // Resolved while this bar is alive: the pickers below finish later, and
+    // sync can drop the last selected Outcome (unmounting the bar) meanwhile.
+    final database = ref.read(databaseProvider);
+    final userId = ref.read(currentUserIdProvider);
     return Semantics(
       label: '$count selected',
       container: true,
@@ -65,49 +69,60 @@ class OutcomeSelectionBar extends ConsumerWidget {
         color: const Color(0xFFEFF6FF),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
-          child: Row(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              IconButton(
-                tooltip: 'Clear selection',
-                icon: const Icon(Icons.close, size: 20),
-                color: const Color(0xFF374151),
-                onPressed: onClear,
-              ),
-              Expanded(
-                child: Text(
-                  '$count selected',
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFF1A1A2E),
+              Row(
+                children: [
+                  IconButton(
+                    tooltip: 'Clear selection',
+                    icon: const Icon(Icons.close, size: 20),
+                    color: const Color(0xFF374151),
+                    onPressed: onClear,
                   ),
-                ),
+                  Expanded(
+                    child: Text(
+                      '$count selected',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF1A1A2E),
+                      ),
+                    ),
+                  ),
+                  if (!allSelected)
+                    TextButton(
+                      onPressed: onSelectAll,
+                      child: const Text('Select all'),
+                    ),
+                ],
               ),
-              if (!allSelected)
-                TextButton(
-                  onPressed: onSelectAll,
-                  child: const Text('Select all'),
-                ),
-              ProjectPickerWidget(
-                currentProjectTag: null,
-                onClear: () {},
-                onAssign: (tag) => ref.read(databaseProvider).tagDao
-                    .setProjectForOutcomes(
-                        selectedIds, tag.id, ref.read(currentUserIdProvider))
-                    .ignore(),
-                customChild: const _BarButton(
-                    icon: Icons.folder_outlined, label: 'Project'),
-              ),
-              InkWell(
-                borderRadius: BorderRadius.circular(8),
-                onTap: () => _showTagsSheet(context, selectedIds),
-                child: const _BarButton(icon: Icons.sell_outlined, label: 'Tags'),
-              ),
-              InkWell(
-                borderRadius: BorderRadius.circular(8),
-                onTap: () => _showStatusSheet(context, ref, selectedIds, onClear),
-                child: const _BarButton(
-                    icon: Icons.flag_outlined, label: 'Status'),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  ProjectPickerWidget(
+                    currentProjectTag: null,
+                    onClear: () {},
+                    onAssign: (tag) => database.tagDao
+                        .setProjectForOutcomes(selectedIds, tag.id, userId)
+                        .ignore(),
+                    customChild: const _BarButton(
+                        icon: Icons.folder_outlined, label: 'Project'),
+                  ),
+                  InkWell(
+                    borderRadius: BorderRadius.circular(8),
+                    onTap: () => _showTagsSheet(context, selectedIds),
+                    child: const _BarButton(
+                        icon: Icons.sell_outlined, label: 'Tags'),
+                  ),
+                  InkWell(
+                    borderRadius: BorderRadius.circular(8),
+                    onTap: () => _showStatusSheet(
+                        context, database, userId, selectedIds, onClear),
+                    child: const _BarButton(
+                        icon: Icons.flag_outlined, label: 'Status'),
+                  ),
+                ],
               ),
             ],
           ),
@@ -197,8 +212,8 @@ class _BulkTagsSheet extends ConsumerWidget {
   }
 }
 
-Future<void> _showStatusSheet(BuildContext context, WidgetRef ref,
-    Set<String> ids, VoidCallback onDone) async {
+Future<void> _showStatusSheet(BuildContext context, GtdDatabase database,
+    String? userId, Set<String> ids, VoidCallback onDone) async {
   final choice = await showModalBottomSheet<RoutingKind>(
     context: context,
     builder: (ctx) => SafeArea(
@@ -227,9 +242,9 @@ Future<void> _showStatusSheet(BuildContext context, WidgetRef ref,
     people = await showPersonTagPicker(context,
         assignedPersonTagIds: const {}, requireSelection: true);
     if (people == null) return; // cancelled: nothing is written
+    if (!context.mounted) return;
   }
-  final dao = ref.read(databaseProvider).todoDao;
-  final userId = ref.read(currentUserIdProvider);
+  final dao = database.todoDao;
   await dao.applyRoutingToOutcomes(
     ids,
     to: choice,

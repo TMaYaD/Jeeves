@@ -15,6 +15,7 @@ import 'package:jeeves/database/daos/tag_dao.dart' show todoTagIdFor;
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/routing_kind.dart';
 import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/screens/done/done_screen.dart';
 import 'package:jeeves/screens/next/next_screen.dart';
 import 'package:jeeves/screens/waiting_for/waiting_for_screen.dart';
 import 'package:jeeves/sync/collection_codecs.dart';
@@ -71,14 +72,23 @@ void main() {
   });
   tearDown(() async => db.close());
 
-  Future<void> pumpApp(WidgetTester tester, {String start = '/next'}) async {
+  Future<void> pumpApp(WidgetTester tester,
+      {String start = '/next', bool shell = false}) async {
     lastRoute = start;
     final router = GoRouter(
       initialLocation: start,
       routes: [
-        GoRoute(path: '/next', builder: (_, _) => const NextScreen()),
-        GoRoute(
-            path: '/waiting-for', builder: (_, _) => const WaitingForScreen()),
+        ShellRoute(
+          builder: (_, _, child) =>
+              shell ? Scaffold(body: child) : child,
+          routes: [
+            GoRoute(path: '/next', builder: (_, _) => const NextScreen()),
+            GoRoute(path: '/done', builder: (_, _) => const DoneScreen()),
+            GoRoute(
+                path: '/waiting-for',
+                builder: (_, _) => const WaitingForScreen()),
+          ],
+        ),
         GoRoute(
           path: '/task/:id',
           builder: (_, state) {
@@ -197,6 +207,72 @@ void main() {
     await db.tagDao.assignTag('o1', 'sam', 'local');
     await pumpApp(tester, start: '/waiting-for');
     await tester.longPress(find.text('Outcome o1'));
+    await _settle(tester);
+    expect(find.text('1 selected'), findsOneWidget);
+  });
+
+  testWidgets('back exits selection under a ShellRoute', (tester) async {
+    await pumpApp(tester, shell: true);
+    await tester.longPress(find.text('Outcome o1'));
+    await _settle(tester);
+    expect(find.text('1 selected'), findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await _settle(tester);
+    expect(find.textContaining('selected'), findsNothing);
+  });
+
+  testWidgets('the bar keeps count and all actions usable at 320 px',
+      (tester) async {
+    tester.view.physicalSize = const Size(320, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await pumpApp(tester);
+    await tester.longPress(find.text('Outcome o1'));
+    await _settle(tester);
+    expect(tester.takeException(), isNull);
+    expect(find.text('1 selected'), findsOneWidget);
+    for (final label in ['Project', 'Tags', 'Status', 'Select all']) {
+      expect(find.text(label), findsOneWidget, reason: label);
+    }
+  });
+
+  testWidgets('a Project picker outliving its selection writes nothing',
+      (tester) async {
+    await pumpApp(tester);
+    await tester.longPress(find.text('Outcome o1'));
+    await _settle(tester);
+    await tester.tap(find.text('Project'));
+    await _settle(tester);
+    // Sync removes the only selected Outcome underneath the open picker.
+    await _real(tester, () => db.todoDao.deleteOutcome('o1'));
+    await _settle(tester);
+    capture.clear();
+    await tester.tap(find.text('Garden'));
+    await _settle(tester);
+    expect(tester.takeException(), isNull);
+    expect(await tagIdsOf(tester, 'o1'), isEmpty);
+    expect(capture.recorded, isEmpty);
+  });
+
+  testWidgets('the Done list offers no selection', (tester) async {
+    await _real(tester, () => db.todoDao.applyRouting('o1',
+        to: RoutingKind.done, now: DateTime.utc(2026, 7, 29, 9)));
+    await pumpApp(tester, start: '/done');
+    await tester.longPress(find.text('Outcome o1'));
+    await _settle(tester);
+    expect(find.textContaining('selected'), findsNothing);
+  });
+
+  testWidgets('an Outcome under two people counts once', (tester) async {
+    await db.tagDao.upsertTag(const TagsCompanion(
+        id: Value('kim'),
+        name: Value('Kim'),
+        type: Value('person'),
+        userId: Value('local')));
+    await db.tagDao.assignTag('o1', 'sam', 'local');
+    await db.tagDao.assignTag('o1', 'kim', 'local');
+    await pumpApp(tester, start: '/waiting-for');
+    await tester.longPress(find.text('Outcome o1').first);
     await _settle(tester);
     expect(find.text('1 selected'), findsOneWidget);
   });

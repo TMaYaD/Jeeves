@@ -135,6 +135,26 @@ void main() {
       expect(ops.single.tombstone, isTrue);
     });
 
+    test('removeTagFromOutcomes leaves a dangling junction of an absent Outcome',
+        () async {
+      await seed(['a']);
+      final tag = await db.tagDao.findOrCreateTag('home', 'context', _userId);
+      await db.into(db.todoTags).insert(TodoTagsCompanion(
+            id: Value(todoTagIdFor('gone', tag)),
+            todoId: const Value('gone'),
+            tagId: Value(tag),
+            userId: const Value(_userId),
+          ));
+      capture.clear();
+
+      final removed =
+          await db.tagDao.removeTagFromOutcomes({'a', 'gone'}, tag);
+
+      expect(removed, isEmpty);
+      expect(await tagIdsOf('gone'), {tag});
+      expect(capture.recorded, isEmpty);
+    });
+
     test('person and project tags are refused by the Tag batches', () async {
       await seed(['a']);
       final person = await db.tagDao.findOrCreateTag('Sam', 'person', _userId);

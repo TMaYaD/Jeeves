@@ -676,9 +676,10 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
     await attachedDatabase.capturing(() async {
       final tag = await _tagOfTypeOrNull(tagId);
       if (tag != null) _requireBulkTagType(tag);
-      if (outcomeIds.isEmpty) return;
+      final present = await _presentOutcomeIds(outcomeIds);
+      if (present.isEmpty) return;
       final held = await (select(todoTags)
-            ..where((tt) => tt.tagId.equals(tagId) & tt.todoId.isIn(outcomeIds)))
+            ..where((tt) => tt.tagId.equals(tagId) & tt.todoId.isIn(present)))
           .get();
       for (final row in held) {
         await (delete(todoTags)..where((tt) => tt.id.equals(row.id))).go();
