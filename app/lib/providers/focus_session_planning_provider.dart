@@ -410,9 +410,17 @@ class FocusSessionPlanningState {
     this.reviewPersonTags = const {},
     this.reviewActionTexts = const {},
     this.reviewStaleIds = const {},
+    this.startedPastIntro = false,
   });
 
   final int currentStep;
+
+  /// True once the user has proceeded past the intro, for the life of this
+  /// draft. A latch, not a step test: backing out of a started performance
+  /// passes through the intro, so the step at the moment of leaving says
+  /// nothing. [FocusSessionPlanningNotifier.startDay] and
+  /// [FocusSessionPlanningNotifier.reEnterPlanning] reset it with the draft.
+  final bool startedPastIntro;
   final int availableMinutes;
 
   /// True once the user has explicitly set available time (not the default).
@@ -496,8 +504,10 @@ class FocusSessionPlanningState {
     Map<String, List<Tag>>? reviewPersonTags,
     Map<String, String>? reviewActionTexts,
     Set<String>? reviewStaleIds,
+    bool? startedPastIntro,
   }) =>
       FocusSessionPlanningState(
+        startedPastIntro: startedPastIntro ?? this.startedPastIntro,
         currentStep: currentStep ?? this.currentStep,
         availableMinutes: availableMinutes ?? this.availableMinutes,
         availableTimeSet: availableTimeSet ?? this.availableTimeSet,
@@ -538,6 +548,14 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   FocusSessionPlanningState build() {
     Future.microtask(ensureRolloverPreload);
     Future.microtask(ensureAvailableTimePreload);
+    // A session opening — here or through sync — finishes Daily Planning for
+    // good, so a draft started before it must not read as unfinished once that
+    // session later closes without this Ceremony.
+    ref.listen(activeSessionProvider, (_, next) {
+      if (next.asData?.value != null && state.startedPastIntro) {
+        state = state.copyWith(startedPastIntro: false);
+      }
+    });
     return const FocusSessionPlanningState();
   }
 
@@ -660,7 +678,10 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
           reviewActionTexts: actionTexts,
         );
       }
-      state = state.copyWith(currentStep: next.clamp(0, _maxStepIndex));
+      state = state.copyWith(
+        currentStep: next.clamp(0, _maxStepIndex),
+        startedPastIntro: state.startedPastIntro || next > 0,
+      );
       // Hold the guard through the rest of the current event-loop turn so a
       // second call from the same tap burst is dropped even on the branch
       // with no snapshot load to await.
@@ -686,7 +707,10 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   }
 
   void goToStep(int step) {
-    state = state.copyWith(currentStep: step.clamp(0, _maxStepIndex));
+    state = state.copyWith(
+      currentStep: step.clamp(0, _maxStepIndex),
+      startedPastIntro: state.startedPastIntro || step > 0,
+    );
   }
 
   /// Records that the user is editing the available time without changing the

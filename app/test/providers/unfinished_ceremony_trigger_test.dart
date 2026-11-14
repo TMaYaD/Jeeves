@@ -1,0 +1,156 @@
+/// The Unfinished Trigger of Daily Planning and Evening Shutdown: it fires from
+/// the instant a started performance is left, and is void once the Ritual is
+/// finished by any route. Real providers and an in-memory database; only the
+/// clock is controlled.
+library;
+
+import 'package:drift/native.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/ritual.dart';
+import 'package:jeeves/providers/ceremony_in_progress_provider.dart';
+import 'package:jeeves/providers/clock_provider.dart';
+import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/providers/evening_shutdown_provider.dart';
+import 'package:jeeves/providers/focus_session_planning_provider.dart';
+import 'package:jeeves/providers/nudge_clock_provider.dart';
+import 'package:jeeves/providers/nudge_triggers.dart';
+
+import '../test_helpers.dart';
+
+void main() {
+  setUpAll(configureSqliteForTests);
+
+  late GtdDatabase db;
+  late ProviderContainer c;
+  late DateTime now;
+
+  setUp(() {
+    db = GtdDatabase(NativeDatabase.memory());
+    now = DateTime(2026, 5, 8, 16);
+    c = ProviderContainer(overrides: [
+      databaseProvider.overrideWithValue(db),
+      clockProvider.overrideWithValue(() => now),
+      nudgeBoundaryTickProvider.overrideWithValue(0),
+    ]);
+  });
+
+  tearDown(() async {
+    c.dispose();
+    await db.close();
+  });
+
+  /// Keeps the Trigger's inputs subscribed, as the app shell does.
+  Future<void> watch(RitualId ritual) async {
+    final subscription = c.listen(
+        unfinishedCeremonyTriggerProvider(ritual), (_, _) {});
+    addTearDown(subscription.close);
+    c.listen(activeSessionProvider, (_, _) {});
+    await pumpEventQueue(times: 10);
+  }
+
+  TriggerState trigger(RitualId ritual) =>
+      c.read(unfinishedCeremonyTriggerProvider(ritual));
+
+  group('Daily Planning', () {
+    const ritual = RitualId.dailyPlanning;
+
+    test('opening the intro and leaving is not unfinished', () async {
+      await watch(ritual);
+      final ceremony = c.read(ceremonyInProgressProvider.notifier);
+      ceremony.enter(ritual);
+      ceremony.exit(ritual);
+      expect(trigger(ritual).isFiring, isFalse);
+    });
+
+    test('leaving after proceeding fires from the instant left, and a second '
+        'leave advances the edge', () async {
+      await watch(ritual);
+      final ceremony = c.read(ceremonyInProgressProvider.notifier);
+      ceremony.enter(ritual);
+      c.read(focusSessionPlanningProvider.notifier).goToStep(3);
+      expect(trigger(ritual).isFiring, isFalse, reason: 'in progress');
+      // Backing out passes through the intro: the latch outlives the step.
+      c.read(focusSessionPlanningProvider.notifier).goToStep(0);
+      ceremony.exit(ritual);
+      expect(trigger(ritual),
+          TriggerState(isFiring: true, firingSince: now));
+
+      now = now.add(const Duration(hours: 1));
+      ceremony.enter(ritual);
+      expect(trigger(ritual).isFiring, isFalse);
+      ceremony.exit(ritual);
+      expect(trigger(ritual).firingSince, now);
+    });
+
+    test('a session opening voids it for good, even after that session closes',
+        () async {
+      await watch(ritual);
+      final ceremony = c.read(ceremonyInProgressProvider.notifier);
+      ceremony.enter(ritual);
+      c.read(focusSessionPlanningProvider.notifier).goToStep(2);
+      ceremony.exit(ritual);
+      expect(trigger(ritual).isFiring, isTrue);
+
+      final sessionId =
+          await db.focusSessionDao.openSession(userId: 'local', taskIds: []);
+      await pumpEventQueue(times: 10);
+      expect(trigger(ritual).isFiring, isFalse);
+
+      await db.focusSessionDao.closeSession(sessionId: sessionId);
+      await pumpEventQueue(times: 10);
+      expect(trigger(ritual).isFiring, isFalse);
+    });
+
+    test('resetting the draft voids it', () async {
+      await watch(ritual);
+      final ceremony = c.read(ceremonyInProgressProvider.notifier);
+      ceremony.enter(ritual);
+      c.read(focusSessionPlanningProvider.notifier).goToStep(2);
+      ceremony.exit(ritual);
+      expect(trigger(ritual).isFiring, isTrue);
+
+      await c.read(focusSessionPlanningProvider.notifier).reEnterPlanning();
+      expect(trigger(ritual).isFiring, isFalse);
+    });
+  });
+
+  group('Evening Shutdown', () {
+    const ritual = RitualId.eveningShutdown;
+
+    test('fires on leaving a started performance, before the shutdown anchor',
+        () async {
+      final sessionId =
+          await db.focusSessionDao.openSession(userId: 'local', taskIds: []);
+      await watch(ritual);
+      final ceremony = c.read(ceremonyInProgressProvider.notifier);
+      ceremony.enter(ritual);
+      await c.read(eveningShutdownProvider.notifier).markStarted();
+      expect(c.read(eveningShutdownProvider).startedSessionId, sessionId);
+      ceremony.exit(ritual);
+      expect(trigger(ritual),
+          TriggerState(isFiring: true, firingSince: now));
+    });
+
+    test('is void once that session closes without the Ceremony, and a new '
+        'session does not inherit it', () async {
+      final sessionId =
+          await db.focusSessionDao.openSession(userId: 'local', taskIds: []);
+      await watch(ritual);
+      final ceremony = c.read(ceremonyInProgressProvider.notifier);
+      ceremony.enter(ritual);
+      await c.read(eveningShutdownProvider.notifier).markStarted();
+      ceremony.exit(ritual);
+      expect(trigger(ritual).isFiring, isTrue);
+
+      await db.focusSessionDao.closeSession(sessionId: sessionId);
+      await pumpEventQueue(times: 10);
+      expect(trigger(ritual).isFiring, isFalse);
+
+      await db.focusSessionDao.openSession(userId: 'local', taskIds: []);
+      await pumpEventQueue(times: 10);
+      expect(trigger(ritual).isFiring, isFalse);
+    });
+  });
+}

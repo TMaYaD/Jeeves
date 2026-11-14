@@ -16,7 +16,9 @@ For the visual treatment of a Banner, [DESIGN.md](DESIGN.md).
 
 A Ceremony **performance** runs *not-started* → *in-progress* → *terminated*, and
 termination splits two ways. A **completed** performance is one a Trigger may treat
-as satisfying the Ritual; an **abandoned** one is treated as if it had not happened.
+as satisfying the Ritual; an **abandoned** one is treated as if it had not happened,
+except that a *started* Daily Planning, Evening Shutdown or Weekly Review fires the
+**Unfinished Trigger**.
 Performances accumulate over a Ritual's lifetime, and a Trigger may consult that
 history as part of its predicate.
 
@@ -114,10 +116,17 @@ Three shapes exist today.
 - **Content-state Triggers** are predicates over the user's data, refiring whenever
   the predicate newly evaluates true mid-period. The only one today is the Weekly
   Review's: *the Next list is empty while Waiting For or Someday still holds items*.
-- The **Unfinished Trigger** is the Weekly Review's alone: *a session was started and
-  left without Done*. It fires at once, whether or not the review is due, ends when a
-  session is finished, and lives in memory on this device. While it fires the Banner
-  uses continue wording.
+- The **Unfinished Trigger** is every Ritual's: *a performance was started and left
+  without finishing*. It fires at once, whether or not the Ritual is due, and lives in
+  memory on this device. While it fires the Banner and the Now screen's empty state
+  use continue wording. The Weekly Review's ends when a session is finished. Daily
+  Planning is *started* once the user proceeds past the intro (a latch on the draft),
+  and ends when any FocusSession opens or the draft resets. Evening Shutdown is
+  started when its first step shows, and ends when that session closes, with or
+  without the Ceremony. It stays out of the pure firing-edge functions the
+  Notification planner reads, so leaving a Ceremony never re-arms a skipped
+  Notification. While Evening Shutdown is the head the Now screen keeps its shutdown
+  callout, so its continue wording shows on the other shell screens.
 
 The Weekly Review's Cadence Trigger fires while the review is due and refires every
 day, so a swipe holds for the rest of the day and the Nudge returns tomorrow.
