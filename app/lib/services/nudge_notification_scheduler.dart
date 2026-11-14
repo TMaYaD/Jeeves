@@ -382,6 +382,11 @@ class NudgeNotificationScheduler {
   Future<void> _queue = Future.value();
   bool _disposed = false;
 
+  /// Whether every alarm this scheduler left pending was armed under exact
+  /// permission. Pending alarms carry no mode, so after a process start (or a
+  /// permission change) the only safe assumption is "not yet".
+  bool _pendingArmedExactly = false;
+
   /// Queues a reconciliation against [facts].
   Future<void> enqueue(NudgeNotificationFacts facts) {
     _queue = _queue.then((_) async {
@@ -435,19 +440,29 @@ class NudgeNotificationScheduler {
       await _notifications.cancelReminder(id);
     }
     final executionNow = _clock?.call() ?? facts.now;
+    // Alarms armed inexact stay inexact unless replaced: when exact timing is
+    // permitted but the pending set was not armed under it (an upgrade, or the
+    // permission granted since), re-arm every planned alarm once.
+    final canExact = await _notifications.canScheduleExactRitualNotifications();
+    final rearmForExact = canExact && !_pendingArmedExactly;
+    var allArmedExactly = canExact;
     for (final entry in plan) {
       // Same id and same payload (which records the fire instant): unchanged.
-      if (pendingPayloadById[entry.id] == entry.payload) continue;
+      if (!rearmForExact && pendingPayloadById[entry.id] == entry.payload) {
+        continue;
+      }
       // Its instant passed while the reconciliation waited; the next one
       // replans from the new time.
       if (!entry.fireAt.isAfter(executionNow)) continue;
       try {
         await _schedule(entry);
       } catch (e, s) {
+        allArmedExactly = false;
         // One refused alarm must not stop the ones after it.
         debugPrint('Scheduling Ritual notification ${entry.id} failed: $e\n$s');
       }
     }
+    _pendingArmedExactly = allArmedExactly;
   }
 
   Future<void> _schedule(PlannedNudgeNotification entry) {

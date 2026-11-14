@@ -100,6 +100,9 @@ class RecordingNotificationService extends NotificationService {
   /// What the OS reports for notification permission.
   bool notificationsAllowed = true;
 
+  /// What the OS reports for exact-alarm permission.
+  bool exactAlarmsAllowed = false;
+
   /// How many times a permission request was made.
   int permissionRequests = 0;
 
@@ -113,6 +116,9 @@ class RecordingNotificationService extends NotificationService {
   }
 
   @override
+  Future<bool> canScheduleExactRitualNotifications() async => exactAlarmsAllowed;
+
+  @override
   Future<void> scheduleRitualNotification({
     required int id,
     required RitualId ritual,
@@ -120,7 +126,8 @@ class RecordingNotificationService extends NotificationService {
     required String payload,
   }) async {
     scheduleCalls.add(id);
-    pending[id] = RecordedRitualAlarm(ritual, fireAt, payload);
+    pending[id] =
+        RecordedRitualAlarm(ritual, fireAt, payload, exact: exactAlarmsAllowed);
   }
 
   @override
@@ -147,7 +154,10 @@ class RecordingNotificationService extends NotificationService {
 
 class RecordedRitualAlarm {
   const RecordedRitualAlarm(
-      this.ritual, this.fireAt, this.payload);
+      this.ritual, this.fireAt, this.payload, {this.exact = false});
+
+  /// Whether the alarm was armed under exact-alarm permission.
+  final bool exact;
 
   final RitualId ritual;
   final DateTime fireAt;

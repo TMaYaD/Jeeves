@@ -247,6 +247,15 @@ class NotificationService {
   // Ritual is one entry in that matrix, not five new methods.
   // ---------------------------------------------------------------------------
 
+  /// Whether the OS lets Jeeves set exact alarms right now. Ritual alarms are
+  /// scheduled exact only then; the scheduler re-reads this so alarms armed
+  /// inexact are replaced once the permission appears.
+  Future<bool> canScheduleExactRitualNotifications() async {
+    final android = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    return await android?.canScheduleExactNotifications() ?? false;
+  }
+
   /// Schedules one Ritual notification at [fireAt]. [id] decides what it
   /// replaces: scheduling again under the same id moves the alarm.
   Future<void> scheduleRitualNotification({
@@ -256,9 +265,7 @@ class NotificationService {
     required String payload,
   }) async {
     final cfg = _ritualConfigs[ritual]!;
-    final android = _plugin.resolvePlatformSpecificImplementation<
-        AndroidFlutterLocalNotificationsPlugin>();
-    final canExact = await android?.canScheduleExactNotifications() ?? false;
+    final canExact = await canScheduleExactRitualNotifications();
     await _plugin.zonedSchedule(
       id: id,
       title: cfg.title,
