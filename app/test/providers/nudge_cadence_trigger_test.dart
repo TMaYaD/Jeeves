@@ -27,6 +27,7 @@ import 'package:jeeves/providers/nudge_triggers.dart';
 import 'package:jeeves/providers/onboarding_provider.dart';
 import 'package:jeeves/models/nudge_predicates.dart';
 import 'package:jeeves/providers/shutdown_settings_provider.dart';
+import 'package:jeeves/providers/synced_preferences_provider.dart';
 import 'package:jeeves/providers/system_trust_provider.dart'
     show weeklyReviewDueAtProvider;
 
@@ -68,6 +69,13 @@ Todo _todo() => Todo(
       userId: 'u',
     );
 
+/// No stored preferences: the Evening Shutdown facts read the last available
+/// time from them, and the real provider would open a database.
+class _EmptyPreferences extends SyncedPreferencesNotifier {
+  @override
+  Future<SyncedPreferences> build() async => const SyncedPreferences({});
+}
+
 ProviderContainer _makeContainer({
   required DateTime now,
   TimeOfDay planningTime = const TimeOfDay(hour: 8, minute: 0),
@@ -80,6 +88,7 @@ ProviderContainer _makeContainer({
   return ProviderContainer(overrides: [
     clockProvider.overrideWithValue(() => now),
     nudgeBoundaryTickProvider.overrideWithValue(0),
+    syncedPreferencesProvider.overrideWith(_EmptyPreferences.new),
     focusSessionPlanningSettingsProvider
         .overrideWith(() => _StubPlanningSettings(planningTime)),
     shutdownSettingsProvider

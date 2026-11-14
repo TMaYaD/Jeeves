@@ -48,6 +48,9 @@ void main() {
       notificationServiceProvider
           .overrideWithValue(StubPeriodicReviewNotificationService()),
       activeSessionProvider.overrideWith((_) => openSessions.stream),
+      // The draft resets to the intro step, whose counts are a live Drift read.
+      focusSessionPlanningIntroCountsProvider
+          .overrideWith((ref) async => (inboxCount: 0, reviewCount: 0)),
     ]);
     final router = GoRouter(routes: [
       GoRoute(path: '/', builder: (_, _) => const FocusSessionPlanningScreen()),
