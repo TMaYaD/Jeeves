@@ -172,6 +172,8 @@ The test skips when `DATABASE_URL` does not point at Postgres, so local SQLite-o
 
 The recording stand-in proves what the scheduler asked for, not what the OS delivers. On the PR's APK, with notifications allowed: for each Ritual in turn, set its time two or three minutes ahead in a state where it heads the Nudge queue, lock the phone and confirm the notification arrives; note how late. Then deny notifications in system settings, reopen the app and confirm the denied row appears under each enabled reminder switch.
 
+**Notification buttons (debug dev build).** With the app not running (`adb shell am kill`, check `pidof` is empty; never `force-stop`, it cancels the app's alarms), raise a Ritual reminder and tap each button from the shade. Open: the app comes forward on that Ritual. Skip: the notification goes, and `run-as … cat shared_prefs/FlutterSharedPreferences.xml` shows one `nudge_action_outbox.` entry. Snooze: same entry, `dumpsys alarm` lists an alarm at now plus the snooze, logcat has no `LateInitializationError`, and the reminder returns on time. Record device, Android version and SHA.
+
 ## Sync conflict resolution (manual)
 
 Merge is covered automatically, at three levels: the per-key strategy function
