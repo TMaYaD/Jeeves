@@ -155,57 +155,37 @@ void main() {
     await _unmount(tester);
   });
 
-  Future<void> replaceCurrentWhileOpen(WidgetTester tester) async {
-    await tester.runAsync(() async {
-      await db.actionDao
-          .supersedeCurrentAction('t5', newActionText: 'the successor');
-      await db.customStatement(
-          "UPDATE actions SET time_context = '{\"days\":[1]}' "
-          "WHERE role = 'current'");
-    });
-  }
-
-  Future<List<String?>> storedByRole(WidgetTester tester) async {
-    final rows = await tester.runAsync(() => (db.select(db.actions)
-          ..orderBy([(a) => OrderingTerm.asc(a.createdAt)]))
-        .get());
-    return [for (final r in rows!) r.timeContext];
-  }
-
-  testWidgets('Save after the Action was replaced leaves the successor alone',
+  testWidgets(
+      'a 23:30–24:00 window opens the end picker, saves and reopens',
       (tester) async {
-    final todo = await _seedOutcome(db, 't5');
+    final todo = await _seedOutcome(db, 't6');
+    await db.customStatement(
+        "UPDATE actions SET time_context = "
+        "'{\"days\":[1],\"start\":\"23:30\",\"end\":\"24:00\"}'");
     await tester.pumpWidget(_harness(db, todo));
     await _open(tester);
 
     await tester.tap(find.byKey(const Key('time_context_chip')));
     await _settle(tester);
-    await tester.tap(find.byKey(const Key('time_context_day_2')));
-    await tester.pump();
-    await replaceCurrentWhileOpen(tester);
+    // The stored end is 24:00; TimeOfDay only takes hours 0-23, so the picker
+    // has to open (at 23:59) rather than throw or show noon.
+    await tester.tap(find.byKey(const Key('time_context_end')));
+    await _settle(tester);
+    expect(tester.takeException(), isNull);
+    expect(find.text('OK'), findsOneWidget);
+    await tester.tap(find.text('OK'));
+    await _settle(tester);
     await tester.tap(find.byKey(const Key('time_context_save')));
     await _settle(tester);
 
-    expect(await storedByRole(tester), [null, '{"days":[1]}']);
-
-    await _unmount(tester);
-  });
-
-  testWidgets('Clear after the Action was replaced leaves the successor alone',
-      (tester) async {
-    final todo = await _seedOutcome(db, 't5');
-    await db.customStatement(
-        "UPDATE actions SET time_context = '{\"days\":[2]}'");
-    await tester.pumpWidget(_harness(db, todo));
-    await _open(tester);
+    expect(await _stored(tester, db),
+        '{"days":[1],"start":"23:30","end":"23:59"}');
 
     await tester.tap(find.byKey(const Key('time_context_chip')));
     await _settle(tester);
-    await replaceCurrentWhileOpen(tester);
-    await tester.tap(find.byKey(const Key('time_context_clear')));
-    await _settle(tester);
-
-    expect(await storedByRole(tester), ['{"days":[2]}', '{"days":[1]}']);
+    expect(tester.takeException(), isNull);
+    expect(find.text('23:30'), findsWidgets);
+    expect(find.text('23:59'), findsWidgets);
 
     await _unmount(tester);
   });

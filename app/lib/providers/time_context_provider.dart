@@ -56,8 +56,13 @@ final outsideTimeContextOutcomeIdsProvider = Provider<Set<String>>((ref) {
   };
 });
 
+/// The schema version that introduced `actions.time_context`. A store opened
+/// at an older version is converted once; the constant moves with the column,
+/// never with later unrelated schema bumps.
+const int timeContextSchemaVersion = 7;
+
 /// Converts time-named context tags into TimeContexts, once, on the first launch
-/// after the v4 schema upgrade (issue #238). Eagerly watched from `main.dart`.
+/// after the schema upgrade that added the column (issue #238). Eagerly watched from `main.dart`.
 ///
 /// Ordered after [domainStoreRebuildProvider] so the post-upgrade re-projection
 /// cannot re-project a link the conversion just removed. Fresh installs have no
@@ -73,7 +78,7 @@ final FutureProvider<int> timeContextTagConversionProvider =
   await db.customSelect('SELECT 1').getSingle();
   final details = await db.opened;
   final before = details.versionBefore;
-  if (before == null || before >= 4) return 0;
+  if (before == null || before >= timeContextSchemaVersion) return 0;
   try {
     return await convertTimeNamedContextTags(db);
   } on Object catch (error) {
