@@ -110,6 +110,25 @@ final activeSessionProvider = StreamProvider<FocusSession?>((ref) {
   return db.focusSessionDao.watchActiveSession();
 });
 
+/// Counts FocusSession openings seen on this device and voids Daily Planning's
+/// started latch on each one. Kept alive by the Nudge triggers, not by the
+/// planning notifier (which must not subscribe to the live stream).
+final sessionOpeningCountProvider =
+    NotifierProvider<SessionOpeningCountNotifier, int>(
+        SessionOpeningCountNotifier.new);
+
+class SessionOpeningCountNotifier extends Notifier<int> {
+  @override
+  int build() {
+    ref.listen(activeSessionProvider, (_, next) {
+      if (next.asData?.value == null) return;
+      state = state + 1;
+      ref.read(focusSessionPlanningProvider.notifier).voidStartedLatch();
+    });
+    return 0;
+  }
+}
+
 /// Stream of [Todo] rows that are part of the user's active session, ordered
 /// by their session position.
 final activeSessionTasksProvider = StreamProvider<List<Todo>>((ref) {
@@ -544,27 +563,33 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// its (possibly stale) read to the next draft (#825).
   int _planningGeneration = 0;
 
-  /// Bumped every time a session is seen open. A step advance that began
-  /// before it must not restore the started latch the opening voided, even if
-  /// that session has already closed again by the time the advance resumes.
-  int _sessionOpenedCount = 0;
-
   @override
   FocusSessionPlanningState build() {
     Future.microtask(ensureRolloverPreload);
     Future.microtask(ensureAvailableTimePreload);
-    // A session opening — here or through sync — finishes Daily Planning for
-    // good, so a draft started before it must not read as unfinished once that
-    // session later closes without this Ceremony.
-    ref.listen(activeSessionProvider, (_, next) {
-      if (next.asData?.value == null) return;
-      _sessionOpenedCount++;
-      if (state.startedPastIntro) {
-        state = state.copyWith(startedPastIntro: false);
-      }
-    });
+    // Deliberately no subscription to [activeSessionProvider] here: it is a
+    // live Drift watch, and every widget test that builds this notifier would
+    // hang in pumpAndSettle (docs/TESTING.md). The void-on-session-open rule
+    // lives in [sessionOpeningCountProvider], which only the Nudge triggers keep
+    // alive, and calls [voidStartedLatch].
     return const FocusSessionPlanningState();
   }
+
+  /// Voids the started latch: a FocusSession opened, which finishes Daily
+  /// Planning for good, so this draft must not read as unfinished once that
+  /// session later closes without the Ceremony.
+  void voidStartedLatch() {
+    if (state.startedPastIntro) {
+      state = state.copyWith(startedPastIntro: false);
+    }
+  }
+
+  /// Session openings seen so far by the Nudge triggers, or 0 when nothing
+  /// keeps the counter alive (no subscription is created by asking).
+  int get _sessionOpeningsSeen =>
+      ref.exists(sessionOpeningCountProvider)
+          ? ref.read(sessionOpeningCountProvider)
+          : 0;
 
   GtdDatabase get _db => ref.read(databaseProvider);
   ClarificationService get _clarification =>
@@ -646,7 +671,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   Future<void> advanceStep() async {
     if (_advancing) return;
     _advancing = true;
-    final sessionOpenedCountAtStart = _sessionOpenedCount;
+    final sessionOpeningsAtStart = _sessionOpeningsSeen;
     try {
       final next = state.currentStep + 1;
       if (next == 2) {
@@ -689,9 +714,11 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       // The awaits above can span a session opening through sync, which voids
       // the latch; do not restore it from the pre-await decision — not even
       // when that session has closed again before this point.
-      final sessionOpenNow =
-          ref.read(activeSessionProvider).asData?.value != null ||
-              _sessionOpenedCount != sessionOpenedCountAtStart;
+      final needsLatch = !state.startedPastIntro && next > 0;
+      final sessionOpenNow = needsLatch &&
+          (_sessionOpeningsSeen != sessionOpeningsAtStart ||
+              await _db.focusSessionDao.getActiveSession() != null);
+      if (!ref.mounted) return;
       state = state.copyWith(
         currentStep: next.clamp(0, _maxStepIndex),
         startedPastIntro:
