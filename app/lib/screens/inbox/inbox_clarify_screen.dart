@@ -22,15 +22,31 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../providers/inbox_provider.dart';
 import '../../widgets/app_title_bar/app_title_bar.dart';
 import '../../widgets/capture/capture_action.dart';
 import '../../widgets/clarify_card.dart';
 import '../../widgets/clarify_shared_widgets.dart';
 
+/// Location that opens Inbox clarification one Capture at a time, starting at
+/// [captureId].
+String inboxClarifySequenceLocation(String captureId) =>
+    '/inbox/$captureId/clarify?sequence=1';
+
 class InboxClarifyScreen extends ConsumerStatefulWidget {
-  const InboxClarifyScreen({super.key, required this.captureId});
+  const InboxClarifyScreen({
+    super.key,
+    required this.captureId,
+    this.sequence = false,
+  });
 
   final String captureId;
+
+  /// Opened by the Inbox too full Banner: Inbox clarification one Capture at a
+  /// time. A routing verdict moves on to the next oldest Capture instead of
+  /// popping, until the Inbox is empty; Back (or Skip) leaves. Opened from an
+  /// Inbox row ([sequence] false) the screen pops after a verdict.
+  final bool sequence;
 
   @override
   ConsumerState<InboxClarifyScreen> createState() => _InboxClarifyScreenState();
@@ -45,6 +61,25 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
   /// against a screen the user has already left, so the tap that started it
   /// gives no feedback and a failure has nowhere to report.
   bool _routing = false;
+
+  /// After a verdict: the next oldest Capture in sequence mode, else leave.
+  Future<void> _afterVerdict() async {
+    if (!mounted) return;
+    if (!widget.sequence) {
+      context.pop();
+      return;
+    }
+    final nextId = await ref
+        .read(inboxNotifierProvider)
+        .oldestInboxCaptureId(excludingId: widget.captureId);
+    if (!mounted) return;
+    if (nextId == null) {
+      context.pop();
+    } else {
+      // Replace, not push, so one Back leaves the sequence.
+      context.pushReplacement(inboxClarifySequenceLocation(nextId));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -97,12 +132,8 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
           // (ADR-0023), so leaving is the whole of the post-verdict work.
           // Both hooks are wired: the 1-1 routing verdict and the n-m
           // completing one.
-          onAfterRoute: (_) async {
-            if (mounted) context.pop();
-          },
-          onCaptureCompleted: () async {
-            if (mounted) context.pop();
-          },
+          onAfterRoute: (_) => _afterVerdict(),
+          onCaptureCompleted: _afterVerdict,
         ),
       ),
     );

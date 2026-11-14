@@ -15,6 +15,8 @@ import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/screens/inbox/inbox_clarify_screen.dart';
 import 'package:jeeves/models/routing_kind.dart';
 import 'package:jeeves/services/clarification_service.dart';
+import 'package:jeeves/widgets/app_title_bar/app_title_bar.dart'
+    show appTitleBarLeadingKey;
 import 'package:jeeves/widgets/clarify_shared_widgets.dart';
 import 'package:jeeves/widgets/next_action_dialog.dart';
 import 'package:jeeves/widgets/state_surfaces.dart';
@@ -281,16 +283,24 @@ Widget _buildApp(
   // mounts. Reproduces the real ordering: the screen is not always the thing
   // that brings the subject into existence.
   bool subjectAlreadyLive = false,
+  // Opens the route the way the Inbox too full Banner does, and lets every
+  // Capture in the sequence resolve through a one-shot read.
+  bool sequence = false,
 }) {
   return ProviderScope(
     overrides: [
       databaseProvider.overrideWithValue(db),
       // The screen's live subject binding. Default to a one-shot read of the
       // stored row: enough for the screen to render, with no pending timer.
-      captureProvider(captureId).overrideWith(
-        (_) => captureFeed?.stream ??
-            Stream.fromFuture(db.captureDao.getCapture(captureId)),
-      ),
+      if (sequence)
+        captureProvider.overrideWith(
+          (ref, id) => Stream.fromFuture(db.captureDao.getCapture(id)),
+        )
+      else
+        captureProvider(captureId).overrideWith(
+          (_) => captureFeed?.stream ??
+              Stream.fromFuture(db.captureDao.getCapture(captureId)),
+        ),
       if (clarificationService != null)
         clarificationServiceProvider.overrideWithValue(clarificationService),
       // Only the Waiting For flow opens the person picker. Override with a
@@ -302,8 +312,11 @@ Widget _buildApp(
     child: MaterialApp.router(
       routerConfig: GoRouter(
         // Nest the clarify route under /inbox so pop() has a page to return to.
-        initialLocation:
-            subjectAlreadyLive ? '/inbox' : '/inbox/$captureId/clarify',
+        initialLocation: subjectAlreadyLive
+            ? '/inbox'
+            : sequence
+                ? inboxClarifySequenceLocation(captureId)
+                : '/inbox/$captureId/clarify',
         routes: [
           GoRoute(
             path: '/inbox',
@@ -315,6 +328,7 @@ Widget _buildApp(
                 path: ':id/clarify',
                 builder: (context, state) => InboxClarifyScreen(
                   captureId: state.pathParameters['id']!,
+                  sequence: state.uri.queryParameters['sequence'] == '1',
                 ),
               ),
             ],
@@ -333,6 +347,80 @@ void main() {
 
     setUp(() => db = _openInMemory());
     tearDown(() => db.close());
+
+    group('Inbox clarification one Capture at a time', () {
+      Future<void> insertAt(String id, DateTime createdAt) =>
+          db.captureDao.insertCapture(CapturesCompanion(
+            id: Value(id),
+            title: Value('Capture $id'),
+            captureSource: const Value('manual'),
+            userId: const Value(_userId),
+            createdAt: Value(createdAt),
+            updatedAt: Value(createdAt),
+          ));
+
+      testWidgets('a verdict moves on to the next oldest, then leaves',
+          (tester) async {
+        final base = DateTime(2026, 1, 1);
+        await insertAt('c-old', base);
+        await insertAt('c-mid', base.add(const Duration(days: 1)));
+        await insertAt('c-new', base.add(const Duration(days: 2)));
+
+        await tester.pumpWidget(_buildApp(db, 'c-old', sequence: true));
+        await tester.pumpAndSettle();
+        expect(find.byType(InboxClarifyScreen), findsOneWidget);
+        expect(find.text('Capture c-old'), findsOneWidget);
+
+        await tester.tap(find.text('Next Action'));
+        await tester.pumpAndSettle();
+        await _acceptNextActionDialog(tester);
+        expect(find.text('Capture c-mid'), findsOneWidget,
+            reason: 'moved on to the next oldest');
+        expect(await _inboxIds(db), unorderedEquals(['c-mid', 'c-new']));
+
+        await tester.tap(find.text('Next Action'));
+        await tester.pumpAndSettle();
+        await _acceptNextActionDialog(tester);
+        expect(find.text('Capture c-new'), findsOneWidget);
+
+        await tester.tap(find.text('Next Action'));
+        await tester.pumpAndSettle();
+        await _acceptNextActionDialog(tester);
+        expect(find.byType(InboxClarifyScreen), findsNothing,
+            reason: 'the Inbox is empty, so the sequence ends');
+        expect(find.text('Inbox'), findsOneWidget);
+      });
+
+      testWidgets('Back leaves after the first verdict in one step',
+          (tester) async {
+        final base = DateTime(2026, 1, 1);
+        await insertAt('c-old', base);
+        await insertAt('c-new', base.add(const Duration(days: 1)));
+
+        await tester.pumpWidget(_buildApp(db, 'c-old', sequence: true));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Next Action'));
+        await tester.pumpAndSettle();
+        await _acceptNextActionDialog(tester);
+        expect(find.text('Capture c-new'), findsOneWidget);
+
+        await tester.tap(find.byKey(appTitleBarLeadingKey));
+        await tester.pumpAndSettle();
+        expect(find.byType(InboxClarifyScreen), findsNothing);
+        expect(await _inboxIds(db), ['c-new']);
+      });
+
+      test('oldestInboxCaptureId skips the excluded id and clarified ones',
+          () async {
+        final base = DateTime(2026, 1, 1);
+        await insertAt('a', base);
+        await insertAt('b', base.add(const Duration(days: 1)));
+        expect(await db.captureDao.oldestInboxCaptureId(), 'a');
+        expect(await db.captureDao.oldestInboxCaptureId(excludingId: 'a'), 'b');
+        expect(
+            await db.captureDao.oldestInboxCaptureId(excludingId: 'zzz'), 'a');
+      });
+    });
 
     testWidgets('pins the global capture action in the bar (#458)',
         (tester) async {

@@ -50,6 +50,7 @@ void main() {
     testWidgets('renders nothing when the queue is empty', (tester) async {
       await tester.pumpWidget(ProviderScope(
         overrides: [
+          inboxTooFullProvider.overrideWith((ref) => false),
           nudgeQueueProvider.overrideWith((ref) => const <RitualId>[]),
           nudgeBannerEnabledProvider.overrideWith((ref, r) => true),
         ],
@@ -68,6 +69,7 @@ void main() {
         (tester) async {
       await tester.pumpWidget(ProviderScope(
         overrides: [
+          inboxTooFullProvider.overrideWith((ref) => false),
           nudgeQueueProvider.overrideWith(
             (ref) => const [RitualId.dailyPlanning, RitualId.eveningShutdown],
           ),
@@ -85,6 +87,7 @@ void main() {
         (tester) async {
       await tester.pumpWidget(ProviderScope(
         overrides: [
+          inboxTooFullProvider.overrideWith((ref) => false),
           nudgeQueueProvider.overrideWith(
             (ref) => const [RitualId.weeklyReview, RitualId.dailyPlanning],
           ),
@@ -107,6 +110,7 @@ void main() {
       RitualId? dismissed;
       await tester.pumpWidget(ProviderScope(
         overrides: [
+          inboxTooFullProvider.overrideWith((ref) => false),
           nudgeQueueProvider
               .overrideWith((ref) => const [RitualId.eveningShutdown]),
           nudgeBannerEnabledProvider.overrideWith((ref, r) => true),
@@ -133,6 +137,7 @@ void main() {
       RitualId? dismissed;
       await tester.pumpWidget(ProviderScope(
         overrides: [
+          inboxTooFullProvider.overrideWith((ref) => false),
           nudgeQueueProvider
               .overrideWith((ref) => const [RitualId.dailyPlanning]),
           nudgeBannerEnabledProvider.overrideWith((ref, r) => true),
@@ -159,6 +164,7 @@ void main() {
       RitualId? dismissed;
       await tester.pumpWidget(ProviderScope(
         overrides: [
+          inboxTooFullProvider.overrideWith((ref) => false),
           nudgeQueueProvider
               .overrideWith((ref) => const [RitualId.dailyPlanning]),
           nudgeBannerEnabledProvider.overrideWith((ref, r) => true),
@@ -183,6 +189,7 @@ void main() {
           (tester) async {
         await tester.pumpWidget(ProviderScope(
           overrides: [
+            inboxTooFullProvider.overrideWith((ref) => false),
             nudgeQueueProvider.overrideWith((ref) => [ritual]),
             nudgeBannerEnabledProvider.overrideWith((ref, r) => true),
             weeklyReviewDaysLateProvider.overrideWith((ref) => 0),
@@ -210,7 +217,8 @@ void main() {
     }) async {
       await tester.pumpWidget(ProviderScope(
         overrides: [
-          nudgeQueueProvider.overrideWith((ref) => const [RitualId.weeklyReview]),
+          inboxTooFullProvider.overrideWith((ref) => false),
+            nudgeQueueProvider.overrideWith((ref) => const [RitualId.weeklyReview]),
           nudgeBannerEnabledProvider.overrideWith((ref, r) => true),
           weeklyReviewDaysLateProvider.overrideWith((ref) => daysLate),
           unfinishedReviewTriggerProvider.overrideWith((ref) => unfinished
@@ -278,6 +286,71 @@ void main() {
       }).length;
       expect(shownPairCount, 1);
       expect(kWeeklyReviewContentStateLinePair.length, 3);
+    });
+  });
+
+  group('Inbox too full', () {
+    Future<void> pump(WidgetTester tester, {int count = 51}) async {
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          inboxTooFullProvider.overrideWith((ref) => count > 50),
+          unprocessedCaptureCountProvider.overrideWith((ref) => count),
+          nudgeQueueProvider
+              .overrideWith((ref) => const [RitualId.weeklyReview]),
+          nudgeBannerEnabledProvider.overrideWith((ref, r) => true),
+          weeklyReviewDaysLateProvider.overrideWith((ref) => 3),
+          unfinishedReviewTriggerProvider
+              .overrideWith((ref) => TriggerState.idle),
+        ],
+        child: MaterialApp.router(routerConfig: _router()),
+      ));
+      await tester.pump();
+    }
+
+    final banner = find.byKey(const Key('inbox_too_full_banner_visible'));
+
+    testWidgets('sits ahead of a due Weekly Review', (tester) async {
+      await pump(tester);
+      expect(banner, findsOneWidget);
+      expect(find.byKey(const Key('periodic_review_banner_visible')),
+          findsNothing);
+    });
+
+    testWidgets('states the Capture count and never names the limit', (tester) async {
+      await pump(tester, count: 73);
+      final text = tester
+          .widgetList<Text>(find.descendant(
+              of: banner, matching: find.byType(Text)))
+          .map((t) => t.data)
+          .join(' ');
+      expect(text, contains('73'));
+      expect(text, isNot(contains('50')));
+    });
+
+    testWidgets('is untinted: white, no ✕, no pulse', (tester) async {
+      await pump(tester);
+      expect(find.byIcon(Icons.close), findsNothing);
+      final decorated = tester.widget<Container>(find
+          .descendant(of: banner, matching: find.byType(Container))
+          .first);
+      expect((decorated.decoration as BoxDecoration).color, Colors.white);
+      // Nothing animates, so the frame settles.
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('a swipe does nothing', (tester) async {
+      await pump(tester);
+      await tester.drag(banner, const Offset(-300, 0));
+      await tester.pump();
+      expect(banner, findsOneWidget);
+    });
+
+    testWidgets('is gone at 50 Captures, and the Weekly Review shows',
+        (tester) async {
+      await pump(tester, count: 50);
+      expect(banner, findsNothing);
+      expect(find.byKey(const Key('periodic_review_banner_visible')),
+          findsOneWidget);
     });
   });
 }

@@ -183,6 +183,15 @@ operate on — planning against a stale Next list violates the method. Evening
 Shutdown outranks Daily Planning
 ([ADR-0020](adr/0020-sessions-never-auto-close-anchor-day-attribution.md)).
 
+**Inbox too full** sits ahead of the queue, not in it. It is not a Ritual: it has
+no Trigger, no dismiss or snooze, and no Notification, and it clears the moment
+the Inbox holds 50 Captures or fewer. It shows as a Banner only; its tap opens
+Inbox clarification, one Capture at a time, oldest first, until the Inbox is
+empty or the user leaves. The Now screen shows no Banner: the surface head (Inbox
+too full, else the queue head) fills the Today's Tasks empty state while no open
+session carries tasks, and the title bar's sun action opens Daily Planning while
+Inbox too full or the Weekly Review holds that space.
+
 Surfaces consume the queue rather than reading Nudges directly:
 
 - **Banner** — a single-occupancy in-app slot, renders the queue head.

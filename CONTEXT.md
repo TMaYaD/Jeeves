@@ -341,7 +341,6 @@ _Avoid_: stack, list (too generic), priority list (acceptable but Nudge queue is
 
 - **Nudge** (this context) and **Reminder** (forthcoming, GTD Core) are different concepts. A Nudge targets a *Ritual* — "it's time for your weekly review". A Reminder targets an *individual Action* — "remind me to call John at 5pm". Different scopes, triggers and lifecycles; do not collapse them into one primitive even though both surface as OS notifications.
 - The **due-date notification** (an Outcome due today) is neither a Nudge nor the reserved **Reminder**. `NotificationService.scheduleReminder` keeps its name but serves due-date notifications; the name is a candidate for renaming when Reminder is built.
-- **Inbox too full** is a nudge with no Ritual behind it — Inbox clarification is an ad-hoc Ceremony — yet it heads the Nudge queue above the Weekly Review. How it enters the queue is unmodelled.
 
 ### Sync
 
@@ -398,7 +397,7 @@ The shared storage row backing several conceptual entities, discriminated by a `
 _Avoid_: (none — Tag is the canonical name for the storage)
 
 **Banner** *(an in-app surface for a Nudge)*:
-A persistent, single-occupancy visual element rendered at the top of shell-hosted screens. The Banner consumes the head of the **Nudge queue** (Conceptual tier) — when the queue is non-empty, the Banner renders the highest-priority visible Nudge; when the queue is empty, the Banner is absent. A horizontal swipe is a high-signal in-app gesture and maps to a Nudge **dismiss** (suppress the current firing — re-surfaces on the next Trigger firing edge of the same Nudge). No Banner carries a ✕. Tapping the body opens the underlying Ceremony.
+A persistent, single-occupancy visual element rendered at the top of shell-hosted screens. The Banner consumes the head of the **Nudge queue** (Conceptual tier) — when the queue is non-empty, the Banner renders the highest-priority visible Nudge; when the queue is empty, the Banner is absent. A horizontal swipe is a high-signal in-app gesture and maps to a Nudge **dismiss** (suppress the current firing — re-surfaces on the next Trigger firing edge of the same Nudge). No Banner carries a ✕. Tapping the body opens the underlying Ceremony. **Inbox too full** (more than 50 Captures) occupies the slot ahead of the queue, with no dismiss; its tap opens Inbox clarification.
 _Avoid_: Toast (transient), Snackbar (transient), Alert (overloaded)
 
 **Notification** *(an OS-level surface for a Nudge)*:

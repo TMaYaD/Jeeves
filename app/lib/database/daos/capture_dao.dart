@@ -137,6 +137,24 @@ class CaptureDao extends DatabaseAccessor<GtdDatabase> with _$CaptureDaoMixin {
   Stream<Capture?> watchCapture(String id) =>
       (select(captures)..where((c) => c.id.equals(id))).watchSingleOrNull();
 
+  /// The id of the oldest Capture still in the Inbox (`clarified_at IS NULL`),
+  /// skipping [excludingId], or null when none is left. Ties on `created_at`
+  /// break on `id` so the order is stable. Drives Inbox clarification one
+  /// Capture at a time.
+  Future<String?> oldestInboxCaptureId({String? excludingId}) async {
+    final query = select(captures)
+      ..where((c) => c.clarifiedAt.isNull())
+      ..orderBy([
+        (c) => OrderingTerm.asc(c.createdAt),
+        (c) => OrderingTerm.asc(c.id),
+      ])
+      ..limit(1);
+    if (excludingId != null) {
+      query.where((c) => c.id.equals(excludingId).not());
+    }
+    return (await query.getSingleOrNull())?.id;
+  }
+
   // --- Capture writes -------------------------------------------------------
 
   /// Insert a new Capture (Inbox: `clarified_at` stays NULL).
