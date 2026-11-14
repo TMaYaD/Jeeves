@@ -299,7 +299,22 @@ void main() {
     expect(find.text('End Session'), findsNothing);
   });
 
+  testWidgets(
+      'open session with an empty Plan shows End Session, not Plan the Day',
+      (tester) async {
+    await tester.pumpWidget(_buildScreen(activeSession: _openSession()));
+    await tester.pump();
+
+    expect(find.text('End Session'), findsOneWidget);
+    expect(find.text('Plan the Day'), findsNothing);
+  });
+
   group('focusCalloutKindFor', () {
+    test('an empty Plan → endSession (nothing to dispose)', () {
+      expect(focusCalloutKindFor(const [], const {}),
+          FocusCalloutKind.endSession);
+    });
+
     Todo task(String id, {String? doneAt}) => _todo(id, 'Task $id', doneAt: doneAt);
     final done = DateTime.now().toUtc().toIso8601String();
 

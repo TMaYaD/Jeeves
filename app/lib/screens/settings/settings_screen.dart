@@ -14,7 +14,6 @@ import '../../providers/auth_provider.dart';
 import '../../providers/build_version_provider.dart';
 import '../../providers/clarify_mode_provider.dart';
 import '../../providers/dev_options_provider.dart';
-import '../../providers/evening_shutdown_provider.dart';
 import '../../providers/focus_session_planning_settings_provider.dart';
 import '../../providers/focus_settings_provider.dart';
 import '../../providers/periodic_review_provider.dart';
@@ -898,27 +897,6 @@ class _EveningShutdownSettings extends ConsumerWidget {
           ),
           value: settings.bannerEnabled,
           onChanged: (v) => notifier.setBannerEnabled(v),
-        ),
-        ListTile(
-          key: const Key('start_shutdown_tile'),
-          leading:
-              const Icon(Icons.nightlight_round, color: Color(0xFF4F46E5)),
-          title: const Text(
-            'Start Evening Shutdown',
-            style: TextStyle(
-              fontWeight: FontWeight.w500,
-              color: Color(0xFF4F46E5),
-            ),
-          ),
-          subtitle: const Text(
-            'Review your day and close out manually.',
-            style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
-          ),
-          onTap: () {
-            Navigator.pop(context);
-            ref.read(eveningShutdownProvider.notifier).goToStep(0);
-            context.push('/shutdown');
-          },
         ),
       ],
     );
