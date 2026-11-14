@@ -212,6 +212,7 @@ void main() {
     await harness.tapFooter(tester);
     await tester.runAsync(() => pumpEventQueue());
     await tester.pump();
+    await tester.pumpAndSettle();
 
     final session =
         await tester.runAsync(() => db.focusSessionDao.getActiveSession());
