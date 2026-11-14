@@ -16,6 +16,8 @@ import 'package:go_router/go_router.dart';
 import 'package:jeeves/models/focus_settings.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/providers/focus_settings_provider.dart';
+import 'package:jeeves/providers/nudge_triggers.dart';
+import 'package:jeeves/providers/system_trust_provider.dart';
 import 'package:jeeves/models/ritual.dart';
 import 'package:jeeves/widgets/nudge_banner.dart';
 import 'package:jeeves/screens/focus_screen.dart';
@@ -93,6 +95,10 @@ Widget _buildScreen({
       lastClosedSessionRolloverTasksProvider.overrideWith(
         (_) => Stream.value(rolloverTasks),
       ),
+      // The Weekly Review empty state reads both; unoverridden they build a
+      // real database.
+      weeklyReviewDaysLateProvider.overrideWith((ref) => null),
+      unfinishedReviewTriggerProvider.overrideWith((ref) => TriggerState.idle),
       // `Stream.value` is the documented override shape for a StreamProvider
       // backed by a live Drift watch (docs/TESTING.md § Frontend).
       activeSessionSettlementsProvider.overrideWith(

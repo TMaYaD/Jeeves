@@ -22,7 +22,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../providers/database_provider.dart';
+import '../../providers/inbox_provider.dart';
 import '../../widgets/app_title_bar/app_title_bar.dart';
 import '../../widgets/capture/capture_action.dart';
 import '../../widgets/clarify_card.dart';
@@ -70,8 +70,7 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
       return;
     }
     final nextId = await ref
-        .read(databaseProvider)
-        .captureDao
+        .read(inboxNotifierProvider)
         .oldestInboxCaptureId(excludingId: widget.captureId);
     if (!mounted) return;
     if (nextId == null) {

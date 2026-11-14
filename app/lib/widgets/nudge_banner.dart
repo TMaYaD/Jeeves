@@ -24,7 +24,7 @@ import '../providers/nudge_provider.dart';
 import '../providers/nudge_triggers.dart' show unfinishedReviewTriggerProvider;
 import '../providers/periodic_review_settings_provider.dart'
     show periodicReviewBannerEnabledProvider;
-import '../providers/database_provider.dart';
+import '../providers/inbox_provider.dart' show inboxNotifierProvider;
 import '../providers/shutdown_settings_provider.dart';
 import '../providers/system_trust_provider.dart'
     show
@@ -114,6 +114,8 @@ class NudgeSurfaceContent {
   final Future<void> Function(BuildContext context) open;
 }
 
+bool _openingInboxClarification = false;
+
 NudgeSurfaceContent nudgeSurfaceContent(WidgetRef ref, NudgeSurfaceHead head) {
   switch (head) {
     case InboxTooFullHead():
@@ -131,12 +133,20 @@ NudgeSurfaceContent nudgeSurfaceContent(WidgetRef ref, NudgeSurfaceHead head) {
         inkMuted: skin.inkMuted,
         icon: skin.icon,
         open: (context) async {
-          final id = await ref
-              .read(databaseProvider)
-              .captureDao
-              .oldestInboxCaptureId();
-          if (!context.mounted) return;
-          context.push(id == null ? '/inbox' : inboxClarifySequenceLocation(id));
+          // The Banner and the Now screen's button share this operation; a
+          // second tap while the lookup is pending must not push a second
+          // clarification route.
+          if (_openingInboxClarification) return;
+          _openingInboxClarification = true;
+          try {
+            final id =
+                await ref.read(inboxNotifierProvider).oldestInboxCaptureId();
+            if (!context.mounted) return;
+            context
+                .push(id == null ? '/inbox' : inboxClarifySequenceLocation(id));
+          } finally {
+            _openingInboxClarification = false;
+          }
         },
       );
     case RitualHead(:final ritual):

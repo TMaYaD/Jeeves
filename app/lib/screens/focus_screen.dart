@@ -77,8 +77,7 @@ class FocusScreen extends ConsumerWidget {
                   // open session carries tasks. Evening Shutdown and no head
                   // keep the existing content.
                   final surfaceHead = ref.watch(nudgeSurfaceHeadProvider);
-                  final nudgeHead = !showShutdownEntry &&
-                          sortedTasks.isEmpty &&
+                  final nudgeHead = sortedTasks.isEmpty &&
                           (surfaceHead is InboxTooFullHead ||
                               (surfaceHead is RitualHead &&
                                   surfaceHead.ritual !=
