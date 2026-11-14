@@ -32,9 +32,13 @@ final waitingForProvider = StreamProvider<List<Todo>>((ref) {
 /// that person. A todo with two person-tags appears under both keys.
 /// Tags are ordered alphabetically; todos within each group are ordered by
 /// creation date.
+///
+/// Automatically filtered by the active context tag set from
+/// [tagFilterProvider] (AND semantics when multiple tags are selected).
 final waitingListGroupedProvider = StreamProvider<Map<Tag, List<Todo>>>((ref) {
   final db = ref.watch(databaseProvider);
-  return db.todoDao.watchPersonTaggedGrouped();
+  final tagIds = ref.watch(tagFilterProvider);
+  return db.todoDao.watchPersonTaggedGrouped(tagIds: tagIds);
 });
 
 /// Stream of maybe-intent todos (intent = 'maybe', done_at IS NULL).

@@ -482,5 +482,32 @@ void main() {
       expect(results.first.id, 't1');
     });
 
+    test('watchPersonTaggedGrouped with tagIds keeps grouping and filters',
+        () async {
+      await _insertTag(db, id: 'ctx1', name: 'errand');
+      await _insertTag(db, id: 'ctx2', name: 'phone');
+      await _insertTag(db, id: 'person1', name: 'Alice', type: 'person');
+      await _insertTag(db, id: 'person2', name: 'Bob', type: 'person');
+      await _insertTodo(db, id: 't1', title: 'Both ctx');
+      await _insertTodo(db, id: 't2', title: 'One ctx');
+      await _assignTag(db, 't1', 'person1');
+      await _assignTag(db, 't2', 'person2');
+      await _assignTag(db, 't1', 'ctx1');
+      await _assignTag(db, 't1', 'ctx2');
+      await _assignTag(db, 't2', 'ctx1');
+
+      final one = await db.todoDao
+          .watchPersonTaggedGrouped(tagIds: {'ctx1'}).first;
+      expect(one.keys.map((t) => t.name), ['Alice', 'Bob']);
+
+      final both = await db.todoDao
+          .watchPersonTaggedGrouped(tagIds: {'ctx1', 'ctx2'}).first;
+      expect(both.keys.map((t) => t.name), ['Alice']);
+      expect(both.values.single.map((t) => t.id), ['t1']);
+
+      final none = await db.todoDao.watchPersonTaggedGrouped().first;
+      expect(none.keys.map((t) => t.name), ['Alice', 'Bob']);
+    });
+
   });
 }
