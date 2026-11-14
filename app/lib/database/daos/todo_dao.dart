@@ -1328,7 +1328,7 @@ AND (
         return false;
       }
       effects.promotedPlannedAction = effect.changed;
-      effects.logChanged = effects.logChanged || effect.effects.logChanged;
+      effects.logChanged = effects.logChanged || effect.logChanged;
     }
     final captured = switch (to) {
       RoutingKind.nextAction || RoutingKind.waitingFor => <String, Object?>{
@@ -1381,13 +1381,13 @@ AND (
     await (update(todos)..where((t) => t.id.equals(todoId))).write(companion);
     _captureTodo(todoId, captured);
 
-    if (effects.touchesAction) {
+    if (effects.touchesAction && actionText != null) {
       final normalised = _normaliseText(actionText);
       if (normalised == null) {
         // Blank supersedes the current Action, closing its open log (#476).
         final effect = await attachedDatabase.actionDao
             .applySupersedeCurrentAction(todoId, ts: ts);
-        effects.logChanged = effects.logChanged || effect.effects.logChanged;
+        effects.logChanged = effects.logChanged || effect.logChanged;
       } else {
         await attachedDatabase.actionDao
             .applySetCurrentAction(todoId, normalised, ts: ts);
@@ -1414,7 +1414,7 @@ AND (
       final effect = await attachedDatabase.actionDao
           .applyCompleteCurrentAction(todoId, ts: ts);
       effects.actionTerminated = effect.changed;
-      effects.logChanged = effects.logChanged || effect.effects.logChanged;
+      effects.logChanged = effects.logChanged || effect.logChanged;
     }
 
     if (personTagIds != null) {
