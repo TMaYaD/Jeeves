@@ -117,6 +117,16 @@ final activeSessionTasksProvider = StreamProvider<List<Todo>>((ref) {
   return db.focusSessionDao.watchActiveSessionTasks();
 });
 
+/// Stream of the open session's Review surface: its Plan plus every Outcome
+/// engaged during the session, on the Plan or not. The same stream Evening
+/// Shutdown reads, so the Now screen's "nothing to dispose" decision ranges
+/// over exactly the set the wizard would ask about.
+final activeSessionReviewSurfaceProvider =
+    StreamProvider<List<Todo>>((ref) {
+  final db = ref.watch(databaseProvider);
+  return db.focusSessionDao.watchActiveSessionReviewSurface();
+});
+
 /// Stream of the open session's **Settled** Outcomes, keyed by Outcome id and
 /// valued by how each settled (issue #693). Absent from the map means *not
 /// Settled*; the map is empty when no session is open.
