@@ -2,7 +2,7 @@
 ///
 /// Real in-memory store, real `waitingListGroupedProvider`, real
 /// `AppShell` drawer tag cloud and `ActiveFilterBar`. The store is staged in `setUp` (outside FakeAsync) and
-/// the drift streams are advanced with `settleWithRealAsync`, per
+/// the drift streams are advanced with fixed-duration pumps, per
 /// docs/TESTING.md.
 @TestOn('!browser')
 library;
@@ -26,7 +26,6 @@ import 'package:jeeves/screens/waiting_for/waiting_for_screen.dart';
 import 'package:jeeves/widgets/app_title_bar/app_title_bar.dart';
 import 'package:jeeves/widgets/outcome_row.dart';
 
-import '../helpers/settle.dart';
 import '../test_helpers.dart';
 
 const _userId = 'test-user';
@@ -62,6 +61,15 @@ Future<void> _insertTodo(GtdDatabase db, String id, String title) {
         createdAt: Value(now),
         updatedAt: Value(now),
       ));
+}
+
+/// Live Drift watches run, so pump fixed durations, never `pumpAndSettle`
+/// (docs/TESTING.md).
+Future<void> _pumpFor(WidgetTester tester, [int steps = 4]) async {
+  for (var i = 0; i < steps; i++) {
+    await tester.runAsync(() => pumpEventQueue());
+    await tester.pump(const Duration(milliseconds: 150));
+  }
 }
 
 void main() {
@@ -110,7 +118,7 @@ void main() {
         child: MaterialApp.router(routerConfig: router),
       ),
     );
-    await settleWithRealAsync(tester, rounds: 5);
+    await _pumpFor(tester, 5);
 
     expect(find.byType(OutcomeRow), findsNWidgets(2));
     expect(find.text('Alice'), findsOneWidget);
@@ -119,11 +127,11 @@ void main() {
 
     // Select the tag through the drawer's tag cloud, as a user would.
     await tester.tap(find.byKey(appTitleBarLeadingKey));
-    await settleWithRealAsync(tester, rounds: 3);
+    await _pumpFor(tester, 3);
     await tester.ensureVisible(find.byKey(const Key('tag_chip_ctx')));
-    await tester.pumpAndSettle();
+    await _pumpFor(tester, 3);
     await tester.tap(find.byKey(const Key('tag_chip_ctx')));
-    await settleWithRealAsync(tester, rounds: 5);
+    await _pumpFor(tester, 5);
 
     expect(find.byType(OutcomeRow), findsOneWidget);
     expect(find.text('Send the contract'), findsOneWidget);
@@ -133,9 +141,9 @@ void main() {
 
     // Dismiss the drawer by tapping its scrim, then clear from the page.
     await tester.tapAt(const Offset(780, 300));
-    await tester.pumpAndSettle();
+    await _pumpFor(tester, 3);
     await tester.tap(find.byKey(const Key('active_filter_clear_all')));
-    await settleWithRealAsync(tester, rounds: 5);
+    await _pumpFor(tester, 5);
 
     expect(find.byType(OutcomeRow), findsNWidgets(2));
     expect(find.text('Return the drill'), findsOneWidget);
