@@ -229,6 +229,40 @@ void main() {
   });
 
   testWidgets(
+      'finishing the last Capture empties the Inbox and returns to the page '
+      'the Banner was tapped on', (tester) async {
+    await seedFiftyOneCaptures();
+    try {
+      await pumpApp(tester);
+      appRouter.go('/next');
+      await _flush(tester);
+      await tester.tap(find.text('At once  →'));
+      await _flush(tester);
+      expect(find.byType(InboxClarifyScreen), findsOneWidget);
+
+      for (var i = 0; i < 51; i++) {
+        final id = 'c${i.toString().padLeft(2, '0')}';
+        expect(find.text('Capture $id'), findsOneWidget,
+            reason: 'oldest first, one at a time');
+        await tester.tap(find.text('Next Action'));
+        await _flush(tester);
+        await tester.tap(find.text('Save'));
+        await _flush(tester);
+      }
+
+      final remaining = await tester.runAsync(
+          () => db.captureDao.watchInbox().first);
+      expect(remaining, isEmpty);
+      expect(find.byType(InboxClarifyScreen), findsNothing);
+      expect(appRouter.routeInformationProvider.value.uri.path, '/next');
+      expect(tooFull, findsNothing);
+      expect(tester.takeException(), isNull);
+    } finally {
+      await tearDownApp(tester);
+    }
+  });
+
+  testWidgets(
       'Daily Planning at the head of the Now screen: the empty-state button '
       'opens Daily Planning', (tester) async {
     // One recent Capture: Inbox is far under 50 and no Weekly Review is due,
