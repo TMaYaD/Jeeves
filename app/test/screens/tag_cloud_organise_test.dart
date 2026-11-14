@@ -131,5 +131,11 @@ void main() {
       expect(_ids(layout), ['a', 'b']);
     });
   });
-}
 
+  group('cleanTagCloudQuery', () {
+    test('drops a leading @ and the space after it, ignoring case', () {
+      expect(cleanTagCloudQuery('@ Home'), 'home');
+      expect(cleanTagCloudQuery('  @Home '), 'home');
+    });
+  });
+}

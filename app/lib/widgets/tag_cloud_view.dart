@@ -22,9 +22,10 @@ class TagCloudLayout {
   final Map<String, double> fontSizes;
 }
 
-/// Cleans a find query for matching: trims, drops one leading `@`, lower-cases.
-String cleanTagCloudQuery(String query) =>
-    query.trim().replaceFirst(RegExp(r'^@'), '').toLowerCase();
+/// Cleans a find query for matching: trims, drops one leading `@`, trims again
+/// (so `@ Home` matches `home`), lower-cases. Shares [typedTagName] with the
+/// creation path so the Add offer and the created name can never disagree.
+String cleanTagCloudQuery(String query) => typedTagName(query).toLowerCase();
 
 /// The name a user typed, trimmed with one leading `@` removed, casing kept.
 String typedTagName(String query) =>

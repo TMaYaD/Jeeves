@@ -127,4 +127,74 @@ void main() {
     expect(assigned.single.type, 'context');
     await unmount(tester);
   });
+  testWidgets('the × on an applied chip removes it', (tester) async {
+    final home = (await tester.runAsync(() => _insertContext(db, 'home')))!;
+    await mount(tester, [home]);
+
+    await tester.tap(find.byIcon(Icons.close));
+    await _pump(tester);
+    expect(removed.map((t) => t.id), ['home']);
+    await unmount(tester);
+  });
+
+  testWidgets('a name differing by case, spacing or a leading @ is not added',
+      (tester) async {
+    await tester.runAsync(() => _insertContext(db, 'home'));
+    await mount(tester, const []);
+    await tester.tap(find.byKey(const Key('context_tag_picker_add')));
+    await _pump(tester);
+
+    await tester.enterText(
+        find.byKey(const Key('tag_cloud_find_field')), '@ Home');
+    await _pump(tester);
+    expect(find.byKey(const Key('tag_cloud_add_tag')), findsNothing);
+    expect(find.text('@home'), findsOneWidget);
+    await unmount(tester);
+  });
+
+  testWidgets('a failed create shows a snackbar, keeps the query, applies nothing',
+      (tester) async {
+    await mount(tester, const []);
+    await tester.tap(find.byKey(const Key('context_tag_picker_add')));
+    await _pump(tester);
+
+    // Over 100 characters: TagNotifier.createTag throws ArgumentError.
+    final tooLong = 'x' * 101;
+    await tester.enterText(
+        find.byKey(const Key('tag_cloud_find_field')), tooLong);
+    await _pump(tester);
+    await tester.tap(find.byKey(const Key('tag_cloud_add_tag')));
+    await _pump(tester);
+
+    expect(find.text('Failed to create tag. Please try again.'),
+        findsOneWidget);
+    expect(assigned, isEmpty);
+    expect(find.byKey(const Key('tag_cloud_add_tag')), findsOneWidget);
+    final field = tester
+        .widget<TextField>(find.byKey(const Key('tag_cloud_find_field')));
+    expect(field.controller!.text, tooLong);
+    await unmount(tester);
+  });
+
+  testWidgets('a second tap while creating creates and applies once',
+      (tester) async {
+    await mount(tester, const []);
+    await tester.tap(find.byKey(const Key('context_tag_picker_add')));
+    await _pump(tester);
+
+    await tester.enterText(
+        find.byKey(const Key('tag_cloud_find_field')), 'Errands');
+    await _pump(tester);
+    final add = find.byKey(const Key('tag_cloud_add_tag'));
+    await tester.tap(add);
+    await tester.tap(add, warnIfMissed: false);
+    await _pump(tester);
+
+    expect(assigned.map((t) => t.name), ['Errands']);
+    final rows = await tester.runAsync(() => (db.select(db.tags)
+          ..where((t) => t.name.equals('Errands')))
+        .get());
+    expect(rows, hasLength(1));
+    await unmount(tester);
+  });
 }
