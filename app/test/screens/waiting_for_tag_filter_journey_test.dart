@@ -100,7 +100,7 @@ void main() {
 
   testWidgets('selecting a tag narrows the page; Clear all restores it',
       (tester) async {
-    const ctxTag =
+    final ctxTag =
         Tag(id: 'ctx', name: 'errand', type: 'context', userId: _userId);
     debugPrint('journey: mount');
     final router = GoRouter(
