@@ -82,7 +82,7 @@ void main() {
   setUpAll(configureSqliteForTests);
 
   group('schema version', () {
-    test('is 4 — three onUpgrade steps behind the fresh baseline', () async {
+    test('is 7 — six onUpgrade steps behind the fresh baseline', () async {
       final db = _openInMemory();
       addTearDown(db.close);
       expect(db.schemaVersion, 7);
@@ -468,9 +468,6 @@ void main() {
 
   group('v4 onUpgrade adds capture_attachments', () {
     test('a v3 store with Captures upgrades and keeps every row', () async {
-
-  group('v7 onUpgrade adds actions.time_context', () {
-    test('adds a nullable column and keeps every existing Action row', () async {
       final raw = sqlite3.openInMemory();
       addTearDown(raw.close);
 
@@ -502,7 +499,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        6,
+        7,
       );
       expect(await _objects(upgraded, 'table'), contains('capture_attachments'));
       expect(await _rows(upgraded, 'captures'), hasLength(1));
@@ -607,7 +604,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        6,
+        7,
       );
       expect(await _columnNames(upgraded, 'todos'), isNot(contains('clarified')),
           reason: 'v5 drops the dead flag');
@@ -708,7 +705,7 @@ void main() {
           await upgraded.customSelect('PRAGMA user_version').getSingle().then(
                 (r) => r.read<int>('user_version'),
               ),
-          6,
+          7,
         );
         expect(await _rows(upgraded, 'todos'), todosBefore);
         expect(await _rows(upgraded, 'captures'), capturesBefore);
@@ -729,5 +726,69 @@ void main() {
         }
       });
     }
+  });
+
+  group('v7 onUpgrade adds actions.time_context', () {
+    test('adds a nullable column and keeps every existing Action row', () async {
+      final raw = sqlite3.openInMemory();
+      addTearDown(raw.close);
+
+      final seed = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      var seedClosed = false;
+      Future<void> closeSeed() async {
+        if (seedClosed) return;
+        seedClosed = true;
+        await seed.close();
+      }
+
+      addTearDown(closeSeed);
+
+      // A v6 `actions` table: the current declaration with the v7 column cut
+      // out of the CREATE statement Drift itself emitted.
+      final createSql = (await seed
+              .customSelect("SELECT sql FROM sqlite_master "
+                  "WHERE type = 'table' AND name = 'actions'")
+              .getSingle())
+          .read<String>('sql');
+      final v3Sql = createSql.replaceFirst(
+        RegExp(r',\s*"?time_context"?\s+TEXT\s+NULL', caseSensitive: false),
+        '',
+      );
+      expect(v3Sql, isNot(contains('time_context')),
+          reason: 'the fixture is only a v6 store without the column');
+      await seed.customStatement('DROP TABLE actions');
+      await seed.customStatement(v3Sql);
+
+      final createdMs =
+          DateTime.parse('2026-07-30T09:00:00.000Z').millisecondsSinceEpoch;
+      await seed.customStatement(
+        'INSERT INTO todos (id, title, user_id, created_at, intent) '
+        "VALUES ('t1', 'Ship it', 'u1', ?, 'next')",
+        [createdMs],
+      );
+      await seed.customStatement(
+        'INSERT INTO actions (id, outcome_id, user_id, text, role, created_at) '
+        "VALUES ('a1', 't1', 'u1', 'Call Bob', 'current', ?)",
+        [createdMs],
+      );
+      await seed.customStatement('PRAGMA user_version = 6');
+      await closeSeed();
+
+      final upgraded = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      addTearDown(upgraded.close);
+
+      expect(await _columnNames(upgraded, 'actions'), contains('time_context'));
+      final rows = await upgraded
+          .customSelect('SELECT id, text, role, time_context FROM actions')
+          .get();
+      expect(rows.single.read<String>('id'), 'a1');
+      expect(rows.single.read<String>('text'), 'Call Bob');
+      expect(rows.single.read<String>('role'), 'current');
+      expect(rows.single.read<String?>('time_context'), isNull);
+    });
   });
 }

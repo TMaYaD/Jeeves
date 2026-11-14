@@ -23,7 +23,6 @@ Future<Todo> _seedOutcome(GtdDatabase db, String id,
   await db.into(db.todos).insert(TodosCompanion(
         id: Value(id),
         title: const Value('Ship the release'),
-        clarified: const Value(true),
         userId: const Value(_userId),
         createdAt: Value(now),
         updatedAt: Value(now),

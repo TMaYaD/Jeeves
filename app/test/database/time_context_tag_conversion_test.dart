@@ -32,7 +32,6 @@ void main() {
     await db.into(db.todos).insert(TodosCompanion(
           id: Value(id),
           title: Value('Outcome $id'),
-          clarified: const Value(true),
           userId: const Value(_userId),
           createdAt: Value(DateTime.now()),
         ));
