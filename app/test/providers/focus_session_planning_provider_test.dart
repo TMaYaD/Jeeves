@@ -189,6 +189,20 @@ void main() {
         expect(secondUpdatedAt, firstUpdatedAt);
       });
 
+      test(
+          'startDay keeps the opened session when remembering the available '
+          'time fails', () async {
+        final notifier = container.read(focusSessionPlanningProvider.notifier);
+        notifier.setAvailableTime(300);
+        // A real store failure after the session opens: the preference table
+        // is gone, so the read inside startDay throws.
+        await db.customStatement('DROP TABLE user_preferences');
+        await notifier.startDay();
+        expect(await db.focusSessionDao.getActiveSession(), isNotNull);
+        expect(container.read(focusSessionPlanningProvider).startedSessionId,
+            isNotNull);
+      });
+
       test('the user edit in the current draft survives a preload', () async {
         await store('330');
         final notifier = container.read(focusSessionPlanningProvider.notifier);

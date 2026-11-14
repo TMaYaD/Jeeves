@@ -16,6 +16,7 @@
 /// - Stream providers expose live lists of tasks for each ritual step.
 library;
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/daos/focus_session_dao.dart' show SessionSettlement;
@@ -1081,11 +1082,19 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     // Last, so a preference read/write failure cannot leave the opened session
     // with its reminder unskipped or the draft unreset. Skipped when unchanged
     // so an ordinary day authors no redundant sync op.
-    final storedMinutes = await _db.userPreferencesDao
-        .get(_userId, kLastSessionAvailableMinutesKey);
-    if (storedMinutes != plannedMinutes.toString() && ref.mounted) {
-      await syncedPrefs(ref)
-          .set(kLastSessionAvailableMinutesKey, plannedMinutes);
+    //
+    // The session is already open and the draft already reset, so a failure
+    // here must not reach the caller: Start Day would skip its navigation and
+    // leave the planning screen blank.
+    try {
+      final storedMinutes = await _db.userPreferencesDao
+          .get(_userId, kLastSessionAvailableMinutesKey);
+      if (storedMinutes != plannedMinutes.toString() && ref.mounted) {
+        await syncedPrefs(ref)
+            .set(kLastSessionAvailableMinutesKey, plannedMinutes);
+      }
+    } catch (e) {
+      debugPrint('Could not remember the planned available time: $e');
     }
   }
 
