@@ -76,16 +76,72 @@ Future<void> seedPlannedAction(
       ));
 }
 
-/// No-ops the platform-channel notification calls made by ritual providers
-/// (`startDay` / `closeDay` skip today's reminder on close). Unit and widget
-/// tests wire this in via `notificationServiceProvider.overrideWithValue(...)`
-/// so they never touch a real plugin.
-class StubNotificationService extends NotificationService {
-  StubNotificationService() : super.forTesting();
+/// Stands in for the OS notification plugin: records what the Nudge
+/// notification scheduler and the notification action handler ask of it, and
+/// answers the "what is pending / delivered" queries from that record. Unit,
+/// widget and journey tests wire it in via
+/// `notificationServiceProvider.overrideWithValue(...)` so they never touch a
+/// real plugin.
+class RecordingNotificationService extends NotificationService {
+  RecordingNotificationService() : super.forTesting();
+
+  /// Alarms the OS would hold, by notification id.
+  final pending = <int, RecordedRitualAlarm>{};
+
+  /// Ritual notifications sitting in the tray.
+  final delivered = <({int id, RitualId ritual})>[];
+
+  /// Every id passed to [cancelReminder], in order.
+  final cancelledIds = <int>[];
+
+  /// Every schedule call, in order, for tests asserting on churn.
+  final scheduleCalls = <int>[];
 
   @override
-  Future<void> skipTodayRitualReminder(RitualId ritual) async {}
+  Future<void> scheduleRitualNotification({
+    required int id,
+    required RitualId ritual,
+    required DateTime fireAt,
+    required String payload,
+  }) async {
+    scheduleCalls.add(id);
+    pending[id] = RecordedRitualAlarm(ritual, fireAt, payload);
+  }
+
+  @override
+  Future<List<({int id, String? payload})>> pendingRitualNotifications() async =>
+      [for (final e in pending.entries) (id: e.key, payload: e.value.payload)];
+
+  @override
+  Future<List<({int id, RitualId ritual})>> deliveredRitualNotifications() async =>
+      List.of(delivered);
+
+  @override
+  Future<void> cancelReminder(int id) async {
+    cancelledIds.add(id);
+    pending.remove(id);
+    delivered.removeWhere((d) => d.id == id);
+  }
+
+  /// The pending alarms of [ritual], soonest first.
+  List<RecordedRitualAlarm> alarmsOf(RitualId ritual) => pending.values
+      .where((a) => a.ritual == ritual)
+      .toList()
+    ..sort((a, b) => a.fireAt.compareTo(b.fireAt));
 }
+
+class RecordedRitualAlarm {
+  const RecordedRitualAlarm(
+      this.ritual, this.fireAt, this.payload);
+
+  final RitualId ritual;
+  final DateTime fireAt;
+  final String payload;
+}
+
+/// A [RecordingNotificationService] for tests that only need the plugin kept
+/// out of the way.
+class StubNotificationService extends RecordingNotificationService {}
 
 /// A `getNeedsReview` cutoff so far ahead that every stored
 /// `last_clarified_at` is older than it — the Actionless freshness gate is

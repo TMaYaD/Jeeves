@@ -25,6 +25,8 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'clock_provider.dart';
+import 'focus_session_planning_settings_provider.dart'
+    show focusSessionPlanningSettingsProvider;
 import 'periodic_review_settings_provider.dart'
     show periodicReviewLastCompletedProvider;
 import 'shutdown_settings_provider.dart' show shutdownSettingsProvider;
@@ -65,12 +67,16 @@ DateTime _todayAt(DateTime now, int hour, int minute) {
 ///   - the next day boundary (DPR / WR `firingSince` and the content-state
 ///     per-day stamp all key off start-of-day);
 ///   - today's Evening Shutdown anchor, if still in the future (ES flips at it);
+///   - today's planning anchor, if still in the future (Daily Planning, idle
+///     overnight, can fire again from it);
 ///   - the next Weekly Review seven-day boundary from the due instant
 ///     (WR becomes due at the first, then refires at each subsequent boundary).
 DateTime nextNudgeBoundary(
   DateTime now, {
   required int shutdownHour,
   required int shutdownMinute,
+  int? planningHour,
+  int? planningMinute,
   required DateTime? weeklyReviewDueAt,
   DateTime? weeklyReviewLastCompleted,
 }) {
@@ -79,6 +85,15 @@ DateTime nextNudgeBoundary(
   final shutdownAnchor = _todayAt(now, shutdownHour, shutdownMinute);
   if (shutdownAnchor.isAfter(now) && shutdownAnchor.isBefore(next)) {
     next = shutdownAnchor;
+  }
+
+  // Daily Planning is idle from the Shutdown anchor until the planning anchor,
+  // so the planning anchor is the instant it can start firing again.
+  if (planningHour != null && planningMinute != null) {
+    final planningAnchor = _todayAt(now, planningHour, planningMinute);
+    if (planningAnchor.isAfter(now) && planningAnchor.isBefore(next)) {
+      next = planningAnchor;
+    }
   }
 
   if (weeklyReviewDueAt != null) {
@@ -129,6 +144,8 @@ DateTime nextNudgeBoundary(
 final nudgeBoundaryTickProvider = Provider<int>((ref) {
   final now = ref.watch(clockProvider)();
   final shutdown = ref.watch(shutdownSettingsProvider).shutdownTime;
+  final planningTime =
+      ref.watch(focusSessionPlanningSettingsProvider).planningTime;
   final dueAt = ref.watch(weeklyReviewDueAtProvider);
   final lastCompleted = ref.watch(periodicReviewLastCompletedProvider);
 
@@ -136,6 +153,8 @@ final nudgeBoundaryTickProvider = Provider<int>((ref) {
     now,
     shutdownHour: shutdown.hour,
     shutdownMinute: shutdown.minute,
+    planningHour: planningTime.hour,
+    planningMinute: planningTime.minute,
     weeklyReviewDueAt: dueAt,
     weeklyReviewLastCompleted: lastCompleted,
   );

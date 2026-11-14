@@ -287,7 +287,7 @@ void main() {
 
     test('closeDay tolerates running with no active session', () async {
       // No session opened; closeDay should still complete without throwing
-      // (e.g. user opens settings -> "Start Evening Shutdown" before planning).
+      // (e.g. the shutdown-time notification is tapped with no session open).
       final notifier = container.read(eveningShutdownProvider.notifier);
       await notifier.closeDay();
       // No assertion — the absence of an exception is the contract.

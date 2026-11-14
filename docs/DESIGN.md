@@ -396,12 +396,12 @@ by `CeremonyPopScope` (`app/lib/widgets/ceremony/ceremony_pop_scope.dart`),
 which wraps each ceremony screen.
 
 ### Tag cloud
-The drawer tag cloud has no heading noun. Tags render as `@`-text in three size steps (12 / 13 / 15 sp) by count relative to the busiest visible tag, spaced 12 / 8. Selected tags are pinned first; the collapsed cloud shows 12 tags (never hiding a selected one) with a "Show N more" toggle, and a "Find…" field appears once more tags qualify than the cap.
+The drawer tag cloud has no heading noun. Tags render as `@`-text in three size steps (12 / 13 / 15 sp) by count relative to the busiest visible tag, spaced 12 / 8. Selected tags are pinned first; the collapsed cloud shows 12 tags (never hiding a selected one) with a "Show N more" toggle, and a "Find…" field appears once more tags qualify than the cap. The Outcome context-tag editor reuses the cloud: it lists applied tags with a dotted-circle `+`, which opens the cloud with unused tags included, `Find…` always shown and `Add "name"` for a name no tag has.
 
 ### Long-press multi-select
 Lists that surface batchable actions enter a multi-select mode on **long-press**, mirroring the long-press affordance the tag cloud uses for tag management. Once selection mode is active, a **contextual bar** appears immediately above the list (not in the screen-level app bar, which the shared title bar owns) showing the selected count, a per-batch preview where relevant (e.g. total planned time), a "Select all" shortcut, a Clear (×) button, and a primary commit button. Cards in selection mode replace per-row trailing actions with a leading checkbox; tapping a card toggles its membership. Deselecting the last item auto-exits the mode. Each selection toggle fires a light haptic.
 
-This pattern is used on Step 5 (Build Today's Plan) of the Daily Planning ritual to add several Up Next Outcomes to today's plan in one gesture; the bar there exposes "Add to Today" as the commit button.
+This pattern is used on Step 5 (Build Today's Plan) of the Daily Planning ritual (commit button "Add to Today") and on the Next, Someday/Maybe, Waiting For and Project lists, where the bar offers Project, Tags and Status for every selected Outcome. Done, Trash and NOW do not enter the mode.
 
 ### Capacity bar — two-tone fill
 The Plan Summary capacity bar fills in two segments. Minutes from Outcomes with a real time estimate render in the load-status tone — green (`#16A34A`) at or below 0.8 of available time, amber (`#F59E0B`) up to 1.0, red (`#DC2626`) over — keyed off the *combined* ratio so the warn/over thresholds are unchanged. Minutes contributed by selected Outcomes that carry **no** estimate (counted at the configurable default, see REQUIREMENTS Daily Planning Step 5) render immediately after them as a lighter-blue segment (`#93C5FD`, Tailwind blue-300 — same family as the Daily Planning accent `#2563EB`). The lighter blue marks that provenance; the estimate-less cards themselves look exactly like any other card (no chip). When nothing is counted at the default the bar is a single status-tone fill, unchanged. The bar keeps its 10px height, 4px corner radius, and `#E5E7EB` track.
@@ -549,8 +549,8 @@ Paths are under `app/lib/`; DPR means Daily Planning and ES means Evening Shutdo
 | Focus — `screens/focus_screen.dart` | Title, due, estimate, sprint count | Flat `OutcomeRow`, trailing Start/status | Open detail; Start/Resume |
 | Focus carried-over — `screens/focus_screen.dart` | Muted title, estimate | Flat `OutcomeRow`, leading icon | None |
 | Search — `screens/search/widgets/search_result_tile.dart` | Title, snippet, match hint, status | Flat `OutcomeRow` | Capture → clarify; Outcome → detail |
-| GTD lists / Project — `screens/common/gtd_list_screen.dart` | Title, energy, estimate, due when set | Flat `OutcomeRow` | Open detail |
-| Waiting For — `screens/waiting_for/waiting_for_screen.dart` | Title, energy, estimate, due when set | Flat `OutcomeRow`, grouped by person | Open detail |
+| GTD lists / Project — `screens/common/gtd_list_screen.dart` | Title, energy, estimate, due when set | Flat `OutcomeRow` | Open detail; long-press multi-selects |
+| Waiting For — `screens/waiting_for/waiting_for_screen.dart` | Title, energy, estimate, due when set | Flat `OutcomeRow`, grouped by person | Open detail; long-press multi-selects |
 | Linked Outcomes — `widgets/capture_outcomes_section.dart` | Title, next Action, contexts, Capture provenance count | Framed `OutcomeRow` | Unlink |
 
 ### Deliberate variations

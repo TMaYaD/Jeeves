@@ -155,11 +155,10 @@ final qualifyingSessionTodayProvider = StreamProvider<bool>((ref) {
 ///
 /// Per-Ritual predicate sketches:
 ///   - DPR: now ≥ today's DPR anchor AND no qualifying session (none started
-///     since the last ES anchor) AND DPR not in-progress. Fires even on a day
-///     whose plan+shutdown both completed, once past the ES anchor (the ES
-///     anchor starts the next planning period); with a stale open session it
-///     fires alongside ES, which wins via queue ordering.
-///     firingSince = later of (today's DPR anchor, last ES anchor).
+///     since the last ES anchor) AND DPR not in-progress AND now is before the
+///     last ES anchor of the day; from the ES anchor until the next DPR anchor
+///     it is idle, so the banner stays hidden overnight.
+///     firingSince = today's DPR anchor.
 ///   - ES:  FS active AND now ≥ shutdown anchor AND ES not in-progress.
 ///     firingSince = today's shutdown anchor.
 ///   - WR:  review due (now ≥ `weeklyReviewDueAtProvider`) AND WR not in-progress.

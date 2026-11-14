@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/daos/focus_session_dao.dart'
     show SessionSettlement;
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/routing_kind.dart';
 import '../test_helpers.dart';
 
 GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
@@ -1319,6 +1320,24 @@ void main() {
       await completeActionInSession(sessionId, 'X');
       await reclarifyAt('X', anchorAt.add(const Duration(seconds: 5)));
       await setIntent('X', 'maybe');
+
+      expect(
+        await db.focusSessionDao.getActiveSessionSettlements(),
+        {'X': SessionSettlement.someday},
+      );
+    });
+
+    test(
+        'a bulk move to Someday settles a planned Outcome whose Action was '
+        'completed in-session (the bulk route stamps the re-clarification)',
+        () async {
+      await _insertTodo(db, id: 'X', title: 'X');
+      final sessionId = await openWith(['X']);
+      await completeActionInSession(sessionId, 'X');
+
+      await db.todoDao.applyRoutingToOutcomes({'X'},
+          to: RoutingKind.maybe,
+          now: anchorAt.add(const Duration(seconds: 5)));
 
       expect(
         await db.focusSessionDao.getActiveSessionSettlements(),

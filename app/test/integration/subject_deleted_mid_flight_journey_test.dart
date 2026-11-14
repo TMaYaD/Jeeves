@@ -27,8 +27,6 @@ import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/screens/task_detail/task_detail_screen.dart';
 import 'package:jeeves/widgets/clarify_shared_widgets.dart'
     show kEstimateOptionsMinutes;
-import 'package:jeeves/widgets/context_tag_picker.dart'
-    show ContextTagPickerWidget;
 import 'package:jeeves/widgets/meta_chip.dart' show formatMinutesLabel;
 import 'package:jeeves/widgets/tag_list.dart' show TagList;
 import 'package:jeeves/widgets/tag_text.dart' show TagText;
@@ -121,6 +119,10 @@ void main() {
               .overrideWith((_) => Stream.value(const [])),
           projectTagsProvider.overrideWith((_) => Stream.value(seeded.projects)),
           contextTagsProvider.overrideWith((_) => Stream.value(seeded.contexts)),
+          contextTagsWithCountProvider.overrideWith((_) => Stream.value([
+                for (final t in seeded.contexts)
+                  TagWithCount(tag: t, count: 0),
+              ])),
         ],
         child: MaterialApp.router(routerConfig: router),
       ));
@@ -444,7 +446,7 @@ Future<void> _openContextTagEditor(WidgetTester tester) async {
 Future<void> _tapFirstContextTag(WidgetTester tester) async {
   await tester.tap(find
       .descendant(
-          of: find.byType(ContextTagPickerWidget),
+          of: find.byKey(const Key('context_tag_picker_cloud')),
           matching: find.byType(TagText))
       .first);
 }
