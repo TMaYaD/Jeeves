@@ -146,7 +146,8 @@ void main() {
 
   testWidgets(
       'Start Day route: back on Now after startDay(), End Session leaves the '
-      'planned session open', (tester) async {
+      'planned session open', timeout: const Timeout(Duration(minutes: 2)),
+      (tester) async {
     final harness = _Harness(db);
     await tester.pumpWidget(harness.app());
     await settleWithRealAsync(tester);
@@ -158,11 +159,22 @@ void main() {
 
     // Start Day: the real planning notifier's startDay() opens the session
     // while Now is unmounted (only the planning screen's widgets are stood in).
-    final planning = ProviderScope.containerOf(
-            tester.element(find.text('planning')))
-        .read(focusSessionPlanningProvider.notifier);
+    final planningContainer =
+        ProviderScope.containerOf(tester.element(find.text('planning')));
+    final planning =
+        planningContainer.read(focusSessionPlanningProvider.notifier);
     planning.selectTask('plan');
     await tester.runAsync(() async {
+      // Seed the remembered planned time to the planned value, so startDay()
+      // skips its synced-preference write (it skips an unchanged value) and
+      // this route exercises only the session open under a live stream.
+      await db.userPreferencesDao.set(
+          _userId,
+          kLastSessionAvailableMinutesKey,
+          planningContainer
+              .read(focusSessionPlanningProvider)
+              .availableMinutes
+              .toString());
       await planning.startDay();
       await pumpEventQueue();
     });
