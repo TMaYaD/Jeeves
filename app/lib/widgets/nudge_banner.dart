@@ -5,6 +5,9 @@
 /// Ceremony; a horizontal swipe maps to a Nudge **dismiss** (current firing).
 /// No Banner carries a ✕.
 ///
+/// **Inbox too full** is not in the queue: it sits ahead of it
+/// ([nudgeSurfaceHeadProvider]), is untinted, and cannot be swiped away.
+///
 /// Replaces the three bespoke per-Ritual banner widgets with one
 /// queue-driven widget parametrised by a per-Ritual chrome matrix.
 library;
@@ -21,9 +24,15 @@ import '../providers/nudge_provider.dart';
 import '../providers/nudge_triggers.dart' show unfinishedReviewTriggerProvider;
 import '../providers/periodic_review_settings_provider.dart'
     show periodicReviewBannerEnabledProvider;
+import '../providers/inbox_provider.dart' show inboxNotifierProvider;
 import '../providers/shutdown_settings_provider.dart';
 import '../providers/system_trust_provider.dart'
-    show weeklyReviewDaysLateProvider;
+    show
+        inboxTooFullProvider,
+        unprocessedCaptureCountProvider,
+        weeklyReviewDaysLateProvider;
+import '../screens/inbox/inbox_clarify_screen.dart'
+    show inboxClarifySequenceLocation;
 
 /// True iff the in-app Banner for [ritual] is enabled in user settings.
 /// Each Ritual has its own enabled flag because the user might want to
@@ -49,33 +58,200 @@ final bannerVisibleRitualProvider = Provider<RitualId?>((ref) {
   return null;
 });
 
+/// What occupies the nudge slot on the Banner and the Now screen: Inbox too
+/// full ahead of the Nudge queue, otherwise the first Banner-enabled member of
+/// the queue. Inbox too full is not a Ritual, so it has no Nudge state, no
+/// dismiss and no Notification.
+sealed class NudgeSurfaceHead {
+  const NudgeSurfaceHead();
+}
+
+class InboxTooFullHead extends NudgeSurfaceHead {
+  const InboxTooFullHead();
+  @override
+  bool operator ==(Object other) => other is InboxTooFullHead;
+  @override
+  int get hashCode => 1;
+}
+
+class RitualHead extends NudgeSurfaceHead {
+  const RitualHead(this.ritual);
+  final RitualId ritual;
+  @override
+  bool operator ==(Object other) => other is RitualHead && other.ritual == ritual;
+  @override
+  int get hashCode => ritual.hashCode;
+}
+
+final nudgeSurfaceHeadProvider = Provider<NudgeSurfaceHead?>((ref) {
+  if (ref.watch(inboxTooFullProvider)) return const InboxTooFullHead();
+  final ritual = ref.watch(bannerVisibleRitualProvider);
+  return ritual == null ? null : RitualHead(ritual);
+});
+
+/// What a nudge says and where it leads, shared by the Banner and the Now
+/// screen's empty state so the two cannot drift.
+class NudgeSurfaceContent {
+  const NudgeSurfaceContent({
+    required this.title,
+    required this.sub,
+    required this.cta,
+    required this.accent,
+    required this.ink,
+    required this.inkMuted,
+    required this.icon,
+    required this.open,
+  });
+  final String title;
+  final String sub;
+  final String cta;
+  final Color accent;
+  final Color ink;
+  final Color inkMuted;
+  final IconData icon;
+
+  /// Opens the Ceremony, or for Inbox too full the oldest Capture.
+  final Future<void> Function(BuildContext context) open;
+}
+
+bool _openingInboxClarification = false;
+
+NudgeSurfaceContent nudgeSurfaceContent(WidgetRef ref, NudgeSurfaceHead head) {
+  switch (head) {
+    case InboxTooFullHead():
+      final pair = _inboxTooFullPair(
+        count: ref.watch(unprocessedCaptureCountProvider),
+        seed: _dailySeed(DateTime.now()),
+      );
+      final skin = _inboxTooFullSkin;
+      return NudgeSurfaceContent(
+        title: pair.title,
+        sub: pair.sub,
+        cta: pair.cta,
+        accent: skin.accent,
+        ink: skin.ink,
+        inkMuted: skin.inkMuted,
+        icon: skin.icon,
+        open: (context) async {
+          // The Banner and the Now screen's button share this operation; a
+          // second tap while the lookup is pending must not push a second
+          // clarification route.
+          if (_openingInboxClarification) return;
+          _openingInboxClarification = true;
+          try {
+            final id =
+                await ref.read(inboxNotifierProvider).oldestInboxCaptureId();
+            if (!context.mounted) return;
+            context
+                .push(id == null ? '/inbox' : inboxClarifySequenceLocation(id));
+          } finally {
+            _openingInboxClarification = false;
+          }
+        },
+      );
+    case RitualHead(:final ritual):
+      final skin = _skins[ritual]!;
+      final _Quip quip;
+      if (ritual == RitualId.weeklyReview) {
+        quip = _weeklyReviewQuip(
+          now: DateTime.now(),
+          unfinished: ref.watch(unfinishedReviewTriggerProvider).isFiring,
+          daysLate: ref.watch(weeklyReviewDaysLateProvider),
+        );
+      } else {
+        quip = skin.quipForToday();
+      }
+      return NudgeSurfaceContent(
+        title: quip.title,
+        sub: quip.sub,
+        cta: quip.cta,
+        accent: skin.accent,
+        ink: skin.ink,
+        inkMuted: skin.inkMuted,
+        icon: skin.icon,
+        open: (context) async => context.go(skin.route),
+      );
+  }
+}
+
 class NudgeBanner extends ConsumerWidget {
   const NudgeBanner({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final ritual = ref.watch(bannerVisibleRitualProvider);
-    if (ritual == null) return const SizedBox.shrink();
+    final head = ref.watch(nudgeSurfaceHeadProvider);
+    if (head == null) return const SizedBox.shrink();
+    final content = nudgeSurfaceContent(ref, head);
 
-    final skin = _skins[ritual]!;
-    final _Quip quip;
-    if (ritual == RitualId.weeklyReview) {
-      quip = _weeklyReviewQuip(
-        now: DateTime.now(),
-        unfinished: ref.watch(unfinishedReviewTriggerProvider).isFiring,
-        daysLate: ref.watch(weeklyReviewDaysLateProvider),
-      );
-    } else {
-      quip = skin.quipForToday();
+    switch (head) {
+      case InboxTooFullHead():
+        return _BannerContent(
+          key: const Key('inbox_too_full_banner_visible'),
+          skin: _inboxTooFullSkin,
+          quip: _Quip(content.title, content.sub, content.cta),
+          onTap: () => content.open(context),
+          // No swipe, no key, no semantics action: it clears only when the
+          // Inbox is at 50 or fewer.
+          onDismiss: null,
+        );
+      case RitualHead(:final ritual):
+        return _BannerContent(
+          key: Key('${ritual.keyPrefix}_banner_visible'),
+          skin: _skins[ritual]!,
+          quip: _Quip(content.title, content.sub, content.cta),
+          onTap: () => content.open(context),
+          onDismiss: () => ref.read(nudgeActionsProvider).dismiss(ritual),
+        );
     }
+  }
+}
 
-    return _BannerContent(
-      key: Key('${ritual.keyPrefix}_banner_visible'),
-      skin: skin,
-      quip: quip,
-      onTap: () => context.go(skin.route),
-      onDismiss: () =>
-          ref.read(nudgeActionsProvider).dismiss(ritual),
+/// The Now screen's Today's Tasks empty state when [head] holds it: glyph, the
+/// Jeeves pair and one full-width button in the nudge's accent. It has no
+/// dismiss gesture.
+class NudgeEmptyState extends ConsumerWidget {
+  const NudgeEmptyState({super.key, required this.head});
+  final NudgeSurfaceHead head;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final content = nudgeSurfaceContent(ref, head);
+    return Column(
+      key: const Key('nudge_empty_state'),
+      children: [
+        Icon(content.icon, size: 28, color: content.accent),
+        const SizedBox(height: 12),
+        Text(
+          content.title,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 17,
+            fontWeight: FontWeight.w700,
+            color: content.ink,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          content.sub,
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 14, color: content.inkMuted),
+        ),
+        const SizedBox(height: 20),
+        FilledButton(
+          key: const Key('nudge_empty_state_button'),
+          onPressed: () => content.open(context),
+          style: FilledButton.styleFrom(
+            backgroundColor: content.accent,
+            foregroundColor: Colors.white,
+            minimumSize: const Size.fromHeight(52),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(2)),
+          ),
+          child: Text(
+            content.cta,
+            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -107,6 +283,7 @@ class _Skin {
     required this.pulseDuration,
     required this.pulseFromScale,
     required this.pulseToScale,
+    this.pulses = true,
   });
 
   final List<_Quip> quips;
@@ -121,6 +298,7 @@ class _Skin {
   final Duration pulseDuration;
   final double pulseFromScale;
   final double pulseToScale;
+  final bool pulses;
 
   _Quip quipForToday() =>
       quips[(_dailySeed(DateTime.now()) + quipSeedOffset) % quips.length];
@@ -208,6 +386,46 @@ final _skins = <RitualId, _Skin>{
     pulseToScale: 1.08,
   ),
 };
+
+/// Inbox too full is untinted: ink on white, no pulse, a filled-ink button.
+const _inboxTooFullSkin = _Skin(
+  quips: [],
+  quipSeedOffset: 0,
+  route: '/inbox',
+  bg: Colors.white,
+  accent: Color(0xFF1A1A2E), // ink
+  ink: Color(0xFF1A1A2E),
+  inkMuted: Color(0xFF6B7280),
+  borderTint: 0x1F000000,
+  icon: Icons.inbox_outlined,
+  pulseDuration: Duration(milliseconds: 1400),
+  pulseFromScale: 1,
+  pulseToScale: 1,
+  pulses: false,
+);
+
+/// Inbox too full line pairs. `%N` stands for the Capture count. The limit is
+/// never named: line one says the count is too many, line two encourages
+/// running through the Captures.
+const kInboxTooFullLinePairs = <(String, String)>[
+  (
+    '%N Captures is rather too many, sir.',
+    'Shall we run through them together?',
+  ),
+  ('%N Captures, sir. That is too many.', 'One at a time, they go quickly.'),
+  ('The Inbox holds %N, sir. Too many.', 'A few minutes will see it clear.'),
+  ('Forgive me, sir: %N is too many.', 'Let us take them one by one.'),
+  ('%N Captures waiting, sir. Too many.', 'Each one sorted is off your mind.'),
+];
+
+/// The Bertie button, from the shipped pool.
+const _inboxTooFullButton = 'At once  →';
+
+_Quip _inboxTooFullPair({required int count, required int seed}) {
+  final pair = kInboxTooFullLinePairs[seed % kInboxTooFullLinePairs.length];
+  String fill(String line) => line.replaceAll('%N', '$count');
+  return _Quip(fill(pair.$1), fill(pair.$2), _inboxTooFullButton);
+}
 
 // ---------------------------------------------------------------------------
 // Weekly Review copy
@@ -372,7 +590,8 @@ class _BannerContent extends StatefulWidget {
   final _Skin skin;
   final _Quip quip;
   final VoidCallback onTap;
-  final VoidCallback onDismiss;
+  /// Null for a Banner that cannot be dismissed (Inbox too full).
+  final VoidCallback? onDismiss;
 
   @override
   State<_BannerContent> createState() => _BannerContentState();
@@ -392,8 +611,8 @@ class _BannerContentState extends State<_BannerContent>
   @override
   void initState() {
     super.initState();
-    _pulse = AnimationController(vsync: this, duration: widget.skin.pulseDuration)
-      ..repeat(reverse: true);
+    _pulse = AnimationController(vsync: this, duration: widget.skin.pulseDuration);
+    if (widget.skin.pulses) _pulse.repeat(reverse: true);
   }
 
   @override
@@ -407,7 +626,7 @@ class _BannerContentState extends State<_BannerContent>
     setState(() => _dragOffset = 0);
     if (travelled >= _kSwipeDismissDistance ||
         details.velocity.pixelsPerSecond.dx.abs() >= _kSwipeDismissVelocity) {
-      widget.onDismiss();
+      widget.onDismiss?.call();
     }
   }
 
@@ -473,27 +692,31 @@ class _BannerContentState extends State<_BannerContent>
         ),
       ),
     );
+    final onDismiss = widget.onDismiss;
+    if (onDismiss == null) {
+      return GestureDetector(onTap: widget.onTap, child: content);
+    }
     return CallbackShortcuts(
       // Keyboard dismissal: Escape or Delete while a Banner control has focus.
       bindings: {
-        const SingleActivator(LogicalKeyboardKey.escape): widget.onDismiss,
-        const SingleActivator(LogicalKeyboardKey.delete): widget.onDismiss,
+        const SingleActivator(LogicalKeyboardKey.escape): onDismiss,
+        const SingleActivator(LogicalKeyboardKey.delete): onDismiss,
       },
       child: Semantics(
-      customSemanticsActions: {
-        const CustomSemanticsAction(label: 'Dismiss'): widget.onDismiss,
-      },
-      child: GestureDetector(
-        onTap: widget.onTap,
-        onHorizontalDragUpdate: (details) =>
-            setState(() => _dragOffset += details.delta.dx),
-        onHorizontalDragCancel: () => setState(() => _dragOffset = 0),
-        onHorizontalDragEnd: _finishDrag,
-        child: Transform.translate(
-          offset: Offset(_dragOffset, 0),
-          child: content,
+        customSemanticsActions: {
+          const CustomSemanticsAction(label: 'Dismiss'): onDismiss,
+        },
+        child: GestureDetector(
+          onTap: widget.onTap,
+          onHorizontalDragUpdate: (details) =>
+              setState(() => _dragOffset += details.delta.dx),
+          onHorizontalDragCancel: () => setState(() => _dragOffset = 0),
+          onHorizontalDragEnd: _finishDrag,
+          child: Transform.translate(
+            offset: Offset(_dragOffset, 0),
+            child: content,
+          ),
         ),
-      ),
       ),
     );
   }

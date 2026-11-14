@@ -63,6 +63,7 @@ Widget _buildShellOnly({
   List<Todo> sessionTasks = const [],
   FocusSessionPlanningSettings planningSettings =
       const FocusSessionPlanningSettings(bannerEnabled: false),
+  NudgeSurfaceHead? head,
 }) {
   return ProviderScope(
     overrides: [
@@ -90,6 +91,7 @@ Widget _buildShellOnly({
       // test does not mock. Force the queue empty so the banner is a no-op
       // and the test's focus on shell structure is preserved.
       nudgeQueueProvider.overrideWith((ref) => const <RitualId>[]),
+      nudgeSurfaceHeadProvider.overrideWith((ref) => head),
     ],
     child: MaterialApp(
       home: Builder(
@@ -501,6 +503,76 @@ void main() {
               reason: '$path should pin the capture action');
         }
       }
+    });
+  });
+
+  group('Now-route nudge: no Banner, and the sun action', () {
+    const sunKey = Key('focus_plan_the_day');
+
+    testWidgets('no Banner on /focus, a Banner on /next, same head',
+        (tester) async {
+      const head = RitualHead(RitualId.dailyPlanning);
+      await tester.pumpWidget(
+          _buildShellOnly(initialLocation: '/focus', head: head));
+      await tester.pumpAndSettle();
+      expect(find.byType(NudgeBanner), findsNothing);
+
+      await tester.pumpWidget(
+          _buildShellOnly(initialLocation: '/next', head: head));
+      await tester.pump();
+      expect(find.byKey(const Key('planning_banner_visible')), findsOneWidget);
+    });
+
+    testWidgets(
+        'while the Weekly Review holds the empty state the sun action opens '
+        'Daily Planning', (tester) async {
+      await tester.pumpWidget(_buildShellOnly(
+        initialLocation: '/focus',
+        head: const RitualHead(RitualId.weeklyReview),
+      ));
+      await tester.pumpAndSettle();
+      expect(await findBarAction(tester, sunKey), findsOneWidget);
+      await tester.tap(await findBarAction(tester, sunKey));
+      await tester.pumpAndSettle();
+      expect(find.text('Planning body'), findsOneWidget);
+    });
+
+    testWidgets('Inbox too full also offers the sun action', (tester) async {
+      await tester.pumpWidget(_buildShellOnly(
+        initialLocation: '/focus',
+        head: const InboxTooFullHead(),
+      ));
+      await tester.pumpAndSettle();
+      expect(await findBarAction(tester, sunKey), findsOneWidget);
+    });
+
+    testWidgets('no sun action with a Daily Planning head, no head, or off Now',
+        (tester) async {
+      for (final (head, location) in <(NudgeSurfaceHead?, String)>[
+        (const RitualHead(RitualId.dailyPlanning), '/focus'),
+        (null, '/focus'),
+        (const RitualHead(RitualId.weeklyReview), '/next'),
+      ]) {
+        await tester.pumpWidget(
+            _buildShellOnly(initialLocation: location, head: head));
+        // A Banner pulses forever; one frame is enough.
+        await tester.pump();
+        await tester.pump();
+        expect(find.byKey(sunKey), findsNothing, reason: '$head at $location');
+      }
+    });
+
+    testWidgets('an open session with tasks keeps Re-plan, not the sun action',
+        (tester) async {
+      await tester.pumpWidget(_buildShellOnly(
+        initialLocation: '/focus',
+        activeSession: _openSession(),
+        sessionTasks: [_todo('t1', 'Planned task')],
+        head: const RitualHead(RitualId.weeklyReview),
+      ));
+      await tester.pumpAndSettle();
+      expect(await findBarAction(tester, _replanKey), findsOneWidget);
+      expect(find.byKey(sunKey), findsNothing);
     });
   });
 

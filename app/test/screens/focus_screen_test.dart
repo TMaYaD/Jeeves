@@ -18,6 +18,10 @@ import 'package:go_router/go_router.dart';
 import 'package:jeeves/models/focus_settings.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/providers/focus_settings_provider.dart';
+import 'package:jeeves/providers/nudge_triggers.dart';
+import 'package:jeeves/providers/system_trust_provider.dart';
+import 'package:jeeves/models/ritual.dart';
+import 'package:jeeves/widgets/nudge_banner.dart';
 import 'package:jeeves/screens/focus_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -66,6 +70,7 @@ Widget _buildScreen({
   FocusSession? activeSession,
   List<Todo> rolloverTasks = const [],
   Map<String, SessionSettlement> settlements = const {},
+  NudgeSurfaceHead? head,
   List<Todo>? reviewSurface,
   Stream<List<Todo>>? reviewSurfaceStream,
 }) {
@@ -97,6 +102,10 @@ Widget _buildScreen({
       lastClosedSessionRolloverTasksProvider.overrideWith(
         (_) => Stream.value(rolloverTasks),
       ),
+      // The Weekly Review empty state reads both; unoverridden they build a
+      // real database.
+      weeklyReviewDaysLateProvider.overrideWith((ref) => null),
+      unfinishedReviewTriggerProvider.overrideWith((ref) => TriggerState.idle),
       // `Stream.value` is the documented override shape for a StreamProvider
       // backed by a live Drift watch (docs/TESTING.md § Frontend).
       activeSessionSettlementsProvider.overrideWith(
@@ -105,6 +114,7 @@ Widget _buildScreen({
       focusSessionPlanningProvider
           .overrideWith(() => _MockFocusSessionPlanningNotifier()),
       focusSettingsProvider.overrideWith(() => _MockFocusSettingsNotifier()),
+      nudgeSurfaceHeadProvider.overrideWith((ref) => head),
     ],
     child: MaterialApp.router(routerConfig: router),
   );
@@ -442,5 +452,56 @@ void main() {
 
     expect(find.byIcon(Icons.more_vert), findsNothing);
     expect(find.text('Re-plan'), findsNothing);
+  });
+
+  group('Today\'s Tasks empty state carries the nudge head', () {
+    Future<void> pump(WidgetTester tester, NudgeSurfaceHead? head,
+        {List<Todo> tasks = const [], FocusSession? session}) async {
+      await tester.pumpWidget(
+          _buildScreen(head: head, tasks: tasks, activeSession: session));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('Daily Planning head: its Bertie button opens Daily Planning',
+        (tester) async {
+      await pump(tester, const RitualHead(RitualId.dailyPlanning));
+      expect(find.byKey(const Key('nudge_empty_state')), findsOneWidget);
+      expect(find.text('Plan the Day'), findsNothing);
+      expect(find.byType(Dismissible), findsNothing);
+      await tester.tap(find.byKey(const Key('nudge_empty_state_button')));
+      await tester.pumpAndSettle();
+      expect(find.text('planning'), findsOneWidget);
+    });
+
+    testWidgets('Weekly Review head shows its own button', (tester) async {
+      await pump(tester, const RitualHead(RitualId.weeklyReview));
+      expect(find.byKey(const Key('nudge_empty_state')), findsOneWidget);
+      expect(find.text('Plan the Day'), findsNothing);
+    });
+
+    testWidgets('Inbox too full head shows its count', (tester) async {
+      await pump(tester, const InboxTooFullHead());
+      expect(find.byKey(const Key('nudge_empty_state')), findsOneWidget);
+      expect(find.text('At once  →'), findsOneWidget);
+    });
+
+    testWidgets('no head keeps the Plan the Day button', (tester) async {
+      await pump(tester, null);
+      expect(find.byKey(const Key('nudge_empty_state')), findsNothing);
+      expect(find.text('Plan the Day'), findsOneWidget);
+    });
+
+    testWidgets('an Evening Shutdown head keeps the existing content',
+        (tester) async {
+      await pump(tester, const RitualHead(RitualId.eveningShutdown));
+      expect(find.byKey(const Key('nudge_empty_state')), findsNothing);
+      expect(find.text('Plan the Day'), findsOneWidget);
+    });
+
+    testWidgets('an open session with tasks shows no nudge', (tester) async {
+      await pump(tester, const InboxTooFullHead(),
+          tasks: [_todo('t1', 'Write report')], session: _openSession());
+      expect(find.byKey(const Key('nudge_empty_state')), findsNothing);
+    });
   });
 }

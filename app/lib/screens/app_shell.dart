@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../models/ritual.dart';
 import '../providers/focus_session_planning_provider.dart';
 import '../providers/inbox_provider.dart';
 import '../providers/gtd_lists_provider.dart';
@@ -89,6 +90,15 @@ class AppShell extends ConsumerWidget {
     // Every other shell route supplies none.
     final showReplan =
         location == '/focus' && ref.watch(hasOpenSessionProvider);
+    // While Inbox too full or the Weekly Review holds the Today's Tasks empty
+    // state, the same slot offers Daily Planning, which that nudge has pushed
+    // out of the empty state. Exclusive with Re-plan: the empty state only
+    // renders without an open session.
+    final head = ref.watch(nudgeSurfaceHeadProvider);
+    final planningPushedOut = location == '/focus' &&
+        !showReplan &&
+        (head is InboxTooFullHead ||
+            (head is RitualHead && head.ritual == RitualId.weeklyReview));
     final pageActions = showReplan
         ? [
             AppTitleBarAction(
@@ -98,7 +108,17 @@ class AppShell extends ConsumerWidget {
               onPressed: () => context.go('/focus-session-planning'),
             ),
           ]
-        : const <AppTitleBarAction>[];
+        : planningPushedOut
+            ? [
+                AppTitleBarAction(
+                  key: const Key('focus_plan_the_day'),
+                  icon: Icons.wb_sunny_outlined,
+                  // One action, one name: the Now screen uses the same label.
+                  label: 'Plan the Day',
+                  onPressed: () => context.go('/focus-session-planning'),
+                ),
+              ]
+            : const <AppTitleBarAction>[];
 
     return Shortcuts(
       shortcuts: {
@@ -138,7 +158,9 @@ class AppShell extends ConsumerWidget {
           ),
           body: Column(
             children: [
-              const NudgeBanner(),
+              // The Now screen carries its nudge in the Today's Tasks empty
+              // state instead of a Banner.
+              if (location != '/focus') const NudgeBanner(),
               Expanded(child: child),
             ],
           ),
