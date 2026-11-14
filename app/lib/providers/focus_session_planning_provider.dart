@@ -678,9 +678,13 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
           reviewActionTexts: actionTexts,
         );
       }
+      // The awaits above can span a session opening through sync, which voids
+      // the latch; do not restore it from the pre-await decision.
+      final sessionOpenNow = ref.read(activeSessionProvider).asData?.value != null;
       state = state.copyWith(
         currentStep: next.clamp(0, _maxStepIndex),
-        startedPastIntro: state.startedPastIntro || next > 0,
+        startedPastIntro:
+            state.startedPastIntro || (next > 0 && !sessionOpenNow),
       );
       // Hold the guard through the rest of the current event-loop turn so a
       // second call from the same tap burst is dropped even on the branch

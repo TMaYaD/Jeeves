@@ -103,6 +103,39 @@ void main() {
       expect(trigger(ritual).isFiring, isFalse);
     });
 
+    test('a step advance still awaiting its reads cannot restore the latch a '
+        'synced session just voided', () async {
+      await watch(ritual);
+      final ceremony = c.read(ceremonyInProgressProvider.notifier);
+      final planning = c.read(focusSessionPlanningProvider.notifier);
+      ceremony.enter(ritual);
+      planning.goToStep(1);
+      expect(c.read(focusSessionPlanningProvider).startedPastIntro, isTrue);
+
+      // The session opens (as through sync) while the advance into Review is
+      // reading from the database.
+      final advancing = planning.advanceStep();
+      await db.focusSessionDao.openSession(userId: 'local', taskIds: []);
+      await pumpEventQueue(times: 10);
+      await advancing;
+      await pumpEventQueue(times: 10);
+      expect(c.read(focusSessionPlanningProvider).startedPastIntro, isFalse);
+
+      ceremony.exit(ritual);
+      expect(trigger(ritual).isFiring, isFalse);
+    });
+
+    test('advancing while a session is already open does not latch', () async {
+      await watch(ritual);
+      final planning = c.read(focusSessionPlanningProvider.notifier);
+      planning.goToStep(1);
+      await db.focusSessionDao.openSession(userId: 'local', taskIds: []);
+      await pumpEventQueue(times: 10);
+      expect(c.read(focusSessionPlanningProvider).startedPastIntro, isFalse);
+      await planning.advanceStep();
+      expect(c.read(focusSessionPlanningProvider).startedPastIntro, isFalse);
+    });
+
     test('resetting the draft voids it', () async {
       await watch(ritual);
       final ceremony = c.read(ceremonyInProgressProvider.notifier);
@@ -151,6 +184,35 @@ void main() {
       await db.focusSessionDao.openSession(userId: 'local', taskIds: []);
       await pumpEventQueue(times: 10);
       expect(trigger(ritual).isFiring, isFalse);
+    });
+
+    test('a second performance after the first session closed rebinds and '
+        'fires, instead of keeping the first session\'s id', () async {
+      final firstId =
+          await db.focusSessionDao.openSession(userId: 'local', taskIds: []);
+      await watch(ritual);
+      final ceremony = c.read(ceremonyInProgressProvider.notifier);
+      final shutdown = c.read(eveningShutdownProvider.notifier);
+      ceremony.enter(ritual);
+      await shutdown.markStarted();
+      ceremony.exit(ritual);
+      expect(trigger(ritual).isFiring, isTrue);
+
+      // Session A ends without the Ceremony (End Session or sync); B opens.
+      await db.focusSessionDao.closeSession(sessionId: firstId);
+      await pumpEventQueue(times: 10);
+      expect(trigger(ritual).isFiring, isFalse);
+      final secondId =
+          await db.focusSessionDao.openSession(userId: 'local', taskIds: []);
+      await pumpEventQueue(times: 10);
+
+      now = now.add(const Duration(hours: 2));
+      ceremony.enter(ritual);
+      await shutdown.markStarted();
+      expect(c.read(eveningShutdownProvider).startedSessionId, secondId);
+      ceremony.exit(ritual);
+      expect(trigger(ritual),
+          TriggerState(isFiring: true, firingSince: now));
     });
   });
 }

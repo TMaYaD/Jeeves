@@ -244,13 +244,14 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
   GtdDatabase get _db => ref.read(databaseProvider);
 
   /// Records that the performance has started, against the session open now.
-  /// Idempotent: a reopened draft keeps the session it started against.
+  /// Idempotent for the same session, so a reopened draft keeps it. A different
+  /// open session is a new performance: the draft's old session closed without
+  /// this Ceremony, so rebind rather than keep a stale id that would stop the
+  /// new session's unfinished Nudge from ever firing.
   Future<void> markStarted() async {
-    if (state.startedSessionId != null) return;
     final session = await _db.focusSessionDao.getActiveSession();
-    if (!ref.mounted || session == null || state.startedSessionId != null) {
-      return;
-    }
+    if (!ref.mounted || session == null) return;
+    if (state.startedSessionId == session.id) return;
     state = state.copyWith(startedSessionId: session.id);
   }
 
