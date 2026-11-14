@@ -16,6 +16,7 @@ class DoneScreen extends StatelessWidget {
     return GtdListScreen(
       provider: doneProvider,
       showFilterBar: false,
+      selectable: false,
       emptyIcon: Icons.task_alt,
       emptyTitle: 'Nothing in Done',
       emptySubtitle: 'Completed Outcomes appear here.',
