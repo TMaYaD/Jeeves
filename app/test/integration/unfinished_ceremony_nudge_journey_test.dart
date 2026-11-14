@@ -214,9 +214,20 @@ void main() {
     await settle();
     expect(unfinished(), isFalse);
 
-    // Close the day through the Ceremony, then move to the next morning.
+    // Start Evening Shutdown against that session and leave it: it is
+    // unfinished, and Close Day is the real completion path that clears it.
+    bool shutdownLeft() => c
+        .read(unfinishedCeremonyTriggerProvider(RitualId.eveningShutdown))
+        .isFiring;
+    ceremony.enter(RitualId.eveningShutdown);
+    await c.read(eveningShutdownProvider.notifier).markStarted();
+    ceremony.exit(RitualId.eveningShutdown);
+    await settle();
+    expect(shutdownLeft(), isTrue);
+
     await c.read(eveningShutdownProvider.notifier).closeDay();
     await settle();
+    expect(shutdownLeft(), isFalse);
     expect(unfinished(), isFalse);
 
     // The session above started at the real wall-clock time, not the test

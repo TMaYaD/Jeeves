@@ -192,6 +192,58 @@ void main() {
           isFalse);
     });
 
+    test('a session that opens and closes during the final session read from '
+        'the intro does not get its latch restored', () async {
+      final session =
+          await db.focusSessionDao.openSession(userId: 'local', taskIds: []);
+      final opened = await db.focusSessionDao.watchActiveSession().first;
+      await db.focusSessionDao.closeSession(sessionId: session);
+
+      final sessionEvents = StreamController<FocusSession?>();
+      addTearDown(sessionEvents.close);
+      final gated = ProviderContainer(overrides: [
+        databaseProvider.overrideWithValue(db),
+        clockProvider.overrideWithValue(() => now),
+        nudgeBoundaryTickProvider.overrideWithValue(0),
+        activeSessionProvider.overrideWith((ref) => sessionEvents.stream),
+      ]);
+      addTearDown(gated.dispose);
+      gated.listen(activeSessionProvider, (_, _) {});
+      gated.listen(unfinishedCeremonyTriggerProvider(ritual), (_, _) {});
+      sessionEvents.add(null);
+      await pumpEventQueue(times: 10);
+
+      // From the intro the step 0 -> 1 advance has no review reads: the only
+      // await is the final active-session read, which the held transaction
+      // keeps pending.
+      final planning = gated.read(focusSessionPlanningProvider.notifier);
+      final releaseDatabase = Completer<void>();
+      final transactionEntered = Completer<void>();
+      final heldTransaction = db.uncapturedTransaction(() async {
+        transactionEntered.complete();
+        await releaseDatabase.future;
+      });
+      try {
+        await transactionEntered.future;
+        final advancing = planning.advanceStep();
+        await pumpEventQueue(times: 10);
+
+        sessionEvents.add(opened);
+        await pumpEventQueue(times: 10);
+        sessionEvents.add(null);
+        await pumpEventQueue(times: 10);
+
+        releaseDatabase.complete();
+        await heldTransaction;
+        await advancing;
+        await pumpEventQueue(times: 10);
+        expect(gated.read(dailyPlanningStartedProvider), isFalse);
+      } finally {
+        if (!releaseDatabase.isCompleted) releaseDatabase.complete();
+        await heldTransaction;
+      }
+    });
+
     test('advancing while a session is already open does not latch', () async {
       await watch(ritual);
       final planning = c.read(focusSessionPlanningProvider.notifier);

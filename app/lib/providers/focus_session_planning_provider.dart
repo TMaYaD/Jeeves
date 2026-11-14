@@ -719,9 +719,16 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       // the latch; do not restore it from the pre-await decision — not even
       // when that session has closed again before this point.
       final needsLatch = !ref.read(dailyPlanningStartedProvider) && next > 0;
-      final sessionOpenNow = needsLatch &&
-          (_started.sessionOpeningsSeen != sessionOpeningsAtStart ||
-              await _db.focusSessionDao.getActiveSession() != null);
+      var sessionOpenNow = needsLatch &&
+          _started.sessionOpeningsSeen != sessionOpeningsAtStart;
+      if (needsLatch && !sessionOpenNow) {
+        sessionOpenNow = await _db.focusSessionDao.getActiveSession() != null;
+        // This read is itself an await: an opening observed while it was
+        // pending is still an opening, even if the session has closed again.
+        if (_started.sessionOpeningsSeen != sessionOpeningsAtStart) {
+          sessionOpenNow = true;
+        }
+      }
       if (!ref.mounted) return;
       if (needsLatch && !sessionOpenNow) _started.latch();
       state = state.copyWith(currentStep: next.clamp(0, _maxStepIndex));
