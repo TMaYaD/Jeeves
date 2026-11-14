@@ -168,6 +168,10 @@ The test skips when `DATABASE_URL` does not point at Postgres, so local SQLite-o
 
 **When you write a migration that touches data, add its row shape to the seed set here.** A backfill with no representative row in this module is untested.
 
+## Ritual reminder delivery (manual, on an Android phone)
+
+The recording stand-in proves what the scheduler asked for, not what the OS delivers. On the PR's APK, with notifications allowed: for each Ritual in turn, set its time two or three minutes ahead in a state where it heads the Nudge queue, lock the phone and confirm the notification arrives; note how late. Then deny notifications in system settings, reopen the app and confirm the denied row appears under each enabled reminder switch.
+
 ## Sync conflict resolution (manual)
 
 Merge is covered automatically, at three levels: the per-key strategy function
@@ -541,7 +545,7 @@ Coordinates are `(x, y)` in device pixels. The drawer lives under a hamburger ic
 | **Sign-out confirm dialog** → "Cancel" | `(284, 1378)` | Left-side action. |
 | **Login screen** → "Connect wallet" button | `(540, 1416)` | Center. In SWS mode this is the only action. |
 | **Login screen (canPop=true)** → close (X) | `(88, 140)` | Only present when reached via push (e.g. from Settings). |
-| **Notification permission dialog** → "Don't allow" | `(540, 1452)` | First-launch prompt. |
+| **Notification permission dialog** → "Don't allow" | `(540, 1452)` | First-launch prompt. Tapping it disables every notification, Ritual reminders included; Settings then shows the denied row under each enabled reminder. |
 | **Mock MWA Wallet — connect prompt** → "Connect" | `(810, 2200)` | Green button, bottom-right. |
 | **Mock MWA Wallet — SIWS sign message** → "Approve" | `(800, 2160)` | Green button, bottom-right. |
 

@@ -1,4 +1,7 @@
 import 'package:drift/drift.dart' hide isNull, isNotNull;
+import 'package:flutter/material.dart' show TimeOfDay;
+import 'package:jeeves/providers/focus_session_planning_settings_provider.dart';
+import 'package:jeeves/providers/shutdown_settings_provider.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -220,5 +223,118 @@ void main() {
     await settle();
     expect(service.pending.containsKey(snoozeId), isTrue,
         reason: 'leaving the wizard without finishing does not hide the firing');
+  });
+
+  group('configured reminder times', () {
+    Future<void> openSession(DateTime now) async {
+      await db.into(db.todos).insert(TodosCompanion(
+            id: const Value('planned'),
+            title: const Value('Planned thing'),
+            userId: const Value('local'),
+            createdAt: Value(now.toUtc()),
+            updatedAt: Value(now.toUtc()),
+          ));
+      await db.focusSessionDao
+          .openSession(userId: 'local', taskIds: ['planned'], now: now);
+    }
+
+    test('Daily Planning arms at its configured time, follows a change and '
+        'goes quiet when switched off', () async {
+      await boot(now: at(0, 7), prefs: {
+        'focus_session_planning_settings_time_hour': 8,
+        'focus_session_planning_settings_time_minute': 15,
+      });
+      expect(oneOffs(RitualId.dailyPlanning).first, at(0, 8, 15));
+
+      await c
+          .read(focusSessionPlanningSettingsProvider.notifier)
+          .setPlanningTime(const TimeOfDay(hour: 8, minute: 45));
+      await settle();
+      expect(oneOffs(RitualId.dailyPlanning).first, at(0, 8, 45));
+      expect(oneOffs(RitualId.dailyPlanning), isNot(contains(at(0, 8, 15))),
+          reason: 'the alarm at the old time is gone');
+
+      await c
+          .read(focusSessionPlanningSettingsProvider.notifier)
+          .setNotificationEnabled(false);
+      await settle();
+      expect(oneOffs(RitualId.dailyPlanning), isEmpty);
+    });
+
+    test('Evening Shutdown arms at its configured time with a session open, '
+        'follows a change and goes quiet when switched off', () async {
+      // Shutdown settings live in SharedPreferences, not synced preferences,
+      // so the non-default time goes in through the production notifier.
+      await boot(now: at(0, 7));
+      await openSession(at(0, 7));
+      await c
+          .read(shutdownSettingsProvider.notifier)
+          .setShutdownTime(const TimeOfDay(hour: 19, minute: 40));
+      c.invalidate(nudgeNotificationFactsProvider);
+      await settle();
+      expect(oneOffs(RitualId.eveningShutdown).first, at(0, 19, 40));
+
+      await c
+          .read(shutdownSettingsProvider.notifier)
+          .setShutdownTime(const TimeOfDay(hour: 21, minute: 5));
+      await settle();
+      expect(oneOffs(RitualId.eveningShutdown).first, at(0, 21, 5));
+      expect(oneOffs(RitualId.eveningShutdown), isNot(contains(at(0, 19, 40))));
+
+      await c
+          .read(shutdownSettingsProvider.notifier)
+          .setNotificationEnabled(false);
+      await settle();
+      expect(oneOffs(RitualId.eveningShutdown), isEmpty);
+    });
+
+    test('Weekly Review arms at its configured time while due, follows a '
+        'change and goes quiet when switched off', () async {
+      await boot(now: at(0, 7), prefs: {
+        'periodic_review_last_completed_at': at(-9, 7).toIso8601String(),
+        'periodic_review_notification_hour': 10,
+        'periodic_review_notification_minute': 25,
+      });
+      expect(oneOffs(RitualId.weeklyReview).first, at(0, 10, 25));
+
+      await c
+          .read(periodicReviewSettingsProvider.notifier)
+          .setNotificationTime(const TimeOfDay(hour: 11, minute: 50));
+      await settle();
+      expect(oneOffs(RitualId.weeklyReview).first, at(0, 11, 50));
+      expect(oneOffs(RitualId.weeklyReview), isNot(contains(at(0, 10, 25))));
+
+      await c
+          .read(periodicReviewSettingsProvider.notifier)
+          .setNotificationEnabled(false);
+      await settle();
+      expect(oneOffs(RitualId.weeklyReview), isEmpty);
+    });
+  });
+
+  group('exact alarm timing', () {
+    test('alarms armed inexact are replaced once exact alarms are permitted, '
+        'and left alone afterwards', () async {
+      await boot(now: at(0, 7), prefs: {
+        'periodic_review_last_completed_at': at(-9, 7).toIso8601String(),
+      });
+      expect(service.pending.values, isNotEmpty);
+      expect(service.pending.values.every((a) => !a.exact), isTrue,
+          reason: 'exact alarms were not permitted when they were armed');
+
+      service.exactAlarmsAllowed = true;
+      service.scheduleCalls.clear();
+      c.invalidate(nudgeNotificationFactsProvider);
+      await settle();
+      expect(service.pending.values.every((a) => a.exact), isTrue,
+          reason: 'the same instants are re-armed under the new permission');
+      expect(service.scheduleCalls, isNotEmpty);
+
+      service.scheduleCalls.clear();
+      c.invalidate(nudgeNotificationFactsProvider);
+      await settle();
+      expect(service.scheduleCalls, isEmpty,
+          reason: 'already exact: an unchanged plan causes no churn');
+    });
   });
 }
