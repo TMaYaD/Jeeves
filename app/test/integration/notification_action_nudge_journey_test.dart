@@ -16,7 +16,6 @@ import 'package:jeeves/services/notification_service.dart';
 import 'package:jeeves/services/ritual_notification_response_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../helpers/periodic_review_test_helpers.dart';
 import '../test_helpers.dart';
 
 /// Skip / Snooze on a Ritual notification and the Nudge are one state.
@@ -27,26 +26,13 @@ import '../test_helpers.dart';
 /// the outbox to a real database. Only the OS plugin (a recording stand-in for
 /// [NotificationService]) and the router are substituted.
 
-class _RecordingNotificationService extends StubPeriodicReviewNotificationService {
-  final snoozed = <(RitualId, int)>[];
-  final skipped = <RitualId>[];
-
-  @override
-  Future<void> snoozeRitualReminder(RitualId ritual, int minutes) async =>
-      snoozed.add((ritual, minutes));
-
-  @override
-  Future<void> skipTodayRitualReminder(RitualId ritual) async =>
-      skipped.add(ritual);
-}
-
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(configureSqliteForTests);
 
   late GtdDatabase db;
   late ProviderContainer c;
-  late _RecordingNotificationService service;
+  late RecordingNotificationService service;
   late DateTime Function() clockFn;
   late DateTime firstDue;
   late DateTime nextDue;
@@ -62,7 +48,7 @@ void main() {
     clockFn = clock;
     SharedPreferences.setMockInitialValues({});
     db = GtdDatabase(NativeDatabase.memory());
-    service = _RecordingNotificationService();
+    service = RecordingNotificationService();
     c = ProviderContainer(overrides: [
       databaseProvider.overrideWithValue(db),
       clockProvider.overrideWithValue(() => clockFn()),
@@ -125,7 +111,9 @@ void main() {
 
     await tap(RitualId.dailyPlanning, kNotificationActionSkip);
     await settle();
-    expect(service.skipped, [RitualId.dailyPlanning]);
+    expect(service.cancelledIds,
+        contains(ritualSnoozeNotificationId(RitualId.dailyPlanning)),
+        reason: 'Skip cancels the Ritual\'s pending snooze alarm');
     expect(sub.read(), isFalse, reason: 'Skip must reach the Nudge');
 
     // From the evening Shutdown time the banner stays hidden overnight.
@@ -163,7 +151,9 @@ void main() {
       await tester.runAsync(() => tap(RitualId.weeklyReview, kPeriodicReviewActionSnooze));
       await tester.runAsync(settle);
       await tester.pump();
-      expect(service.snoozed, [(RitualId.weeklyReview, 60)]);
+      expect(service.pending[ritualSnoozeNotificationId(RitualId.weeklyReview)]?.ritual,
+          RitualId.weeklyReview,
+          reason: 'Snooze arms a one-off alarm for the Ritual');
       expect(sub.read(), isFalse, reason: 'snoozed by the notification button');
 
       await tester.pump(const Duration(minutes: 59));

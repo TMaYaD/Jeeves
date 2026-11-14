@@ -9,14 +9,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'capture/share_inbox_host.dart';
 import 'providers/auth_provider.dart';
 import 'providers/database_provider.dart';
-import 'providers/focus_session_planning_settings_provider.dart';
 import 'providers/nudge_action_outbox.dart';
 import 'providers/onboarding_provider.dart';
 import 'providers/sync_lifecycle_provider.dart';
-import 'providers/shutdown_settings_provider.dart';
 import 'router.dart';
 import 'services/due_date_notifications.dart';
 import 'services/notification_service.dart';
+import 'services/nudge_notification_scheduler.dart';
 import 'services/ritual_notification_response_handler.dart';
 
 Future<void> main() async {
@@ -35,12 +34,6 @@ Future<void> main() async {
       onNotificationResponse: _handleNotificationResponse,
     );
     await NotificationService.instance.requestPermissions();
-
-    // Re-establish the daily planning notification schedule after a restart.
-    await initFocusSessionPlanningNotificationSchedule();
-
-    // Re-establish the evening shutdown notification schedule after a restart.
-    await initShutdownNotificationSchedule();
 
     // Cold-start: if the user tapped a notification to launch the app from a
     // terminated state, onDidReceiveNotificationResponse will not fire; the
@@ -105,6 +98,9 @@ class JeevesApp extends ConsumerWidget {
     // Keeps a notification scheduled for each due-dated Outcome (09:00 on its
     // due day). Nothing else reads it, so without this watch it never runs.
     ref.watch(dueDateNotificationReconcilerProvider);
+    // Keeps the Ritual notifications equal to the projection of the Nudge
+    // queue over the coming week. Nothing else reads it.
+    ref.watch(nudgeNotificationSchedulerProvider);
     return MaterialApp.router(
       title: 'Jeeves',
       theme: ThemeData(
