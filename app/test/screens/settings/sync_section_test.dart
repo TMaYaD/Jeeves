@@ -38,6 +38,9 @@ class _StubNotificationService extends NotificationService {
   _StubNotificationService() : super.forTesting();
 
   @override
+  Future<bool> areNotificationsAllowed() async => true;
+
+  @override
   Future<void> cancelReminder(int id) async {}
 
   @override

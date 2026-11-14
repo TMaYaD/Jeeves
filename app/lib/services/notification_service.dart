@@ -109,6 +109,28 @@ class NotificationService {
     );
   }
 
+  /// Whether the OS currently lets Jeeves show notifications. Unlike
+  /// [requestPermissions] this never prompts, so it can be re-read on resume
+  /// after the user changes the setting in system settings.
+  Future<bool> areNotificationsAllowed() async {
+    final android = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    if (android != null) {
+      return await android.areNotificationsEnabled() ?? false;
+    }
+    final iOS = _plugin.resolvePlatformSpecificImplementation<
+        IOSFlutterLocalNotificationsPlugin>();
+    if (iOS != null) {
+      return (await iOS.checkPermissions())?.isEnabled ?? false;
+    }
+    final macOS = _plugin.resolvePlatformSpecificImplementation<
+        MacOSFlutterLocalNotificationsPlugin>();
+    if (macOS != null) {
+      return (await macOS.checkPermissions())?.isEnabled ?? false;
+    }
+    return false;
+  }
+
   Future<bool> requestPermissions() async {
     final android = instance._plugin
         .resolvePlatformSpecificImplementation<
@@ -225,6 +247,15 @@ class NotificationService {
   // Ritual is one entry in that matrix, not five new methods.
   // ---------------------------------------------------------------------------
 
+  /// Whether the OS lets Jeeves set exact alarms right now. Ritual alarms are
+  /// scheduled exact only then; the scheduler re-reads this so alarms armed
+  /// inexact are replaced once the permission appears.
+  Future<bool> canScheduleExactRitualNotifications() async {
+    final android = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    return await android?.canScheduleExactNotifications() ?? false;
+  }
+
   /// Schedules one Ritual notification at [fireAt]. [id] decides what it
   /// replaces: scheduling again under the same id moves the alarm.
   Future<void> scheduleRitualNotification({
@@ -234,6 +265,7 @@ class NotificationService {
     required String payload,
   }) async {
     final cfg = _ritualConfigs[ritual]!;
+    final canExact = await canScheduleExactRitualNotifications();
     await _plugin.zonedSchedule(
       id: id,
       title: cfg.title,
@@ -241,7 +273,9 @@ class NotificationService {
       payload: payload,
       scheduledDate: tz.TZDateTime.from(fireAt, tz.local),
       notificationDetails: _ritualNotificationDetails(cfg),
-      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+      // Exact when the OS already permits it, so a reminder lands at its
+      // configured minute; otherwise Android may deliver it late.
+      androidScheduleMode: ritualAndroidScheduleMode(canExact: canExact),
     );
   }
 
@@ -419,7 +453,8 @@ class NotificationService {
         importance: cfg.androidImportance,
         priority: cfg.androidPriority,
         actions: [
-          AndroidNotificationAction(cfg.openAction, cfg.openLabel),
+          AndroidNotificationAction(cfg.openAction, cfg.openLabel,
+              showsUserInterface: true),
           AndroidNotificationAction(cfg.snoozeAction, 'Snooze'),
           AndroidNotificationAction(cfg.skipAction, cfg.skipLabel),
         ],
@@ -688,6 +723,12 @@ const _ritualConfigs = <RitualId, _RitualNotificationConfig>{
     skipLabel: 'Skip this week',
   ),
 };
+
+/// The Android alarm mode for a Ritual reminder.
+AndroidScheduleMode ritualAndroidScheduleMode({required bool canExact}) =>
+    canExact
+        ? AndroidScheduleMode.exactAllowWhileIdle
+        : AndroidScheduleMode.inexactAllowWhileIdle;
 
 final notificationServiceProvider = Provider<NotificationService>((ref) {
   return NotificationService.instance;
