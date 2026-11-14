@@ -102,17 +102,15 @@ class ScheduledReviewStep extends ConsumerWidget {
   }
 
   Future<void> _startDay(BuildContext context, WidgetRef ref) async {
-    // Taken before the await: opening the session redraws this screen, and the
-    // button's context may be gone by the time the session is open.
+    // Taken before the await: starting the day resets the planning step and
+    // opens a session, either of which unmounts this step while startDay() is
+    // still awaiting the store (#901). The router outlives it.
     final router = GoRouter.of(context);
-    Object? startError;
+    final notifier = ref.read(focusSessionPlanningProvider.notifier);
     try {
-      await ref.read(focusSessionPlanningProvider.notifier).startDay();
+      await notifier.startDay();
     } catch (e) {
-      startError = e;
-    }
-    if (startError != null) {
-      debugPrint('Failed to start day: $startError');
+      debugPrint('Failed to start day: $e');
       return;
     }
     router.go('/focus');
