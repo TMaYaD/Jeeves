@@ -287,6 +287,26 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
     });
   }
 
+  /// Closes [sessionId] only when nothing on its Review surface lacks a
+  /// Completion, deciding from the store at call time rather than from any list
+  /// a screen holds. Returns false when something on the surface is unfinished
+  /// (a refusal writes nothing), true when nothing is left to dispose. An empty
+  /// surface counts as nothing to dispose. The result follows the surface, not
+  /// the session's open state: closing an already closed session is a no-op
+  /// write, so a closed session whose surface still holds an unfinished Outcome
+  /// also returns false.
+  Future<bool> closeSessionIfNothingToDispose({
+    required String sessionId,
+    DateTime? now,
+  }) async {
+    return attachedDatabase.capturing(() async {
+      final surface = await getReviewSurface(sessionId);
+      if (surface.any((todo) => todo.doneAt == null)) return false;
+      await closeSession(sessionId: sessionId, now: now);
+      return true;
+    });
+  }
+
   /// Close every open log attributed to [sessionId], capturing an `ended_at`
   /// field write per row. Shared by [closeSession] and [reviewAndCloseSession].
   Future<void> _closeSessionLogs(String sessionId, String tsIso) async {

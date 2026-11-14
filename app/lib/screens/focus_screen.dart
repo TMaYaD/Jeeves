@@ -270,9 +270,14 @@ class FocusScreen extends ConsumerWidget {
         reviewSurface != null && reviewSurface.every((t) => t.doneAt != null);
     if (allDone) {
       final db = ref.read(databaseProvider);
-      await db.focusSessionDao.closeSession(sessionId: session.id);
+      // The list on screen may belong to an earlier moment (a new session
+      // paired with the empty list from before it opened), so the close
+      // re-reads this session's Review surface and refuses if anything is
+      // unfinished.
+      final closed = await db.focusSessionDao
+          .closeSessionIfNothingToDispose(sessionId: session.id);
       if (!context.mounted) return;
-      context.go('/inbox');
+      context.go(closed ? '/inbox' : '/shutdown');
     } else {
       context.go('/shutdown');
     }
