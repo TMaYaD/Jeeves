@@ -27,6 +27,10 @@ Future<void> _flush(WidgetTester tester) async {
     await tester.runAsync(() => pumpEventQueue());
     await tester.pump();
   }
+  // Lets a route transition finish and fires the zero-duration drift timer a
+  // disposed route's providers leave behind; far short of any Nudge boundary.
+  await tester.pump(const Duration(milliseconds: 500));
+  await tester.pump(const Duration(milliseconds: 1));
 }
 
 void main() {
@@ -187,6 +191,15 @@ void main() {
         expect(find.byType(InboxClarifyScreen), findsOneWidget);
       }
 
+      Future<void> tapSkip() async {
+        // The footer can sit below the fold on the test surface.
+        final skip = find.text('Skip', skipOffstage: false);
+        await tester.ensureVisible(skip);
+        await tester.pump();
+        await tester.tap(skip);
+        await _flush(tester);
+      }
+
       // Back before any verdict.
       await openSequence();
       await tester.tap(find.byKey(const Key('app_title_bar_leading')).last);
@@ -196,8 +209,7 @@ void main() {
 
       // Skip before any verdict.
       await openSequence();
-      await tester.tap(find.text('Skip'));
-      await _flush(tester);
+      await tapSkip();
       expect(find.byType(InboxClarifyScreen), findsNothing);
       expect(appRouter.routeInformationProvider.value.uri.path, '/next');
 
@@ -208,8 +220,7 @@ void main() {
       await tester.tap(find.text('Save'));
       await _flush(tester);
       expect(find.text('Capture c01'), findsOneWidget);
-      await tester.tap(find.text('Skip'));
-      await _flush(tester);
+      await tapSkip();
       expect(find.byType(InboxClarifyScreen), findsNothing);
       expect(appRouter.routeInformationProvider.value.uri.path, '/next');
     } finally {
