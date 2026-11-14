@@ -65,7 +65,7 @@ class OutcomeAttributeStrip extends StatelessWidget {
         ),
       ),
       if (timeLoggedMinutes != null) _TimeLoggedChip(value: timeLoggedMinutes!),
-      if (timeContextChip != null) timeContextChip!,
+      ?timeContextChip,
       _TapChip(
         key: Key('${keyPrefix}_due'),
         onTap: onDueTap,
