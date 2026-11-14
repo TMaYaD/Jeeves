@@ -21,10 +21,13 @@ void main() {
   late RecordingDomainOpCapture capture;
   late GtdDatabase db;
 
-  setUp(() {
+  setUp(() async {
     driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
     capture = RecordingDomainOpCapture();
     db = GtdDatabase(NativeDatabase.memory(), opCapture: capture);
+    // A fresh store is created already marked; these tests model an upgraded
+    // store whose conversion has not run yet.
+    await db.customStatement('DELETE FROM local_migration_markers');
   });
   tearDown(() async => db.close());
 
@@ -114,6 +117,18 @@ void main() {
     expect(timeNamedContextTags.containsKey(normaliseContextTagName('@Night')),
         isFalse);
     expect(timeNamedContextTags.containsKey('scheduled'), isFalse);
+  });
+
+  test('a freshly created store is already marked and converts nothing',
+      () async {
+    await db.customStatement(
+        "INSERT INTO local_migration_markers (name, completed_at) "
+        "VALUES ('$timeContextConversionMarkerName', '1970-01-01T00:00:00Z')");
+    await outcome('o1');
+    await tag('t-morning', '@morning');
+    await link('o1', 't-morning');
+    expect(await convertTimeNamedContextTags(db), 0);
+    expect(await links('o1'), {'t-morning'});
   });
 
   test('a second run converts nothing', () async {

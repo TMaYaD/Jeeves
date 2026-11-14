@@ -39,7 +39,7 @@ export 'tables.dart';
 part 'gtd_database.g.dart';
 
 @DriftDatabase(
-  tables: [Todos, Tags, TodoTags, TimeLogs, FocusSessions, FocusSessionTasks, FocusSessionDispositions, FocusSessionPlanningBypasses, FocusSessionReschedules, OutcomeBypassDecisions, UserPreferences, Captures, CaptureAttachments, CaptureOutcomes, CaptureTags, Actions],
+  tables: [Todos, Tags, TodoTags, TimeLogs, FocusSessions, FocusSessionTasks, FocusSessionDispositions, FocusSessionPlanningBypasses, FocusSessionReschedules, OutcomeBypassDecisions, UserPreferences, Captures, CaptureAttachments, CaptureOutcomes, CaptureTags, Actions, LocalMigrationMarkers],
   daos: [TagDao, TodoDao, TimeLogDao, FocusSessionDao, CaptureDao, ActionDao],
 )
 class GtdDatabase extends _$GtdDatabase {
@@ -214,7 +214,16 @@ class GtdDatabase extends _$GtdDatabase {
         // [transaction] guard would otherwise refuse (a migration is outside
         // any [capturing] scope). Migrations author no ops, so the marker lets
         // them through without weakening the guard's runtime teeth.
-        onCreate: (m) => _duringMigration(m.createAll),
+        onCreate: (m) => _duringMigration(() async {
+          await m.createAll();
+          // A fresh store has no pre-existing tags to convert: mark the
+          // time-context conversion done so it never runs here.
+          await customStatement(
+            'INSERT INTO local_migration_markers (name, completed_at) '
+            "VALUES ('time_context_tag_conversion', "
+            "strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
+          );
+        }),
         onUpgrade: (m, from, to) => _duringMigration(() async {
           // v2 (issue #604): drop `todos.time_spent_minutes`, a denormalised
           // time-spent cache with no write path — time spent is derived from
@@ -283,6 +292,16 @@ class GtdDatabase extends _$GtdDatabase {
                 .get();
             if (!existing.any((row) => row.read<String>('name') == 'time_context')) {
               await m.addColumn(actions, actions.timeContext);
+            }
+            // Device-local completion marker for the tag conversion (see
+            // [LocalMigrationMarkers]); additive, guarded like the column.
+            final tables = await m.database
+                .customSelect(
+                    "SELECT name FROM sqlite_master WHERE type='table'")
+                .get();
+            if (!tables.any(
+                (row) => row.read<String>('name') == 'local_migration_markers')) {
+              await m.createTable(localMigrationMarkers);
             }
           }
         }),

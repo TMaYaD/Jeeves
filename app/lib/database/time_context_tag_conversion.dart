@@ -45,14 +45,25 @@ String normaliseContextTagName(String name) => name
     .replaceAll(RegExp(r'[\s_\-]+'), ' ')
     .trim();
 
-/// Converts in one [GtdDatabase.capturing] transaction (all or nothing).
-/// Returns the number of Outcome↔tag links converted.
+/// Name of the [LocalMigrationMarkers] row recording that this store ran the
+/// conversion.
+const String timeContextConversionMarkerName = 'time_context_tag_conversion';
+
+/// Converts in one [GtdDatabase.capturing] transaction (all or nothing), and
+/// writes the device-local completion marker in that same transaction, so the
+/// conversion and its marker commit together or not at all. Skips when the
+/// marker is already present. Returns the number of Outcome↔tag links
+/// converted.
 Future<int> convertTimeNamedContextTags(
   GtdDatabase db, {
   DateTime? now,
 }) async {
   final ts = (now ?? DateTime.now()).toUtc();
   final converted = await db.capturing(() async {
+    final marker = await (db.select(db.localMigrationMarkers)
+          ..where((m) => m.name.equals(timeContextConversionMarkerName)))
+        .getSingleOrNull();
+    if (marker != null) return 0;
     final contextTags = await (db.select(db.tags)
           ..where((t) => t.type.equals('context'))
           ..orderBy([(t) => OrderingTerm.asc(t.name), (t) => OrderingTerm.asc(t.id)]))
@@ -73,6 +84,9 @@ Future<int> convertTimeNamedContextTags(
         linkCount++;
       }
     }
+    await db.into(db.localMigrationMarkers).insert(
+        LocalMigrationMarkersCompanion.insert(
+            name: timeContextConversionMarkerName, completedAt: ts));
     return linkCount;
   });
   if (converted > 0) {

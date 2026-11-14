@@ -26,7 +26,8 @@ void main() {
   setUp(() => driftRuntimeOptions.dontWarnAboutMultipleDatabases = true);
 
   Future<int> reopenAtVersion(int? userVersion,
-      {required void Function(GtdDatabase db, int converted) check}) async {
+      {bool markerPresent = false,
+      required void Function(GtdDatabase db, int converted) check}) async {
     final raw = sqlite3.openInMemory();
     addTearDown(raw.close);
     final seed = GtdDatabase(
@@ -48,6 +49,11 @@ void main() {
         todoId: const Value('o1'),
         tagId: const Value('t-morning'),
         userId: const Value(_userId)));
+    // A fresh store carries the marker from onCreate; an older or interrupted
+    // store does not.
+    if (!markerPresent) {
+      await seed.customStatement('DELETE FROM local_migration_markers');
+    }
     await seed.customStatement('PRAGMA user_version = ${userVersion ?? 0}');
     await seed.close();
 
@@ -84,7 +90,52 @@ void main() {
   }
 
   test('a store already at the current version converts nothing', () async {
-    await reopenAtVersion(timeContextSchemaVersion,
+    await reopenAtVersion(7,
+        markerPresent: true,
         check: (db, converted) => expect(converted, 0));
+  });
+
+  test(
+      'an interrupted open (schema at v7, marker absent) converts once on the '
+      'next open, then never again', () async {
+    final raw = sqlite3.openInMemory();
+    addTearDown(raw.close);
+    final seed = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false));
+    await seed.into(seed.todos).insert(TodosCompanion(
+        id: const Value('o1'),
+        title: const Value('Plan the offsite'),
+        userId: const Value(_userId),
+        createdAt: Value(DateTime.now())));
+    await seedCurrentAction(seed,
+        outcomeId: 'o1', text: 'book a room', userId: _userId);
+    await seed.into(seed.tags).insert(TagsCompanion(
+        id: const Value('t-morning'),
+        name: const Value('@morning'),
+        type: const Value('context'),
+        userId: const Value(_userId)));
+    await seed.into(seed.todoTags).insert(TodoTagsCompanion(
+        id: const Value('o1-t-morning'),
+        todoId: const Value('o1'),
+        tagId: const Value('t-morning'),
+        userId: const Value(_userId)));
+    // The upgrade committed (v7, column present) but the conversion did not.
+    await seed.customStatement('DELETE FROM local_migration_markers');
+    await seed.close();
+
+    Future<int> openAndConvert() async {
+      final db = GtdDatabase(
+          NativeDatabase.opened(raw, closeUnderlyingOnClose: false));
+      addTearDown(db.close);
+      final container = ProviderContainer(overrides: [
+        databaseProvider.overrideWithValue(db),
+        domainStoreRebuildProvider.overrideWith((ref) async => 0),
+      ]);
+      addTearDown(container.dispose);
+      return container.read(timeContextTagConversionProvider.future);
+    }
+
+    expect(await openAndConvert(), 1, reason: 'first open after interruption');
+    expect(await openAndConvert(), 0, reason: 'second open converts nothing');
   });
 }

@@ -56,29 +56,22 @@ final outsideTimeContextOutcomeIdsProvider = Provider<Set<String>>((ref) {
   };
 });
 
-/// The schema version that introduced `actions.time_context`. A store opened
-/// at an older version is converted once; the constant moves with the column,
-/// never with later unrelated schema bumps.
-const int timeContextSchemaVersion = 7;
-
-/// Converts time-named context tags into TimeContexts, once, on the first launch
-/// after the schema upgrade that added the column (issue #238). Eagerly watched from `main.dart`.
+/// Converts time-named context tags into TimeContexts, once per store, until a
+/// device-local completion marker exists (issue #238). Eagerly watched from
+/// `main.dart`.
 ///
-/// Ordered after [domainStoreRebuildProvider] so the post-upgrade re-projection
-/// cannot re-project a link the conversion just removed. Fresh installs have no
-/// tags to convert. A failure rethrows into the provider's error state (the
-/// rebuild provider's convention); the transaction leaves all or nothing done.
+/// Gated on the marker, not on the schema version: the schema upgrade commits
+/// before the conversion, so a process stopped between the two would otherwise
+/// skip the conversion for good. The marker is written in the conversion's own
+/// transaction; fresh installs get it at creation. Ordered after
+/// [domainStoreRebuildProvider] so the post-upgrade re-projection cannot
+/// re-project a link the conversion just removed. A failure rethrows into the
+/// provider's error state; the transaction leaves all or nothing done.
 final FutureProvider<int> timeContextTagConversionProvider =
     FutureProvider<int>((ref) async {
   ref.keepAlive();
   await ref.read(domainStoreRebuildProvider.future);
   final db = ref.read(databaseProvider);
-  // Force the delayed connection open (and its migration) before reading the
-  // verdict, as [domainStoreRebuildProvider] does.
-  await db.customSelect('SELECT 1').getSingle();
-  final details = await db.opened;
-  final before = details.versionBefore;
-  if (before == null || before >= timeContextSchemaVersion) return 0;
   try {
     return await convertTimeNamedContextTags(db);
   } on Object catch (error) {
