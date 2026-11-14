@@ -263,11 +263,13 @@ void main() {
 
     test('Evening Shutdown arms at its configured time with a session open, '
         'follows a change and goes quiet when switched off', () async {
-      await boot(now: at(0, 7), prefs: {
-        'shutdown_settings_time_hour': 19,
-        'shutdown_settings_time_minute': 40,
-      });
+      // Shutdown settings live in SharedPreferences, not synced preferences,
+      // so the non-default time goes in through the production notifier.
+      await boot(now: at(0, 7));
       await openSession(at(0, 7));
+      await c
+          .read(shutdownSettingsProvider.notifier)
+          .setShutdownTime(const TimeOfDay(hour: 19, minute: 40));
       c.invalidate(nudgeNotificationFactsProvider);
       await settle();
       expect(oneOffs(RitualId.eveningShutdown).first, at(0, 19, 40));
