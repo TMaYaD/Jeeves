@@ -137,7 +137,7 @@ phase — without one it has nothing to operate on.
 
 The two Triggers never overlap: while any session is open Daily Planning is not
 offered, and Evening Shutdown asks the user to close it first
-([ADR-0020](adr/0020-sessions-never-auto-close-anchor-day-attribution.md)).
+([ADR-0020](adr/0020-sessions-never-auto-close-anchor-day-attribution.md), [ADR-0049](adr/0049-a-session-counts-as-the-days-plan-only-on-the-day-it-started.md)).
 
 - **Daily Planning** counts a session as the day's plan only if it started on that
   calendar day, open or closed. A session started in the Evening belongs to that
