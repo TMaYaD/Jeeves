@@ -86,8 +86,9 @@ void main() {
         await turn();
       }
       await tester.pumpWidget(const SizedBox.shrink());
-      container.dispose();
       await tester.runAsync(() async {
+        container.dispose();
+        await pumpEventQueue();
         await bridge?.cancel();
         unawaited(openSessions.close());
         await db.close().timeout(const Duration(seconds: 10), onTimeout: () {});
