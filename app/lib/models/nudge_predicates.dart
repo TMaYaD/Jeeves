@@ -129,6 +129,8 @@ DateTime? dprFiringEdgeAt(DateTime instant, DprFacts facts) {
           !facts.latestSessionStartedAt!.isBefore(lastShutdownAnchor));
   if (qualifying) return null;
   // From the ES anchor until the next planning anchor the Trigger is idle.
+  // A tie (planning time == ES time) goes to planning: strict isAfter, so the
+  // user is still prompted to plan.
   if (lastShutdownAnchor.isAfter(planningAnchor)) return null;
   return planningAnchor;
 }

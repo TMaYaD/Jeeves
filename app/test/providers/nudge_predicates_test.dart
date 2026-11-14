@@ -13,6 +13,18 @@ void main() {
     hasInboxOrNext: true,
   );
 
+  test('Daily Planning still fires when planning and shutdown times are equal', () {
+    const sameTime = DprFacts(
+      planningHour: 18,
+      planningMinute: 0,
+      shutdownHour: 18,
+      shutdownMinute: 0,
+      hasAnyItem: true,
+      hasInboxOrNext: true,
+    );
+    expect(dprFiringEdgeAt(evening, sameTime), evening);
+  });
+
   test(
     'Daily Planning fires at its anchor and is idle from shutdown until the next anchor',
     () {

@@ -138,10 +138,13 @@ phase — without one it has nothing to operate on.
 The Daily Planning gate is the subtle one. Day attribution is anchor-based, so a
 session started since the last ES anchor means this period's planning already
 happened and the Nudge stands down. From the ES anchor until the next planning
-anchor Daily Planning is idle whatever the session state, so the user is not
-nagged to plan a day that is over. A **stale** open session — started *before* the
-last ES anchor — does not qualify, so Daily Planning fires at the next planning
-anchor; Evening Shutdown, not Daily Planning, is what asks the user to close it.
+anchor Daily Planning is idle whatever the session state. A **stale** open
+session — started *before* the last ES anchor — does not qualify, so Daily
+Planning fires at the next planning anchor; Evening Shutdown, not Daily Planning,
+asks the user to close it
+([ADR-0020](adr/0020-sessions-never-auto-close-anchor-day-attribution.md)).
+When the planning and ES times are equal, the planning anchor wins and the Nudge
+can still fire.
 
 ## Cadence
 
@@ -177,8 +180,8 @@ Weekly Review  >  Evening Shutdown  >  Daily Planning
 
 Weekly Review ranks highest because it restores the trusted state the other two
 operate on — planning against a stale Next list violates the method. Evening
-Shutdown outranks Daily Planning so that, if both ever fire, the user closes the
-session they have open before planning a new day.
+Shutdown outranks Daily Planning
+([ADR-0020](adr/0020-sessions-never-auto-close-anchor-day-attribution.md)).
 
 Surfaces consume the queue rather than reading Nudges directly:
 
