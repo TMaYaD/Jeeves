@@ -37,7 +37,10 @@ class _HoldPreferenceRead extends QueryInterceptor {
   final reached = Completer<void>();
   final _gate = Completer<void>();
 
-  void release() => _gate.complete();
+  /// Safe to call more than once, so cleanup can always release the hold.
+  void release() {
+    if (!_gate.isCompleted) _gate.complete();
+  }
 
   @override
   Future<List<Map<String, Object?>>> runSelect(
@@ -136,43 +139,51 @@ void main() {
   String currentPath() => router.routeInformationProvider.value.uri.path;
 
   testWidgets('ordinary ordering: Start Day lands on Now', (tester) async {
-    await openCompletionView(tester);
+    try {
+      await openCompletionView(tester);
 
-    await tester.tap(find.text('Start Day'));
-    await _pumpFrames(tester);
+      await tester.tap(find.text('Start Day'));
+      await _pumpFrames(tester);
 
-    expect(find.byKey(_focusKey), findsOneWidget);
-    expect(currentPath(), '/focus');
-    await teardownApp(tester);
+      expect(find.byKey(_focusKey), findsOneWidget);
+      expect(currentPath(), '/focus');
+    } finally {
+      await teardownApp(tester);
+    }
   });
 
   testWidgets('a frame drawn while the start is in flight: still lands on Now',
       (tester) async {
-    await openCompletionView(tester);
-    hold.armed = true;
+    try {
+      await openCompletionView(tester);
+      hold.armed = true;
 
-    await tester.tap(find.text('Start Day'));
-    // Drain until startDay() is parked on the held preference read; the
-    // session is already open and the planning state already reset.
-    for (var i = 0; i < 20 && !hold.reached.isCompleted; i++) {
-      await tester.runAsync(() => pumpEventQueue());
+      await tester.tap(find.text('Start Day'));
+      // Drain until startDay() is parked on the held preference read; the
+      // session is already open and the planning state already reset.
+      for (var i = 0; i < 20 && !hold.reached.isCompleted; i++) {
+        await tester.runAsync(() => pumpEventQueue());
+      }
+      expect(hold.reached.isCompleted, isTrue,
+          reason: 'startDay() no longer awaits the available-time preference '
+              'read after opening the session: move the hold to whatever it '
+              'awaits now, or delete this case if nothing is awaited');
+      // Let the session stream reach the screen, and draw frames mid-start.
+      await _pumpFrames(tester, frames: 2);
+      final session =
+          await tester.runAsync(db.focusSessionDao.getActiveSession);
+      expect(session, isNotNull, reason: 'the session is already open');
+
+      hold.release();
+      await _pumpFrames(tester);
+
+      expect(find.text('Close your current session first'), findsNothing,
+          reason: 'the user must not be left on the session-open interstitial');
+      expect(find.byKey(_focusKey), findsOneWidget);
+      expect(currentPath(), '/focus');
+    } finally {
+      hold.release();
+      await teardownApp(tester);
     }
-    expect(hold.reached.isCompleted, isTrue,
-        reason: 'startDay() no longer awaits the available-time preference '
-            'read after opening the session: move the hold to whatever it '
-            'awaits now, or delete this case if nothing is awaited');
-    // Let the session stream reach the screen, and draw frames mid-start.
-    await _pumpFrames(tester, frames: 2);
-    final session = await tester.runAsync(db.focusSessionDao.getActiveSession);
-    expect(session, isNotNull, reason: 'the session is already open');
-
-    hold.release();
-    await _pumpFrames(tester);
-
-    expect(find.text('Close your current session first'), findsNothing,
-        reason: 'the user must not be left on the session-open interstitial');
-    expect(find.byKey(_focusKey), findsOneWidget);
-    expect(currentPath(), '/focus');
-    await teardownApp(tester);
   });
 }
