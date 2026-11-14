@@ -12,16 +12,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../test_helpers.dart';
 
-class _StubNotificationService extends NotificationService {
-  _StubNotificationService() : super.forTesting();
-
-  @override
-  Future<void> cancelReminder(int id) async {}
-
-  @override
-  Future<void> cancelAll() async {}
-}
-
 void main() {
   setUpAll(configureSqliteForTests);
   setUp(() => SharedPreferences.setMockInitialValues({}));
@@ -34,7 +24,7 @@ void main() {
     final container = ProviderContainer(overrides: [
       nudgeBoundaryTickProvider.overrideWithValue(0),
       databaseProvider.overrideWithValue(db),
-      notificationServiceProvider.overrideWithValue(_StubNotificationService()),
+      notificationServiceProvider.overrideWithValue(RecordingNotificationService()),
     ]);
     addTearDown(container.dispose);
     await container.read(syncedPreferencesProvider.future);
