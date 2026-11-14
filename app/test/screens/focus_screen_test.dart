@@ -115,6 +115,9 @@ Widget _buildScreen({
           .overrideWith(() => _MockFocusSessionPlanningNotifier()),
       focusSettingsProvider.overrideWith(() => _MockFocusSettingsNotifier()),
       nudgeSurfaceHeadProvider.overrideWith((ref) => head),
+      // The Inbox too full empty state reads the Capture count; unoverridden
+      // it reaches the live Drift-backed inbox provider.
+      unprocessedCaptureCountProvider.overrideWith((ref) => 51),
     ],
     child: MaterialApp.router(routerConfig: router),
   );
