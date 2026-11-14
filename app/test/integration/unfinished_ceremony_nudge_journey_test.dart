@@ -39,6 +39,9 @@ void main() {
   late GtdDatabase db;
   late ProviderContainer c;
   late DateTime noon;
+  // When set, replaces the default clock: lets a journey pin "before the
+  // anchor" or jump to the next period.
+  DateTime Function()? clockOverride;
 
   final banner = find.byKey(const Key('planning_banner_visible'));
   final unfinishedLine = find.text('Daily Planning, sir. Unfinished.');
@@ -86,11 +89,14 @@ void main() {
     db = GtdDatabase(NativeDatabase.memory());
     final today = DateTime.now();
     noon = DateTime(today.year, today.month, today.day, 12);
+    clockOverride = null;
     c = ProviderContainer(overrides: [
       databaseProvider.overrideWithValue(db),
-      // Never earlier than the wall clock: a swipe stamps the wall clock.
-      clockProvider.overrideWithValue(
-          () => DateTime.now().isAfter(noon) ? DateTime.now() : noon),
+      // Default: never earlier than the wall clock, since a swipe stamps the
+      // wall clock.
+      clockProvider.overrideWithValue(() =>
+          clockOverride?.call() ??
+          (DateTime.now().isAfter(noon) ? DateTime.now() : noon)),
       notificationServiceProvider
           .overrideWithValue(StubPeriodicReviewNotificationService()),
     ]);
@@ -172,22 +178,33 @@ void main() {
   });
 
   testWidgets(
-      'a session opening finishes Daily Planning: the unfinished Nudge is gone '
-      'and stays gone after the session closes', (tester) async {
+      'finishing Daily Planning clears the unfinished Nudge; the next period '
+      'starts in start wording', (tester) async {
     try {
       await pumpApp(tester);
       await startAndLeavePlanning(tester);
       expect(unfinishedLine, findsOneWidget);
 
-      final sessionId =
-          await db.focusSessionDao.openSession(userId: 'local', taskIds: []);
+      // The real completion path: startDay() opens the session.
+      await tester.runAsync(
+          () => c.read(focusSessionPlanningProvider.notifier).startDay());
       await _flush(tester);
       expect(unfinishedLine, findsNothing);
 
-      await db.focusSessionDao.closeSession(sessionId: sessionId);
+      // Close the day through the Ceremony, then move to the next morning.
+      await tester.runAsync(
+          () => c.read(eveningShutdownProvider.notifier).closeDay());
       await _flush(tester);
+      expect(unfinishedLine, findsNothing);
+
+      final nextDayNoon = noon.add(const Duration(days: 1));
+      clockOverride = () => nextDayNoon;
+      await tester.pump(const Duration(days: 1));
+      await _flush(tester);
+      expect(banner, findsOneWidget,
+          reason: 'the next period is due again');
       expect(unfinishedLine, findsNothing,
-          reason: 'next period starts in start wording');
+          reason: 'and in start wording, not continue');
     } finally {
       await tearDownApp(tester);
     }
@@ -195,35 +212,46 @@ void main() {
 
   testWidgets(
       'Evening Shutdown left unfinished before its anchor shows the continue '
-      'Nudge; closing the session clears it and a new session starts clean',
-      (tester) async {
-    final firstId =
-        await db.focusSessionDao.openSession(userId: 'local', taskIds: []);
+      'Nudge; a session closed without the Ceremony voids it, a new one fires '
+      'again, and Close Day clears it', (tester) async {
+    final morning = DateTime(noon.year, noon.month, noon.day, 10);
+    clockOverride = () => morning;
+    late String firstId;
+    await tester.runAsync(() async {
+      firstId =
+          await db.focusSessionDao.openSession(userId: 'local', taskIds: []);
+    });
     try {
       await pumpApp(tester);
       expect(shutdownBanner, findsNothing, reason: 'before the anchor');
 
+      // The screen's own lifecycle marks the start; nothing is called by hand.
       await goTo(tester, '/shutdown');
-      await tester.runAsync(() =>
-          c.read(eveningShutdownProvider.notifier).markStarted());
       await goTo(tester, '/inbox');
       expect(shutdownBanner, findsOneWidget);
       expect(shutdownUnfinishedLine, findsOneWidget);
       expect(find.textContaining('Push on'), findsOneWidget);
 
-      await db.focusSessionDao.closeSession(sessionId: firstId);
+      // End Session without the Ceremony voids the fact.
+      await tester.runAsync(
+          () => db.focusSessionDao.closeSession(sessionId: firstId));
       await _flush(tester);
       expect(shutdownBanner, findsNothing);
 
       // A later session, started and left, fires again against its own id.
-      await db.focusSessionDao.openSession(userId: 'local', taskIds: []);
+      await tester.runAsync(() =>
+          db.focusSessionDao.openSession(userId: 'local', taskIds: []));
       await _flush(tester);
       expect(shutdownBanner, findsNothing);
       await goTo(tester, '/shutdown');
-      await tester.runAsync(() =>
-          c.read(eveningShutdownProvider.notifier).markStarted());
       await goTo(tester, '/inbox');
       expect(shutdownUnfinishedLine, findsOneWidget);
+
+      // Close Day, the real completion path, clears it.
+      await tester.runAsync(
+          () => c.read(eveningShutdownProvider.notifier).closeDay());
+      await _flush(tester);
+      expect(shutdownBanner, findsNothing);
     } finally {
       await tearDownApp(tester);
     }
@@ -232,16 +260,18 @@ void main() {
   testWidgets(
       'a due Weekly Review outranks an unfinished Daily Planning until swiped',
       (tester) async {
-    await db.captureDao.insertCapture(CapturesCompanion(
-      id: const Value('inbox'),
-      title: const Value('Plan this'),
-      userId: const Value('local'),
-      createdAt: Value(noon.subtract(const Duration(days: 20))),
-      updatedAt: Value(noon.subtract(const Duration(days: 20))),
-    ));
-    await c.read(syncedPreferencesProvider.notifier).set(
-        'periodic_review_last_completed_at',
-        noon.subtract(const Duration(days: 10)).toIso8601String());
+    await tester.runAsync(() async {
+      await db.captureDao.insertCapture(CapturesCompanion(
+        id: const Value('inbox'),
+        title: const Value('Plan this'),
+        userId: const Value('local'),
+        createdAt: Value(noon.subtract(const Duration(days: 20))),
+        updatedAt: Value(noon.subtract(const Duration(days: 20))),
+      ));
+      await c.read(syncedPreferencesProvider.notifier).set(
+          'periodic_review_last_completed_at',
+          noon.subtract(const Duration(days: 10)).toIso8601String());
+    });
     try {
       await pumpApp(tester);
       await startAndLeavePlanning(tester);
