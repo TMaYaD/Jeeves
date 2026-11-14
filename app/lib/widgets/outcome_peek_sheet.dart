@@ -27,6 +27,7 @@ import 'outcome_attribute_strip.dart';
 import 'outcome_attribute_editors.dart';
 import 'outcome_plan_section.dart';
 import 'person_tag_picker.dart';
+import 'dotted_add_button.dart';
 import 'tag_list.dart';
 
 /// One-shot read of the ceiling-rounded minutes logged against [taskId],
@@ -276,21 +277,10 @@ class _OutcomePeekSheetState extends ConsumerState<OutcomePeekSheet> {
                             runSpacing: 8,
                             onTap: (_) =>
                                 showOutcomeContextTagEditor(context, todoId),
-                            trailing: GestureDetector(
+                            trailing: DottedAddButton(
                               key: const Key('outcome_peek_add_context'),
                               onTap: () =>
                                   showOutcomeContextTagEditor(context, todoId),
-                              child: Container(
-                                width: 24,
-                                height: 24,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                      color: const Color(0xFFD1D5DB)),
-                                ),
-                                child: const Icon(Icons.add,
-                                    size: 16, color: Color(0xFF9CA3AF)),
-                              ),
                             ),
                           ),
                           const SizedBox(height: 16),
