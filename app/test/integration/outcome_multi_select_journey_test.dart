@@ -20,6 +20,8 @@ import 'package:jeeves/screens/next/next_screen.dart';
 import 'package:jeeves/screens/trash/trash_screen.dart';
 import 'package:jeeves/screens/waiting_for/waiting_for_screen.dart';
 import 'package:jeeves/sync/collection_codecs.dart';
+import 'package:jeeves/widgets/dotted_add_button.dart';
+import 'package:jeeves/widgets/tag_list.dart';
 import 'package:jeeves/sync/domain_op_capture.dart';
 
 import '../test_helpers.dart';
@@ -154,11 +156,19 @@ void main() {
     // Add a Tag, then remove it.
     await tester.tap(find.text('Tags'));
     await _settle(tester);
-    await tester.tap(find.byKey(const Key('tag_chip_home')));
+    // The + opens the cloud; tapping a Tag there applies it to every selected
+    // Outcome, and it then shows as an applied chip (tap removes it).
+    await tester.tap(find.byType(DottedAddButton));
+    await _settle(tester);
+    await tester.tap(find.descendant(
+        of: find.byKey(const Key('context_tag_picker_cloud')),
+        matching: find.byKey(const Key('tag_chip_home'))));
     await _settle(tester);
     expect(await tagIdsOf(tester, 'o1'), {'proj', 'home'});
     expect(await tagIdsOf(tester, 'o2'), {'proj', 'home'});
-    await tester.tap(find.byKey(const Key('tag_chip_home')));
+    await tester.tap(find.descendant(
+        of: find.byType(TagList).first,
+        matching: find.byKey(const Key('tag_chip_home'))));
     await _settle(tester);
     expect(await tagIdsOf(tester, 'o1'), {'proj'});
     final tombstone = capture
