@@ -17,6 +17,7 @@ import '../../providers/dev_options_provider.dart';
 import '../../providers/evening_shutdown_provider.dart';
 import '../../providers/focus_session_planning_settings_provider.dart';
 import '../../providers/focus_settings_provider.dart';
+import '../../providers/notification_permission_provider.dart';
 import '../../providers/periodic_review_provider.dart';
 import '../../providers/periodic_review_settings_provider.dart';
 import '../../providers/shutdown_settings_provider.dart';
@@ -451,6 +452,8 @@ class _FocusSessionPlanningSettings extends ConsumerWidget {
           onChanged: (v) => notifier.setNotificationEnabled(v),
         ),
         if (settings.notificationEnabled)
+          const NotificationPermissionDeniedRow(),
+        if (settings.notificationEnabled)
           ListTile(
             key: const Key('planning_snooze_tile'),
             leading: const Icon(Icons.snooze_outlined, color: Color(0xFF9CA3AF)),
@@ -783,6 +786,8 @@ class _PeriodicReviewSettings extends ConsumerWidget {
           value: settings.notificationEnabled,
           onChanged: (v) => notifier.setNotificationEnabled(v),
         ),
+        if (settings.notificationEnabled)
+          const NotificationPermissionDeniedRow(),
         SwitchListTile(
           key: const Key('periodic_review_banner_toggle'),
           secondary: const Icon(Icons.campaign_outlined,
@@ -883,6 +888,8 @@ class _EveningShutdownSettings extends ConsumerWidget {
           value: settings.notificationEnabled,
           onChanged: (v) => notifier.setNotificationEnabled(v),
         ),
+        if (settings.notificationEnabled)
+          const NotificationPermissionDeniedRow(),
         SwitchListTile(
           key: const Key('shutdown_banner_toggle'),
           secondary:
@@ -921,6 +928,35 @@ class _EveningShutdownSettings extends ConsumerWidget {
           },
         ),
       ],
+    );
+  }
+}
+
+/// Shown under a Ritual's reminder switch when the switch is on but the OS
+/// blocks notifications, so a silent reminder is never a mystery.
+class NotificationPermissionDeniedRow extends ConsumerWidget {
+  const NotificationPermissionDeniedRow({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final allowed = ref.watch(notificationPermissionProvider);
+    if (allowed) return const SizedBox.shrink();
+    return ListTile(
+      key: const Key('notification_permission_denied_row'),
+      leading: const Icon(Icons.notifications_off_outlined,
+          color: Color(0xFFB45309)),
+      title: const Text(
+        'Notifications are turned off for Jeeves, so this reminder will not appear.',
+        style: TextStyle(fontSize: 13, color: Color(0xFF374151)),
+      ),
+      subtitle: const Text(
+          'If no prompt appears, enable notifications for Jeeves in system settings.'),
+      trailing: TextButton(
+        key: const Key('notification_permission_request_button'),
+        onPressed: () =>
+            ref.read(notificationPermissionProvider.notifier).request(),
+        child: const Text('Allow'),
+      ),
     );
   }
 }

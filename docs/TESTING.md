@@ -541,7 +541,7 @@ Coordinates are `(x, y)` in device pixels. The drawer lives under a hamburger ic
 | **Sign-out confirm dialog** → "Cancel" | `(284, 1378)` | Left-side action. |
 | **Login screen** → "Connect wallet" button | `(540, 1416)` | Center. In SWS mode this is the only action. |
 | **Login screen (canPop=true)** → close (X) | `(88, 140)` | Only present when reached via push (e.g. from Settings). |
-| **Notification permission dialog** → "Don't allow" | `(540, 1452)` | First-launch prompt. |
+| **Notification permission dialog** → "Don't allow" | `(540, 1452)` | First-launch prompt. Tapping it disables every notification, Ritual reminders included; Settings then shows the denied row under each enabled reminder. |
 | **Mock MWA Wallet — connect prompt** → "Connect" | `(810, 2200)` | Green button, bottom-right. |
 | **Mock MWA Wallet — SIWS sign message** → "Approve" | `(800, 2160)` | Green button, bottom-right. |
 

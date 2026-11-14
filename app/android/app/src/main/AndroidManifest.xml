@@ -58,6 +58,12 @@
             android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver"
             android:exported="false" />
 
+        <!-- Receives taps on notification action buttons (Snooze, Skip);
+             the plugin does not declare it for us. -->
+        <receiver
+            android:name="com.dexterous.flutterlocalnotifications.ActionBroadcastReceiver"
+            android:exported="false" />
+
         <!-- Reschedules planning notifications after device reboot.
              Paired with the RECEIVE_BOOT_COMPLETED permission above. -->
         <receiver
