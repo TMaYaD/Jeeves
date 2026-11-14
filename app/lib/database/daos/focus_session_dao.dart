@@ -444,7 +444,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
 
   /// One-shot sibling of [watchQualifyingSessionExists].
   Future<bool> qualifyingSessionExists(DateTime since) async {
-    final anchorIso = esAnchor.toUtc().toIso8601String();
+    final anchorIso = since.toUtc().toIso8601String();
     final row = await customSelect(
       'SELECT EXISTS('
       '  SELECT 1 FROM focus_sessions WHERE started_at >= ?'
