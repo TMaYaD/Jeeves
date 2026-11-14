@@ -129,22 +129,30 @@ lifecycle gates:
 
 | Ritual | Predicate |
 |---|---|
-| Daily Planning | Past today's planning anchor, before the next Evening Shutdown anchor, and no qualifying session exists since the last Evening Shutdown anchor |
-| Evening Shutdown | The ES period has turned, a FocusSession is active, and ES has not been completed this period |
+| Daily Planning | Past today's planning time, before the Evening Shutdown time, no session is open, and no session started today |
+| Evening Shutdown | A FocusSession is open and has reached its due time, and ES has not been completed this period |
 
-Evening Shutdown needs an active session because it *is* that session's Review
+Evening Shutdown needs an open session because it *is* that session's Review
 phase — without one it has nothing to operate on.
 
-The Daily Planning gate is the subtle one. Day attribution is anchor-based, so a
-session started since the last ES anchor means this period's planning already
-happened and the Nudge stands down. From the ES anchor until the next planning
-anchor Daily Planning is idle whatever the session state. A **stale** open
-session — started *before* the last ES anchor — does not qualify, so Daily
-Planning fires at the next planning anchor; Evening Shutdown, not Daily Planning,
-asks the user to close it
+The two Triggers never overlap: while any session is open Daily Planning is not
+offered, and Evening Shutdown asks the user to close it first
 ([ADR-0020](adr/0020-sessions-never-auto-close-anchor-day-attribution.md)).
-When the planning and ES times are equal, the planning anchor wins and the Nudge
-can still fire.
+
+- **Daily Planning** counts a session as the day's plan only if it started on that
+  calendar day, open or closed. A session started in the Evening belongs to that
+  Evening, so Daily Planning is offered again at the next planning time. From the
+  Evening Shutdown time until the next planning time it is idle.
+- **Evening Shutdown due time.** A session started before the Evening Shutdown time
+  is due at it. A session started at or after it is due at its start plus the
+  available time chosen in Daily Planning — but never later than the next planning
+  time. The available time is read from the preference Daily Planning stores each
+  time a session opens. The rule is provisional.
+- **Staying visible.** Once due, Evening Shutdown shows through midnight until the
+  session is closed. A swipe hides it until the next planning time or the next
+  Evening Shutdown time, whichever comes first.
+- **Settings refuse equal times.** Daily Planning and Evening Shutdown cannot be set
+  to the same time, so no predicate carries a tie rule.
 
 ## Cadence
 

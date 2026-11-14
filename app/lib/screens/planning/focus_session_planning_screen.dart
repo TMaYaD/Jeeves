@@ -110,12 +110,17 @@ class _FocusSessionPlanningScreenState
     // menu or the planning notification), surface a blocking interstitial that
     // sequences the user through Evening Shutdown first — carrying an
     // and-then-plan intent so Close Day routes back here instead of exiting.
-    final activeSession = ref.watch(activeSessionProvider);
-    if (activeSession.asData?.value != null) {
+    final activeSession = ref.watch(activeSessionProvider).asData?.value;
+    final state = ref.watch(focusSessionPlanningProvider);
+    if (activeSession != null) {
+      // The session this very performance just opened is not a blocker; Start
+      // Day is already on its way to the Now screen.
+      if (activeSession.id == state.startedSessionId) {
+        return const Scaffold(body: SizedBox.shrink());
+      }
       return const _SessionOpenInterstitial();
     }
 
-    final state = ref.watch(focusSessionPlanningProvider);
     final notifier = ref.read(focusSessionPlanningProvider.notifier);
     final step = state.currentStep;
 

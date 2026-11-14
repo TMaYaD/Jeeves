@@ -321,6 +321,8 @@ void main() {
               .overrideWith(_DefaultPlanningSettingsNotifier.new),
           weeklyReviewDueAtProvider.overrideWithValue(_due),
           periodicReviewLastCompletedProvider.overrideWithValue(null),
+          // No open session: the tick's session lookup is a live Drift watch.
+          eveningShutdownFactsProvider.overrideWithValue(null),
         ]);
         addTearDown(c.dispose);
 

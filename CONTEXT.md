@@ -208,7 +208,7 @@ A user session comprising three phases — **Planning**, **Execution**, and **Re
 
 A FocusSession changes lifecycle state **only by explicit user action** — it opens when the user completes Planning and closes when the user completes Review, never on its own. Cadence anchors are **reminder anchors only**: they decide when a Nudge fires, never when a session opens or closes, so an open session persists across idle time and process death until the user reviews it. At most one is open at a time, and because two Devices can each open one offline the invariant has to be *repairable* rather than merely declared (ADR-0020).
 
-Because sessions never auto-close, **day attribution is anchor-based, not calendar midnight**: a session belongs to the planning period opened by the most recent **Evening Shutdown anchor** before its start. A session started at or after the last ES anchor is the *current period's* (whether still open or already closed); a session open since before the last ES anchor belongs to the previous period, and the Daily Planning nudge re-arms for it while Evening Shutdown wins. This "qualifying session" rule — `started_at >=` last ES anchor — is the single test for whether the current period's planning has happened.
+A session is **the day's plan only if it started on that calendar day**, open or closed; this "qualifying session" test is the single answer to whether today's planning has happened. A session started in the Evening belongs to that Evening, so the next morning Daily Planning is offered again. While any session is open Daily Planning is not offered and Evening Shutdown asks the user to close it. An Evening session's Evening Shutdown is due at its start plus the available time chosen in planning.
 
 The three phases:
 

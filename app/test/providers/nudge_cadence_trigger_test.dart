@@ -292,7 +292,24 @@ void main() {
     });
   });
 
-  group('Stale open session — only ES fires past shutdown', () {
+  group('Session left open from an earlier day — only ES fires', () {
+    test('in the Day: Plan your day is hidden, Evening Shutdown fires',
+        () async {
+      final c = _makeContainer(
+        now: DateTime(2026, 5, 20, 9, 0),
+        qualifying: false,
+        activeSession: _openSession(DateTime(2026, 5, 19, 9, 0)),
+      );
+      addTearDown(c.dispose);
+
+      final dpr = await _readTrigger(c, RitualId.dailyPlanning);
+      final es = await _readTrigger(c, RitualId.eveningShutdown);
+      expect(dpr.isFiring, isFalse);
+      expect(es.isFiring, isTrue);
+      expect(es.firingSince, DateTime(2026, 5, 20, 8, 0),
+          reason: 'raised again at the planning time');
+    });
+
     test('past both anchors: DPR idle (past ES anchor) AND ES fires', () async {
       // Session opened yesterday, still open; clock 18:30 today; anchors 08:00
       // / 18:00. It started before today\'s ES anchor, so does not qualify.

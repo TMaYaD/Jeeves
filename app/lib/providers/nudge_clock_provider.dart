@@ -24,12 +24,16 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../models/nudge_predicates.dart';
 import 'clock_provider.dart';
+import 'focus_session_planning_provider.dart'
+    show activeSessionProvider, kLastSessionAvailableMinutesKey;
 import 'focus_session_planning_settings_provider.dart'
     show focusSessionPlanningSettingsProvider;
 import 'periodic_review_settings_provider.dart'
     show periodicReviewLastCompletedProvider;
 import 'shutdown_settings_provider.dart' show shutdownSettingsProvider;
+import 'synced_preferences_provider.dart' show syncedPreferencesProvider;
 import 'system_trust_provider.dart' show weeklyReviewDueAtProvider;
 
 // ---------------------------------------------------------------------------
@@ -69,6 +73,7 @@ DateTime _todayAt(DateTime now, int hour, int minute) {
 ///   - today's Evening Shutdown anchor, if still in the future (ES flips at it);
 ///   - today's planning anchor, if still in the future (Daily Planning, idle
 ///     overnight, can fire again from it);
+///   - the open session's Evening Shutdown due instant, if still in the future;
 ///   - the next Weekly Review seven-day boundary from the due instant
 ///     (WR becomes due at the first, then refires at each subsequent boundary).
 DateTime nextNudgeBoundary(
@@ -77,6 +82,7 @@ DateTime nextNudgeBoundary(
   required int shutdownMinute,
   int? planningHour,
   int? planningMinute,
+  DateTime? eveningShutdownDueAt,
   required DateTime? weeklyReviewDueAt,
   DateTime? weeklyReviewLastCompleted,
 }) {
@@ -94,6 +100,14 @@ DateTime nextNudgeBoundary(
     if (planningAnchor.isAfter(now) && planningAnchor.isBefore(next)) {
       next = planningAnchor;
     }
+  }
+
+  // An open session started in the Evening becomes due part-way through the
+  // night, at an instant that is neither anchor.
+  if (eveningShutdownDueAt != null &&
+      eveningShutdownDueAt.isAfter(now) &&
+      eveningShutdownDueAt.isBefore(next)) {
+    next = eveningShutdownDueAt;
   }
 
   if (weeklyReviewDueAt != null) {
@@ -124,6 +138,38 @@ DateTime nextNudgeBoundary(
   return next;
 }
 
+/// The facts Evening Shutdown is decided on, or null while the open-session
+/// stream is still loading. The available time is the preference written each
+/// time a session opens; at most one session is open, so it is the open
+/// session's.
+final eveningShutdownFactsProvider = Provider<EsFacts?>((ref) {
+  final session = ref.watch(activeSessionProvider);
+  if (!session.hasValue) return null;
+  final shutdown = ref.watch(shutdownSettingsProvider).shutdownTime;
+  final planning =
+      ref.watch(focusSessionPlanningSettingsProvider).planningTime;
+  final storedMinutes = ref
+      .watch(syncedPreferencesProvider)
+      .asData
+      ?.value
+      .get<int>(kLastSessionAvailableMinutesKey);
+  final open = session.requireValue;
+  return EsFacts(
+    shutdownHour: shutdown.hour,
+    shutdownMinute: shutdown.minute,
+    planningHour: planning.hour,
+    planningMinute: planning.minute,
+    sessionIsOpen: open != null,
+    openSessionStartedAt:
+        open == null ? null : DateTime.parse(open.startedAt).toLocal(),
+    availableMinutes: storedMinutes != null &&
+            storedMinutes >= 1 &&
+            storedMinutes <= 1440
+        ? storedMinutes
+        : kDefaultEveningSessionAvailableMinutes,
+  );
+});
+
 /// A coarse reactive signal that time-based Trigger Providers `ref.watch` so
 /// they re-evaluate when a wall-clock boundary passes.
 ///
@@ -148,6 +194,8 @@ final nudgeBoundaryTickProvider = Provider<int>((ref) {
       ref.watch(focusSessionPlanningSettingsProvider).planningTime;
   final dueAt = ref.watch(weeklyReviewDueAtProvider);
   final lastCompleted = ref.watch(periodicReviewLastCompletedProvider);
+  final esFacts = ref.watch(eveningShutdownFactsProvider);
+  final sessionStartedAt = esFacts?.openSessionStartedAt;
 
   final next = nextNudgeBoundary(
     now,
@@ -155,6 +203,9 @@ final nudgeBoundaryTickProvider = Provider<int>((ref) {
     shutdownMinute: shutdown.minute,
     planningHour: planningTime.hour,
     planningMinute: planningTime.minute,
+    eveningShutdownDueAt: esFacts == null || sessionStartedAt == null
+        ? null
+        : eveningShutdownDueAt(sessionStartedAt, esFacts),
     weeklyReviewDueAt: dueAt,
     weeklyReviewLastCompleted: lastCompleted,
   );

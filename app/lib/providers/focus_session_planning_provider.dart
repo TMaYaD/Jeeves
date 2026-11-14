@@ -410,6 +410,7 @@ class FocusSessionPlanningState {
     this.reviewPersonTags = const {},
     this.reviewActionTexts = const {},
     this.reviewStaleIds = const {},
+    this.startedSessionId,
   });
 
   final int currentStep;
@@ -481,6 +482,10 @@ class FocusSessionPlanningState {
   /// hint.
   final Set<String> reviewStaleIds;
 
+  /// The session this performance just opened with Start Day. The open-session
+  /// gate lets this one through: it is not a session left open from before.
+  final String? startedSessionId;
+
   FocusSessionPlanningState copyWith({
     int? currentStep,
     int? availableMinutes,
@@ -496,6 +501,7 @@ class FocusSessionPlanningState {
     Map<String, List<Tag>>? reviewPersonTags,
     Map<String, String>? reviewActionTexts,
     Set<String>? reviewStaleIds,
+    String? startedSessionId,
   }) =>
       FocusSessionPlanningState(
         currentStep: currentStep ?? this.currentStep,
@@ -512,6 +518,7 @@ class FocusSessionPlanningState {
         reviewPersonTags: reviewPersonTags ?? this.reviewPersonTags,
         reviewActionTexts: reviewActionTexts ?? this.reviewActionTexts,
         reviewStaleIds: reviewStaleIds ?? this.reviewStaleIds,
+        startedSessionId: startedSessionId ?? this.startedSessionId,
       );
 }
 
@@ -1051,7 +1058,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// On success, today's Daily Planning notification is now moot (a qualifying
   /// session exists), so its pending one-off fire is cancelled.
   Future<void> startDay() async {
-    await _db.focusSessionDao.openSession(
+    final startedSessionId = await _db.focusSessionDao.openSession(
       userId: _userId,
       taskIds: state.pendingSelectedTaskIds,
       // The Outcomes the user tapped Skip on (the set the skipped list shows):
@@ -1065,6 +1072,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     state = FocusSessionPlanningState(
       energyLevel: state.energyLevel,
       availableMinutes: state.availableMinutes,
+      startedSessionId: startedSessionId,
     );
     // Retained clarify drafts belong to the performance that produced them,
     // the same as the inbox snapshot and its cursor above.
