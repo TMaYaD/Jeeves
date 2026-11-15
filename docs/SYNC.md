@@ -96,6 +96,17 @@ Two collections have a domain key that is not their `id` column: `focus_session_
 
 They do not, because the id is **derived**: `focusSessionTaskIdFor(sessionId, taskId)` and `preferenceEntityId(workspace, key)` (`app/lib/sync/ids.dart`). Every device names the same entity, so the ordinary field-grain merge above applies unchanged, and the projector realigns the local row's `id` onto the derivation when it writes reduced state back (`app/lib/sync/domain_projector.dart`). Junction rows in `todo_tags`, `capture_outcomes` and `capture_tags` follow the same rule through their `*IdFor` helpers.
 
+## Where merge state lives
+
+Merge state — the reduced value and winning clock of every field — belongs to the
+**sync host**, not to the op-log client. The host merges a `Change` (a clocked,
+field-grain write) under the strategy registry; the op-log reducer only checks the
+op-level guards and converts an op to a `Change`. A device with no enrolment still
+clocks and merges its own writes, under a random device node id; once enrolled, its
+member id takes over as the tie-break so the wire is unchanged. Clocks stamped under
+the device node id are never ops, so the enrolment upload does not skip them and a
+rebuild from the log carries them across. See [sync-plugins](proposals/sync-plugins.md).
+
 ## Protocol surface
 
 Three things are wire contract rather than implementation detail. Changing any of

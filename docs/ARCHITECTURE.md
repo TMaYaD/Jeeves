@@ -85,11 +85,13 @@ Every device holds two SQLite files, deliberately not one.
 
 - **`jeeves_domain.sqlite`** — the domain read model, over `sqlite_async`. This
   is what the app reads. It is *derived*: a device can throw it away and
-  reproject it from its own op log.
-- **`jeeves_sync.sqlite`** — the op log, the outbox, the quarantine, the
-  integrity alarms and the control chain, over Drift's native executor on a
-  background isolate so reducing a page of ops never competes for frames. This
-  is the record. It is not disposable, and nothing may treat it as if it were.
+  reproject it from its own merge state. It also holds the `pending_changes`
+  outbox that hands a write to the sync host.
+- **`jeeves_sync.sqlite`** — merge state, the host's change sequence and plugin
+  cursors, and the op log, the outbox, the quarantine, the integrity alarms and
+  the control chain, over Drift's native executor on a background isolate so
+  reducing a page of ops never competes for frames. This is the record. It is not
+  disposable, and nothing may treat it as if it were.
 
 Two files rather than two schemas in one file, so that an operation whose whole
 premise is that the read model can be discarded cannot take the evidence with it.
@@ -113,6 +115,14 @@ code path routes a user into it. Until the enrolment question is answered the
 capture seam *buffers*, so a write on the first turn of a cold start is never
 lost to the async chain — a decision disposes of a buffered op, never launch
 timing.
+
+**The sync host** (`app/lib/sync/host/`, [design](proposals/sync-plugins.md)) owns
+merge state, the merge core, the projector and the reconciler, on every device,
+enrolled or not. A write commits together with a clocked change in
+`pending_changes`; the host drains that into merge state and a durable change
+sequence and hands changes to plugins, each resumed from a cursor the host stores.
+The op-log client reaches the host through a temporary bridge until it becomes a
+plugin.
 
 Four pieces carry the domain across the spine, and the split between the last two
 is load-bearing: the **capture seam** turns writes into ops; the **codecs** name
