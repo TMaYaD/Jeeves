@@ -25,6 +25,7 @@ import '../../widgets/person_tag_picker.dart';
 import '../../widgets/project_picker.dart';
 import '../../widgets/dotted_add_button.dart';
 import '../../widgets/tag_list.dart';
+import '../../widgets/time_context_sheet.dart';
 import '../../widgets/task_status_row.dart';
 
 class TaskDetailScreen extends ConsumerStatefulWidget {
@@ -309,6 +310,8 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                         energyLevel: todo.energyLevel,
                         timeEstimateMinutes: todo.timeEstimate,
                         dueDate: todo.dueDate,
+                        timeContextChip:
+                            TimeContextChip(outcomeId: widget.todoId),
                         onEnergyTap: () => showOutcomeEnergyLevelSheet(
                             context, _notifier, todo.energyLevel),
                         onEstimateTap: () => showOutcomeTimeEstimateSheet(

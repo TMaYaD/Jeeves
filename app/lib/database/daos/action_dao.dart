@@ -59,6 +59,11 @@
 /// Action's text, to keep two sides agreeing, would be re-introducing the
 /// second source of truth this model exists to remove.
 ///
+/// **[setTimeContext] is the second exception** (issue #238): attaching a
+/// TimeContext is Organising — it does not stamp `last_clarified_at`
+/// (docs/proposals/blockers-and-contexts.md). The value lives on the Action row
+/// and no primitive copies it onto a successor.
+///
 /// What primitives *do* still mirror onto `todos` is Action **metadata**
 /// (`energy_level` / `time_estimate`), which is a separate mechanism with a
 /// live reader: the per-field D2 COALESCE fallback. See
@@ -76,6 +81,7 @@ library;
 import 'package:drift/drift.dart';
 import '../../utils/uuid.dart';
 
+import '../../models/time_context.dart';
 import '../../sync/collection_codecs.dart';
 import '../gtd_database.dart';
 import 'time_log_dao.dart' show TimeLogDao;
@@ -198,6 +204,48 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
       ),
     );
     _notify(effect);
+  }
+
+  /// Set ([value]) or clear (null) the TimeContext of the Action [actionId].
+  /// Does not stamp `last_clarified_at` (Organising). No-op when the row is
+  /// gone or already holds the same value.
+  Future<void> setTimeContext(
+    String actionId,
+    TimeContext? value, {
+    DateTime? now,
+  }) async {
+    final ts = (now ?? DateTime.now()).toUtc();
+    final changed = await attachedDatabase.capturing(
+      () => applySetTimeContext(actionId, value, ts: ts),
+    );
+    if (changed) {
+      attachedDatabase.notifyActionsViewWrite();
+      attachedDatabase.notifyTodosViewWrite();
+    }
+  }
+
+  /// Transaction-body variant of [setTimeContext]; returns whether it wrote.
+  Future<bool> applySetTimeContext(
+    String actionId,
+    TimeContext? value, {
+    required DateTime ts,
+  }) async {
+    final row = await (select(actions)..where((a) => a.id.equals(actionId)))
+        .getSingleOrNull();
+    if (row == null) return false;
+    final encoded = value?.encode();
+    if (row.timeContext == encoded) return false;
+    await (update(actions)..where((a) => a.id.equals(actionId))).write(
+      ActionsCompanion(
+        timeContext: Value(encoded),
+        updatedAt: Value(ts),
+      ),
+    );
+    _captureAction(actionId, {
+      'time_context': encoded,
+      'updated_at': encodeInstant(ts),
+    });
+    return true;
   }
 
   /// The explicit-affordance primitive: flip the Outcome's current
@@ -503,6 +551,28 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
               a.outcomeId.equals(outcomeId) & a.role.equals('current')))
         .watch()
         .map(_pickWinner);
+  }
+
+  /// Parsed TimeContext of each Outcome's current Action, keyed by Outcome id.
+  /// Outcomes with none — or whose stored value does not parse — are absent, so
+  /// an unreadable value never gates anything. Multi-current races resolve by
+  /// the same winner rule as every other read.
+  Stream<Map<String, TimeContext>> watchCurrentTimeContexts() {
+    return (select(actions)..where((a) => a.role.equals('current')))
+        .watch()
+        .map((rows) {
+      final byOutcome = <String, List<Action>>{};
+      for (final a in rows) {
+        (byOutcome[a.outcomeId] ??= []).add(a);
+      }
+      final result = <String, TimeContext>{};
+      for (final entry in byOutcome.entries) {
+        final winner = _pickWinner(entry.value);
+        final parsed = TimeContext.tryParse(winner?.timeContext);
+        if (parsed != null) result[entry.key] = parsed;
+      }
+      return result;
+    });
   }
 
   /// Current Action text for each of [outcomeIds], keyed by Outcome id. An

@@ -15,6 +15,7 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/time_context.dart';
 import '../test_helpers.dart';
 
 const _userId = 'test-user';
@@ -972,6 +973,52 @@ void main() {
       final planned = await _planned(db, 'o1');
       // Same position → earlier created_at wins.
       expect(planned.map((p) => p.$2), ['earlier', 'later']);
+    });
+  });
+
+  group('setTimeContext', () {
+    final windowed =
+        TimeContext.create(days: {2, 4}, startMinute: 540, endMinute: 1020)!;
+
+    test('writes, reads back parsed, clears — and never stamps', () async {
+      await db.actionDao.setCurrentAction('o1', 'call', now: _t1);
+      final id = (await _current(db, 'o1'))!['id'] as String;
+
+      await db.actionDao.setTimeContext(id, windowed, now: _t2);
+      expect((await _current(db, 'o1'))!['time_context'], windowed.encode());
+      expect(await _lastClarified(db, 'o1'), _t1,
+          reason: 'context assignment is Organising, not clarifying');
+      expect(await db.actionDao.watchCurrentTimeContexts().first,
+          {'o1': windowed});
+
+      await db.actionDao.setTimeContext(id, null, now: _t3);
+      expect((await _current(db, 'o1'))!['time_context'], isNull);
+      expect(await db.actionDao.watchCurrentTimeContexts().first, isEmpty);
+    });
+
+    test('an unchanged value is a no-op', () async {
+      await db.actionDao.setCurrentAction('o1', 'call', now: _t1);
+      final id = (await _current(db, 'o1'))!['id'] as String;
+      await db.actionDao.setTimeContext(id, windowed, now: _t2);
+      await db.actionDao.setTimeContext(id, windowed, now: _t3);
+      expect((await db.actionDao.getCurrentAction('o1'))!.updatedAt, _t2);
+    });
+
+    test('is not inherited by a successor Action', () async {
+      await db.actionDao.setCurrentAction('o1', 'call', now: _t1);
+      final id = (await _current(db, 'o1'))!['id'] as String;
+      await db.actionDao.setTimeContext(id, windowed, now: _t2);
+
+      await db.actionDao
+          .supersedeCurrentAction('o1', newActionText: 'email', now: _t3);
+      expect((await _current(db, 'o1'))!['time_context'], isNull);
+    });
+
+    test('an unparseable stored value gates nothing', () async {
+      await db.actionDao.setCurrentAction('o1', 'call', now: _t1);
+      await db.customStatement(
+          "UPDATE actions SET time_context = 'garbage' WHERE outcome_id = 'o1'");
+      expect(await db.actionDao.watchCurrentTimeContexts().first, isEmpty);
     });
   });
 }

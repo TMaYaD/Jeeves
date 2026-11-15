@@ -403,6 +403,18 @@ class Captures extends Table {
 // capture_outcomes  (provenance join: which Outcomes a Capture clarified into)
 // ---------------------------------------------------------------------------
 
+/// Device-local record that a one-time data conversion has run on this
+/// store (issue #238: time-named context tags). **No sync codec, no op**: a
+/// marker replicated from another device would claim a conversion this device
+/// never ran. Written in the same transaction as the conversion it names.
+class LocalMigrationMarkers extends Table {
+  TextColumn get name => text()();
+  DateTimeColumn get completedAt => dateTime()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {name};
+}
+
 /// A file attached to a Capture — today, an image shared in through the
 /// Android share sheet. The bytes live in app-private storage at
 /// `relative_path` (relative to the application support directory).
@@ -531,6 +543,10 @@ class Actions extends Table {
 
   /// Estimated effort in minutes (nullable).
   IntColumn get timeEstimate => integer().nullable()();
+
+  /// TimeContext (issue #238): canonical JSON, see `models/time_context.dart`.
+  /// NULL = not gated. Belongs to this Action row; never copied to a successor.
+  TextColumn get timeContext => text().named('time_context').nullable()();
 
   DateTimeColumn get createdAt => dateTime()();
 

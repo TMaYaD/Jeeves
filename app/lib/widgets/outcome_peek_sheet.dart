@@ -25,6 +25,7 @@ import '../providers/database_provider.dart';
 import '../providers/task_detail_provider.dart';
 import 'outcome_attribute_strip.dart';
 import 'outcome_attribute_editors.dart';
+import 'time_context_sheet.dart';
 import 'outcome_plan_section.dart';
 import 'person_tag_picker.dart';
 import 'dotted_add_button.dart';
@@ -256,6 +257,8 @@ class _OutcomePeekSheetState extends ConsumerState<OutcomePeekSheet> {
                             timeEstimateMinutes: timeEstimate,
                             timeLoggedMinutes: timeLogged,
                             dueDate: dueDate,
+                            timeContextChip:
+                                TimeContextChip(outcomeId: widget.todo.id),
                             onEnergyTap: () => showOutcomeEnergyLevelSheet(
                                 context, _notifier, energyLevel),
                             onEstimateTap: () => showOutcomeTimeEstimateSheet(

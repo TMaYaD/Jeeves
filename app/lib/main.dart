@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'capture/share_inbox_host.dart';
 import 'providers/auth_provider.dart';
 import 'providers/database_provider.dart';
+import 'providers/time_context_provider.dart';
 import 'providers/nudge_action_outbox.dart';
 import 'providers/onboarding_provider.dart';
 import 'providers/sync_lifecycle_provider.dart';
@@ -76,6 +77,8 @@ class JeevesApp extends ConsumerWidget {
     // note on why the view notifies make that safe), and a failure is logged
     // there rather than surfaced here, since there is no UI that could act on it.
     ref.watch(domainStoreRebuildProvider);
+    // Runs once after the v4 upgrade, after the replay above (issue #238).
+    ref.watch(timeContextTagConversionProvider);
 
     // Eagerly materialise [authTokenProvider] so its async build() runs at
     // startup and restores the persisted session from secure storage.  The

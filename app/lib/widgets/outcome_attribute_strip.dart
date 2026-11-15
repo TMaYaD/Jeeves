@@ -12,6 +12,7 @@ class OutcomeAttributeStrip extends StatelessWidget {
     this.timeEstimateMinutes,
     this.timeLoggedMinutes,
     this.dueDate,
+    this.timeContextChip,
     required this.onEnergyTap,
     required this.onEstimateTap,
     required this.onDueTap,
@@ -23,6 +24,9 @@ class OutcomeAttributeStrip extends StatelessWidget {
   final int? timeEstimateMinutes;
   final AsyncValue<int>? timeLoggedMinutes;
   final DateTime? dueDate;
+
+  /// The Time context chip, shown between logged time and due date when given.
+  final Widget? timeContextChip;
   final VoidCallback onEnergyTap;
   final VoidCallback onEstimateTap;
   final VoidCallback onDueTap;
@@ -61,6 +65,7 @@ class OutcomeAttributeStrip extends StatelessWidget {
         ),
       ),
       if (timeLoggedMinutes != null) _TimeLoggedChip(value: timeLoggedMinutes!),
+      ?timeContextChip,
       _TapChip(
         key: Key('${keyPrefix}_due'),
         onTap: onDueTap,

@@ -9,6 +9,7 @@ library;
 
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jeeves/models/time_context.dart';
 
 import 'package:jeeves/database/daos/focus_session_dao.dart'
     show focusSessionDispositionIdFor;
@@ -96,6 +97,18 @@ void main() {
     final current = await b.domain.actionDao.getCurrentAction(id);
     expect(current!.actionText, 'Draft the memo');
     expect(current.role, 'current');
+  });
+
+  test('an Action carries its TimeContext to the other device', () async {
+    final id = await outcomeOnA();
+    await a.domain.todoDao
+        .setCurrentActionText(id, 'Draft the memo', now: a.clock.asDateTime);
+    final actionId = (await a.domain.actionDao.getCurrentAction(id))!.id;
+    final value = TimeContext.create(days: {2, 4})!;
+    await a.domain.actionDao.setTimeContext(actionId, value);
+    await workspace.syncAll();
+    expect((await b.domain.actionDao.getCurrentAction(id))!.timeContext,
+        value.encode());
   });
 
   test('tags and todo_tags round-trip, junction id included', () async {
