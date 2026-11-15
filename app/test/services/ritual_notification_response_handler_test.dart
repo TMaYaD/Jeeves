@@ -127,6 +127,26 @@ void main() {
     expect(service.pending.containsKey(301), isFalse);
   });
 
+  test('Skip on an Evening Shutdown due-time notification leaves the next '
+      'Daily Planning-time alarm pending', () async {
+    final dueEdge = DateTime(2026, 11, 11, 23);
+    final nextMorning = DateTime(2026, 11, 12, 8);
+    Future<void> arm(int id, DateTime at) => service.scheduleRitualNotification(
+          id: id,
+          ritual: RitualId.eveningShutdown,
+          fireAt: at,
+          payload: payloadFor(RitualId.eveningShutdown, at),
+        );
+    await arm(611, dueEdge);
+    await arm(412, nextMorning);
+
+    await tap(kNotificationActionSkip,
+        payloadFor(RitualId.eveningShutdown, dueEdge));
+
+    expect(service.pending.containsKey(611), isFalse);
+    expect(service.pending.containsKey(412), isTrue);
+  });
+
   test('the Weekly Review skip action reads "Skip this week"', () {
     expect(ritualSkipActionLabel(RitualId.weeklyReview), 'Skip this week');
     expect(ritualSkipActionLabel(RitualId.dailyPlanning), 'Skip today');

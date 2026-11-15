@@ -241,8 +241,9 @@ fidelity**, which is the whole reason the two gestures differ:
 
 The Notification surface is a projection of the queue to fire instants. An OS
 notification fires while the app is not running, so the scheduler asks, for each
-Ritual's notification time over the coming week, whether that Ritual would hold
-the queue head then — over the same predicates the live queue uses, with current
+Ritual's notification time over the coming week — and, for Evening Shutdown, at
+each Daily Planning time and at an open session's due time, where its banner
+is raised afresh — whether that Ritual would hold the queue head then — over the same predicates the live queue uses, with current
 facts frozen — and arms only those. It re-plans whenever the facts change and
 whenever the app opens or resumes. Reminders are planned seven days ahead and no
 further, so they stop if the app is not opened for seven days.
