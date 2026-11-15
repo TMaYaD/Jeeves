@@ -13,6 +13,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sqlite3/sqlite3.dart' show sqlite3;
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/database/time_context_tag_conversion.dart';
 import 'package:jeeves/models/time_context.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/time_context_provider.dart';
@@ -24,6 +25,13 @@ const _userId = 'local';
 void main() {
   setUpAll(configureSqliteForTests);
   setUp(() => driftRuntimeOptions.dontWarnAboutMultipleDatabases = true);
+
+  /// Strips what the v7 step adds, leaving the schema a v6 build wrote.
+  Future<void> rewindToVersion6(GtdDatabase db) async {
+    await db.customStatement('DROP TABLE local_migration_markers');
+    await db.customStatement('ALTER TABLE actions DROP COLUMN time_context');
+    await db.customStatement('PRAGMA user_version = 6');
+  }
 
   Future<int> reopenAtVersion(int? userVersion,
       {bool markerPresent = false,
@@ -49,10 +57,11 @@ void main() {
         todoId: const Value('o1'),
         tagId: const Value('t-morning'),
         userId: const Value(_userId)));
-    // A fresh store carries the marker from onCreate; an older or interrupted
-    // store does not.
+    // A fresh store carries the marker from onCreate; an older store has
+    // neither the marker table nor the column, so the open below must run the
+    // real v7 migration step to create them.
     if (!markerPresent) {
-      await seed.customStatement('DELETE FROM local_migration_markers');
+      await rewindToVersion6(seed);
     }
     await seed.customStatement('PRAGMA user_version = ${userVersion ?? 0}');
     await seed.close();
@@ -96,8 +105,9 @@ void main() {
   });
 
   test(
-      'an interrupted open (schema at v7, marker absent) converts once on the '
-      'next open, then never again', () async {
+      'an interrupted upgrade (v6 -> v7 committed, conversion not) converts '
+      'once on the next open, and the marker then blocks later conversions',
+      () async {
     final raw = sqlite3.openInMemory();
     addTearDown(raw.close);
     final seed = GtdDatabase(
@@ -119,9 +129,22 @@ void main() {
         todoId: const Value('o1'),
         tagId: const Value('t-morning'),
         userId: const Value(_userId)));
-    // The upgrade committed (v7, column present) but the conversion did not.
-    await seed.customStatement('DELETE FROM local_migration_markers');
+    await rewindToVersion6(seed);
     await seed.close();
+
+    // The upgrade runs and commits; the process stops before the conversion.
+    final upgraded = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false));
+    await upgraded.customSelect('SELECT 1').get();
+    expect(
+        (raw.select('PRAGMA user_version').first.values.first as int), 7,
+        reason: 'the schema upgrade committed');
+    expect(await upgraded.select(upgraded.localMigrationMarkers).get(),
+        isEmpty,
+        reason: 'the v7 step created the marker table; nothing marked it yet');
+    expect(await upgraded.select(upgraded.todoTags).get(), hasLength(1),
+        reason: 'the conversion did not run');
+    await upgraded.close();
 
     Future<int> openAndConvert() async {
       final db = GtdDatabase(
@@ -132,10 +155,36 @@ void main() {
         domainStoreRebuildProvider.overrideWith((ref) async => 0),
       ]);
       addTearDown(container.dispose);
-      return container.read(timeContextTagConversionProvider.future);
+      final converted =
+          await container.read(timeContextTagConversionProvider.future);
+      await db.close();
+      return converted;
     }
 
     expect(await openAndConvert(), 1, reason: 'first open after interruption');
-    expect(await openAndConvert(), 0, reason: 'second open converts nothing');
+
+    // Between opens, a new eligible link appears (e.g. synced from another
+    // device). Only the persisted marker can make the next open skip it.
+    final between = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false));
+    final markers = await between.select(between.localMigrationMarkers).get();
+    expect(markers.map((m) => m.name), [timeContextConversionMarkerName],
+        reason: 'the marker persisted with the conversion');
+    final action = (await between.actionDao.getCurrentAction('o1'))!;
+    expect(TimeContext.tryParse(action.timeContext), isNotNull);
+    expect(await between.select(between.tags).get(), hasLength(1));
+    await between.into(between.todoTags).insert(TodoTagsCompanion(
+        id: const Value('o1-t-morning-again'),
+        todoId: const Value('o1'),
+        tagId: const Value('t-morning'),
+        userId: const Value(_userId)));
+    await between.close();
+
+    expect(await openAndConvert(), 0, reason: 'the marker blocks a re-run');
+    final after = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false));
+    addTearDown(after.close);
+    expect(await after.select(after.todoTags).get(), hasLength(1),
+        reason: 'the new eligible link was left alone');
   });
 }
