@@ -105,6 +105,16 @@ void main() {
     await db.close();
   });
 
+  /// Puts the soonest pending alarm of [ritual] in the tray, as the OS does
+  /// once it fires, and returns its id.
+  int deliverSoonestAlarmOf(RitualId ritual) {
+    final soonest = service.pending.entries
+        .where((e) => e.value.ritual == ritual)
+        .reduce((a, b) => a.value.fireAt.isBefore(b.value.fireAt) ? a : b);
+    service.delivered.add((id: soonest.key, ritual: ritual));
+    return soonest.key;
+  }
+
   Iterable<DateTime> oneOffs(RitualId ritual) =>
       service.alarmsOf(ritual).map((a) => a.fireAt);
 
@@ -302,11 +312,14 @@ void main() {
       expect(oneOffs(RitualId.eveningShutdown).take(3),
           [at(0, 23), at(1, 8), at(1, 18)]);
       expect(oneOffs(RitualId.dailyPlanning), isEmpty);
+      final deliveredId = deliverSoonestAlarmOf(RitualId.eveningShutdown);
 
       await db.focusSessionDao
           .closeSession(sessionId: sessionId, now: at(0, 20, 10));
       await settle();
       expect(oneOffs(RitualId.eveningShutdown), isEmpty);
+      expect(service.delivered.map((d) => d.id), isNot(contains(deliveredId)),
+          reason: 'the delivered 23:00 notification is withdrawn');
       expect(oneOffs(RitualId.dailyPlanning).first, at(1, 8));
     });
 
@@ -320,11 +333,14 @@ void main() {
 
       expect(oneOffs(RitualId.eveningShutdown).take(2), [at(0, 8), at(0, 18)]);
       expect(oneOffs(RitualId.dailyPlanning), isEmpty);
+      final deliveredId = deliverSoonestAlarmOf(RitualId.eveningShutdown);
 
       await db.focusSessionDao
           .closeSession(sessionId: sessionId, now: at(0, 7, 10));
       await settle();
       expect(oneOffs(RitualId.eveningShutdown), isEmpty);
+      expect(service.delivered.map((d) => d.id), isNot(contains(deliveredId)),
+          reason: 'the delivered 08:00 notification is withdrawn');
       expect(oneOffs(RitualId.dailyPlanning).first, at(0, 8));
     });
 

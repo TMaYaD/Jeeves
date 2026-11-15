@@ -356,6 +356,25 @@ void main() {
       expect(esTimes(plan), isNot(contains(_at(1, 8))));
     });
 
+    test('a Weekly Review due at a future session-due time holds the head '
+        'there', () {
+      // Session started 20:00 with 180 min: due 23:00. Weekly Review is due
+      // from 23:00 (notification time), so it outranks Evening Shutdown then.
+      final plan = planNudgeNotifications(_facts(
+        now: _at(0, 20, 5),
+        sessionIsOpen: true,
+        latestSessionStartedAt: _at(0, 20),
+        availableMinutes: 180,
+        weeklyReviewLastCompleted: _at(-9, 7),
+        enabled: _allEnabled,
+        weeklyReviewHour: 23,
+      ));
+
+      expect(esTimes(plan), isNot(contains(_at(0, 23))));
+      expect(_of(plan, RitualId.weeklyReview).map((p) => p.fireAt),
+          contains(_at(0, 23)));
+    });
+
     test('with Evening Shutdown notifications off nothing is armed for it', () {
       final plan = planNudgeNotifications(_facts(
         sessionIsOpen: true,
