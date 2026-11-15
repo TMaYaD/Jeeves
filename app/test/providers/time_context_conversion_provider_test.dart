@@ -173,9 +173,20 @@ void main() {
     final action = (await between.actionDao.getCurrentAction('o1'))!;
     expect(TimeContext.tryParse(action.timeContext), isNotNull);
     expect(await between.select(between.tags).get(), hasLength(1));
+    // A second Outcome whose current Action has no TimeContext: unlike o1
+    // (already converted, so skipped on its own), this link is eligible.
+    await between.into(between.todos).insert(TodosCompanion(
+        id: const Value('o2'),
+        title: const Value('Book travel'),
+        userId: const Value(_userId),
+        createdAt: Value(DateTime.now())));
+    await seedCurrentAction(between,
+        outcomeId: 'o2', text: 'compare flights', userId: _userId);
+    expect((await between.actionDao.getCurrentAction('o2'))!.timeContext,
+        isNull);
     await between.into(between.todoTags).insert(TodoTagsCompanion(
-        id: const Value('o1-t-morning-again'),
-        todoId: const Value('o1'),
+        id: const Value('o2-t-morning'),
+        todoId: const Value('o2'),
         tagId: const Value('t-morning'),
         userId: const Value(_userId)));
     await between.close();
@@ -184,7 +195,11 @@ void main() {
     final after = GtdDatabase(
         NativeDatabase.opened(raw, closeUnderlyingOnClose: false));
     addTearDown(after.close);
-    expect(await after.select(after.todoTags).get(), hasLength(1),
-        reason: 'the new eligible link was left alone');
+    final links = await after.select(after.todoTags).get();
+    expect(links.map((l) => l.id), ['o2-t-morning'],
+        reason: 'the eligible link was left alone because of the marker');
+    expect((await after.actionDao.getCurrentAction('o2'))!.timeContext,
+        isNull,
+        reason: 'the marker stopped the conversion from touching o2');
   });
 }
