@@ -193,6 +193,7 @@ void main() {
           'startDay keeps the opened session when remembering the available '
           'time fails', () async {
         final notifier = container.read(focusSessionPlanningProvider.notifier);
+        await notifier.ensureAvailableTimePreload();
         notifier.setAvailableTime(300);
         // A real store failure after the session opens: the preference table
         // is gone, so the read inside startDay throws.
