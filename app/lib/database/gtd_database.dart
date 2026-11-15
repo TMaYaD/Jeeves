@@ -19,6 +19,7 @@
 library;
 
 import 'dart:async';
+import 'dart:math';
 
 import 'package:drift/drift.dart';
 import '../utils/uuid.dart';
@@ -39,7 +40,7 @@ export 'tables.dart';
 part 'gtd_database.g.dart';
 
 @DriftDatabase(
-  tables: [Todos, Tags, TodoTags, TimeLogs, FocusSessions, FocusSessionTasks, FocusSessionDispositions, FocusSessionPlanningBypasses, FocusSessionReschedules, OutcomeBypassDecisions, UserPreferences, Captures, CaptureAttachments, CaptureOutcomes, CaptureTags, Actions, LocalMigrationMarkers],
+  tables: [Todos, Tags, TodoTags, TimeLogs, FocusSessions, FocusSessionTasks, FocusSessionDispositions, FocusSessionPlanningBypasses, FocusSessionReschedules, OutcomeBypassDecisions, UserPreferences, Captures, CaptureAttachments, CaptureOutcomes, CaptureTags, Actions, LocalMigrationMarkers, PendingChanges, DeviceClockIdentity],
   daos: [TagDao, TodoDao, TimeLogDao, FocusSessionDao, CaptureDao, ActionDao],
 )
 class GtdDatabase extends _$GtdDatabase {
@@ -88,7 +89,13 @@ class GtdDatabase extends _$GtdDatabase {
     try {
       result = await opCapture.runInScope(
         scope,
-        () => _capturedTransaction(body),
+        () => _capturedTransaction(() async {
+          final bodyResult = await body();
+          // Inside the transaction, so the staged effects commit or roll back
+          // with the domain rows they describe.
+          await opCapture.stageInTransaction(scope, this);
+          return bodyResult;
+        }),
       );
     } catch (_) {
       opCapture.rollbackScope(scope);
@@ -186,7 +193,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final UserPreferencesDao userPreferencesDao = UserPreferencesDao(this);
 
   @override
-  int get schemaVersion => 7;
+  int get schemaVersion => 8;
 
   /// Completes with the [OpeningDetails] of this store's one open.
   ///
@@ -223,6 +230,7 @@ class GtdDatabase extends _$GtdDatabase {
             "VALUES ('time_context_tag_conversion', "
             "strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
           );
+          await ensureDeviceClockIdentity();
         }),
         onUpgrade: (m, from, to) => _duringMigration(() async {
           // v2 (issue #604): drop `todos.time_spent_minutes`, a denormalised
@@ -304,8 +312,47 @@ class GtdDatabase extends _$GtdDatabase {
               await m.createTable(localMigrationMarkers);
             }
           }
+          // v8 (sync host): the transactional outbox and the device's clock
+          // identity. Created only; nothing is dropped or altered, so no row of
+          // an existing store moves.
+          if (from < 8) {
+            final tables = await m.database
+                .customSelect(
+                    "SELECT name FROM sqlite_master WHERE type='table'")
+                .get();
+            bool has(String name) =>
+                tables.any((row) => row.read<String>('name') == name);
+            if (!has('pending_changes')) await m.createTable(pendingChanges);
+            if (!has('device_clock_identity')) {
+              await m.createTable(deviceClockIdentity);
+            }
+            await ensureDeviceClockIdentity();
+          }
         }),
       );
+
+  /// Makes sure the one-row [DeviceClockIdentity] exists, minting a random node
+  /// id if it does not, and returns the row. Idempotent.
+  Future<({String deviceNodeId, String? enrolledMemberIdHex})>
+      ensureDeviceClockIdentity() async {
+    final random = Random.secure();
+    final minted = [
+      for (var i = 0; i < 16; i++) random.nextInt(256).toRadixString(16).padLeft(2, '0'),
+    ].join();
+    await customStatement(
+      'INSERT OR IGNORE INTO device_clock_identity (id, device_node_id) '
+      'VALUES (1, ?)',
+      [minted],
+    );
+    final row = await customSelect(
+      'SELECT device_node_id, enrolled_member_id_hex FROM device_clock_identity '
+      'WHERE id = 1',
+    ).getSingle();
+    return (
+      deviceNodeId: row.read<String>('device_node_id'),
+      enrolledMemberIdHex: row.readNullable<String>('enrolled_member_id_hex'),
+    );
+  }
 
   /// Invalidates Drift stream queries reading `todos` (and, when
   /// [includeTodoTags] is set, `todo_tags`) after a write, independent of what

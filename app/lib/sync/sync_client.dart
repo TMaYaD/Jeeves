@@ -62,6 +62,8 @@ import 'package:uuid/uuid.dart';
 import 'chain_verifier.dart';
 import 'control_payload.dart';
 import 'domain_projector.dart';
+import 'host/change.dart';
+import 'host/sync_host_service.dart';
 import 'domain_reconciler.dart';
 import 'envelope.dart';
 import 'grants_view.dart';
@@ -227,6 +229,10 @@ class SyncClient {
   /// reconcile.
   DomainReconciler? reconciler;
 
+  /// The app-owned sync host, when one exists. The rebuild consults it to carry
+  /// across merge state the log never held (writes made under the device node id).
+  SyncHostService? host;
+
   SyncTransport? _transport;
 
   /// The authors whose quarantined successors a release scan is currently
@@ -368,11 +374,12 @@ class SyncClient {
     Map<String, Object?> fields = const {},
     bool tombstone = false,
     int? keyEpoch,
+    Hlc? clock,
   }) async {
     final payload = OpPayload(
       collection: collection,
       entityId: entityId,
-      hlc: _clock.send(),
+      hlc: clock ?? _clock.send(),
       fields: {
         for (final entry in fields.entries) entry.key: FieldWrite(entry.value),
       },
@@ -1213,6 +1220,12 @@ class SyncClient {
     // reduced to nothing from one this device never held.
     final reducedBefore = await _reducedEntities();
 
+    // Merge state whose winning clock is this device's own node id was never an
+    // op: the log cannot rebuild it, and wiping it would make the projector delete
+    // rows the user wrote. Saved here, merged back after the replay.
+    final carriedAcrossRebuild =
+        await host?.changesStampedByDevice() ?? const <Change>[];
+
     // Derived state only. The op log, the outbox, the applied control log and the
     // quarantine are all evidence, and evidence is not edited.
     await _db.transaction(() async {
@@ -1284,6 +1297,9 @@ class SyncClient {
         // first time; the clock is not re-consulted for anything already judged.
         await _stampRefused(row.seq, rejection.reason);
       }
+    }
+    if (carriedAcrossRebuild.isNotEmpty) {
+      await host!.restore(carriedAcrossRebuild);
     }
     // Everything that *was* reduced, whether or not it reduced again: an entity
     // whose ops all became refused is exactly the case the projector has to hear

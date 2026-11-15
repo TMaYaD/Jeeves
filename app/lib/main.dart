@@ -13,6 +13,7 @@ import 'providers/time_context_provider.dart';
 import 'providers/nudge_action_outbox.dart';
 import 'providers/onboarding_provider.dart';
 import 'providers/sync_lifecycle_provider.dart';
+import 'providers/sync_stack_provider.dart';
 import 'router.dart';
 import 'services/due_date_notifications.dart';
 import 'services/notification_service.dart';
@@ -76,6 +77,7 @@ class JeevesApp extends ConsumerWidget {
     // as early as the app can start it; it is not awaited (see the provider's own
     // note on why the view notifies make that safe), and a failure is logged
     // there rather than surfaced here, since there is no UI that could act on it.
+    ref.watch(syncHostProvider);
     ref.watch(domainStoreRebuildProvider);
     // Runs once after the v4 upgrade, after the replay above (issue #238).
     ref.watch(timeContextTagConversionProvider);

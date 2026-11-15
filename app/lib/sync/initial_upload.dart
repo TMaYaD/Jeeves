@@ -169,6 +169,7 @@ Future<InitialUploadReport> runInitialUpload({
   required SyncClient gtdClient,
   required SyncClient preferencesClient,
   required ReducedCollectionReader readReducedCollection,
+  Future<Set<String>> Function(String collection)? readDeviceStampedEntityIds,
   void Function(InitialUploadProgress)? onProgress,
   int flushEveryOpCount = initialUploadFlushEveryOpCount,
   int progressEveryEntityCount = initialUploadProgressEveryEntityCount,
@@ -192,6 +193,11 @@ Future<InitialUploadReport> runInitialUpload({
     final entities = plan.entitiesFor(collection).toList();
     if (entities.isEmpty) continue;
     final reduced = await readReducedCollection(collection);
+    // Merge state now holds writes made before enrolment, clocked under the
+    // device's own node id and never carried by any op. Equal-to-merge-state no
+    // longer means "already on the log" for those, so they are not skipped.
+    final deviceStamped = await readDeviceStampedEntityIds?.call(collection) ??
+        const <String>{};
 
     // Emitted at the head of the collection and then *inside* the walk: the
     // counters are what a progress line is for, and a collection holding
@@ -209,7 +215,8 @@ Future<InitialUploadReport> runInitialUpload({
     for (final entity in entities) {
       completed++;
       final existing = reduced[entity.entityId];
-      if (plannedFieldsAlreadyReduced(entity.fields, existing)) {
+      if (!deviceStamped.contains(entity.entityId) &&
+          plannedFieldsAlreadyReduced(entity.fields, existing)) {
         skipped++;
         continue;
       }

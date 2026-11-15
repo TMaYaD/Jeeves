@@ -8,18 +8,36 @@ import '../database/domain_store.dart';
 import '../database/gtd_database.dart';
 import '../sync/domain_op_capture.dart';
 import '../sync/domain_rebuild.dart';
+import '../sync/hlc.dart';
+import '../sync/host/hosted_capture.dart';
 import 'sync_stack_provider.dart';
 
-/// The process-wide capture seam every DAO write path describes its effect
-/// through.
+/// The device's one HLC state, shared by the domain store's capture binding, the
+/// sync host and the op-log stack. Every stamp names its own node id, so the
+/// default member id here is never used.
+final Provider<HlcClock> deviceClockProvider = Provider<HlcClock>(
+  (ref) => HlcClock(
+    memberIdHex: '0' * 32,
+    nowMs: () => DateTime.now().millisecondsSinceEpoch,
+  ),
+);
+
+/// The binding every DAO write path describes its effect through: it stages each
+/// coalesced change into `pending_changes`, in the write's own transaction, and
+/// asks the sync host to drain it after the commit. One instance, so the store and
+/// the host reach the same object.
+final Provider<HostedDomainOpCapture> hostedDomainOpCaptureProvider =
+    Provider<HostedDomainOpCapture>(
+  (ref) => HostedDomainOpCapture(clock: ref.read(deviceClockProvider)),
+);
+
+/// The interim op-log bridge: the sync host hands it each merged local change and
+/// it routes the change to the Workspace client that authors it.
 ///
 /// One instance, constructed before sign-in and bound to nothing — which is the
-/// state an un-enrolled device stays in for ever, authoring nothing. It is a
-/// provider of its own rather than an inline argument to [databaseProvider]
-/// because binding it is `sync_lifecycle_provider.dart`'s job and the two have to
-/// reach the *same* object: a second instance would leave the store describing
-/// its writes into a void while the lifecycle held a bound seam nobody wrote
-/// through.
+/// state an un-enrolled device stays in for ever, authoring no ops. It is a
+/// provider of its own because binding it is `sync_lifecycle_provider.dart`'s job
+/// and the lifecycle and the host have to reach the *same* object.
 final Provider<WorkspaceRoutingOpCapture> domainOpCaptureProvider =
     Provider<WorkspaceRoutingOpCapture>((ref) => WorkspaceRoutingOpCapture());
 
@@ -58,7 +76,7 @@ final Provider<GtdDatabase> databaseProvider = Provider<GtdDatabase>((ref) {
   }));
   final db = GtdDatabase(
     connection,
-    opCapture: ref.read(domainOpCaptureProvider),
+    opCapture: ref.read(hostedDomainOpCaptureProvider),
   );
   ref.onDispose(db.close);
   return db;

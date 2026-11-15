@@ -1,0 +1,444 @@
+/// The app-owned sync host.
+///
+/// Owns merge state, the merge core, the projector and the reconciler; drains the
+/// domain store's `pending_changes` outbox into merge state and a durable change
+/// sequence; and hands changes to plugins through [SyncPlugin.deliver], resuming
+/// each from a cursor it stores. Built once per device, without a signed-in user.
+///
+/// **Ordering of a drain.** Per outbox row, one sync-store transaction merges the
+/// change and (when any plugin cursor exists) appends it to the sequence; only
+/// after that commit is the row deleted. A crash between the two commits replays
+/// the row: the merge is idempotent and `change_id` is a unique key on the
+/// sequence, so the replay leaves one entry.
+library;
+
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart' as crypto;
+import 'package:drift/drift.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
+
+import '../../database/gtd_database.dart';
+import '../domain_projector.dart';
+import '../domain_reconciler.dart';
+import '../hlc.dart';
+import '../merge_strategy.dart';
+import '../sync_database.dart';
+import '../sync_rejection.dart';
+import 'change.dart';
+import 'hosted_capture.dart';
+import 'merge_core.dart';
+import 'merge_state.dart';
+import 'sync_host.dart';
+
+/// Called with the changes a drain merged, in order — the interim bridge to the
+/// op-log client. Failures are the listener's to contain.
+typedef LocalChangeListener = Future<void> Function(List<Change> changes);
+
+/// How many sequence entries one `deliver` call carries.
+const int deliveryBatchSize = 200;
+
+class SyncHostService implements SyncHost, OutboxDrainer {
+  SyncHostService({
+    required SyncDatabase sync,
+    required GtdDatabase domain,
+    required HlcClock clock,
+    MergeStrategyRegistry strategies = const MergeStrategyRegistry(),
+  })  : _sync = sync,
+        _domain = domain,
+        _clock = clock,
+        _core = MergeCore(sync, strategies: strategies),
+        registry = CollectionRegistry(sync) {
+    projector = DomainProjector(registry: registry, domain: domain);
+    reconciler = DomainReconciler(registry: registry, domain: domain);
+  }
+
+  final SyncDatabase _sync;
+  final GtdDatabase _domain;
+  final HlcClock _clock;
+  final MergeCore _core;
+
+  /// One registry over merge state for the whole device.
+  final CollectionRegistry registry;
+  late final DomainProjector projector;
+  late final DomainReconciler reconciler;
+
+  /// The interim op-log bridge (removed by moving the op log behind
+  /// [SyncPlugin]).
+  LocalChangeListener? localChangeListener;
+
+  String? _deviceNodeId;
+  bool _reconcileRetryRequired = false;
+  Future<void> _drainTail = Future<void>.value();
+  final Map<String, SyncPlugin> _plugins = <String, SyncPlugin>{};
+  final Map<String, Future<void>> _deliveryTails = <String, Future<void>>{};
+
+  /// Load the device identity and replay whatever the outbox still holds — the
+  /// crash replay.
+  Future<void> start() async {
+    _deviceNodeId = (await readClockIdentity(_domain)).deviceNodeId;
+    await drain();
+  }
+
+  // --- Local writes ----------------------------------------------------------
+
+  /// Merge every outbox row into merge state, in row order, then project the
+  /// touched entities, notify the bridge and trigger delivery. Serialised.
+  @override
+  Future<void> drain() {
+    final run = _drainTail.then((_) => _drainOnce());
+    _drainTail = run.then((_) {}, onError: (Object _) {});
+    return run;
+  }
+
+  Future<void> _drainOnce() async {
+    final rows = await _domain
+        .customSelect('SELECT id, change_id, change_json FROM pending_changes ORDER BY id')
+        .get();
+    if (rows.isEmpty) return;
+    final touched = <AffectedEntity>{};
+    final merged = <Change>[];
+    Object? storageError;
+    for (final row in rows) {
+      final id = row.read<int>('id');
+      final changeId = row.read<String>('change_id');
+      final Change change;
+      try {
+        change = Change.fromJson(
+            (jsonDecode(row.read<String>('change_json')) as Map).cast<String, Object?>());
+      } on Object catch (error) {
+        debugPrint('sync host: dropped an unreadable pending change $changeId — $error');
+        await _deletePending(id);
+        continue;
+      }
+      try {
+        touched.addAll(await _mergeAndSequence(change, changeId, 'local'));
+      } on SyncRejection catch (rejection) {
+        debugPrint('sync host: refused pending change $changeId — $rejection');
+        await _deletePending(id);
+        continue;
+      } on Object catch (error) {
+        // A storage error: leave this row and everything behind it for the next
+        // drain, so merge order stays outbox order.
+        storageError = error;
+        break;
+      }
+      await _deletePending(id);
+      merged.add(change);
+    }
+    if (touched.isNotEmpty) {
+      await projector.project(touched);
+    }
+    final listener = localChangeListener;
+    if (listener != null && merged.isNotEmpty) {
+      try {
+        await listener(merged);
+      } on Object catch (error) {
+        debugPrint('sync host: op-log bridge failed — $error');
+      }
+    }
+    if (merged.isNotEmpty) unawaited(_triggerDelivery());
+    if (storageError != null) throw storageError;
+  }
+
+  Future<void> _deletePending(int id) =>
+      _domain.customStatement('DELETE FROM pending_changes WHERE id = ?', [id]);
+
+  Future<Set<AffectedEntity>> _mergeAndSequence(
+    Change change,
+    String changeId,
+    String source,
+  ) =>
+      _sync.transaction(() async {
+        final affected = await _core.apply(change);
+        if (await _hasCursors()) {
+          await _sync.customStatement(
+            'INSERT OR IGNORE INTO change_sequence (change_id, source, change_json) '
+            'VALUES (?, ?, ?)',
+            [changeId, source, jsonEncode(change.toJson())],
+          );
+        }
+        return affected;
+      });
+
+  Future<bool> _hasCursors() async =>
+      (await _sync.customSelect('SELECT 1 FROM plugin_cursors LIMIT 1').get())
+          .isNotEmpty;
+
+  // --- SyncHost --------------------------------------------------------------
+
+  @override
+  Future<void> applyRemote(String sourcePluginId, List<Change> changes) async {
+    final touched = <AffectedEntity>{};
+    for (final change in changes) {
+      touched.addAll(await _mergeAndSequence(
+        change,
+        // A remote change has no outbox identity: derive a stable id from its
+        // content so redelivery of the same change is one sequence entry.
+        'remote:$sourcePluginId:'
+        '${crypto.sha256.convert(utf8.encode(jsonEncode(change.toJson())))}',
+        sourcePluginId,
+      ));
+      final highest = change.highestClock;
+      if (highest != null) _clock.receive(highest);
+    }
+    if (touched.isEmpty) return;
+    final groups = await projector.project(touched);
+    await _reconcileProjected(groups);
+    unawaited(_triggerDelivery());
+  }
+
+  /// Run the convergence passes over what a projection changed, containing any
+  /// failure and re-arming — the passes detect from durable state, so a retry is
+  /// safe (the rule `SyncClient._reconcileProjected` follows).
+  Future<void> _reconcileProjected(Set<String> groups) async {
+    try {
+      await reconciler.reconcile(groups, force: _reconcileRetryRequired);
+      _reconcileRetryRequired = false;
+    } on Object {
+      _reconcileRetryRequired = true;
+    }
+  }
+
+  @override
+  Stream<Change> snapshot() async* {
+    final entities = (await reducedEntities(_sync)).toList()
+      ..sort((a, b) {
+        final byCollection = a.collection.compareTo(b.collection);
+        return byCollection != 0 ? byCollection : a.entityId.compareTo(b.entityId);
+      });
+    for (final entity in entities) {
+      yield await _readChange(entity.collection, entity.entityId);
+    }
+  }
+
+  Future<Change> _readChange(String collection, String entityId) async {
+    final fieldRows = await _sync.customSelect(
+      'SELECT f.field AS field, f.value_json AS value_json, '
+      'c.wall_ms AS wall_ms, c.counter AS counter, c.member_id_hex AS member_id_hex '
+      'FROM reduced_fields f JOIN field_clocks c '
+      'ON c.collection = f.collection AND c.entity_id = f.entity_id AND c.field = f.field '
+      'WHERE f.collection = ? AND f.entity_id = ? ORDER BY f.field',
+      variables: [Variable<String>(collection), Variable<String>(entityId)],
+    ).get();
+    final tombstoneRow = await (_sync.select(_sync.rowTombstones)
+          ..where((row) =>
+              row.collection.equals(collection) & row.entityId.equals(entityId)))
+        .getSingleOrNull();
+    return Change(
+      collection: collection,
+      entityId: entityId,
+      fields: {
+        for (final row in fieldRows)
+          row.read<String>('field'): ClockedValue(
+            jsonDecode(row.read<String>('value_json')),
+            Hlc(row.read<int>('wall_ms'), row.read<int>('counter'),
+                row.read<String>('member_id_hex')),
+          ),
+      },
+      tombstone: tombstoneRow == null
+          ? null
+          : Hlc(tombstoneRow.wallMs, tombstoneRow.counter, tombstoneRow.memberIdHex),
+    );
+  }
+
+  @override
+  Hlc mintClock() {
+    final node = _deviceNodeId;
+    if (node == null) {
+      throw StateError('SyncHostService.start must complete before mintClock');
+    }
+    return _clock.send(nodeIdHex: node);
+  }
+
+  // --- Things the op-log bridge needs ----------------------------------------
+
+  /// Merge state whose winning clock names [nodeIdHex] — the changes this device
+  /// made under its own node id, which no op ever carried.
+  Future<List<Change>> changesStampedBy(String nodeIdHex) async {
+    final fieldEntities = await _sync.customSelect(
+      'SELECT DISTINCT collection, entity_id FROM field_clocks WHERE member_id_hex = ? '
+      'UNION SELECT collection, entity_id FROM row_tombstones WHERE member_id_hex = ?',
+      variables: [Variable<String>(nodeIdHex), Variable<String>(nodeIdHex)],
+    ).get();
+    final changes = <Change>[];
+    for (final row in fieldEntities) {
+      final whole = await _readChange(
+          row.read<String>('collection'), row.read<String>('entity_id'));
+      changes.add(Change(
+        collection: whole.collection,
+        entityId: whole.entityId,
+        fields: {
+          for (final field in whole.fields.entries)
+            if (field.value.hlc.memberIdHex == nodeIdHex) field.key: field.value,
+        },
+        tombstone:
+            whole.tombstone?.memberIdHex == nodeIdHex ? whole.tombstone : null,
+      ));
+    }
+    return changes;
+  }
+
+  /// [changesStampedBy] for this device's own node id.
+  Future<List<Change>> changesStampedByDevice() async => changesStampedBy(
+      _deviceNodeId ?? (await readClockIdentity(_domain)).deviceNodeId);
+
+  /// A view of the device's one clock that stamps [memberIdHex] by default — what
+  /// the op-log stack mints its own clocks (certificates, uploads, compaction) from.
+  HlcClock clockForMember(String memberIdHex) => _clock.viewFor(memberIdHex);
+
+  /// Entity ids in [collection] with at least one field or tombstone clock that
+  /// names this device's own node id.
+  Future<Set<String>> entityIdsStampedByDevice(String collection) async {
+    final node = _deviceNodeId ?? (await readClockIdentity(_domain)).deviceNodeId;
+    final rows = await _sync.customSelect(
+      'SELECT entity_id FROM field_clocks WHERE collection = ? AND member_id_hex = ? '
+      'UNION SELECT entity_id FROM row_tombstones WHERE collection = ? AND member_id_hex = ?',
+      variables: [
+        Variable<String>(collection),
+        Variable<String>(node),
+        Variable<String>(collection),
+        Variable<String>(node),
+      ],
+    ).get();
+    return {for (final row in rows) row.read<String>('entity_id')};
+  }
+
+  /// This device's node id (after [start]).
+  String get deviceNodeId {
+    final node = _deviceNodeId;
+    if (node == null) {
+      throw StateError('SyncHostService.start must complete first');
+    }
+    return node;
+  }
+
+  /// Record which member id, if any, local writes are stamped with.
+  Future<void> setEnrolledMember(String? memberIdHex) async {
+    await readClockIdentity(_domain);
+    await _domain.customStatement(
+      'UPDATE device_clock_identity SET enrolled_member_id_hex = ? WHERE id = 1',
+      [memberIdHex],
+    );
+  }
+
+  /// Merge changes saved from before a wipe back in, and project them.
+  Future<void> restore(List<Change> changes) async {
+    for (final change in changes) {
+      await _core.apply(change);
+    }
+  }
+
+  // --- Plugins and delivery --------------------------------------------------
+
+  /// Attach [plugin]: record its cursor at the current head if it has none, start
+  /// it, and deliver whatever it is owed. Earlier state reaches a new plugin
+  /// through [snapshot].
+  Future<void> attach(SyncPlugin plugin) async {
+    _plugins[plugin.id] = plugin;
+    await _sync.customStatement(
+      'INSERT OR IGNORE INTO plugin_cursors (plugin_id, acknowledged_sequence) '
+      'VALUES (?, COALESCE((SELECT MAX(sequence) FROM change_sequence), 0))',
+      [plugin.id],
+    );
+    await plugin.start(this);
+    unawaited(_triggerDelivery());
+  }
+
+  /// Stop [pluginId]. Its cursor is kept unless [forgetCursor], so a later attach
+  /// resumes where it left off.
+  Future<void> detach(String pluginId, {bool forgetCursor = false}) async {
+    final plugin = _plugins.remove(pluginId);
+    await plugin?.stop();
+    if (forgetCursor) {
+      await _sync
+          .customStatement('DELETE FROM plugin_cursors WHERE plugin_id = ?', [pluginId]);
+      await _prune();
+    }
+  }
+
+  /// The highest sequence number [pluginId] has acknowledged.
+  Future<int?> cursorOf(String pluginId) async {
+    final row = await _sync.customSelect(
+      'SELECT acknowledged_sequence FROM plugin_cursors WHERE plugin_id = ?',
+      variables: [Variable<String>(pluginId)],
+    ).getSingleOrNull();
+    return row?.read<int>('acknowledged_sequence');
+  }
+
+  /// Run delivery to every attached plugin and wait until each has nothing
+  /// further to take.
+  Future<void> deliverAll() => _triggerDelivery();
+
+  Future<void> _triggerDelivery() {
+    final runs = <Future<void>>[];
+    for (final plugin in _plugins.values.toList()) {
+      final previous = _deliveryTails[plugin.id] ?? Future<void>.value();
+      final run = previous.then((_) => _deliverTo(plugin));
+      _deliveryTails[plugin.id] = run.then((_) {}, onError: (Object _) {});
+      runs.add(run);
+    }
+    return Future.wait(runs);
+  }
+
+  Future<void> _deliverTo(SyncPlugin plugin) async {
+    while (true) {
+      final cursor = await cursorOf(plugin.id);
+      if (cursor == null) return;
+      final rows = await _sync.customSelect(
+        'SELECT sequence, source, change_json FROM change_sequence '
+        'WHERE sequence > ? ORDER BY sequence LIMIT ?',
+        variables: [Variable<int>(cursor), Variable<int>(deliveryBatchSize)],
+      ).get();
+      if (rows.isEmpty) return;
+      final lastSequence = rows.last.read<int>('sequence');
+      final owed = <SequencedChange>[
+        for (final row in rows)
+          if (row.read<String>('source') != plugin.id)
+            SequencedChange(
+              row.read<int>('sequence'),
+              Change.fromJson((jsonDecode(row.read<String>('change_json')) as Map)
+                  .cast<String, Object?>()),
+            ),
+      ];
+      int acknowledged;
+      if (owed.isEmpty) {
+        // Nothing this plugin is owed: pass its own entries without a call.
+        acknowledged = lastSequence;
+      } else {
+        try {
+          acknowledged = await plugin.deliver(owed);
+        } on Object catch (error) {
+          debugPrint('sync host: plugin ${plugin.id} failed to take changes — $error');
+          return;
+        }
+        // Never believe an acknowledgement beyond what was delivered.
+        final highestDelivered = owed.last.sequence;
+        if (acknowledged > highestDelivered) acknowledged = highestDelivered;
+        // An acknowledgement short of the last owed entry still moves the cursor
+        // only as far as it says. Skipped own-source entries ahead of the first
+        // owed entry are covered by an acknowledgement that reaches it.
+      }
+      if (acknowledged <= cursor) return;
+      await _sync.customStatement(
+        'UPDATE plugin_cursors SET acknowledged_sequence = ? WHERE plugin_id = ?',
+        [acknowledged, plugin.id],
+      );
+      await _prune();
+    }
+  }
+
+  Future<void> _prune() => _sync.customStatement(
+        'DELETE FROM change_sequence WHERE sequence <= '
+        '(SELECT COALESCE(MIN(acknowledged_sequence), 0) FROM plugin_cursors)',
+      );
+
+  /// Stop every attached plugin. The host stays usable.
+  Future<void> stopPlugins() async {
+    for (final plugin in _plugins.values.toList()) {
+      await plugin.stop();
+    }
+    _plugins.clear();
+  }
+}
