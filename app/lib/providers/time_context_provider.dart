@@ -16,6 +16,20 @@ final currentTimeContextsProvider =
   return ref.watch(databaseProvider).actionDao.watchCurrentTimeContexts();
 });
 
+/// Longest delay the boundary timer is armed with. Browsers store a timer
+/// delay as a 32-bit signed millisecond count (about 24.8 days), so a longer
+/// delay wraps and fires at once. A capped timer that fires early just
+/// rebuilds the provider, which re-arms it.
+const Duration maxBoundaryTimerDelay = Duration(days: 1);
+
+/// Delay to arm the boundary timer with for [next], never negative and never
+/// above [maxBoundaryTimerDelay].
+Duration boundaryTimerDelay(DateTime now, DateTime next) {
+  final delay = next.difference(now);
+  if (delay.isNegative) return Duration.zero;
+  return delay > maxBoundaryTimerDelay ? maxBoundaryTimerDelay : delay;
+}
+
 /// A coarse signal that advances whenever a TimeContext flips between
 /// satisfied and unsatisfied. Arms one [Timer] at the earliest
 /// [TimeContext.nextTransitionAfter] over [currentTimeContextsProvider] and
@@ -33,11 +47,7 @@ final timeContextBoundaryTickProvider = Provider<int>((ref) {
     if (t != null && (next == null || t.isBefore(next))) next = t;
   }
   if (next == null) return 0;
-  final delay = next.difference(now);
-  final timer = Timer(
-    delay.isNegative ? Duration.zero : delay,
-    ref.invalidateSelf,
-  );
+  final timer = Timer(boundaryTimerDelay(now, next), ref.invalidateSelf);
   ref.onDispose(timer.cancel);
   return next.millisecondsSinceEpoch ~/ 1000;
 });
