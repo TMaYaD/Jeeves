@@ -1,10 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../models/follow_up_change.dart';
 import '../providers/auth_provider.dart';
 import '../providers/database_provider.dart';
 import '../providers/tags_provider.dart';
 import '../providers/task_detail_provider.dart';
+
+/// What the sheet hands back: the chosen people and, when the sheet offered a
+/// follow-up date and the user changed it, that change. [followUp] is null when
+/// the row was not offered or left as it was.
+class PersonPickerResult {
+  const PersonPickerResult(this.people, {this.followUp});
+
+  final Set<String> people;
+  final FollowUpChange? followUp;
+}
 
 /// Bottom-sheet multi-select picker for person-typed tags (Waiting For).
 ///
@@ -39,7 +50,17 @@ class PersonTagPickerSheet extends ConsumerStatefulWidget {
     this.todoId,
     required this.assignedPersonTagIds,
     this.requireSelection = false,
+    this.offerFollowUp = false,
+    this.initialFollowUpDate,
   });
+
+  /// Shows the optional "Follow up from" date row. Only the routing bar to
+  /// Waiting For asks for it.
+  final bool offerFollowUp;
+
+  /// The follow-up date the Outcome already carries, if any. Shown on the row;
+  /// the result carries a [FollowUpChange] only if the user moves away from it.
+  final DateTime? initialFollowUpDate;
 
   /// The Outcome to write person tags to. Null in selection-only mode.
   final String? todoId;
@@ -78,10 +99,16 @@ class _PersonTagPickerSheetState extends ConsumerState<PersonTagPickerSheet> {
   /// lets a cancel land a `null` result on top of a write that did commit.
   bool _committing = false;
 
+  /// The follow-up date on the row; starts at [initialFollowUpDate].
+  DateTime? _followUpDate;
+
   @override
   void initState() {
     super.initState();
     _selected = Set.from(widget.assignedPersonTagIds);
+    final initial = widget.initialFollowUpDate;
+    _followUpDate =
+        initial == null ? null : DateTime(initial.year, initial.month, initial.day);
     _searchController.addListener(() {
       setState(() {
         _searchText = _searchController.text.trim();
@@ -220,6 +247,7 @@ class _PersonTagPickerSheetState extends ConsumerState<PersonTagPickerSheet> {
                 icon: const Icon(Icons.add, size: 18),
                 label: const Text('Add person'),
               ),
+            if (widget.offerFollowUp) _followUpRow(context),
             const SizedBox(height: 8),
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
@@ -244,6 +272,68 @@ class _PersonTagPickerSheetState extends ConsumerState<PersonTagPickerSheet> {
         ),
       ),
     );
+  }
+
+  Widget _followUpRow(BuildContext context) {
+    final date = _followUpDate;
+    final label = date == null
+        ? 'Follow up from…'
+        : 'Follow up from '
+            '${MaterialLocalizations.of(context).formatShortMonthDay(date)}';
+    return Row(
+      children: [
+        TextButton.icon(
+          key: const Key('follow-up-from'),
+          onPressed: _committing ? null : _pickFollowUpDate,
+          icon: const Icon(Icons.event, size: 18),
+          label: Text(label),
+        ),
+        if (date != null)
+          IconButton(
+            key: const Key('follow-up-clear'),
+            tooltip: 'Clear follow-up date',
+            icon: const Icon(Icons.close, size: 18),
+            onPressed:
+                _committing ? null : () => setState(() => _followUpDate = null),
+          ),
+      ],
+    );
+  }
+
+  Future<void> _pickFollowUpDate() async {
+    final today = DateTime.now();
+    final startOfToday = DateTime(today.year, today.month, today.day);
+    final lastDate = startOfToday.add(const Duration(days: 365));
+    // Same bounds as the Time context sheet's From picker. A stored date can lie
+    // outside them, and showDatePicker asserts initialDate is in range, so clamp
+    // only what the picker opens on.
+    var initialDate = _followUpDate ?? startOfToday;
+    if (initialDate.isBefore(startOfToday)) initialDate = startOfToday;
+    if (initialDate.isAfter(lastDate)) initialDate = lastDate;
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initialDate,
+      firstDate: startOfToday,
+      lastDate: lastDate,
+    );
+    if (picked != null && mounted) {
+      setState(() =>
+          _followUpDate = DateTime(picked.year, picked.month, picked.day));
+    }
+  }
+
+  /// The follow-up change to hand back: null unless the row was offered and the
+  /// date now differs from the one the sheet opened with.
+  FollowUpChange? _followUpChange() {
+    if (!widget.offerFollowUp) return null;
+    final initial = widget.initialFollowUpDate;
+    final initialDay =
+        initial == null ? null : DateTime(initial.year, initial.month, initial.day);
+    if (_followUpDate == initialDay) return null;
+    final date = _followUpDate;
+    return date == null
+        ? const FollowUpChange.remove()
+        : FollowUpChange.set(date);
   }
 
   Future<void> _createAndSelect() async {
@@ -308,7 +398,12 @@ class _PersonTagPickerSheetState extends ConsumerState<PersonTagPickerSheet> {
 
     // The Outcome was deleted while the sheet was open: nothing was written,
     // so close as a cancel rather than report a selection that did not land.
-    if (mounted) Navigator.pop(context, landed ? selected : null);
+    if (mounted) {
+      Navigator.pop(
+        context,
+        landed ? PersonPickerResult(selected, followUp: _followUpChange()) : null,
+      );
+    }
   }
 }
 
@@ -326,8 +421,28 @@ Future<Set<String>?> showPersonTagPicker(
   String? todoId,
   required Set<String> assignedPersonTagIds,
   bool requireSelection = false,
+}) async {
+  final result = await showPersonPicker(
+    context,
+    todoId: todoId,
+    assignedPersonTagIds: assignedPersonTagIds,
+    requireSelection: requireSelection,
+  );
+  return result?.people;
+}
+
+/// [showPersonTagPicker] with the full result, optionally offering the
+/// "Follow up from" date row ([offerFollowUp], starting from
+/// [initialFollowUpDate]).
+Future<PersonPickerResult?> showPersonPicker(
+  BuildContext context, {
+  String? todoId,
+  required Set<String> assignedPersonTagIds,
+  bool requireSelection = false,
+  bool offerFollowUp = false,
+  DateTime? initialFollowUpDate,
 }) {
-  return showModalBottomSheet<Set<String>>(
+  return showModalBottomSheet<PersonPickerResult>(
     context: context,
     isScrollControlled: true,
     backgroundColor: Theme.of(context).colorScheme.surface,
@@ -335,6 +450,8 @@ Future<Set<String>?> showPersonTagPicker(
       todoId: todoId,
       assignedPersonTagIds: assignedPersonTagIds,
       requireSelection: requireSelection,
+      offerFollowUp: offerFollowUp,
+      initialFollowUpDate: initialFollowUpDate,
     ),
   );
 }

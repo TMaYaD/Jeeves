@@ -364,6 +364,19 @@ void main() {
       expect(await db.select(db.todoTags).get(), isEmpty);
     });
 
+    testWidgets('the follow-up row is not offered to ordinary callers',
+        (tester) async {
+      await _insertPersonTag(db, id: 'alice', name: 'Alice');
+      await tester.pumpWidget(_harness(
+        db,
+        observed: _Observed(),
+        personTags: [_personTag('alice', 'Alice')],
+      ));
+      await _openPicker(tester);
+
+      expect(find.byKey(const Key('follow-up-from')), findsNothing);
+    });
+
     testWidgets('cancelling returns null and writes nothing', (tester) async {
       await _insertPersonTag(db, id: 'alice', name: 'Alice');
       final observed = _Observed();

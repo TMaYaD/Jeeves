@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/follow_up_change.dart';
 import 'package:jeeves/models/action_draft.dart' show ActionDraft;
 import 'package:jeeves/models/routing_kind.dart';
 import 'package:jeeves/providers/clarify_retention_provider.dart';
@@ -64,6 +65,7 @@ class _CaptureVanishesBeforeWriteService extends DaoClarificationService {
     DateTime? dueDate,
     ActionDraft? action,
     Set<String>? personTagIds,
+    FollowUpChange? followUp,
     Set<String> tagIds = const {},
     String? outcomeId,
     DateTime? now,
@@ -78,6 +80,7 @@ class _CaptureVanishesBeforeWriteService extends DaoClarificationService {
       dueDate: dueDate,
       action: action,
       personTagIds: personTagIds,
+      followUp: followUp,
       tagIds: tagIds,
       outcomeId: outcomeId,
       now: now,

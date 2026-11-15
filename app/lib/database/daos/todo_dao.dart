@@ -3,7 +3,9 @@ library;
 
 import 'package:drift/drift.dart';
 
+import '../../models/follow_up_change.dart';
 import '../../models/intent.dart';
+import '../../models/time_context.dart';
 import '../../models/routing_kind.dart';
 import '../../sync/collection_codecs.dart';
 import '../gtd_database.dart';
@@ -1206,9 +1208,14 @@ AND (
     String? promotePlannedActionId,
     String? replacingCurrentActionId,
     Set<String>? personTagIds,
+    FollowUpChange? followUp,
     String? userId,
     DateTime? now,
   }) async {
+    if (followUp != null && to != RoutingKind.waitingFor) {
+      throw ArgumentError.value(
+          to, 'to', 'followUp is only valid for waitingFor');
+    }
     if (promotePlannedActionId != null) {
       if (to != RoutingKind.nextAction) {
         throw ArgumentError.value(to, 'to',
@@ -1256,6 +1263,7 @@ AND (
         promotePlannedActionId: promotePlannedActionId,
         replacingCurrentActionId: replacingCurrentActionId,
         personTagIds: personTagIds,
+        followUp: followUp,
         userId: userId,
       ),
     );
@@ -1331,6 +1339,7 @@ AND (
     String? promotePlannedActionId,
     String? replacingCurrentActionId,
     Set<String>? personTagIds,
+    FollowUpChange? followUp,
     String? userId,
   }) async {
     final tsIso = ts.toIso8601String();
@@ -1437,6 +1446,10 @@ AND (
       }
     }
 
+    if (followUp != null) {
+      await _applyFollowUp(todoId, followUp, ts: ts, effects: effects);
+    }
+
     if (to == RoutingKind.done) {
       // Achieving the Outcome closes the current Action (ADR-0001 story 4) —
       // the same cascade markDone runs, sharing one apply-variant.
@@ -1457,6 +1470,55 @@ AND (
     return true;
   }
 
+  /// Writes the follow-up date onto the current Action's TimeContext, inside
+  /// the routing transaction.
+  ///
+  /// Setting a date on an Actionless Outcome first mints the current Action
+  /// from the Outcome's title (the Waiting For title-as-action fallback), since
+  /// the date needs an Action to live on. Only `from` is replaced; a weekly
+  /// window already on the Action is kept. Removing the date clears the value
+  /// when nothing else is left, and never mints an Action.
+  Future<void> _applyFollowUp(
+    String todoId,
+    FollowUpChange followUp, {
+    required DateTime ts,
+    required _RoutingEffects effects,
+  }) async {
+    final actionDao = attachedDatabase.actionDao;
+    var current = await actionDao.getCurrentAction(todoId);
+    if (current == null) {
+      if (followUp.isRemoval) return;
+      final title = await (select(todos)..where((t) => t.id.equals(todoId)))
+          .map((t) => t.title)
+          .getSingleOrNull();
+      final text = title == null ? null : _normaliseText(title);
+      if (text == null) return;
+      await actionDao.applySetCurrentAction(todoId, text, ts: ts);
+      effects.wroteFallbackAction = true;
+      current = await actionDao.getCurrentAction(todoId);
+      if (current == null) return;
+    }
+    final existing = TimeContext.tryParse(current.timeContext);
+    final TimeContext? next;
+    if (followUp.isRemoval) {
+      next = TimeContext.create(
+        days: existing?.days,
+        startMinute: existing?.startMinute,
+        endMinute: existing?.endMinute,
+      );
+    } else {
+      next = TimeContext.create(
+        fromDate: followUp.date,
+        days: existing?.days,
+        startMinute: existing?.startMinute,
+        endMinute: existing?.endMinute,
+      );
+    }
+    if (await actionDao.applySetTimeContext(current.id, next, ts: ts)) {
+      effects.timeContextChanged = true;
+    }
+  }
+
   /// Fires the view notifications a landed routing owes, once per commit.
   void _notifyRoutingLanded(_RoutingEffects effects,
       {required bool personTagsTouched}) {
@@ -1469,6 +1531,7 @@ AND (
     if (effects.touchesAction ||
         effects.actionTerminated ||
         effects.wroteFallbackAction ||
+        effects.timeContextChanged ||
         effects.promotedPlannedAction) {
       attachedDatabase.notifyActionsViewWrite();
     }
@@ -1808,6 +1871,7 @@ class _RoutingEffects {
   bool actionTerminated = false;
   bool logChanged = false;
   bool promotedPlannedAction = false;
+  bool timeContextChanged = false;
 }
 
 /// Thrown by [TodoDao.applyRoutingToOutcomes] when a requested Person no

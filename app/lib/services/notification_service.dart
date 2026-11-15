@@ -16,8 +16,13 @@ import 'package:timezone/timezone.dart' as tz;
 import '../models/ritual.dart';
 import 'due_date_notifications.dart'
     show
+        OutcomeNotificationsOnDevice,
         fireAtMillisFromNotificationPayload,
         outcomeIdFromNotificationPayload;
+import 'follow_up_notifications.dart'
+    show
+        followUpFireAtMillisFromNotificationPayload,
+        followUpOutcomeIdFromNotificationPayload;
 
 // Stable notification IDs.
 const _kFocusSessionPlanningNotificationId = 0;
@@ -42,6 +47,7 @@ const kPeriodicReviewActionSkip = 'periodic_review_skip_today';
 
 const _kFocusId = 1001;
 const _kDueDateChannelId = 'due_dates';
+const _kFollowUpChannelId = 'follow_ups';
 
 class NotificationService {
   NotificationService._();
@@ -168,6 +174,48 @@ class NotificationService {
     required String body,
     required DateTime scheduledAt,
     String? payload,
+  }) =>
+      _scheduleOutcomeNotification(
+        id: id,
+        title: title,
+        body: body,
+        scheduledAt: scheduledAt,
+        payload: payload,
+        channelId: _kDueDateChannelId,
+        channelName: 'Due dates',
+        channelDescription: 'Outcomes that are due today',
+      );
+
+  /// Follow-up notifications (a Waiting For Outcome whose follow-up date has
+  /// arrived). Their own channel and payload prefix keep them apart from the
+  /// due-date notifications of the same Outcome.
+  Future<void> scheduleFollowUpNotification({
+    required int id,
+    required String title,
+    required String body,
+    required DateTime scheduledAt,
+    String? payload,
+  }) =>
+      _scheduleOutcomeNotification(
+        id: id,
+        title: title,
+        body: body,
+        scheduledAt: scheduledAt,
+        payload: payload,
+        channelId: _kFollowUpChannelId,
+        channelName: 'Follow-ups',
+        channelDescription: 'Waiting For items to follow up on today',
+      );
+
+  Future<void> _scheduleOutcomeNotification({
+    required int id,
+    required String title,
+    required String body,
+    required DateTime scheduledAt,
+    required String? payload,
+    required String channelId,
+    required String channelName,
+    required String channelDescription,
   }) async {
     final scheduled = tz.TZDateTime.from(scheduledAt, tz.local);
     await _plugin.zonedSchedule(
@@ -176,15 +224,15 @@ class NotificationService {
       body: body,
       payload: payload,
       scheduledDate: scheduled,
-      notificationDetails: const NotificationDetails(
+      notificationDetails: NotificationDetails(
         android: AndroidNotificationDetails(
-          _kDueDateChannelId,
-          'Due dates',
-          channelDescription: 'Outcomes that are due today',
+          channelId,
+          channelName,
+          channelDescription: channelDescription,
           importance: Importance.high,
           priority: Priority.high,
         ),
-        iOS: DarwinNotificationDetails(),
+        iOS: const DarwinNotificationDetails(),
       ),
       androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
     );
@@ -196,18 +244,33 @@ class NotificationService {
   /// them appears in both sets.
   /// `pendingFireAtMillis` maps a pending id to the fire instant recorded in
   /// its payload (absent for payloads that carry none).
-  Future<
-      ({
-        Set<int> pending,
-        Map<int, int> pendingFireAtMillis,
-        Set<int> delivered
-      })> dueDateNotificationsOnDevice() async {
+  Future<OutcomeNotificationsOnDevice> dueDateNotificationsOnDevice() =>
+      _outcomeNotificationsOnDevice(
+        channelId: _kDueDateChannelId,
+        outcomeIdOf: outcomeIdFromNotificationPayload,
+        fireAtMillisOf: fireAtMillisFromNotificationPayload,
+      );
+
+  /// Follow-up notifications the OS holds; see [dueDateNotificationsOnDevice].
+  /// Never reports a due-date notification.
+  Future<OutcomeNotificationsOnDevice> followUpNotificationsOnDevice() =>
+      _outcomeNotificationsOnDevice(
+        channelId: _kFollowUpChannelId,
+        outcomeIdOf: followUpOutcomeIdFromNotificationPayload,
+        fireAtMillisOf: followUpFireAtMillisFromNotificationPayload,
+      );
+
+  Future<OutcomeNotificationsOnDevice> _outcomeNotificationsOnDevice({
+    required String channelId,
+    required String? Function(String?) outcomeIdOf,
+    required int? Function(String?) fireAtMillisOf,
+  }) async {
     final pending = <int>{};
     final pendingFireAtMillis = <int, int>{};
     for (final request in await _plugin.pendingNotificationRequests()) {
-      if (outcomeIdFromNotificationPayload(request.payload) != null) {
+      if (outcomeIdOf(request.payload) != null) {
         pending.add(request.id);
-        final millis = fireAtMillisFromNotificationPayload(request.payload);
+        final millis = fireAtMillisOf(request.payload);
         if (millis != null) pendingFireAtMillis[request.id] = millis;
       }
     }
@@ -220,8 +283,8 @@ class NotificationService {
       // Android reports no payload for active notifications (iOS/macOS only),
       // so recognise ours by channel, or by payload where one is present.
       if (id != null &&
-          (shown.channelId == _kDueDateChannelId ||
-              outcomeIdFromNotificationPayload(shown.payload) != null)) {
+          (shown.channelId == channelId ||
+              outcomeIdOf(shown.payload) != null)) {
         delivered.add(id);
       }
     }

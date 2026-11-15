@@ -25,6 +25,7 @@ import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/services/clarification_service.dart';
+import 'package:jeeves/models/follow_up_change.dart';
 import 'package:jeeves/models/action_draft.dart';
 import 'package:jeeves/widgets/clarify_card.dart';
 import 'package:jeeves/widgets/clarify_shared_widgets.dart';
@@ -136,6 +137,7 @@ class _BlockingClarificationService extends DaoClarificationService {
     DateTime? dueDate,
     ActionDraft? action,
     Set<String>? personTagIds,
+    FollowUpChange? followUp,
     Set<String> tagIds = const {},
     String? outcomeId,
     DateTime? now,
@@ -150,6 +152,7 @@ class _BlockingClarificationService extends DaoClarificationService {
       dueDate: dueDate,
       action: action,
       personTagIds: personTagIds,
+      followUp: followUp,
       tagIds: tagIds,
       outcomeId: outcomeId,
       now: now,
