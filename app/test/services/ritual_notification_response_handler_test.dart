@@ -140,7 +140,7 @@ void main() {
     await arm(611, dueEdge);
     await arm(412, nextMorning);
 
-    await tap(kNotificationActionSkip,
+    await tap(kShutdownNotificationActionSkip,
         payloadFor(RitualId.eveningShutdown, dueEdge));
 
     expect(service.pending.containsKey(611), isFalse);

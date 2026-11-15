@@ -265,7 +265,8 @@ void main() {
 
       expect(esTimes(plan).take(3), [_at(0, 23), _at(1, 8), _at(1, 18)]);
       final due = _of(plan, RitualId.eveningShutdown).first;
-      expect(parseRitualNotificationPayload(due.payload)!.edge, _at(0, 23),
+      expect(parseRitualNotificationPayload(due.payload)!.edge!.toLocal(),
+          _at(0, 23),
           reason: 'the alarm carries its own instant as the firing edge');
     });
 
