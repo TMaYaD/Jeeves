@@ -1,0 +1,580 @@
+<title>Jeeves Day Timeline</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800&display=swap">
+<style>
+/* Layout: a sheet of phone frames (390px) in a wrapping grid, then one wide desktop frame.
+   Plan = tinted block outline; record = sprint bars in a lane at real time; events = hatched, left column. */
+:root{
+  --bg:#EEF1F6; --surf:#FFFFFF; --surf2:#F6F8FB; --line:#DCE2EB; --text:#18202E; --mut:#4A5568; --faint:#667085;
+  --pri:#2667B7; --pri2:#1E4F8F; --pri-text:#2667B7; --pri-tint:#E6EFFA; --on-pri:#FFFFFF;
+  --green:#16A34A; --amber:#F59E0B; --red:#DC2626; --green-tint:#E5F5EB; --red-tint:#FDEAEA;
+  --c-energy:#7C3AED; --c-est:#2563EB; --c-log:#16A34A; --c-due:#DC2626;
+  --track:#E5E7EB; --lblue:#93C5FD; --hatch:#C9D1DE;
+  /* sprint clock, as shipped (active_focus_screen.dart): do not change */
+  --c-spr:#2563EB; --t-spr:#DBEAFE; --c-brk:#10B981; --t-brk:#D1FAE5; --t-over:#FEF3C7; --dot:#2563EB; --dote:#BFDBFE;
+  --font:'Manrope',system-ui,-apple-system,'Segoe UI',sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0B1017; --surf:#151C27; --surf2:#1B2432; --line:#2A3445; --text:#E8ECF3; --mut:#A9B4C6; --faint:#8D99AE;
+  --pri-text:#7DB0F2; --pri-tint:#1A2A44; --green-tint:#14291D; --red-tint:#341A1A;
+  --c-energy:#A78BFA; --c-est:#7AA2F7; --c-log:#4ADE80; --c-due:#F87171; --track:#2A3445; --hatch:#33405A; --pri2:#3B78C9; --c-spr:#5B8DF6; --t-spr:#1E2F52; --c-brk:#34D399; --t-brk:#123A30; --t-over:#3B2E10; --dot:#5B8DF6; --dote:#2F4468;
+  color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0B1017; --surf:#151C27; --surf2:#1B2432; --line:#2A3445; --text:#E8ECF3; --mut:#A9B4C6; --faint:#8D99AE;
+  --pri-text:#7DB0F2; --pri-tint:#1A2A44; --green-tint:#14291D; --red-tint:#341A1A;
+  --c-energy:#A78BFA; --c-est:#7AA2F7; --c-log:#4ADE80; --c-due:#F87171; --track:#2A3445; --hatch:#33405A; --pri2:#3B78C9; --c-spr:#5B8DF6; --t-spr:#1E2F52; --c-brk:#34D399; --t-brk:#123A30; --t-over:#3B2E10; --dot:#5B8DF6; --dote:#2F4468;
+  color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14px;line-height:1.45;padding-block:24px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+button{font:inherit;color:inherit}
+.wrap{max-width:1280px;margin:0 auto}
+header.top{display:flex;gap:16px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;margin-bottom:8px}
+h1{font-size:28px;font-weight:800;margin:0;letter-spacing:-.01em}
+h2{font-size:20px;font-weight:700;margin:44px 0 4px}
+.lede{color:var(--mut);max-width:70ch;margin:6px 0 0}
+.sub{color:var(--mut);margin:0 0 16px;max-width:75ch}
+.tog{border:1px solid var(--line);background:var(--surf);padding:8px 14px;border-radius:2px;font-weight:600;cursor:pointer}
+.tog:focus-visible,.btn:focus-visible{outline:2px solid var(--pri-text);outline-offset:2px}
+.grid{display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start}
+.fig{display:flex;flex-direction:column;gap:8px;width:390px;max-width:100%}
+.cap{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--faint)}
+.phone{width:390px;max-width:100%;background:var(--surf);border:1px solid var(--line);border-radius:6px;overflow:hidden;display:flex;flex-direction:column}
+.bar{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:14px 16px;border-bottom:1px solid var(--line)}
+.bar b{font-size:17px;font-weight:700}
+.bar small{color:var(--mut);font-weight:500}
+.pad{padding:14px 16px;display:flex;flex-direction:column;gap:12px}
+.btn{border:1px solid var(--line);background:var(--surf);padding:9px 14px;border-radius:2px;font-weight:600;cursor:pointer;font-size:14px}
+.btn.p{background:var(--pri);border-color:var(--pri);color:var(--on-pri)}
+.btn.t{border-color:transparent;background:transparent;color:var(--pri-text);padding-inline:6px}
+.btn.sm{padding:5px 10px;font-size:13px}
+.row2{display:flex;gap:8px;flex-wrap:wrap}
+.row2.end{justify-content:flex-end}
+.ic{width:13px;height:13px;flex:none}
+/* chips */
+.chip{display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:4px;font-size:12px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--cc);background:color-mix(in srgb,var(--cc) 13%,transparent)}
+.chip.en{--cc:var(--c-energy)}.chip.es{--cc:var(--c-est)}.chip.lg{--cc:var(--c-log)}.chip.du{--cc:var(--c-due)}
+.ctx{font-size:12px;color:var(--mut);font-weight:600}
+.tag{display:inline-block;font-size:11px;font-weight:700;padding:1px 6px;border-radius:4px;border:1px solid var(--line);color:var(--mut);background:var(--surf)}
+/* capacity */
+.capwrap{display:flex;flex-direction:column;gap:6px}
+.capline{display:flex;justify-content:space-between;gap:8px;font-size:13px;font-weight:600;flex-wrap:wrap}
+.capline span:last-child{color:var(--mut);display:inline-flex;align-items:center;gap:5px}
+.capbar{position:relative;height:10px;border-radius:4px;background:var(--track);display:flex;overflow:hidden}
+.capbar i{display:block;height:100%}
+.capmark{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--text)}
+.capbar-w{position:relative}
+/* rows */
+.list{display:flex;flex-direction:column}
+.task{display:flex;gap:10px;padding:11px 16px;border-bottom:1px solid var(--line);align-items:flex-start}
+.task:last-child{border-bottom:0}
+.st{width:16px;height:16px;border-radius:50%;border:2px solid var(--faint);margin-top:2px;flex:none}
+.st.done{background:var(--green);border-color:var(--green)}
+.tb{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px}
+.tb .ti{font-weight:700;font-size:15px}
+.chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.hint{font-size:12px;color:var(--mut);font-weight:600;display:inline-flex;align-items:center;gap:6px}
+.pips{display:inline-flex;gap:3px}
+.pips u{width:6px;height:6px;border-radius:50%;border:1.5px solid var(--mut);display:block}
+/* timeline */
+.tlw{padding:6px 16px 14px}
+.tl{position:relative;margin-left:44px}
+.hr{position:absolute;left:-44px;right:0;height:0}
+.hr span{position:absolute;left:0;top:-8px;width:38px;font-size:11px;font-weight:600;color:var(--faint);font-variant-numeric:tabular-nums}
+.hr::after{content:'';position:absolute;left:44px;right:0;top:0;border-top:1px solid var(--line)}
+.ev{position:absolute;left:0;width:33%;border-radius:4px;padding:4px 6px;font-size:12px;overflow:hidden;color:var(--mut);border:1px solid var(--hatch);background:repeating-linear-gradient(135deg,transparent 0 5px,var(--hatch) 5px 6px)}
+.ev b{display:block;font-weight:700;color:var(--text);background:var(--surf);width:fit-content;padding:0 3px;border-radius:2px;line-height:1.3}
+.ev i{font-style:normal;font-size:11px;background:var(--surf);padding:0 3px;border-radius:2px;display:block;width:fit-content;margin-top:1px}
+.bx{position:absolute;left:35%;right:20px;border-radius:6px;padding:5px 8px;overflow:hidden;font-size:12px;border:1px solid var(--pri);background:var(--pri-tint);display:flex;flex-direction:column;gap:2px}
+.noev .bx{left:0}
+.bx .bt{display:flex;align-items:center;gap:6px;font-weight:700;font-size:13px;min-width:0}
+.bx .tt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
+.bx .bm{color:var(--mut);font-weight:600;font-variant-numeric:tabular-nums;display:flex;gap:6px;flex-wrap:wrap}
+.bx .sc{font-weight:700;color:var(--text)}
+.bx .nt{font-size:11px;color:var(--mut);font-weight:600}
+.bx.sm{padding:1px 8px;justify-content:center;flex-direction:row;align-items:center}
+.bx.sm .sc{font-size:11px;white-space:nowrap}
+.bx.lim{border-bottom:4px solid var(--pri2)}
+.bx.running{background:var(--pri);color:var(--on-pri);border-color:var(--pri2)}
+.bx.running .bm,.bx.running .nt,.bx.running .sc{color:var(--on-pri)}
+.bx.done{background:var(--green-tint);border-color:var(--green)}
+.bx.missed{background:transparent;border:1px dashed var(--faint);color:var(--mut)}
+.bx .tags{display:flex;gap:4px;flex-wrap:wrap}
+.bx .tag{background:var(--surf);color:var(--text)}
+.live{width:8px;height:8px;border-radius:50%;background:currentColor;flex:none;animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,currentColor 50%,transparent)}50%{box-shadow:0 0 0 5px transparent}}
+@media (prefers-reduced-motion:reduce){.live,.dot.cur,.sk{animation:none}}
+.lane{position:absolute;right:0;width:14px;top:0;bottom:0;border-left:1px solid var(--line)}
+.sp{position:absolute;left:4px;width:7px;border-radius:2px;background:var(--pri2)}
+.sp.lv{background:repeating-linear-gradient(180deg,var(--pri2) 0 3px,transparent 3px 5px)}
+.now{position:absolute;left:-44px;right:0;border-top:2px solid var(--pri-text);z-index:3}
+.now span{position:absolute;left:0;top:-10px;font-size:11px;font-weight:800;background:var(--pri);color:var(--on-pri);padding:0 4px;border-radius:2px}
+.gap{position:absolute;left:35%;right:20px;border:1px dashed var(--pri-text);border-radius:6px;color:var(--pri-text);font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;text-align:center;background:color-mix(in srgb,var(--pri) 5%,transparent)}
+.noev .gap{left:0}
+.gap.sug{border-style:solid;background:var(--pri-tint)}
+.strip{display:flex;gap:8px;align-items:center;width:100%;padding:8px 10px;border:1px solid var(--red);background:var(--red-tint);border-radius:6px;font-size:13px;font-weight:600;text-align:left}
+.bx .nt.over{color:var(--text);font-weight:700;display:flex;gap:4px;align-items:center}
+.bx .nt.over .ic{color:var(--red)}
+.sp.ov{background:var(--red)}
+.cmp{width:100%;border-collapse:collapse;font-size:13px}.cmp th,.cmp td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}.cmp th{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--faint)}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--mut);font-weight:600;padding:0 16px 14px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.lg-ev{width:16px;height:10px;border:1px solid var(--hatch);background:repeating-linear-gradient(135deg,transparent 0 3px,var(--hatch) 3px 4px)}
+.lg-bx{width:16px;height:10px;border:1px solid var(--pri);background:var(--pri-tint);border-radius:2px}
+.lg-ov{width:5px;height:12px;background:var(--red);border-radius:2px}
+.lg-sp{width:5px;height:12px;background:var(--pri2);border-radius:2px}
+/* banners, sheets, jeeves */
+.note{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:var(--surf2);font-size:13px}
+.note.red{border-color:var(--red);background:var(--red-tint)}
+.note.neutral{background:var(--surf2)}
+.note b{display:block}
+.note span{color:var(--mut)}
+.jv b{display:block;font-size:16px;font-weight:700}
+.jv span{display:block;color:var(--mut);font-size:13px;font-weight:400}
+.sheet{border-top:1px solid var(--line);background:var(--surf);padding:14px 16px;display:flex;flex-direction:column;gap:12px;box-shadow:0 -6px 16px rgba(0,0,0,.06)}
+.sheet h3{margin:0;font-size:15px}
+.trayh{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-top:1px solid var(--line);background:var(--surf2);font-weight:700;font-size:13px}
+.sk{border-radius:4px;background:var(--track);animation:shim 1.4s ease-in-out infinite}
+@keyframes shim{50%{opacity:.45}}
+.sync{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--mut)}
+.sync i{width:9px;height:9px;border-radius:50%;border:2px solid var(--amber);display:block;border-right-color:transparent}
+.tbbtn{width:34px;height:34px;border:1px solid var(--line);border-radius:4px;background:var(--surf2);color:var(--mut);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0}
+.tbbtn .ic{width:18px;height:18px}
+.tbbtn[aria-pressed=true]{background:var(--pri);border-color:var(--pri);color:var(--on-pri)}
+.tbbtn:focus-visible{outline:2px solid var(--pri-text);outline-offset:2px}
+.tipw{position:relative;display:inline-block}
+.tip{position:absolute;right:0;top:42px;width:230px;padding:8px 10px;border-radius:4px;background:var(--text);color:var(--bg);font-size:12px;font-weight:600;z-index:4}
+.est{display:flex;align-items:center;gap:8px}
+.stepper{display:flex;align-items:center;gap:0;border:1px solid var(--line);border-radius:4px;overflow:hidden}
+.stepper button{width:34px;height:34px;border:0;background:var(--surf2);font-weight:700;font-size:16px;cursor:pointer}
+.stepper output{min-width:62px;text-align:center;font-weight:700;font-variant-numeric:tabular-nums}
+.setrow{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line)}
+.setrow small{display:block;color:var(--mut);font-size:12px}
+/* focus */
+.focus{align-items:center;text-align:center;padding:18px 16px 20px;display:flex;flex-direction:column;gap:12px}
+.ringw{position:relative;width:216px;height:216px}
+.ringw svg{width:100%;height:100%;display:block}
+.trk{stroke:var(--trk);fill:none}.arc{stroke:var(--ring);fill:none;stroke-linecap:round}.mk{fill:var(--ring)}.tk{stroke:var(--trk);stroke-width:2;stroke-linecap:round}.tk.on{stroke:var(--ring)}
+.rc{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
+.rc .n{font-weight:700;font-size:14px;color:var(--mut)}
+.rc .t{color:var(--ring);font-size:44px;font-weight:300;font-variant-numeric:tabular-nums;letter-spacing:-.02em;line-height:1.05}
+.rc .s{font-size:12px;font-weight:600;color:var(--mut)}
+.v-P .rc .t{font-weight:700}.v-I .rc .t{font-weight:500;font-size:38px}
+.rd{display:flex;align-items:center;justify-content:center;gap:16px}
+.dots{display:flex;flex-direction:column;align-items:center;justify-content:center}
+.dg{display:flex;flex-direction:column}.dg+.dg{margin-top:8px}
+.dot{width:14px;height:14px;margin:5px 0;border-radius:50%;border:2px solid var(--dote);display:block;flex:none}
+.dot.f{background:var(--dot);border-color:var(--dot)}
+.dot.ov{border-color:var(--red)}.dot.f.ov,.dot.cur.ov{background:var(--red);border-color:var(--red)}
+.dot.cur{background:var(--dot);border-color:var(--dot);animation:pulse2 1.1s ease-in-out infinite alternate}
+@keyframes pulse2{from{transform:scale(.82)}to{transform:scale(1.18)}}
+.ringw.long::before{content:'';position:absolute;inset:-7px;border:1px solid var(--c-brk);border-radius:50%}
+.focus h4{margin:0;font-size:17px;font-weight:700}
+.focus .meta{color:var(--mut);font-size:13px;font-weight:600}
+.mini{width:100%}
+.matrix{display:grid;grid-template-columns:repeat(3,minmax(190px,1fr));gap:12px;overflow-x:auto;min-width:0}
+.cell{border:1px solid var(--line);border-radius:6px;background:var(--surf);padding:10px 8px 12px;display:flex;flex-direction:column;align-items:center;gap:8px}
+.cell .ringw{width:140px;height:140px}.cell .dot{width:10px;height:10px;margin:2px 0}.cell .rd{gap:8px}.cell .rc .t{font-size:28px}.cell .rc .n{font-size:12px}.cell .rc .s{display:none}
+.cell small{font-size:11px;color:var(--mut);font-weight:600;text-align:center}
+.xs{overflow-x:auto}
+.mh{display:grid;grid-template-columns:repeat(3,minmax(190px,1fr));gap:12px;font-weight:800;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--faint);margin-bottom:6px}
+.pool{display:flex;flex-direction:column;gap:10px}
+.pool div{padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:var(--surf)}
+.pool b{display:block;font-size:14px}.pool span{color:var(--mut);font-size:13px}
+.desk{border:1px solid var(--line);border-radius:6px;background:var(--surf);min-width:1100px;display:grid;grid-template-columns:300px 1fr 330px}
+.desk>div{padding:16px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.desk>div+div{border-left:1px solid var(--line)}
+.desk .task{padding-inline:0}
+.dtop{grid-column:1/-1;display:flex;gap:24px;align-items:center;padding:14px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.dtop .capwrap{flex:1;min-width:320px}
+.ul{margin:0;padding-left:18px;color:var(--mut);max-width:80ch}
+.ul li{margin:4px 0}
+</style>
+
+<div class="wrap">
+<header class="top">
+  <div>
+    <h1>Jeeves — Suggested times, sprints and the day timeline</h1>
+    <p class="lede">Phone first, then the wide shell. The plan (a tile at its suggested time) and what happened (sprints, time logged) are drawn separately and never reconciled. Sprint counts appear in words as “Sprint N” and as a hint in the dots only.</p>
+  </div>
+  <button class="tog" id="tog" type="button">Switch light / dark</button>
+</header>
+
+<div id="app"></div>
+</div>
+
+<script>
+const $=(s)=>document.querySelector(s);
+const m=s=>{const[a,b]=s.split(':').map(Number);return a*60+b};
+const hm=n=>String(Math.floor(n/60)).padStart(2,'0')+':'+String(n%60).padStart(2,'0');
+const fmt=n=>n<60?n+'m':(n%60?Math.floor(n/60)+'h '+n%60+'m':Math.floor(n/60)+'h');
+const SPR=20, LONG_EVERY=4; /* sprints per long break: Settings, default 4 */
+const I={
+ tbx:'<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="4.8"/><path d="M8 8V5.6M6.3 1.4h3.4"/><path d="M2 14.6h12" stroke-width="2.2"/></svg>',
+ bolt:'<svg class="ic" viewBox="0 0 16 16"><path d="M9 1 3 9h4l-1 6 6-8H8z" fill="currentColor"/></svg>',
+ timer:'<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="8" cy="9.2" r="5.3"/><path d="M8 9V6M6 1.6h4"/></svg>',
+ clock:'<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.4 1.5"/></svg>',
+ cal:'<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="3" width="12" height="11" rx="1"/><path d="M2 6.5h12M5 1.5v3M11 1.5v3"/></svg>',
+ check:'<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 8.5l3.2 3L13 4.5"/></svg>',
+ info:'<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" style="margin-top:2px"><circle cx="8" cy="8" r="6"/><path d="M8 7.2V11M8 4.8v.1"/></svg>',
+ warn:'<svg class="ic" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" style="margin-top:2px"><path d="M8 2 14.5 13.5h-13z"/><path d="M8 6.5v3.3M8 11.6v.1"/></svg>'
+};
+/* ---------- chips / rows ---------- */
+function row(o){
+  const h=o.est?Math.ceil(o.est/SPR):0;
+  const chips=[];
+  if(o.energy)chips.push(`<span class="chip en">${I.bolt}${o.energy}</span>`);
+  if(o.setEst)chips.push('<span class="ctx" style="color:var(--faint)">Set</span>');
+  if(o.est)chips.push(`<span class="chip es" ${o.tbx?'title="Timeboxed: the estimate is a limit"':''}>${I.timer}${fmt(o.est)}${o.tbx?I.tbx:''}</span>`);
+  if(o.logged)chips.push(`<span class="chip lg">${I.clock}${fmt(o.logged)}</span>`);
+  if(o.due)chips.push(`<span class="chip du">${I.cal}${o.due}</span>`);
+  if(o.ctx)chips.push(`<span class="ctx">${o.ctx}</span>`);
+  const hint=h?`<span class="hint"><span class="pips" aria-hidden="true">${'<u></u>'.repeat(Math.min(h,6))}</span>about ${h} sprint${h>1?'s':''}</span>`:'';
+  const extra=[o.added?'<span class="tag">Added during the day</span>':'',o.placed?`<span class="tag">Timebox ${o.placed}</span>`:''].join('');
+  return `<div class="task"><span class="st ${o.done?'done':''}"></span><div class="tb"><span class="ti">${o.t}</span><div class="chips">${chips.join('')}</div>${(hint||extra)?`<div class="chips">${hint}${extra}</div>`:''}</div>${o.act||''}</div>`;
+}
+/* ---------- capacity ---------- */
+function cap(est,noest,free,label){
+  const scale=Math.max(est+noest,free);
+  const g=Math.min(est,.8*free),a=Math.max(0,Math.min(est-.8*free,.2*free)),r=Math.max(est-free,0);
+  const p=x=>(x/scale*100).toFixed(2)+'%';
+  const total=est+noest, over=total-free;
+  const status=over>0?`${I.warn}Over by ${fmt(over)}`:(est+noest>.8*free?`${I.info}Near the limit`:`${I.check}Room to spare`);
+  return `<div class="capwrap"><div class="capline"><span>${fmt(total)} planned of ${fmt(free)} free</span><span>${status}</span></div>
+  <div class="capbar-w"><div class="capbar"><i style="width:${p(g)};background:var(--green)"></i><i style="width:${p(a)};background:var(--amber)"></i><i style="width:${p(r)};background:var(--red)"></i><i style="width:${p(noest)};background:var(--lblue)"></i></div>${over>0?`<span class="capmark" style="left:${p(free)}"></span>`:''}</div>${label?`<div class="ctx">${label}</div>`:''}</div>`;
+}
+/* ---------- timeline ---------- */
+function tl(o){
+  const ppm=o.ppm||1.2,f=m(o.from),t=m(o.to),H=(t-f)*ppm;
+  let h='';
+  for(let x=Math.ceil(f/60)*60;x<=t;x+=60)h+=`<div class="hr" style="top:${(x-f)*ppm}px"><span>${hm(x)}</span></div>`;
+  (o.events||[]).forEach(e=>{const s=m(e[0]),d=m(e[1])-s;h+=`<div class="ev" style="top:${(s-f)*ppm}px;height:${d*ppm-2}px"><b>${e[2]}</b>${d*ppm>34?`<i>${e[0]}–${e[1]} · Event</i>`:''}</div>`});
+  (o.skel||[]).forEach(e=>{const s=m(e[0]),d=m(e[1])-s;h+=`<div class="ev sk" style="top:${(s-f)*ppm}px;height:${d*ppm-2}px;border:0"></div>`});
+  let lane='';
+  (o.boxes||[]).forEach(b=>{
+    const s=m(b.s),Hh=b.d*ppm-2,sm=Hh<40,n=b.n||(b.sprints||[]).length;
+    const logged=(b.sprints||[]).reduce((a,x)=>a+x[1],0);
+    const cnt=n?`<span class="sc">${n} sprint${n>1?'s':''} · ${fmt(b.logged||logged)}</span>`:'';
+    const glyph=b.state==='done'?I.check:(b.state==='running'?'<span class="live"></span>':'');
+    let inner;
+    if(sm)inner=`${glyph}<span class="tt">${b.t}</span>${cnt||(b.state==='missed'?'<span class="sc">Not started</span>':'')}`;
+    else{
+      const live=b.state==='running'?`<span class="sc">Sprint ${b.sprintNo} · ${b.left} left</span>`:'';
+      const list=(b.d>=120&&n)?`<div class="nt">${b.sprints.map((x,i)=>`${i+1}: ${hm(m(x[0]))} · ${fmt(x[1])}`).join('  ·  ')}</div>`:'';
+      inner=`<div class="bt">${glyph}<span class="tt">${b.t}</span></div><div class="bm"><span>${b.s}–${hm(s+b.d)}</span><span>${fmt(b.d)}</span>${cnt}${live}${b.state==='missed'?'<span class="sc">Not started</span>':''}</div>${list}${b.note&&Hh>=64?`<div class="nt ${b.over?'over':''}">${b.over?I.warn:''}${b.note}</div>`:''}${((b.lim||b.tags)&&Hh>=56)?`<div class="tags">${(b.lim?['Timeboxed']:[]).concat(b.tags||[]).map(x=>`<span class="tag">${x}</span>`).join('')}</div>`:''}`;
+    }
+    h+=`<div class="bx ${b.state||''} ${b.lim?'lim':''} ${sm?'sm':''}" style="top:${(s-f)*ppm}px;height:${Hh}px">${inner}</div>`;
+    (b.sprints||[]).forEach(x=>{lane+=`<div class="sp ${x[2]||''}" style="top:${(m(x[0])-f)*ppm}px;height:${Math.max(x[1]*ppm,3)}px"></div>`});
+  });
+  (o.gaps||[]).forEach(g=>{const s=m(g[0]),d=m(g[1])-s;h+=`<div class="gap ${g[3]||''}" style="top:${(s-f)*ppm}px;height:${d*ppm-2}px">${g[2]}</div>`});
+  if(o.now)h+=`<div class="now" style="top:${(m(o.now)-f)*ppm}px"><span>Now ${o.now}</span></div>`;
+  return `<div class="tlw"><div class="tl ${o.noev?'noev':''}" style="height:${H}px">${h}<div class="lane">${lane}</div></div></div>`;
+}
+const legend=`<div class="legend"><span><i class="lg-ev"></i>Event (calendar, read-only)</span><span><i class="lg-ov"></i>Past the limit</span><span><i class="lg-bx"></i>Suggested time (tile)</span><span><i class="lg-bx" style="border-bottom:4px solid var(--pri2)"></i>Timeboxed Action (limit edge)</span><span><i class="lg-sp"></i>Sprint done (real time)</span></div>`;
+/* ---------- phone shell ---------- */
+const phone=(title,right,inner)=>`<div class="phone"><div class="bar"><b>${title}</b><small>${right||''}</small></div>${inner}</div>`;
+const fig=(cap_,inner)=>`<div class="fig"><div class="cap">${cap_}</div>${inner}</div>`;
+/* ---------- scenes ---------- */
+const EVENTS=[['09:30','10:00','Standup'],['11:30','12:00','Accountant call']];
+const DAY={from:'08:30',to:'13:00',events:EVENTS,boxes:[
+ {s:'08:30',d:30,t:'Order printer ink',state:'missed'},
+ {s:'09:00',d:30,t:'Reconcile receipts',state:'done',sprints:[['09:02',20]],note:'Stopped 8m short of the tile'},
+ {s:'10:00',d:60,t:'Draft the Q3 letter',lim:true,state:'done',n:3,logged:76,over:true,sprints:[['10:00',20],['10:23',28],['10:54',6],['11:00',16,'ov']],note:'16m past the limit · 1 sprint past'},
+ {s:'11:15',d:60,t:'Renew passport form',lim:true,state:'running',sprints:[['11:17',17,'lv']],sprintNo:1,left:'3:00',tags:['Set by you','Overlaps Accountant call']},
+ {s:'12:15',d:10,t:'Book the dentist'},
+ {s:'12:30',d:30,t:'Reply to Mrs. Pennywhistle'}
+],now:'11:34'};
+
+const PLAN_ROWS=[
+ {t:'Draft the Q3 letter',energy:'High',est:60,logged:70,due:'Fri',placed:'10:00'},
+ {t:'Renew passport form',energy:'Med',est:60,ctx:'@computer',placed:'11:15'},
+ {t:'Book the dentist',energy:'Low',est:10,ctx:'@phone'},
+ {t:'Reconcile receipts',energy:'Low',ctx:'@computer'},
+];
+
+function trayScreen(){
+  return phone("Today's Plan",'Fri 14 Nov',
+   `<div class="pad">${cap(250,30,255)}<div class="jv"><b>I have arranged the day around your calendar, sir.</b><span>The garage fits only in pieces, and not wholly. Nothing has been dropped.</span></div></div>`+tl({from:'08:30',to:'13:00',ppm:1,events:EVENTS,boxes:[
+     {s:'08:30',d:60,t:'Draft the Q3 letter'},{s:'10:00',d:10,t:'Book the dentist'},{s:'10:10',d:30,t:'Reconcile receipts'},
+     {s:'10:40',d:23,t:'Sort the garage · part 1'},{s:'11:15',d:60,t:'Renew passport form',tags:['Set by you','Overlaps Accountant call']},{s:'12:15',d:23,t:'Sort the garage · part 2'}]})+legend+
+   `<div class="trayh"><span>Not wholly placed · 1</span><span class="ctx">No gap held 2h, so it was split</span></div><div class="list">`+
+   row({t:'Sort the garage',energy:'High',est:120,ctx:'@home',act:'<button class="btn sm" type="button">Set the time</button>'})+`</div><div class="pad"><span class="ctx">46m placed in two pieces, each one sprint and its break (23m). 1h 14m has no gap left today.</span></div>`);
+}
+function placingScreen(){
+  return phone("Set the time",'<button class="btn t sm" type="button">Cancel</button>',
+   `<div class="pad"><div class="jv"><b>Where shall it go, sir?</b><span>Book the dentist · 10m. A time you set stays put; I shall not move it again.</span></div></div>`+
+   tl({from:'08:30',to:'13:00',ppm:.9,events:EVENTS,boxes:[{s:'10:00',d:60,t:'Draft the Q3 letter'},{s:'11:15',d:60,t:'Renew passport form'}],
+     gaps:[['08:30','09:30','Place here · 1h free'],['10:00','10:00','' ,'']].filter(g=>g[0]!==g[1]).concat([['12:15','13:00','Place here · 45m free']])})+
+   `<div class="sheet"><h3>Book the dentist · 12:15–12:25</h3><div class="stepper" style="align-self:flex-start"><button type="button" aria-label="Earlier">−</button><output>12:15</output><button type="button" aria-label="Later">+</button></div><label class="ctx" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="ovl"> Allow overlap with events</label><div class="row2 end"><button class="btn" type="button">Cancel</button><button class="btn p" type="button">Set the time</button></div></div>`);
+}
+function dayScreen(){
+  return phone("Today",'11:34',
+   `<div class="pad">${cap(165,30,255)}<div class="jv"><b>The passport form is under way, sir.</b><span>The letter ran a quarter-hour over its limit. I have left it so.</span></div></div>`+tl(DAY)+legend);
+}
+function boxGallery(){
+  const one=(label,cfg)=>`<div><div class="cap" style="padding:10px 16px 0">${label}</div>${tl(Object.assign({noev:false,ppm:1.2},cfg))}</div>`;
+  const E1=[['09:00','09:45','Calendar event']];
+  return phone('Tile states','',
+   one('Upcoming',{from:'09:00',to:'10:15',boxes:[{s:'09:15',d:60,t:'Draft the Q3 letter'}]})+
+   one('Running now · sprint live',{from:'09:00',to:'10:15',now:'09:40',boxes:[{s:'09:15',d:60,t:'Draft the Q3 letter',state:'running',sprints:[['09:17',23,'lv']],sprintNo:1,left:'0:00 · overtime'}]})+
+   one('Done · sprints inside',{from:'09:00',to:'10:15',boxes:[{s:'09:15',d:60,t:'Draft the Q3 letter',state:'done',sprints:[['09:15',20],['09:38',20],['10:01',14]],note:'Planned 1h · logged 54m'}]})+
+   one('Past, not engaged',{from:'09:00',to:'10:15',boxes:[{s:'09:15',d:60,t:'Draft the Q3 letter',state:'missed',note:'Nothing logged against this tile'}]})+
+   one('Engaged longer (10m planned, 31m logged)',{from:'09:00',to:'10:00',boxes:[{s:'09:15',d:10,t:'Book the dentist',lim:true,state:'done',n:2,over:true,logged:31,sprints:[['09:15',10],['09:25',21,'ov']]}]})+
+   one('Overlapping an event',{from:'09:00',to:'10:15',events:E1,boxes:[{s:'09:30',d:45,t:'Draft the Q3 letter',tags:['Set by you','Overlaps Calendar event']}]})
+   +legend);
+}
+function scaleGallery(){
+  const a=tl({from:'14:00',to:'14:45',ppm:1.6,boxes:[{s:'14:00',d:15,t:'Call the plumber',state:'done',sprints:[['14:01',12]]}]});
+  const b=tl({from:'14:00',to:'17:30',ppm:.8,boxes:[{s:'14:00',d:180,t:'Write the garden-party speech',state:'done',sprints:[['14:00',20],['14:24',28],['14:55',10],['15:10',20],['15:34',20],['16:00',24],['16:30',20]]}]});
+  return phone('15 minutes and 3 hours','',`<div class="cap" style="padding:10px 16px 0">15 minutes · one sprint, 12m</div>${a}<div class="cap" style="padding:0 16px">3 hours · seven sprints of varied length</div>${b}${legend}`);
+}
+function stateCard(title,inner){return `<div class="phone"><div class="bar"><b>${title}</b></div>${inner}</div>`}
+function states(){
+  const hdr=(est,no,free)=>`<div class="pad" style="padding-bottom:0">${cap(est,no,free)}</div>`;
+  return [
+   fig('Empty · nothing on the timeline yet',stateCard("Today's Plan",hdr(0,0,255)+tl({from:'09:00',to:'12:00',ppm:.9,events:[['09:30','10:00','Standup']]})+`<div class="pad"><div class="jv"><b>The day is a clean sheet, sir.</b><span>Four Outcomes are chosen. Place each at a time, or leave them loose.</span></div></div>`)),
+   fig('No calendar connected',stateCard("Today's Plan",hdr(120,0,300)+tl({from:'09:00',to:'12:00',ppm:.9,noev:true,boxes:[{s:'09:30',d:60,t:'Draft the Q3 letter'}]})+`<div class="pad"><div class="note neutral">${I.info}<div><b>No calendar connected</b><span>Your suggested times stand alone. Events never get written to.</span></div></div></div>`)),
+   fig('Calendar loading',stateCard("Today's Plan",hdr(120,0,255)+tl({from:'09:00',to:'12:00',ppm:.9,skel:[['09:15','10:00'],['10:45','11:30']],boxes:[{s:'09:30',d:60,t:'Draft the Q3 letter'}]})+`<div class="pad"><span class="sync">Reading your calendar. The timeline is usable now.</span></div>`)),
+   fig('Calendar unavailable',stateCard("Today's Plan",hdr(120,0,300)+tl({from:'09:00',to:'12:00',ppm:.9,noev:true,boxes:[{s:'09:30',d:60,t:'Draft the Q3 letter'}]})+`<div class="pad"><div class="note neutral">${I.info}<div><b>Calendar unavailable</b><span>Permission was refused. The timeline still works without events.</span><div class="row2" style="margin-top:6px"><button class="btn sm" type="button">Try again</button><button class="btn t sm" type="button">Why?</button></div></div></div></div>`)),
+   fig('Overbooked',stateCard("Today's Plan",hdr(295,0,255)+tl({from:'09:00',to:'13:00',ppm:.9,events:[['10:00','11:00','Workshop']],boxes:[{s:'09:00',d:60,t:'Draft the Q3 letter'},{s:'11:00',d:90,t:'Renew passport form'},{s:'12:30',d:30,t:'Reconcile receipts'}]})+`<div class="pad"><div class="note red">${I.warn}<div><b>That is more than the day holds, sir</b><span>Estimates exceed free time by 40m. Nothing has been removed.</span></div></div></div>`)),
+   fig('Outcome added during the day',stateCard("Today",hdr(205,0,255)+tl({from:'11:00',to:'14:00',ppm:.9,now:'11:40',events:[['11:30','12:00','Accountant call']],boxes:[{s:'11:15',d:60,t:'Renew passport form',state:'running',sprints:[['11:17',20,'lv']],sprintNo:1,left:'8:00'},{s:'12:30',d:30,t:'Reply to Mrs. Pennywhistle',tags:['Added during the day']}]})+row({t:'Reply to Mrs. Pennywhistle',energy:'Low',est:30,ctx:'@computer',added:true,placed:'12:30'})))
+  ].join('');
+}
+function autoflow(){
+  const E0=[['09:30','10:00','Standup'],['11:30','12:00','Accountant call']];
+  const E1=[['09:30','10:00','Standup'],['10:30','11:30','Accountant call']];
+  const B0=[{s:'08:30',d:60,t:'Draft the Q3 letter'},{s:'10:00',d:10,t:'Book the dentist'},{s:'10:10',d:60,t:'Renew passport form'},{s:'12:00',d:30,t:'Reconcile receipts'}];
+  const B1=[{s:'08:30',d:60,t:'Draft the Q3 letter'},{s:'10:00',d:10,t:'Book the dentist'},{s:'11:30',d:60,t:'Renew passport form',tags:['Moved from 10:10']},{s:'12:30',d:30,t:'Reconcile receipts'}];
+  const t0=phone("Today",'Before',tl({from:'08:30',to:'13:00',ppm:1,events:E0,boxes:B0})+legend);
+  const t1=phone("Today",'Calendar changed',`<div class="pad"><div class="note neutral">${I.info}<div><b>The Accountant call moved to 10:30–11:30</b><span>I have moved two suggested times to keep clear of it: Renew passport form to 11:30, Reconcile receipts to 12:30.</span><div class="row2" style="margin-top:6px"><button class="btn sm" type="button">Very good</button><button class="btn t sm" type="button">Undo</button></div></div></div></div>`+tl({from:'08:30',to:'13:00',ppm:1,events:E1,boxes:B1})+legend);
+  const ov=phone("Set the time",'<button class="btn t sm" type="button">Cancel</button>',
+   tl({from:'10:30',to:'12:30',ppm:1.2,events:[['11:30','12:00','Accountant call']],boxes:[{s:'11:15',d:60,t:'Renew passport form',tags:['Set by you','Overlaps Accountant call']}]})+
+   `<div class="sheet"><h3>Renew passport form · 11:15–12:15</h3><div class="stepper" style="align-self:flex-start"><button type="button" aria-label="Earlier">−</button><output>11:15</output><button type="button" aria-label="Later">+</button></div>
+   <label class="ctx" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="ovl2" checked> Allow overlap with events</label>
+   <div class="note neutral">${I.info}<div><b>This overlaps your Accountant call</b><span>11:30–12:00. By default I would place it at 12:00. You may keep your time.</span></div></div>
+   <div class="row2 end"><button class="btn" type="button">Place at 12:00</button><button class="btn p" type="button">Keep 11:15</button></div></div>`);
+  const pin=phone("Today",'Calendar changed',`<div class="pad"><div class="note neutral">${I.info}<div><b>The Accountant call now overlaps a time you set</b><span>Renew passport form stays at 11:15, as you left it.</span><div class="row2" style="margin-top:6px"><button class="btn sm" type="button">Leave it</button><button class="btn t sm" type="button">Let Jeeves move it</button></div></div></div></div>`+
+   tl({from:'10:30',to:'13:00',ppm:1.2,events:[['11:30','12:00','Accountant call']],boxes:[{s:'11:15',d:60,t:'Renew passport form',tags:['Set by you','Overlaps Accountant call']},{s:'12:15',d:30,t:'Reconcile receipts'}]}));
+  return fig('Default · flowed around events',t0)+fig('The calendar changes · re-flowed',t1)+fig('Override · set the time yourself',ov)+fig('A time you set is never re-flowed',pin);
+}
+function limits(){
+  const strip=`<div class="strip">${I.warn}<span>Limit passed at 11:15 · 22m past<br><span style="font-weight:500;color:var(--mut)">Sprint 2 past the limit</span></span></div>`;
+  const f=focusScreen({v:'P',task:'Renew passport form',meta:'Limit 10:15–11:15 · logged 1h 22m',strip,limit:3,frac:.4,n:'Sprint 5',time:'12:00',done:4,hint:3,btns:stopBrk});
+  const gate=(nth,jv,tail)=>phone('Next sprint','',`<div class="pad"><b style="font-size:16px">Renew passport form</b><div class="strip">${I.warn}<span>${tail}<br><span style="font-weight:500;color:var(--mut)">Sprints past the limit so far: ${nth-1}</span></span></div>
+   <div class="jv"><b>${jv[0]}</b><span>${jv[1]}</span></div>
+   <div class="row2" style="flex-direction:column"><button class="btn p" type="button">Right ho</button><button class="btn" type="button">Another sprint, regardless</button><button class="btn t" type="button" style="align-self:flex-start">Raise the estimate…</button></div>
+   <span class="ctx">“Regardless” asks once more, then starts. Nothing is locked. “Regardless” leaves the estimate as it is. Raising it is permanent, and I shall re-flow the rest of the day.</span></div>`);
+  const tlv=phone('Today','',tl({from:'09:30',to:'12:30',ppm:1.5,now:'12:07',events:[['09:30','10:00','Standup']],boxes:[{s:'10:15',d:60,t:'Renew passport form',lim:true,state:'running',n:5,logged:142,over:true,sprints:[['10:15',20],['10:38',20],['11:01',14],['11:15',20,'ov'],['11:40',27,'lv ov']],sprintNo:5,left:'overtime',note:'52m past the limit · 2 sprints past'}]})+legend);
+  const cmp=`<div class="phone"><div class="pad"><table class="cmp"><tr><th></th><th>Estimate</th><th>Timeboxed</th></tr>
+   <tr><td><b>Is</b></td><td>A guess, for planning</td><td>A limit the user chose</td></tr>
+   <tr><td><b>Used for</b></td><td>Capacity, flow, “about N sprints”</td><td>Holding an Outcome to its share of the day</td></tr>
+   <tr><td><b>Exceeded</b></td><td>Silently. No warning, dots just continue</td><td>Warned before each sprint past it</td></tr>
+   <tr><td><b>Shown as</b></td><td>Chip and hollow dots</td><td>Block, with red for time past it</td></tr></table></div></div>`;
+  const tb=(on,tip)=>`<span class="tipw"><button class="tbbtn" type="button" aria-pressed="${on}" aria-label="Timeboxed" title="Timeboxed: treat the estimate as a limit. Each sprint past it is discouraged.">${I.tbx}</button>${tip?'<span class="tip" role="tooltip">Timeboxed. The estimate becomes a limit; each sprint past it is discouraged.</span>':''}</span>`;
+  const stp=v=>`<div class="stepper"><button type="button" aria-label="Less">−</button><output>${v}</output><button type="button" aria-label="More">+</button></div>`;
+  const est=phone('Next Actions','',`<div class="list">${row({t:'Find the old passport number',est:20,tbx:true,ctx:'Renew passport form'})}${row({t:'Fill in section 4',est:45,ctx:'Renew passport form'})}${row({t:'Post the form',setEst:true,ctx:'Renew passport form'})}</div>
+   <div class="sheet"><h3>Estimate · Find the old passport number</h3>
+   <div class="est" style="justify-content:space-between">${stp('20m')}${tb(true,true)}</div>
+   <div style="height:34px"></div>
+   <span class="ctx">Tap the estimate tag to open this. The icon shows in the tag only while it is on, and a step with no estimate shows a quiet “Set”. Hover or long-press the icon for the hint.</span>
+   <div class="row2 end"><button class="btn" type="button">Cancel</button><button class="btn p" type="button">Very good</button></div></div>`);
+  return fig('Timeboxed · set from the estimate tag',est)+fig('Focus Mode · limit passed',f)+fig('Starting a sprint · the first past the limit',gate(1,['The limit has run its course, sir.','Another sprint would be the first beyond it.'],'22m past the limit'))+fig('Starting a sprint · the third past it',gate(3,['That would be the third past the limit, sir.','I do not wish to nag. The rest of the day, however, is beginning to notice.'],'1h 07m past the limit'))+fig('On the timeline · the record runs past the block',tlv)+fig('Estimate and Timeboxed compared',cmp);
+}
+function suggestion(){
+  const gaps=(cls)=>[['12:15','12:40','Suggested · @phone',cls]];
+  const base={from:'11:30',to:'13:30',ppm:1.6,events:[['11:30','12:00','Accountant call']],noev:false};
+  const before=phone("Today",'11:52',tl(Object.assign({},base,{now:'11:52',gaps:[['12:15','12:40','Suggested · @phone','sug']]}))+
+   `<div class="sheet"><div class="jv"><b>A small suggestion, sir.</b><span>Three telephone errands, 25m together, would fit the gap after your call, as one sprint with no break between them.</span></div>
+   <div class="list" style="border:1px solid var(--line);border-radius:6px">${row({t:'Book the dentist',est:10,ctx:'@phone'})}${row({t:'Ring the plumber',est:10,ctx:'@phone'})}${row({t:'Confirm Friday lunch',est:5,ctx:'@phone'})}</div>
+   <div class="ctx">Same context (@phone), each 10m or less · 12:15–12:40</div>
+   <div class="row2 end"><button class="btn t" type="button">Not today</button><button class="btn" type="button">Edit</button><button class="btn p" type="button">Very good</button></div></div>`);
+  const edit=phone("Edit suggestion",'<button class="btn t sm" type="button">Cancel</button>',
+   `<div class="pad"><div class="jv"><b>Whom shall I include, sir?</b><span>Each keeps its own tile. Remove any, or add another @phone Outcome.</span></div></div><div class="list">
+   ${row({t:'Book the dentist',est:10,ctx:'@phone',act:'<button class="btn sm" type="button">Remove</button>'})}${row({t:'Ring the plumber',est:10,ctx:'@phone',act:'<button class="btn sm" type="button">Remove</button>'})}${row({t:'Confirm Friday lunch',est:5,ctx:'@phone',act:'<button class="btn sm" type="button">Remove</button>'})}
+   ${row({t:'Return the library book',est:10,ctx:'@phone',act:'<button class="btn sm" type="button">Add</button>'})}${row({t:'Renew passport form',est:125,ctx:'@computer'}).replace('class="task"','class="task" style="opacity:.55"')}</div>
+   <div class="pad"><span class="ctx">Not offered: Renew passport form (@computer, 2h 5m).</span><div class="row2 end"><button class="btn p" type="button">Very good</button></div></div>`);
+  const after=phone("Today",'11:52',tl(Object.assign({},base,{now:'11:52',boxes:[
+    {s:'12:15',d:10,t:'Book the dentist'},{s:'12:25',d:10,t:'Ring the plumber'},{s:'12:35',d:5,t:'Confirm Friday lunch'}]}))+
+   `<div class="pad"><div class="note neutral">${I.check}<div><b>Three tiles, side by side</b><span>Each is its own block, and they run as one sprint with a single break after. Move or remove any one.</span></div></div></div>`);
+  return fig('Suggestion in a free gap',before)+fig('Edit membership',edit)+fig('After accepting',after);
+}
+/* ---------- focus ---------- */
+const lerp=(x,y,t)=>x+(y-x)*t;
+const mixOver=t=>'rgb('+[245,158,11].map((v,i)=>Math.round(lerp(v,[220,38,38][i],t))).join(',')+')';
+/* kind: spr (countdown, CCW) | brk (countdown, CW) | over (sprint overtime, CW, grows) | bover (break overtime, CCW, grows)
+   p: remaining fraction for countdowns, overtime fraction for overtime. Mirrors _RingPainter. */
+function kindOf(over,brk){return over?(brk?'bover':'over'):(brk?'brk':'spr')}
+function cols(kind,p){
+  if(kind==='over'||kind==='bover')return [mixOver(p),'var(--t-over)'];
+  return kind==='brk'?['var(--c-brk)','var(--t-brk)']:['var(--c-spr)','var(--t-spr)'];
+}
+function arcPath(p,cw,r){
+  if(p<=0)return '';const f=cw?1:0;
+  if(p>=.999)return `M100 ${100-r}A${r} ${r} 0 1 ${f} 100 ${100+r}A${r} ${r} 0 1 ${f} 100 ${100-r}`;
+  const a=-Math.PI/2+(cw?1:-1)*p*2*Math.PI;
+  return `M100 ${100-r}A${r} ${r} 0 ${p>.5?1:0} ${f} ${100+r*Math.cos(a)} ${100+r*Math.sin(a)}`;
+}
+function ring(v,p,kind){
+  const cw=kind==='brk'||kind==='over';
+  const a=-Math.PI/2+(cw?1:-1)*Math.min(p,1)*2*Math.PI;
+  if(v==='M')return `<svg viewBox="0 0 200 200" aria-hidden="true"><circle class="trk" cx="100" cy="100" r="90" stroke-width="2"/><path class="arc" d="${arcPath(p,cw,90)}" stroke-width="3"/><circle class="mk" cx="${100+90*Math.cos(a)}" cy="${100+90*Math.sin(a)}" r="6"/></svg>`;
+  if(v==='P')return `<svg viewBox="0 0 200 200" aria-hidden="true"><circle class="trk" cx="100" cy="100" r="90" stroke-width="11"/><path class="arc" d="${arcPath(p,cw,90)}" stroke-width="11"/></svg>`;
+  let t='';const lit=Math.round(Math.min(p,1)*60);
+  for(let i=0;i<60;i++){const an=i/60*2*Math.PI-Math.PI/2,r1=i%5?82:76,off=cw?i:(60-i)%60;
+    t+=`<line class="tk ${off<lit?'on':''}" x1="${100+r1*Math.cos(an)}" y1="${100+r1*Math.sin(an)}" x2="${100+90*Math.cos(an)}" y2="${100+90*Math.sin(an)}"/>`}
+  return `<svg viewBox="0 0 200 200" aria-hidden="true">${t}<circle class="trk" cx="100" cy="100" r="66" stroke-width="1"/><circle class="mk" cx="${100+66*Math.cos(a)}" cy="${100+66*Math.sin(a)}" r="4"/></svg>`;
+}
+/* dots: vertical column beside the ring, as shipped. Completed and current are solid, the rest outlined; current pulses 0.82 to 1.18. */
+function dots(done,hint,onBreak,limit){
+  const completed=onBreak?done+1:done, total=Math.max(hint,completed+(onBreak?0:1));
+  let g=[],cell='';
+  for(let i=0;i<total;i++){
+    const ov=limit!=null&&i>=limit&&(i<completed||(!onBreak&&i===done));
+    cell+=`<span class="dot ${i<completed?'f':(!onBreak&&i===done?'cur':'')} ${ov?'ov':''}"></span>`;
+    if((i+1)%LONG_EVERY===0||i===total-1){g.push(`<span class="dg">${cell}</span>`);cell=''}
+  }
+  return `<div class="dots" role="img" aria-label="${completed} sprints done">${g.join('')}</div>`;
+}
+/* frac: elapsed fraction for countdowns (converted to remaining), overtime fraction when over */
+function ringBlock(v,frac,n,time,sub,done,hint,over,cls,brk,limit){
+  const kind=kindOf(over,brk),p=over?frac:Math.max(0,1-frac),[c,t]=cols(kind,p);
+  return `<div class="rd"><div class="ringw v-${v} ${cls||''}" style="--ring:${c};--trk:${t}">${ring(v,p,kind)}<div class="rc"><span class="n">${n}</span><span class="t">${time}</span>${sub?`<span class="s">${sub}</span>`:''}</div></div>${dots(done,hint,brk,limit)}</div>`;
+}
+function matrix(){
+  const states=[
+   ['Sprint 1 · about 3 sprints',0.12,1,'17:36',0,3],
+   ['Sprint 4 · about 3 sprints (past the hint)',0.55,4,'09:01',3,3],
+   ['Sprint 12 · about 3 sprints',0.3,12,'14:00',11,3],
+   ['Sprint 2 · no estimate',0.4,2,'12:00',1,0]];
+  let h=`<div class="mh"><span>Monastic</span><span>Paced</span><span>Instrument</span></div>`;
+  states.forEach(s=>{
+    h+=`<div class="matrix" style="margin-bottom:12px">`+['M','P','I'].map(v=>`<div class="cell">${ringBlock(v,s[1],'Sprint '+s[2],s[3],'',s[4],s[5])}<small>${s[0]}</small></div>`).join('')+`</div>`;
+  });
+  return `<div class="xs">${h}</div>`;
+}
+function focusScreen(o){
+  return phone(o.title||'Focus','<span class="sync" style="display:'+(o.sync?'inline-flex':'none')+'"><i></i>Not synced</span>',
+   `<div class="focus ${o.cls||''}"><h4>${o.task}</h4><div class="meta">${o.meta}</div>${o.strip||''}${ringBlock(o.v,o.frac,o.n,o.time,o.sub,o.done,o.hint,o.over,o.cls,o.brk,o.limit)}
+   ${o.jv?`<div class="jv"><b>${o.jv[0]}</b><span>${o.jv[1]}</span></div>`:''}
+   ${o.extra||''}<div class="row2" style="justify-content:center">${o.btns}</div></div>`);
+}
+const stopBrk='<button class="btn" type="button">Stop</button><button class="btn p" type="button">Start break</button>';
+function focusScreens(){
+  return [
+   fig('Paced · sprint 1 on an “about 3 sprints” task',focusScreen({v:'P',task:'Draft the Q3 letter',meta:'Estimate 1h · logged 1h 12m',frac:.12,n:'Sprint 1',time:'17:36',done:0,hint:3,btns:stopBrk})),
+   fig('Monastic · sprint stopped early',focusScreen({v:'M',task:'Draft the Q3 letter',meta:'Logged 1h 26m, breaks included',frac:.7,n:'Sprint 2',time:'14:00',sub:'Stopped early · 6m left',done:1,hint:3,jv:['Stopped at 14m, sir.','Fourteen minutes is recorded as it stands.'],btns:'<button class="btn" type="button">Start sprint</button><button class="btn p" type="button">Start break</button>'})),
+   fig('Instrument · overtime',focusScreen({v:'I',task:'Draft the Q3 letter',meta:'Logged 1h 49m',frac:.16,over:true,n:'Sprint 3',time:'+3:12',sub:'Overtime · planned 20m',done:2,hint:3,btns:stopBrk})),
+   fig('Paced · still running from another device',focusScreen({v:'P',sync:true,task:'Renew passport form',meta:'Logged 2h 31m',frac:1,over:true,n:'Sprint 2',time:'+2:41:07',sub:'Overtime',done:1,hint:6,
+     jv:['This one may have ended elsewhere, sir.','I last heard from your other device at 14:02.'],extra:'<div class="note neutral" style="text-align:left;width:100%"><span class="sync"><i></i>Last synced 14:02</span><span>Sync catches up on its own. Until then this device shows the sprint as running.</span></div>',btns:'<button class="btn p" type="button">Stop sprint here</button>'}))
+  ].join('');
+}
+function breaks(){
+  const short=focusScreen({title:'Break',brk:true,v:'P',task:'Short break',meta:'Draft the Q3 letter · logged 1h 15m, still counting',frac:.33,n:'Break',time:'02:01',done:3,hint:3,jv:['Three minutes, sir.','The letter will keep.'],btns:'<button class="btn" type="button">Stop</button><button class="btn p" type="button">Push on</button>'}).replace('class="ringw v-P ','class="ringw v-P ');
+  const long=focusScreen({title:'Long break',brk:true,cls:'long',v:'P',task:'Long break · 15m',meta:'Four sprints done. The count begins afresh after this.',frac:.2,n:'Long break',time:'12:00',sub:'Draft the Q3 letter · logged 1h 40m',done:4,hint:3,jv:['Quite earned, sir.','The work will keep for a quarter of an hour.'],
+    btns:'<button class="btn" type="button">Stop</button><button class="btn p" type="button">Push on</button>',extra:''});
+  const longOver=focusScreen({title:'Long break',brk:true,cls:'long',v:'P',task:'Long break · 15m',meta:'Logged 1h 52m',frac:.28,over:true,n:'Long break',time:'+4:10',sub:'Overtime',done:4,hint:3,jv:['Take your time, sir.','I shall keep the minutes.'],btns:'<button class="btn" type="button">Stop</button><button class="btn p" type="button">Right ho</button>'});
+  const pool=`<div class="pool"><div><b>A longer pause, sir.</b><span>Four sprints is a respectable showing.</span></div><div><b>Quite earned, sir.</b><span>The work will keep for a quarter of an hour.</span></div><div><b>Might I suggest a turn about the room?</b><span>The chair will not take offence.</span></div><div><b>The tea is, I trust, still warm.</b><span>Fifteen minutes, and I shall say nothing of the clock.</span></div><div><b>I have cleared the next quarter-hour, sir.</b><span>Nothing requires you but the kettle.</span></div></div>`;
+  return fig('Short break (break green)',short)+fig('Long break (break green as shipped, outer hairline ring, a full group of dots)',long)+fig('Long break · overtime (counter-clockwise, grows)',longOver)+fig('Jeeves pool for the long break',pool);
+}
+function rows(){
+  const L=[
+   row({t:'Draft the Q3 letter',energy:'High',est:60,logged:70,due:'Fri',ctx:'@computer',tbx:true}),
+   row({t:'Book the dentist',energy:'Low',est:10,ctx:'@phone'}),
+   row({t:'Reconcile October receipts',energy:'Low',ctx:'@computer'}),
+   row({t:'Renew passport form',energy:'Med',est:125,due:'Today'}),
+   row({t:'Reply to Mrs. Pennywhistle',energy:'Low',est:5,ctx:'@computer',added:true}),
+   row({t:'Post the cheque',done:true,est:5,logged:5})
+  ];
+  return fig("Today's Plan rows",phone("Today's Plan",'6 Outcomes','<div class="list">'+L.join('')+'</div>'))+
+   fig('How the hint reads',`<div class="phone"><div class="pad"><ul class="ul"><li><b>“about 3 sprints”</b> = estimate ÷ sprint length, rounded up. 60m ÷ 20m.</li><li>Small hollow pips repeat the hint visually, up to six. Nothing says “of”.</li><li>No estimate: no hint line at all, no pips, no “?”.</li><li>The estimate chip and the hint are different facts. The hint never edits the estimate.</li></ul></div></div>`);
+}
+function addScreens(){
+  const s1=phone("Today's Plan",'<button class="btn p sm" type="button">Add</button>',
+   `<div class="pad">${cap(165,30,255)}</div><div class="list">${row({t:'Draft the Q3 letter',energy:'High',est:60,logged:70,due:'Fri'})}${row({t:'Renew passport form',energy:'Med',est:60})}</div>
+    <div class="pad"><span class="ctx">“Add” stays in the app bar, top right, so it can be reached from any scroll.</span></div>`);
+  const s2=phone('Add to Today’s Plan','<button class="btn t sm" type="button">Cancel</button>',
+   `<div class="pad"><div class="jv"><b>Another for the day, sir?</b><span>Choose an Outcome. It will be marked as added during the day.</span></div></div><div class="list">${row({t:'Sort the garage',energy:'High',est:120,ctx:'@home',act:'<span class="st done" aria-label="selected"></span>'})}${row({t:'Return the library book',energy:'Low',est:10,ctx:'@phone'})}</div>
+    <div class="pad"><div class="note red">${I.warn}<div><b>That would exceed the time left</b><span>Estimates total 5h 15m; 4h 15m remain. You may add it regardless.</span></div></div><div class="row2 end"><button class="btn" type="button">Cancel</button><button class="btn p" type="button">Add anyway</button></div></div>`);
+  const s3=phone("Today's Plan",'',
+   `<div class="pad">${cap(285,0,255)}</div><div class="list">${row({t:'Sort the garage',energy:'High',est:120,ctx:'@home',added:true,act:'<button class="btn sm" type="button">Place</button>'})}${row({t:'Draft the Q3 letter',energy:'High',est:60,logged:70,due:'Fri',placed:'10:00'})}</div>`+
+   tl({from:'13:00',to:'16:00',ppm:.9,boxes:[{s:'13:30',d:120,t:'Sort the garage',tags:['Added during the day']}]}));
+  return fig('Where the add starts',s1)+fig('Warning that never blocks',s2)+fig('Marked on the row and its Timebox',s3);
+}
+function settings(){
+  const r=(a,b,v)=>`<div class="setrow"><div><b>${a}</b><small>${b}</small></div><div class="stepper"><button type="button" aria-label="Less">−</button><output>${v}</output><button type="button" aria-label="More">+</button></div></div>`;
+  return fig('Settings · Focus',phone('Focus','',
+   r('Sprint length','Each sprint starts at this. You may stop early or run over.','20m')+r('Short break','After a sprint.','3m')+r('Long break','After a run of sprints.','15m')+r('Sprints before a long break','The count runs across Outcomes.','4')+
+   `<div class="pad"><span class="ctx">The count starts over after a long break, or after a gap with no sprint as long as a long break.</span></div>`));
+}
+/* ---------- desktop ---------- */
+function desktop(){
+  const plan=`<div class="cap">Today’s Plan</div><div class="list">${row({t:'Draft the Q3 letter',energy:'High',est:60,logged:70,due:'Fri',placed:'10:00'})}${row({t:'Renew passport form',energy:'Med',est:60,placed:'11:15',ctx:'@computer'})}${row({t:'Book the dentist',energy:'Low',est:10,ctx:'@phone'})}${row({t:'Reconcile receipts',energy:'Low'})}${row({t:'Reply to Mrs. Pennywhistle',energy:'Low',est:5,added:true})}</div>`;
+  const tlw=tl(Object.assign({},DAY,{ppm:1.5,from:'08:30',to:'17:00'}));
+  const nowp=`<div class="cap">Now</div>`+focusScreen({title:'Renew passport form',v:'P',task:'Renew passport form',meta:'Sprint started on your phone · logged 17m',frac:.85,n:'Sprint 1',time:'03:00',done:0,hint:6,btns:stopBrk})+
+   `<div class="cap">Suggestion</div><div class="note neutral">${I.info}<div><b>A small suggestion, sir.</b><span>Three @phone errands, 25m, fit 12:15–12:40.</span><div class="row2" style="margin-top:6px"><button class="btn sm" type="button">Edit</button><button class="btn p sm" type="button">Very good</button></div></div></div>`;
+  return `<div class="xs"><div class="desk"><div class="dtop">${cap(165,30,255)}<span class="sync">Wide screen: the plan, the timeline and the sprint clock side by side</span></div><div>${plan}</div><div><div class="cap">Friday 14 November</div>${tlw}${legend}</div><div>${nowp}</div></div></div>`;
+}
+/* ---------- compose ---------- */
+$('#app').innerHTML=`
+<h2>1 · Day timeline</h2>
+<p class="sub">On a phone the timeline owns the screen. Outcomes flow onto it by themselves. One that fits no gap waits in a tray under it, and “Set the time” (or dragging the row) lets the user choose a time. Both end at the same sheet, so nothing depends on dragging.</p>
+<div class="grid">${fig('Planning · flowed, one Outcome doesn’t fit',trayScreen())}${fig('Set the time · free gaps offered',placingScreen())}${fig('During the day · plan and record side by side',dayScreen())}</div>
+<h2>Tile states and sprint marks</h2>
+<p class="sub">A tile is one block, sized by the estimate, with no sprint or break blocks inside. What was done is drawn in a lane at the right edge, at the real times, so it can run past the block or fall short of it without “correcting” anything. Inside the block a count says how many sprints and how much time. At 15 minutes the block reduces to one line; at 3 hours it also lists each sprint.</p>
+<div class="grid">${fig('Six states',boxGallery())}${fig('Short and long tiles',scaleGallery())}</div>
+<h2>Day timeline states</h2>
+<div class="grid">${states()}</div>
+
+<h2>Autoflow and overrides</h2>
+<p class="sub">By default no tile overlaps an event. Jeeves flows each Plan Outcome into the first gap that holds its estimate, and re-flows when the calendar changes. Outcomes are unordered, so a small one may fill an earlier gap; the steps within an Outcome keep their order. A gap that holds an Outcome whole is always preferred; failing that, it is split into pieces that fit the gaps. The chunk is one sprint plus its short break (23m at the defaults), so there is no extra setting; the last piece takes the remainder. Setting a time yourself pins it: it may overlap, and it never moves on its own. Moves are announced once, with Undo. Past and engaged Timeboxes are never re-flowed.</p>
+<div class="grid">${autoflow()}</div>
+
+<h2>Timeboxed Actions have limits</h2>
+<p class="sub">An estimate is a guess and may be wrong in either direction without comment. A Timeboxed Action’s estimate is the limit the user chose, so every sprint started past it is discouraged. The discouragement is friction and candour, never a lock: Jeeves advises, the buttons put stopping first, and “regardless” still works. A sprint already running when the limit passes is left alone; the strip simply states the fact. There is no separate length: “Timeboxed” is a switch on the Outcome that makes its estimate the limit.</p>
+<div class="grid">${limits()}</div>
+
+<h2>2 · Small-task suggestion</h2>
+<p class="sub">The suggestion lives in the free gap as a quiet outline. Nothing moves until “Very good”. Accepting produces separate, adjacent tiles that run as one sprint (the batching algorithm is still to be designed).</p>
+<div class="grid">${suggestion()}</div>
+
+<h2>3 · Focus Mode sprint counter</h2>
+<p class="sub">“Sprint N” is always the words. The hint is carried only by dots: hollow for sprints still hinted, filled for done, a pulsing halo on the current one. Dots group by the number of sprints per long break (4 by default, set in Settings), so each gap marks where a long break falls and twelve still read at a glance. Past the hint, the dots simply continue.</p>
+${matrix()}
+<div class="grid" style="margin-top:20px">${focusScreens()}</div>
+
+<h2>4 · Long break</h2>
+<div class="grid">${breaks()}</div>
+
+<h2>5 · Task rows</h2>
+<div class="grid">${rows()}</div>
+
+<h2>6 · Adding during the day</h2>
+<div class="grid">${addScreens()}</div>
+
+<h2>7 · Settings</h2>
+<div class="grid">${settings()}</div>
+
+<h2>Wide screen</h2>
+<p class="sub">The same timeline gets room: events and tiles sit in two columns, the sprint lane is wider to read, and the Now panel keeps the sprint clock and the current suggestion in view. Scroll sideways inside the frame on a narrow window.</p>
+${desktop()}
+
+<h2>Decisions to check</h2>
+<ul class="ul">
+<li><b>Sprint clock, preserved from the shipped app:</b> sprint ring #2563EB on #DBEAFE, break ring #10B981 on #D1FAE5, overtime blending amber to red on #FEF3C7. Fill follows the clock: a countdown drains full to empty, overtime grows empty to full. Direction: a sprint countdown drains counter-clockwise, a break countdown clockwise, sprint overtime clockwise, break overtime counter-clockwise. The Monastic, Paced and Instrument looks change only the drawing style, never these rules. Dots stay a vertical column beside the ring, solid blue when done or current, outlined #BFDBFE otherwise, the current one pulsing.</li>
+<li>Overtime uses amber, which DESIGN.md says is spent on the capacity bar and sync indicator. I kept the shipped behaviour; the two statements disagree and one of them will need amending.</li>
+<li>Dark-theme values for the clock colours are mine, since the shipped app is light only.</li>
+<li>The “now” line and live sprint on the timeline use primary blue.</li>
+<li>State is carried by shape and text too: ticks on done blocks, dashed outlines on not-engaged ones, “Overlaps …”, “Added during the day”, “Over by 40m”, dot fill versus hollow.</li>
+<li>Sprint 12 only occurs if long breaks were skipped; the dots still fit, grouped by sprints per long break.</li>
+<li><b>Timeboxed:</b> a switch on a step (Action) beside its estimate, not on the Outcome. The estimate tag opens a dialog with the time and the icon; with no estimate the tag is a quiet “Set”. Only Timeboxed steps show the limit edge, the red overflow dots and the pre-sprint advice. The wider Project / Outcome / step model is a later design sprint, so rows here still show the estimate chip on the Outcome.</li>
+<li><b>Raising the estimate</b> is permanent; carrying on regardless never changes it.</li>
+<li><b>Chunking</b> uses the sprint-plus-break unit from Settings and affects layout only; sprints done and their lengths stay independent of the estimate. <b>Batching</b> is wanted; its algorithm is not designed yet. A chunked Outcome shows as separate tiles (“part 1”, “part 2”); a batch shows as adjacent tiles with no break between them. Open: a Timeboxed limit would be the total time on the Action across its pieces, not per piece.</li>
+<li><b>Overflow dots:</b> on a Timeboxed Action, dots for sprints started past the limit are red. The red dots are the only marker; no dash is drawn. Hollow hint dots stay blue. This is a change from the shipped dots, by your decision.</li>
+<li><b>Estimate stays quiet:</b> the “no warning past the hint” rule still holds for estimates. Red appears only for time past a Timebox.</li>
+<li><b>Autoflow:</b> an Outcome with no estimate flows using the assumed default. Only pinned starts are stored. Time-contexts are not built and not drawn; flow will take a Context’s hours as one more constraint beside gap length.</li>
+<li>Not designed here, per scope: the sprint-end sheet, estimate-versus-actual analytics.</li>
+</ul>
+`;
+document.addEventListener('click',e=>{const b=e.target.closest('.tbbtn');if(b)b.setAttribute('aria-pressed',b.getAttribute('aria-pressed')==='true'?'false':'true')});
+$('#tog').addEventListener('click',()=>{const r=document.documentElement;const dark=(r.dataset.theme==='dark')||(!r.dataset.theme&&matchMedia('(prefers-color-scheme:dark)').matches);r.dataset.theme=dark?'light':'dark'});
+</script>
