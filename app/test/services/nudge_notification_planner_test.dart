@@ -54,11 +54,18 @@ NudgeNotificationFacts _facts({
       hasAnyItem: hasAnyItem,
       hasInboxOrNext: hasInboxOrNext,
       latestSessionStartedAt: latestSessionStartedAt,
+      sessionIsOpen: sessionIsOpen,
     ),
+    // Built as `eveningShutdownFactsProvider` builds it: the open session's
+    // start is the latest session's start, and the planning time is the
+    // Daily Planning time.
     es: EsFacts(
       shutdownHour: shutdownHour,
       shutdownMinute: 0,
+      planningHour: planningHour,
+      planningMinute: 0,
       sessionIsOpen: sessionIsOpen,
+      openSessionStartedAt: sessionIsOpen ? latestSessionStartedAt : null,
     ),
     wr: WrFacts(
       dueAt: hasAnyItem
@@ -224,15 +231,14 @@ void main() {
       expect(_of(plan, RitualId.dailyPlanning), isEmpty);
     });
 
-    test('Daily Planning still notifies in the morning of a stale-session day',
-        () {
+    test('row 10: Daily Planning is silent while a stale session is open', () {
       final plan = planNudgeNotifications(_facts(
         sessionIsOpen: true,
         latestSessionStartedAt: _at(-1, 10),
       ));
 
-      expect(_of(plan, RitualId.dailyPlanning).first.fireAt, _at(0, 8),
-          reason: 'Shutdown is not firing at 08:00, so Planning is the head');
+      expect(_of(plan, RitualId.dailyPlanning), isEmpty,
+          reason: 'a session is open, so Planning is not offered');
       expect(_of(plan, RitualId.eveningShutdown).first.fireAt, _at(0, 18));
     });
   });

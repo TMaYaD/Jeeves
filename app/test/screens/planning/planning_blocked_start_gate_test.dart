@@ -48,7 +48,7 @@ void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
   testWidgets(
-      'open session → interstitial, and "Begin Evening Shutdown" carries the '
+      'row 20: a session left open from an earlier day → interstitial, and "Begin Evening Shutdown" carries the '
       'and-then-plan intent to /shutdown', (tester) async {
     final db = GtdDatabase(NativeDatabase.memory());
     addTearDown(db.close);

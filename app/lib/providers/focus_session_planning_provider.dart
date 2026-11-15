@@ -16,6 +16,7 @@
 /// - Stream providers expose live lists of tasks for each ritual step.
 library;
 
+import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/daos/focus_session_dao.dart' show SessionSettlement;
@@ -455,6 +456,7 @@ class FocusSessionPlanningState {
     this.reviewPersonTags = const {},
     this.reviewActionTexts = const {},
     this.reviewStaleIds = const {},
+    this.startedSessionId,
   });
 
   final int currentStep;
@@ -527,6 +529,10 @@ class FocusSessionPlanningState {
   /// hint.
   final Set<String> reviewStaleIds;
 
+  /// The session this performance just opened with Start Day. The open-session
+  /// gate lets this one through: it is not a session left open from before.
+  final String? startedSessionId;
+
   FocusSessionPlanningState copyWith({
     int? currentStep,
     int? availableMinutes,
@@ -542,6 +548,7 @@ class FocusSessionPlanningState {
     Map<String, List<Tag>>? reviewPersonTags,
     Map<String, String>? reviewActionTexts,
     Set<String>? reviewStaleIds,
+    String? startedSessionId,
   }) =>
       FocusSessionPlanningState(
         currentStep: currentStep ?? this.currentStep,
@@ -558,6 +565,7 @@ class FocusSessionPlanningState {
         reviewPersonTags: reviewPersonTags ?? this.reviewPersonTags,
         reviewActionTexts: reviewActionTexts ?? this.reviewActionTexts,
         reviewStaleIds: reviewStaleIds ?? this.reviewStaleIds,
+        startedSessionId: startedSessionId ?? this.startedSessionId,
       );
 }
 
@@ -1123,7 +1131,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
   /// On success, today's Daily Planning notification is now moot (a qualifying
   /// session exists), so its pending one-off fire is cancelled.
   Future<void> startDay() async {
-    await _db.focusSessionDao.openSession(
+    final startedSessionId = await _db.focusSessionDao.openSession(
       userId: _userId,
       taskIds: state.pendingSelectedTaskIds,
       // The Outcomes the user tapped Skip on (the set the skipped list shows):
@@ -1138,20 +1146,52 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     state = FocusSessionPlanningState(
       energyLevel: state.energyLevel,
       availableMinutes: state.availableMinutes,
+      startedSessionId: startedSessionId,
     );
     // Retained clarify drafts belong to the performance that produced them,
     // the same as the inbox snapshot and its cursor above.
     ref.read(clarifyRetentionProvider).clearAll();
     // Remember this session's planned time as the next planning's default.
-    // Last, so a preference read/write failure cannot leave the opened session
-    // with its reminder unskipped or the draft unreset. Skipped when unchanged
+    // Not awaited: the session is open and the draft reset, so the caller must
+    // be free to navigate to Now while the preference store is slow or failing
+    // (the planning screen renders nothing in between). Skipped when unchanged
     // so an ordinary day authors no redundant sync op.
-    final storedMinutes = await _db.userPreferencesDao
-        .get(_userId, kLastSessionAvailableMinutesKey);
-    if (storedMinutes != plannedMinutes.toString() && ref.mounted) {
-      await syncedPrefs(ref)
-          .set(kLastSessionAvailableMinutesKey, plannedMinutes);
+    _preferenceWrite = _rememberPlannedMinutes(plannedMinutes);
+  }
+
+  Future<void> _preferenceWrite = Future<void>.value();
+
+  /// Completes when the last Start Day's available-time preference write has
+  /// finished (successfully or not). Tests await it; production does not.
+  @visibleForTesting
+  Future<void> get preferenceWriteSettled => _preferenceWrite;
+
+  /// Never throws: the session is already open, so a failure here is logged
+  /// and dropped.
+  Future<void> _rememberPlannedMinutes(int plannedMinutes) async {
+    try {
+      final storedMinutes = await _db.userPreferencesDao
+          .get(_userId, kLastSessionAvailableMinutesKey);
+      if (storedMinutes != plannedMinutes.toString() && ref.mounted) {
+        await syncedPrefs(ref)
+            .set(kLastSessionAvailableMinutesKey, plannedMinutes);
+      }
+    } catch (e) {
+      debugPrint('Could not remember the planned available time: $e');
     }
+  }
+
+  /// Forgets the session this performance opened. Called when the planning
+  /// screen leaves the tree, so the blocked-start gate's allowance for "the
+  /// session Start Day just opened" ends with that performance and a later
+  /// visit (Re-plan while the session is open) meets the Shutdown-first gate.
+  void clearStartedSession() {
+    if (!ref.mounted || state.startedSessionId == null) return;
+    state = FocusSessionPlanningState(
+      currentStep: state.currentStep,
+      energyLevel: state.energyLevel,
+      availableMinutes: state.availableMinutes,
+    );
   }
 
   /// Resets the planning ritual to a fresh performance.

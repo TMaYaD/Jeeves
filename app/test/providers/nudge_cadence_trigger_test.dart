@@ -27,6 +27,7 @@ import 'package:jeeves/providers/nudge_triggers.dart';
 import 'package:jeeves/providers/onboarding_provider.dart';
 import 'package:jeeves/models/nudge_predicates.dart';
 import 'package:jeeves/providers/shutdown_settings_provider.dart';
+import 'package:jeeves/providers/synced_preferences_provider.dart';
 import 'package:jeeves/providers/system_trust_provider.dart'
     show weeklyReviewDueAtProvider;
 
@@ -68,6 +69,13 @@ Todo _todo() => Todo(
       userId: 'u',
     );
 
+/// No stored preferences: the Evening Shutdown facts read the last available
+/// time from them, and the real provider would open a database.
+class _EmptyPreferences extends SyncedPreferencesNotifier {
+  @override
+  Future<SyncedPreferences> build() async => const SyncedPreferences({});
+}
+
 ProviderContainer _makeContainer({
   required DateTime now,
   TimeOfDay planningTime = const TimeOfDay(hour: 8, minute: 0),
@@ -80,6 +88,7 @@ ProviderContainer _makeContainer({
   return ProviderContainer(overrides: [
     clockProvider.overrideWithValue(() => now),
     nudgeBoundaryTickProvider.overrideWithValue(0),
+    syncedPreferencesProvider.overrideWith(_EmptyPreferences.new),
     focusSessionPlanningSettingsProvider
         .overrideWith(() => _StubPlanningSettings(planningTime)),
     shutdownSettingsProvider
@@ -296,7 +305,24 @@ void main() {
     });
   });
 
-  group('Stale open session — only ES fires past shutdown', () {
+  group('Session left open from an earlier day — only ES fires', () {
+    test('in the Day: Plan your day is hidden, Evening Shutdown fires',
+        () async {
+      final c = _makeContainer(
+        now: DateTime(2026, 5, 20, 9, 0),
+        qualifying: false,
+        activeSession: _openSession(DateTime(2026, 5, 19, 9, 0)),
+      );
+      addTearDown(c.dispose);
+
+      final dpr = await _readTrigger(c, RitualId.dailyPlanning);
+      final es = await _readTrigger(c, RitualId.eveningShutdown);
+      expect(dpr.isFiring, isFalse);
+      expect(es.isFiring, isTrue);
+      expect(es.firingSince, DateTime(2026, 5, 20, 8, 0),
+          reason: 'raised again at the planning time');
+    });
+
     test('past both anchors: DPR idle (past ES anchor) AND ES fires', () async {
       // Session opened yesterday, still open; clock 18:30 today; anchors 08:00
       // / 18:00. It started before today\'s ES anchor, so does not qualify.

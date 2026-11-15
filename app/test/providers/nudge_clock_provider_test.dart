@@ -28,6 +28,17 @@ void main() {
       expect(next, DateTime(2026, 6, 29, 8, 30));
     });
 
+    test('picks an open Evening session\'s due instant when it is earliest',
+        () {
+      final now = DateTime(2026, 6, 29, 21, 0);
+      final next = nextNudgeBoundary(now,
+          shutdownHour: 17,
+          shutdownMinute: 0,
+          eveningShutdownDueAt: DateTime(2026, 6, 29, 23, 0),
+          weeklyReviewDueAt: null);
+      expect(next, DateTime(2026, 6, 29, 23, 0));
+    });
+
     test('falls back to the next day boundary once the anchor has passed', () {
       final now = DateTime(2026, 6, 29, 18, 0);
       final next = nextNudgeBoundary(now,

@@ -410,6 +410,24 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 }
 
+const String _kEqualRitualTimesMessage =
+    "Daily Planning and Evening Shutdown can't be at the same time.";
+
+/// Daily Planning and Evening Shutdown must not share a time. True when
+/// [picked] equals [other]; the caller then saves nothing and this has told the
+/// user why.
+bool _refuseEqualRitualTimes(
+  BuildContext context,
+  TimeOfDay picked,
+  TimeOfDay other,
+) {
+  if (picked.hour != other.hour || picked.minute != other.minute) return false;
+  ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(const SnackBar(content: Text(_kEqualRitualTimesMessage)));
+  return true;
+}
+
 class _FocusSessionPlanningSettings extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -434,7 +452,9 @@ class _FocusSessionPlanningSettings extends ConsumerWidget {
               context: context,
               initialTime: settings.planningTime,
             );
-            if (picked != null) {
+            if (picked != null && context.mounted) {
+              final shutdownTime = ref.read(shutdownSettingsProvider).shutdownTime;
+              if (_refuseEqualRitualTimes(context, picked, shutdownTime)) return;
               await notifier.setPlanningTime(picked);
             }
           },
@@ -870,7 +890,10 @@ class _EveningShutdownSettings extends ConsumerWidget {
               context: context,
               initialTime: settings.shutdownTime,
             );
-            if (picked != null) {
+            if (picked != null && context.mounted) {
+              final planningTime =
+                  ref.read(focusSessionPlanningSettingsProvider).planningTime;
+              if (_refuseEqualRitualTimes(context, picked, planningTime)) return;
               await notifier.setShutdownTime(picked);
             }
           },

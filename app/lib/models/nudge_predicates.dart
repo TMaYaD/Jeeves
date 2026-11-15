@@ -50,11 +50,12 @@ class DprFacts {
     required this.hasAnyItem,
     required this.hasInboxOrNext,
     this.latestSessionStartedAt,
-  }) : _qualifyingSessionExists = null;
+    this.sessionIsOpen = false,
+  }) : _startedTodayOverride = null;
 
-  /// Adapter for the live provider's existing per-anchor database query.
-  /// These facts apply only to the instant whose period the query describes.
-  /// Future projections must use the timestamp constructor instead.
+  /// Adapter for the live provider's per-day database query. These facts apply
+  /// only to the instant whose calendar day the query describes. Future
+  /// projections must use the timestamp constructor instead.
   const DprFacts.forCurrentPeriod({
     required this.planningHour,
     required this.planningMinute,
@@ -63,7 +64,8 @@ class DprFacts {
     required this.hasAnyItem,
     required this.hasInboxOrNext,
     required bool qualifyingSessionExists,
-  }) : _qualifyingSessionExists = qualifyingSessionExists,
+    this.sessionIsOpen = false,
+  }) : _startedTodayOverride = qualifyingSessionExists,
        latestSessionStartedAt = null;
 
   final int planningHour;
@@ -73,19 +75,41 @@ class DprFacts {
   final bool hasAnyItem;
   final bool hasInboxOrNext;
   final DateTime? latestSessionStartedAt;
-  final bool? _qualifyingSessionExists;
+
+  /// Whether any session is open, whenever it started.
+  final bool sessionIsOpen;
+  final bool? _startedTodayOverride;
 }
+
+/// Available time assumed when none was recorded: eight hours.
+const int kDefaultEveningSessionAvailableMinutes = 480;
 
 class EsFacts {
   const EsFacts({
     required this.shutdownHour,
     required this.shutdownMinute,
     required this.sessionIsOpen,
+    this.planningHour = 8,
+    this.planningMinute = 0,
+    this.openSessionStartedAt,
+    this.availableMinutes = kDefaultEveningSessionAvailableMinutes,
   });
 
   final int shutdownHour;
   final int shutdownMinute;
   final bool sessionIsOpen;
+
+  /// Daily Planning time: an open session that is overdue is raised again at
+  /// each planning time.
+  final int planningHour;
+  final int planningMinute;
+
+  /// Start of the open session; null is read as "started before today's
+  /// Evening Shutdown time".
+  final DateTime? openSessionStartedAt;
+
+  /// The available time the open session was planned with.
+  final int availableMinutes;
 }
 
 class WrFacts {
@@ -101,44 +125,87 @@ class WrFacts {
 DateTime _todayAt(DateTime instant, int hour, int minute) =>
     DateTime(instant.year, instant.month, instant.day, hour, minute);
 
+/// Daily Planning is offered from today's planning time until the Evening
+/// Shutdown time, and only when no session is open and none started today.
 DateTime? dprFiringEdgeAt(DateTime instant, DprFacts facts) {
   if (!facts.hasAnyItem || !facts.hasInboxOrNext) return null;
+  if (facts.sessionIsOpen) return null;
   final planningAnchor = _todayAt(
     instant,
     facts.planningHour,
     facts.planningMinute,
   );
   if (instant.isBefore(planningAnchor)) return null;
+  final startedToday =
+      facts._startedTodayOverride ??
+      (facts.latestSessionStartedAt != null &&
+          !facts.latestSessionStartedAt!.isBefore(_todayAt(instant, 0, 0)));
+  if (startedToday) return null;
   final shutdownToday = _todayAt(
     instant,
     facts.shutdownHour,
     facts.shutdownMinute,
   );
-  final lastShutdownAnchor = instant.isBefore(shutdownToday)
-      ? DateTime(
-          instant.year,
-          instant.month,
-          instant.day - 1,
-          facts.shutdownHour,
-          facts.shutdownMinute,
-        )
-      : shutdownToday;
-  final qualifying =
-      facts._qualifyingSessionExists ??
-      (facts.latestSessionStartedAt != null &&
-          !facts.latestSessionStartedAt!.isBefore(lastShutdownAnchor));
-  if (qualifying) return null;
-  // From the ES anchor until the next planning anchor the Trigger is idle.
-  // A tie (planning time == ES time) goes to planning: strict isAfter, so the
-  // user is still prompted to plan.
-  if (lastShutdownAnchor.isAfter(planningAnchor)) return null;
+  // From the Evening Shutdown time until the next planning time it is idle.
+  if (shutdownToday.isAfter(planningAnchor) &&
+      !instant.isBefore(shutdownToday)) {
+    return null;
+  }
   return planningAnchor;
 }
 
+/// The instant from which Evening Shutdown is due for the open session.
+///
+/// A session started before that day's Evening Shutdown time is due at it. A
+/// session started in the Evening is due after its available time, but no later
+/// than the next planning time.
+DateTime eveningShutdownDueAt(DateTime startedAt, EsFacts facts) {
+  final shutdownOnStartDay = _todayAt(
+    startedAt,
+    facts.shutdownHour,
+    facts.shutdownMinute,
+  );
+  if (startedAt.isBefore(shutdownOnStartDay)) return shutdownOnStartDay;
+  final availableTimeUp = startedAt.add(
+    Duration(minutes: facts.availableMinutes),
+  );
+  final planningOnStartDay = _todayAt(
+    startedAt,
+    facts.planningHour,
+    facts.planningMinute,
+  );
+  final nextPlanning = startedAt.isBefore(planningOnStartDay)
+      ? planningOnStartDay
+      : DateTime(
+          startedAt.year,
+          startedAt.month,
+          startedAt.day + 1,
+          facts.planningHour,
+          facts.planningMinute,
+        );
+  return availableTimeUp.isBefore(nextPlanning) ? availableTimeUp : nextPlanning;
+}
+
+/// Evening Shutdown is raised from the due instant, and raised again at every
+/// planning time and every Evening Shutdown time until the session is closed.
 DateTime? esFiringEdgeAt(DateTime instant, EsFacts facts) {
   if (!facts.sessionIsOpen) return null;
-  final anchor = _todayAt(instant, facts.shutdownHour, facts.shutdownMinute);
-  return instant.isBefore(anchor) ? null : anchor;
+  final startedAt =
+      facts.openSessionStartedAt ?? _todayAt(instant, 0, 0);
+  final dueAt = eveningShutdownDueAt(startedAt, facts);
+  if (instant.isBefore(dueAt)) return null;
+  var edge = dueAt;
+  for (final (hour, minute) in [
+    (facts.shutdownHour, facts.shutdownMinute),
+    (facts.planningHour, facts.planningMinute),
+  ]) {
+    var anchor = _todayAt(instant, hour, minute);
+    if (anchor.isAfter(instant)) {
+      anchor = DateTime(instant.year, instant.month, instant.day - 1, hour, minute);
+    }
+    if (anchor.isAfter(edge)) edge = anchor;
+  }
+  return edge;
 }
 
 /// Most recent active Weekly Review Trigger edge. Content edges are already

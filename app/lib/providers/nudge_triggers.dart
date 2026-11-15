@@ -122,7 +122,7 @@ DateTime lastAnchorBefore(DateTime now, int hour, int minute) {
 /// Today's Daily Planning anchor instant, derived from the user's configured
 /// planning time (default 08:00). Used only by the DPR Cadence Trigger for its
 /// past-anchor gate and `firingSince` — it is *not* the day boundary for
-/// session attribution (that is [lastShutdownAnchorProvider]).
+/// session attribution.
 final planningAnchorProvider = Provider<DateTime>((ref) {
   final now = _now(ref);
   final planningTime =
@@ -130,26 +130,14 @@ final planningAnchorProvider = Provider<DateTime>((ref) {
   return _todayAt(now, planningTime.hour, planningTime.minute);
 });
 
-/// The most recent Evening Shutdown anchor at or before now, derived from the
-/// user's configured shutdown time (default 18:00 — the same source
-/// [_esCadenceTrigger] reads). This is the **day boundary for session
-/// attribution** (ADR-0020): a session belongs to the planning period opened
-/// by the most recent ES anchor before its `started_at`.
-final lastShutdownAnchorProvider = Provider<DateTime>((ref) {
-  final now = _now(ref);
-  final shutdownTime = ref.watch(shutdownSettingsProvider).shutdownTime;
-  return lastAnchorBefore(now, shutdownTime.hour, shutdownTime.minute);
-});
-
-/// Whether a session qualifies as belonging to the current planning period —
-/// i.e. one exists whose `started_at >=` [lastShutdownAnchorProvider]. This is
-/// the single source of "did today's planning happen" for the Daily Planning
-/// nudge (ADR-0020). `ended_at` plays no part; an open session that started
-/// before the last ES anchor does *not* qualify.
+/// Whether a session started on the current calendar day, open or closed.
+/// This is the single source of "has today been planned" for the Daily
+/// Planning nudge. A session started in the Evening belongs to that Evening, so
+/// by the next morning it no longer counts.
 final qualifyingSessionTodayProvider = StreamProvider<bool>((ref) {
-  final anchor = ref.watch(lastShutdownAnchorProvider);
+  final startOfToday = _startOfToday(_now(ref));
   final db = ref.watch(databaseProvider);
-  return db.focusSessionDao.watchQualifyingSessionExists(anchor);
+  return db.focusSessionDao.watchQualifyingSessionExists(startOfToday);
 });
 
 // ---------------------------------------------------------------------------
@@ -159,13 +147,14 @@ final qualifyingSessionTodayProvider = StreamProvider<bool>((ref) {
 /// The Cadence Trigger for [ritual]. See file-level docs for semantics.
 ///
 /// Per-Ritual predicate sketches:
-///   - DPR: now ≥ today's DPR anchor AND no qualifying session (none started
-///     since the last ES anchor) AND DPR not in-progress AND now is before the
-///     last ES anchor of the day; from the ES anchor until the next DPR anchor
-///     it is idle, so the banner stays hidden overnight.
+///   - DPR: now ≥ today's DPR anchor AND no session is open AND none started
+///     today AND DPR not in-progress AND now is before the day's ES time; from
+///     the ES time until the next DPR anchor it is idle.
 ///     firingSince = today's DPR anchor.
-///   - ES:  FS active AND now ≥ shutdown anchor AND ES not in-progress.
-///     firingSince = today's shutdown anchor.
+///   - ES:  a session is open AND now ≥ its due instant (see
+///     `eveningShutdownDueAt`) AND ES not in-progress. firingSince = latest of
+///     the due instant, the last DPR anchor and the last ES anchor, so a swipe
+///     holds until the next of those.
 ///   - WR:  review due (now ≥ `weeklyReviewDueAtProvider`) AND WR not in-progress.
 ///     firingSince = later of the due instant and the start of today, so the
 ///     Nudge returns daily while due.
@@ -187,11 +176,13 @@ TriggerState _stateForEdge(DateTime? edge) => edge == null
 TriggerState _dprCadenceTrigger(Ref ref) {
   final now = _now(ref);
   final qualifying = ref.watch(qualifyingSessionTodayProvider);
+  final session = ref.watch(activeSessionProvider);
   final hasAnyItem = ref.watch(hasAnyItemProvider);
   final inbox = ref.watch(unfilteredInboxProvider);
   final next = ref.watch(unfilteredNextProvider);
   // Loading is not an empty database: avoid flashing a firing state at startup.
   if (!qualifying.hasValue ||
+      !session.hasValue ||
       !hasAnyItem.hasValue ||
       !inbox.hasValue ||
       !next.hasValue) {
@@ -206,6 +197,7 @@ TriggerState _dprCadenceTrigger(Ref ref) {
     shutdownHour: shutdownTime.hour,
     shutdownMinute: shutdownTime.minute,
     qualifyingSessionExists: qualifying.requireValue,
+    sessionIsOpen: session.requireValue != null,
     hasAnyItem: hasAnyItem.requireValue,
     hasInboxOrNext: inbox.requireValue.isNotEmpty || next.requireValue.isNotEmpty,
   )));
@@ -213,14 +205,9 @@ TriggerState _dprCadenceTrigger(Ref ref) {
 
 TriggerState _esCadenceTrigger(Ref ref) {
   final now = _now(ref);
-  final session = ref.watch(activeSessionProvider);
-  if (!session.hasValue) return TriggerState.idle;
-  final shutdownTime = ref.watch(shutdownSettingsProvider).shutdownTime;
-  return _stateForEdge(esFiringEdgeAt(now, EsFacts(
-    shutdownHour: shutdownTime.hour,
-    shutdownMinute: shutdownTime.minute,
-    sessionIsOpen: session.requireValue != null,
-  )));
+  final facts = ref.watch(eveningShutdownFactsProvider);
+  if (facts == null) return TriggerState.idle;
+  return _stateForEdge(esFiringEdgeAt(now, facts));
 }
 
 TriggerState _wrCadenceTrigger(Ref ref) {

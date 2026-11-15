@@ -189,6 +189,10 @@ List<DateTime> _visibilityChangeCandidates(
   for (final state in facts.nudgeState.values) {
     add(state.snoozedUntil);
   }
+  final openSessionStartedAt = facts.es.openSessionStartedAt;
+  if (facts.es.sessionIsOpen && openSessionStartedAt != null) {
+    add(eveningShutdownDueAt(openSessionStartedAt, facts.es));
+  }
   add(facts.wr.dueAt);
   add(facts.unfinishedReviewLeftAt);
   add(facts.wr.contentFiringEdge);
@@ -543,12 +547,9 @@ final nudgeNotificationFactsProvider = Provider<NudgeNotificationFacts?>((ref) {
       hasInboxOrNext:
           inbox.requireValue.isNotEmpty || next.requireValue.isNotEmpty,
       latestSessionStartedAt: latestSessionStartedAt.requireValue,
-    ),
-    es: EsFacts(
-      shutdownHour: shutdown.shutdownTime.hour,
-      shutdownMinute: shutdown.shutdownTime.minute,
       sessionIsOpen: session.requireValue != null,
     ),
+    es: ref.watch(eveningShutdownFactsProvider)!,
     wr: WrFacts(
       dueAt: ref.watch(weeklyReviewDueAtProvider),
       contentFiringEdge:

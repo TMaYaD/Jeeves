@@ -13,7 +13,7 @@ void main() {
     hasInboxOrNext: true,
   );
 
-  test('Daily Planning still fires when planning and shutdown times are equal', () {
+  test('equal planning and shutdown times (arrived by sync) do not crash', () {
     const sameTime = DprFacts(
       planningHour: 18,
       planningMinute: 0,
@@ -22,7 +22,21 @@ void main() {
       hasAnyItem: true,
       hasInboxOrNext: true,
     );
-    expect(dprFiringEdgeAt(evening, sameTime), evening);
+    expect(() => dprFiringEdgeAt(evening, sameTime), returnsNormally);
+    expect(
+      () => esFiringEdgeAt(
+        evening,
+        EsFacts(
+          shutdownHour: 18,
+          shutdownMinute: 0,
+          planningHour: 18,
+          planningMinute: 0,
+          sessionIsOpen: true,
+          openSessionStartedAt: DateTime(2026, 5, 19, 10),
+        ),
+      ),
+      returnsNormally,
+    );
   });
 
   test(
@@ -82,10 +96,9 @@ void main() {
   );
 
   test(
-    'session at the last shutdown anchor qualifies; a stale session does not',
+    'only a session started on the current calendar day counts as the plan',
     () {
-      final previous = DateTime(2026, 5, 19, 18);
-      DprFacts facts(DateTime started) => DprFacts(
+      DprFacts facts(DateTime started, {bool open = false}) => DprFacts(
         planningHour: 8,
         planningMinute: 0,
         shutdownHour: 18,
@@ -93,19 +106,28 @@ void main() {
         hasAnyItem: true,
         hasInboxOrNext: true,
         latestSessionStartedAt: started,
+        sessionIsOpen: open,
       );
-      expect(dprFiringEdgeAt(morning, facts(previous)), isNull);
+      // Started in yesterday's Evening: not today's plan.
+      expect(dprFiringEdgeAt(morning, facts(DateTime(2026, 5, 19, 20))), morning);
       expect(
-        dprFiringEdgeAt(
-          morning,
-          facts(previous.subtract(const Duration(microseconds: 1))),
-        ),
+        dprFiringEdgeAt(morning, facts(DateTime(2026, 5, 19, 23, 59, 59))),
         morning,
       );
-      // The same frozen session ceases to qualify for tomorrow's projection.
+      // Started at or after midnight today: it is.
+      expect(dprFiringEdgeAt(morning, facts(DateTime(2026, 5, 20))), isNull);
+      // The same frozen session ceases to count for tomorrow's projection.
       expect(
-        dprFiringEdgeAt(morning.add(const Duration(days: 1)), facts(previous)),
+        dprFiringEdgeAt(
+          morning.add(const Duration(days: 1)),
+          facts(DateTime(2026, 5, 20, 7)),
+        ),
         morning.add(const Duration(days: 1)),
+      );
+      // Any open session hides Daily Planning, however old.
+      expect(
+        dprFiringEdgeAt(morning, facts(DateTime(2026, 5, 18, 10), open: true)),
+        isNull,
       );
     },
   );
@@ -269,4 +291,67 @@ void main() {
       );
     },
   );
+
+  group('Evening Shutdown due time and firing edge', () {
+    EsFacts open(DateTime started, {int available = 480}) => EsFacts(
+      shutdownHour: 18,
+      shutdownMinute: 0,
+      sessionIsOpen: true,
+      openSessionStartedAt: started,
+      availableMinutes: available,
+    );
+
+    test('a session started before the shutdown time is due at it', () {
+      final facts = open(DateTime(2026, 5, 20, 7, 30));
+      expect(eveningShutdownDueAt(DateTime(2026, 5, 20, 7, 30), facts), evening);
+      expect(
+        eveningShutdownDueAt(DateTime(2026, 5, 20, 17, 59), facts),
+        evening,
+      );
+    });
+
+    test('a session started in the Evening is due after its available time', () {
+      final started = DateTime(2026, 5, 20, 20);
+      expect(
+        eveningShutdownDueAt(started, open(started, available: 180)),
+        DateTime(2026, 5, 20, 23),
+      );
+      // At the shutdown time itself the session counts as started in the Evening.
+      expect(
+        eveningShutdownDueAt(evening, open(evening, available: 60)),
+        DateTime(2026, 5, 20, 19),
+      );
+    });
+
+    test('an Evening session is due no later than the next planning time', () {
+      final started = DateTime(2026, 5, 20, 23);
+      expect(
+        eveningShutdownDueAt(started, open(started, available: 720)),
+        DateTime(2026, 5, 21, 8),
+      );
+    });
+
+    test('exactly at and one microsecond before the due time', () {
+      final started = DateTime(2026, 5, 20, 20);
+      final facts = open(started, available: 180);
+      final due = DateTime(2026, 5, 20, 23);
+      expect(
+        esFiringEdgeAt(due.subtract(const Duration(microseconds: 1)), facts),
+        isNull,
+      );
+      expect(esFiringEdgeAt(due, facts), due);
+    });
+
+    test('the edge advances to each planning and shutdown time; no gap at '
+        'midnight', () {
+      final facts = open(DateTime(2026, 5, 19, 10));
+      expect(esFiringEdgeAt(DateTime(2026, 5, 19, 23, 59), facts),
+          DateTime(2026, 5, 19, 18));
+      expect(esFiringEdgeAt(DateTime(2026, 5, 20), facts),
+          DateTime(2026, 5, 19, 18));
+      expect(esFiringEdgeAt(DateTime(2026, 5, 20, 8), facts),
+          DateTime(2026, 5, 20, 8));
+      expect(esFiringEdgeAt(evening, facts), evening);
+    });
+  });
 }

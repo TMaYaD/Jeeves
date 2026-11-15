@@ -434,28 +434,20 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
         ..limit(1))
       .getSingleOrNull();
 
-  /// Stream of whether a session qualifies as belonging to the current
-  /// planning period — i.e. one exists whose `started_at >= [esAnchor]`, the
-  /// most recent Evening Shutdown anchor before now (issue #460; ADR-0020).
-  ///
-  /// Day attribution is ES-anchor-based, never calendar midnight: a session
-  /// belongs to the planning period opened by the most recent Evening Shutdown
-  /// anchor before its start. `ended_at` plays no part — a session started
-  /// after the last ES anchor qualifies whether it is still open or already
-  /// closed (a plan performed at 07:30 is after *yesterday's* ES anchor, so it
-  /// counts as today's). A session open since *before* the last ES anchor
-  /// belongs to the previous period and does not qualify — the Daily Planning
-  /// nudge re-arms for it while Evening Shutdown wins.
+  /// Stream of whether any session, open or closed, started at or after
+  /// [since]. The Daily Planning nudge passes the start of the current calendar
+  /// day: a session counts as that day's plan only if it started that day.
+  /// `ended_at` plays no part.
   ///
   /// UTC-ISO string comparison, consistent with the other DAO queries: stored
   /// `started_at` values are UTC ISO-8601, which sort chronologically as text.
-  Stream<bool> watchQualifyingSessionExists(DateTime esAnchor) {
-    final anchorIso = esAnchor.toUtc().toIso8601String();
+  Stream<bool> watchQualifyingSessionExists(DateTime since) {
+    final sinceIso = since.toUtc().toIso8601String();
     return customSelect(
       'SELECT EXISTS('
       '  SELECT 1 FROM focus_sessions WHERE started_at >= ?'
       ') AS qualifying',
-      variables: [Variable<String>(anchorIso)],
+      variables: [Variable<String>(sinceIso)],
       readsFrom: {focusSessions},
     ).watch().map((rows) => rows.first.read<int>('qualifying') == 1);
   }
@@ -471,8 +463,8 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       });
 
   /// One-shot sibling of [watchQualifyingSessionExists].
-  Future<bool> qualifyingSessionExists(DateTime esAnchor) async {
-    final anchorIso = esAnchor.toUtc().toIso8601String();
+  Future<bool> qualifyingSessionExists(DateTime since) async {
+    final anchorIso = since.toUtc().toIso8601String();
     final row = await customSelect(
       'SELECT EXISTS('
       '  SELECT 1 FROM focus_sessions WHERE started_at >= ?'
