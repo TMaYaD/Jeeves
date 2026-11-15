@@ -3,8 +3,8 @@
 /// conceptual definition and `docs/adr/0008-cadence-as-anchor-with-period.md`
 /// for the Cadence-as-anchor-with-period decision.
 ///
-/// Three concrete shapes (the third, the Unfinished Trigger, is Weekly
-/// Review's alone):
+/// Three concrete shapes (the third, the Unfinished Trigger, fires for a
+/// started performance that was left without finishing):
 ///
 /// - **Cadence Trigger** — fires once per anchor-to-anchor period. The
 ///   predicate combines "current time has crossed into a new period",
@@ -33,7 +33,12 @@ import '../models/ritual.dart';
 import 'ceremony_in_progress_provider.dart';
 import 'clock_provider.dart';
 import 'database_provider.dart';
-import 'focus_session_planning_provider.dart' show activeSessionProvider;
+import 'evening_shutdown_provider.dart' show eveningShutdownProvider;
+import 'focus_session_planning_provider.dart'
+    show
+        activeSessionProvider,
+        dailyPlanningStartedProvider,
+        sessionOpeningWatcherProvider;
 import 'focus_session_planning_settings_provider.dart'
     show focusSessionPlanningSettingsProvider;
 import 'gtd_lists_provider.dart';
@@ -416,6 +421,54 @@ final unfinishedReviewTriggerProvider = Provider<TriggerState>((ref) {
   );
 });
 
+/// The instant the user left a started Daily Planning or Evening Shutdown
+/// performance without finishing it, or null while that Ritual is not
+/// unfinished. Held in memory on this device, like the Weekly Review's.
+///
+/// Unfinished means the performance was started, is no longer open, and has
+/// not been finished by any route: Daily Planning's draft latch is reset by
+/// `startDay()`, `reEnterPlanning()` and any FocusSession opening; Evening
+/// Shutdown's belongs to the session that was open when it started, so it ends
+/// when that session closes, with or without the Ceremony.
+final unfinishedCeremonyLeftAtProvider =
+    Provider.family<DateTime?, RitualId>((ref, ritual) {
+  if (ref.watch(ceremonyInProgressForProvider(ritual))) return null;
+  final bool started;
+  switch (ritual) {
+    case RitualId.dailyPlanning:
+      // Keeps the session-opening watcher (which voids the latch) alive.
+      ref.watch(sessionOpeningWatcherProvider);
+      started = ref.watch(dailyPlanningStartedProvider);
+    case RitualId.eveningShutdown:
+      final startedSessionId = ref.watch(
+          eveningShutdownProvider.select((state) => state.startedSessionId));
+      final openSessionId =
+          ref.watch(activeSessionProvider.select((s) => s.asData?.value?.id));
+      started = startedSessionId != null && startedSessionId == openSessionId;
+    case RitualId.weeklyReview:
+      return null;
+  }
+  if (!started) return null;
+  // The Ceremony tracker records every exit, so a second exit after a reopen
+  // is seen even though nothing watched this provider meanwhile.
+  return ref.read(ceremonyInProgressProvider.notifier).lastExitedAt(ritual) ??
+      ref.read(clockProvider)();
+});
+
+/// The **Unfinished Trigger** of Daily Planning and Evening Shutdown: fires
+/// from the instant a started performance was left, whether or not the
+/// Cadence Trigger fires, so the Nudge returns at once even after a swipe.
+///
+/// Deliberately not an input of the pure `*FiringEdgeAt` functions the
+/// Notification planner projects from: leaving a Ceremony must not re-arm an
+/// OS Notification the user skipped.
+final unfinishedCeremonyTriggerProvider =
+    Provider.family<TriggerState, RitualId>((ref, ritual) {
+  final leftAt = ref.watch(unfinishedCeremonyLeftAtProvider(ritual));
+  if (leftAt == null) return TriggerState.idle;
+  return TriggerState(isFiring: true, firingSince: leftAt);
+});
+
 // ---------------------------------------------------------------------------
 // Aggregate helpers
 // ---------------------------------------------------------------------------
@@ -428,7 +481,9 @@ final triggersForRitualProvider =
     ref.watch(cadenceTriggerProvider(ritual)),
     ref.watch(contentStateTriggerProvider(ritual)),
     if (ritual == RitualId.weeklyReview)
-      ref.watch(unfinishedReviewTriggerProvider),
+      ref.watch(unfinishedReviewTriggerProvider)
+    else
+      ref.watch(unfinishedCeremonyTriggerProvider(ritual)),
   ];
 });
 

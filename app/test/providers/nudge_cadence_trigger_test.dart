@@ -186,6 +186,10 @@ void main() {
         unfinishedReviewLeftAtProvider.overrideWith(() => _StubLeftAt(leftAt)),
         cadenceTriggerProvider.overrideWith((ref, r) => TriggerState.idle),
         contentStateTriggerProvider.overrideWith((ref, r) => TriggerState.idle),
+        // Daily Planning's and Evening Shutdown's own Unfinished Trigger reads
+        // the live session stream; this group is about the Weekly Review's.
+        unfinishedCeremonyTriggerProvider
+            .overrideWith((ref, r) => TriggerState.idle),
       ]);
     }
 
@@ -225,14 +229,14 @@ void main() {
           DateTime(2026, 5, 20));
     });
 
-    test('is part of the Weekly Review Triggers only', () {
+    test('every Ritual carries a Cadence, a content-state and an Unfinished '
+        'Trigger', () {
       final c = container(
           leftAt: DateTime(2026, 5, 20, 9), now: DateTime(2026, 5, 20, 10));
       addTearDown(c.dispose);
-      expect(c.read(triggersForRitualProvider(RitualId.dailyPlanning)),
-          hasLength(2));
-      expect(c.read(triggersForRitualProvider(RitualId.weeklyReview)),
-          hasLength(3));
+      for (final ritual in RitualId.values) {
+        expect(c.read(triggersForRitualProvider(ritual)), hasLength(3));
+      }
     });
   });
 

@@ -61,6 +61,8 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _ceremonyNotifier.enter(RitualId.eveningShutdown);
+      // Evening Shutdown has no intro: showing its first step is the start.
+      ref.read(eveningShutdownProvider.notifier).markStarted();
     });
   }
 

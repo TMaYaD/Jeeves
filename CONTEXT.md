@@ -315,7 +315,7 @@ An autonomous predicate-with-edge-detection that fires its Nudge to visible when
 _Avoid_: Event (Triggers are predicates with edge semantics, not point-in-time events), Condition (too generic), Predicate (a Trigger *contains* a predicate but adds edge-detection and Nudge-firing)
 
 **Nudge**:
-The app's mechanism for suggesting a Ritual — a contextual reminder that the disciplined Ceremony is due. Belongs only to Rituals; ad-hoc Ceremonies are user-initiated and need none. Its visibility is *computed*, never stored; the only persisted facts are the user's **dismiss** (scoped to the current firing) and **snooze** (time-bound). **In-progress hygiene** — no Nudge of a Ritual while a performance of it is underway — is the one centralised, content-independent rule the Nudge model carries.
+The app's mechanism for suggesting a Ritual — a contextual reminder that the disciplined Ceremony is due. Belongs only to Rituals; ad-hoc Ceremonies are user-initiated and need none. Its visibility is *computed*, never stored; the only persisted facts are the user's **dismiss** (scoped to the current firing) and **snooze** (time-bound). **In-progress hygiene** — no Nudge of a Ritual while a performance of it is underway — is the one centralised, content-independent rule the Nudge model carries. A Ritual **left unfinished** after it was started brings its Nudge back at once, in continue wording.
 _Avoid_: Reminder (a separate concept — see ambiguities), Prompt, Suggestion (overloaded with AI surfaces)
 
 **Cadence**:

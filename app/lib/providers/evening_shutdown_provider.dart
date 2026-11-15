@@ -193,9 +193,17 @@ class EveningShutdownState {
     this.currentStep = 0,
     this.dispositions = const {},
     this.unfinishedNav = const SnapshotNav<Todo>(),
+    this.startedSessionId,
   });
 
   final int currentStep;
+
+  /// The id of the FocusSession that was open when the user started this
+  /// performance, or null before it is started. Evening Shutdown has no intro,
+  /// so showing its first step is the start. The performance is unfinished
+  /// only while that same session is still open: once it closes — with or
+  /// without the Ceremony — the id never matches an open session again.
+  final String? startedSessionId;
 
   /// Maps task ID → disposition string ('rollover' | 'leave' | 'maybe').
   /// Held in memory until [EveningShutdownNotifier.closeDay] commits via
@@ -210,8 +218,10 @@ class EveningShutdownState {
     int? currentStep,
     Map<String, String>? dispositions,
     SnapshotNav<Todo>? unfinishedNav,
+    String? startedSessionId,
   }) =>
       EveningShutdownState(
+        startedSessionId: startedSessionId ?? this.startedSessionId,
         currentStep: currentStep ?? this.currentStep,
         dispositions: dispositions ?? this.dispositions,
         unfinishedNav: unfinishedNav ?? this.unfinishedNav,
@@ -232,6 +242,18 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
   }
 
   GtdDatabase get _db => ref.read(databaseProvider);
+
+  /// Records that the performance has started, against the session open now.
+  /// Idempotent for the same session, so a reopened draft keeps it. A different
+  /// open session is a new performance: the draft's old session closed without
+  /// this Ceremony, so rebind rather than keep a stale id that would stop the
+  /// new session's unfinished Nudge from ever firing.
+  Future<void> markStarted() async {
+    final session = await _db.focusSessionDao.getActiveSession();
+    if (!ref.mounted || session == null) return;
+    if (state.startedSessionId == session.id) return;
+    state = state.copyWith(startedSessionId: session.id);
+  }
 
   // ---- Step navigation -------------------------------------------------------
 

@@ -21,7 +21,8 @@ import 'package:go_router/go_router.dart';
 import '../models/ritual.dart';
 import '../providers/focus_session_planning_settings_provider.dart';
 import '../providers/nudge_provider.dart';
-import '../providers/nudge_triggers.dart' show unfinishedReviewTriggerProvider;
+import '../providers/nudge_triggers.dart'
+    show unfinishedCeremonyTriggerProvider, unfinishedReviewTriggerProvider;
 import '../providers/periodic_review_settings_provider.dart'
     show periodicReviewBannerEnabledProvider;
 import '../providers/inbox_provider.dart' show inboxNotifierProvider;
@@ -158,6 +159,8 @@ NudgeSurfaceContent nudgeSurfaceContent(WidgetRef ref, NudgeSurfaceHead head) {
           unfinished: ref.watch(unfinishedReviewTriggerProvider).isFiring,
           daysLate: ref.watch(weeklyReviewDaysLateProvider),
         );
+      } else if (ref.watch(unfinishedCeremonyTriggerProvider(ritual)).isFiring) {
+        quip = _unfinishedCeremonyQuip(ritual);
       } else {
         quip = skin.quipForToday();
       }
@@ -230,12 +233,14 @@ class NudgeEmptyState extends ConsumerWidget {
             color: content.ink,
           ),
         ),
-        const SizedBox(height: 4),
-        Text(
-          content.sub,
-          textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 14, color: content.inkMuted),
-        ),
+        if (content.sub.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Text(
+            content.sub,
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 14, color: content.inkMuted),
+          ),
+        ],
         const SizedBox(height: 20),
         FilledButton(
           key: const Key('nudge_empty_state_button'),
@@ -426,6 +431,21 @@ _Quip _inboxTooFullPair({required int count, required int seed}) {
   String fill(String line) => line.replaceAll('%N', '$count');
   return _Quip(fill(pair.$1), fill(pair.$2), _inboxTooFullButton);
 }
+
+// ---------------------------------------------------------------------------
+// Unfinished Daily Planning and Evening Shutdown copy
+// ---------------------------------------------------------------------------
+
+/// The continue wording for a Ritual left unfinished. One first line and the
+/// button only: no second line exists until the Product Owner supplies one.
+_Quip _unfinishedCeremonyQuip(RitualId ritual) => switch (ritual) {
+      RitualId.dailyPlanning =>
+        const _Quip('Daily Planning, sir. Unfinished.', '', 'Push on  →'),
+      RitualId.eveningShutdown =>
+        const _Quip('Evening Shutdown, sir. Unfinished.', '', 'Push on  →'),
+      RitualId.weeklyReview =>
+        throw ArgumentError('Weekly Review builds its own continue lines'),
+    };
 
 // ---------------------------------------------------------------------------
 // Weekly Review copy
@@ -668,16 +688,18 @@ class _BannerContentState extends State<_BannerContent>
                         height: 1.2,
                       ),
                     ),
-                    const SizedBox(height: 2),
-                    Text(
-                      widget.quip.sub,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: skin.inkMuted,
-                        height: 1.2,
+                    if (widget.quip.sub.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        widget.quip.sub,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                          color: skin.inkMuted,
+                          height: 1.2,
+                        ),
                       ),
-                    ),
+                    ],
                   ],
                 ),
               ),
