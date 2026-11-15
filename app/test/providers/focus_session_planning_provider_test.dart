@@ -166,6 +166,7 @@ void main() {
         final notifier = container.read(focusSessionPlanningProvider.notifier);
         notifier.setAvailableTime(300);
         await notifier.startDay();
+        await notifier.preferenceWriteSettled;
         expect(await storedValue(), '300');
         final firstUpdatedAt = (await db.customSelect(
           'SELECT updated_at FROM user_preferences WHERE "key" = ?',
@@ -179,6 +180,7 @@ void main() {
           sessionId: (await db.focusSessionDao.getActiveSession())!.id,
         );
         await notifier.startDay();
+        await notifier.preferenceWriteSettled;
         final secondUpdatedAt = (await db.customSelect(
           'SELECT updated_at FROM user_preferences WHERE "key" = ?',
           variables: [
@@ -199,6 +201,7 @@ void main() {
         // is gone, so the read inside startDay throws.
         await db.customStatement('DROP TABLE user_preferences');
         await notifier.startDay();
+        await notifier.preferenceWriteSettled;
         expect(await db.focusSessionDao.getActiveSession(), isNotNull);
         expect(container.read(focusSessionPlanningProvider).startedSessionId,
             isNotNull);

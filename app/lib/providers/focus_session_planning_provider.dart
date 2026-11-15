@@ -16,7 +16,7 @@
 /// - Stream providers expose live lists of tasks for each ritual step.
 library;
 
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/daos/focus_session_dao.dart' show SessionSettlement;
@@ -1079,13 +1079,23 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     // the same as the inbox snapshot and its cursor above.
     ref.read(clarifyRetentionProvider).clearAll();
     // Remember this session's planned time as the next planning's default.
-    // Last, so a preference read/write failure cannot leave the opened session
-    // with its reminder unskipped or the draft unreset. Skipped when unchanged
+    // Not awaited: the session is open and the draft reset, so the caller must
+    // be free to navigate to Now while the preference store is slow or failing
+    // (the planning screen renders nothing in between). Skipped when unchanged
     // so an ordinary day authors no redundant sync op.
-    //
-    // The session is already open and the draft already reset, so a failure
-    // here must not reach the caller: Start Day would skip its navigation and
-    // leave the planning screen blank.
+    _preferenceWrite = _rememberPlannedMinutes(plannedMinutes);
+  }
+
+  Future<void> _preferenceWrite = Future<void>.value();
+
+  /// Completes when the last Start Day's available-time preference write has
+  /// finished (successfully or not). Tests await it; production does not.
+  @visibleForTesting
+  Future<void> get preferenceWriteSettled => _preferenceWrite;
+
+  /// Never throws: the session is already open, so a failure here is logged
+  /// and dropped.
+  Future<void> _rememberPlannedMinutes(int plannedMinutes) async {
     try {
       final storedMinutes = await _db.userPreferencesDao
           .get(_userId, kLastSessionAvailableMinutesKey);

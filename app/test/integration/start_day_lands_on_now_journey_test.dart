@@ -37,6 +37,9 @@ class _HoldPreferenceRead extends QueryInterceptor {
   final reached = Completer<void>();
   final _gate = Completer<void>();
 
+  /// When true, the held read fails on release instead of running.
+  bool failOnRelease = false;
+
   /// Safe to call more than once, so cleanup can always release the hold.
   void release() {
     if (!_gate.isCompleted) _gate.complete();
@@ -51,6 +54,7 @@ class _HoldPreferenceRead extends QueryInterceptor {
         args.contains(kLastSessionAvailableMinutesKey)) {
       reached.complete();
       await _gate.future;
+      if (failOnRelease) throw StateError('preference store failed');
     }
     return super.runSelect(executor, statement, args);
   }
@@ -152,33 +156,61 @@ void main() {
     }
   });
 
-  testWidgets('a frame drawn while the start is in flight: still lands on Now',
+  /// Starts the day with the preference read held, and asserts the user is on
+  /// Now *before* the hold is released: navigation must not wait on the
+  /// optional available-time persistence.
+  Future<void> startDayWithHeldPreference(WidgetTester tester) async {
+    await openCompletionView(tester);
+    hold.armed = true;
+
+    await tester.tap(find.text('Start Day'));
+    for (var i = 0; i < 20 && !hold.reached.isCompleted; i++) {
+      await tester.runAsync(() => pumpEventQueue());
+    }
+    expect(hold.reached.isCompleted, isTrue,
+        reason: 'startDay() no longer reads the available-time preference '
+            'after opening the session: move the hold to whatever it reads '
+            'now, or delete these cases if nothing is read');
+    // Draw frames while the preference read is still held.
+    await _pumpFrames(tester);
+    final session = await tester.runAsync(db.focusSessionDao.getActiveSession);
+    expect(session, isNotNull, reason: 'the session is already open');
+    expect(find.text('Close your current session first'), findsNothing,
+        reason: 'the user must not be left on the session-open interstitial');
+    expect(find.byKey(_focusKey), findsOneWidget,
+        reason: 'Now is reached while the preference write is still pending');
+    expect(currentPath(), '/focus');
+  }
+
+  testWidgets('Start Day reaches Now while the preference read is pending',
       (tester) async {
     try {
-      await openCompletionView(tester);
-      hold.armed = true;
-
-      await tester.tap(find.text('Start Day'));
-      // Drain until startDay() is parked on the held preference read; the
-      // session is already open and the planning state already reset.
-      for (var i = 0; i < 20 && !hold.reached.isCompleted; i++) {
-        await tester.runAsync(() => pumpEventQueue());
-      }
-      expect(hold.reached.isCompleted, isTrue,
-          reason: 'startDay() no longer awaits the available-time preference '
-              'read after opening the session: move the hold to whatever it '
-              'awaits now, or delete this case if nothing is awaited');
-      // Let the session stream reach the screen, and draw frames mid-start.
-      await _pumpFrames(tester, frames: 2);
-      final session =
-          await tester.runAsync(db.focusSessionDao.getActiveSession);
-      expect(session, isNotNull, reason: 'the session is already open');
+      await startDayWithHeldPreference(tester);
 
       hold.release();
       await _pumpFrames(tester);
+      expect(find.byKey(_focusKey), findsOneWidget);
+      expect(currentPath(), '/focus');
+    } finally {
+      hold.release();
+      await teardownApp(tester);
+    }
+  });
 
-      expect(find.text('Close your current session first'), findsNothing,
-          reason: 'the user must not be left on the session-open interstitial');
+  testWidgets(
+      'a preference failure after Start Day keeps the session and the user '
+      'on Now', (tester) async {
+    try {
+      await startDayWithHeldPreference(tester);
+
+      hold.failOnRelease = true;
+      hold.release();
+      await _pumpFrames(tester);
+
+      final session =
+          await tester.runAsync(db.focusSessionDao.getActiveSession);
+      expect(session, isNotNull, reason: 'the opened session is retained');
+      expect(find.text('Close your current session first'), findsNothing);
       expect(find.byKey(_focusKey), findsOneWidget);
       expect(currentPath(), '/focus');
     } finally {
