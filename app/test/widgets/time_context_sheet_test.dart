@@ -189,4 +189,31 @@ void main() {
 
     await _unmount(tester);
   });
+
+  testWidgets(
+      'a stored From date beyond the one-year limit opens the picker without '
+      'asserting, and cancelling keeps the stored value', (tester) async {
+    final todo = await _seedOutcome(db, 't7');
+    final far = DateTime.now().add(const Duration(days: 800));
+    final farIso = '${far.year.toString().padLeft(4, '0')}-'
+        '${far.month.toString().padLeft(2, '0')}-'
+        '${far.day.toString().padLeft(2, '0')}';
+    await db.customStatement(
+        "UPDATE actions SET time_context = '{\"from\":\"$farIso\"}'");
+    await tester.pumpWidget(_harness(db, todo));
+    await _open(tester);
+
+    await tester.tap(find.byKey(const Key('time_context_chip')));
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('time_context_from')));
+    await _settle(tester);
+    expect(tester.takeException(), isNull);
+    expect(find.text('Cancel'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await _settle(tester);
+
+    expect(await _stored(tester, db), '{"from":"$farIso"}');
+
+    await _unmount(tester);
+  });
 }

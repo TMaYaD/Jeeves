@@ -120,13 +120,18 @@ class _TimeContextSheetState extends State<_TimeContextSheet> {
   Future<void> _pickFrom() async {
     final today = DateTime.now();
     final startOfToday = DateTime(today.year, today.month, today.day);
+    final lastDate = startOfToday.add(const Duration(days: 365));
+    // A stored From date can lie outside [today, today + 365 days] (set
+    // earlier, or the device clock moved back); showDatePicker asserts
+    // initialDate is in range, so clamp only what the picker opens on.
+    var initialDate = _fromDate ?? startOfToday;
+    if (initialDate.isBefore(startOfToday)) initialDate = startOfToday;
+    if (initialDate.isAfter(lastDate)) initialDate = lastDate;
     final picked = await showDatePicker(
       context: context,
-      initialDate: _fromDate != null && !_fromDate!.isBefore(startOfToday)
-          ? _fromDate!
-          : startOfToday,
+      initialDate: initialDate,
       firstDate: startOfToday,
-      lastDate: startOfToday.add(const Duration(days: 365)),
+      lastDate: lastDate,
     );
     if (picked != null) setState(() => _fromDate = picked);
   }

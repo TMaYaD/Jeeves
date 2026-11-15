@@ -20,6 +20,7 @@ import 'package:jeeves/providers/clock_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/providers/gtd_lists_provider.dart';
+import 'package:jeeves/providers/time_context_provider.dart';
 import 'package:jeeves/services/notification_service.dart';
 
 import '../test_helpers.dart';
@@ -94,20 +95,25 @@ void main() {
       'with no other write', () async {
     final actionId = await _insertOutcome(db, 'o1');
     await _insertOutcome(db, 'plain');
-    // Real wall clock, parked 2 s before tomorrow's local midnight.
     // Calendar-date arithmetic: `+ 24h` is still today in the first hour of a
     // fall-back DST day.
     final today = DateTime.now();
     final midnight = DateTime(today.year, today.month, today.day + 1);
-    final start = midnight.subtract(const Duration(milliseconds: 2000));
-    final stopwatch = Stopwatch()..start();
-    clock = () => start.add(stopwatch.elapsed);
+    // Parked an hour before midnight while the hidden state is observed, so
+    // slow setup cannot eat the wait.
+    clock = () => midnight.subtract(const Duration(hours: 1));
     startContainer();
 
     await db.actionDao
         .setTimeContext(actionId, TimeContext.create(fromDate: midnight));
 
     expect(await nextIds((ids) => !ids.contains('o1')), {'plain'});
+    // Only now start the real elapsed time, 2 s before midnight, and re-arm
+    // the boundary timer against the new clock.
+    final stopwatch = Stopwatch()..start();
+    final start = midnight.subtract(const Duration(milliseconds: 2000));
+    clock = () => start.add(stopwatch.elapsed);
+    container.invalidate(timeContextBoundaryTickProvider);
     // Past midnight, nothing was written in between.
     expect(await nextIds((ids) => ids.contains('o1')), {'o1', 'plain'});
   });
