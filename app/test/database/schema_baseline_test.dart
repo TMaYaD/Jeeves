@@ -82,16 +82,16 @@ void main() {
   setUpAll(configureSqliteForTests);
 
   group('schema version', () {
-    test('is 7 — six onUpgrade steps behind the fresh baseline', () async {
+    test('is 8 — seven onUpgrade steps behind the fresh baseline', () async {
       final db = _openInMemory();
       addTearDown(db.close);
-      expect(db.schemaVersion, 7);
+      expect(db.schemaVersion, 8);
       // A fresh file runs onCreate at the current version, not the ladder.
       expect(
         await db.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        7,
+        8,
       );
     });
   });
@@ -300,7 +300,7 @@ void main() {
       await seed.customStatement('PRAGMA user_version = 1');
       await seed.close();
 
-      // Open 2: Drift sees user_version=1 and schemaVersion=7, so it runs the
+      // Open 2: Drift sees user_version=1 and schemaVersion=8, so it runs the
       // whole ladder — the v2 drop asserted here, and the v3 `tags` recreate the
       // group below owns.
       final upgraded = GtdDatabase(
@@ -312,7 +312,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        7,
+        8,
       );
       expect(await _columnNames(upgraded, 'todos'),
           isNot(contains('time_spent_minutes')),
@@ -439,7 +439,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        7,
+        8,
       );
       expect(await _uniqueConstraintIndexes(upgraded, 'tags'), isEmpty,
           reason: 'v3 drops UNIQUE (name, type)');
@@ -499,7 +499,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        7,
+        8,
       );
       expect(await _objects(upgraded, 'table'), contains('capture_attachments'));
       expect(await _rows(upgraded, 'captures'), hasLength(1));
@@ -604,7 +604,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        7,
+        8,
       );
       expect(await _columnNames(upgraded, 'todos'), isNot(contains('clarified')),
           reason: 'v5 drops the dead flag');
@@ -705,7 +705,7 @@ void main() {
           await upgraded.customSelect('PRAGMA user_version').getSingle().then(
                 (r) => r.read<int>('user_version'),
               ),
-          7,
+          8,
         );
         expect(await _rows(upgraded, 'todos'), todosBefore);
         expect(await _rows(upgraded, 'captures'), capturesBefore);
@@ -789,6 +789,59 @@ void main() {
       expect(rows.single.read<String>('text'), 'Call Bob');
       expect(rows.single.read<String>('role'), 'current');
       expect(rows.single.read<String?>('time_context'), isNull);
+    });
+  });
+
+  group('v8 onUpgrade adds the sync host outbox and the clock identity', () {
+    test('creates both tables, mints a device node id, and moves no row', () async {
+      final raw = sqlite3.openInMemory();
+      addTearDown(raw.close);
+
+      final seed = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      var seedClosed = false;
+      Future<void> closeSeed() async {
+        if (seedClosed) return;
+        seedClosed = true;
+        await seed.close();
+      }
+
+      addTearDown(closeSeed);
+
+      // A v7 store: the two new tables did not exist.
+      await seed.customStatement('DROP TABLE pending_changes');
+      await seed.customStatement('DROP TABLE device_clock_identity');
+      final createdMs =
+          DateTime.parse('2026-10-30T09:00:00.000Z').millisecondsSinceEpoch;
+      await seed.customStatement(
+        'INSERT INTO todos (id, title, user_id, created_at, intent) '
+        "VALUES ('t1', 'Ship it', 'u1', ?, 'next')",
+        [createdMs],
+      );
+      await seed.customStatement('PRAGMA user_version = 7');
+      await closeSeed();
+
+      final upgraded = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      addTearDown(upgraded.close);
+
+      expect(await _objects(upgraded, 'table'),
+          containsAll(['pending_changes', 'device_clock_identity']));
+      final todos = await upgraded.customSelect('SELECT id, title FROM todos').get();
+      expect(todos.single.read<String>('id'), 't1');
+      expect(todos.single.read<String>('title'), 'Ship it');
+
+      final identity = await upgraded
+          .customSelect('SELECT device_node_id, enrolled_member_id_hex '
+              'FROM device_clock_identity')
+          .getSingle();
+      expect(identity.read<String>('device_node_id'),
+          matches(RegExp(r'^[0-9a-f]{32}$')));
+      expect(identity.read<String?>('enrolled_member_id_hex'), isNull);
+      expect(
+          await upgraded.customSelect('SELECT 1 FROM pending_changes').get(), isEmpty);
     });
   });
 }
