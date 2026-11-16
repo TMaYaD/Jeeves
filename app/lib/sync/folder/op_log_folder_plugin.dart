@@ -10,7 +10,6 @@
 library;
 
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
@@ -24,7 +23,6 @@ import '../host/change.dart';
 import '../host/sync_host.dart';
 import '../op_payload.dart';
 import '../sync_database.dart';
-import '../sync_rejection.dart';
 import 'folder_codec.dart';
 import 'folder_metadata.dart';
 import 'folder_setup.dart';
@@ -643,8 +641,9 @@ class _Judgement {
         authorSeq = null,
         accepted = false;
 
-  const _Judgement.accept(int this.authorSeq, Change this.change, {this.detail = ''})
+  const _Judgement.accept(int this.authorSeq, Change this.change)
       : alarm = null,
+        detail = '',
         accepted = true;
 
   const _Judgement.refusedButChained(int this.authorSeq)

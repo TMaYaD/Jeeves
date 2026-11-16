@@ -21,6 +21,7 @@ import '../envelope.dart';
 import '../sync_database.dart';
 import 'folder_metadata.dart';
 import 'segment_folder.dart';
+import 'segment_format.dart' show firstSegmentNumber;
 
 /// Whether this device is signed in or enrolled with the sync server.
 typedef EnrolmentCheck = Future<bool> Function();
