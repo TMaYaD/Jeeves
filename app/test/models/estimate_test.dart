@@ -20,7 +20,8 @@ void main() {
 
     test('the steps continue in half hours to the top', () {
       expect(estimateLadderMinutes, contains(150));
-      expect(estimateLadderMinutes, contains(200));
+      expect(estimateLadderMinutes, contains(180));
+      expect(estimateLadderMinutes, contains(210));
       expect(estimateLadderMinutes.last, kMaxEstimateMinutes);
       expect(
         estimateLadderMinutes.any((m) => m > kMaxEstimateMinutes),

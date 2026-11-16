@@ -37,8 +37,12 @@ void main() {
       userId: _userId,
       now: _ts,
     );
-    await db.actionDao
-        .setCurrentAction('t1', 'Draft', timeEstimate: 30, now: _ts);
+    await db.actionDao.setCurrentAction(
+      't1',
+      'Draft',
+      timeEstimate: 30,
+      now: _ts,
+    );
   });
   tearDown(() async {
     container.dispose();
@@ -48,8 +52,22 @@ void main() {
   Future<String> actionId() async =>
       (await db.actionDao.getCurrentAction('t1'))!.id;
 
-  Future<TimeboxedLimitStatus?> status() async =>
-      container.read(timeboxedLimitStatusProvider('t1').future);
+  /// The live status, read through the provider.
+  ///
+  /// The provider is autoDispose, so something must keep it alive while the
+  /// value is awaited — a bare read lets it be disposed before it has emitted,
+  /// and the read then throws instead of answering.
+  Future<TimeboxedLimitStatus?> status() async {
+    final subscription = container.listen(
+      timeboxedLimitStatusProvider('t1'),
+      (_, _) {},
+    );
+    try {
+      return await container.read(timeboxedLimitStatusProvider('t1').future);
+    } finally {
+      subscription.close();
+    }
+  }
 
   test('an Action that is not Timeboxed has no status', () async {
     expect(await status(), isNull);
@@ -69,15 +87,17 @@ void main() {
     expect(current.sprintsPastLimit, 0);
   });
 
-  test('the switch needs an estimate: a merged "estimate cleared" reads as off',
-      () async {
-    await db.actionDao.setTimeboxed(await actionId(), true, now: _ts);
-    // Another device cleared the estimate; the switch survived the merge. A
-    // limit of nothing is not a limit.
-    await db.customStatement('UPDATE actions SET time_estimate = NULL');
+  test(
+    'the switch needs an estimate: a merged "estimate cleared" reads as off',
+    () async {
+      await db.actionDao.setTimeboxed(await actionId(), true, now: _ts);
+      // Another device cleared the estimate; the switch survived the merge. A
+      // limit of nothing is not a limit.
+      await db.customStatement('UPDATE actions SET time_estimate = NULL');
 
-    expect(await status(), isNull);
-  });
+      expect(await status(), isNull);
+    },
+  );
 
   test('logged time past the estimate passes the limit', () async {
     await db.actionDao.setTimeboxed(await actionId(), true, now: _ts);

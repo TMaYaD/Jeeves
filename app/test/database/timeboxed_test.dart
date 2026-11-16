@@ -68,14 +68,22 @@ void main() {
 
     // A later turn of the same switch is not a change: the row keeps its
     // stamp, so no needless op reaches the other device.
-    await db.actionDao
-        .setTimeboxed(id, true, now: _ts.add(const Duration(minutes: 5)));
+    await db.actionDao.setTimeboxed(
+      id,
+      true,
+      now: _ts.add(const Duration(minutes: 5)),
+    );
 
     expect((await db.actionDao.getCurrentAction('t1'))!.updatedAt, _ts);
   });
 
   test('clearing the estimate clears the switch with it', () async {
-    await db.actionDao.setCurrentAction('t1', 'Draft', timeEstimate: 30, now: _ts);
+    await db.actionDao.setCurrentAction(
+      't1',
+      'Draft',
+      timeEstimate: 30,
+      now: _ts,
+    );
     final id = await currentActionId('t1');
     await db.actionDao.setTimeboxed(id, true, now: _ts);
 
@@ -87,11 +95,20 @@ void main() {
   });
 
   test('a successor Action does not inherit the switch', () async {
-    await db.actionDao.setCurrentAction('t1', 'Draft', timeEstimate: 30, now: _ts);
+    await db.actionDao.setCurrentAction(
+      't1',
+      'Draft',
+      timeEstimate: 30,
+      now: _ts,
+    );
     final id = await currentActionId('t1');
     await db.actionDao.setTimeboxed(id, true, now: _ts);
 
-    await db.actionDao.supersedeCurrentAction('t1', newActionText: 'The successor', now: _ts);
+    await db.actionDao.supersedeCurrentAction(
+      't1',
+      newActionText: 'The successor',
+      now: _ts,
+    );
 
     final successor = (await db.actionDao.getCurrentAction('t1'))!;
     expect(successor.id, isNot(id));

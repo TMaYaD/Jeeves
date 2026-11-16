@@ -45,12 +45,14 @@ class _GateHarness extends ConsumerWidget {
         child: ElevatedButton(
           key: const Key('open_gate'),
           onPressed: () {
-            unawaited(guardSprintPastLimit(
-              context,
-              ref,
-              outcomeId: 't1',
-              start: () async => onStart(),
-            ));
+            unawaited(
+              guardSprintPastLimit(
+                context,
+                ref,
+                outcomeId: 't1',
+                start: () async => onStart(),
+              ),
+            );
           },
           child: const Text('open'),
         ),
@@ -120,8 +122,9 @@ void main() {
   Future<int?> storedEstimate() async =>
       (await db.todoDao.getTodo('t1'))?.timeEstimate;
 
-  testWidgets('an Action that is not Timeboxed starts without asking',
-      (tester) async {
+  testWidgets('an Action that is not Timeboxed starts without asking', (
+    tester,
+  ) async {
     var started = false;
     await tester.pumpWidget(harness(onStart: () => started = true));
 
@@ -132,8 +135,9 @@ void main() {
     expect(find.byKey(const Key('timeboxed_gate_start')), findsNothing);
   });
 
-  testWidgets('a limit that has not passed starts without asking',
-      (tester) async {
+  testWidgets('a limit that has not passed starts without asking', (
+    tester,
+  ) async {
     await makeTimeboxed();
     await logTime(const Duration(minutes: 10));
     var started = false;
@@ -177,8 +181,9 @@ void main() {
     expect(find.byKey(const Key('timeboxed_gate_start')), findsNothing);
   });
 
-  testWidgets('"Another sprint, regardless" asks once more, then starts',
-      (tester) async {
+  testWidgets('"Another sprint, regardless" asks once more, then starts', (
+    tester,
+  ) async {
     await makeTimeboxed();
     await logTime(const Duration(minutes: 50));
     var started = false;
@@ -200,8 +205,9 @@ void main() {
     expect(started, isTrue);
   });
 
-  testWidgets('carrying on regardless leaves the estimate as it is',
-      (tester) async {
+  testWidgets('carrying on regardless leaves the estimate as it is', (
+    tester,
+  ) async {
     await makeTimeboxed();
     await logTime(const Duration(minutes: 50));
     await tester.pumpWidget(harness(onStart: () {}));
@@ -231,8 +237,9 @@ void main() {
     expect(find.byKey(const Key('timeboxed_gate_start')), findsNothing);
   });
 
-  testWidgets('"Never mind" at the second ask does not start the Sprint',
-      (tester) async {
+  testWidgets('"Never mind" at the second ask does not start the Sprint', (
+    tester,
+  ) async {
     await makeTimeboxed();
     await logTime(const Duration(minutes: 50));
     var started = false;
@@ -249,8 +256,9 @@ void main() {
     expect(find.byKey(const Key('timeboxed_gate_confirm')), findsNothing);
   });
 
-  testWidgets('"Raise the estimate…" opens the estimate sheet',
-      (tester) async {
+  testWidgets('"Raise the estimate…" opens the estimate sheet one step up', (
+    tester,
+  ) async {
     await makeTimeboxed();
     await logTime(const Duration(minutes: 50));
     await tester.pumpWidget(harness(onStart: () {}));
@@ -261,10 +269,13 @@ void main() {
     await settle(tester);
 
     expect(find.byKey(const Key('estimate_sheet_value')), findsOneWidget);
+    // The estimate is 30; the sheet opens on the step above it.
+    expect(find.text('45m'), findsOneWidget);
   });
 
-  testWidgets('a raised estimate that is still short does not start',
-      (tester) async {
+  testWidgets('cancelling the estimate sheet returns to the gate', (
+    tester,
+  ) async {
     await makeTimeboxed();
     await logTime(const Duration(minutes: 50));
     var started = false;
@@ -274,19 +285,42 @@ void main() {
     await settle(tester);
     await tester.tap(find.byKey(const Key('timeboxed_gate_raise')));
     await settle(tester);
-    // One step up: 30 becomes 45, and 50 minutes are logged — the limit is
-    // still passed.
-    await tester.tap(find.byKey(const Key('estimate_sheet_more')));
-    await tester.pump();
+    await tester.tap(find.byKey(const Key('estimate_sheet_cancel')));
+    await settle(tester);
+
+    // Back at the gate, with the estimate untouched and no Sprint started.
+    expect(find.byKey(const Key('timeboxed_gate_start')), findsOneWidget);
+    expect(find.byKey(const Key('estimate_sheet_value')), findsNothing);
+    expect(await storedEstimate(), 30);
+    expect(started, isFalse);
+  });
+
+  testWidgets('a raised estimate that is still short asks again, and does '
+      'not start', (tester) async {
+    await makeTimeboxed();
+    await logTime(const Duration(minutes: 50));
+    var started = false;
+    await tester.pumpWidget(harness(onStart: () => started = true));
+
+    await tester.tap(find.byKey(const Key('open_gate')));
+    await settle(tester);
+    await tester.tap(find.byKey(const Key('timeboxed_gate_raise')));
+    await settle(tester);
+    // The sheet opened one step up: 30 becomes 45, and 50 minutes are logged —
+    // the limit is still passed.
     await tester.tap(find.byKey(const Key('estimate_sheet_save')));
     await settle(tester);
 
     expect(await storedEstimate(), 45);
     expect(started, isFalse);
+    // The gate asks again, with the figures as they now stand.
+    expect(find.byKey(const Key('timeboxed_gate_start')), findsOneWidget);
+    expect(find.text('Sprints past the limit so far: 0'), findsOneWidget);
   });
 
-  testWidgets('a raised estimate that clears the limit starts the Sprint',
-      (tester) async {
+  testWidgets('a raised estimate that clears the limit starts the Sprint', (
+    tester,
+  ) async {
     await makeTimeboxed();
     await logTime(const Duration(minutes: 50));
     var started = false;
@@ -296,10 +330,8 @@ void main() {
     await settle(tester);
     await tester.tap(find.byKey(const Key('timeboxed_gate_raise')));
     await settle(tester);
-    // Two steps up: 30 becomes 60, and 50 minutes are logged — the limit is
-    // no longer passed.
-    await tester.tap(find.byKey(const Key('estimate_sheet_more')));
-    await tester.pump();
+    // One step further: 45 becomes 60, and 50 minutes are logged — the limit
+    // is no longer passed.
     await tester.tap(find.byKey(const Key('estimate_sheet_more')));
     await tester.pump();
     await tester.tap(find.byKey(const Key('estimate_sheet_save')));

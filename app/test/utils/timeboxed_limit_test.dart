@@ -81,7 +81,11 @@ void main() {
         ),
       ]);
 
-      expect(passed, isNull, reason: '10 minutes is short of a 20 minute limit');
+      expect(
+        passed,
+        isNull,
+        reason: '10 minutes is short of a 20 minute limit',
+      );
     });
 
     test('a stint whose start does not parse is skipped, not fatal', () {

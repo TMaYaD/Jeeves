@@ -29,8 +29,9 @@ void main() {
 
     test('a limit passed an hour ago has passed', () {
       expect(
-        status(limitPassedAt: passed.subtract(const Duration(hours: 1)))
-            .hasPassedAt(passed),
+        status(
+          limitPassedAt: passed.subtract(const Duration(hours: 1)),
+        ).hasPassedAt(passed),
         isTrue,
       );
     });
@@ -39,8 +40,9 @@ void main() {
       // An open stint runs on, so the limit is reached inside it — at an
       // instant that has not come yet. Nothing may say it has passed.
       expect(
-        status(limitPassedAt: passed.add(const Duration(minutes: 5)))
-            .hasPassedAt(passed),
+        status(
+          limitPassedAt: passed.add(const Duration(minutes: 5)),
+        ).hasPassedAt(passed),
         isFalse,
       );
     });

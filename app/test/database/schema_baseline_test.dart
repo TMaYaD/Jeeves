@@ -1109,14 +1109,16 @@ void main() {
       addTearDown(closeSeed);
 
       // A v11 `actions` table: the current declaration with the v12 column cut
-      // out of the CREATE statement Drift itself emitted.
+      // out of the CREATE statement Drift itself emitted. The cut takes the
+      // column's CHECK constraint with it — the constraint names the column, so
+      // leaving it behind would leave a v11 table that mentions `timeboxed`.
       final createSql = (await seed
               .customSelect("SELECT sql FROM sqlite_master "
                   "WHERE type = 'table' AND name = 'actions'")
               .getSingle())
           .read<String>('sql');
       final v11Sql = createSql.replaceFirst(
-        RegExp(r',\s*"?timeboxed"?\s+[A-Za-z]+\s+NULL', caseSensitive: false),
+        RegExp(r',\s*"timeboxed"\s+INTEGER.*?(?=,\s*"created_at")'),
         '',
       );
       expect(v11Sql, isNot(contains('timeboxed')),

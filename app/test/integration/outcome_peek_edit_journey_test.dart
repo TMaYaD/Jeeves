@@ -108,7 +108,17 @@ void main() {
     await _pumpFor(tester);
     await tester.tap(find.byKey(const Key('outcome_peek_time')));
     await _pumpFor(tester);
-    await tester.tap(find.text('10m').last);
+    // The estimate sheet is a stepper, not a list of options (issue #923):
+    // two steps up from no estimate is 10 minutes, and saving writes it.
+    await tester.tap(find.byKey(const Key('estimate_sheet_more')));
+    await _pumpFor(tester);
+    await tester.tap(find.byKey(const Key('estimate_sheet_more')));
+    await _pumpFor(tester);
+    expect(
+      tester.widget<Text>(find.byKey(const Key('estimate_sheet_value'))).data,
+      '10m',
+    );
+    await tester.tap(find.byKey(const Key('estimate_sheet_save')));
     await _pumpFor(tester);
 
     // Edit notes, then close (flushes the field).

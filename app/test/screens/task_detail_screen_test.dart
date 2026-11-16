@@ -1261,7 +1261,15 @@ void main() {
       final rowId = (await h.plannedRows()).single.id;
 
       expect(find.byKey(Key('planned_effort_unset_$rowId')), findsOneWidget);
-      expect(find.text('Set'), findsOneWidget);
+      // The row's own affordance reads "Set". It is read off the keyed widget
+      // rather than off the text, because the Outcome's own estimate tag also
+      // reads "Set" now that it is a quiet prompt (issue #923).
+      expect(
+        tester
+            .widget<Text>(find.byKey(Key('planned_effort_unset_$rowId')))
+            .data,
+        'Set',
+      );
       expect(find.byKey(Key('planned_meta_$rowId')), findsNothing);
     });
 
