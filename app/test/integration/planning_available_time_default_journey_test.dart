@@ -94,6 +94,7 @@ void main() {
     await tester.pump();
     container.read(focusSessionPlanningProvider.notifier).goToStep(6);
     await settleWithRealAsync(tester);
+    await tester.ensureVisible(find.text('Start Day'));
     await tester.tap(find.text('Start Day'));
     await settleWithRealAsync(tester);
     expect(find.byKey(_focusKey), findsOneWidget);

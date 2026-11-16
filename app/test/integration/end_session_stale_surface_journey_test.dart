@@ -10,6 +10,7 @@
 /// land, so the test decides which results Now has seen when the tap happens.
 library;
 
+import 'package:jeeves/providers/day_timeline_provider.dart';
 import 'dart:async';
 
 import 'package:drift/drift.dart' hide isNull, isNotNull;
@@ -111,6 +112,7 @@ class _Harness {
         databaseProvider.overrideWithValue(db),
         notificationServiceProvider
             .overrideWithValue(StubNotificationService()),
+        nowTimelineExtrasProvider.overrideWithValue(const NowTimelineExtras()),
       ],
       child: MaterialApp.router(routerConfig: router),
     );
@@ -122,8 +124,10 @@ class _Harness {
     expect(endSession.evaluate().isNotEmpty || shutdown.evaluate().isNotEmpty,
         isTrue,
         reason: 'Now shows a session footer callout');
-    await tester
-        .tap(endSession.evaluate().isNotEmpty ? endSession : shutdown);
+    final callout = endSession.evaluate().isNotEmpty ? endSession : shutdown;
+    // The day timeline sits above it, so the callout can be below the fold.
+    await tester.ensureVisible(callout);
+    await tester.tap(callout);
   }
 }
 

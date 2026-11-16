@@ -138,6 +138,12 @@ that must *not* derive — a Tag's op-log identity is its random `id`, while
 representable and folded rather than prevented
 ([ADR-0043](adr/0043-tag-duplicates-are-representable-and-folded.md)).
 
+**One Project per Outcome.** Each Outcome–Project link is its own entity, so two
+Devices assigning different Projects while apart leave two live links that
+last-write-wins never compares. The reconciler's third pass keeps the link with
+the greatest clock (ties: smaller tag id) and unassigns the rest by tombstone;
+the winner is not re-asserted, so a later assignment elsewhere still beats it.
+
 **No implicit cascades.** The log has no foreign keys, so nothing downstream
 infers that deleting a parent removes its children. Every deletion enumerates its
 own cascade set at capture time. A new child table means every delete path that
