@@ -305,9 +305,12 @@ class VaultPlugin implements SyncPlugin {
           (value == null &&
               (entry.digest == digestOf(null) || entry.digest == digestOf('')));
       if (matches) {
-        if (value != null) {
-          addField(todosCollection, key.entityId, field.key, value, entry.hlc);
-        }
+        // An empty field is still a field: its clock must reach the host, or a
+        // device that only sees the page would lack it and write other bytes.
+        final carried =
+            value ?? (entry.digest == digestOf('') ? '' : null);
+        addField(
+            todosCollection, key.entityId, field.key, carried, entry.hlc);
       } else {
         addField(todosCollection, key.entityId, field.key, value,
             _host.mintClock());
