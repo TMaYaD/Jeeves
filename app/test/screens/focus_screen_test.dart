@@ -16,6 +16,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:jeeves/models/focus_settings.dart';
+import 'package:jeeves/providers/day_timeline_provider.dart';
+import 'package:jeeves/widgets/day_timeline/day_timeline.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/providers/focus_settings_provider.dart';
 import 'package:jeeves/providers/nudge_triggers.dart';
@@ -47,6 +49,11 @@ class _MockFocusSettingsNotifier extends FocusSettingsNotifier {
 // ---------------------------------------------------------------------------
 // Test helper
 // ---------------------------------------------------------------------------
+
+/// A Plan row's title. The same title also names the Outcome's tile on the day
+/// timeline, so a bare `find.text` would find two.
+Finder _rowTitle(String title) => find.descendant(
+    of: find.byType(OutcomeRow), matching: find.text(title));
 
 FocusSession _openSession() => FocusSession(
       id: 'test-session',
@@ -118,6 +125,7 @@ Widget _buildScreen({
           .overrideWith(() => _MockFocusSessionPlanningNotifier()),
       focusSettingsProvider.overrideWith(() => _MockFocusSettingsNotifier()),
       nudgeSurfaceHeadProvider.overrideWith((ref) => head),
+      nowTimelineExtrasProvider.overrideWithValue(const NowTimelineExtras()),
       // The Inbox too full empty state reads the Capture count; unoverridden
       // it reaches the live Drift-backed inbox provider.
       unprocessedCaptureCountProvider.overrideWith((ref) => 51),
@@ -175,6 +183,31 @@ void main() {
     expect(find.text('planning'), findsOneWidget);
   });
 
+  testWidgets(
+      'the Now timeline lays out the Plan in Plan order, not due-date order',
+      (tester) async {
+    Todo planned(String id, DateTime? due) => Todo(
+          id: id, title: id, userId: 'test-user', createdAt: DateTime(2030),
+          intent: 'next', dueDate: due, timeEstimate: 30,
+        );
+    await tester.pumpWidget(_buildScreen(
+      activeSession: _openSession(),
+      tasks: [
+        planned('first in Plan', DateTime(2030, 3, 16)),
+        planned('second in Plan', DateTime(2030, 3, 15)),
+      ],
+    ));
+    await tester.pump();
+    await tester.pump();
+
+    final timeline = tester.widget<DayTimeline>(find.byType(DayTimeline));
+    expect(timeline.entries.map((e) => e.outcomeId),
+        ['first in Plan', 'second in Plan']);
+    // The rows below keep their due-date presentation.
+    final rows = tester.widgetList<OutcomeRow>(find.byType(OutcomeRow));
+    expect(rows.map((r) => r.title), ['second in Plan', 'first in Plan']);
+  });
+
   testWidgets('Focus row metadata fits a narrow screen beside Start', (tester) async {
     await tester.pumpWidget(_buildScreen(
       activeSession: _openSession(),
@@ -212,7 +245,7 @@ void main() {
     await tester.pump();
 
     expect(find.byType(OutcomeRow), findsOneWidget);
-    expect(find.text('Planned task'), findsOneWidget);
+    expect(_rowTitle('Planned task'), findsOneWidget);
     expect(find.text('CARRIED OVER FROM LAST SESSION'), findsNothing);
     expect(find.text('Old rollover'), findsNothing);
     expect(find.text('Plan the Day'), findsNothing);
@@ -273,9 +306,9 @@ void main() {
 
     // Strike-off is the acceptance criterion itself — a state signal on the
     // row, not a design token — so it is asserted directly.
-    final struck = tester.widget<Text>(find.text('Resolved task'));
+    final struck = tester.widget<Text>(_rowTitle('Resolved task'));
     expect(struck.style?.decoration, TextDecoration.lineThrough);
-    final untouched = tester.widget<Text>(find.text('Untouched task'));
+    final untouched = tester.widget<Text>(_rowTitle('Untouched task'));
     expect(untouched.style?.decoration, isNot(TextDecoration.lineThrough));
 
     // A Settled row is handled for this session: exactly one Start remains,
@@ -298,7 +331,7 @@ void main() {
     ));
     await tester.pump();
 
-    final struck = tester.widget<Text>(find.text('Achieved task'));
+    final struck = tester.widget<Text>(_rowTitle('Achieved task'));
     expect(struck.style?.decoration, TextDecoration.lineThrough);
     expect(find.text('Start'), findsNothing);
   });
