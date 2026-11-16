@@ -498,6 +498,7 @@ class _StartButton extends ConsumerWidget {
 
         // A Sprint that would start past a Timeboxed limit goes past the gate
         // first, before the engagement opens a TimeLog (issue #923).
+        if (!context.mounted) return;
         unawaited(guardSprintPastLimit(
           context,
           ref,
