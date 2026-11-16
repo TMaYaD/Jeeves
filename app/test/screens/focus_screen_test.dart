@@ -16,6 +16,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:jeeves/models/focus_settings.dart';
+import 'package:jeeves/providers/day_timeline_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/providers/focus_settings_provider.dart';
 import 'package:jeeves/providers/nudge_triggers.dart';
@@ -115,6 +116,7 @@ Widget _buildScreen({
           .overrideWith(() => _MockFocusSessionPlanningNotifier()),
       focusSettingsProvider.overrideWith(() => _MockFocusSettingsNotifier()),
       nudgeSurfaceHeadProvider.overrideWith((ref) => head),
+      nowTimelineExtrasProvider.overrideWithValue(const NowTimelineExtras()),
       // The Inbox too full empty state reads the Capture count; unoverridden
       // it reaches the live Drift-backed inbox provider.
       unprocessedCaptureCountProvider.overrideWith((ref) => 51),

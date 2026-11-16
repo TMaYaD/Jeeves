@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jeeves/providers/day_timeline_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/screens/planning/steps/scheduled_review_step.dart';
 import 'package:jeeves/widgets/outcome_row.dart';
@@ -21,6 +22,8 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          currentTimeContextsProvider
+              .overrideWith((_) => Stream.value(const {})),
           focusSessionPlanningSelectedTasksProvider.overrideWith(
             (_) => Stream.value([
               todo('No due date', null),

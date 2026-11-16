@@ -912,6 +912,39 @@ HAVING COUNT(DISTINCT p.session_id) >= ?''';
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
   }
 
+  /// The start times the user set on the open session's Plan entries
+  /// ("Set by you"), keyed by Outcome id. Entries Jeeves places are absent.
+  Stream<Map<String, DateTime>> watchActiveSessionPinnedStarts() {
+    return customSelect(
+      'SELECT fst.* FROM focus_session_tasks fst '
+      'WHERE fst.focus_session_id = $_activeSessionIdSql '
+      'AND fst.pinned_start_at IS NOT NULL',
+      variables: [],
+      readsFrom: {focusSessionTasks, focusSessions},
+    ).watch().map((rows) {
+      final pinned = <String, DateTime>{};
+      for (final row in rows) {
+        final entry = focusSessionTasks.map(row.data);
+        final startAt = entry.pinnedStartAt;
+        if (startAt != null) pinned[entry.taskId] = startAt;
+      }
+      return pinned;
+    });
+  }
+
+  /// Outcomes with a TimeLog attributed to the open session: engaged ones. The
+  /// day timeline never re-flows an engaged entry.
+  Stream<Set<String>> watchActiveSessionEngagedTaskIds() {
+    return customSelect(
+      'SELECT DISTINCT tl.task_id AS task_id FROM time_logs tl '
+      'WHERE tl.focus_session_id = $_activeSessionIdSql',
+      variables: [],
+      readsFrom: {attachedDatabase.timeLogs, focusSessions},
+    ).watch().map(
+          (rows) => {for (final row in rows) row.read<String>('task_id')},
+        );
+  }
+
   /// Explicit `todos` projection (alias `t`) shared by every Review-surface
   /// query. `energy_level` / `time_estimate` resolve to the current Action
   /// (ADR-0001 story 7, D2); the raw columns are write-mirror compatibility only.

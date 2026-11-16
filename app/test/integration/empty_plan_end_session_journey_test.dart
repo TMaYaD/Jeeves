@@ -6,6 +6,7 @@
 /// is stubbed.
 library;
 
+import 'package:jeeves/providers/day_timeline_provider.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -35,6 +36,7 @@ void main() {
       notificationServiceProvider.overrideWithValue(StubNotificationService()),
       // A fixed tick: the live provider arms a real boundary timer.
       nudgeBoundaryTickProvider.overrideWithValue(0),
+      nowTimelineExtrasProvider.overrideWithValue(const NowTimelineExtras()),
     ]);
   });
 

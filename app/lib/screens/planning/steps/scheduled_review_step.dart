@@ -4,14 +4,31 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../models/day_timeline.dart';
+import '../../../providers/clock_provider.dart';
+import '../../../providers/day_timeline_provider.dart';
 import '../../../providers/focus_session_planning_provider.dart';
+import '../../../providers/focus_session_planning_settings_provider.dart';
+import '../../../providers/focus_settings_provider.dart';
+import '../../../widgets/day_timeline/day_timeline.dart';
 import '../../../widgets/outcome_row.dart';
 
-class ScheduledReviewStep extends ConsumerWidget {
+class ScheduledReviewStep extends ConsumerStatefulWidget {
   const ScheduledReviewStep({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ScheduledReviewStep> createState() =>
+      _ScheduledReviewStepState();
+}
+
+class _ScheduledReviewStepState extends ConsumerState<ScheduledReviewStep> {
+  /// Where the day starts, fixed when the screen opens so the layout does not
+  /// shift under the user as the clock moves.
+  late final DateTime _flowOrigin =
+      roundUpToFiveMinutes(ref.read(clockProvider)());
+
+  @override
+  Widget build(BuildContext context) {
     final asyncSelected = ref.watch(focusSessionPlanningSelectedTasksProvider);
 
     return asyncSelected.when(
@@ -36,20 +53,7 @@ class ScheduledReviewStep extends ConsumerWidget {
               ),
             ),
             const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.grey[50],
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.grey[200]!),
-              ),
-              child: const Center(
-                child: Text(
-                  "Calendar events placeholder",
-                  style: TextStyle(color: Colors.grey),
-                ),
-              ),
-            ),
+            if (sortedTasks.isNotEmpty) _timeline(sortedTasks),
             const SizedBox(height: 36),
             const Divider(height: 1, color: Color(0xFFF3F4F6)),
             const SizedBox(height: 36),
@@ -98,6 +102,33 @@ class ScheduledReviewStep extends ConsumerWidget {
           ],
         );
       },
+    );
+  }
+
+  Widget _timeline(List<Todo> tasks) {
+    final planning = ref.watch(focusSessionPlanningProvider);
+    final focusSettings = ref.watch(focusSettingsProvider);
+    final defaultEstimate =
+        ref.watch(focusSessionPlanningSettingsProvider).defaultTimeEstimate;
+    final timeContexts =
+        ref.watch(currentTimeContextsProvider).asData?.value ?? const {};
+    final entries = dayTimelineEntriesFor(
+      tasks: tasks,
+      defaultEstimateMinutes: defaultEstimate,
+      now: _flowOrigin,
+      timeContexts: timeContexts,
+      pinnedStarts: planning.pinnedStartByTaskId,
+    );
+    return DayTimeline(
+      scope: 'planning',
+      entries: entries,
+      flowOrigin: _flowOrigin,
+      availableMinutes: planning.availableMinutes,
+      chunkUnitMinutes:
+          focusSettings.sprintDurationMinutes + focusSettings.breakDurationMinutes,
+      onSetPinnedStart: (outcomeId, startAt) async => ref
+          .read(focusSessionPlanningProvider.notifier)
+          .setPinnedStart(outcomeId, startAt),
     );
   }
 

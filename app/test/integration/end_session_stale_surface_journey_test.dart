@@ -10,6 +10,7 @@
 /// land, so the test decides which results Now has seen when the tap happens.
 library;
 
+import 'package:jeeves/providers/day_timeline_provider.dart';
 import 'dart:async';
 
 import 'package:drift/drift.dart' hide isNull, isNotNull;
@@ -111,6 +112,7 @@ class _Harness {
         databaseProvider.overrideWithValue(db),
         notificationServiceProvider
             .overrideWithValue(StubNotificationService()),
+        nowTimelineExtrasProvider.overrideWithValue(const NowTimelineExtras()),
       ],
       child: MaterialApp.router(routerConfig: router),
     );

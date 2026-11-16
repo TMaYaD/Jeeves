@@ -5,10 +5,15 @@ import 'package:go_router/go_router.dart';
 import '../models/ritual.dart';
 import '../providers/database_provider.dart';
 import '../providers/focus_session_planning_provider.dart';
+import '../providers/focus_session_planning_settings_provider.dart';
 import '../providers/focus_session_provider.dart';
 import '../providers/focus_settings_provider.dart';
 import '../providers/sprint_timer_provider.dart'
     show findBatchingCandidates, sprintTimerProvider;
+import '../models/day_timeline.dart';
+import '../providers/clock_provider.dart';
+import '../providers/day_timeline_provider.dart';
+import '../widgets/day_timeline/day_timeline.dart';
 import '../widgets/meta_chip.dart';
 import '../widgets/nudge_banner.dart'
     show InboxTooFullHead, NudgeEmptyState, RitualHead, nudgeSurfaceHeadProvider;
@@ -103,20 +108,19 @@ class FocusScreen extends ConsumerWidget {
                             ),
                           ),
                           const SizedBox(height: 16),
-                          Container(
-                            padding: const EdgeInsets.all(16),
-                            decoration: BoxDecoration(
-                              color: Colors.grey[50],
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: Colors.grey[200]!),
+                          if (planningDone &&
+                              activeSession != null &&
+                              sortedTasks.isNotEmpty)
+                            _NowTimeline(
+                              session: activeSession,
+                              tasks: sortedTasks,
+                            )
+                          else
+                            Text(
+                              'Nothing is planned for today yet.',
+                              style: TextStyle(
+                                  fontSize: 14, color: Colors.grey[400]),
                             ),
-                            child: const Center(
-                              child: Text(
-                                "Calendar events placeholder",
-                                style: TextStyle(color: Colors.grey),
-                              ),
-                            ),
-                          ),
                           const SizedBox(height: 36),
                           const Divider(height: 1, color: Color(0xFFF3F4F6)),
                           const SizedBox(height: 36),
@@ -608,6 +612,50 @@ class _PrimaryCallout extends StatelessWidget {
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
       child: label,
+    );
+  }
+}
+
+/// The day timeline on the Now screen: the open session's Plan at its suggested
+/// times, with the times the user set. Starts from the session's own start.
+class _NowTimeline extends ConsumerWidget {
+  const _NowTimeline({required this.session, required this.tasks});
+
+  final FocusSession session;
+  final List<Todo> tasks;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final extras = ref.watch(nowTimelineExtrasProvider);
+    final focusSettings = ref.watch(focusSettingsProvider);
+    final defaultEstimate =
+        ref.watch(focusSessionPlanningSettingsProvider).defaultTimeEstimate;
+    final flowOrigin =
+        roundUpToFiveMinutes(DateTime.parse(session.startedAt).toLocal());
+    final entries = dayTimelineEntriesFor(
+      tasks: tasks,
+      defaultEstimateMinutes: defaultEstimate,
+      now: ref.read(clockProvider)(),
+      timeContexts: extras.timeContexts,
+      pinnedStarts: extras.pinnedStarts,
+      engagedTaskIds: extras.engagedTaskIds,
+      runningTaskId: session.currentTaskId,
+    );
+    return DayTimeline(
+      scope: session.id,
+      entries: entries,
+      flowOrigin: flowOrigin,
+      availableMinutes: extras.availableMinutes,
+      chunkUnitMinutes:
+          focusSettings.sprintDurationMinutes + focusSettings.breakDurationMinutes,
+      onSetPinnedStart: (outcomeId, startAt) => ref
+          .read(databaseProvider)
+          .focusSessionDao
+          .setPinnedStart(
+            sessionId: session.id,
+            taskId: outcomeId,
+            pinnedStartAt: startAt,
+          ),
     );
   }
 }
