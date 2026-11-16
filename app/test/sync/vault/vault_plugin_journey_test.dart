@@ -50,6 +50,14 @@ class _VaultDevice {
           'SELECT COUNT(*) AS c FROM actions WHERE outcome_id = ?',
           variables: [Variable<String>(_outcomeId)]).getSingle())
       .read<int>('c');
+
+  /// The ids of the Outcome's Actions, in order.
+  Future<List<String>> actionIds() async => (await device.domain.customSelect(
+        'SELECT id FROM actions WHERE outcome_id = ? ORDER BY id',
+        variables: [Variable<String>(_outcomeId)],
+      ).get())
+          .map((row) => row.read<String>('id'))
+          .toList();
 }
 
 Future<_VaultDevice> _open(String label, Directory root) async {
@@ -423,6 +431,169 @@ void main() {
     expect(await a.folder.read(copy), isNull,
         reason: 'the copy with the larger path is removed');
     expect(await a.folder.read(path), page);
+  });
+
+  test('a hand edit with a mangled block shows the edit', () async {
+    final a = await _open('a', root);
+    await a.device.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'Old title', userId: _userId);
+    await a.device.host!.deliverAll();
+    await a.plugin.rescan();
+
+    final path = await a.outcomePath();
+    // The machine block is damaged: what is left of it cannot be read.
+    final mangled = (await a.outcomePage())
+        .replaceFirst('title: Old title', 'title: New title')
+        .replaceFirst(
+          RegExp(
+              r'(Written by Jeeves\. Leave this block alone\.\n)[A-Za-z0-9+/=\n]*(-->)'),
+          r'$1bm90IGJhc2U2NCE=$2',
+        );
+    expect(parsePage(mangled).block, isNull,
+        reason: 'the block cannot be read');
+    await a.folder.writeAtomically(path, mangled);
+    a.device.wall.advance(5000);
+    await a.plugin.rescan();
+
+    expect((await a.todoRow())?['title'], 'New title');
+    expect(await a.outcomePage(), contains('title: New title'));
+  });
+
+  test('a stale copy does not roll back a newer value', () async {
+    final a = await _open('a', root);
+    final b = await _open('b', root);
+    await a.device.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'Old title', userId: _userId);
+    await _settle(a, b);
+
+    // The other device keeps a copy of the page as it was.
+    final stalePath = await b.outcomePath();
+    final stalePage = await b.outcomePage();
+
+    // This device renames the Outcome.
+    a.device.wall.advance();
+    await a.device.domain.todoDao.updateFields(_outcomeId, title: 'New title');
+    await a.device.host!.deliverAll();
+    await a.plugin.rescan();
+    expect((await a.todoRow())?['title'], 'New title');
+
+    // The syncer brings the older copy over the newer page.
+    await a.folder.writeAtomically(stalePath, stalePage);
+    await a.plugin.rescan();
+    await a.device.host!.deliverAll();
+
+    expect((await a.todoRow())?['title'], 'New title',
+        reason: 'the older copy did not roll the title back');
+    expect(await a.outcomePage(), contains('title: New title'));
+  });
+
+  test('a missing page file deletes nothing', () async {
+    final a = await _open('a', root);
+    final b = await _open('b', root);
+    await a.device.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'Doomed', userId: _userId);
+    await _settle(a, b);
+
+    // The page is not in the folder any more: a syncer dropped it, or a person
+    // deleted it. A file that is not there is not a deletion.
+    await a.folder.remove(await a.outcomePath());
+    await a.plugin.rescan();
+
+    expect(await a.todoRow(), isNotNull,
+        reason: 'a missing file is not a deletion');
+    expect((await b.todoRow())?['title'], 'Doomed',
+        reason: 'the other device still holds the Outcome');
+  });
+
+  test('a deletion stays deleted on both devices', () async {
+    final a = await _open('a', root);
+    final b = await _open('b', root);
+    await a.device.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'Doomed', userId: _userId);
+    await _settle(a, b);
+    final stalePath = await b.outcomePath();
+    final stalePage = await b.outcomePage();
+
+    a.device.wall.advance(5000);
+    await a.device.domain.todoDao.deleteOutcome(_outcomeId);
+    await a.device.host!.deliverAll();
+    await a.plugin.rescan();
+    expect(await a.todoRow(), isNull);
+    expect(await a.outcomePage(), contains('deleted:'));
+
+    // The syncer brings the deletion to the other device.
+    await _copyVault(a, b);
+    await b.plugin.rescan();
+    await b.device.host!.deliverAll();
+    expect(await b.todoRow(), isNull,
+        reason: 'the deletion reached the other device');
+    expect(await b.outcomePage(), contains('deleted:'));
+
+    // And the other device's older copy does not bring it back.
+    await a.folder.writeAtomically(stalePath, stalePage);
+    await a.plugin.rescan();
+    await a.device.host!.deliverAll();
+    expect(await a.todoRow(), isNull,
+        reason: 'the older copy did not revive it');
+  });
+
+  test('a line added by hand becomes one Action on both devices', () async {
+    final a = await _open('a', root);
+    final b = await _open('b', root);
+    await a.device.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'Plan', userId: _userId);
+    await _settle(a, b);
+
+    // A person types a line into the page.
+    final path = await a.outcomePath();
+    await a.folder.writeAtomically(
+      path,
+      (await a.outcomePage())
+          .replaceFirst('## Actions\n', '## Actions\n- [ ] call Sam\n'),
+    );
+    a.device.wall.advance(5000);
+    await a.plugin.rescan();
+    expect(await a.actionCount(), 1);
+
+    // The syncer brings the page to the other device.
+    await _copyVault(a, b);
+    await b.plugin.rescan();
+    await b.device.host!.deliverAll();
+    expect(await b.actionCount(), 1,
+        reason: 'the line is one Action, not one per device');
+    expect(await b.actionIds(), await a.actionIds(),
+        reason: 'both devices hold the same Action');
+
+    await _settle(a, b);
+    expect(await a.outcomePage(), await b.outcomePage(),
+        reason: 'two devices in one state write the same bytes');
+  });
+
+  test('a page that arrives as a conflict copy is taken, and folded away',
+      () async {
+    final a = await _open('a', root);
+    final b = await _open('b', root);
+    await a.device.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'Old title', userId: _userId);
+    await _settle(a, b);
+
+    // This device renames the Outcome.
+    a.device.wall.advance();
+    await a.device.domain.todoDao.updateFields(_outcomeId, title: 'New title');
+    await a.device.host!.deliverAll();
+    await a.plugin.rescan();
+
+    // The syncer cannot merge the two versions of the page, so it keeps both:
+    // the copy arrives under a second name.
+    await b.folder.writeAtomically('Outcomes/zz-conflict.md', await a.outcomePage());
+
+    await b.plugin.rescan();
+    await b.device.host!.deliverAll();
+
+    expect((await b.todoRow())?['title'], 'New title');
+    expect(await b.folder.listMarkdownFiles('Outcomes'), hasLength(1),
+        reason: 'two copies of one page collapse to one');
+    expect(await b.outcomePage(), contains('title: New title'));
   });
 }
 
