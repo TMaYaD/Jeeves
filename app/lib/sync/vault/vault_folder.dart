@@ -1,8 +1,17 @@
-import 'dart:io';
-
 /// The only way the vault plugin touches the folder: list, read,
-/// write-and-rename, remove. Paths are relative to the vault root and use
-/// `/` as separator, whatever the platform.
+/// write-and-rename, remove.
+///
+/// **The port, and nothing else.** The implementation that reaches a plain
+/// directory needs `dart:io`, which the web build does not have, so it lives in
+/// `vault_folder_io.dart` and is selected by the conditional export in
+/// `vault_folder_impl.dart` — the same rule `sync/sync_store.dart` follows
+/// (docs/ARCHITECTURE.md § "Platform I/O Adapters").
+///
+/// Paths are relative to the vault root and use `/` as separator, whatever the
+/// platform.
+library;
+
+/// The vault's folder: pages under `Outcomes/`, `Sessions/` and `Inbox/`.
 abstract class VaultFolder {
   /// Relative paths of every `.md` file under [subfolder], sorted.
   Future<List<String>> listMarkdownFiles(String subfolder);
@@ -17,51 +26,22 @@ abstract class VaultFolder {
   Future<void> remove(String relativePath);
 }
 
-/// [VaultFolder] over a plain directory, through `dart:io`.
-class DirectoryVaultFolder implements VaultFolder {
-  DirectoryVaultFolder(this.root);
-
-  final Directory root;
-
-  File _file(String relativePath) =>
-      File('${root.path}${Platform.pathSeparator}'
-          '${relativePath.replaceAll('/', Platform.pathSeparator)}');
-
-  @override
-  Future<List<String>> listMarkdownFiles(String subfolder) async {
-    final dir = Directory(_file(subfolder).path);
-    if (!await dir.exists()) return const [];
-    final prefix = '${root.path}${Platform.pathSeparator}';
-    final paths = <String>[];
-    await for (final entity in dir.list(recursive: true, followLinks: false)) {
-      if (entity is File && entity.path.endsWith('.md')) {
-        paths.add(entity.path.substring(prefix.length).replaceAll(
-            Platform.pathSeparator, '/'));
-      }
+/// A relative path made only of safe components, or an [ArgumentError].
+///
+/// Everything read back through a [VaultFolder] is untrusted input — another app
+/// or the file syncer may have put anything there — so a name is never used as a
+/// path component before it has been checked, and a path that escapes the vault
+/// is refused rather than resolved.
+String requireSafeVaultPath(String path) {
+  if (path.isEmpty) return path;
+  for (final part in path.split('/')) {
+    if (part.isEmpty ||
+        part == '.' ||
+        part == '..' ||
+        part.contains('\\') ||
+        part.contains('\x00')) {
+      throw ArgumentError.value(path, 'path', 'is not a safe relative path');
     }
-    paths.sort();
-    return paths;
   }
-
-  @override
-  Future<String?> read(String relativePath) async {
-    final file = _file(relativePath);
-    if (!await file.exists()) return null;
-    return file.readAsString();
-  }
-
-  @override
-  Future<void> writeAtomically(String relativePath, String text) async {
-    final target = _file(relativePath);
-    await target.parent.create(recursive: true);
-    final temporary = File('${target.path}.jeeves-tmp');
-    await temporary.writeAsString(text, flush: true);
-    await temporary.rename(target.path);
-  }
-
-  @override
-  Future<void> remove(String relativePath) async {
-    final file = _file(relativePath);
-    if (await file.exists()) await file.delete();
-  }
+  return path;
 }

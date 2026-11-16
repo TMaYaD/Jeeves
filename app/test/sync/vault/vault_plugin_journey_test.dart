@@ -11,6 +11,7 @@ import 'dart:io';
 import 'package:drift/drift.dart' show Variable;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/sync/vault/vault_folder.dart';
+import 'package:jeeves/sync/vault/vault_folder_io.dart';
 import 'package:jeeves/sync/vault/vault_plugin.dart';
 
 import '../host/host_harness.dart';

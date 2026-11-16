@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -23,6 +24,7 @@ import '../../providers/periodic_review_provider.dart';
 import '../../providers/periodic_review_settings_provider.dart';
 import '../../providers/shutdown_settings_provider.dart';
 import '../../providers/bypassed_outcomes_provider.dart';
+import '../../providers/vault_sync_provider.dart';
 import '../../services/export_service.dart';
 import '../../sync/device_names.dart';
 import '../../widgets/app_title_bar/app_title_bar.dart';
@@ -75,6 +77,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           // claim about the account.
           final isAuthenticated = gate == SessionGate.signedInNotEnrolled ||
               gate == SessionGate.ready;
+          // The vault's whole setting is the folder it points at: a folder set
+          // means the vault is on, and no folder means it is off.
+          final vaultOn = ref.watch(vaultFolderProvider).asData?.value != null;
           return ListView(
         children: [
           const SystemTrustSection(),
@@ -101,6 +106,36 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           // signed in, and a name set while signed out carries into the
           // account later.
           _deviceNameTile(context, ref),
+          // The vault: one plugin at a time (#914). It is offered where the op
+          // log's own door is not — a device that has not enrolled for the op
+          // log — and it is not offered on the web, which has no folder to sync
+          // through.
+          if (!kIsWeb &&
+              (gate == SessionGate.signedOut ||
+                  gate == SessionGate.signedInNotEnrolled)) ...[
+            ListTile(
+              key: const Key('vault_folder_tile'),
+              leading: const Icon(Icons.folder_outlined, color: Color(0xFF2563EB)),
+              title: Text(
+                vaultOn
+                    ? 'Stop syncing through this folder'
+                    : 'Sync through a folder of pages',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFF2563EB),
+                ),
+              ),
+              subtitle: Text(
+                vaultOn
+                    ? 'Your Outcomes, sessions and captures stay as Markdown '
+                        'pages in a folder you chose.'
+                    : 'Keep your Outcomes, sessions and captures as Markdown '
+                        'pages in a folder you choose.',
+                style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+              ),
+              onTap: () => _toggleVault(ref, vaultOn),
+            ),
+          ],
           if (!isAuthenticated) ...[
             ListTile(
               key: const Key('sign_in_to_sync_tile'),
@@ -123,7 +158,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             // The only door into the enrolment ceremony. `push`, not `go`: the
             // user is choosing to look at it and must be able to back out with
             // the app bar's own arrow.
-            if (gate == SessionGate.signedInNotEnrolled)
+            //
+            // Hidden while the vault is on: one plugin at a time (#914), and the
+            // op log is not yet behind the plugin interface.
+            if (gate == SessionGate.signedInNotEnrolled && !vaultOn)
               ListTile(
                 key: const Key('enrolment_ceremony_tile'),
                 leading: const Icon(Icons.cloud_sync_outlined,
@@ -437,6 +475,20 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         ),
       ),
     );
+  }
+
+  /// Turn the vault on, or off.
+  ///
+  /// Turning it on asks the person for a folder (the system picker on Android);
+  /// turning it off only stops this device syncing through it — the folder and
+  /// everything in it are left exactly where they are.
+  Future<void> _toggleVault(WidgetRef ref, bool vaultOn) async {
+    final controller = ref.read(vaultControllerProvider);
+    if (vaultOn) {
+      await controller.turnOff();
+      return;
+    }
+    await controller.turnOn();
   }
 
   Future<void> _confirmLogout(BuildContext context) async {
