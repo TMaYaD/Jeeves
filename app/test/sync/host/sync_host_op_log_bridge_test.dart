@@ -76,6 +76,16 @@ void main() {
     ];
   }
 
+  test('an activation abandoned during its first read stops before the '
+      'enrolment decision', () async {
+    final phone = await hostedPhone();
+
+    final activation = phone.activate();
+    await phone.lifecycle!.deactivate();
+
+    expect(await activation, SyncActivation.deactivated);
+  });
+
   test('an un-enrolled device keeps merge state and authors no op', () async {
     final phone = await hostedPhone();
 
