@@ -315,7 +315,7 @@ void main() {
     await tester.pumpWidget(_app([
       _entry('blocker', 60, pinned: DateTime(2030, 3, 15, 9, 30)),
       _entry('split', 50),
-    ], sprints: [
+    ], availableMinutes: 120, sprints: [
       _sprint('s1', 'split',
           startedAt: DateTime(2030, 3, 15, 9, 10),
           endedAt: DateTime(2030, 3, 15, 9, 33)),

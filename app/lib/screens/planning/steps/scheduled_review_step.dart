@@ -119,7 +119,7 @@ class _ScheduledReviewStepState extends ConsumerState<ScheduledReviewStep> {
     // The Sprints done, read from the record: the same lane the Now screen
     // draws, so the two timelines of one day read alike.
     final sprintMarks =
-        ref.watch(dayTimelineSprintsProvider).asData?.value ?? const [];
+        ref.watch(planningSprintMarksProvider).asData?.value ?? const [];
     final entries = dayTimelineEntriesFor(
       tasks: tasks,
       defaultEstimateMinutes: settings.defaultEstimateMinutes,

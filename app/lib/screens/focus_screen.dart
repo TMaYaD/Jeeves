@@ -640,10 +640,6 @@ class _NowTimeline extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final extras = ref.watch(nowTimelineExtrasProvider);
-    // The Sprints done, read from the record: a Sprint a peer recorded and
-    // synced shows on its tile here, without a restart.
-    final sprintMarks =
-        ref.watch(dayTimelineSprintsProvider).asData?.value ?? const [];
     final flowOrigin =
         roundUpToFiveMinutes(DateTime.parse(session.startedAt).toLocal());
     final entries = dayTimelineEntriesFor(
@@ -661,7 +657,7 @@ class _NowTimeline extends ConsumerWidget {
       flowOrigin: flowOrigin,
       availableMinutes: extras.availableMinutes,
       chunkUnitMinutes: extras.settings.chunkUnitMinutes,
-      sprintMarks: sprintMarks,
+      sprintMarks: extras.sprintMarks,
       onSetPinnedStart: (outcomeId, startAt) => ref
           .read(databaseProvider)
           .focusSessionDao

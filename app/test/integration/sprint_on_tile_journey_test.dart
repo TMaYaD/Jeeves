@@ -9,6 +9,11 @@
 /// [Reducer] on a real [SyncDatabase], and the real [DomainProjector] writes
 /// the row into the domain store and announces it, exactly as the sync host
 /// does when a peer's Sprint arrives.
+///
+/// Harness shape follows `day_timeline_journey_test.dart`: the real route over
+/// a real database, the databases opened and closed outside the fake-async
+/// body, and a bounded number of frames instead of `pumpAndSettle`, which a
+/// live drift stream would make spin.
 @TestOn('!browser')
 library;
 
@@ -23,7 +28,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/clock_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
-import 'package:jeeves/providers/day_timeline_provider.dart';
 import 'package:jeeves/screens/focus_screen.dart';
 import 'package:jeeves/services/notification_service.dart';
 import 'package:jeeves/sync/collection_codecs.dart';
@@ -56,28 +60,15 @@ Future<void> _pumpFrames(WidgetTester tester, {int frames = 8}) async {
   }
 }
 
-Widget _app(GtdDatabase db) {
-  final router = GoRouter(
-    initialLocation: '/focus',
-    routes: [
-      GoRoute(path: '/focus', builder: (_, _) => const FocusScreen()),
-    ],
-  );
-  return ProviderScope(
-    overrides: [
-      nowTimelineExtrasProvider.overrideWithValue(const NowTimelineExtras()),
-      databaseProvider.overrideWithValue(db),
-      clockProvider.overrideWithValue(() => _now),
-      notificationServiceProvider.overrideWithValue(StubNotificationService()),
-    ],
-    child: MaterialApp.router(routerConfig: router),
-  );
-}
-
 void main() {
   setUpAll(configureSqliteForTests);
 
   late GtdDatabase db;
+  late SyncDatabase sync;
+  late Reducer reducer;
+  late DomainProjector projector;
+  late ProviderContainer container;
+  late GoRouter router;
 
   setUp(() async {
     driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
@@ -101,70 +92,116 @@ void main() {
       taskIds: ['report'],
       now: _sessionStart,
     );
+    // The sync store is opened outside the test body on purpose: a database
+    // opened inside the fake-async body never finishes opening, and the
+    // reducer's write would hang.
+    sync = SyncDatabase(NativeDatabase.memory());
+    final registry = CollectionRegistry(sync);
+    reducer = Reducer(
+      sync,
+      nowMs: () => DateTime.now().millisecondsSinceEpoch,
+    );
+    projector = DomainProjector(registry: registry, domain: db);
+    // The Now screen's own providers are the real ones: the Sprints must reach
+    // the tile through the app's own path, not through a test-only override.
+    container = ProviderContainer(overrides: [
+      databaseProvider.overrideWithValue(db),
+      clockProvider.overrideWithValue(() => _now),
+      notificationServiceProvider.overrideWithValue(StubNotificationService()),
+    ]);
+    router = GoRouter(
+      initialLocation: '/focus',
+      routes: [
+        GoRoute(path: '/focus', builder: (_, _) => const FocusScreen()),
+      ],
+    );
   });
 
-  tearDown(() async => db.close());
+  tearDown(() async {
+    router.dispose();
+    await db.close();
+    await sync.close();
+  });
+
+  /// Disposing the container cancels the live drift streams, which schedules a
+  /// zero-duration timer; it must fire inside the test body.
+  Future<void> teardownApp(WidgetTester tester) async {
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.runAsync(() => pumpEventQueue());
+    container.dispose();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 10));
+  }
+
+  Future<void> openNowScreen(WidgetTester tester) async {
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: container,
+      child: MaterialApp.router(routerConfig: router),
+    ));
+    await _pumpFrames(tester, frames: 20);
+  }
 
   testWidgets('a Sprint recorded here is counted on its tile', (tester) async {
-    await tester.runAsync(() async {
-      await db.sprintDao.startSprint(
-        taskId: 'report',
-        userId: _userId,
-        plannedDurationMinutes: 23,
-        now: _sprintStart,
-      );
-      await db.sprintDao.endRunningSprint(
-        userId: _userId,
-        now: _sprintEnd,
-      );
-    });
+    try {
+      await tester.runAsync(() async {
+        await db.sprintDao.startSprint(
+          taskId: 'report',
+          userId: _userId,
+          plannedDurationMinutes: 23,
+          now: _sprintStart,
+        );
+        await db.sprintDao.endRunningSprint(
+          userId: _userId,
+          now: _sprintEnd,
+        );
+      });
 
-    await tester.pumpWidget(_app(db));
-    await _pumpFrames(tester, frames: 20);
+      await openNowScreen(tester);
 
-    expect(find.byKey(const Key('day_timeline')), findsOneWidget);
-    expect(find.byKey(const Key('day_timeline_tile_report_1')), findsOneWidget);
-    expect(find.textContaining('1 sprint · 23m'), findsOneWidget);
+      expect(find.byKey(const Key('day_timeline')), findsOneWidget);
+      expect(find.byKey(const Key('day_timeline_tile_report_1')), findsOneWidget);
+      expect(find.textContaining('1 sprint · 23m'), findsOneWidget);
+    } finally {
+      await teardownApp(tester);
+    }
   });
 
   testWidgets('a Sprint that arrives by sync is counted on its tile',
       (tester) async {
-    await tester.pumpWidget(_app(db));
-    await _pumpFrames(tester, frames: 20);
-    expect(find.textContaining('1 sprint · 23m'), findsNothing);
+    try {
+      await openNowScreen(tester);
+      expect(find.textContaining('1 sprint · 23m'), findsNothing);
 
-    // The peer records a Sprint on the same Action this device has, and its op
-    // converges here: the reducer reduces it, the projector writes the row.
-    final sync = SyncDatabase(NativeDatabase.memory());
-    addTearDown(() => sync.close());
-    final registry = CollectionRegistry(sync);
-    final reducer = Reducer(sync, nowMs: () => DateTime.now().millisecondsSinceEpoch);
-    final projector = DomainProjector(registry: registry, domain: db);
+      // The peer records a Sprint on the same Action this device has, and its
+      // op converges here: the reducer reduces it, the projector writes the
+      // row and announces it.
+      await tester.runAsync(() async {
+        final affected = await reducer.apply(
+          OpPayload(
+            collection: sprintsCollection,
+            entityId: 'sprint-from-a-peer',
+            hlc: Hlc(DateTime.now().millisecondsSinceEpoch, 0, _member),
+            fields: {
+              'user_id': FieldWrite(_userId),
+              'action_id': FieldWrite('action-report'),
+              'started_at': FieldWrite(encodeInstant(_sprintStart)),
+              'ended_at': FieldWrite(encodeInstant(_sprintEnd)),
+              'planned_duration_minutes': FieldWrite(23),
+            },
+          ),
+          authorMemberIdHex: _member,
+        );
+        await projector.project(affected);
+      });
 
-    await tester.runAsync(() async {
-      final affected = await reducer.apply(
-        OpPayload(
-          collection: sprintsCollection,
-          entityId: 'sprint-from-a-peer',
-          hlc: Hlc(DateTime.now().millisecondsSinceEpoch, 0, _member),
-          fields: {
-            'user_id': FieldWrite(_userId),
-            'action_id': FieldWrite('action-report'),
-            'started_at': FieldWrite(encodeInstant(_sprintStart)),
-            'ended_at': FieldWrite(encodeInstant(_sprintEnd)),
-            'planned_duration_minutes': FieldWrite(23),
-          },
-        ),
-        authorMemberIdHex: _member,
-      );
-      await projector.project(affected);
-    });
+      // The row is in the store; the screen is still open.
+      await _pumpFrames(tester, frames: 20);
 
-    // The row is in the store; the screen is still open.
-    await _pumpFrames(tester, frames: 20);
-
-    final rows = (await tester.runAsync(() => db.select(db.sprints).get()))!;
-    expect(rows, hasLength(1));
-    expect(find.textContaining('1 sprint · 23m'), findsOneWidget);
+      final rows = (await tester.runAsync(() => db.select(db.sprints).get()))!;
+      expect(rows, hasLength(1));
+      expect(find.textContaining('1 sprint · 23m'), findsOneWidget);
+    } finally {
+      await teardownApp(tester);
+    }
   });
 }

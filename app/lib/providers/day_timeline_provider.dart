@@ -64,6 +64,17 @@ final planningTimeContextsProvider =
   return ref.watch(databaseProvider).actionDao.getCurrentTimeContexts();
 });
 
+/// The recorded Sprints, read once when the planning completion screen opens,
+/// for the same reason as [planningTimeContextsProvider].
+final planningSprintMarksProvider =
+    FutureProvider.autoDispose<List<TileSprintMark>>((ref) {
+  return ref
+      .watch(databaseProvider)
+      .sprintDao
+      .getRecordsByOutcome()
+      .then(tileSprintMarks);
+});
+
 /// The two settings the timeline reads: what an Outcome with no estimate counts
 /// as, and the chunking unit (sprint plus short break).
 class DayTimelineSettings {
@@ -92,6 +103,7 @@ class NowTimelineExtras {
     this.pinnedStarts = const {},
     this.engagedTaskIds = const {},
     this.timeContexts = const {},
+    this.sprintMarks = const [],
     this.availableMinutes = kFallbackAvailableMinutes,
     this.settings = const DayTimelineSettings(),
   });
@@ -99,6 +111,10 @@ class NowTimelineExtras {
   final Map<String, DateTime> pinnedStarts;
   final Set<String> engagedTaskIds;
   final Map<String, TimeContext> timeContexts;
+
+  /// The Sprints done, as the timeline draws them: a bar in the lane at the
+  /// time it ran, and a count on the tile it ran on.
+  final List<TileSprintMark> sprintMarks;
 
   /// The available time the open session was planned with; the preference that
   /// remembers it, or the fallback when none was recorded.
@@ -120,6 +136,8 @@ final nowTimelineExtrasProvider = Provider<NowTimelineExtras>((ref) {
             const {},
     timeContexts:
         ref.watch(currentTimeContextsProvider).asData?.value ?? const {},
+    sprintMarks:
+        ref.watch(dayTimelineSprintsProvider).asData?.value ?? const [],
     availableMinutes: remembered != null && remembered > 0
         ? remembered
         : kFallbackAvailableMinutes,
