@@ -64,7 +64,7 @@ void main() {
     final src = Directory('android/app/src');
     for (final f in src.listSync(recursive: true).whereType<File>()) {
       if (!f.path.endsWith('AndroidManifest.xml')) continue;
-      if (f.path.contains('/src/main/')) continue;
+      if (f.path.replaceAll(r'\', '/').contains('/src/main/')) continue;
       expect(
         RegExp('allowBackup|fullBackupContent|dataExtractionRules')
             .hasMatch(f.readAsStringSync()),
