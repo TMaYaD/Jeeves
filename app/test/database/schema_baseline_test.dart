@@ -82,16 +82,16 @@ void main() {
   setUpAll(configureSqliteForTests);
 
   group('schema version', () {
-    test('is 8 — seven onUpgrade steps behind the fresh baseline', () async {
+    test('is 9 — eight onUpgrade steps behind the fresh baseline', () async {
       final db = _openInMemory();
       addTearDown(db.close);
-      expect(db.schemaVersion, 8);
+      expect(db.schemaVersion, 9);
       // A fresh file runs onCreate at the current version, not the ladder.
       expect(
         await db.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        8,
+        9,
       );
     });
   });
@@ -842,6 +842,69 @@ void main() {
       expect(identity.read<String?>('enrolled_member_id_hex'), isNull);
       expect(
           await upgraded.customSelect('SELECT 1 FROM pending_changes').get(), isEmpty);
+    });
+  });
+
+  group('v9 onUpgrade adds the recorded Sprint table', () {
+    test('creates sprints, keeps every existing row and matches fresh v9',
+        () async {
+      final raw = sqlite3.openInMemory();
+      addTearDown(raw.close);
+
+      final seed = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      var seedClosed = false;
+      Future<void> closeSeed() async {
+        if (seedClosed) return;
+        seedClosed = true;
+        await seed.close();
+      }
+
+      addTearDown(closeSeed);
+
+      // A v8 store: the Sprint table did not exist.
+      await seed.customStatement('DROP TABLE sprints');
+      final createdMs =
+          DateTime.parse('2026-11-10T09:00:00.000Z').millisecondsSinceEpoch;
+      await seed.customStatement(
+        'INSERT INTO todos (id, title, user_id, created_at, intent) '
+        "VALUES ('t1', 'Ship it', 'u1', ?, 'next')",
+        [createdMs],
+      );
+      await seed.customStatement(
+        'INSERT INTO time_logs (id, user_id, task_id, started_at) '
+        "VALUES ('tl1', 'u1', 't1', '2026-11-10T09:00:00.000Z')",
+      );
+      await seed.customStatement('PRAGMA user_version = 8');
+      await closeSeed();
+
+      final upgraded = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      addTearDown(upgraded.close);
+
+      expect(await _objects(upgraded, 'table'), contains('sprints'));
+      expect(await _columnNames(upgraded, 'sprints'), {
+        'id',
+        'user_id',
+        'action_id',
+        'started_at',
+        'ended_at',
+        'planned_duration_minutes',
+      });
+      expect(
+        (await upgraded.customSelect('SELECT id FROM todos').getSingle())
+            .read<String>('id'),
+        't1',
+      );
+      expect(
+        (await upgraded.customSelect('SELECT id FROM time_logs').getSingle())
+            .read<String>('id'),
+        'tl1',
+      );
+      expect(await upgraded.customSelect('SELECT 1 FROM sprints').get(), isEmpty,
+          reason: 'nothing is backfilled');
     });
   });
 }

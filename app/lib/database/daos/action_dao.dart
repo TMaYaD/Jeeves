@@ -84,6 +84,7 @@ import '../../utils/uuid.dart';
 import '../../models/time_context.dart';
 import '../../sync/collection_codecs.dart';
 import '../gtd_database.dart';
+import 'sprint_dao.dart' show SprintDao;
 import 'time_log_dao.dart' show TimeLogDao;
 
 part 'action_dao.g.dart';
@@ -1470,6 +1471,8 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     for (final row in open) {
       TimeLogDao.captureLogClosedOn(attachedDatabase, row.id, ts);
     }
+    // A Sprint never outlives its TimeLog (issue #910).
+    await SprintDao.closeRunningSprintOn(attachedDatabase, ts);
     return open.first;
   }
 

@@ -29,6 +29,7 @@ import 'daos/capture_dao.dart';
 import 'daos/focus_session_dao.dart';
 import 'daos/search_dao.dart';
 import 'daos/tag_dao.dart';
+import 'daos/sprint_dao.dart';
 import 'daos/time_log_dao.dart';
 import 'daos/todo_dao.dart';
 import 'daos/user_preferences_dao.dart';
@@ -40,8 +41,8 @@ export 'tables.dart';
 part 'gtd_database.g.dart';
 
 @DriftDatabase(
-  tables: [Todos, Tags, TodoTags, TimeLogs, FocusSessions, FocusSessionTasks, FocusSessionDispositions, FocusSessionPlanningBypasses, FocusSessionReschedules, OutcomeBypassDecisions, UserPreferences, Captures, CaptureAttachments, CaptureOutcomes, CaptureTags, Actions, LocalMigrationMarkers, PendingChanges, DeviceClockIdentity],
-  daos: [TagDao, TodoDao, TimeLogDao, FocusSessionDao, CaptureDao, ActionDao],
+  tables: [Todos, Tags, TodoTags, TimeLogs, Sprints, FocusSessions, FocusSessionTasks, FocusSessionDispositions, FocusSessionPlanningBypasses, FocusSessionReschedules, OutcomeBypassDecisions, UserPreferences, Captures, CaptureAttachments, CaptureOutcomes, CaptureTags, Actions, LocalMigrationMarkers, PendingChanges, DeviceClockIdentity],
+  daos: [TagDao, TodoDao, TimeLogDao, SprintDao, FocusSessionDao, CaptureDao, ActionDao],
 )
 class GtdDatabase extends _$GtdDatabase {
   GtdDatabase(super.executor, {this.opCapture = const NoopDomainOpCapture()});
@@ -193,7 +194,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final UserPreferencesDao userPreferencesDao = UserPreferencesDao(this);
 
   @override
-  int get schemaVersion => 8;
+  int get schemaVersion => 9;
 
   /// Completes with the [OpeningDetails] of this store's one open.
   ///
@@ -328,6 +329,18 @@ class GtdDatabase extends _$GtdDatabase {
             }
             await ensureDeviceClockIdentity();
           }
+          // v9 (issue #910): the recorded Sprint. Purely additive — one new
+          // table, no existing row or column touched, nothing backfilled
+          // (Sprints before this build were never recorded).
+          if (from < 9) {
+            final tables = await m.database
+                .customSelect(
+                    "SELECT name FROM sqlite_master WHERE type='table'")
+                .get();
+            if (!tables.any((row) => row.read<String>('name') == 'sprints')) {
+              await m.createTable(sprints);
+            }
+          }
         }),
       );
 
@@ -417,6 +430,12 @@ class GtdDatabase extends _$GtdDatabase {
   /// never over-notifies the active-log and time-spent watchers.
   void notifyTimeLogsViewWrite() => notifyUpdates({
         const TableUpdate('time_logs'),
+      });
+
+  /// The [notifyTodosViewWrite] analogue for `sprints` — fired by the projector
+  /// and the importer, which write through raw SQL.
+  void notifySprintsViewWrite() => notifyUpdates({
+        const TableUpdate('sprints'),
       });
 
   /// The [notifyTodosViewWrite] analogue for `tags`.

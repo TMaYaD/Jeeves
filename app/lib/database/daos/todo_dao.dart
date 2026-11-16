@@ -1795,6 +1795,21 @@ AND (
         fields: {'action_id': null},
       );
     }
+    // Sprints are never destroyed either: those recorded on the Outcome's
+    // Actions detach (`action_id` nulled), as the TimeLogs above do.
+    final actionIds = {for (final row in actionRows) row.id};
+    if (actionIds.isNotEmpty) {
+      final sprintRows = await (select(attachedDatabase.sprints)
+            ..where((s) => s.actionId.isIn(actionIds)))
+          .get();
+      for (final row in sprintRows) {
+        capture.write(
+          collection: sprintsCollection,
+          entityId: row.id,
+          fields: {'action_id': null},
+        );
+      }
+    }
     // The Bypassed rows about this Outcome go with it: every read of them
     // joins `todos`, so a survivor could never surface, but it would linger.
     final db = attachedDatabase;

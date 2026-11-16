@@ -112,6 +112,9 @@ class DomainProjector {
     if (collections.contains(timeLogsCollection)) {
       domain.notifyTimeLogsViewWrite();
     }
+    if (collections.contains(sprintsCollection)) {
+      domain.notifySprintsViewWrite();
+    }
     if (collections.contains(tagsCollection)) {
       domain.notifyTagsViewWrite();
     }

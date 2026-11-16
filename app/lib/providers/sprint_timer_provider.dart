@@ -1,44 +1,30 @@
-/// Pomodoro sprint timer state and notifier (Issue #47).
+/// Sprint timer state and notifier (Issues #47, #910).
 ///
-/// Implements a configurable focus sprint + break cycle bound to a selected
-/// Focus Mode task. Durations are read from [focusSettingsProvider] at sprint-
-/// start time. Timer state persists to SharedPreferences across app backgrounding;
-/// a local notification fires at expiry even when the app is in the background.
+/// Binds a focus Sprint + Break cycle to the open TimeLog. **The recorded Sprint
+/// is the only source of truth**: the notifier derives its whole state from the
+/// `sprints` table, the open TimeLog and the synced break length through
+/// [deriveSprintTimerState], a pure function of (record, `now`), and the
+/// one-second ticker only re-evaluates it. Nothing is read from device-only
+/// storage, so a Sprint started on one device shows on every other, and a
+/// restart resumes from the record.
+///
+/// Restoring never writes: past its set length a Sprint reads as overtime — the
+/// same as in the foreground — instead of being turned into a Break, because on a
+/// shared record that would let one device end a Sprint another is still running.
 library;
 
 import 'dart:async';
 
+import 'package:drift/drift.dart' show OrderingTerm, TableUpdateQuery;
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
+import '../database/daos/sprint_dao.dart';
 import '../database/gtd_database.dart';
 import '../services/notification_service.dart';
+import 'auth_provider.dart';
 import 'database_provider.dart';
 import 'focus_settings_provider.dart';
-
-// ---------------------------------------------------------------------------
-// SharedPreferences keys
-// ---------------------------------------------------------------------------
-
-const _kPrefActiveTaskId = 'sprint_active_task_id';
-const _kPrefActiveTaskTitle = 'sprint_active_task_title';
-const _kPrefEndTime = 'sprint_end_time';
-const _kPrefPhase = 'sprint_phase';
-const _kPrefSprintNumber = 'sprint_sprint_number';
-const _kPrefTotalSprints = 'sprint_total_sprints';
-const _kPrefIsPaused = 'sprint_is_paused'; // legacy key, kept for prefs cleanup
-const _kPrefRemainingSeconds = 'sprint_remaining_seconds'; // legacy key, kept for prefs cleanup
-const _kPrefSprintMinutes = 'sprint_sprint_duration_minutes';
-const _kPrefBreakMinutes = 'sprint_break_duration_minutes';
-const _kPrefLastBreakEndedAt = 'sprint_last_break_ended_at';
-const _kPrefOvertimeStartMs = 'sprint_overtime_start_ms';
-
-// Phase string values stored in SharedPreferences.
-const _kPhaseFocus = 'focus';
-const _kPhaseBreak = 'break';
-const _kPhaseFocusOvertime = 'focus_overtime';
-const _kPhaseBreakOvertime = 'break_overtime';
 
 // ---------------------------------------------------------------------------
 // Phase enum
@@ -151,6 +137,147 @@ class SprintTimerState {
 }
 
 // ---------------------------------------------------------------------------
+// Derivation
+// ---------------------------------------------------------------------------
+
+/// The ms-truncated UTC instant of [value] — the grain a recorded Sprint's
+/// instants have, so a Sprint started in the same instant a TimeLog opened is
+/// never read as having started before it.
+DateTime _floorToMillisecond(DateTime value) =>
+    DateTime.fromMillisecondsSinceEpoch(value.millisecondsSinceEpoch,
+        isUtc: true);
+
+int _calcTotalSprints(int? estimateMinutes, int sprintMinutes) {
+  if (estimateMinutes == null || estimateMinutes <= sprintMinutes) return 1;
+  return (estimateMinutes / sprintMinutes).ceil();
+}
+
+/// The timer state as a pure function of the recorded Sprints, the open
+/// TimeLog, the synced settings and [now].
+///
+/// * No open TimeLog: idle.
+/// * The latest Sprint is running on the TimeLog's Action: focus, or focus
+///   overtime once `started_at + planned length` has passed.
+/// * The latest Sprint ended at or after the TimeLog opened: break, or break
+///   overtime once `ended_at + break length` has passed.
+/// * Otherwise idle.
+///
+/// `sprintNumber` counts the recorded Sprints on the TimeLog's Action, the
+/// running one included (an idle timer reports the number the next one would
+/// have). [suppressedSprintId] names a Sprint the user stopped on this device;
+/// it never reads as a break.
+SprintTimerState deriveSprintTimerState({
+  required List<SprintRecord> sprints,
+  required TimeLog? activeLog,
+  required Todo? activeTask,
+  required int sprintMinutesSetting,
+  required int breakMinutesSetting,
+  required DateTime now,
+  String? suppressedSprintId,
+}) {
+  final latest = sprints.isEmpty ? null : sprints.last;
+  final lastBreakEndedAt =
+      sprints.length >= 2 ? latest!.startedAtUtc.toLocal() : null;
+  if (activeLog == null) {
+    return SprintTimerState(
+      sprintDurationMinutes: sprintMinutesSetting,
+      breakDurationMinutes: breakMinutesSetting,
+      lastBreakEndedAt: lastBreakEndedAt,
+    );
+  }
+
+  final actionId = activeLog.actionId;
+  final logStartedAtUtc =
+      _floorToMillisecond(DateTime.parse(activeLog.startedAt).toUtc());
+  final sprintsOnAction = actionId == null
+      ? const <SprintRecord>[]
+      : [for (final s in sprints) if (s.actionId == actionId) s];
+  final latestOnAction = latest != null &&
+          actionId != null &&
+          latest.actionId == actionId &&
+          latest.id != suppressedSprintId &&
+          !latest.startedAtUtc.isBefore(logStartedAtUtc)
+      ? latest
+      : null;
+
+  final nowUtc = now.toUtc();
+  final breakMinutes = breakMinutesSetting;
+  final sprintMinutes =
+      latestOnAction?.plannedDurationMinutes ?? sprintMinutesSetting;
+  final recorded = sprintsOnAction.length;
+
+  SprintTimerState build({
+    required SprintPhase phase,
+    required int sprintNumber,
+    Duration remaining = Duration.zero,
+    Duration total = Duration.zero,
+    Duration overtime = Duration.zero,
+  }) =>
+      SprintTimerState(
+        phase: phase,
+        activeTaskId: activeLog.taskId,
+        activeTaskTitle: activeTask?.title,
+        sprintNumber: sprintNumber,
+        totalSprints: _calcTotalSprints(activeTask?.timeEstimate, sprintMinutes) >
+                sprintNumber
+            ? _calcTotalSprints(activeTask?.timeEstimate, sprintMinutes)
+            : sprintNumber,
+        remaining: remaining,
+        total: total,
+        overtime: overtime,
+        sprintDurationMinutes: sprintMinutes,
+        breakDurationMinutes: breakMinutes,
+        lastBreakEndedAt: lastBreakEndedAt,
+      );
+
+  if (latestOnAction != null && latestOnAction.isRunning) {
+    final total = Duration(minutes: latestOnAction.plannedDurationMinutes);
+    var elapsed = nowUtc.difference(latestOnAction.startedAtUtc);
+    if (elapsed.isNegative) elapsed = Duration.zero;
+    if (elapsed < total) {
+      return build(
+        phase: SprintPhase.focus,
+        sprintNumber: recorded,
+        remaining: total - elapsed,
+        total: total,
+      );
+    }
+    final overtime = elapsed - total;
+    return build(
+      phase: SprintPhase.focusOvertime,
+      sprintNumber: recorded,
+      total: total,
+      overtime: overtime > total ? total : overtime,
+    );
+  }
+
+  final endedAtUtc = latestOnAction?.endedAtUtc;
+  if (latestOnAction != null &&
+      endedAtUtc != null &&
+      !endedAtUtc.isBefore(logStartedAtUtc)) {
+    final total = Duration(minutes: breakMinutes);
+    final breakEndsAtUtc = endedAtUtc.add(total);
+    if (nowUtc.isBefore(breakEndsAtUtc)) {
+      return build(
+        phase: SprintPhase.break_,
+        sprintNumber: recorded,
+        remaining: breakEndsAtUtc.difference(nowUtc),
+        total: total,
+      );
+    }
+    final overtime = nowUtc.difference(breakEndsAtUtc);
+    return build(
+      phase: SprintPhase.breakOvertime,
+      sprintNumber: recorded,
+      total: total,
+      overtime: overtime > total ? total : overtime,
+    );
+  }
+
+  return build(phase: SprintPhase.idle, sprintNumber: recorded + 1);
+}
+
+// ---------------------------------------------------------------------------
 // Provider
 // ---------------------------------------------------------------------------
 
@@ -165,22 +292,44 @@ final sprintTimerProvider =
 
 class SprintTimerNotifier extends Notifier<SprintTimerState> {
   Timer? _ticker;
-  DateTime? _endTime;
-  int? _overtimeStartMs;
+  StreamSubscription<Object?>? _tableUpdates;
+
+  List<SprintRecord> _sprints = const [];
+  TimeLog? _activeLog;
+  Todo? _activeTask;
+  String? _suppressedSprintId;
+  bool _disposed = false;
 
   @override
   SprintTimerState build() {
-    ref.onDispose(() => _ticker?.cancel());
-    // Fire-and-forget: runs async without blocking build(). State emitted
-    // inside _restoreFromPrefs() triggers a widget rebuild when ready.
-    _restoreFromPrefs();
+    ref.onDispose(() {
+      _disposed = true;
+      _ticker?.cancel();
+      _tableUpdates?.cancel();
+    });
+    final db = _databaseOrNull();
+    if (db != null) {
+      // `tableUpdates` is a plain broadcast stream (no query, no close timer);
+      // each event re-reads the record, so a Sprint a peer started — projected
+      // in by the sync host — shows up here.
+      _tableUpdates = db
+          .tableUpdates(TableUpdateQuery.onAllTables([db.sprints, db.timeLogs]))
+          .listen((_) => unawaited(_reload()));
+      // Fire-and-forget: state emitted by [_reload] rebuilds listeners.
+      unawaited(_reload());
+    }
     return const SprintTimerState();
   }
 
-  // ---------------------------------------------------------------------------
-  // Convenience getters for current configured durations (fallback only;
-  // startSprint reads from SharedPreferences directly to avoid async race).
-  // ---------------------------------------------------------------------------
+  /// The domain store, or null while it is not available (the store is still
+  /// opening, or a test has not provided one): the timer then stays idle.
+  GtdDatabase? _databaseOrNull() {
+    try {
+      return ref.read(databaseProvider);
+    } catch (_) {
+      return null;
+    }
+  }
 
   int get _sprintMinutes =>
       ref.read(focusSettingsProvider).sprintDurationMinutes;
@@ -190,113 +339,77 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
   // Public API
   // ---------------------------------------------------------------------------
 
-  /// Starts a focus sprint for [task] using the currently configured durations.
+  /// Starts a recorded Sprint on [task] using the synced Sprint length.
+  ///
+  /// Reads the record first: when this Outcome already has a running Sprint —
+  /// started on another device, or before a restart — it is adopted, not
+  /// duplicated.
   Future<void> startSprint(Todo task) async {
     if (state.isProcessing) return;
+    final db = _databaseOrNull();
+    if (db == null) return;
     state = state.copyWith(isProcessing: true);
     try {
-      _ticker?.cancel();
       HapticFeedback.mediumImpact();
-
-      // Read from SharedPreferences directly to avoid the async-load race in
-      // focusSettingsProvider: its build() fires _loadFromPrefs() async, so
-      // ref.read may return stale defaults if called before it completes.
-      final prefs = await SharedPreferences.getInstance();
-      final sm = prefs.getInt(kFocusSprintDurationMinutesPrefKey) ?? _sprintMinutes;
-      final bm = prefs.getInt(kFocusBreakDurationMinutesPrefKey) ?? _breakMinutes;
-      final sprintDur = Duration(minutes: sm);
-
-      final totalSprints = _calcTotalSprints(task.timeEstimate, sm);
-      final totalMinutes = await ref
-          .read(databaseProvider)
-          .timeLogDao
-          .totalMinutesForTask(task.id);
-      final sprintNumber = _calcSprintNumber(totalMinutes, sm);
-      _endTime = DateTime.now().add(sprintDur);
-
-      // Carry forward lastBreakEndedAt so post-break cooldown survives
-      // starting a new sprint immediately after a break.
-      state = SprintTimerState(
-        phase: SprintPhase.focus,
-        activeTaskId: task.id,
-        activeTaskTitle: task.title,
-        sprintNumber: sprintNumber,
-        totalSprints: totalSprints,
-        remaining: sprintDur,
-        total: sprintDur,
-        sprintDurationMinutes: sm,
-        breakDurationMinutes: bm,
-        lastBreakEndedAt: state.lastBreakEndedAt,
-      );
-
-      await _persist();
-      await _scheduleEndNotification(
-          _endTime!, isFocus: true, taskTitle: task.title);
-      _startTicker();
+      await _reload();
+      if (state.isFocus && state.activeTaskId == task.id) return;
+      await _startRecordedSprint(db, task);
     } finally {
       if (state.isProcessing) state = state.copyWith(isProcessing: false);
     }
   }
 
-  /// Ends the current sprint early and starts a break.
+  /// Ends the current Sprint early and starts a Break.
   Future<void> startBreak() async {
     if (!state.isFocus || state.isProcessing) return;
-    state = state.copyWith(isProcessing: true);
-    try {
-      _ticker?.cancel();
-      HapticFeedback.lightImpact();
-      await _cancelSprintNotifications();
-      state = state.copyWith(isProcessing: false);
-      await _startBreak();
-    } finally {
-      if (state.isProcessing) state = state.copyWith(isProcessing: false);
-    }
+    await _endSprint(HapticFeedback.lightImpact);
   }
 
-  /// Stops the sprint and returns to idle. The open time log is closed by
+  /// Stops the Sprint and returns to idle. The open TimeLog is closed by
   /// [FocusSessionDao.setCurrentTask] when [FocusModeNotifier.endFocus] is called.
   Future<void> stopSprint() async {
     if (state.isProcessing) return;
+    final db = _databaseOrNull();
+    if (db == null) {
+      state = const SprintTimerState();
+      return;
+    }
     state = state.copyWith(isProcessing: true);
     try {
-      _ticker?.cancel();
+      _stopTicker();
       HapticFeedback.mediumImpact();
       await _cancelSprintNotifications();
-      await _clearPrefs();
-      state = const SprintTimerState();
+      await db.sprintDao.endRunningSprint();
+      await _reload();
+      // The TimeLog stays open until the caller closes it; until then the
+      // Sprint just stopped must not read as a Break.
+      _suppressedSprintId = _sprints.isEmpty ? null : _sprints.last.id;
+      _recompute();
     } finally {
       if (state.isProcessing) state = state.copyWith(isProcessing: false);
     }
   }
 
-  /// Cancels the sprint's notifications and transitions the timer to the
-  /// break phase. Writes no record: time tracking is handled by TimeLog rows
-  /// (opened/closed on focus switches), not here.
+  /// Ends the Sprint (recording its end) and transitions the timer to the Break.
   Future<void> completeSprint() async {
     if (state.isProcessing) return;
-    state = state.copyWith(isProcessing: true);
-    try {
-      _ticker?.cancel();
-      HapticFeedback.heavyImpact();
-      await _cancelSprintNotifications();
-      await _startBreak();
-    } finally {
-      if (state.isProcessing) state = state.copyWith(isProcessing: false);
-    }
+    await _endSprint(HapticFeedback.heavyImpact);
   }
 
-  /// Skips the break and starts the next sprint immediately (works from break_ or breakOvertime).
+  /// Skips the Break and starts the next Sprint immediately (from break_ or
+  /// breakOvertime).
   Future<void> skipBreak() async {
     if (!state.isBreak || state.isProcessing) return;
+    final db = _databaseOrNull();
+    final taskId = state.activeTaskId;
+    if (db == null || taskId == null) return;
     state = state.copyWith(isProcessing: true);
     try {
-      _ticker?.cancel();
       HapticFeedback.lightImpact();
       await _cancelSprintNotifications();
-      final now = DateTime.now();
-      await _persistLastBreakEndedAt(now);
-      state = state.copyWith(isProcessing: false, lastBreakEndedAt: now);
-      await _startNextSprint();
+      final task = await db.todoDao.getTodo(taskId);
+      if (task == null) return;
+      await _startRecordedSprint(db, task);
     } finally {
       if (state.isProcessing) state = state.copyWith(isProcessing: false);
     }
@@ -306,318 +419,103 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
   // Private helpers
   // ---------------------------------------------------------------------------
 
-  Future<void> _restoreFromPrefs() async {
-    final prefs = await SharedPreferences.getInstance();
-    final activeTaskId = prefs.getString(_kPrefActiveTaskId);
-
-    // Restore lastBreakEndedAt regardless of whether a sprint is active.
-    final lastBreakStr = prefs.getString(_kPrefLastBreakEndedAt);
-    final lastBreakEndedAt =
-        lastBreakStr != null ? DateTime.tryParse(lastBreakStr) : null;
-
-    if (activeTaskId == null || activeTaskId.isEmpty) {
-      if (lastBreakEndedAt != null) {
-        // No active sprint but there was a recent break — carry the cooldown.
-        final sm = prefs.getInt(_kPrefSprintMinutes) ?? 20;
-        final bm = prefs.getInt(_kPrefBreakMinutes) ?? 3;
-        state = SprintTimerState(
-          sprintDurationMinutes: sm,
-          breakDurationMinutes: bm,
-          lastBreakEndedAt: lastBreakEndedAt,
-        );
-      }
-      return;
-    }
-
-    final endTimeStr = prefs.getString(_kPrefEndTime);
-    final phaseStr = prefs.getString(_kPrefPhase);
-    if (endTimeStr == null || phaseStr == null) return;
-
-    final sprintNumber = prefs.getInt(_kPrefSprintNumber) ?? 1;
-    final totalSprints = prefs.getInt(_kPrefTotalSprints) ?? 1;
-    final taskTitle = prefs.getString(_kPrefActiveTaskTitle) ?? '';
-    final sm = prefs.getInt(_kPrefSprintMinutes) ?? 20;
-    final bm = prefs.getInt(_kPrefBreakMinutes) ?? 3;
-
-    final phase = switch (phaseStr) {
-      _kPhaseBreak => SprintPhase.break_,
-      _kPhaseFocusOvertime => SprintPhase.focusOvertime,
-      _kPhaseBreakOvertime => SprintPhase.breakOvertime,
-      _ => SprintPhase.focus,
-    };
-
-    // Overtime phases: restore elapsed overtime, resume ticker if not maxed.
-    if (phase == SprintPhase.focusOvertime || phase == SprintPhase.breakOvertime) {
-      final total = phase == SprintPhase.focusOvertime
-          ? Duration(minutes: sm)
-          : Duration(minutes: bm);
-      final savedMs = prefs.getInt(_kPrefOvertimeStartMs);
-      Duration overtime;
-      if (savedMs != null) {
-        _overtimeStartMs = savedMs;
-        overtime = DateTime.now()
-            .difference(DateTime.fromMillisecondsSinceEpoch(savedMs));
-        if (overtime > total) overtime = total;
-      } else {
-        overtime = total;
-      }
-      state = SprintTimerState(
-        phase: phase,
-        activeTaskId: activeTaskId,
-        activeTaskTitle: taskTitle,
-        sprintNumber: sprintNumber,
-        totalSprints: totalSprints,
-        remaining: Duration.zero,
-        total: total,
-        overtime: overtime,
-        sprintDurationMinutes: sm,
-        breakDurationMinutes: bm,
-        lastBreakEndedAt: lastBreakEndedAt,
-      );
-      if (overtime < total) _startTicker();
-      return;
-    }
-
-    // Countdown phases.
-    final total = phase == SprintPhase.focus
-        ? Duration(minutes: sm)
-        : Duration(minutes: bm);
-
-    _endTime = DateTime.tryParse(endTimeStr);
-    if (_endTime == null) return;
-    final remaining = _endTime!.difference(DateTime.now());
-    if (remaining.isNegative) {
-      _onTimerExpiredBackground(phase, sm: sm, bm: bm,
-          lastBreakEndedAt: lastBreakEndedAt);
-      return;
-    }
-
-    state = SprintTimerState(
-      phase: phase,
-      activeTaskId: activeTaskId,
-      activeTaskTitle: taskTitle,
-      sprintNumber: sprintNumber,
-      totalSprints: totalSprints,
-      remaining: remaining,
-      total: total,
-      sprintDurationMinutes: sm,
-      breakDurationMinutes: bm,
-      lastBreakEndedAt: lastBreakEndedAt,
+  Future<void> _startRecordedSprint(GtdDatabase db, Todo task) async {
+    final sprintMinutes = _sprintMinutes;
+    final startedAt = DateTime.now();
+    await db.sprintDao.startSprint(
+      taskId: task.id,
+      userId: ref.read(currentUserIdProvider),
+      plannedDurationMinutes: sprintMinutes,
+      now: startedAt,
     );
-
-    _startTicker();
-  }
-
-  void _onTimerExpiredBackground(SprintPhase expiredPhase,
-      {required int sm, required int bm, DateTime? lastBreakEndedAt}) {
-    if (expiredPhase == SprintPhase.focus) {
-      // Compute break window relative to when the sprint actually ended so
-      // reopening the app 10+ minutes later doesn't grant a fresh full break.
-      // Time is tracked via TimeLog; no explicit logging needed here.
-      final focusEndedAt = _endTime;
-      if (focusEndedAt != null) {
-        final breakEndTime = focusEndedAt.add(Duration(minutes: bm));
-        final remainingBreak = breakEndTime.difference(DateTime.now());
-        if (remainingBreak <= Duration.zero) {
-          _clearPrefs();
-          final now = DateTime.now();
-          _persistLastBreakEndedAt(now);
-          state = SprintTimerState(
-            sprintDurationMinutes: sm,
-            breakDurationMinutes: bm,
-            lastBreakEndedAt: now,
-          );
-          return;
-        }
-        _startBreak(
-            endTime: breakEndTime,
-            remaining: remainingBreak,
-            sm: sm,
-            bm: bm,
-            lastBreakEndedAt: lastBreakEndedAt);
-      } else {
-        _startBreak(sm: sm, bm: bm, lastBreakEndedAt: lastBreakEndedAt);
-      }
-    } else {
-      // Break expired in background — record it and go idle.
-      _clearPrefs();
-      final now = DateTime.now();
-      _persistLastBreakEndedAt(now);
-      state = SprintTimerState(
-        sprintDurationMinutes: sm,
-        breakDurationMinutes: bm,
-        lastBreakEndedAt: now,
-      );
-    }
-  }
-
-  Future<void> _startBreak({
-    DateTime? endTime,
-    Duration? remaining,
-    int? sm,
-    int? bm,
-    DateTime? lastBreakEndedAt,
-  }) async {
-    final breakMin = bm ?? state.breakDurationMinutes;
-    final sprintMin = sm ?? state.sprintDurationMinutes;
-    final breakDur = Duration(minutes: breakMin);
-    _endTime = endTime ?? DateTime.now().add(breakDur);
-    final breakRemaining = remaining ?? breakDur;
-    state = state.copyWith(
-      phase: SprintPhase.break_,
-      remaining: breakRemaining,
-      total: breakDur,
-      overtime: Duration.zero,
-      sprintDurationMinutes: sprintMin,
-      breakDurationMinutes: breakMin,
-    );
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_kPrefEndTime, _endTime!.toIso8601String());
-    await prefs.setString(_kPrefPhase, _kPhaseBreak);
-    await _scheduleEndNotification(_endTime!, isFocus: false);
-    _startTicker();
-  }
-
-  Future<void> _startNextSprint() async {
-    final sm = state.sprintDurationMinutes;
-    final bm = state.breakDurationMinutes;
-    final sprintDur = Duration(minutes: sm);
-    final nextNumber = state.sprintNumber + 1;
-    final total = nextNumber > state.totalSprints ? nextNumber : state.totalSprints;
-    _endTime = DateTime.now().add(sprintDur);
-    _overtimeStartMs = null;
-    state = SprintTimerState(
-      phase: SprintPhase.focus,
-      activeTaskId: state.activeTaskId,
-      activeTaskTitle: state.activeTaskTitle,
-      sprintNumber: nextNumber,
-      totalSprints: total,
-      remaining: sprintDur,
-      total: sprintDur,
-      sprintDurationMinutes: sm,
-      breakDurationMinutes: bm,
-      lastBreakEndedAt: state.lastBreakEndedAt,
-    );
-    await _persist();
+    _suppressedSprintId = null;
+    await _reload();
     await _scheduleEndNotification(
-      _endTime!,
+      startedAt.add(Duration(minutes: sprintMinutes)),
       isFocus: true,
-      taskTitle: state.activeTaskTitle ?? '',
+      taskTitle: task.title,
     );
-    _startTicker();
   }
 
-  void _startFocusOvertime() {
-    _overtimeStartMs = DateTime.now().millisecondsSinceEpoch;
-    state = state.copyWith(
-      phase: SprintPhase.focusOvertime,
-      remaining: Duration.zero,
-      overtime: Duration.zero,
+  Future<void> _endSprint(void Function() haptic) async {
+    final db = _databaseOrNull();
+    if (db == null) return;
+    state = state.copyWith(isProcessing: true);
+    try {
+      _stopTicker();
+      haptic();
+      await _cancelSprintNotifications();
+      final endedAt = DateTime.now();
+      await db.sprintDao.endRunningSprint(now: endedAt);
+      await _reload();
+      await _scheduleEndNotification(
+        endedAt.add(Duration(minutes: _breakMinutes)),
+        isFocus: false,
+      );
+    } finally {
+      if (state.isProcessing) state = state.copyWith(isProcessing: false);
+    }
+  }
+
+  /// Re-reads the record, the open TimeLog and its Outcome, then re-derives.
+  Future<void> _reload() async {
+    final db = _databaseOrNull();
+    if (db == null || _disposed) return;
+    final sprints = await db.sprintDao.getAllRecords();
+    final openLogs = await (db.select(db.timeLogs)
+          ..where((t) => t.endedAt.isNull())
+          ..orderBy([(t) => OrderingTerm.desc(t.startedAt)]))
+        .get();
+    final log = openLogs.isEmpty ? null : openLogs.first;
+    Todo? task = _activeTask;
+    if (log == null) {
+      task = null;
+    } else if (task?.id != log.taskId) {
+      task = await db.todoDao.getTodo(log.taskId);
+    }
+    if (_disposed) return;
+    _sprints = sprints;
+    _activeLog = log;
+    _activeTask = task;
+    _recompute();
+  }
+
+  /// Derives the state from the cached record at the current time, and keeps
+  /// the ticker running exactly while there is something to count.
+  void _recompute() {
+    if (_disposed) return;
+    final previous = state;
+    var next = deriveSprintTimerState(
+      sprints: _sprints,
+      activeLog: _activeLog,
+      activeTask: _activeTask,
+      // The synced settings only matter once there is an engagement to time, so
+      // an idle timer does not even instantiate them. A change to either is
+      // picked up by the next one-second re-evaluation.
+      sprintMinutesSetting: _activeLog == null ? 20 : _sprintMinutes,
+      breakMinutesSetting: _activeLog == null ? 3 : _breakMinutes,
+      now: DateTime.now(),
+      suppressedSprintId: _suppressedSprintId,
     );
-    _persistOvertimeStart();
-    _startTicker();
+    next = next.copyWith(isProcessing: previous.isProcessing);
+    if (previous.phase == SprintPhase.focus &&
+            next.phase == SprintPhase.focusOvertime ||
+        previous.phase == SprintPhase.break_ &&
+            next.phase == SprintPhase.breakOvertime) {
+      HapticFeedback.heavyImpact();
+    }
+    state = next;
+    final counting = next.isActive && !(next.isOvertime && next.overtime >= next.total);
+    if (counting) {
+      _ticker ??= Timer.periodic(const Duration(seconds: 1), (_) => _recompute());
+    } else {
+      _stopTicker();
+    }
   }
 
-  void _startBreakOvertime() {
-    _overtimeStartMs = DateTime.now().millisecondsSinceEpoch;
-    state = state.copyWith(
-      phase: SprintPhase.breakOvertime,
-      remaining: Duration.zero,
-      overtime: Duration.zero,
-    );
-    _persistOvertimeStart();
-    _startTicker();
-  }
-
-  Future<void> _persistOvertimeStart() async {
-    if (_overtimeStartMs == null) return;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_kPrefOvertimeStartMs, _overtimeStartMs!);
-    await prefs.setString(_kPrefPhase,
-        state.phase == SprintPhase.focusOvertime
-            ? _kPhaseFocusOvertime
-            : _kPhaseBreakOvertime);
-  }
-
-  void _startTicker() {
+  void _stopTicker() {
     _ticker?.cancel();
-    _ticker = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
-  }
-
-  void _tick() {
-    if (state.isOvertime) {
-      if (_overtimeStartMs == null) return;
-      final overtime = DateTime.now().difference(
-          DateTime.fromMillisecondsSinceEpoch(_overtimeStartMs!));
-      if (overtime >= state.total) {
-        _ticker?.cancel();
-        state = state.copyWith(overtime: state.total);
-        return;
-      }
-      state = state.copyWith(overtime: overtime);
-      return;
-    }
-    if (_endTime == null) return;
-    final remaining = _endTime!.difference(DateTime.now());
-    if (remaining <= Duration.zero) {
-      _ticker?.cancel();
-      _onTimerExpired();
-      return;
-    }
-    state = state.copyWith(remaining: remaining);
-  }
-
-  void _onTimerExpired() {
-    HapticFeedback.heavyImpact();
-    if (state.phase == SprintPhase.focus) {
-      // Countdown ended: wait in overtime (no auto-break).
-      // Time is tracked via TimeLog; FocusSessionDao.setCurrentTask closes it.
-      _startFocusOvertime();
-    } else if (state.phase == SprintPhase.break_) {
-      // Break ended: wait in overtime (no auto-sprint).
-      _startBreakOvertime();
-    }
-  }
-
-  Future<void> _persist() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_kPrefActiveTaskId, state.activeTaskId ?? '');
-    await prefs.setString(_kPrefActiveTaskTitle, state.activeTaskTitle ?? '');
-    await prefs.setString(_kPrefEndTime, _endTime?.toIso8601String() ?? '');
-    final phaseStr = switch (state.phase) {
-      SprintPhase.focus => _kPhaseFocus,
-      SprintPhase.focusOvertime => _kPhaseFocusOvertime,
-      SprintPhase.break_ => _kPhaseBreak,
-      SprintPhase.breakOvertime => _kPhaseBreakOvertime,
-      SprintPhase.idle => _kPhaseFocus,
-    };
-    await prefs.setString(_kPrefPhase, phaseStr);
-    await prefs.setInt(_kPrefSprintNumber, state.sprintNumber);
-    await prefs.setInt(_kPrefTotalSprints, state.totalSprints);
-    await prefs.setInt(_kPrefSprintMinutes, state.sprintDurationMinutes);
-    await prefs.setInt(_kPrefBreakMinutes, state.breakDurationMinutes);
-  }
-
-  Future<void> _clearPrefs() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_kPrefActiveTaskId);
-    await prefs.remove(_kPrefActiveTaskTitle);
-    await prefs.remove(_kPrefEndTime);
-    await prefs.remove(_kPrefPhase);
-    await prefs.remove(_kPrefSprintNumber);
-    await prefs.remove(_kPrefTotalSprints);
-    await prefs.remove(_kPrefIsPaused);
-    await prefs.remove(_kPrefRemainingSeconds);
-    await prefs.remove(_kPrefSprintMinutes);
-    await prefs.remove(_kPrefBreakMinutes);
-    await prefs.remove(_kPrefOvertimeStartMs);
-    // _kPrefLastBreakEndedAt is intentionally NOT cleared here — it persists
-    // across sprint resets so the post-break cooldown survives idle state.
-  }
-
-  Future<void> _persistLastBreakEndedAt(DateTime t) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_kPrefLastBreakEndedAt, t.toIso8601String());
+    _ticker = null;
   }
 
   Future<void> _scheduleEndNotification(
@@ -639,19 +537,6 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
   Future<void> _cancelSprintNotifications() async {
     final svc = ref.read(notificationServiceProvider);
     await svc.cancelSprintNotifications();
-  }
-
-  // ---------------------------------------------------------------------------
-  // Calculations
-  // ---------------------------------------------------------------------------
-
-  static int _calcTotalSprints(int? estimateMinutes, int sprintMinutes) {
-    if (estimateMinutes == null || estimateMinutes <= sprintMinutes) return 1;
-    return (estimateMinutes / sprintMinutes).ceil();
-  }
-
-  static int _calcSprintNumber(int timeSpentMinutes, int sprintMinutes) {
-    return (timeSpentMinutes / sprintMinutes).floor() + 1;
   }
 }
 

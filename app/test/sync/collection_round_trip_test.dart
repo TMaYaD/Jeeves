@@ -150,6 +150,22 @@ void main() {
     await expectTableConverges('time_logs');
   });
 
+  test('sprints round-trip: a start on A, an end on A', () async {
+    final id = await outcomeOnA();
+    await a.domain.sprintDao.startSprint(
+      taskId: id,
+      userId: _userId,
+      plannedDurationMinutes: 25,
+      now: a.clock.asDateTime,
+    );
+    await workspace.syncAll();
+    await expectTableConverges('sprints');
+    a.clock.advance(60000);
+    await a.domain.sprintDao.endRunningSprint(now: a.clock.asDateTime);
+    await workspace.syncAll();
+    await expectTableConverges('sprints');
+  });
+
   test('focus_session_tasks.id is realigned onto its pair derivation on every '
       'device, including the author', () async {
     final id = await outcomeOnA();
