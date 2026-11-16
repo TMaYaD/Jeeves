@@ -53,7 +53,8 @@ class TimeLogDao extends DatabaseAccessor<GtdDatabase>
       }
       // A Sprint never outlives its TimeLog (issue #910).
       if (stillOpen.isNotEmpty) {
-        await SprintDao.closeRunningSprintOn(attachedDatabase, ts);
+        await SprintDao.closeRunningSprintOn(attachedDatabase, ts,
+            userId: stillOpen.first.userId);
       }
       // Insert the new open log.
       final id = uuid.v4();
@@ -139,7 +140,8 @@ class TimeLogDao extends DatabaseAccessor<GtdDatabase>
       }
       // A Sprint never outlives its TimeLog (issue #910).
       if (open.isNotEmpty) {
-        await SprintDao.closeRunningSprintOn(attachedDatabase, ts);
+        await SprintDao.closeRunningSprintOn(attachedDatabase, ts,
+            userId: open.first.userId);
       }
     });
   }

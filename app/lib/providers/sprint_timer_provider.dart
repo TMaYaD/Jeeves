@@ -26,6 +26,7 @@ import '../services/notification_service.dart';
 import 'auth_provider.dart';
 import 'database_provider.dart';
 import 'focus_settings_provider.dart';
+import 'synced_preferences_provider.dart';
 
 // ---------------------------------------------------------------------------
 // Phase enum
@@ -353,7 +354,10 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
     try {
       HapticFeedback.mediumImpact();
       await _reload();
-      if (state.isFocus && state.activeTaskId == task.id) return;
+      // Adopt any live phase for this Outcome (Sprint, Break or either
+      // overtime): a restart or a second device opening Focus mid-Break must
+      // not end the Break and record a new Sprint.
+      if (state.isActive && state.activeTaskId == task.id) return;
       await _startRecordedSprint(db, task);
     } finally {
       if (state.isProcessing) state = state.copyWith(isProcessing: false);
@@ -380,11 +384,15 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
       _stopTicker();
       HapticFeedback.mediumImpact();
       await _cancelSprintNotifications();
-      await db.sprintDao.endRunningSprint();
+      // Remember which Sprint we stop before reloading: a peer's Sprint may be
+      // projected in between and must not be the one suppressed.
+      final stoppedSprintId = _runningSprintId();
+      await db.sprintDao
+          .endRunningSprint(userId: ref.read(currentUserIdProvider));
       await _reload();
       // The TimeLog stays open until the caller closes it; until then the
       // Sprint just stopped must not read as a Break.
-      _suppressedSprintId = _sprints.isEmpty ? null : _sprints.last.id;
+      _suppressedSprintId = stoppedSprintId;
       _recompute();
     } finally {
       if (state.isProcessing) state = state.copyWith(isProcessing: false);
@@ -420,7 +428,26 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
   // Private helpers
   // ---------------------------------------------------------------------------
 
+  /// Id of the user's running Sprint (latest, no stored end), or null.
+  String? _runningSprintId() {
+    if (_sprints.isEmpty) return null;
+    final latest = _sprints.last;
+    return latest.storedEndedAtUtc == null ? latest.id : null;
+  }
+
   Future<void> _startRecordedSprint(GtdDatabase db, Todo task) async {
+    // The synced setting loads asynchronously; right after launch the notifier
+    // still holds defaults, and the wrong length would be recorded and synced.
+    ref.read(focusSettingsProvider); // starts the settings watch if not yet
+    try {
+      // `exists`: a container that replaced the settings (as tests do) never
+      // starts the synced-preferences load, and there is nothing to wait for.
+      if (ref.exists(syncedPreferencesProvider)) {
+        await ref.read(syncedPreferencesProvider.future);
+      }
+    } catch (error) {
+      debugPrint('Sprint length: synced preferences unavailable: $error');
+    }
     final sprintMinutes = _sprintMinutes;
     final startedAt = DateTime.now();
     await db.sprintDao.startSprint(
@@ -447,7 +474,10 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
       haptic();
       await _cancelSprintNotifications();
       final endedAt = DateTime.now();
-      await db.sprintDao.endRunningSprint(now: endedAt);
+      await db.sprintDao.endRunningSprint(
+        userId: ref.read(currentUserIdProvider),
+        now: endedAt,
+      );
       await _reload();
       await _scheduleEndNotification(
         endedAt.add(Duration(minutes: _breakMinutes)),

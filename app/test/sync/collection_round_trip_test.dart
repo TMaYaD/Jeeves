@@ -161,7 +161,7 @@ void main() {
     await workspace.syncAll();
     await expectTableConverges('sprints');
     a.clock.advance(60000);
-    await a.domain.sprintDao.endRunningSprint(now: a.clock.asDateTime);
+    await a.domain.sprintDao.endRunningSprint(userId: _userId, now: a.clock.asDateTime);
     await workspace.syncAll();
     await expectTableConverges('sprints');
   });

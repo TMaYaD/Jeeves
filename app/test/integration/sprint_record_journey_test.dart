@@ -128,4 +128,47 @@ void main() {
     restarted.dispose();
     await tester.pumpWidget(const SizedBox.shrink());
   });
+
+  testWidgets(
+      'a restart during a Break adopts the Break: no Sprint is recorded',
+      (tester) async {
+    final todo = await tester.runAsync(() async {
+      final inserted = await insertFocusTodo(db, id: 'o1');
+      await db.timeLogDao.openLog(
+          taskId: 'o1', userId: focusUserId, now: DateTime.now());
+      final startedAt = DateTime.now().subtract(const Duration(minutes: 5));
+      await db.sprintDao.startSprint(
+          taskId: 'o1',
+          userId: focusUserId,
+          plannedDurationMinutes: 20,
+          now: startedAt);
+      await db.sprintDao.endRunningSprint(userId: focusUserId);
+      return inserted;
+    });
+    final rowsBefore =
+        (await tester.runAsync(() => db.select(db.sprints).get()))!;
+    expect(rowsBefore, hasLength(1));
+
+    // The screen mounts over a notifier that has not reloaded yet: this is the
+    // restart (and the second-device) path.
+    await tester.pumpWidget(focusHarness(
+      db,
+      todo: todo!,
+      sprintTimer: SprintTimerNotifier.new,
+      overrides: [focusSettingsProvider.overrideWith(_FixedFocusSettings.new)],
+    ));
+    await pumpFocusFrames(tester, 20);
+    await tester.runAsync(() => pumpEventQueue(times: 20));
+    await pumpFocusFrames(tester, 5);
+
+    final container =
+        ProviderScope.containerOf(tester.element(find.byType(ActiveFocusScreen)));
+    expect(container.read(sprintTimerProvider).phase, SprintPhase.break_);
+    final rowsAfter =
+        (await tester.runAsync(() => db.select(db.sprints).get()))!;
+    expect(rowsAfter, hasLength(1),
+        reason: 'opening Focus during a Break must not record a Sprint');
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 }

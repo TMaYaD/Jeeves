@@ -70,7 +70,7 @@ void main() {
     await _start(pair.a, _t0);
     pair.a.wall.advance();
     await pair.a.domain.sprintDao
-        .endRunningSprint(now: _t0.add(const Duration(minutes: 25)));
+        .endRunningSprint(userId: _userId, now: _t0.add(const Duration(minutes: 25)));
     await pair.sync();
 
     final onB = await _records(pair.b);
@@ -107,9 +107,9 @@ void main() {
       final first = laterCloserIsA ? pair.b : pair.a;
       final second = laterCloserIsA ? pair.a : pair.b;
       first.wall.advance();
-      await first.domain.sprintDao.endRunningSprint(now: early);
+      await first.domain.sprintDao.endRunningSprint(userId: _userId, now: early);
       second.wall.advance(60000);
-      await second.domain.sprintDao.endRunningSprint(now: late);
+      await second.domain.sprintDao.endRunningSprint(userId: _userId, now: late);
       await pair.sync();
 
       expect((await _records(pair.a)).single.endedAtUtc, early);

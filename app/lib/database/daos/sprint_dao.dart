@@ -135,7 +135,7 @@ class SprintDao extends DatabaseAccessor<GtdDatabase> with _$SprintDaoMixin {
       final resolved =
           await ActionDao.ensureCurrentActionIdFor(attachedDatabase, taskId, ts);
       wroteAction = resolved.wroteAction;
-      await closeRunningSprintOn(attachedDatabase, ts);
+      await closeRunningSprintOn(attachedDatabase, ts, userId: userId);
       await into(sprints).insert(SprintsCompanion(
         id: Value(id),
         userId: Value(userId),
@@ -165,10 +165,10 @@ class SprintDao extends DatabaseAccessor<GtdDatabase> with _$SprintDaoMixin {
 
   /// Ends the user's running Sprint at [now], if there is one. A second call
   /// writes and captures nothing: the first end stands locally.
-  Future<void> endRunningSprint({DateTime? now}) {
+  Future<void> endRunningSprint({required String userId, DateTime? now}) {
     final ts = (now ?? DateTime.now()).toUtc();
     return attachedDatabase
-        .capturing(() => closeRunningSprintOn(attachedDatabase, ts));
+        .capturing(() => closeRunningSprintOn(attachedDatabase, ts, userId: userId));
   }
 
   /// Ends the running Sprint — the user's latest, when it has no stored end — at
@@ -179,8 +179,13 @@ class SprintDao extends DatabaseAccessor<GtdDatabase> with _$SprintDaoMixin {
   /// Earlier Sprints left open on other devices are not touched: they already
   /// read as ending before the later Sprint, and a stored end later than that
   /// would only be overridden by the earlier end anyway.
-  static Future<void> closeRunningSprintOn(GtdDatabase db, DateTime ts) async {
+  static Future<void> closeRunningSprintOn(
+    GtdDatabase db,
+    DateTime ts, {
+    required String userId,
+  }) async {
     final latest = await (db.select(db.sprints)
+          ..where((s) => s.userId.equals(userId))
           ..orderBy([
             (s) => OrderingTerm.desc(s.startedAt),
             (s) => OrderingTerm.desc(s.id),

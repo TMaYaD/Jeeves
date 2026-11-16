@@ -133,9 +133,9 @@ void main() {
       final outcome = await seedOutcome();
       await db.sprintDao.startSprint(
           taskId: outcome, userId: _userId, plannedDurationMinutes: 25, now: _t0);
-      await db.sprintDao.endRunningSprint(now: _at(20));
+      await db.sprintDao.endRunningSprint(userId: _userId, now: _at(20));
       capture.clear();
-      await db.sprintDao.endRunningSprint(now: _at(40));
+      await db.sprintDao.endRunningSprint(userId: _userId, now: _at(40));
       expect((await rows()).single.endedAt, encodeInstant(_at(20)));
       expect(capture.forCollection(sprintsCollection), isEmpty);
     });
@@ -232,10 +232,26 @@ void main() {
       await db.timeLogDao.openLog(taskId: outcome, userId: _userId, now: _t0);
       await db.sprintDao.startSprint(
           taskId: outcome, userId: _userId, plannedDurationMinutes: 25, now: _t0);
-      await db.sprintDao.endRunningSprint(now: _at(25));
+      await db.sprintDao.endRunningSprint(userId: _userId, now: _at(25));
       await db.timeLogDao.closeLog(taskId: outcome, now: _at(30));
       expect(await db.timeLogDao.totalMinutesForTask(outcome), 30,
           reason: 'the break between Sprints still counts');
+    });
+
+    test("closing one user's Sprint leaves another user's open", () async {
+      final outcome = await seedOutcome();
+      await db.sprintDao.startSprint(
+          taskId: outcome, userId: _userId, plannedDurationMinutes: 25, now: _t0);
+      await db.sprintDao.startSprint(
+          taskId: outcome,
+          userId: 'other-user',
+          plannedDurationMinutes: 25,
+          now: _at(1));
+      await db.sprintDao.endRunningSprint(userId: _userId, now: _at(5));
+      final rows = await db.select(db.sprints).get();
+      expect(rows.where((r) => r.userId == _userId).single.endedAt, isNotNull);
+      expect(rows.where((r) => r.userId == 'other-user').single.endedAt,
+          isNull);
     });
 
     test('deleting an Outcome detaches its Sprints instead of deleting them',
@@ -248,6 +264,8 @@ void main() {
       final ops = capture.forCollection(sprintsCollection);
       expect(ops, hasLength(1));
       expect(ops.single.fields, {'action_id': null});
+      expect(await db.select(db.sprints).get(), hasLength(1),
+          reason: 'the Sprint row is kept, only detached');
     });
   });
 }

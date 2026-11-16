@@ -339,6 +339,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       await SprintDao.closeRunningSprintOn(
         attachedDatabase,
         DateTime.parse(tsIso),
+        userId: open.first.userId,
       );
     }
   }
@@ -388,6 +389,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
         await SprintDao.closeRunningSprintOn(
           attachedDatabase,
           DateTime.parse(ts),
+          userId: stillOpen.first.userId,
         );
       }
 

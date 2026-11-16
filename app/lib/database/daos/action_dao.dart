@@ -1472,7 +1472,8 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
       TimeLogDao.captureLogClosedOn(attachedDatabase, row.id, ts);
     }
     // A Sprint never outlives its TimeLog (issue #910).
-    await SprintDao.closeRunningSprintOn(attachedDatabase, ts);
+    await SprintDao.closeRunningSprintOn(attachedDatabase, ts,
+        userId: open.first.userId);
     return open.first;
   }
 
