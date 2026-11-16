@@ -192,8 +192,7 @@ void main() {
     await _dispose(tester);
   });
 
-  testWidgets('engaging an off-Plan Outcome leaves the Plan unchanged',
-      (tester) async {
+  test('engaging an off-Plan Outcome leaves the Plan unchanged', () async {
     await db.focusSessionDao
         .setCurrentTask(sessionId: sessionId, taskId: 'later');
     await db.focusSessionDao.setCurrentTask(sessionId: sessionId, taskId: null);
