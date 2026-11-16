@@ -89,6 +89,8 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
 
       expect(find.text('No Outcomes in this project'), findsOneWidget);
+      expect(find.text('Assign an Outcome to this project to see it here.'),
+          findsOneWidget);
 
       await disposeScreen(tester);
     });

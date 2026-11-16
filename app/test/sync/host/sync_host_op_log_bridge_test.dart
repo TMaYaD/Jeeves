@@ -11,6 +11,8 @@ import 'dart:convert';
 import 'package:drift/drift.dart' show Variable;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/sync/envelope.dart' show opClassContent;
+import 'package:jeeves/sync/ids.dart'
+    show preferenceEntityId, userPreferencesWorkspaceId;
 import 'package:jeeves/sync/sync_lifecycle.dart';
 
 import '../../test_helpers.dart';
@@ -18,6 +20,7 @@ import '../harness/fake_sync_server.dart';
 import '../harness/sim_device.dart' show FakeClock;
 import '../harness/sim_workspace.dart' show simulationStartWallMs;
 import '../harness/stack_phone.dart';
+import 'pre_host_rows.dart';
 
 const String _userId = 'bridge-user';
 const String _outcomeBeforeEnrolment = '33333333-3333-4333-8333-333333333333';
@@ -139,5 +142,219 @@ void main() {
     expect(todo, hasLength(1),
         reason: 'the projector must not delete a row the user wrote');
     expect(jsonEncode(todo.single.read<String>('title')), '"Write the thing"');
+  });
+
+  group('a rebuild of one Workspace leaves the other alone', () {
+    Future<List<Object?>> mergeStateOf(StackPhone phone, String collection) async {
+      final rows = <String>[];
+      for (final table in ['reduced_fields', 'field_clocks', 'row_tombstones']) {
+        final found = await phone.syncStore
+            .customSelect('SELECT * FROM $table WHERE collection = ? ORDER BY 1, 2, 3',
+                variables: [Variable<String>(collection)])
+            .get();
+        rows.add('$table:${found.map((row) => jsonEncode(row.data)).join('|')}');
+      }
+      return rows;
+    }
+
+    Future<StackPhone> enrolledPhoneWithBothWorkspaces() async {
+      final phone = await hostedPhone();
+      await phone.enrolAsFirstDevice();
+      expect(await phone.activate(), SyncActivation.active);
+      await writeOutcome(phone, _outcomeAfterEnrolment);
+      await phone.domain.userPreferencesDao.set(_userId, 'theme', '"dark"');
+      await phone.stack.defaultClient.flushOutbox();
+      await (await phone.preferencesClient).flushOutbox();
+      return phone;
+    }
+
+    Future<int> todoCount(StackPhone phone) async => (await phone.domain
+            .customSelect('SELECT id FROM todos WHERE id = ?',
+                variables: [Variable<String>(_outcomeAfterEnrolment)])
+            .get())
+        .length;
+
+    Future<int> todoCountFor(StackPhone phone, String id) async => (await phone
+            .domain
+            .customSelect('SELECT id FROM todos WHERE id = ?',
+                variables: [Variable<String>(id)])
+            .get())
+        .length;
+
+    Future<String?> theme(StackPhone phone) =>
+        phone.domain.userPreferencesDao.get(_userId, 'theme');
+
+    test('device-node state of both Workspaces survives a rebuild of either',
+        () async {
+      final phone = await hostedPhone();
+      await writeOutcome(phone, _outcomeBeforeEnrolment);
+      await phone.domain.userPreferencesDao.set(_userId, 'theme', '"dark"');
+
+      Future<List<Object?>> themeClock() async {
+        final row = await phone.syncStore.customSelect(
+          "SELECT DISTINCT member_id_hex FROM field_clocks "
+          "WHERE collection = 'user_preferences'",
+        ).get();
+        return row.map((r) => r.read<String>('member_id_hex')).toList();
+      }
+
+      final nodeId = phone.host!.deviceNodeId;
+      expect(await themeClock(), [nodeId],
+          reason: 'precondition: the preference is clocked by the device node');
+
+      for (final client in [
+        phone.stack.defaultClient,
+        await phone.preferencesClient,
+      ]) {
+        final affected = await client.rebuildFromOpLog();
+        await phone.host!.projector.project(affected);
+
+        expect((await titleClock(phone, _outcomeBeforeEnrolment))[2], nodeId);
+        expect(await themeClock(), [nodeId]);
+        expect(await todoCountFor(phone, _outcomeBeforeEnrolment), 1);
+        expect(await theme(phone), '"dark"');
+      }
+    });
+
+    test('rebuilding preferences keeps the GTD merge state and rows', () async {
+      final phone = await enrolledPhoneWithBothWorkspaces();
+      final gtdBefore = await mergeStateOf(phone, 'todos');
+      expect(gtdBefore.join(), contains(_outcomeAfterEnrolment));
+
+      final affected = await (await phone.preferencesClient).rebuildFromOpLog();
+      await phone.host!.projector.project(affected);
+
+      expect(affected.map((entity) => entity.collection).toSet(),
+          {'user_preferences'});
+      expect(await mergeStateOf(phone, 'todos'), gtdBefore);
+      expect(await todoCount(phone), 1);
+      expect(await theme(phone), '"dark"');
+    });
+
+    test('rebuilding GTD keeps the preferences merge state and rows', () async {
+      final phone = await enrolledPhoneWithBothWorkspaces();
+      final preferencesBefore = await mergeStateOf(phone, 'user_preferences');
+      expect(preferencesBefore.join(), contains('theme'));
+
+      final affected = await phone.stack.defaultClient.rebuildFromOpLog();
+      await phone.host!.projector.project(affected);
+
+      expect(affected.map((entity) => entity.collection),
+          isNot(contains('user_preferences')));
+      expect(await mergeStateOf(phone, 'user_preferences'), preferencesBefore);
+      expect(await theme(phone), '"dark"');
+      expect(await todoCount(phone), 1);
+    });
+  });
+
+  group('rows that predate the host', () {
+    Future<List<List<Object?>>> realClocks(StackPhone phone) async => [
+          for (final row in await phone.syncStore
+              .customSelect('SELECT collection, entity_id, field, wall_ms, '
+                  'counter, member_id_hex FROM field_clocks WHERE wall_ms > 0 '
+                  'ORDER BY collection, entity_id, field')
+              .get())
+            [
+              row.read<String>('collection'),
+              row.read<String>('entity_id'),
+              row.read<String>('field'),
+              row.read<int>('wall_ms'),
+              row.read<int>('counter'),
+              row.read<String>('member_id_hex'),
+            ],
+        ];
+
+    test('seeded, then enrolled: every row reaches the log, once', () async {
+      final phone = await hostedPhone();
+      await writeRowInEveryCollection(phone.domain);
+      await phone.host!.ensureMergeStateSeeded();
+      expect(_contentOpCount(server), 0, reason: 'seeding authors nothing');
+
+      await phone.enrolAsFirstDevice();
+      expect(await phone.activate(), SyncActivation.active);
+
+      final afterEnrolment = _contentOpCount(server);
+      expect(afterEnrolment, greaterThan(0));
+      expect(
+          (await titleClock(phone, preHostOutcomeId))[2],
+          phone.stack.identity.memberIdHex,
+          reason: 'the upload re-asserted the seeded row under the member id');
+
+      await phone.stack.defaultClient.flushOutbox();
+      expect(_contentOpCount(server), afterEnrolment,
+          reason: 'nothing is authored a second time');
+    });
+
+    test('a value the log already holds beats the device\'s seeded one',
+        () async {
+      const passphrase = 'correct horse battery staple';
+      final first = await hostedPhone();
+      await first.enrolAsFirstDevice(passphrase: passphrase);
+      expect(await first.activate(), SyncActivation.active);
+      await first.domain.userPreferencesDao.set(_userId, 'theme', '"dark"');
+      await (await first.preferencesClient).flushOutbox();
+
+      final second = await StackPhone.create(
+        label: 'B',
+        userId: _userId,
+        server: server,
+        clock: clock,
+        hosted: true,
+      );
+      addTearDown(second.close);
+      final entityId = preferenceEntityId(
+          userPreferencesWorkspaceId(_userId), 'theme');
+      await second.domain.customInsert(
+        'INSERT INTO user_preferences (id, user_id, "key", value, updated_at) '
+        "VALUES (?, ?, 'theme', '\"light\"', '2026-01-01T00:00:00.000Z')",
+        variables: [Variable<String>(entityId), Variable<String>(_userId)],
+      );
+      await second.host!.ensureMergeStateSeeded();
+
+      await second.enrolWithPassphrase(passphrase);
+      expect(await second.activate(), SyncActivation.active);
+
+      Future<String> storedValue(StackPhone phone) async => (await phone
+              .syncStore
+              .customSelect("SELECT value_json FROM reduced_fields "
+                  "WHERE entity_id = ? AND field = 'value'",
+                  variables: [Variable<String>(entityId)])
+              .getSingle())
+          .read<String>('value_json');
+      expect(await storedValue(second), await storedValue(first),
+          reason: 'the account\'s value won; the floor-clock seed lost');
+      expect(
+          (await second.domain.customSelect(
+                  "SELECT value FROM user_preferences WHERE \"key\" = 'theme'")
+              .getSingle())
+              .read<String>('value'),
+          '"dark"');
+    });
+
+    test('on an enrolled device the pass changes no existing clock and authors '
+        'no op', () async {
+      final phone = await hostedPhone();
+      await phone.enrolAsFirstDevice();
+      expect(await phone.activate(), SyncActivation.active);
+      await writeOutcome(phone, _outcomeAfterEnrolment);
+      await phone.stack.defaultClient.flushOutbox();
+      // A second flush settles any housekeeping the first one leaves behind, so
+      // the baseline below is what the pass is compared against.
+      await phone.stack.defaultClient.flushOutbox();
+      final clocksBefore = await realClocks(phone);
+      final opsBefore = _contentOpCount(server);
+      // `op_log` also records ops pulled back from the server, so it can grow
+      // with no authoring on this device; the server's own count cannot.
+      final storedOpsBefore = server.storedOps.length;
+      expect(clocksBefore, isNotEmpty);
+
+      await phone.host!.ensureMergeStateSeeded();
+      await phone.stack.defaultClient.flushOutbox();
+
+      expect(await realClocks(phone), clocksBefore);
+      expect(_contentOpCount(server), opsBefore);
+      expect(server.storedOps.length, storedOpsBefore,
+          reason: 'no op of any class was authored');
+    });
   });
 }

@@ -75,6 +75,62 @@ class MergeCore {
     return {(collection: change.collection, entityId: change.entityId)};
   }
 
+  /// Insert the fields of [planned] that merge state holds **no value or clock
+  /// for**, and nothing else. Returns how many fields it inserted.
+  ///
+  /// This is the seeding pass's only write path. It never updates: a field merge
+  /// state already holds keeps its value and clock whatever [planned] carries,
+  /// and no tombstone is written or read. Run it twice and the second call
+  /// inserts nothing. The caller chooses the clocks; the seeding pass gives every
+  /// field the floor clock, so any real write beats a seeded value.
+  ///
+  /// Refuses a preference value with no key ([guard]) on the whole planned
+  /// entity, before any field is filtered away.
+  Future<int> insertMissingFields(Change planned) async {
+    guard(planned);
+    return _db.transaction(() async {
+      var inserted = 0;
+      for (final entry in planned.fields.entries) {
+        final heldValue = await (_db.select(_db.reducedFields)
+              ..where((row) =>
+                  row.collection.equals(planned.collection) &
+                  row.entityId.equals(planned.entityId) &
+                  row.field.equals(entry.key)))
+            .getSingleOrNull();
+        final heldClock = await (_db.select(_db.fieldClocks)
+              ..where((row) =>
+                  row.collection.equals(planned.collection) &
+                  row.entityId.equals(planned.entityId) &
+                  row.field.equals(entry.key)))
+            .getSingleOrNull();
+        if (heldValue != null || heldClock != null) continue;
+        await _db.into(_db.reducedFields).insert(
+              ReducedFieldsCompanion.insert(
+                collection: planned.collection,
+                entityId: planned.entityId,
+                field: entry.key,
+                valueJson: jsonEncode(entry.value.value),
+              ),
+              mode: InsertMode.insertOrIgnore,
+            );
+        final clock = entry.value.hlc;
+        await _db.into(_db.fieldClocks).insert(
+              FieldClocksCompanion.insert(
+                collection: planned.collection,
+                entityId: planned.entityId,
+                field: entry.key,
+                wallMs: clock.wallMs,
+                counter: clock.counter,
+                memberIdHex: clock.memberIdHex,
+              ),
+              mode: InsertMode.insertOrIgnore,
+            );
+        inserted += 1;
+      }
+      return inserted;
+    });
+  }
+
   /// The `user_preferences` key this change carries, or null for every other
   /// collection and for a preference change that carries no key.
   String? _preferenceKeyFor(Change change) {

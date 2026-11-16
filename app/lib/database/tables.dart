@@ -198,6 +198,13 @@ class FocusSessionTasks extends Table {
   /// 'maybe' = defer; FocusSessionReviewNotifier writes intent='maybe' to todos.
   TextColumn get disposition => text().nullable()();
 
+  /// The start time the user set for this Plan entry on the day timeline
+  /// ("Set by you"; `pinned` in code). NULL = Jeeves places it. A property of
+  /// the (session, Outcome) entry that dies with the session (ADR-0013); length
+  /// is never stored — it is the estimate. Merges last-write-wins per field, and
+  /// clearing it ("Let Jeeves move it") writes NULL.
+  DateTimeColumn get pinnedStartAt => dateTime().nullable()();
+
   /// Denormalized from `focus_sessions.user_id` so a junction row carries its
   /// owner without a JOIN.
   TextColumn get userId => text()();

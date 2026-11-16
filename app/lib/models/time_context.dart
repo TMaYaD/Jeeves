@@ -162,6 +162,30 @@ class TimeContext {
     return true;
   }
 
+  /// The stretch of the calendar day containing [day] (read in local time) in
+  /// which the Action can be done, or null when it cannot be done that day.
+  ///
+  /// A weekly window gives that window; a from-date or weekly days without a
+  /// window give the whole day (midnight to the next midnight). A window that
+  /// ends at 24:00 ends at the next midnight.
+  ({DateTime start, DateTime end})? allowedIntervalOn(DateTime day) {
+    final local = day.toLocal();
+    final midnight = DateTime(local.year, local.month, local.day);
+    if (fromDate != null && midnight.isBefore(fromDate!)) return null;
+    final days = this.days;
+    if (days != null && !days.contains(midnight.weekday)) return null;
+    final nextMidnight = DateTime(local.year, local.month, local.day + 1);
+    if (days == null || startMinute == null) {
+      return (start: midnight, end: nextMidnight);
+    }
+    return (
+      start: DateTime(local.year, local.month, local.day, 0, startMinute!),
+      end: endMinute! >= 24 * 60
+          ? nextMidnight
+          : DateTime(local.year, local.month, local.day, 0, endMinute!),
+    );
+  }
+
   /// The earliest instant after [now] at which [isSatisfiedAt] can change, or
   /// null when it cannot (a `from` already passed with no weekly window).
   DateTime? nextTransitionAfter(DateTime now) {

@@ -19,8 +19,9 @@ typedef AffectedEntity = ({String collection, String entityId});
 /// told only about live entities would leave a deleted row standing.
 ///
 /// Device-wide rather than per-Workspace: reduced state is not partitioned by
-/// Workspace, and both consumers (a chain rebuild, and the first-open projection
-/// into a fresh domain store) want everything this device has ever reduced.
+/// Workspace, and the first-open projection into a fresh domain store and the
+/// host snapshot want everything this device has ever reduced. A Workspace
+/// rebuild filters this down to the collections it owns.
 Future<Set<AffectedEntity>> reducedEntities(SyncDatabase db) async {
   final rows = await db.customSelect(
     'SELECT collection, entity_id FROM reduced_fields '
