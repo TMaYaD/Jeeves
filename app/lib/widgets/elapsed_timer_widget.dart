@@ -37,12 +37,20 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
         Object.hash(sprintState.activeTaskId, sprintState.sprintNumber);
 
     if (sprintState.phase == SprintPhase.breakOvertime) {
+      if (sprintState.isLongBreak) return jeevesLongBreakOvertimePhrase;
       return jeevesOvertimePhrase(isFocus: false, seed: sprintSeed);
     }
-    if (sprintState.isBreak && sprintState.isNearPhaseEnd) {
-      return jeevesBreakNearEndHint(seed: sprintSeed);
-    }
     if (sprintState.isBreak) {
+      if (sprintState.isLongBreak) {
+        return jeevesLongBreakPhrase(
+          longBreakMinutes: sprintState.currentBreakDurationMinutes,
+          sprintsBeforeLongBreak: sprintState.sprintsBeforeLongBreak,
+          seed: sprintSeed,
+        );
+      }
+      if (sprintState.isNearPhaseEnd) {
+        return jeevesBreakNearEndHint(seed: sprintSeed);
+      }
       return jeevesBreakEncouragement(seed: sprintSeed);
     }
     if (sprintState.phase == SprintPhase.focusOvertime) {
@@ -120,6 +128,84 @@ class ElapsedTimerWidget extends ConsumerStatefulWidget {
       'A brisk walk would serve you well, sir.',
       'The kettle awaits, sir.',
     ];
+    final rng = seed == null ? _random : Random(seed);
+    return pool[rng.nextInt(pool.length)];
+  }
+
+  /// The Jeeves lines offered during a long Break.
+  ///
+  /// A line that names a number is offered only when that number is true of
+  /// the settings in force: "four sprints" only when the count is four, the
+  /// quarter-hour lines only when the long Break is a quarter of an hour.
+  /// The line that names no number is always on offer.
+  static const List<
+          ({
+            String line,
+            int? longBreakMinutes,
+            int? sprintsBeforeLongBreak,
+          })>
+      _longBreakLines = [
+    (
+      line: 'A longer pause, sir. Four sprints is a respectable showing.',
+      longBreakMinutes: null,
+      sprintsBeforeLongBreak: 4,
+    ),
+    (
+      line: 'Quite earned, sir. The work will keep for a quarter of an hour.',
+      longBreakMinutes: 15,
+      sprintsBeforeLongBreak: null,
+    ),
+    (
+      line: 'Might I suggest a turn about the room, sir? '
+          'The chair will not take offence.',
+      longBreakMinutes: null,
+      sprintsBeforeLongBreak: null,
+    ),
+    (
+      line: 'The tea is, I trust, still warm. '
+          'Fifteen minutes, sir, and I shall say nothing of the clock.',
+      longBreakMinutes: 15,
+      sprintsBeforeLongBreak: null,
+    ),
+    (
+      line: 'I have cleared the next quarter-hour, sir. '
+          'Nothing requires you but the kettle.',
+      longBreakMinutes: 15,
+      sprintsBeforeLongBreak: null,
+    ),
+  ];
+
+  /// The Jeeves line for a long Break run past its length.
+  ///
+  /// A long Break is meant to be taken in full, so overtime is met with
+  /// patience rather than the insistence a short Break over time gets.
+  static const String jeevesLongBreakOvertimePhrase =
+      'Take your time, sir. I shall keep the minutes.';
+
+  /// The long Break lines whose numbers are true of the settings in force.
+  static List<String> longBreakLines({
+    required int longBreakMinutes,
+    required int sprintsBeforeLongBreak,
+  }) =>
+      [
+        for (final entry in _longBreakLines)
+          if ((entry.longBreakMinutes == null ||
+                  entry.longBreakMinutes == longBreakMinutes) &&
+              (entry.sprintsBeforeLongBreak == null ||
+                  entry.sprintsBeforeLongBreak == sprintsBeforeLongBreak))
+            entry.line,
+      ];
+
+  /// Returns a Jeeves-flavoured phrase for the long Break.
+  static String jeevesLongBreakPhrase({
+    required int longBreakMinutes,
+    required int sprintsBeforeLongBreak,
+    int? seed,
+  }) {
+    final pool = longBreakLines(
+      longBreakMinutes: longBreakMinutes,
+      sprintsBeforeLongBreak: sprintsBeforeLongBreak,
+    );
     final rng = seed == null ? _random : Random(seed);
     return pool[rng.nextInt(pool.length)];
   }
@@ -287,7 +373,23 @@ class _ElapsedTimerWidgetState extends ConsumerState<ElapsedTimerWidget>
     // Break overtime — insist the user return to work.
     if (sprintState.phase == SprintPhase.breakOvertime) {
       return _buildBanner(
-        ElapsedTimerWidget.jeevesOvertimePhrase(isFocus: false, seed: sprintSeed),
+        sprintState.isLongBreak
+            ? ElapsedTimerWidget.jeevesLongBreakOvertimePhrase
+            : ElapsedTimerWidget.jeevesOvertimePhrase(
+                isFocus: false, seed: sprintSeed),
+        icon: Icons.self_improvement,
+        iconColor: const Color(0xFF10B981),
+      );
+    }
+
+    // Long Break — the long Break's own voice.
+    if (sprintState.isBreak && sprintState.isLongBreak) {
+      return _buildBanner(
+        ElapsedTimerWidget.jeevesLongBreakPhrase(
+          longBreakMinutes: sprintState.currentBreakDurationMinutes,
+          sprintsBeforeLongBreak: sprintState.sprintsBeforeLongBreak,
+          seed: sprintSeed,
+        ),
         icon: Icons.self_improvement,
         iconColor: const Color(0xFF10B981),
       );

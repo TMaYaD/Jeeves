@@ -75,6 +75,7 @@ Every current key, grouped by family:
 | Key (family) | Type | Strategy | Rationale |
 |---|---|---|---|
 | `focus_settings_sprint_duration_minutes`, `focus_settings_break_duration_minutes` | int | `lww` | Scalar setting; latest intent wins |
+| `focus_settings_long_break_duration_minutes`, `focus_settings_sprints_before_long_break` | int | `lww` *(registered explicitly)* | Scalar settings; each travels as its own key, so a concurrent edit to one never drops the other |
 | `focus_session_planning_settings_time_hour`, `…_time_minute`, `…_notification_enabled`, `…_banner_enabled`, `…_default_snooze_duration`, `…_default_time_estimate` | int / bool | `lww` | Scalar settings |
 | `planning_banner_dismissed_date`, `planning_notification_skipped_date` | date | `lww` | Latest-intent scalar, not a set |
 | `shutdown_ritual_completed_date`, `shutdown_banner_dismissed_date`, `shutdown_notification_skipped_date` | date | `lww` | Latest completion / suppression wins |
@@ -101,6 +102,8 @@ A Sprint (`sprints`: Action, start, end, set length) is recorded locally first a
 | Left open, and the user has a later Sprint | Reads as ending 1 ms before the later one starts. Derived when read (`sprintRecordsWithEffectiveEnds`), never written, so no device authors a convergence write. |
 
 A stored end later than the next Sprint's start (closed late on an offline device) stays as recorded. A Sprint ends in the same transaction as the TimeLog it ran under.
+
+Which Break is the long one is derived on each device from the recorded Sprints and the synced settings, and is never stored or arbitrated: every device holding the same Sprints and settings reaches the same answer.
 
 Bypassed Outcomes add three collections, `focus_session_planning_bypasses`, `focus_session_reschedules` (one row per session and Outcome, replaced by a later edit) and `outcome_bypass_decisions` (append-only), each registered in `collection_codecs.dart` and carried by the initial upload like any domain collection. Jeeves works without them leaving the device: they are ordinary local rows first.
 

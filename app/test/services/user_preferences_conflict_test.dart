@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/models/clarify_mode.dart';
+import 'package:jeeves/models/focus_settings.dart';
 import 'package:jeeves/services/user_preferences_conflict.dart';
 
 PreferenceRow _row(dynamic value, String updatedAt) => PreferenceRow(
@@ -57,6 +58,21 @@ void main() {
       for (final entry in preferenceConflictRegistry.entries) {
         expect(strategyForKey(entry.key), entry.value,
             reason: '${entry.key} should resolve to its registered strategy');
+      }
+    });
+
+    test('the long Break settings are registered explicitly', () {
+      // The long Break length and the number of Sprints before it each travel
+      // as their own key, so a concurrent edit to one never drops the other
+      // (issue #911).
+      for (final key in [
+        kFocusLongBreakDurationMinutesPrefKey,
+        kFocusSprintsBeforeLongBreakPrefKey,
+      ]) {
+        expect(preferenceConflictRegistry, contains(key),
+            reason: '$key must have an explicit registry entry');
+        expect(preferenceConflictRegistry[key], ConflictStrategy.lww);
+        expect(strategyForKey(key), ConflictStrategy.lww);
       }
     });
   });

@@ -88,7 +88,7 @@ class _IdleView extends ConsumerWidget {
           const SizedBox(height: 8),
           Text(
             'Focus for ${settings.sprintDurationMinutes} min, '
-            'then take a ${settings.breakDurationMinutes} min break.',
+            'then take a ${settings.shortBreakDurationMinutes} min break.',
             style: const TextStyle(fontSize: 14, color: Color(0xFF6B7280)),
             textAlign: TextAlign.center,
           ),

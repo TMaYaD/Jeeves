@@ -850,6 +850,11 @@ class _SprintRingState extends State<_SprintRing>
           ringColor: ringColor,
           trackColor: trackColor,
           clockwise: widget.timer.isOvertime != widget.timer.isBreak,
+          // A long Break carries a hairline outside the ring, so it reads as
+          // the long one at a glance (issue #911).
+          hairlineColor: widget.timer.isLongBreak
+              ? const Color(0xFF10B981)
+              : null,
         ),
         child: Padding(
           // align column bounds to the inner edge of the ring stroke
@@ -859,6 +864,19 @@ class _SprintRingState extends State<_SprintRing>
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               const Spacer(),
+              // The long Break names itself: the ring alone says only how
+              // long the Break runs.
+              if (widget.timer.isLongBreak) ...[
+                Text(
+                  'Long break',
+                  style: TextStyle(
+                    fontSize: widget.size * 0.075,
+                    fontWeight: FontWeight.w600,
+                    color: ringColor,
+                  ),
+                ),
+                const SizedBox(height: 2),
+              ],
               Text(
                 '$minutes:$seconds',
                 style: TextStyle(
@@ -959,12 +977,16 @@ class _RingPainter extends CustomPainter {
     required this.ringColor,
     required this.trackColor,
     this.clockwise = true,
+    this.hairlineColor,
   });
 
   final double progress;
   final Color ringColor;
   final Color trackColor;
   final bool clockwise;
+
+  /// The colour of the hairline drawn outside the ring, or null for none.
+  final Color? hairlineColor;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -999,6 +1021,18 @@ class _RingPainter extends CustomPainter {
           ..strokeCap = StrokeCap.round,
       );
     }
+
+    final hairline = hairlineColor;
+    if (hairline != null) {
+      canvas.drawCircle(
+        center,
+        radius + strokeWidth / 2 + 3,
+        Paint()
+          ..color = hairline
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1,
+      );
+    }
   }
 
   @override
@@ -1006,5 +1040,6 @@ class _RingPainter extends CustomPainter {
       old.progress != progress ||
       old.ringColor != ringColor ||
       old.trackColor != trackColor ||
-      old.clockwise != clockwise;
+      old.clockwise != clockwise ||
+      old.hairlineColor != hairlineColor;
 }
