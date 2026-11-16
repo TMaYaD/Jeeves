@@ -259,6 +259,49 @@ void main() {
       }
     });
 
+    test('a time set during planning is written with the Plan row at startDay',
+        () async {
+      for (final id in ['pinned-1', 'free-1', 'dropped-1']) {
+        await db.todoDao.insertOutcome(id: id, title: id, userId: 'local');
+      }
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+      notifier.selectTasks(['pinned-1', 'free-1', 'dropped-1']);
+      final nineThirty = DateTime.utc(2026, 11, 16, 9, 30);
+      notifier.setPinnedStart('pinned-1', nineThirty);
+      notifier.setPinnedStart('dropped-1', DateTime.utc(2026, 11, 16, 11));
+      // Taking an Outcome out of the plan takes its time with it.
+      notifier.undoTaskReview('dropped-1');
+      // A task that was never selected cannot hold a time.
+      notifier.setPinnedStart('never-selected', nineThirty);
+      expect(container.read(focusSessionPlanningProvider).pinnedStartByTaskId,
+          {'pinned-1': nineThirty});
+
+      await notifier.startDay();
+
+      final rows = await db.select(db.focusSessionTasks).get();
+      final pinnedByTask = {for (final r in rows) r.taskId: r.pinnedStartAt};
+      expect(pinnedByTask.keys.toSet(), {'pinned-1', 'free-1'});
+      expect(pinnedByTask['pinned-1']?.toUtc(), nineThirty);
+      expect(pinnedByTask['free-1'], isNull);
+      expect(container.read(focusSessionPlanningProvider).pinnedStartByTaskId,
+          isEmpty,
+          reason: 'the draft is spent once the session is open');
+    });
+
+    test('clearing a time during planning leaves the entry to Jeeves',
+        () async {
+      await db.todoDao.insertOutcome(id: 'o1', title: 'o1', userId: 'local');
+      final notifier = container.read(focusSessionPlanningProvider.notifier);
+      notifier.selectTask('o1');
+      notifier.setPinnedStart('o1', DateTime.utc(2026, 11, 16, 9));
+      notifier.setPinnedStart('o1', null);
+
+      await notifier.startDay();
+
+      final row = await db.select(db.focusSessionTasks).getSingle();
+      expect(row.pinnedStartAt, isNull);
+    });
+
     test('startDay preserves energyLevel and availableMinutes', () async {
       final notifier = container.read(focusSessionPlanningProvider.notifier);
 
