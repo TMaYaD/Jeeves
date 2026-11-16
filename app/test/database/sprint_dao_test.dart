@@ -251,8 +251,8 @@ void main() {
       // outcome-2, converged in without going through openLog.
       await db.todoDao.insertOutcome(
           id: 'outcome-2', title: 'Other', userId: _userId, now: _t0);
-      final other = await ActionDao.ensureCurrentActionIdFor(
-          db, 'outcome-2', _at(2));
+      final other = await db.capturing(() =>
+          ActionDao.ensureCurrentActionIdFor(db, 'outcome-2', _at(2)));
       await db.into(db.timeLogs).insert(TimeLogsCompanion.insert(
           id: 'log-2',
           userId: _userId,
