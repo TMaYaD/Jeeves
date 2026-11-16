@@ -138,6 +138,21 @@ DateTime nextNudgeBoundary(
   return next;
 }
 
+/// The available time (minutes) the open session was planned with: the
+/// preference written at Start Day when valid (1–1440), otherwise the Evening
+/// default. One home, so Evening Shutdown's due time and the Plan's time-left
+/// warning (issue #700) cannot read it differently.
+final openSessionAvailableMinutesProvider = Provider<int>((ref) {
+  final storedMinutes = ref
+      .watch(syncedPreferencesProvider)
+      .asData
+      ?.value
+      .get<int>(kLastSessionAvailableMinutesKey);
+  return storedMinutes != null && storedMinutes >= 1 && storedMinutes <= 1440
+      ? storedMinutes
+      : kDefaultEveningSessionAvailableMinutes;
+});
+
 /// The facts Evening Shutdown is decided on, or null while the open-session
 /// stream is still loading. The available time is the preference written each
 /// time a session opens; at most one session is open, so it is the open
@@ -148,11 +163,6 @@ final eveningShutdownFactsProvider = Provider<EsFacts?>((ref) {
   final shutdown = ref.watch(shutdownSettingsProvider).shutdownTime;
   final planning =
       ref.watch(focusSessionPlanningSettingsProvider).planningTime;
-  final storedMinutes = ref
-      .watch(syncedPreferencesProvider)
-      .asData
-      ?.value
-      .get<int>(kLastSessionAvailableMinutesKey);
   final open = session.requireValue;
   return EsFacts(
     shutdownHour: shutdown.hour,
@@ -162,11 +172,7 @@ final eveningShutdownFactsProvider = Provider<EsFacts?>((ref) {
     sessionIsOpen: open != null,
     openSessionStartedAt:
         open == null ? null : DateTime.parse(open.startedAt).toLocal(),
-    availableMinutes: storedMinutes != null &&
-            storedMinutes >= 1 &&
-            storedMinutes <= 1440
-        ? storedMinutes
-        : kDefaultEveningSessionAvailableMinutes,
+    availableMinutes: ref.watch(openSessionAvailableMinutesProvider),
   );
 });
 

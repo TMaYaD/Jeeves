@@ -4,6 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../providers/evening_shutdown_provider.dart';
+import '../../../providers/focus_session_planning_provider.dart'
+    show activeSessionAddedDuringExecutionTaskIdsProvider;
+import '../../../widgets/added_during_the_day_tag.dart';
 import '../../../widgets/meta_chip.dart';
 import '../../../widgets/outcome_row.dart';
 
@@ -39,6 +42,9 @@ class SettledReviewStep extends ConsumerWidget {
     // suppress on.
     final loggedMinutes =
         ref.watch(loggedMinutesByOutcomeProvider).value ?? const {};
+    final addedDuringTheDayIds =
+        ref.watch(activeSessionAddedDuringExecutionTaskIdsProvider).value ??
+            const <String>{};
 
     if (asyncGroups.isLoading) {
       return const Center(child: CircularProgressIndicator());
@@ -113,6 +119,7 @@ class SettledReviewStep extends ConsumerWidget {
                         todo: t,
                         settlement: entry.key,
                         loggedMinutes: loggedMinutes[t.id] ?? 0,
+                        addedDuringTheDay: addedDuringTheDayIds.contains(t.id),
                       )),
                   const SizedBox(height: 20),
                 ],
@@ -283,6 +290,7 @@ Widget _settledOutcomeRow({
   required Todo todo,
   required SessionSettlement settlement,
   required int loggedMinutes,
+  bool addedDuringTheDay = false,
 }) {
   final estimated = todo.timeEstimate;
   final actual = loggedMinutes;
@@ -303,8 +311,17 @@ Widget _settledOutcomeRow({
       size: 20,
       color: isDone ? const Color(0xFF16A34A) : const Color(0xFF6B7280),
     ),
-    meta: estimated != null || actual > 0
-        ? _TimeComparison(estimated: estimated, actual: actual)
+    meta: estimated != null || actual > 0 || addedDuringTheDay
+        ? Wrap(
+            spacing: 12,
+            runSpacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              if (estimated != null || actual > 0)
+                _TimeComparison(estimated: estimated, actual: actual),
+              if (addedDuringTheDay) const AddedDuringTheDayTag(),
+            ],
+          )
         : null,
   );
 }

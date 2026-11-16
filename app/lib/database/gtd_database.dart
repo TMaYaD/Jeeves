@@ -194,7 +194,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final UserPreferencesDao userPreferencesDao = UserPreferencesDao(this);
 
   @override
-  int get schemaVersion => 10;
+  int get schemaVersion => 11;
 
   /// Completes with the [OpeningDetails] of this store's one open.
   ///
@@ -342,10 +342,25 @@ class GtdDatabase extends _$GtdDatabase {
               await m.addColumn(focusSessionTasks, focusSessionTasks.pinnedStartAt);
             }
           }
-          // v10 (issue #910): the recorded Sprint. Purely additive — one new
+          // v10 (issue #700): `focus_session_tasks.added_during_execution_at`,
+          // when a Plan entry was added after Start Day. A nullable
+          // `ADD COLUMN`; every existing row reads NULL (chosen in Planning),
+          // which is correct because no earlier build could add one. Guarded on
+          // the column's absence like v7.
+          if (from < 10) {
+            final existing = await m.database
+                .customSelect('PRAGMA table_info(focus_session_tasks)')
+                .get();
+            if (!existing.any((row) =>
+                row.read<String>('name') == 'added_during_execution_at')) {
+              await m.addColumn(
+                  focusSessionTasks, focusSessionTasks.addedDuringExecutionAt);
+            }
+          }
+          // v11 (issue #910): the recorded Sprint. Purely additive — one new
           // table, no existing row or column touched, nothing backfilled
           // (Sprints before this build were never recorded).
-          if (from < 10) {
+          if (from < 11) {
             final tables = await m.database
                 .customSelect(
                     "SELECT name FROM sqlite_master WHERE type='table'")
