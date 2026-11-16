@@ -9,12 +9,14 @@ import '../capacity_bar.dart';
 import 'set_time_sheet.dart';
 
 /// Today's Plan on a day timeline: a capacity bar, one tile per piece of each
-/// Plan entry at its suggested time, and the "Not wholly placed" tray for
-/// entries Autoflow could not wholly place.
+/// Plan entry at its suggested time, the lane of Sprints done at the tiles'
+/// right edge, and the "Not wholly placed" tray for entries Autoflow could not
+/// wholly place.
 ///
 /// The widget owns no data. Its caller supplies the entries, the flow origin and
-/// the available minutes, and receives the one thing the user can change: a time
-/// they set (or clear) for an entry, through [onSetPinnedStart].
+/// the available minutes, the Sprints done ([sprintMarks]), and receives the one
+/// thing the user can change: a time they set (or clear) for an entry, through
+/// [onSetPinnedStart].
 class DayTimeline extends ConsumerStatefulWidget {
   const DayTimeline({
     super.key,
@@ -25,6 +27,7 @@ class DayTimeline extends ConsumerStatefulWidget {
     required this.chunkUnitMinutes,
     required this.onSetPinnedStart,
     this.events = const [],
+    this.sprintMarks = const [],
   });
 
   /// What the layout belongs to: the planning draft, or one session. A layout
@@ -44,6 +47,11 @@ class DayTimeline extends ConsumerStatefulWidget {
       onSetPinnedStart;
   final List<BusyInterval> events;
 
+  /// The Sprints done, read from the Sprint record (#910). Each is drawn in
+  /// the lane at the tile's right edge, at its real time, and counted in the
+  /// tile it ran on.
+  final List<TileSprintMark> sprintMarks;
+
   @override
   ConsumerState<DayTimeline> createState() => _DayTimelineState();
 }
@@ -55,6 +63,10 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
   static const _pixelsPerMinute = 1.0;
   static const _gutterWidth = 56.0;
   static const _minTileHeight = 24.0;
+
+  /// The lane at the tiles' right edge, where the Sprints done are drawn at
+  /// their real times.
+  static const _laneWidth = 14.0;
 
   /// The timeline scrolls inside this height, so a long day does not push the
   /// Plan's own rows far down the page.
@@ -221,6 +233,12 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
       for (final placement in _layout.entries)
         if (placement.unplacedMinutes > 0) placement,
     ];
+    // The Sprints done, grouped by the Outcome they ran on. A Sprint from
+    // another day is not part of this day's record.
+    final sprintsByOutcome = tileSprintMarksOfDay(
+      widget.sprintMarks,
+      widget.flowOrigin,
+    );
 
     return Column(
       key: const Key('day_timeline'),
@@ -274,7 +292,7 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
                     top: at.difference(_windowStart).inMinutes *
                         _pixelsPerMinute,
                     left: 0,
-                    right: 0,
+                    right: _laneWidth,
                     child: Row(
                       children: [
                         SizedBox(
@@ -291,14 +309,15 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
                   ),
                 for (final placement in _layout.entries)
                   for (final piece in placement.pieces)
-                    _tile(placement, piece, now),
+                    _tile(placement, piece, now, sprintsByOutcome),
+                _lane(sprintsByOutcome, now),
                 if (!now.isBefore(_windowStart) && now.isBefore(_windowEnd))
                   Positioned(
                     key: const Key('day_timeline_now_line'),
                     top: now.difference(_windowStart).inMinutes *
                         _pixelsPerMinute,
                     left: _gutterWidth - 8,
-                    right: 0,
+                    right: _laneWidth,
                     child: const IgnorePointer(
                       child: Divider(
                           height: 2,
@@ -320,7 +339,12 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
     );
   }
 
-  Widget _tile(EntryPlacement placement, PlacedPiece piece, DateTime now) {
+  Widget _tile(
+    EntryPlacement placement,
+    PlacedPiece piece,
+    DateTime now,
+    Map<String, List<TileSprintMark>> sprintsByOutcome,
+  ) {
     final entry = _entryFor(placement.outcomeId);
     final state = entry.isDone
         ? _TileState.done
@@ -364,7 +388,16 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
     final height =
         (piece.minutes * _pixelsPerMinute).clamp(_minTileHeight, double.infinity).toDouble();
     final timeText = '${_clock(piece.start)} – ${_clock(piece.end)}';
-    final detail = [timeText, ...labels].join(' · ');
+    // The count is the Outcome's, not the piece's: it is shown once, on the
+    // piece that opens the Outcome's tiles.
+    final sprintCount = _sprintCount(
+      piece.part == placement.pieces.first.part
+          ? (sprintsByOutcome[placement.outcomeId] ?? const <TileSprintMark>[])
+          : const <TileSprintMark>[],
+      now,
+    );
+    final detail =
+        [timeText, ...labels, if (sprintCount != null) sprintCount].join(' · ');
 
     final body = Container(
       key: Key('day_timeline_tile_${piece.outcomeId}_${piece.part}'),
@@ -399,7 +432,10 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
                       [
                         _clock(piece.start),
                         if (placement.pieces.length > 1) 'part ${piece.part}',
+                        if (sprintCount != null) sprintCount,
                       ].join(' · '),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(fontSize: 11, color: foreground)),
                 ],
               )
@@ -425,7 +461,7 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
     return Positioned(
       top: piece.start.difference(_windowStart).inMinutes * _pixelsPerMinute,
       left: _gutterWidth,
-      right: 0,
+      right: _laneWidth,
       height: height,
       child: LongPressDraggable<String>(
         data: entry.outcomeId,
@@ -446,6 +482,69 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
         ),
       ),
     );
+  }
+
+  /// The lane at the tiles' right edge: every Sprint done, drawn at its real
+  /// time.
+  ///
+  /// A Sprint is drawn where it happened, so one that ran past its tile or
+  /// fell short of it is not "corrected" to fit: the lane and the tile are
+  /// two records of the same day, never reconciled.
+  Widget _lane(
+    Map<String, List<TileSprintMark>> sprintsByOutcome,
+    DateTime now,
+  ) {
+    // Only the Sprints of the day's Plan entries: a Sprint on an Outcome the
+    // day does not carry has no tile to belong to.
+    final marks = [
+      for (final entry in widget.entries)
+        for (final mark
+            in sprintsByOutcome[entry.outcomeId] ?? const <TileSprintMark>[])
+          mark,
+    ];
+    return Positioned(
+      key: const Key('day_timeline_sprint_lane'),
+      right: 0,
+      top: 0,
+      bottom: 0,
+      width: _laneWidth,
+      child: ClipRect(
+        child: Stack(
+          clipBehavior: Clip.hardEdge,
+          children: [
+            const Positioned(
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: 1,
+              child: ColoredBox(color: Color(0xFFE5E7EB)),
+            ),
+            for (final mark in marks)
+              Positioned(
+                key: Key('day_timeline_sprint_${mark.id}'),
+                top: mark.startedAt.difference(_windowStart).inMinutes *
+                    _pixelsPerMinute,
+                height: (mark.durationMinutesAt(now) * _pixelsPerMinute)
+                    .clamp(3.0, double.infinity)
+                    .toDouble(),
+                left: 3,
+                right: 3,
+                child: const ColoredBox(color: Color(0xFF2563EB)),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// "2 sprints · 54m": how many Sprints the Outcome ran and how long they
+  /// took. Null when it ran none.
+  static String? _sprintCount(List<TileSprintMark> marks, DateTime now) {
+    if (marks.isEmpty) return null;
+    final minutes = marks.fold<int>(
+        0, (sum, mark) => sum + mark.durationMinutesAt(now));
+    return '${marks.length} sprint${marks.length == 1 ? '' : 's'} · '
+        '${_duration(minutes)}';
   }
 
   Widget _tray(List<EntryPlacement> placements) {

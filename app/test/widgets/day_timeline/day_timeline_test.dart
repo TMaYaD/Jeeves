@@ -35,12 +35,27 @@ class _Calls {
   final pins = <(String, DateTime?)>[];
 }
 
+/// A Sprint recorded on [outcomeId], at [startedAt] local time.
+TileSprintMark _sprint(
+  String id,
+  String outcomeId, {
+  DateTime? startedAt,
+  DateTime? endedAt,
+}) =>
+    TileSprintMark(
+      id: id,
+      outcomeId: outcomeId,
+      startedAt: startedAt ?? DateTime(2030, 3, 15, 9, 10),
+      endedAt: endedAt,
+    );
+
 Widget _app(
   List<DayTimelineEntry> entries, {
   int availableMinutes = 240,
   DateTime? now,
   _Calls? calls,
   String scope = 'test',
+  List<TileSprintMark> sprints = const [],
 }) {
   return ProviderScope(
     overrides: [clockProvider.overrideWithValue(() => now ?? _origin)],
@@ -54,6 +69,7 @@ Widget _app(
             flowOrigin: _origin,
             availableMinutes: availableMinutes,
             chunkUnitMinutes: 23,
+            sprintMarks: sprints,
             onSetPinnedStart: (id, startAt) async =>
                 calls?.pins.add((id, startAt)),
           ),
@@ -214,5 +230,99 @@ void main() {
     expect(find.textContaining('Running'), findsOneWidget);
     // 'missed' sits at 11:00-12:00, after done and running; now is 12:30.
     expect(find.textContaining('Not started'), findsOneWidget);
+  });
+
+  testWidgets('a Sprint is drawn in the lane and counted on its tile',
+      (tester) async {
+    await tester.pumpWidget(_app([
+      _entry('a', 60),
+    ], sprints: [
+      _sprint('s1', 'a',
+          startedAt: DateTime(2030, 3, 15, 9, 10),
+          endedAt: DateTime(2030, 3, 15, 9, 33)),
+    ]));
+
+    expect(find.byKey(const Key('day_timeline_sprint_lane')), findsOneWidget);
+    expect(find.byKey(const Key('day_timeline_sprint_s1')), findsOneWidget);
+    expect(find.textContaining('1 sprint · 23m'), findsOneWidget);
+  });
+
+  testWidgets('two Sprints on one Outcome are counted as two', (tester) async {
+    await tester.pumpWidget(_app([
+      _entry('a', 60),
+    ], sprints: [
+      _sprint('s1', 'a',
+          startedAt: DateTime(2030, 3, 15, 9, 10),
+          endedAt: DateTime(2030, 3, 15, 9, 33)),
+      _sprint('s2', 'a',
+          startedAt: DateTime(2030, 3, 15, 9, 40),
+          endedAt: DateTime(2030, 3, 15, 10, 3)),
+    ]));
+
+    expect(find.byKey(const Key('day_timeline_sprint_s1')), findsOneWidget);
+    expect(find.byKey(const Key('day_timeline_sprint_s2')), findsOneWidget);
+    expect(find.textContaining('2 sprints · 46m'), findsOneWidget);
+  });
+
+  testWidgets('a running Sprint counts the time since it started',
+      (tester) async {
+    await tester.pumpWidget(_app([
+      _entry('a', 60),
+    ], now: DateTime(2030, 3, 15, 9, 40), sprints: [
+      _sprint('s1', 'a', startedAt: DateTime(2030, 3, 15, 9, 10)),
+    ]));
+
+    expect(find.textContaining('1 sprint · 30m'), findsOneWidget);
+  });
+
+  testWidgets('a Sprint of another day is not part of this day',
+      (tester) async {
+    await tester.pumpWidget(_app([
+      _entry('a', 60),
+    ], sprints: [
+      _sprint('s1', 'a',
+          startedAt: DateTime(2030, 3, 14, 9, 10),
+          endedAt: DateTime(2030, 3, 14, 9, 33)),
+    ]));
+
+    expect(find.byKey(const Key('day_timeline_sprint_s1')), findsNothing);
+    expect(find.textContaining('sprint'), findsNothing);
+  });
+
+  testWidgets('a Sprint on an Outcome with no tile is not drawn',
+      (tester) async {
+    await tester.pumpWidget(_app([
+      _entry('a', 60),
+    ], sprints: [
+      _sprint('s1', 'other',
+          startedAt: DateTime(2030, 3, 15, 9, 10),
+          endedAt: DateTime(2030, 3, 15, 9, 33)),
+    ]));
+
+    expect(find.byKey(const Key('day_timeline_sprint_s1')), findsNothing);
+    expect(find.textContaining('sprint'), findsNothing);
+  });
+
+  testWidgets('an Outcome that ran no Sprint counts none', (tester) async {
+    await tester.pumpWidget(_app([_entry('a', 60)]));
+
+    expect(find.byKey(const Key('day_timeline_sprint_lane')), findsOneWidget);
+    expect(find.textContaining('sprint'), findsNothing);
+  });
+
+  testWidgets('a split Outcome counts its Sprints once', (tester) async {
+    // The set time leaves two 30-minute gaps; 50 minutes fits neither whole.
+    await tester.pumpWidget(_app([
+      _entry('blocker', 60, pinned: DateTime(2030, 3, 15, 9, 30)),
+      _entry('split', 50),
+    ], sprints: [
+      _sprint('s1', 'split',
+          startedAt: DateTime(2030, 3, 15, 9, 10),
+          endedAt: DateTime(2030, 3, 15, 9, 33)),
+    ]));
+
+    expect(find.byKey(const Key('day_timeline_tile_split_1')), findsOneWidget);
+    expect(find.byKey(const Key('day_timeline_tile_split_2')), findsOneWidget);
+    expect(find.textContaining('1 sprint · 23m'), findsOneWidget);
   });
 }

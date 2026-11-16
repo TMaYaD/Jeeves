@@ -43,6 +43,20 @@ final currentTimeContextsProvider =
   return ref.watch(databaseProvider).actionDao.watchCurrentTimeContexts();
 });
 
+/// The recorded Sprints, live, with the Outcome each ran on.
+///
+/// The Sprint record is the only source of truth for what was done (issue
+/// #910), so a Sprint that arrives by sync — projected into the domain store by
+/// the sync host — reaches the tile without a restart.
+final dayTimelineSprintsProvider =
+    StreamProvider<List<TileSprintMark>>((ref) {
+  return ref
+      .watch(databaseProvider)
+      .sprintDao
+      .watchRecordsByOutcome()
+      .map(tileSprintMarks);
+});
+
 /// The same, read once when the planning completion screen opens: a screen
 /// that is left within a minute needs no live query.
 final planningTimeContextsProvider =

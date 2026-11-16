@@ -410,6 +410,11 @@ The Plan Summary capacity bar fills in two segments. Minutes from Outcomes with 
 ### Timeline tile
 A Plan entry's suggested time, tall as its estimate, no sprint blocks; a chunked piece reads "part N", a user-set time "Set by you". Upcoming pale blue, running blue, done grey, unstarted amber. Events: hatched, read-only. Sprints done: a lane at its right edge. Timeboxed: heavier bottom edge.
 
+| Element | Contract |
+|---|---|
+| Sprint lane | Each recorded Sprint is a bar in the lane at the real time it ran — the lane is a record, never a correction of the tile. |
+| Sprint count | The tile's detail line ends with the Outcome's Sprints and their time: "2 sprints · 46m". A running Sprint counts the time since it started. |
+
 ### Outcome peek sheet
 On the Daily Planning Plan Summary step, a plain **tap** on any card (Today's Plan, Up Next, or Skipped) opens the **Outcome peek** — a bottom sheet (`OutcomePeekSheet`, `app/lib/widgets/outcome_peek_sheet.dart`) that reads as a viewer and edits in place. Title and notes are borderless fields saved on focus loss and flushed on dismissal; energy, time estimate and due date are tappable chips; below them sit the context tags, the Waiting For people and the Plan. The sheet reuses the Task Detail editors (`outcome_attribute_editors.dart`, `outcome_plan_section.dart`) and writes through `TaskDetailNotifier`, so stamping and the deleted-Outcome guard behave as on the detail screen. The **Time context** chip (`time_context_sheet.dart`, also at the end of the Task Detail attribute strip) shows the current Action's time predicate or a quiet `Time context`; it opens a sheet with a From date, seven day chips and a Between range, a Save that is disabled while the value is invalid, and `Clear time context`. Time logged stays read-only, summed from `time_logs`. Status changes and project assignment are deliberately not offered, and Areas and Labels have no editor in the app yet.
 

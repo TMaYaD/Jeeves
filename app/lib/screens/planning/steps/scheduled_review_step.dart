@@ -116,6 +116,10 @@ class _ScheduledReviewStepState extends ConsumerState<ScheduledReviewStep> {
     final settings = ref.watch(dayTimelineSettingsProvider);
     final timeContexts =
         ref.watch(planningTimeContextsProvider).asData?.value ?? const {};
+    // The Sprints done, read from the record: the same lane the Now screen
+    // draws, so the two timelines of one day read alike.
+    final sprintMarks =
+        ref.watch(dayTimelineSprintsProvider).asData?.value ?? const [];
     final entries = dayTimelineEntriesFor(
       tasks: tasks,
       defaultEstimateMinutes: settings.defaultEstimateMinutes,
@@ -129,6 +133,7 @@ class _ScheduledReviewStepState extends ConsumerState<ScheduledReviewStep> {
       flowOrigin: _flowOrigin,
       availableMinutes: planning.availableMinutes,
       chunkUnitMinutes: settings.chunkUnitMinutes,
+      sprintMarks: sprintMarks,
       onSetPinnedStart: (outcomeId, startAt) async => ref
           .read(focusSessionPlanningProvider.notifier)
           .setPinnedStart(outcomeId, startAt),

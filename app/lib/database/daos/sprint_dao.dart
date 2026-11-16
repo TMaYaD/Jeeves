@@ -51,6 +51,23 @@ class SprintRecord {
   bool get isRunning => endedAtUtc == null;
 }
 
+/// A recorded Sprint with the Outcome it ran on.
+///
+/// A Sprint lives on an Action; an Action belongs to an Outcome. The Outcome is
+/// what the day timeline draws a tile for, so this is the shape the timeline
+/// reads the record in.
+class SprintOutcomeRecord {
+  const SprintOutcomeRecord({
+    required this.record,
+    required this.outcomeId,
+  });
+
+  final SprintRecord record;
+
+  /// The Outcome the Sprint's Action belongs to.
+  final String outcomeId;
+}
+
 /// Parses a stored instant; null when it does not read as one.
 DateTime? _parseStoredInstant(String? value) =>
     value == null ? null : DateTime.tryParse(value)?.toUtc();
@@ -283,4 +300,38 @@ class SprintDao extends DatabaseAccessor<GtdDatabase> with _$SprintDaoMixin {
   /// Every recorded Sprint with its effective end, ordered by start.
   Future<List<SprintRecord>> getAllRecords() async =>
       sprintRecordsWithEffectiveEnds(await select(sprints).get());
+
+  /// Every recorded Sprint with its effective end and the Outcome it ran on,
+  /// live: a Sprint projected in by a peer (the sync host writes the row and
+  /// notifies) reaches the reader without a restart.
+  ///
+  /// A Sprint whose Action was deleted has no Outcome: its Sprints detach and
+  /// are never deleted, and a detached Sprint belongs to no Outcome's tile.
+  Stream<List<SprintOutcomeRecord>> watchRecordsByOutcome() {
+    // The watch is on `sprints` alone: a Sprint projected in by a peer is written
+    // outside Drift's own bookkeeping and announced by `notifySprintsViewWrite`,
+    // which names that table.
+    return select(sprints).watch().asyncMap((rows) async {
+      final records = sprintRecordsWithEffectiveEnds(rows);
+      final actionIds = {
+        for (final record in records)
+          if (record.actionId != null) record.actionId!,
+      };
+      if (actionIds.isEmpty) return const <SprintOutcomeRecord>[];
+      final actionRows =
+          await (select(actions)..where((a) => a.id.isIn(actionIds))).get();
+      final outcomeIdByActionId = {
+        for (final action in actionRows) action.id: action.outcomeId,
+      };
+      return [
+        for (final record in records)
+          if (record.actionId != null)
+            () {
+              final outcomeId = outcomeIdByActionId[record.actionId!];
+              if (outcomeId == null) return null;
+              return SprintOutcomeRecord(record: record, outcomeId: outcomeId);
+            }(),
+      ].whereType<SprintOutcomeRecord>().toList();
+    });
+  }
 }
