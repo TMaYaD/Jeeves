@@ -442,7 +442,8 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
     try {
       // `exists`: a container that replaced the settings (as tests do) never
       // starts the synced-preferences load, and there is nothing to wait for.
-      if (ref.read(syncedPreferencesProvider.exist)) {
+      // ignore: deprecated_member_use
+      if (ref.exists(syncedPreferencesProvider)) {
         await ref.read(syncedPreferencesProvider.future);
       }
     } catch (error) {
