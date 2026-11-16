@@ -109,6 +109,9 @@ class FolderSyncSetup {
             ..where((row) => row.folderId.equals(folderId)))
           .write(FolderSyncBindingsCompanion(
         isActive: const Value(true),
+        // Changes made while it was off never reached the plugin, so the next
+        // start uploads the merged state again; a receiver merges it as a no-op.
+        snapshotEnqueued: const Value(false),
         folderLocation: Value(folderLocation),
         deviceLabel: Value(deviceLabel),
       ));

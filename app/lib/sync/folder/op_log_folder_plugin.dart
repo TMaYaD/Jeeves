@@ -191,7 +191,7 @@ class OpLogFolderPlugin implements SyncPlugin {
         await _enqueue(
           state,
           change,
-          'snapshot:$_memberId:${change.collection}/${change.entityId}',
+          'snapshot:$_memberId:${state.nextAuthorSeq}',
         );
       }
       state.snapshotEnqueued = true;

@@ -15,6 +15,7 @@ import '../../providers/build_version_provider.dart';
 import '../../providers/clarify_mode_provider.dart';
 import '../../providers/dev_options_provider.dart';
 import '../../providers/focus_session_planning_settings_provider.dart';
+import '../../providers/folder_sync_provider.dart';
 import '../../providers/focus_settings_provider.dart';
 import '../../providers/notification_permission_provider.dart';
 import '../../providers/periodic_review_provider.dart';
@@ -24,6 +25,7 @@ import '../../providers/bypassed_outcomes_provider.dart';
 import '../../services/export_service.dart';
 import '../../widgets/app_title_bar/app_title_bar.dart';
 import '../enrolment/enrolment_ceremony_screen.dart';
+import '../folder_sync/folder_sync_screen.dart';
 import '../tag_management/tag_management_screen.dart';
 import 'system_trust_section.dart';
 import '../../widgets/capture/capture_action.dart';
@@ -110,6 +112,25 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
               onTap: () => context.push('/login'),
             ),
+            if (ref.watch(folderPlatformProvider).isAvailable)
+              ListTile(
+                key: const Key('folder_sync_tile'),
+                leading: const Icon(Icons.folder_shared_outlined,
+                    color: Color(0xFF2563EB)),
+                title: const Text(
+                  'Sync through a folder',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w500,
+                    color: Color(0xFF2563EB),
+                  ),
+                ),
+                subtitle: const Text(
+                  'Use a folder your file sync app carries. No account or '
+                  'server needed.',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+                ),
+                onTap: () => context.push(FolderSyncScreen.routePath),
+              ),
           ] else ...[
             // The only door into the enrolment ceremony. `push`, not `go`: the
             // user is choosing to look at it and must be able to back out with
