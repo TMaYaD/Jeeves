@@ -18,6 +18,7 @@ import 'package:jeeves/providers/focus_settings_provider.dart';
 import 'package:jeeves/providers/sprint_timer_provider.dart';
 import 'package:jeeves/screens/active_focus_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:timezone/data/latest_all.dart' as tz_data;
 
 import '../helpers/active_focus_harness.dart';
 import '../test_helpers.dart';
@@ -29,7 +30,11 @@ class _FixedFocusSettings extends FocusSettingsNotifier {
 }
 
 void main() {
-  setUpAll(configureSqliteForTests);
+  setUpAll(() {
+    configureSqliteForTests();
+    // The Sprint-end notifications are scheduled in the device's time zone.
+    tz_data.initializeTimeZones();
+  });
 
   late GtdDatabase db;
 

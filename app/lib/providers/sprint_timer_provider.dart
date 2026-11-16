@@ -16,6 +16,7 @@ library;
 import 'dart:async';
 
 import 'package:drift/drift.dart' show OrderingTerm, TableUpdateQuery;
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -523,14 +524,20 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
     required bool isFocus,
     String? taskTitle,
   }) async {
-    final svc = ref.read(notificationServiceProvider);
-    if (isFocus) {
-      await svc.scheduleSprintEndNotification(
-        endTime: endTime,
-        taskTitle: taskTitle ?? 'your task',
-      );
-    } else {
-      await svc.scheduleBreakEndNotification(endTime: endTime);
+    // A reminder is a side effect: failing to schedule it must not undo the
+    // Sprint that is already recorded.
+    try {
+      final svc = ref.read(notificationServiceProvider);
+      if (isFocus) {
+        await svc.scheduleSprintEndNotification(
+          endTime: endTime,
+          taskTitle: taskTitle ?? 'your task',
+        );
+      } else {
+        await svc.scheduleBreakEndNotification(endTime: endTime);
+      }
+    } catch (error) {
+      debugPrint('Sprint end notification not scheduled: $error');
     }
   }
 

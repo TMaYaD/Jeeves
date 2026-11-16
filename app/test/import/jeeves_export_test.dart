@@ -126,6 +126,13 @@ Future<void> _seed(GtdDatabase db, {String userId = _userId}) async {
       startedAt: const Value('2026-07-28T08:05:00.000Z'),
       endedAt: const Value('2026-07-28T08:30:00.000Z'),
       focusSessionId: const Value('fs-1')));
+  await db.into(db.sprints).insert(SprintsCompanion(
+      id: const Value('sp-1'),
+      userId: Value(userId),
+      actionId: const Value('act-current'),
+      startedAt: const Value('2026-07-28T08:05:00.000Z'),
+      endedAt: const Value('2026-07-28T08:25:00.000Z'),
+      plannedDurationMinutes: const Value(20)));
 
   // --- junctions ---
   await db.into(db.todoTags).insert(TodoTagsCompanion(
@@ -298,6 +305,7 @@ void main() {
       expect(await restored.select(restored.captures).get(), hasLength(2));
       expect(await restored.select(restored.tags).get(), hasLength(4));
       expect(await restored.select(restored.timeLogs).get(), hasLength(1));
+      expect(await restored.select(restored.sprints).get(), hasLength(1));
       expect(await restored.select(restored.focusSessions).get(), hasLength(1));
       expect(await restored.select(restored.todoTags).get(), hasLength(1));
       expect(

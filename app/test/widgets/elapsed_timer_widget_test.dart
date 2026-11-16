@@ -3,15 +3,24 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/providers/focus_session_provider.dart';
+import 'package:jeeves/providers/sprint_timer_provider.dart';
 import 'package:jeeves/widgets/elapsed_timer_widget.dart';
 
 Widget _wrap({required FocusModeState focusState}) {
   return ProviderScope(
     overrides: [
       focusModeProvider.overrideWith(() => _FakeFocusModeNotifier(focusState)),
+      // The Sprint timer now reads the domain store; this test is about the
+      // widget's wording, so the timer is pinned idle.
+      sprintTimerProvider.overrideWith(_IdleSprintTimerNotifier.new),
     ],
     child: const MaterialApp(home: Scaffold(body: ElapsedTimerWidget())),
   );
+}
+
+class _IdleSprintTimerNotifier extends SprintTimerNotifier {
+  @override
+  SprintTimerState build() => const SprintTimerState();
 }
 
 class _FakeFocusModeNotifier extends FocusModeNotifier {
