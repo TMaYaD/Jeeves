@@ -214,6 +214,23 @@ void main() {
     expect(await pinOnB(pinnedLater), isNull);
   });
 
+  test('a Plan entry added during the day keeps its mark on the other device, '
+      'and a morning entry stays unmarked', () async {
+    final morning = await outcomeOnA();
+    final later = await outcomeOnA(id: _id('outcome-2'));
+    final sessionId = await a.domain.focusSessionDao.openSession(
+        userId: _userId, taskIds: [morning], now: a.clock.asDateTime);
+    await a.domain.focusSessionDao.addOutcomeToPlan(
+        sessionId: sessionId, taskId: later, now: a.clock.asDateTime);
+    await workspace.syncAll();
+
+    final markedOnB = await b.domain.focusSessionDao
+        .watchActiveSessionAddedDuringExecutionTaskIds()
+        .first;
+    expect(markedOnB, {later});
+    await expectTableConverges('focus_session_tasks', orderBy: 'position');
+  });
+
   test('focus_session_dispositions round-trip for off-Plan engagement',
       () async {
     final planned = await outcomeOnA(id: _id('planned-1'));

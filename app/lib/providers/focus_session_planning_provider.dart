@@ -164,6 +164,16 @@ final activeSessionTasksProvider = StreamProvider<List<Todo>>((ref) {
   return db.focusSessionDao.watchActiveSessionTasks();
 });
 
+/// Ids of the open session's Plan entries that the user added during
+/// Execution (issue #700), as opposed to the morning commitment. Rides beside
+/// [activeSessionTasksProvider] the way Settled state does, so no `List<Todo>`
+/// consumer changes.
+final activeSessionAddedDuringExecutionTaskIdsProvider =
+    StreamProvider<Set<String>>((ref) {
+  final db = ref.watch(databaseProvider);
+  return db.focusSessionDao.watchActiveSessionAddedDuringExecutionTaskIds();
+});
+
 /// Stream of the open session's Review surface: its Plan plus every Outcome
 /// engaged during the session, on the Plan or not. The same stream Evening
 /// Shutdown reads, so the Now screen's "nothing to dispose" decision ranges
