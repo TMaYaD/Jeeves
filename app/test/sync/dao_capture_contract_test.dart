@@ -717,6 +717,27 @@ void main() {
       // The entity id is the pair derivation, not the random local `id`.
       expect(planOp.entityId, focusSessionTaskIdFor(sessionId, outcome));
       expect(planOp.fields['position'], 0);
+      expect(planOp.fields.containsKey('added_during_execution_at'), isTrue);
+      expect(planOp.fields['added_during_execution_at'], isNull);
+    });
+
+    test('addOutcomeToPlan captures one Plan entry carrying when it was added',
+        () async {
+      final planned = await seedOutcome(id: 'planned-1', title: 'Planned');
+      final added = await seedOutcome(id: 'added-1', title: 'Added');
+      final sessionId = await db.focusSessionDao
+          .openSession(userId: _userId, taskIds: [planned], now: _ts);
+      capture.clear();
+      final changed = await db.focusSessionDao
+          .addOutcomeToPlan(sessionId: sessionId, taskId: added, now: _ts);
+      expect(changed, isTrue);
+      final op = only(focusSessionTasksCollection);
+      expect(op.entityId, focusSessionTaskIdFor(sessionId, added));
+      expect(op.fields['position'], 1);
+      expect(op.fields['added_during_execution_at'], isNotNull);
+      // Every codec field is authored, as openSession does.
+      expect(op.fields.keys.toSet(),
+          containsAll(collectionCodecs[focusSessionTasksCollection]!.columns.keys));
     });
 
     test('openSession writes a time set during planning with the Plan row',

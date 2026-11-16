@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 
 import 'auth/auth_mode.dart';
 import 'auth/session_gate.dart';
+import 'screens/add_to_plan/add_to_plan_screen.dart';
 import 'screens/app_shell.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/auth/register_screen.dart';
@@ -101,6 +102,10 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/focus-session-planning',
       builder: (context, state) => const FocusSessionPlanningScreen(),
+    ),
+    GoRoute(
+      path: '/add-to-plan',
+      builder: (context, state) => const AddToPlanScreen(),
     ),
     GoRoute(
       path: '/periodic-review',

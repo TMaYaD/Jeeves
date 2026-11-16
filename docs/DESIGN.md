@@ -339,7 +339,7 @@ Left to right:
     (task detail's Start focus keeps the primary blue `#2667B7`). A shell list
     route can supply page actions too, derived from route state and passed down
     by `AppShell` — the Now route's Re-plan action (shown only while an open
-    session carries tasks) is the precedent.
+    session carries tasks) is the precedent, with "Add" beside it.
 *   **pinned capture** — the fixed rightmost action slot, reserved for capture.
     Identical position on every screen that pins it; never overflows. It carries
     the reserved capture glyph, never a plain `+` (§ Icon vocabulary). The Inbox
