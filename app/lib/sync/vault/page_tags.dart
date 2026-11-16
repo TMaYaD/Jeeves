@@ -46,7 +46,7 @@ List<Change> tagLinkChanges({
 }) {
   final isOutcome = key.kind == VaultPageKind.outcome;
   final isCapture = key.kind == VaultPageKind.capture;
-  // A session sheet is read only (the plan's section 3.6): it names no Tags.
+  // A session sheet is read only: it names no Tags.
   if (!isOutcome && !isCapture) return const [];
 
   final junctionCollection =
@@ -59,17 +59,14 @@ List<Change> tagLinkChanges({
 
   void addField(String collection, String entityId, String field, Object? value,
       Hlc hlc) {
+    // No clock is compared here: the host's merge settles every field. Each
+    // field is written once, by the read that knows what the page says.
     final map = fields.putIfAbsent('$collection/$entityId', () => {});
-    final existing = map[field];
-    if (existing == null || existing.hlc < hlc) {
-      map[field] = ClockedValue(value, hlc);
-    }
+    map[field] = ClockedValue(value, hlc);
   }
 
   void addTombstone(String collection, String entityId, Hlc hlc) {
-    final ref = '$collection/$entityId';
-    final existing = tombstones[ref];
-    if (existing == null || existing < hlc) tombstones[ref] = hlc;
+    tombstones['$collection/$entityId'] = hlc;
   }
 
   // The Tags the page names, by id: their name is what the page shows.

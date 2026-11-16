@@ -15,6 +15,8 @@ import 'dart:async';
 import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
 
+import '../../database/tables.dart';
+import '../../models/intent.dart';
 import '../collection_codecs.dart';
 import '../hlc.dart';
 import '../host/change.dart';
@@ -143,7 +145,15 @@ class VaultPlugin implements SyncPlugin {
     for (final kind in VaultPageKind.values) {
       final byId = <String, List<({String path, String text, PageModel page})>>{};
       for (final path in await _folder.listMarkdownFiles(kind.folder)) {
-        final text = await _folder.read(path);
+        final String? text;
+        try {
+          text = await _folder.read(path);
+        } on Object catch (error) {
+          // A file that cannot be read is left alone: the rest of the folder
+          // is still read.
+          debugPrint('vault: $path not read: $error');
+          continue;
+        }
         if (text == null) continue;
         final PageModel page;
         try {
@@ -169,7 +179,12 @@ class VaultPlugin implements SyncPlugin {
         _members.putIfAbsent(key, () => <String>{});
         // Concurrent versions of one page were all read; keep one.
         for (final extra in copies.skip(1)) {
-          await _folder.remove(extra.path);
+          try {
+            await _folder.remove(extra.path);
+          } on Object catch (error) {
+            debugPrint('vault: ${extra.path} not removed: $error');
+            continue;
+          }
           await _dropBase(extra.path);
           touched.add(key);
         }
@@ -178,7 +193,9 @@ class VaultPlugin implements SyncPlugin {
     return touched;
   }
 
-  Future<void> _ingest(
+  /// Take what a page says. Returns false when the page could not be taken:
+  /// it is left alone, and the next pass reads it again.
+  Future<bool> _ingest(
       VaultPageKey key, String path, String text, PageModel page) async {
     final base = await _baseOf(path);
     PageModel? baseModel;
@@ -191,7 +208,14 @@ class VaultPlugin implements SyncPlugin {
     }
     final changes = _changesFromPage(key, page, baseModel);
     if (changes.isNotEmpty) {
-      await _host.applyRemote(id, changes);
+      try {
+        await _host.applyRemote(id, changes);
+      } on Object catch (error) {
+        // A page the app cannot take must not stop the vault: the other pages
+        // are still read, and this one is left for the next pass.
+        debugPrint('vault: $path not taken: $error');
+        return false;
+      }
       final members = _members.putIfAbsent(key, () => <String>{});
       for (final change in changes) {
         members.add('${change.collection}/${change.entityId}');
@@ -200,6 +224,7 @@ class VaultPlugin implements SyncPlugin {
       }
     }
     await _saveBase(path, text);
+    return true;
   }
 
   /// What a page says, as changes. Block entries pass through with their own
@@ -217,18 +242,17 @@ class VaultPlugin implements SyncPlugin {
     void addField(String collection, String entityId, String field,
         Object? value, Hlc hlc) {
       touch(collection, entityId);
+      // No clock is compared here. The host's merge settles every field, and
+      // the page read below is the last word on what the page says: it knows
+      // whether a value is what a device wrote (its digest says so) or a hand
+      // edit, and a hand edit gets a clock of its own.
       final map = fields.putIfAbsent('$collection/$entityId', () => {});
-      final existing = map[field];
-      if (existing == null || existing.hlc < hlc) {
-        map[field] = ClockedValue(value, hlc);
-      }
+      map[field] = ClockedValue(value, hlc);
     }
 
     void addTombstone(String collection, String entityId, Hlc hlc) {
       touch(collection, entityId);
-      final ref = '$collection/$entityId';
-      final existing = tombstones[ref];
-      if (existing == null || existing < hlc) tombstones[ref] = hlc;
+      tombstones['$collection/$entityId'] = hlc;
     }
 
     final block = page.block ?? base?.block;
@@ -323,7 +347,8 @@ class VaultPlugin implements SyncPlugin {
         }
       }
       if (entry == null) {
-        if (value != null) {
+        // Nothing said about it before: what the page shows is news.
+        if (value != null && _canCarry(todosCollection, field.key, value)) {
           addField(todosCollection, key.entityId, field.key, value,
               _host.mintClock());
         }
@@ -339,9 +364,14 @@ class VaultPlugin implements SyncPlugin {
             value ?? (entry.digest == digestOf('') ? '' : null);
         addField(
             todosCollection, key.entityId, field.key, carried, entry.hlc);
-      } else {
+      } else if (_canCarry(todosCollection, field.key, value)) {
+        // A hand edit, and one the app can hold.
         addField(todosCollection, key.entityId, field.key, value,
             _host.mintClock());
+      } else {
+        // A hand edit the app cannot hold. It is not carried, so the app keeps
+        // the value it has, and the next write puts the page back.
+        debugPrint('vault: ${field.key} not taken: the app cannot hold it');
       }
     }
   }
@@ -364,7 +394,8 @@ class VaultPlugin implements SyncPlugin {
     }
     if (entry == null) {
       // Nothing said about it before: what the page shows is news.
-      if (value != null) {
+      if (value != null &&
+          _canCarry(capturesCollection, 'clarified_at', value)) {
         addField(capturesCollection, key.entityId, 'clarified_at', value,
             _host.mintClock());
       }
@@ -375,10 +406,14 @@ class VaultPlugin implements SyncPlugin {
       // host, or a device that only sees the page would lack it.
       addField(capturesCollection, key.entityId, 'clarified_at', value,
           entry.hlc);
-    } else {
+    } else if (_canCarry(capturesCollection, 'clarified_at', value)) {
       // A hand edit.
       addField(capturesCollection, key.entityId, 'clarified_at', value,
           _host.mintClock());
+    } else {
+      // A hand edit the app cannot hold: it is not carried, and the next
+      // write puts the page back.
+      debugPrint('vault: clarified_at not taken: the app cannot hold it');
     }
   }
 
@@ -543,16 +578,24 @@ class VaultPlugin implements SyncPlugin {
     while (true) {
       final text = await _render(key);
       if (text == null) return;
-      final path = await _pathFor(key, text);
-      final existing = await _folder.read(path);
+      var path = _pathFor(key, text);
+      final String? existing;
+      try {
+        existing = await _folder.read(path);
+      } on Object catch (error) {
+        // A file that cannot be read is left alone: the other pages are still
+        // written.
+        debugPrint('vault: $path not read: $error');
+        return;
+      }
       final base = await _baseOf(path);
       if (existing == text) {
         if (base != text) await _saveBase(path, text);
+        _paths[key] = path;
         return;
       }
-      if (existing != null && existing != base && attempts < 2) {
-        // Someone changed the file since this device last saw it: read it before
-        // it is overwritten.
+      if (existing != null) {
+        // What is at this path?
         final PageModel page;
         try {
           page = parsePage(existing);
@@ -560,10 +603,32 @@ class VaultPlugin implements SyncPlugin {
           debugPrint('vault: $path left alone: ${error.message}');
           return;
         }
-        if (page.frontmatter['id'] is! String) return;
-        await _ingest(key, path, existing, page);
-        attempts++;
-        continue;
+        final id = page.frontmatter['id'];
+        if (id is! String) {
+          debugPrint('vault: $path left alone: it names no entity');
+          return;
+        }
+        if (id != key.entityId) {
+          // The path holds another entity's page. This entity needs a path of
+          // its own — one every device derives the same way — and the other
+          // entity's page is left alone.
+          final own = _ownPath(key, path);
+          if (own == path) {
+            debugPrint('vault: $path left alone: another entity holds it');
+            return;
+          }
+          path = own;
+          _paths[key] = path;
+          attempts++;
+          continue;
+        }
+        if (existing != base && attempts < 3) {
+          // Someone changed the file since this device last saw it: read it
+          // before it is overwritten.
+          if (!await _ingest(key, path, existing, page)) return;
+          attempts++;
+          continue;
+        }
       }
       await _folder.writeAtomically(path, text);
       await _saveBase(path, text);
@@ -587,7 +652,12 @@ class VaultPlugin implements SyncPlugin {
     return renderPage(layOutPage(key, changes));
   }
 
-  Future<String> _pathFor(VaultPageKey key, String text) async {
+  /// Where this entity's page goes: where it went last, or a name of its own.
+  ///
+  /// The name is a reading of the entity, never its identity — the frontmatter
+  /// id is. Two entities can want the same name, and the one that finds the
+  /// name taken moves to a path of its own ([_ownPath]).
+  String _pathFor(VaultPageKey key, String text) {
     final known = _paths[key];
     if (known != null) return known;
     final page = parsePage(text);
@@ -604,24 +674,20 @@ class VaultPlugin implements SyncPlugin {
       case VaultPageKind.capture:
         stem = key.entityId;
     }
-    var candidate = '${key.kind.folder}/$stem.md';
-    final existing = await _folder.read(candidate);
-    if (existing != null) {
-      String? otherId;
-      try {
-        final id = parsePage(existing).frontmatter['id'];
-        otherId = id is String ? id : null;
-      } on PageParseException {
-        otherId = null;
-      }
-      if (otherId != key.entityId) {
-        final short = key.entityId.length > 8
-            ? key.entityId.substring(0, 8)
-            : key.entityId;
-        candidate = '${key.kind.folder}/$stem-$short.md';
-      }
-    }
-    return candidate;
+    return '${key.kind.folder}/$stem.md';
+  }
+
+  /// A path of this entity's own, for when the path it wanted holds another
+  /// entity's page.
+  ///
+  /// Derived from the entity's id, so every device that meets the same
+  /// collision derives the same path.
+  String _ownPath(VaultPageKey key, String path) {
+    final suffix = '-${key.entityId}';
+    final stem =
+        path.endsWith('.md') ? path.substring(0, path.length - 3) : path;
+    if (stem.endsWith(suffix)) return path;
+    return '$stem$suffix.md';
   }
 
   String _slug(Object? title) {
@@ -650,4 +716,40 @@ class VaultPlugin implements SyncPlugin {
 
   Future<void> _dropBase(String path) => _sync.customStatement(
       'DELETE FROM vault_page_bases WHERE page_path = ?', [path]);
+}
+
+/// Whether the app can hold [value] as [field] of [collection].
+///
+/// A hand edit is a value no device wrote, so it can be one the app cannot
+/// hold: a value of the wrong kind, an Outcome's intent that is not one of
+/// its three words, a title longer than the row allows. Carrying such a value
+/// would put a row the domain store refuses into the sync store, and the
+/// Outcome would vanish from the app.
+///
+/// Such a value is not carried. The app keeps the value it has, and the next
+/// write puts the page back.
+bool _canCarry(String collection, String field, Object? value) {
+  if (value == null) {
+    // A field cleared by hand is a value the app can hold — unless the row
+    // cannot do without it. `todos.intent` is NOT NULL, and a null intent
+    // would put a row the store refuses into the sync store.
+    return !(collection == todosCollection && field == 'intent');
+  }
+  final kind = collectionCodecs[collection]?.columns[field];
+  final fits = switch (kind) {
+    FieldKind.text => value is String,
+    FieldKind.integer => value is num,
+    FieldKind.boolean => value is bool || value is int,
+    FieldKind.instant => value is String && decodeInstant(value) != null,
+    null => true,
+  };
+  if (!fits) return false;
+  // The rules the column contract does not carry.
+  if (collection == todosCollection && field == 'intent') {
+    return Intent.values.any((intent) => intent.value == value);
+  }
+  if (collection == todosCollection && field == 'title') {
+    return value is String && value.length <= Todos.maxTitleLength;
+  }
+  return true;
 }

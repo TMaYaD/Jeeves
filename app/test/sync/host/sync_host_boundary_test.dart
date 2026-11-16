@@ -96,4 +96,30 @@ void main() {
     }
     expect(offenders, isEmpty);
   });
+
+  test('nothing under sync/vault compares two clocks', () {
+    // The plugin is a carrier: it turns a page into changes and writes the
+    // host's merged state back. It never orders two clocks — the host's merge
+    // settles every field — so a comparison of clocks under sync/vault is the
+    // carrier reaching for a decision that is not its own.
+    final offenders = <String>[];
+    for (final file in _dartFiles('lib/sync/vault')) {
+      for (final line in file.readAsLinesSync()) {
+        final code = line.split('//').first;
+        if (!_comparesClocks.hasMatch(code)) continue;
+        offenders.add('${file.path}: $line');
+      }
+    }
+    expect(offenders, isEmpty);
+  });
 }
+
+/// A comparison of two clocks: a clock, an operator, and something beside it.
+///
+/// A type argument list — `<String, Hlc>` — is not a comparison: the angle
+/// bracket there closes a type, it does not order two values.
+final RegExp _comparesClocks = RegExp(
+  r'(hlc|clock)\s*[<>]=?\s*[A-Za-z_$]'
+  r'|[A-Za-z0-9_)\]]\s*[<>]=?\s*(hlc|clock)',
+  caseSensitive: false,
+);

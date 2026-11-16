@@ -100,4 +100,25 @@ void main() {
     expect(parsePage(text).checklist.length, 2);
     expect(parsePage(text).block, isNotNull);
   });
+
+  test('a checklist text that spans lines survives the page', () {
+    // A line that was cut short would read back as a different Action, so the
+    // newline is spelled out and the line stays one line.
+    final page = PageModel(
+      frontmatter: const {'id': 'a1b2', 'title': 'Plan'},
+      notes: 'Some notes.\n',
+      checklist: const [
+        ChecklistLine(done: false, text: 'first line\nsecond line'),
+        ChecklistLine(done: true, text: 'a backslash \\ and a newline\nhere'),
+      ],
+      block: const [],
+    );
+
+    final text = renderPage(page);
+    expect(text, contains(r'- [ ] first line\nsecond line'));
+    expect(text, contains(r'- [x] a backslash \\ and a newline\nhere'));
+
+    final parsed = parsePage(text);
+    expect(parsed.checklist, page.checklist);
+  });
 }

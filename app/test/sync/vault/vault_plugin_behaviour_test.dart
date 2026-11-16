@@ -15,6 +15,7 @@ import 'dart:io';
 import 'package:drift/drift.dart' show Variable;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/sync/host/change.dart';
+import 'package:jeeves/sync/vault/page_codec.dart';
 import 'package:jeeves/sync/vault/vault_folder.dart';
 import 'package:jeeves/sync/vault/vault_folder_io.dart';
 import 'package:jeeves/sync/vault/vault_plugin.dart';
@@ -23,6 +24,7 @@ import '../host/host_harness.dart';
 
 const String _userId = 'vault-user';
 const String _outcomeId = '3f2d1c4e-5a6b-4c8d-9e0f-1a2b3c4d5e6f';
+const String _otherOutcomeId = '8a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d';
 
 /// A folder that refuses to write while [failing] is set.
 ///
@@ -34,12 +36,20 @@ class _RefusingFolder implements VaultFolder {
   final VaultFolder inner;
   bool failing = false;
 
+  /// The paths that cannot be read.
+  final Set<String> unreadable = {};
+
   @override
   Future<List<String>> listMarkdownFiles(String subfolder) =>
       inner.listMarkdownFiles(subfolder);
 
   @override
-  Future<String?> read(String relativePath) => inner.read(relativePath);
+  Future<String?> read(String relativePath) {
+    if (unreadable.contains(relativePath)) {
+      throw StateError('the file cannot be read');
+    }
+    return inner.read(relativePath);
+  }
 
   @override
   Future<void> writeAtomically(String relativePath, String text) {
@@ -191,15 +201,128 @@ void main() {
     expect(await _actionCount(restarted), 1,
         reason: 'the Action was made once, not once per delivery');
   });
+
+  test('a hand edit the app cannot hold is not taken', () async {
+    final device = HostDevice.open('a');
+    addTearDown(device.close);
+    final host = await device.startHost();
+    final directory = Directory('${root.path}/vault')..createSync(recursive: true);
+    final folder = DirectoryVaultFolder(directory);
+    final plugin = VaultPlugin(folder: folder, sync: device.sync);
+    await host.attach(plugin);
+
+    await device.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'Plan', userId: _userId);
+    await host.deliverAll();
+    await plugin.rescan();
+
+    final path = (await folder.listMarkdownFiles('Outcomes')).single;
+    final page = (await folder.read(path))!;
+
+    // The intent is one of three words, and a title is at most as long as the
+    // row allows. Another word and a longer title are hand edits the app
+    // cannot hold: taking them would put a row the store refuses into the
+    // sync store, and the Outcome would vanish from the app.
+    final longTitle = 'x' * 501;
+    await folder.writeAtomically(
+      path,
+      page.replaceFirst('title: Plan', 'title: $longTitle\nintent: Next'),
+    );
+    await plugin.rescan();
+
+    expect(await _title(device), 'Plan',
+        reason: 'the app took a title it cannot hold');
+    expect(await _intent(device), 'next',
+        reason: 'the app took an intent it cannot hold');
+    final restored = (await folder.read(path))!;
+    expect(restored, contains('title: Plan'), reason: 'the page was not put back');
+    expect(restored, isNot(contains('Next')),
+        reason: 'the page kept a word the app cannot hold');
+  });
+
+  test('two Outcomes whose names read alike have a page each', () async {
+    final device = HostDevice.open('a');
+    addTearDown(device.close);
+    final host = await device.startHost();
+    final directory = Directory('${root.path}/vault')..createSync(recursive: true);
+    final folder = DirectoryVaultFolder(directory);
+    final plugin = VaultPlugin(folder: folder, sync: device.sync);
+    await host.attach(plugin);
+
+    // Two names that read alike, so both want the same file name.
+    await device.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'Plan!', userId: _userId);
+    await device.domain.todoDao
+        .insertOutcome(id: _otherOutcomeId, title: 'Plan?', userId: _userId);
+    await host.deliverAll();
+    await plugin.rescan();
+
+    final paths = await folder.listMarkdownFiles('Outcomes');
+    expect(paths, hasLength(2), reason: 'the two Outcomes share a page');
+
+    final ids = <String>{};
+    for (final path in paths) {
+      final page = parsePage((await folder.read(path))!);
+      ids.add(page.frontmatter['id']! as String);
+    }
+    expect(ids, {_outcomeId, _otherOutcomeId});
+
+    expect(await _title(device, _outcomeId), 'Plan!');
+    expect(await _title(device, _otherOutcomeId), 'Plan?');
+  });
+
+  test('a file that cannot be read does not stop the vault', () async {
+    final device = HostDevice.open('a');
+    addTearDown(device.close);
+    final host = await device.startHost();
+    final directory = Directory('${root.path}/vault')..createSync(recursive: true);
+    final folder = _RefusingFolder(DirectoryVaultFolder(directory));
+    final plugin = VaultPlugin(folder: folder, sync: device.sync);
+    await host.attach(plugin);
+
+    await device.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'aaa', userId: _userId);
+    await device.domain.todoDao
+        .insertOutcome(id: _otherOutcomeId, title: 'bbb', userId: _userId);
+    await host.deliverAll();
+    await plugin.rescan();
+
+    final paths = await folder.listMarkdownFiles('Outcomes');
+    expect(paths, hasLength(2));
+
+    // The first file cannot be read. The second is still read, so the hand
+    // edit in it lands.
+    final unreadable = paths.firstWhere((path) => path.contains('aaa'));
+    final edited = paths.firstWhere((path) => path.contains('bbb'));
+    folder.unreadable.add(unreadable);
+    final page = (await folder.read(edited))!;
+    await folder.writeAtomically(
+      edited,
+      page.replaceFirst('title: bbb', 'title: bbb edited'),
+    );
+
+    await plugin.rescan();
+
+    expect(await _title(device, _otherOutcomeId), 'bbb edited');
+  });
 }
 
 /// The Outcome's title, as the app holds it.
-Future<String?> _title(HostDevice device) async {
+Future<String?> _title(HostDevice device, [String id = _outcomeId]) async {
   final rows = await device.domain.customSelect(
     'SELECT title FROM todos WHERE id = ?',
-    variables: [Variable<String>(_outcomeId)],
+    variables: [Variable<String>(id)],
   ).get();
   return rows.isEmpty ? null : rows.single.read<String>('title');
+}
+
+/// The Outcome's intent, as the app holds it.
+Future<String?> _intent(HostDevice device, [String id = _outcomeId]) async {
+  final rows = await device.domain.customSelect(
+    'SELECT intent FROM todos WHERE id = ?',
+    variables: [Variable<String>(id)],
+  ).get();
+  return rows.isEmpty ? null : rows.single.read<String>('intent');
 }
 
 /// How many Actions the Outcome has.

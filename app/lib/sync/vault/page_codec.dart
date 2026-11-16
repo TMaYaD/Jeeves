@@ -23,7 +23,9 @@
 /// that does not was edited by hand. The encoding is base64 so no value can ever
 /// close the comment (it holds no `--`).
 ///
-/// A page is a pure function of its model: fixed field order, sorted entries,
+/// A checklist line holds one line of text: a newline in it is written `\n`,
+/// so the text survives the page whole.
+////// A page is a pure function of its model: fixed field order, sorted entries,
 /// `\n` line ends, nothing read from the device. Two devices in the same state
 /// write the same bytes.
 library;
@@ -154,7 +156,7 @@ String renderPage(PageModel page) {
     ..write(page.notes)
     ..write('\n$_actionsHeading\n');
   for (final line in page.checklist) {
-    out.write('- [${line.done ? 'x' : ' '}] ${line.text}\n');
+    out.write('- [${line.done ? 'x' : ' '}] ${_escapeChecklistText(line.text)}\n');
   }
   final block = page.block;
   if (block != null) {
@@ -275,9 +277,43 @@ List<ChecklistLine> _parseChecklist(String text) {
   for (final line in text.split('\n')) {
     final match = _checklistLine.firstMatch(line);
     if (match == null) continue;
-    lines.add(ChecklistLine(done: match.group(1) != ' ', text: match.group(2)!));
+    lines.add(ChecklistLine(
+      done: match.group(1) != ' ',
+      text: _unescapeChecklistText(match.group(2)!),
+    ));
   }
   return lines;
+}
+
+/// A checklist line holds one line of text.
+///
+/// A text that spans lines is written with its newlines spelled out (`\n`),
+/// so the line stays one line and the text survives the page: a line that was
+/// cut short would read back as a different Action.
+String _escapeChecklistText(String text) =>
+    text.replaceAll('\\', '\\\\').replaceAll('\n', '\\n');
+
+/// The inverse of [_escapeChecklistText].
+String _unescapeChecklistText(String text) {
+  final out = StringBuffer();
+  for (var i = 0; i < text.length; i++) {
+    final character = text[i];
+    if (character != '\\' || i + 1 == text.length) {
+      out.write(character);
+      continue;
+    }
+    final next = text[i + 1];
+    if (next == 'n') {
+      out.write('\n');
+      i++;
+    } else if (next == '\\') {
+      out.write('\\');
+      i++;
+    } else {
+      out.write(character);
+    }
+  }
+  return out.toString();
 }
 
 List<BlockEntry>? _parseBlock(String text) {

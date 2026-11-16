@@ -22,8 +22,11 @@ import '../utils/uuid.dart';
 /// surfaces that display it read that derivation directly; nothing caches it,
 /// because a cached total is a value that can only ever be stale (ADR-0030).
 class Todos extends Table {
+  /// The longest title a row holds.
+  static const int maxTitleLength = 500;
+
   TextColumn get id => text().clientDefault(() => uuid.v4())();
-  TextColumn get title => text().withLength(max: 500)();
+  TextColumn get title => text().withLength(max: maxTitleLength)();
   TextColumn get notes => text().nullable()();
   IntColumn get priority => integer().nullable()();
   DateTimeColumn get dueDate => dateTime().nullable()();
