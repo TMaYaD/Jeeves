@@ -48,6 +48,21 @@ Future<Map<String, Map<String, Object?>>> _snapshotValues(
   return out;
 }
 
+final RegExp _instant = RegExp(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}');
+
+Map<String, Map<String, Object?>> _withoutInstants(
+        Map<String, Map<String, Object?>> snapshot) =>
+    {
+      for (final entity in snapshot.entries)
+        entity.key: {
+          for (final field in entity.value.entries)
+            field.key: field.value is String &&
+                    _instant.hasMatch(field.value as String)
+                ? '<instant>'
+                : field.value,
+        },
+    };
+
 Future<List<Map<String, Object?>>> _domainTable(
     HostDevice device, String table) async {
   final rows =
@@ -193,8 +208,11 @@ void main() {
           'After seed');
       await device.domain.todoDao.deleteOutcome(_outcomeB);
       await host.drain();
-      expect((await _snapshotValues(host)).containsKey('todos/$_outcomeB'),
-          isFalse);
+      // The delete wins over the seeded fields: the entity carries a tombstone.
+      expect(await _count(device.sync, 'row_tombstones'), 1);
+      final deleted = await host.snapshot().firstWhere(
+          (change) => change.entityId == _outcomeB);
+      expect(deleted.tombstone, isNotNull);
     });
 
     test('a walk cut short and restarted ends where an uninterrupted one does',
@@ -224,8 +242,10 @@ void main() {
       await interruptedHost.ensureMergeStateSeeded();
       await controlHost.ensureMergeStateSeeded();
 
-      expect(await _snapshotValues(interruptedHost),
-          await _snapshotValues(controlHost));
+      // The two devices wrote their rows at different instants, so compare the
+      // shape and the non-instant values; instants are checked by the clocks.
+      expect(_withoutInstants(await _snapshotValues(interruptedHost)),
+          _withoutInstants(await _snapshotValues(controlHost)));
       expect(await _count(interrupted.sync, 'merge_state_seeding'), 1);
     });
   });
