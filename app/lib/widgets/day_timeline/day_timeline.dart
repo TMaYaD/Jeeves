@@ -56,11 +56,16 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
   static const _gutterWidth = 56.0;
   static const _minTileHeight = 24.0;
 
+  /// The timeline scrolls inside this height, so a long day does not push the
+  /// Plan's own rows far down the page.
+  static const _viewportHeight = 320.0;
+
   final _stackKey = GlobalKey();
   late DayLayout _layout;
   late String _inputsSignature;
   late DateTime _windowStart;
   late DateTime _windowEnd;
+  late final ScrollController _scrollController;
 
   @override
   void initState() {
@@ -68,11 +73,18 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
     WidgetsBinding.instance.addObserver(this);
     _inputsSignature = _signatureOf(widget);
     _recompute();
+    // Open on the now line, or on the start of the day when it is not in view.
+    final now = ref.read(clockProvider)();
+    final nowOffset = now.difference(_windowStart).inMinutes * _pixelsPerMinute;
+    _scrollController = ScrollController(
+      initialScrollOffset: nowOffset > 0 ? nowOffset - 60 : 0,
+    );
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -242,8 +254,14 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
           ),
         const SizedBox(height: 12),
         SizedBox(
-          height: totalMinutes * _pixelsPerMinute,
-          child: DragTarget<String>(
+          height: (totalMinutes * _pixelsPerMinute)
+              .clamp(0.0, _viewportHeight)
+              .toDouble(),
+          child: SingleChildScrollView(
+            controller: _scrollController,
+            child: SizedBox(
+              height: totalMinutes * _pixelsPerMinute,
+              child: DragTarget<String>(
             onAcceptWithDetails: _onDrop,
             builder: (context, _, _) => Stack(
               key: _stackKey,
@@ -289,6 +307,8 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
                     ),
                   ),
               ],
+            ),
+          ),
             ),
           ),
         ),
