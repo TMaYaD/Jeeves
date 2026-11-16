@@ -58,14 +58,33 @@ void main() {
     expect(settingsB.notificationEnabled, isFalse);
     expect(settingsB.bannerEnabled, isFalse);
     expect(appB.read(recentSearchesProvider), ['taxes', 'invoices']);
+  });
 
-    // The dismissal travels as a synced preference.
-    await appA.read(syncedPreferencesProvider.notifier).set('onboarding_seen', true);
+  test('dismissing the card on device A hides it on device B', () async {
+    final workspace = await SimWorkspace.create();
+    addTearDown(workspace.close);
+    final appA = appOver(workspace.a);
+    final appB = appOver(workspace.b);
+    await appA.read(syncedPreferencesProvider.future);
+    await appB.read(syncedPreferencesProvider.future);
+
+    // Device A: the app's own reconciliation provider, then the real dismissal.
+    appA.read(onboardingSyncProvider);
+    await markOnboardingSeen();
+    await pumpEventQueue();
     await workspace.syncAll();
     await pumpEventQueue();
-    expect(
-      appB.read(syncedPreferencesProvider).asData!.value.get<bool>('onboarding_seen'),
-      isTrue,
-    );
+
+    // Device B starts as a fresh install: card not yet dismissed on the device.
+    appA.dispose();
+    SharedPreferences.setMockInitialValues({});
+    onboardingSeenNotifier.value = false;
+
+    appB.read(onboardingSyncProvider);
+    await pumpEventQueue();
+
+    expect(onboardingSeenNotifier.value, isTrue);
+    expect((await SharedPreferences.getInstance()).getBool('onboarding_seen'),
+        isTrue);
   });
 }

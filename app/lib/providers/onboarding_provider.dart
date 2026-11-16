@@ -63,8 +63,8 @@ final onboardingSyncProvider = Provider<void>((ref) {
     }
   }
 
-  ref.listen(syncedPreferencesProvider, (_, __) => reconcile());
-  ref.listen(currentUserIdProvider, (_, __) => reconcile());
+  ref.listen(syncedPreferencesProvider, (_, _) => reconcile());
+  ref.listen(currentUserIdProvider, (_, _) => reconcile());
   onboardingSeenNotifier.addListener(reconcile);
   ref.onDispose(() => onboardingSeenNotifier.removeListener(reconcile));
   reconcile();
