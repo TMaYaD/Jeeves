@@ -71,6 +71,9 @@ String sentenceForAlarmCode(String code) {
     IntegrityAlarmKind.ownWriteRefusedPermanently =>
       "Something you did on this device can't be sent, and newer changes are "
           'stuck behind it.',
+    IntegrityAlarmKind.segmentRolledBack =>
+      'A file in your sync folder went back to an older version. Changes from '
+          'that device may be missing until it catches up.',
     IntegrityAlarmKind.epochKeySetUnpublishable =>
       "This device couldn't finish moving your data onto a new encryption key.",
 
