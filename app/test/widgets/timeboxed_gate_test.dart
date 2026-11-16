@@ -132,7 +132,7 @@ void main() {
     await settle(tester);
 
     expect(started, isTrue);
-    expect(find.byKey(const Key('timeboxed_gate_start')), findsNothing);
+    expect(find.byKey(const Key('timeboxed_gate_stop')), findsNothing);
   });
 
   testWidgets('a limit that has not passed starts without asking', (
@@ -147,7 +147,7 @@ void main() {
     await settle(tester);
 
     expect(started, isTrue);
-    expect(find.byKey(const Key('timeboxed_gate_start')), findsNothing);
+    expect(find.byKey(const Key('timeboxed_gate_stop')), findsNothing);
   });
 
   testWidgets('a passed limit asks before the Sprint starts', (tester) async {
@@ -160,13 +160,13 @@ void main() {
     await settle(tester);
 
     expect(started, isFalse);
-    expect(find.byKey(const Key('timeboxed_gate_start')), findsOneWidget);
+    expect(find.byKey(const Key('timeboxed_gate_stop')), findsOneWidget);
     expect(find.text('The limit has run its course, sir.'), findsOneWidget);
     expect(find.byType(TimeboxedLimitStrip), findsOneWidget);
     expect(find.text('Sprints past the limit so far: 0'), findsOneWidget);
   });
 
-  testWidgets('"Right ho" starts the Sprint', (tester) async {
+  testWidgets('"Right ho" starts nothing', (tester) async {
     await makeTimeboxed();
     await logTime(const Duration(minutes: 50));
     var started = false;
@@ -174,11 +174,12 @@ void main() {
 
     await tester.tap(find.byKey(const Key('open_gate')));
     await settle(tester);
-    await tester.tap(find.byKey(const Key('timeboxed_gate_start')));
+    await tester.tap(find.byKey(const Key('timeboxed_gate_stop')));
     await settle(tester);
 
-    expect(started, isTrue);
-    expect(find.byKey(const Key('timeboxed_gate_start')), findsNothing);
+    // The sheet closes and the Sprint does not start.
+    expect(started, isFalse);
+    expect(find.byKey(const Key('timeboxed_gate_stop')), findsNothing);
   });
 
   testWidgets('"Another sprint, regardless" asks once more, then starts', (
@@ -197,7 +198,8 @@ void main() {
     // Asked once more: the Sprint has still not started.
     expect(started, isFalse);
     expect(find.byKey(const Key('timeboxed_gate_confirm')), findsOneWidget);
-    expect(find.text('Quite so, sir.'), findsOneWidget);
+    expect(find.text('Once more, sir, to be certain.'), findsOneWidget);
+    expect(find.text('Yes, another sprint'), findsOneWidget);
 
     await tester.tap(find.byKey(const Key('timeboxed_gate_confirm')));
     await settle(tester);
@@ -220,21 +222,6 @@ void main() {
     await settle(tester);
 
     expect(await storedEstimate(), 30);
-  });
-
-  testWidgets('"Never mind" does not start the Sprint', (tester) async {
-    await makeTimeboxed();
-    await logTime(const Duration(minutes: 50));
-    var started = false;
-    await tester.pumpWidget(harness(onStart: () => started = true));
-
-    await tester.tap(find.byKey(const Key('open_gate')));
-    await settle(tester);
-    await tester.tap(find.byKey(const Key('timeboxed_gate_cancel')));
-    await settle(tester);
-
-    expect(started, isFalse);
-    expect(find.byKey(const Key('timeboxed_gate_start')), findsNothing);
   });
 
   testWidgets('"Never mind" at the second ask does not start the Sprint', (
@@ -289,7 +276,7 @@ void main() {
     await settle(tester);
 
     // Back at the gate, with the estimate untouched and no Sprint started.
-    expect(find.byKey(const Key('timeboxed_gate_start')), findsOneWidget);
+    expect(find.byKey(const Key('timeboxed_gate_stop')), findsOneWidget);
     expect(find.byKey(const Key('estimate_sheet_value')), findsNothing);
     expect(await storedEstimate(), 30);
     expect(started, isFalse);
@@ -314,7 +301,7 @@ void main() {
     expect(await storedEstimate(), 45);
     expect(started, isFalse);
     // The gate asks again, with the figures as they now stand.
-    expect(find.byKey(const Key('timeboxed_gate_start')), findsOneWidget);
+    expect(find.byKey(const Key('timeboxed_gate_stop')), findsOneWidget);
     expect(find.text('Sprints past the limit so far: 0'), findsOneWidget);
   });
 

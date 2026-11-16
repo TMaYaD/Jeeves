@@ -60,11 +60,11 @@ void main() {
       expect(advice.detail, contains('first beyond it'));
     });
 
-    test('the second past the limit notes the habit', () {
+    test('the second past the limit says the limit was the user\'s own', () {
       final advice = timeboxedAdviceFor(2);
 
       expect(advice.headline, contains('second past the limit'));
-      expect(advice.detail, contains('habit'));
+      expect(advice.detail, contains('your own'));
     });
 
     test('the third and beyond say the day is moving on', () {

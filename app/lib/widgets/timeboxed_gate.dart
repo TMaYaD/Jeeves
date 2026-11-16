@@ -23,11 +23,12 @@ import 'timeboxed_limit_strip.dart';
 
 /// What the user chose at the gate.
 enum TimeboxedGateChoice {
-  /// "Right ho" — the Sprint starts.
-  start,
+  /// "Right ho" — the sheet closes and the Sprint does not start. Nothing is
+  /// written: the user stays where they were.
+  stop,
 
-  /// "Another sprint, regardless", confirmed a second time — the Sprint
-  /// starts and the estimate is left exactly as it was.
+  /// "Yes, another sprint" — confirmed a second time; the Sprint starts and
+  /// the estimate is left exactly as it was.
   regardless,
 
   /// "Raise the estimate…" — the estimate sheet was opened; a raised
@@ -61,14 +62,15 @@ Future<TimeboxedGateChoice?> showTimeboxedSprintGate(
 
 /// Runs [start], unless the Outcome's current Action is Timeboxed and its
 /// limit has already been passed — in which case Jeeves advises first and the
-/// user confirms.
+/// user chooses.
 ///
-/// "Right ho" starts the Sprint. "Another sprint, regardless" asks once more
-/// and then starts it, leaving the estimate exactly as it was. "Raise the
-/// estimate…" opens the estimate sheet one step up; if the raised estimate
-/// moves the limit out of the way the Sprint starts after all, and if it does
-/// not, the gate asks again with the figures as they now stand. Nothing here
-/// is locked.
+/// "Right ho" starts nothing: the sheet closes and the user stays where they
+/// were. "Another sprint, regardless" asks once more and then starts the
+/// Sprint, leaving the estimate exactly as it was. "Raise the estimate…"
+/// opens the estimate sheet one step up; if the raised estimate moves the
+/// limit out of the way the Sprint starts after all, and if it does not, the
+/// gate asks again with the figures as they now stand. Nothing here is
+/// locked.
 Future<void> guardSprintPastLimit(
   BuildContext context,
   WidgetRef ref, {
@@ -88,10 +90,13 @@ Future<void> guardSprintPastLimit(
   }
   var status = initial;
   var action = await db.actionDao.getCurrentAction(outcomeId);
+  // The sheet names the Outcome, as the design does; the Action's own text is
+  // the fallback for an Outcome whose title has gone.
+  final todo = await db.todoDao.getTodo(outcomeId);
   if (!context.mounted) return;
   var choice = await showTimeboxedSprintGate(
     context,
-    actionText: action?.actionText ?? '',
+    actionText: todo?.title ?? action?.actionText ?? '',
     status: status,
     now: now,
   );
@@ -117,13 +122,12 @@ Future<void> guardSprintPastLimit(
     if (!context.mounted) return;
     choice = await showTimeboxedSprintGate(
       context,
-      actionText: action?.actionText ?? '',
+      actionText: todo?.title ?? action?.actionText ?? '',
       status: status,
       now: now,
     );
   }
-  if (choice == TimeboxedGateChoice.start ||
-      choice == TimeboxedGateChoice.regardless) {
+  if (choice == TimeboxedGateChoice.regardless) {
     await start();
   }
 }
@@ -214,9 +218,9 @@ class _TimeboxedGateSheetState extends State<_TimeboxedGateSheet> {
             if (_askedAgain) ..._secondAsk() else ..._firstAsk(advice),
             const SizedBox(height: 10),
             const Text(
-              'Nothing is locked. Carrying on leaves the estimate as it is; '
-              'raising it is permanent, and the rest of the day is re-flowed '
-              'around it.',
+              '“Regardless” asks once more, then starts. Nothing is locked. '
+              '“Regardless” leaves the estimate as it is. Raising it is '
+              'permanent.',
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w500,
@@ -230,15 +234,19 @@ class _TimeboxedGateSheetState extends State<_TimeboxedGateSheet> {
     );
   }
 
-  /// The first ask: Jeeves advises, and the user may start, carry on
+  /// The first ask: Jeeves advises, and the user may stop, carry on
   /// regardless, or raise the estimate.
+  ///
+  /// "Right ho" puts stopping first, as the design does: it closes the sheet
+  /// and the Sprint does not start. "Another sprint, regardless" is the way
+  /// on, and it asks once more before it starts anything.
   List<Widget> _firstAsk(TimeboxedAdvice advice) {
     return [
       _jeevesPair(advice),
       const SizedBox(height: 14),
       FilledButton(
-        key: const Key('timeboxed_gate_start'),
-        onPressed: () => Navigator.of(context).pop(TimeboxedGateChoice.start),
+        key: const Key('timeboxed_gate_stop'),
+        onPressed: () => Navigator.of(context).pop(TimeboxedGateChoice.stop),
         style: FilledButton.styleFrom(
           backgroundColor: const Color(0xFF2667B7),
           foregroundColor: Colors.white,
@@ -257,30 +265,18 @@ class _TimeboxedGateSheetState extends State<_TimeboxedGateSheet> {
         child: const Text('Another sprint, regardless'),
       ),
       const SizedBox(height: 4),
-      Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          TextButton(
-            key: const Key('timeboxed_gate_cancel'),
-            onPressed: () =>
-                Navigator.of(context).pop(TimeboxedGateChoice.cancel),
-            style: TextButton.styleFrom(
-              foregroundColor: const Color(0xFF6B7280),
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-            ),
-            child: const Text('Never mind'),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: TextButton(
+          key: const Key('timeboxed_gate_raise'),
+          onPressed: () =>
+              Navigator.of(context).pop(TimeboxedGateChoice.raise),
+          style: TextButton.styleFrom(
+            foregroundColor: const Color(0xFF2667B7),
+            padding: const EdgeInsets.symmetric(horizontal: 6),
           ),
-          TextButton(
-            key: const Key('timeboxed_gate_raise'),
-            onPressed: () =>
-                Navigator.of(context).pop(TimeboxedGateChoice.raise),
-            style: TextButton.styleFrom(
-              foregroundColor: const Color(0xFF2667B7),
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-            ),
-            child: const Text('Raise the estimate…'),
-          ),
-        ],
+          child: const Text('Raise the estimate…'),
+        ),
       ),
     ];
   }
@@ -289,14 +285,7 @@ class _TimeboxedGateSheetState extends State<_TimeboxedGateSheet> {
   /// starts with the estimate untouched.
   List<Widget> _secondAsk() {
     return [
-      _jeevesPair(
-        const TimeboxedAdvice(
-          headline: 'Quite so, sir.',
-          detail:
-              'Nothing is locked, but the estimate will not move of its '
-              'own accord.',
-        ),
-      ),
+      _jeevesLine('Once more, sir, to be certain.'),
       const SizedBox(height: 14),
       FilledButton(
         key: const Key('timeboxed_gate_confirm'),
@@ -307,7 +296,7 @@ class _TimeboxedGateSheetState extends State<_TimeboxedGateSheet> {
           foregroundColor: Colors.white,
           minimumSize: const Size.fromHeight(48),
         ),
-        child: const Text('Very good'),
+        child: const Text('Yes, another sprint'),
       ),
       const SizedBox(height: 8),
       OutlinedButton(
@@ -320,6 +309,19 @@ class _TimeboxedGateSheetState extends State<_TimeboxedGateSheet> {
         child: const Text('Never mind'),
       ),
     ];
+  }
+
+  /// Jeeves' one line: the bold voice, with nothing under it.
+  Widget _jeevesLine(String headline) {
+    return Text(
+      headline,
+      style: const TextStyle(
+        fontSize: 16,
+        fontWeight: FontWeight.w700,
+        color: Color(0xFF1A1A2E),
+        height: 1.25,
+      ),
+    );
   }
 
   /// Jeeves' pair: the bold line over the quieter one.

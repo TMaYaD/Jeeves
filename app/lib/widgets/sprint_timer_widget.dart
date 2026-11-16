@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -8,7 +7,6 @@ import '../database/gtd_database.dart';
 import '../models/focus_settings.dart';
 import '../providers/focus_settings_provider.dart';
 import '../providers/sprint_timer_provider.dart';
-import 'timeboxed_gate.dart';
 
 /// Full-page sprint timer for the Active Focus carousel (slide left from notes).
 ///
@@ -96,18 +94,7 @@ class _IdleView extends ConsumerWidget {
           ),
           const SizedBox(height: 28),
           FilledButton.icon(
-            onPressed: isProcessing
-                ? null
-                : () {
-                    // A Sprint that would start past a Timeboxed limit goes
-                    // past the gate first (issue #923).
-                    unawaited(guardSprintPastLimit(
-                      context,
-                      ref,
-                      outcomeId: todo.id,
-                      start: () async => notifier.startSprint(todo),
-                    ));
-                  },
+            onPressed: isProcessing ? null : () => notifier.startSprint(todo),
             style: FilledButton.styleFrom(
               backgroundColor: const Color(0xFF2563EB),
               minimumSize: const Size(200, 48),
@@ -284,23 +271,7 @@ class _Controls extends ConsumerWidget {
 
     if (timer.isBreak) {
       return FilledButton(
-        onPressed: disabled
-            ? null
-            : () {
-                // Skipping the break starts the next Sprint, so it goes past
-                // the same gate (issue #923).
-                final taskId = timer.activeTaskId;
-                if (taskId == null) {
-                  unawaited(notifier.skipBreak());
-                  return;
-                }
-                unawaited(guardSprintPastLimit(
-                  context,
-                  ref,
-                  outcomeId: taskId,
-                  start: () async => notifier.skipBreak(),
-                ));
-              },
+        onPressed: disabled ? null : notifier.skipBreak,
         style: FilledButton.styleFrom(
           backgroundColor: const Color(0xFF10B981),
           minimumSize: const Size(double.infinity, 44),

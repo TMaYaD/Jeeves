@@ -105,8 +105,8 @@ class TimeboxedAdvice {
 ///
 /// One-based: 1 is the first Sprint started past the limit. The tone grows
 /// firmer with each further one, as the story asks — the first states the
-/// fact, the second notes the habit, the third and beyond say plainly that
-/// the day is moving on.
+/// fact, the second says the limit was the user's own, the third and beyond
+/// say plainly that the day is moving on.
 TimeboxedAdvice timeboxedAdviceFor(int nth) {
   if (nth <= 1) {
     return const TimeboxedAdvice(
@@ -117,7 +117,7 @@ TimeboxedAdvice timeboxedAdviceFor(int nth) {
   if (nth == 2) {
     return const TimeboxedAdvice(
       headline: 'That would be the second past the limit, sir.',
-      detail: 'A limit passed once may be an accident. Twice is a habit.',
+      detail: 'The limit was your own; I merely keep it in view.',
     );
   }
   return TimeboxedAdvice(

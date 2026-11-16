@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -19,6 +21,7 @@ import '../widgets/nudge_banner.dart'
     show InboxTooFullHead, NudgeEmptyState, RitualHead, nudgeSurfaceHeadProvider;
 import '../widgets/added_during_the_day_tag.dart';
 import '../widgets/outcome_row.dart';
+import '../widgets/timeboxed_gate.dart';
 
 class FocusScreen extends ConsumerWidget {
   const FocusScreen({super.key});
@@ -493,10 +496,19 @@ class _StartButton extends ConsumerWidget {
           }
         }
 
-        await ref.read(focusModeProvider.notifier).startFocus(todoId);
-        if (context.mounted) {
-          context.push('/focus/active');
-        }
+        // A Sprint that would start past a Timeboxed limit goes past the gate
+        // first, before the engagement opens a TimeLog (issue #923).
+        unawaited(guardSprintPastLimit(
+          context,
+          ref,
+          outcomeId: todoId,
+          start: () async {
+            await ref.read(focusModeProvider.notifier).startFocus(todoId);
+            if (context.mounted) {
+              context.push('/focus/active');
+            }
+          },
+        ));
       },
       style: FilledButton.styleFrom(
         backgroundColor: const Color(0xFF2667B7),

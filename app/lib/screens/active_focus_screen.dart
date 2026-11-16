@@ -298,20 +298,18 @@ class _FocusBodyState extends ConsumerState<_FocusBody>
     )..repeat(reverse: true);
     _pageController = PageController();
 
-    // Sprint starts the moment focus mode starts — unless the Action is
-    // Timeboxed and its limit has already passed, in which case Jeeves
-    // advises first and the user confirms (issue #923).
+    // Sprint starts the moment focus mode starts. The Timeboxed gate is
+    // asked *before* the engagement begins — at the button that starts it —
+    // so a Sprint that is declined leaves no TimeLog behind (issue #923).
+    // This path is the one that is not gated: an engagement that was already
+    // under way when the app was closed carries on.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final timer = ref.read(sprintTimerProvider);
       if (!timer.isActive && !timer.isProcessing) {
-        unawaited(guardSprintPastLimit(
-          context,
-          ref,
-          outcomeId: widget.todo.id,
-          start: () async =>
-              ref.read(sprintTimerProvider.notifier).startSprint(widget.todo),
-        ));
+        unawaited(
+          ref.read(sprintTimerProvider.notifier).startSprint(widget.todo),
+        );
       }
     });
   }
@@ -437,17 +435,17 @@ class _FocusBodyState extends ConsumerState<_FocusBody>
     );
   }
 
-  /// The strip's quieter line: how many Sprints started past the limit.
+  /// The strip's quieter line: the running Sprint, when it is one of the ones
+  /// started past the limit.
   ///
   /// A Sprint that was already running when the limit passed does not count —
   /// it was started before the limit, and the story says such a Sprint runs
-  /// to its end (issue #923).
+  /// to its end (issue #923). So the line is there only when the running
+  /// Sprint itself started past the limit.
   String _limitDetail(TimeboxedLimitStatus limit) {
-    final past = limit.sprintsPastLimit;
-    if (past == 0) return 'This sprint started before the limit';
-    return past == 1
-        ? '1 sprint past the limit'
-        : '$past sprints past the limit';
+    final running = limit.runningSprintPastLimitNumber;
+    if (running == null) return '';
+    return 'Sprint $running past the limit';
   }
 }
 

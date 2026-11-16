@@ -27,6 +27,7 @@ import '../../widgets/project_picker.dart';
 import '../../widgets/dotted_add_button.dart';
 import '../../widgets/tag_list.dart';
 import '../../widgets/time_context_sheet.dart';
+import '../../widgets/timeboxed_gate.dart';
 import '../../widgets/task_status_row.dart';
 
 class TaskDetailScreen extends ConsumerStatefulWidget {
@@ -649,8 +650,17 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
       context.push('/focus/active');
       return;
     }
-    await ref.read(focusModeProvider.notifier).startFocus(todo.id);
-    if (mounted) context.push('/focus/active');
+    // A Sprint that would start past a Timeboxed limit goes past the gate
+    // first, before the engagement opens a TimeLog (issue #923).
+    await guardSprintPastLimit(
+      context,
+      ref,
+      outcomeId: todo.id,
+      start: () async {
+        await ref.read(focusModeProvider.notifier).startFocus(todo.id);
+        if (mounted) context.push('/focus/active');
+      },
+    );
   }
 
   Widget _buildInfoSection({required IconData icon, required Color iconBg, required Color iconColor, required String title, required Widget contentWidget, VoidCallback? onTap}) {

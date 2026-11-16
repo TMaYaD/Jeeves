@@ -110,7 +110,35 @@ void main() {
 
     expect(find.byType(TimeboxedLimitStrip), findsOneWidget);
     expect(find.textContaining('20m past'), findsOneWidget);
-    expect(find.text('1 sprint past the limit'), findsOneWidget);
+    expect(find.text('Sprint 1 past the limit'), findsOneWidget);
+  });
+
+  testWidgets('a Sprint that started before the limit says nothing more', (
+    tester,
+  ) async {
+    final todo = await insertFocusTodo(db, id: 'o5');
+    final now = DateTime.now().toUtc();
+    final passed = now.subtract(const Duration(minutes: 20));
+
+    await tester.pumpWidget(
+      focusHarness(
+        db,
+        todo: todo,
+        timeboxedLimit: status(
+          limitPassedAt: passed,
+          // The running Sprint started before the limit passed.
+          sprintStarts: [passed.subtract(const Duration(minutes: 10))],
+          firstPast: 1,
+        ),
+      ),
+    );
+    await pumpFocusFrames(tester);
+
+    expect(find.byType(TimeboxedLimitStrip), findsOneWidget);
+    expect(find.textContaining('20m past'), findsOneWidget);
+    // The quieter line is there only when the running Sprint is one of the
+    // ones started past the limit.
+    expect(find.textContaining('past the limit'), findsNothing);
   });
 
   testWidgets('a limit that has not passed says nothing', (tester) async {
