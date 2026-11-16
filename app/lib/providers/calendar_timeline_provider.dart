@@ -73,6 +73,12 @@ class CalendarTimelineNotifier extends Notifier<CalendarTimelineState> {
   late final Future<void> _switchLoaded;
   bool _switchOn = false;
 
+  /// Counts the reads that have been started. A read applies its result only
+  /// while it is still the newest one: a read that was in flight when the user
+  /// switched the calendar off must not reconnect it, and an older read that
+  /// finishes after a newer one must not overwrite the newer snapshot.
+  int _readGeneration = 0;
+
   @override
   CalendarTimelineState build() {
     _switchLoaded = _loadSwitch();
@@ -104,14 +110,21 @@ class CalendarTimelineNotifier extends Notifier<CalendarTimelineState> {
   Future<void> setSwitch(bool on) async {
     await _switchLoaded;
     _switchOn = on;
+    // A read in flight is about a calendar the user has just switched off or
+    // on; it no longer says what the user wants.
+    _readGeneration++;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(kShowCalendarOnTimelineKey, on);
+    // A later switch change overtook this one, and it decides the state.
+    if (_switchOn != on) return;
     if (!on) {
       state = const CalendarTimelineState();
       return;
     }
     state = const CalendarTimelineState(status: CalendarTimelineStatus.loading);
     final granted = await ref.read(calendarSourceProvider).requestPermission();
+    // The switch changed while the permission was being asked for.
+    if (_switchOn != on) return;
     if (!granted) {
       state = const CalendarTimelineState(
           status: CalendarTimelineStatus.permissionRefused);
@@ -126,6 +139,7 @@ class CalendarTimelineNotifier extends Notifier<CalendarTimelineState> {
   Future<void> refresh() async {
     await _switchLoaded;
     if (!_switchOn) return;
+    final generation = ++_readGeneration;
     final now = ref.read(clockProvider)();
     final dayStart = DateTime(now.year, now.month, now.day);
     final dayEnd = dayStart.add(const Duration(days: 1));
@@ -134,6 +148,10 @@ class CalendarTimelineNotifier extends Notifier<CalendarTimelineState> {
     }
     final reading =
         await ref.read(calendarSourceProvider).readEvents(dayStart, dayEnd);
+    // A newer read, or a switch that went off while this one was in flight,
+    // makes this result stale: the newer one knows more, and the user no
+    // longer wants this one.
+    if (generation != _readGeneration || !_switchOn) return;
     final events = reading.events;
     final next = events != null
         ? CalendarTimelineState(
