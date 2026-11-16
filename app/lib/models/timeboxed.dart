@@ -121,11 +121,35 @@ TimeboxedAdvice timeboxedAdviceFor(int nth) {
     );
   }
   return TimeboxedAdvice(
-    headline: 'That would be the ${englishOrdinal(nth)} past the limit, sir.',
+    headline: 'That would be the ${englishOrdinalWord(nth)} past the limit, sir.',
     detail:
         'I do not wish to nag. The rest of the day, however, is beginning '
         'to notice.',
   );
+}
+
+/// The English ordinal in words: first, second, third, fourth, fifth.
+///
+/// The advice names the count in words — "the third past the limit" — where
+/// [englishOrdinal] spells the number out for a label or a list. A count past
+/// the words spelled here falls back to the numeric form.
+String englishOrdinalWord(int n) {
+  const words = [
+    'first',
+    'second',
+    'third',
+    'fourth',
+    'fifth',
+    'sixth',
+    'seventh',
+    'eighth',
+    'ninth',
+    'tenth',
+    'eleventh',
+    'twelfth',
+  ];
+  if (n < 1 || n > words.length) return englishOrdinal(n);
+  return words[n - 1];
 }
 
 /// The English ordinal for [n]: 1st, 2nd, 3rd, 4th, 11th, 21st.

@@ -106,4 +106,18 @@ void main() {
       expect(englishOrdinal(23), '23rd');
     });
   });
+
+  group('the ordinal in words', () {
+    test('says the usual ones in words', () {
+      expect(englishOrdinalWord(1), 'first');
+      expect(englishOrdinalWord(2), 'second');
+      expect(englishOrdinalWord(3), 'third');
+      expect(englishOrdinalWord(4), 'fourth');
+      expect(englishOrdinalWord(5), 'fifth');
+    });
+
+    test('falls back to the number past the words it has', () {
+      expect(englishOrdinalWord(13), '13th');
+    });
+  });
 }
