@@ -12,7 +12,10 @@
 /// **The floor clock.** Every seeded field carries `Hlc(0, 0, <device node id>)`,
 /// the lowest clock the device can state. A pre-existing value was written at an
 /// unknown time, so the seed claims nothing: any real write, local or remote,
-/// from any time, beats it. That is also why the walk needs no lock against
+/// from any time, beats it. (That is exact for last-write-wins fields. A
+/// preference governed by a join that ignores clocks, such as a `*snoozed_until`
+/// instant, keeps whichever value merge state already holds, so there the order
+/// in which a seed and a real write arrive can matter.) That is also why the walk needs no lock against
 /// concurrent domain writes and cannot revive a deleted entity, and why a walk
 /// interrupted and resumed leaves exactly the state an uninterrupted one would.
 ///
