@@ -298,17 +298,26 @@ class PlannedNudgeNotification {
   final String payload;
 }
 
+/// Id bases for Evening Shutdown's extra alarms, one slot per calendar day of
+/// the fire instant. 500-502 stay clear: retired repeating alarms used them.
+const _kEveningShutdownAtPlanningTimeIdBase = 400;
+const _kEveningShutdownDueIdBase = 600;
+
+int _epochDayIdSlot(DateTime day) =>
+    DateTime.utc(day.year, day.month, day.day).difference(DateTime.utc(1970)).inDays %
+    _kDayIdSlotsPerRitual;
+
 int _dayNotificationId(RitualId ritual, DateTime day) {
-  final epochDay =
-      DateTime.utc(day.year, day.month, day.day).difference(DateTime.utc(1970)).inDays;
   return _kDayIdBase +
       RitualId.values.indexOf(ritual) * _kDayIdSlotsPerRitual +
-      epochDay % _kDayIdSlotsPerRitual;
+      _epochDayIdSlot(day);
 }
 
 /// The alarms that should be pending, soonest first: for each day of the
 /// horizon, each Ritual whose notification time falls on the Notification
-/// surface; each pending snooze's expiry. Nothing is planned past the horizon.
+/// surface; Evening Shutdown also at each Daily Planning time and at the open
+/// session's due time when it holds the surface then; each pending snooze's
+/// expiry. Nothing is planned past the horizon.
 List<PlannedNudgeNotification> planNudgeNotifications(
   NudgeNotificationFacts facts,
 ) {
@@ -350,6 +359,37 @@ List<PlannedNudgeNotification> planNudgeNotifications(
       if (!instant.isAfter(now)) continue;
       final entry = entryAt(ritual, instant, id: _dayNotificationId(ritual, day));
       if (entry != null) planned.add(entry);
+    }
+  }
+
+  // Evening Shutdown is also raised afresh at each Daily Planning time while
+  // a due session is still open, and at the open session's own due time. Both
+  // are armed only where it holds the queue head. An instant already planned
+  // for it (e.g. a session due exactly at the Evening Shutdown time) is armed
+  // once.
+  if (facts.isEnabled(RitualId.eveningShutdown)) {
+    bool plannedEveningShutdownAt(DateTime instant) => planned.any((p) =>
+        p.ritual == RitualId.eveningShutdown &&
+        p.fireAt.isAtSameMomentAs(instant));
+
+    for (var offset = 0; offset < kNudgeNotificationHorizonDays; offset++) {
+      final day = DateTime(now.year, now.month, now.day + offset);
+      final instant = DateTime(
+          day.year, day.month, day.day, facts.es.planningHour, facts.es.planningMinute);
+      if (!instant.isAfter(now) || plannedEveningShutdownAt(instant)) continue;
+      final entry = entryAt(RitualId.eveningShutdown, instant,
+          id: _kEveningShutdownAtPlanningTimeIdBase + _epochDayIdSlot(day));
+      if (entry != null) planned.add(entry);
+    }
+
+    final openSessionStartedAt = facts.es.openSessionStartedAt;
+    if (facts.es.sessionIsOpen && openSessionStartedAt != null) {
+      final dueAt = eveningShutdownDueAt(openSessionStartedAt, facts.es);
+      if (dueAt.isAfter(now) && !plannedEveningShutdownAt(dueAt)) {
+        final entry = entryAt(RitualId.eveningShutdown, dueAt,
+            id: _kEveningShutdownDueIdBase + _epochDayIdSlot(dueAt));
+        if (entry != null) planned.add(entry);
+      }
     }
   }
 

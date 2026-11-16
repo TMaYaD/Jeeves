@@ -36,6 +36,9 @@ NudgeNotificationFacts _facts({
   bool hasInboxOrNext = true,
   DateTime? latestSessionStartedAt,
   bool sessionIsOpen = false,
+  int? availableMinutes,
+  int planningMinute = 0,
+  int shutdownMinute = 0,
   // Not due by default.
   DateTime? weeklyReviewLastCompleted,
   Map<RitualId, int> snoozeMinutes = const {},
@@ -48,9 +51,9 @@ NudgeNotificationFacts _facts({
     inProgress: inProgress,
     dpr: DprFacts(
       planningHour: planningHour,
-      planningMinute: 0,
+      planningMinute: planningMinute,
       shutdownHour: shutdownHour,
-      shutdownMinute: 0,
+      shutdownMinute: shutdownMinute,
       hasAnyItem: hasAnyItem,
       hasInboxOrNext: hasInboxOrNext,
       latestSessionStartedAt: latestSessionStartedAt,
@@ -61,11 +64,13 @@ NudgeNotificationFacts _facts({
     // Daily Planning time.
     es: EsFacts(
       shutdownHour: shutdownHour,
-      shutdownMinute: 0,
+      shutdownMinute: shutdownMinute,
       planningHour: planningHour,
-      planningMinute: 0,
+      planningMinute: planningMinute,
       sessionIsOpen: sessionIsOpen,
       openSessionStartedAt: sessionIsOpen ? latestSessionStartedAt : null,
+      availableMinutes:
+          availableMinutes ?? kDefaultEveningSessionAvailableMinutes,
     ),
     wr: WrFacts(
       dueAt: hasAnyItem
@@ -239,7 +244,185 @@ void main() {
 
       expect(_of(plan, RitualId.dailyPlanning), isEmpty,
           reason: 'a session is open, so Planning is not offered');
-      expect(_of(plan, RitualId.eveningShutdown).first.fireAt, _at(0, 18));
+      expect(_of(plan, RitualId.eveningShutdown).first.fireAt, _at(0, 8),
+          reason: 'the session is overdue, so Shutdown is raised again at the '
+              'next Daily Planning time');
+    });
+  });
+
+  group('Evening Shutdown at the moments it is raised afresh', () {
+    List<DateTime> esTimes(List<PlannedNudgeNotification> plan) =>
+        _of(plan, RitualId.eveningShutdown).map((p) => p.fireAt).toList();
+
+    test('an evening session is armed at its due time, before the next '
+        'morning and evening', () {
+      final plan = planNudgeNotifications(_facts(
+        now: _at(0, 20, 5),
+        sessionIsOpen: true,
+        latestSessionStartedAt: _at(0, 20),
+        availableMinutes: 180,
+      ));
+
+      expect(esTimes(plan).take(3), [_at(0, 23), _at(1, 8), _at(1, 18)]);
+      final due = _of(plan, RitualId.eveningShutdown).first;
+      expect(parseRitualNotificationPayload(due.payload)!.edge!.toLocal(),
+          _at(0, 23),
+          reason: 'the alarm carries its own instant as the firing edge');
+    });
+
+    test('an evening session with the default available time is due the next '
+        'morning at 04:00', () {
+      final plan = planNudgeNotifications(_facts(
+        now: _at(0, 20, 5),
+        sessionIsOpen: true,
+        latestSessionStartedAt: _at(0, 20),
+      ));
+
+      expect(esTimes(plan).first, _at(1, 4));
+    });
+
+    test('one alarm when the due time is the Evening Shutdown time', () {
+      final plan = planNudgeNotifications(_facts(
+        sessionIsOpen: true,
+        latestSessionStartedAt: _at(0, 7),
+      ));
+
+      expect(esTimes(plan).where((t) => t == _at(0, 18)), hasLength(1));
+      expect(_of(plan, RitualId.eveningShutdown).map((p) => p.id).toSet(),
+          hasLength(_of(plan, RitualId.eveningShutdown).length));
+    });
+
+    test('one alarm when the due time is capped at the Daily Planning time', () {
+      final plan = planNudgeNotifications(_facts(
+        now: _at(0, 23, 30),
+        sessionIsOpen: true,
+        latestSessionStartedAt: _at(0, 23),
+        availableMinutes: 12 * 60,
+      ));
+
+      expect(esTimes(plan).where((t) => t == _at(1, 8)), hasLength(1));
+    });
+
+    test('one alarm when the two times were saved equal', () {
+      final plan = planNudgeNotifications(_facts(
+        planningHour: 9,
+        shutdownHour: 9,
+        sessionIsOpen: true,
+        latestSessionStartedAt: _at(-1, 10),
+      ));
+
+      expect(esTimes(plan).where((t) => t == _at(0, 9)), hasLength(1));
+    });
+
+    test('a session left open is armed at every planning and shutdown time, '
+        'and Daily Planning stays silent', () {
+      final plan = planNudgeNotifications(_facts(
+        sessionIsOpen: true,
+        latestSessionStartedAt: _at(-1, 10),
+      ));
+
+      expect(esTimes(plan), [
+        for (var day = 0; day < kNudgeNotificationHorizonDays; day++) ...[
+          _at(day, 8),
+          _at(day, 18),
+        ],
+      ]);
+      expect(_of(plan, RitualId.dailyPlanning), isEmpty);
+    });
+
+    test('a dismiss after the due firing hides only that firing', () {
+      final plan = planNudgeNotifications(_facts(
+        now: _at(0, 23, 30),
+        sessionIsOpen: true,
+        latestSessionStartedAt: _at(0, 20),
+        availableMinutes: 180,
+        nudgeState: {
+          RitualId.eveningShutdown: NudgeState(dismissedAt: _at(0, 23, 10)),
+        },
+      ));
+
+      expect(esTimes(plan).first, _at(1, 8));
+    });
+
+    test('a due Weekly Review holds the head at the new moments', () {
+      final plan = planNudgeNotifications(_facts(
+        sessionIsOpen: true,
+        latestSessionStartedAt: _at(-1, 10),
+        weeklyReviewLastCompleted: _at(-9, 7),
+        enabled: _allEnabled,
+        weeklyReviewHour: 8,
+      ));
+
+      expect(esTimes(plan), isNot(contains(_at(1, 8))));
+    });
+
+    test('a Weekly Review due at a future session-due time holds the head '
+        'there', () {
+      // Session started 20:00 with 180 min: due 23:00. Weekly Review is due
+      // from 23:00 (notification time), so it outranks Evening Shutdown then.
+      final plan = planNudgeNotifications(_facts(
+        now: _at(0, 20, 5),
+        sessionIsOpen: true,
+        latestSessionStartedAt: _at(0, 20),
+        availableMinutes: 180,
+        weeklyReviewLastCompleted: _at(-9, 7),
+        enabled: _allEnabled,
+        weeklyReviewHour: 23,
+      ));
+
+      expect(esTimes(plan), isNot(contains(_at(0, 23))));
+      expect(_of(plan, RitualId.weeklyReview).map((p) => p.fireAt),
+          contains(_at(0, 23)));
+    });
+
+    test('with Evening Shutdown notifications off nothing is armed for it', () {
+      final plan = planNudgeNotifications(_facts(
+        sessionIsOpen: true,
+        latestSessionStartedAt: _at(-1, 10),
+        enabled: const {
+          RitualId.dailyPlanning: true,
+          RitualId.eveningShutdown: false,
+          RitualId.weeklyReview: false,
+        },
+      ));
+
+      expect(esTimes(plan), isEmpty);
+      expect(_of(plan, RitualId.dailyPlanning), isEmpty);
+    });
+
+    test('ids are unique, below the due-date range and clear of retired '
+        'alarm ids', () {
+      final plan = planNudgeNotifications(_facts(
+        now: _at(0, 20, 5),
+        sessionIsOpen: true,
+        latestSessionStartedAt: _at(0, 20),
+        availableMinutes: 180,
+      ));
+      final ids = plan.map((p) => p.id).toList();
+
+      expect(ids.toSet(), hasLength(ids.length));
+      expect(ids.every((id) => id >= 100 && id < 10000), isTrue);
+      expect(ids.where((id) => id >= 500 && id <= 502), isEmpty);
+      expect(ids, isNot(contains(1001)));
+    });
+
+    test('the same calendar day keeps its id as the plan rolls forward', () {
+      int idAt(List<PlannedNudgeNotification> plan, DateTime t) => _of(
+              plan, RitualId.eveningShutdown)
+          .firstWhere((p) => p.fireAt == t)
+          .id;
+      final early = planNudgeNotifications(_facts(
+        now: _at(0, 7),
+        sessionIsOpen: true,
+        latestSessionStartedAt: _at(-1, 10),
+      ));
+      final later = planNudgeNotifications(_facts(
+        now: _at(1, 7),
+        sessionIsOpen: true,
+        latestSessionStartedAt: _at(-1, 10),
+      ));
+
+      expect(idAt(early, _at(3, 8)), idAt(later, _at(3, 8)));
     });
   });
 

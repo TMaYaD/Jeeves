@@ -11,7 +11,7 @@ import 'package:jeeves/providers/ceremony_in_progress_provider.dart';
 import 'package:jeeves/providers/clock_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart'
-    show activeSessionProvider;
+    show activeSessionProvider, kLastSessionAvailableMinutesKey;
 import 'package:jeeves/providers/gtd_lists_provider.dart';
 import 'package:jeeves/providers/onboarding_provider.dart';
 import 'package:jeeves/providers/nudge_provider.dart';
@@ -104,6 +104,16 @@ void main() {
     c.dispose();
     await db.close();
   });
+
+  /// Puts the soonest pending alarm of [ritual] in the tray, as the OS does
+  /// once it fires, and returns its id.
+  int deliverSoonestAlarmOf(RitualId ritual) {
+    final soonest = service.pending.entries
+        .where((e) => e.value.ritual == ritual)
+        .reduce((a, b) => a.value.fireAt.isBefore(b.value.fireAt) ? a : b);
+    service.delivered.add((id: soonest.key, ritual: ritual));
+    return soonest.key;
+  }
 
   Iterable<DateTime> oneOffs(RitualId ritual) =>
       service.alarmsOf(ritual).map((a) => a.fireAt);
@@ -226,7 +236,7 @@ void main() {
   });
 
   group('configured reminder times', () {
-    Future<void> openSession(DateTime now) async {
+    Future<String> openSession(DateTime now) async {
       await db.into(db.todos).insert(TodosCompanion(
             id: const Value('planned'),
             title: const Value('Planned thing'),
@@ -234,7 +244,7 @@ void main() {
             createdAt: Value(now.toUtc()),
             updatedAt: Value(now.toUtc()),
           ));
-      await db.focusSessionDao
+      return db.focusSessionDao
           .openSession(userId: 'local', taskIds: ['planned'], now: now);
     }
 
@@ -286,6 +296,52 @@ void main() {
           .setNotificationEnabled(false);
       await settle();
       expect(oneOffs(RitualId.eveningShutdown), isEmpty);
+    });
+
+    test('an evening session arms Evening Shutdown at its due time and not '
+        'earlier; closing it cancels every alarm', () async {
+      await boot(now: at(0, 20, 5));
+      final sessionId = await openSession(at(0, 20));
+      // Start Day writes the session, then the available time.
+      await c
+          .read(syncedPreferencesProvider.notifier)
+          .set(kLastSessionAvailableMinutesKey, 180);
+      c.invalidate(nudgeNotificationFactsProvider);
+      await settle();
+
+      expect(oneOffs(RitualId.eveningShutdown).take(3),
+          [at(0, 23), at(1, 8), at(1, 18)]);
+      expect(oneOffs(RitualId.dailyPlanning), isEmpty);
+      final deliveredId = deliverSoonestAlarmOf(RitualId.eveningShutdown);
+
+      await db.focusSessionDao
+          .closeSession(sessionId: sessionId, now: at(0, 20, 10));
+      await settle();
+      expect(oneOffs(RitualId.eveningShutdown), isEmpty);
+      expect(service.delivered.map((d) => d.id), isNot(contains(deliveredId)),
+          reason: 'the delivered 23:00 notification is withdrawn');
+      expect(oneOffs(RitualId.dailyPlanning).first, at(1, 8));
+    });
+
+    test('a session left open arms Evening Shutdown at the next Daily '
+        'Planning time, with no Daily Planning alarm; closing cancels',
+        () async {
+      await boot(now: at(0, 7));
+      final sessionId = await openSession(at(-1, 10));
+      c.invalidate(nudgeNotificationFactsProvider);
+      await settle();
+
+      expect(oneOffs(RitualId.eveningShutdown).take(2), [at(0, 8), at(0, 18)]);
+      expect(oneOffs(RitualId.dailyPlanning), isEmpty);
+      final deliveredId = deliverSoonestAlarmOf(RitualId.eveningShutdown);
+
+      await db.focusSessionDao
+          .closeSession(sessionId: sessionId, now: at(0, 7, 10));
+      await settle();
+      expect(oneOffs(RitualId.eveningShutdown), isEmpty);
+      expect(service.delivered.map((d) => d.id), isNot(contains(deliveredId)),
+          reason: 'the delivered 08:00 notification is withdrawn');
+      expect(oneOffs(RitualId.dailyPlanning).first, at(0, 8));
     });
 
     test('Weekly Review arms at its configured time while due, follows a '
