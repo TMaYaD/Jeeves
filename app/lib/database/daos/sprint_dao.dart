@@ -193,15 +193,63 @@ class SprintDao extends DatabaseAccessor<GtdDatabase> with _$SprintDaoMixin {
           ..limit(1))
         .getSingleOrNull();
     if (latest == null || latest.endedAt != null) return;
+    await _endSprintById(db, ts, latest.id);
+  }
+
+  static Future<void> _endSprintById(
+      GtdDatabase db, DateTime ts, String sprintId) async {
     final endedAtIso = encodeInstant(ts.toUtc())!;
     await (db.update(db.sprints)
-          ..where((s) => s.id.equals(latest.id) & s.endedAt.isNull()))
+          ..where((s) => s.id.equals(sprintId) & s.endedAt.isNull()))
         .write(SprintsCompanion(endedAt: Value(endedAtIso)));
     db.opCapture.write(
       collection: sprintsCollection,
-      entityId: latest.id,
+      entityId: sprintId,
       fields: {'ended_at': endedAtIso},
     );
+  }
+
+  /// Ends, at [ts], the running Sprint of each TimeLog in [closedLogs] — the
+  /// rows the caller has just closed — inside the caller's capturing
+  /// transaction.
+  ///
+  /// A Sprint belongs to a TimeLog when it is the user's latest Sprint on the
+  /// log's Action that started at or after the log did and has no stored end.
+  /// A same-user Sprint that belongs to another, still-open TimeLog (two offline
+  /// devices each opened one) is left running.
+  static Future<void> closeRunningSprintsOfLogs(
+    GtdDatabase db,
+    DateTime ts,
+    Iterable<TimeLog> closedLogs,
+  ) async {
+    for (final log in closedLogs) {
+      final logStart = DateTime.tryParse(log.startedAt)?.toUtc();
+      final candidates = await (db.select(db.sprints)
+            ..where((s) =>
+                s.userId.equals(log.userId) &
+                s.endedAt.isNull() &
+                (log.actionId == null
+                    ? s.actionId.isNull()
+                    : s.actionId.equals(log.actionId!)))
+            ..orderBy([
+              (s) => OrderingTerm.desc(s.startedAt),
+              (s) => OrderingTerm.desc(s.id),
+            ]))
+          .get();
+      for (final sprint in candidates) {
+        final start = DateTime.tryParse(sprint.startedAt)?.toUtc();
+        // The Sprint start is truncated to the millisecond; the log's is not.
+        if (logStart != null &&
+            start != null &&
+            start.isBefore(DateTime.fromMillisecondsSinceEpoch(
+                logStart.millisecondsSinceEpoch,
+                isUtc: true))) {
+          continue;
+        }
+        await _endSprintById(db, ts, sprint.id);
+        break;
+      }
+    }
   }
 
   /// Every recorded Sprint with its effective end, ordered by start.

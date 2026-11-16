@@ -417,13 +417,8 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       );
     }
     // A Sprint never outlives its TimeLog (issue #910).
-    if (open.isNotEmpty) {
-      await SprintDao.closeRunningSprintOn(
-        attachedDatabase,
-        DateTime.parse(tsIso),
-        userId: open.first.userId,
-      );
-    }
+    await SprintDao.closeRunningSprintsOfLogs(
+        attachedDatabase, DateTime.parse(tsIso), open);
   }
 
   /// Atomically closes any open time log for the session, optionally opens a
@@ -467,13 +462,8 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
         );
       }
       // A Sprint never outlives its TimeLog (issue #910).
-      if (stillOpen.isNotEmpty) {
-        await SprintDao.closeRunningSprintOn(
-          attachedDatabase,
-          DateTime.parse(ts),
-          userId: stillOpen.first.userId,
-        );
-      }
+      await SprintDao.closeRunningSprintsOfLogs(
+          attachedDatabase, DateTime.parse(ts), stillOpen);
 
       // Open a new time log if a task is being focused, attributing it to the
       // Outcome's current Action resolved inside this transaction (issue #476).

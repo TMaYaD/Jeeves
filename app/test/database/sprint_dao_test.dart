@@ -6,6 +6,7 @@ library;
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jeeves/database/daos/action_dao.dart';
 import 'package:jeeves/database/daos/sprint_dao.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/sync/collection_codecs.dart';
@@ -236,6 +237,42 @@ void main() {
       await db.timeLogDao.closeLog(taskId: outcome, now: _at(30));
       expect(await db.timeLogDao.totalMinutesForTask(outcome), 30,
           reason: 'the break between Sprints still counts');
+    });
+
+    test(
+        "closing one TimeLog leaves the same user's Sprint of another open "
+        'TimeLog running', () async {
+      // Device one: an open TimeLog and its Sprint on outcome-1.
+      final outcome = await seedOutcome();
+      await db.timeLogDao.openLog(taskId: outcome, userId: _userId, now: _t0);
+      await db.sprintDao.startSprint(
+          taskId: outcome, userId: _userId, plannedDurationMinutes: 25, now: _t0);
+      // Device two, offline: its own open TimeLog and later Sprint on
+      // outcome-2, converged in without going through openLog.
+      await db.todoDao.insertOutcome(
+          id: 'outcome-2', title: 'Other', userId: _userId, now: _t0);
+      final other = await ActionDao.ensureCurrentActionIdFor(
+          db, 'outcome-2', _at(2));
+      await db.into(db.timeLogs).insert(TimeLogsCompanion.insert(
+          id: 'log-2',
+          userId: _userId,
+          taskId: 'outcome-2',
+          actionId: Value(other.actionId),
+          startedAt: _at(2).toIso8601String()));
+      await db.into(db.sprints).insert(SprintsCompanion.insert(
+          id: 'sprint-2',
+          userId: _userId,
+          actionId: Value(other.actionId),
+          startedAt: encodeInstant(_at(2))!,
+          plannedDurationMinutes: 25));
+
+      await db.timeLogDao.closeLog(taskId: outcome, now: _at(7));
+
+      final all = await rows();
+      expect(all.firstWhere((r) => r.id != 'sprint-2').endedAt,
+          encodeInstant(_at(7)));
+      expect(all.firstWhere((r) => r.id == 'sprint-2').endedAt, isNull,
+          reason: "the other TimeLog's Sprint keeps running");
     });
 
     test("closing one user's Sprint leaves another user's open", () async {
