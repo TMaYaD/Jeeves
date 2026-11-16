@@ -31,6 +31,8 @@ Future<void> _insertTodo(GtdDatabase db,
 void main() {
   setUpAll(configureSqliteForTests);
 
+  addOutcomeToPlanTests();
+
   // ---------------------------------------------------------------------------
   // openSession
   // ---------------------------------------------------------------------------
@@ -1716,6 +1718,79 @@ void main() {
       expect(
         await db.focusSessionDao.getSettlementsForSession('rival'),
         {'theirs': SessionSettlement.next},
+      );
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// addOutcomeToPlan (issue #700)
+// ---------------------------------------------------------------------------
+
+void addOutcomeToPlanTests() {
+  group('FocusSessionDao — addOutcomeToPlan', () {
+    late GtdDatabase db;
+    final at = DateTime.utc(2026, 11, 16, 10);
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    test('appends a marked entry after the existing positions', () async {
+      await _insertTodo(db, id: 'a', title: 'A');
+      await _insertTodo(db, id: 'b', title: 'B');
+      final sessionId = await db.focusSessionDao
+          .openSession(userId: _userId, taskIds: ['a']);
+
+      final added = await db.focusSessionDao
+          .addOutcomeToPlan(sessionId: sessionId, taskId: 'b', now: at);
+
+      expect(added, isTrue);
+      final rows = await (db.select(db.focusSessionTasks)
+            ..orderBy([(t) => OrderingTerm(expression: t.position)]))
+          .get();
+      expect(rows.map((r) => (r.taskId, r.position)), [('a', 0), ('b', 1)]);
+      expect(rows[0].addedDuringExecutionAt, isNull);
+      expect(rows[1].addedDuringExecutionAt!.isAtSameMomentAs(at), isTrue);
+      expect(
+          await db.focusSessionDao
+              .watchActiveSessionAddedDuringExecutionTaskIds()
+              .first,
+          {'b'});
+    });
+
+    test('starts at position 0 on an empty Plan', () async {
+      await _insertTodo(db, id: 'a', title: 'A');
+      final sessionId =
+          await db.focusSessionDao.openSession(userId: _userId, taskIds: []);
+      await db.focusSessionDao
+          .addOutcomeToPlan(sessionId: sessionId, taskId: 'a', now: at);
+      final row = await db.select(db.focusSessionTasks).getSingle();
+      expect(row.position, 0);
+    });
+
+    test('is a no-op for a member, so a morning entry stays unmarked',
+        () async {
+      await _insertTodo(db, id: 'a', title: 'A');
+      final sessionId = await db.focusSessionDao
+          .openSession(userId: _userId, taskIds: ['a']);
+
+      final added = await db.focusSessionDao
+          .addOutcomeToPlan(sessionId: sessionId, taskId: 'a', now: at);
+
+      expect(added, isFalse);
+      final row = await db.select(db.focusSessionTasks).getSingle();
+      expect(row.addedDuringExecutionAt, isNull);
+    });
+
+    test('refuses a closed session', () async {
+      await _insertTodo(db, id: 'a', title: 'A');
+      final sessionId =
+          await db.focusSessionDao.openSession(userId: _userId, taskIds: []);
+      await db.focusSessionDao.closeSession(sessionId: sessionId);
+      expect(
+        () => db.focusSessionDao
+            .addOutcomeToPlan(sessionId: sessionId, taskId: 'a', now: at),
+        throwsStateError,
       );
     });
   });

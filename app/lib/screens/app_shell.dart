@@ -102,6 +102,12 @@ class AppShell extends ConsumerWidget {
     final pageActions = showReplan
         ? [
             AppTitleBarAction(
+              key: const Key('focus_add_to_plan'),
+              icon: Icons.add,
+              label: 'Add',
+              onPressed: () => context.push('/add-to-plan'),
+            ),
+            AppTitleBarAction(
               key: const Key('focus_replan'),
               icon: Icons.wb_sunny_outlined,
               label: 'Re-plan',

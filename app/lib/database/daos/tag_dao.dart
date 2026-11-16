@@ -524,6 +524,30 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
     });
   }
 
+  /// Outcomes holding more than one link to a live `project`-typed Tag, as
+  /// `{todo id: [project tag ids]}`. A link whose Tag has no row is not counted;
+  /// the rehome pass owns it.
+  Future<Map<String, List<String>>> outcomesWithMultipleProjects() async {
+    final rows = await customSelect(
+      'SELECT tt.todo_id AS todo_id, tt.tag_id AS tag_id '
+      'FROM todo_tags tt JOIN tags t ON t.id = tt.tag_id '
+      "WHERE t.type = 'project' AND tt.todo_id IN ("
+      '  SELECT tt2.todo_id FROM todo_tags tt2 '
+      '  JOIN tags t2 ON t2.id = tt2.tag_id '
+      "  WHERE t2.type = 'project' "
+      '  GROUP BY tt2.todo_id HAVING COUNT(*) > 1) '
+      'ORDER BY tt.todo_id, tt.tag_id',
+      readsFrom: {todoTags, tags},
+    ).get();
+    final byOutcome = <String, List<String>>{};
+    for (final row in rows) {
+      byOutcome
+          .putIfAbsent(row.read<String>('todo_id'), () => <String>[])
+          .add(row.read<String>('tag_id'));
+    }
+    return byOutcome;
+  }
+
   /// Move every reference to [from] onto [to], as its own capturing scope.
   ///
   /// The repair half of both `DomainReconciler` passes: the fold calls the private

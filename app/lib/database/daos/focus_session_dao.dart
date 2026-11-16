@@ -220,6 +220,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
             'position': i,
             'disposition': null,
             'pinned_start_at': encodeInstant(pinnedStart),
+            'added_during_execution_at': null,
             'user_id': userId,
           },
         );
@@ -264,6 +265,87 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
     });
 
     return newId;
+  }
+
+  /// Adds [taskId] to the Plan of the open session [sessionId] during
+  /// Execution (issue #700), recording [now] as when it joined.
+  ///
+  /// The one write path that grows an already-open Plan, and only on the
+  /// user's explicit act — engaging off-Plan never calls it. Capacity is
+  /// advisory and lives in the UI; this never consults it.
+  ///
+  /// Returns false and changes nothing when the Outcome is already a Plan
+  /// member, so a morning entry is never re-labelled as added late. Throws
+  /// [StateError] when the session does not exist or is closed.
+  Future<bool> addOutcomeToPlan({
+    required String sessionId,
+    required String taskId,
+    DateTime? now,
+  }) async {
+    final addedAt = (now ?? DateTime.now()).toUtc();
+    return attachedDatabase.capturing(() async {
+      final session = await (select(focusSessions)
+            ..where((s) => s.id.equals(sessionId)))
+          .getSingleOrNull();
+      if (session == null || session.endedAt != null) {
+        throw StateError(
+          'FocusSession $sessionId is not open; an Outcome can only be added '
+          'to the Plan of an open session.',
+        );
+      }
+
+      final planEntityId = focusSessionTaskIdFor(sessionId, taskId);
+      final existing = await (select(focusSessionTasks)
+            ..where((t) =>
+                t.focusSessionId.equals(sessionId) & t.taskId.equals(taskId)))
+          .getSingleOrNull();
+      if (existing != null) return false;
+
+      final maxPosition = focusSessionTasks.position.max();
+      final lastPosition = await (selectOnly(focusSessionTasks)
+            ..addColumns([maxPosition])
+            ..where(focusSessionTasks.focusSessionId.equals(sessionId)))
+          .map((row) => row.read(maxPosition))
+          .getSingle();
+      final position = lastPosition == null ? 0 : lastPosition + 1;
+
+      await into(focusSessionTasks).insert(FocusSessionTasksCompanion(
+        id: Value(planEntityId),
+        focusSessionId: Value(sessionId),
+        taskId: Value(taskId),
+        position: Value(position),
+        userId: Value(session.userId),
+        addedDuringExecutionAt: Value(addedAt),
+      ));
+      attachedDatabase.opCapture.write(
+        collection: focusSessionTasksCollection,
+        entityId: planEntityId,
+        fields: {
+          'focus_session_id': sessionId,
+          'task_id': taskId,
+          'position': position,
+          'disposition': null,
+          'pinned_start_at': null,
+          'added_during_execution_at': encodeInstant(addedAt),
+          'user_id': session.userId,
+        },
+      );
+      return true;
+    });
+  }
+
+  /// Ids of the Plan entries of the open session that were added during
+  /// Execution rather than chosen in Planning. Empty when no session is open.
+  Stream<Set<String>> watchActiveSessionAddedDuringExecutionTaskIds() {
+    return customSelect(
+      'SELECT fst.task_id AS task_id FROM focus_session_tasks fst '
+      'WHERE fst.focus_session_id = $_activeSessionIdSql '
+      'AND fst.added_during_execution_at IS NOT NULL',
+      variables: [],
+      readsFrom: {focusSessionTasks, focusSessions},
+    ).watch().map(
+          (rows) => rows.map((r) => r.read<String>('task_id')).toSet(),
+        );
   }
 
   /// Closes [sessionId], setting its [ended_at] and clearing
@@ -342,7 +424,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   /// being engaged, whether or not it is on the Plan (CONTEXT.md
   /// § Engagement; ADR-0005). Off-Plan engagement still attributes the
   /// TimeLog to the session and surfaces in Review via the TimeLog union —
-  /// the Plan itself never auto-grows (ADR-0002).
+  /// the Plan itself never grows automatically (ADR-0002).
   ///
   /// Pass [taskId] = null to clear the focused task without starting a new log.
   ///
@@ -910,6 +992,39 @@ HAVING COUNT(DISTINCT p.session_id) >= ?''';
         attachedDatabase.actions,
       },
     ).watch().map((rows) => rows.map((r) => todos.map(r.data)).toList());
+  }
+
+  /// The start times the user set on the open session's Plan entries
+  /// ("Set by you"), keyed by Outcome id. Entries Jeeves places are absent.
+  Stream<Map<String, DateTime>> watchActiveSessionPinnedStarts() {
+    return customSelect(
+      'SELECT fst.* FROM focus_session_tasks fst '
+      'WHERE fst.focus_session_id = $_activeSessionIdSql '
+      'AND fst.pinned_start_at IS NOT NULL',
+      variables: [],
+      readsFrom: {focusSessionTasks, focusSessions},
+    ).watch().map((rows) {
+      final pinned = <String, DateTime>{};
+      for (final row in rows) {
+        final entry = focusSessionTasks.map(row.data);
+        final startAt = entry.pinnedStartAt;
+        if (startAt != null) pinned[entry.taskId] = startAt;
+      }
+      return pinned;
+    });
+  }
+
+  /// Outcomes with a TimeLog attributed to the open session: engaged ones. The
+  /// day timeline never re-flows an engaged entry.
+  Stream<Set<String>> watchActiveSessionEngagedTaskIds() {
+    return customSelect(
+      'SELECT DISTINCT tl.task_id AS task_id FROM time_logs tl '
+      'WHERE tl.focus_session_id = $_activeSessionIdSql',
+      variables: [],
+      readsFrom: {attachedDatabase.timeLogs, focusSessions},
+    ).watch().map(
+          (rows) => {for (final row in rows) row.read<String>('task_id')},
+        );
   }
 
   /// Explicit `todos` projection (alias `t`) shared by every Review-surface

@@ -9,9 +9,14 @@ import '../providers/focus_session_provider.dart';
 import '../providers/focus_settings_provider.dart';
 import '../providers/sprint_timer_provider.dart'
     show findBatchingCandidates, sprintTimerProvider;
+import '../models/day_timeline.dart';
+import '../providers/clock_provider.dart';
+import '../providers/day_timeline_provider.dart';
+import '../widgets/day_timeline/day_timeline.dart';
 import '../widgets/meta_chip.dart';
 import '../widgets/nudge_banner.dart'
     show InboxTooFullHead, NudgeEmptyState, RitualHead, nudgeSurfaceHeadProvider;
+import '../widgets/added_during_the_day_tag.dart';
 import '../widgets/outcome_row.dart';
 
 class FocusScreen extends ConsumerWidget {
@@ -35,6 +40,9 @@ class FocusScreen extends ConsumerWidget {
     // empty one, or the first frame would offer "End Session" past an
     // unfinished Outcome (#885).
     final reviewSurface = ref.watch(activeSessionReviewSurfaceProvider).value;
+    final addedDuringTheDayIds =
+        ref.watch(activeSessionAddedDuringExecutionTaskIdsProvider).value ??
+            const <String>{};
 
     return Scaffold(
       body: SafeArea(
@@ -89,10 +97,15 @@ class FocusScreen extends ConsumerWidget {
                                       RitualId.eveningShutdown))
                       ? surfaceHead
                       : null;
-                  return ListView(
-                        physics: const ClampingScrollPhysics(),
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 20, vertical: 8),
+                  // A column, not a lazy list: it is short and finite, and the
+                  // timeline's height must never leave the Plan's rows or the
+                  // shutdown entry unbuilt below the fold.
+                  return SingleChildScrollView(
+                      physics: const ClampingScrollPhysics(),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 20, vertical: 8),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           const Text(
                             "Today's Schedule",
@@ -103,20 +116,19 @@ class FocusScreen extends ConsumerWidget {
                             ),
                           ),
                           const SizedBox(height: 16),
-                          Container(
-                            padding: const EdgeInsets.all(16),
-                            decoration: BoxDecoration(
-                              color: Colors.grey[50],
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: Colors.grey[200]!),
+                          if (planningDone && sortedTasks.isNotEmpty)
+                            _NowTimeline(
+                              session: activeSession,
+                              // Plan order, not the due-date order of the rows:
+                              // Autoflow places in Plan position order.
+                              tasks: tasks,
+                            )
+                          else
+                            Text(
+                              'Nothing is planned for today yet.',
+                              style: TextStyle(
+                                  fontSize: 14, color: Colors.grey[400]),
                             ),
-                            child: const Center(
-                              child: Text(
-                                "Calendar events placeholder",
-                                style: TextStyle(color: Colors.grey),
-                              ),
-                            ),
-                          ),
                           const SizedBox(height: 36),
                           const Divider(height: 1, color: Color(0xFFF3F4F6)),
                           const SizedBox(height: 36),
@@ -147,6 +159,8 @@ class FocusScreen extends ConsumerWidget {
                                 todo: t,
                                 currentTaskId: currentTaskId,
                                 settlement: settlements[t.id],
+                                addedDuringTheDay:
+                                    addedDuringTheDayIds.contains(t.id),
                               ),
                             )
                           else if (sortedTasks.isEmpty && nudgeHead != null)
@@ -228,7 +242,8 @@ class FocusScreen extends ConsumerWidget {
                           ],
                           const SizedBox(height: 32),
                         ],
-                      );
+                      ),
+                    );
                 },
               ),
             ),
@@ -294,6 +309,7 @@ Widget _focusOutcomeRow(
   required String? currentTaskId,
   required SessionSettlement? settlement,
   required int sprintMinutes,
+  bool addedDuringTheDay = false,
 }) {
   final estimate = todo.timeEstimate;
   final isDone = todo.doneAt != null;
@@ -304,7 +320,7 @@ Widget _focusOutcomeRow(
     title: todo.title,
     struck: isDone || isSettled,
     onTap: () => context.push('/task/${todo.id}'),
-    meta: estimate == null && todo.dueDate == null
+    meta: estimate == null && todo.dueDate == null && !addedDuringTheDay
         ? null
         : Wrap(
             spacing: 8,
@@ -329,6 +345,7 @@ Widget _focusOutcomeRow(
                   ],
                 ),
               if (todo.dueDate != null) OutcomeMetaLine(dueDate: todo.dueDate),
+              if (addedDuringTheDay) const AddedDuringTheDayTag(),
             ],
           ),
     trailing: Row(
@@ -608,6 +625,46 @@ class _PrimaryCallout extends StatelessWidget {
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
       child: label,
+    );
+  }
+}
+
+/// The day timeline on the Now screen: the open session's Plan at its suggested
+/// times, with the times the user set. Starts from the session's own start.
+class _NowTimeline extends ConsumerWidget {
+  const _NowTimeline({required this.session, required this.tasks});
+
+  final FocusSession session;
+  final List<Todo> tasks;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final extras = ref.watch(nowTimelineExtrasProvider);
+    final flowOrigin =
+        roundUpToFiveMinutes(DateTime.parse(session.startedAt).toLocal());
+    final entries = dayTimelineEntriesFor(
+      tasks: tasks,
+      defaultEstimateMinutes: extras.settings.defaultEstimateMinutes,
+      now: ref.read(clockProvider)(),
+      timeContexts: extras.timeContexts,
+      pinnedStarts: extras.pinnedStarts,
+      engagedTaskIds: extras.engagedTaskIds,
+      runningTaskId: session.currentTaskId,
+    );
+    return DayTimeline(
+      scope: session.id,
+      entries: entries,
+      flowOrigin: flowOrigin,
+      availableMinutes: extras.availableMinutes,
+      chunkUnitMinutes: extras.settings.chunkUnitMinutes,
+      onSetPinnedStart: (outcomeId, startAt) => ref
+          .read(databaseProvider)
+          .focusSessionDao
+          .setPinnedStart(
+            sessionId: session.id,
+            taskId: outcomeId,
+            pinnedStartAt: startAt,
+          ),
     );
   }
 }

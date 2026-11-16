@@ -4,14 +4,29 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../models/day_timeline.dart';
+import '../../../providers/clock_provider.dart';
+import '../../../providers/day_timeline_provider.dart';
 import '../../../providers/focus_session_planning_provider.dart';
+import '../../../widgets/day_timeline/day_timeline.dart';
 import '../../../widgets/outcome_row.dart';
 
-class ScheduledReviewStep extends ConsumerWidget {
+class ScheduledReviewStep extends ConsumerStatefulWidget {
   const ScheduledReviewStep({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ScheduledReviewStep> createState() =>
+      _ScheduledReviewStepState();
+}
+
+class _ScheduledReviewStepState extends ConsumerState<ScheduledReviewStep> {
+  /// Where the day starts, fixed when the screen opens so the layout does not
+  /// shift under the user as the clock moves.
+  late final DateTime _flowOrigin =
+      roundUpToFiveMinutes(ref.read(clockProvider)());
+
+  @override
+  Widget build(BuildContext context) {
     final asyncSelected = ref.watch(focusSessionPlanningSelectedTasksProvider);
 
     return asyncSelected.when(
@@ -23,9 +38,14 @@ class ScheduledReviewStep extends ConsumerWidget {
         final noDue = tasks.where((t) => t.dueDate == null).toList();
         final sortedTasks = [...withDue, ...noDue];
 
-        return ListView(
+        // A column, not a lazy list: it is short and finite, and the
+        // timeline's height must never leave the Plan's rows or Start Day
+        // unbuilt below the fold.
+        return SingleChildScrollView(
           physics: const ClampingScrollPhysics(),
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Text(
               "Today's Schedule",
@@ -36,20 +56,9 @@ class ScheduledReviewStep extends ConsumerWidget {
               ),
             ),
             const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.grey[50],
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.grey[200]!),
-              ),
-              child: const Center(
-                child: Text(
-                  "Calendar events placeholder",
-                  style: TextStyle(color: Colors.grey),
-                ),
-              ),
-            ),
+            // Plan order, not the due-date order of the rows: Autoflow places in
+            // Plan position order.
+            if (tasks.isNotEmpty) _timeline(tasks),
             const SizedBox(height: 36),
             const Divider(height: 1, color: Color(0xFFF3F4F6)),
             const SizedBox(height: 36),
@@ -96,8 +105,33 @@ class ScheduledReviewStep extends ConsumerWidget {
             ),
             const SizedBox(height: 32),
           ],
+          ),
         );
       },
+    );
+  }
+
+  Widget _timeline(List<Todo> tasks) {
+    final planning = ref.watch(focusSessionPlanningProvider);
+    final settings = ref.watch(dayTimelineSettingsProvider);
+    final timeContexts =
+        ref.watch(planningTimeContextsProvider).asData?.value ?? const {};
+    final entries = dayTimelineEntriesFor(
+      tasks: tasks,
+      defaultEstimateMinutes: settings.defaultEstimateMinutes,
+      now: _flowOrigin,
+      timeContexts: timeContexts,
+      pinnedStarts: planning.pinnedStartByTaskId,
+    );
+    return DayTimeline(
+      scope: 'planning',
+      entries: entries,
+      flowOrigin: _flowOrigin,
+      availableMinutes: planning.availableMinutes,
+      chunkUnitMinutes: settings.chunkUnitMinutes,
+      onSetPinnedStart: (outcomeId, startAt) async => ref
+          .read(focusSessionPlanningProvider.notifier)
+          .setPinnedStart(outcomeId, startAt),
     );
   }
 

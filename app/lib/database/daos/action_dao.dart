@@ -560,19 +560,29 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   Stream<Map<String, TimeContext>> watchCurrentTimeContexts() {
     return (select(actions)..where((a) => a.role.equals('current')))
         .watch()
-        .map((rows) {
-      final byOutcome = <String, List<Action>>{};
-      for (final a in rows) {
-        (byOutcome[a.outcomeId] ??= []).add(a);
-      }
-      final result = <String, TimeContext>{};
-      for (final entry in byOutcome.entries) {
-        final winner = _pickWinner(entry.value);
-        final parsed = TimeContext.tryParse(winner?.timeContext);
-        if (parsed != null) result[entry.key] = parsed;
-      }
-      return result;
-    });
+        .map(_timeContextsByOutcome);
+  }
+
+  /// One-shot sibling of [watchCurrentTimeContexts], for a surface that reads
+  /// the Time contexts once when it opens and must not hold a live query.
+  Future<Map<String, TimeContext>> getCurrentTimeContexts() async {
+    final rows =
+        await (select(actions)..where((a) => a.role.equals('current'))).get();
+    return _timeContextsByOutcome(rows);
+  }
+
+  Map<String, TimeContext> _timeContextsByOutcome(List<Action> rows) {
+    final byOutcome = <String, List<Action>>{};
+    for (final a in rows) {
+      (byOutcome[a.outcomeId] ??= []).add(a);
+    }
+    final result = <String, TimeContext>{};
+    for (final entry in byOutcome.entries) {
+      final winner = _pickWinner(entry.value);
+      final parsed = TimeContext.tryParse(winner?.timeContext);
+      if (parsed != null) result[entry.key] = parsed;
+    }
+    return result;
   }
 
   /// Current Action text for each of [outcomeIds], keyed by Outcome id. An

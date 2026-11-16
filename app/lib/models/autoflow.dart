@@ -332,6 +332,10 @@ DayLayout autoflow({
 
 /// The stretches of [lower]..[upper] that no interval in [busy] covers, in time
 /// order. Empty when the window is empty.
+List<BusyInterval> freeGaps(
+        DateTime lower, DateTime upper, List<BusyInterval> busy) =>
+    _freeGaps(lower, upper, busy);
+
 List<BusyInterval> _freeGaps(
     DateTime lower, DateTime upper, List<BusyInterval> busy) {
   final gaps = <BusyInterval>[];

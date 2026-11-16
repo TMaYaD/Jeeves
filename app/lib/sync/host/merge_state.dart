@@ -19,8 +19,9 @@ typedef AffectedEntity = ({String collection, String entityId});
 /// told only about live entities would leave a deleted row standing.
 ///
 /// Device-wide rather than per-Workspace: reduced state is not partitioned by
-/// Workspace, and both consumers (a chain rebuild, and the first-open projection
-/// into a fresh domain store) want everything this device has ever reduced.
+/// Workspace, and the first-open projection into a fresh domain store and the
+/// host snapshot want everything this device has ever reduced. A Workspace
+/// rebuild filters this down to the collections it owns.
 Future<Set<AffectedEntity>> reducedEntities(SyncDatabase db) async {
   final rows = await db.customSelect(
     'SELECT collection, entity_id FROM reduced_fields '
@@ -112,6 +113,29 @@ ORDER BY f.entity_id, f.field
       for (final row in rows)
         row.read<String>('field'): jsonDecode(row.read<String>('value_json')),
     };
+  }
+
+  /// The greatest field clock on record for [entityId], or null if none.
+  ///
+  /// Read by the domain reconciler to order two links by when each was asserted.
+  /// Hidden fields count: a link's clock is its last assertion, whatever a later
+  /// tombstone did to its visibility.
+  Future<({int wallMs, int counter, String memberIdHex})?> readLatestClock(
+    String entityId,
+  ) async {
+    final row = await _db.customSelect(
+      'SELECT wall_ms, counter, member_id_hex FROM field_clocks '
+      'WHERE collection = ? AND entity_id = ? '
+      'ORDER BY wall_ms DESC, counter DESC, member_id_hex DESC LIMIT 1',
+      variables: [Variable<String>(collection), Variable<String>(entityId)],
+      readsFrom: {_db.fieldClocks},
+    ).getSingleOrNull();
+    if (row == null) return null;
+    return (
+      wallMs: row.read<int>('wall_ms'),
+      counter: row.read<int>('counter'),
+      memberIdHex: row.read<String>('member_id_hex'),
+    );
   }
 
   Stream<Map<String, Object?>?> watchEntity(String entityId) =>
