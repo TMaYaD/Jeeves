@@ -24,7 +24,6 @@ import 'package:jeeves/widgets/timeboxed_limit_strip.dart';
 import '../helpers/active_focus_harness.dart';
 import '../test_helpers.dart';
 
-const _userId = focusUserId;
 const _notificationsChannel = focusNotificationsChannel;
 typedef _FakeNotificationsPlatform = FakeNotificationsPlatform;
 
@@ -33,6 +32,7 @@ typedef _FakeNotificationsPlatform = FakeNotificationsPlatform;
 class _FixedSprintTimerNotifier extends SprintTimerNotifier {
   _FixedSprintTimerNotifier(this.state);
 
+  @override
   final SprintTimerState state;
 
   @override
@@ -61,14 +61,12 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     FlutterLocalNotificationsPlatform.instance = _FakeNotificationsPlatform();
-    TestWidgetsFlutterBinding.ensureInitialized()
-        .defaultBinaryMessenger
+    TestWidgetsFlutterBinding.ensureInitialized().defaultBinaryMessenger
         .setMockMethodCallHandler(_notificationsChannel, (_) async => null);
     db = GtdDatabase(NativeDatabase.memory());
   });
   tearDown(() async {
-    TestWidgetsFlutterBinding.ensureInitialized()
-        .defaultBinaryMessenger
+    TestWidgetsFlutterBinding.ensureInitialized().defaultBinaryMessenger
         .setMockMethodCallHandler(_notificationsChannel, null);
     await db.close();
   });
@@ -94,18 +92,20 @@ void main() {
     final now = DateTime.now().toUtc();
     final passed = now.subtract(const Duration(minutes: 20));
 
-    await tester.pumpWidget(focusHarness(
-      db,
-      todo: todo,
-      timeboxedLimit: status(
-        limitPassedAt: passed,
-        sprintStarts: [
-          passed.subtract(const Duration(minutes: 10)),
-          passed.add(const Duration(minutes: 5)),
-        ],
-        firstPast: 1,
+    await tester.pumpWidget(
+      focusHarness(
+        db,
+        todo: todo,
+        timeboxedLimit: status(
+          limitPassedAt: passed,
+          sprintStarts: [
+            passed.subtract(const Duration(minutes: 10)),
+            passed.add(const Duration(minutes: 5)),
+          ],
+          firstPast: 1,
+        ),
       ),
-    ));
+    );
     await pumpFocusFrames(tester);
 
     expect(find.byType(TimeboxedLimitStrip), findsOneWidget);
@@ -117,15 +117,17 @@ void main() {
     final todo = await insertFocusTodo(db, id: 'o2');
     final now = DateTime.now().toUtc();
 
-    await tester.pumpWidget(focusHarness(
-      db,
-      todo: todo,
-      timeboxedLimit: status(
-        limitPassedAt: now.add(const Duration(minutes: 10)),
-        sprintStarts: [now],
-        firstPast: 0,
+    await tester.pumpWidget(
+      focusHarness(
+        db,
+        todo: todo,
+        timeboxedLimit: status(
+          limitPassedAt: now.add(const Duration(minutes: 10)),
+          sprintStarts: [now],
+          firstPast: 0,
+        ),
       ),
-    ));
+    );
     await pumpFocusFrames(tester);
 
     expect(find.byType(TimeboxedLimitStrip), findsNothing);
@@ -136,25 +138,29 @@ void main() {
     final now = DateTime.now().toUtc();
     final passed = now.subtract(const Duration(minutes: 20));
 
-    await tester.pumpWidget(focusHarness(
-      db,
-      todo: todo,
-      sprintTimer: () => _FixedSprintTimerNotifier(const SprintTimerState(
-        phase: SprintPhase.focus,
-        activeTaskId: 'o3',
-        sprintNumber: 3,
-        totalSprints: 3,
-      )),
-      timeboxedLimit: status(
-        limitPassedAt: passed,
-        sprintStarts: [
-          passed.subtract(const Duration(minutes: 10)),
-          passed.add(const Duration(minutes: 5)),
-          passed.add(const Duration(minutes: 10)),
-        ],
-        firstPast: 1,
+    await tester.pumpWidget(
+      focusHarness(
+        db,
+        todo: todo,
+        sprintTimer: () => _FixedSprintTimerNotifier(
+          const SprintTimerState(
+            phase: SprintPhase.focus,
+            activeTaskId: 'o3',
+            sprintNumber: 3,
+            totalSprints: 3,
+          ),
+        ),
+        timeboxedLimit: status(
+          limitPassedAt: passed,
+          sprintStarts: [
+            passed.subtract(const Duration(minutes: 10)),
+            passed.add(const Duration(minutes: 5)),
+            passed.add(const Duration(minutes: 10)),
+          ],
+          firstPast: 1,
+        ),
       ),
-    ));
+    );
     await pumpFocusFrames(tester);
 
     // The first Sprint started before the limit: unchanged.
@@ -164,26 +170,31 @@ void main() {
     expect(_dotColour(tester, 2), const Color(0xFFDC2626));
   });
 
-  testWidgets('dots stay blue when no Sprint started past the limit',
-      (tester) async {
+  testWidgets('dots stay blue when no Sprint started past the limit', (
+    tester,
+  ) async {
     final todo = await insertFocusTodo(db, id: 'o4');
     final now = DateTime.now().toUtc();
 
-    await tester.pumpWidget(focusHarness(
-      db,
-      todo: todo,
-      sprintTimer: () => _FixedSprintTimerNotifier(const SprintTimerState(
-        phase: SprintPhase.focus,
-        activeTaskId: 'o4',
-        sprintNumber: 2,
-        totalSprints: 2,
-      )),
-      timeboxedLimit: status(
-        limitPassedAt: now.add(const Duration(minutes: 10)),
-        sprintStarts: [now, now],
-        firstPast: 0,
+    await tester.pumpWidget(
+      focusHarness(
+        db,
+        todo: todo,
+        sprintTimer: () => _FixedSprintTimerNotifier(
+          const SprintTimerState(
+            phase: SprintPhase.focus,
+            activeTaskId: 'o4',
+            sprintNumber: 2,
+            totalSprints: 2,
+          ),
+        ),
+        timeboxedLimit: status(
+          limitPassedAt: now.add(const Duration(minutes: 10)),
+          sprintStarts: [now, now],
+          firstPast: 0,
+        ),
       ),
-    ));
+    );
     await pumpFocusFrames(tester);
 
     expect(_dotColour(tester, 0), const Color(0xFF2563EB));

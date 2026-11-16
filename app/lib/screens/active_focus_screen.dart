@@ -328,7 +328,10 @@ class _FocusBodyState extends ConsumerState<_FocusBody>
     final todo = widget.todo;
     final timer = ref.watch(sprintTimerProvider);
     final notifier = ref.read(sprintTimerProvider.notifier);
-    final limit = ref.watch(timeboxedLimitStatusProvider(todo.id));
+    // The limit status, unwrapped: the strip and the dots want the status
+    // itself, not the state of the watch that carries it.
+    final limit =
+        ref.watch(timeboxedLimitStatusProvider(todo.id)).asData?.value;
 
     final isBreak = timer.isBreak;
     final ringColor =
@@ -492,7 +495,7 @@ class _TimerPage extends StatelessWidget {
               _SprintDotsColumn(
                 timer: timer,
                 pulseCtrl: pulseCtrl,
-                limit: widget.limit,
+                limit: limit,
               ),
             ],
           ),
