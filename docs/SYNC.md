@@ -160,8 +160,23 @@ The ceremony refuses before authoring anything rather than publishing a rotation
 that would strand the Service mid-stream. Revoking the Service is the way
 through.
 
+## Op-log folder
+
+A signed-out device can sync through a folder a file syncer carries, with no server (`app/lib/sync/folder/`). It is a plugin: it carries signed ops and hands them to the host untouched.
+
+- **One writer per file.** `folder.json` names the folder; each device owns `ops/<member id>/` — a `member.json` (public key, label) and numbered `NNNNNN.log` segments it alone appends to. A segment record is a length, a v1 envelope and a 4-byte checksum (`spec/sync/folder_record_vectors.json`); a segment rolls at 1 MiB or 24 hours and is never written again.
+- **Cursors.** Outbound, the host's own cursor plus a local queue of signed records waiting for the file. Inbound, one per paired device: segment, byte offset and the author chain head. A cursor moves only after the host has applied what was read.
+- **Reading.** A short or checksum-failing tail is "not yet arrived": no alarm, picked up on a later scan. A bad signature or a broken chain raises the existing alarm for that author and stops reading them; a chain-valid but refused payload is quarantined and skipped. A segment shorter than the read offset raises `segment_rolled_back`, and a skipped segment raises `author_chain_gap`; both resolve when the files are whole again.
+- **Pairing.** Nothing is read from a device until the person has compared key fingerprints on both and paired. A member whose key later changes is refused, not trusted.
+- **Signed, not encrypted.** The folder gives integrity (no forgery; alarms on rewrite, rollback and gaps), not confidentiality: anyone who can read the folder can read the data. Encrypting needs a way to share a key without a server — a later `aead_v1` suite on the same wire. A syncer that stops delivering is seen only as staleness.
+- **No downgrade.** A device that is signed in or enrolled never binds or attaches a folder, so a folder never holds a plaintext copy of data that is, or could become, encrypted under a Workspace key. The folder is untrusted input: member names are checked as canonical UUIDs before becoming a path, lengths are bounded before any read, and the two JSON files are parsed strictly.
+- **Not built:** unpairing, resetting a device's identity in a folder, compaction, scanning while the app is closed.
+
+**Manual Android runbook** (nothing in CI runs the storage channel): on two devices, turn folder sync on in a folder your syncer carries; confirm the files appear in `ops/`; pair each from the other after comparing fingerprints; edit on each and see both converge. Then turn off Wi-Fi on one, edit, reconnect, and check it catches up. Confirm a restart resumes without duplicate records.
+
 ## What is asserted, and where
 
 - **Merge semantics**: `app/test/sync/merge_strategy_test.dart`, `app/test/services/user_preferences_conflict_test.dart`, and the golden vectors in `spec/sync/reducer_v1_vectors.json` (shared with the server's Python reducer, so a divergence is caught cross-language).
 - **Convergence end to end**: `app/test/sync/convergence_test.dart` and `full_day_convergence_test.dart` run two simulated devices through enrol → write → sign → append → pull → verify → reduce and assert byte-identical reduced state.
 - **Projection**: `app/test/sync/projector_view_notify_test.dart` (a reduced-in row reaches the watching queries) and `domain_rebuild_test.dart` (a fresh domain store rebuilt from the log, tombstones included).
+- **Op-log folder**: `app/test/sync/folder/` — a two- and three-device journey over one real directory, one group per acceptance criterion; the refusals (enrolled device, unpaired or forged member, no secrets in the folder); the carrier source scan and the v11→v12 migration. The Android storage channel is compiled by CI and checked by the runbook above only.
