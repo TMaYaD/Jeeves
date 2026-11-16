@@ -298,9 +298,11 @@ void main() {
     expect(await container.read(authTokenProvider.future), isNull);
 
     // Start the signed-out build without awaiting it, then sign in at once.
-    final signedOutBuild = container.read(syncLifecycleProvider.future);
+    // Listen as the app does (main.dart watches it eagerly): an unwatched
+    // provider that is invalidated only rebuilds on the next read.
+    container.listen(syncLifecycleProvider, (_, _) {});
+    container.read(syncLifecycleProvider.future);
     container.read(currentUserIdProvider.notifier).setUserId(_userId);
-    await signedOutBuild;
     final lifecycle = await container.read(syncLifecycleProvider.future);
     expect(lifecycle, isNotNull);
     expect(await lifecycle!.activate(), SyncActivation.syncFailed);
