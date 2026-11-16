@@ -196,7 +196,7 @@ _Avoid_: health score, score, System Health
 - **The codebase says "Todo" (table, Drift class) and "Task" (docs, `task_id`) for what the model calls an Outcome.** The rename is unstarted. `docs/proposals/blockers-and-contexts.md` uses "Task" and "NextAction" throughout and predates the Action rename.
 - The proposal's four long-term states (`active / someday / done / trashed`) collapse two independent axes into one enum. The code's `intent` column is the Intent axis and `done_at` the Completion axis; the proposal's wording is the conceptual error.
 - A trivially-actionable Capture ("call John") could in principle skip Outcome creation and land directly as an Action. The model says no — every Capture clarifies through an Outcome.
-- **Project and Area exclusivity are not enforced in storage.** Both are typed Tags linked through `todo_tags`, which carries no `type`, so "at most one" is not expressible as a unique index — it needs a dedicated link or a check reaching into `tags`. Project's rule is held by the app's writers alone, Area's by the cutover. Also owed: the user's resolution pass over the Area conversions the initial upload reports.
+- **Project and Area exclusivity are not enforced in storage.** Both are typed Tags linked through `todo_tags`, which carries no `type`, so "at most one" is not expressible as a unique index — it needs a dedicated link or a check reaching into `tags`. Project's rule is held by the writers and the reconciler; Area's by the cutover. Also owed: the user's resolution pass over the Area conversions the initial upload reports.
 
 ### Engagement
 
