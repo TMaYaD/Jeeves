@@ -149,6 +149,18 @@ void main() {
       expect(c.read(recentSearchesProvider),
           ['fresh', 'zeta', 'alpha', 'mid']);
     });
+
+    test('overlapping adds on this device do not lose one another', () async {
+      SharedPreferences.setMockInitialValues({});
+      final db = GtdDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
+      final c = _container(db);
+      final n = c.read(recentSearchesProvider.notifier);
+      await Future.wait([n.add('alpha'), n.add('beta')]);
+      await pumpEventQueue();
+      expect(c.read(recentSearchesProvider), containsAll(['alpha', 'beta']));
+      expect(c.read(recentSearchesProvider).length, 2);
+    });
   });
 
   group('first-launch card dismissal', () {
