@@ -56,7 +56,9 @@ class _ScheduledReviewStepState extends ConsumerState<ScheduledReviewStep> {
               ),
             ),
             const SizedBox(height: 16),
-            if (sortedTasks.isNotEmpty) _timeline(sortedTasks),
+            // Plan order, not the due-date order of the rows: Autoflow places in
+            // Plan position order.
+            if (tasks.isNotEmpty) _timeline(tasks),
             const SizedBox(height: 36),
             const Divider(height: 1, color: Color(0xFFF3F4F6)),
             const SizedBox(height: 36),

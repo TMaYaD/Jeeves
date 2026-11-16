@@ -17,6 +17,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:jeeves/models/focus_settings.dart';
 import 'package:jeeves/providers/day_timeline_provider.dart';
+import 'package:jeeves/widgets/day_timeline/day_timeline.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/providers/focus_settings_provider.dart';
 import 'package:jeeves/providers/nudge_triggers.dart';
@@ -180,6 +181,31 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('planning'), findsOneWidget);
+  });
+
+  testWidgets(
+      'the Now timeline lays out the Plan in Plan order, not due-date order',
+      (tester) async {
+    Todo planned(String id, DateTime? due) => Todo(
+          id: id, title: id, userId: 'test-user', createdAt: DateTime(2030),
+          intent: 'next', dueDate: due, timeEstimate: 30,
+        );
+    await tester.pumpWidget(_buildScreen(
+      activeSession: _openSession(),
+      tasks: [
+        planned('first in Plan', DateTime(2030, 3, 16)),
+        planned('second in Plan', DateTime(2030, 3, 15)),
+      ],
+    ));
+    await tester.pump();
+    await tester.pump();
+
+    final timeline = tester.widget<DayTimeline>(find.byType(DayTimeline));
+    expect(timeline.entries.map((e) => e.outcomeId),
+        ['first in Plan', 'second in Plan']);
+    // The rows below keep their due-date presentation.
+    final rows = tester.widgetList<OutcomeRow>(find.byType(OutcomeRow));
+    expect(rows.map((r) => r.title), ['second in Plan', 'first in Plan']);
   });
 
   testWidgets('Focus row metadata fits a narrow screen beside Start', (tester) async {

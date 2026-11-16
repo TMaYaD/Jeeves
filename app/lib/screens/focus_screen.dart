@@ -119,7 +119,9 @@ class FocusScreen extends ConsumerWidget {
                           if (planningDone && sortedTasks.isNotEmpty)
                             _NowTimeline(
                               session: activeSession,
-                              tasks: sortedTasks,
+                              // Plan order, not the due-date order of the rows:
+                              // Autoflow places in Plan position order.
+                              tasks: tasks,
                             )
                           else
                             Text(
