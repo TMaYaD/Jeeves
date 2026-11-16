@@ -15,6 +15,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart'
     show FlutterLocalNotificationsPlatform;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
@@ -103,6 +104,9 @@ Widget focusHarness(
   // controller here, exactly as a live Drift watch would emit, without leaving
   // a pending timer behind on dispose.
   Stream<Todo?>? todoStream,
+  // Extra overrides, e.g. a fixed `focusSettingsProvider` for tests that run the
+  // real sprint timer and must not open the synced-preferences watch.
+  List<Override> overrides = const [],
 }) {
   final router = GoRouter(
     initialLocation: '/active',
@@ -132,6 +136,7 @@ Widget focusHarness(
       activeSessionSettlementsProvider.overrideWith(
         (_) => Stream.value(const <String, SessionSettlement>{}),
       ),
+      ...overrides,
     ],
     child: MaterialApp.router(routerConfig: router),
   );

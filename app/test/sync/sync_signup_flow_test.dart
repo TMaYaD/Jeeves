@@ -66,6 +66,7 @@ const Map<String, Set<String>> _tables = {
   'focus_session_reschedules': {},
   'outcome_bypass_decisions': {},
   'time_logs': {},
+  'sprints': {},
   'user_preferences': {},
 };
 

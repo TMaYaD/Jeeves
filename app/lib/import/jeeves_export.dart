@@ -108,6 +108,7 @@ const List<String> jeevesExportCollections = <String>[
   actionsCollection,
   focusSessionsCollection,
   timeLogsCollection,
+  sprintsCollection,
   todoTagsCollection,
   captureOutcomesCollection,
   captureTagsCollection,
@@ -530,5 +531,6 @@ void _notifyAllViews(GtdDatabase db) {
   db.notifyCapturesViewWrite();
   db.notifyActionsViewWrite();
   db.notifyTimeLogsViewWrite();
+  db.notifySprintsViewWrite();
   db.notifyFocusSessionsViewWrite();
 }

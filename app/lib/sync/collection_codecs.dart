@@ -51,6 +51,7 @@ const String actionsCollection = 'actions';
 const String tagsCollection = 'tags';
 const String capturesCollection = 'captures';
 const String timeLogsCollection = 'time_logs';
+const String sprintsCollection = 'sprints';
 const String focusSessionsCollection = 'focus_sessions';
 const String todoTagsCollection = 'todo_tags';
 const String captureOutcomesCollection = 'capture_outcomes';
@@ -309,6 +310,20 @@ const Map<String, CollectionCodec> collectionCodecs = {
       'focus_session_id': FieldKind.text,
     },
     requiredColumns: {'user_id', 'task_id', 'started_at'},
+    identityColumns: ['id'],
+  ),
+  sprintsCollection: CollectionCodec(
+    collection: sprintsCollection,
+    table: 'sprints',
+    columns: {
+      'user_id': FieldKind.text,
+      'action_id': FieldKind.text,
+      // TEXT columns holding canonical millisecond instants: opaque pass-through.
+      'started_at': FieldKind.text,
+      'ended_at': FieldKind.text,
+      'planned_duration_minutes': FieldKind.integer,
+    },
+    requiredColumns: {'user_id', 'started_at', 'planned_duration_minutes'},
     identityColumns: ['id'],
   ),
   focusSessionsCollection: CollectionCodec(

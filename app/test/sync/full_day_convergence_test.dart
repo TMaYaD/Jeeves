@@ -65,6 +65,7 @@ const _tables = <String, Set<String>>{
   'focus_session_reschedules': {},
   'outcome_bypass_decisions': {},
   'time_logs': {},
+  'sprints': {},
   'user_preferences': {},
 };
 

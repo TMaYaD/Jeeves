@@ -7,6 +7,7 @@ import '../../utils/uuid.dart';
 import '../../sync/collection_codecs.dart';
 import '../gtd_database.dart';
 import 'action_dao.dart';
+import 'sprint_dao.dart';
 
 part 'time_log_dao.g.dart';
 
@@ -50,6 +51,8 @@ class TimeLogDao extends DatabaseAccessor<GtdDatabase>
       for (final row in stillOpen) {
         captureLogClosed(row.id, ts);
       }
+      // A Sprint never outlives its TimeLog (issue #910).
+      await SprintDao.closeRunningSprintsOfLogs(attachedDatabase, ts, stillOpen);
       // Insert the new open log.
       final id = uuid.v4();
       await into(timeLogs).insert(TimeLogsCompanion(
@@ -132,6 +135,8 @@ class TimeLogDao extends DatabaseAccessor<GtdDatabase>
       for (final row in open) {
         captureLogClosed(row.id, ts);
       }
+      // A Sprint never outlives its TimeLog (issue #910).
+      await SprintDao.closeRunningSprintsOfLogs(attachedDatabase, ts, open);
     });
   }
 
