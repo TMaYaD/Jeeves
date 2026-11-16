@@ -11,9 +11,11 @@ import 'package:go_router/go_router.dart';
 
 import 'package:jeeves/database/daos/action_dao.dart' show TerminatedAction;
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/focus_settings.dart';
 import 'package:jeeves/models/intent.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/focus_session_provider.dart';
+import 'package:jeeves/providers/focus_settings_provider.dart';
 import 'package:jeeves/providers/inbox_provider.dart';
 import 'package:jeeves/providers/sprint_timer_provider.dart'
     show sprintTimerProvider;
@@ -55,6 +57,27 @@ Future<Todo> _insertAt(
     ],
   );
   return (await db.todoDao.getTodo(id))!;
+}
+
+/// Fixed settings: the real sprint timer reads them once there is an
+/// engagement, and the live notifier would open a synced-preferences watch whose
+/// close timer outlives the test.
+class _FixedFocusSettings extends FocusSettingsNotifier {
+  @override
+  FocusSettings build() => const FocusSettings();
+}
+
+/// A running recorded Sprint on [taskId] with its TimeLog open — what a Sprint
+/// that survived a restart (or was started on another device) looks like.
+Future<void> _seedRunningSprint(GtdDatabase db, String taskId) async {
+  final now = DateTime.now();
+  await db.timeLogDao.openLog(taskId: taskId, userId: 'local', now: now);
+  await db.sprintDao.startSprint(
+    taskId: taskId,
+    userId: 'local',
+    plannedDurationMinutes: 20,
+    now: now,
+  );
 }
 
 (Widget, GoRouter) _buildScreen(
@@ -104,6 +127,7 @@ Future<Todo> _insertAt(
     overrides: [
       inboxItemsProvider.overrideWith((_) => Stream.value([])),
       databaseProvider.overrideWithValue(db),
+      focusSettingsProvider.overrideWith(_FixedFocusSettings.new),
       taskDetailTodoProvider(todoId)
           .overrideWith((_) => todoStream ?? Stream.value(initialTodo)),
       taskTagsProvider(todoId)
@@ -152,7 +176,7 @@ void main() {
 
     setUp(() {
       // The Start focus affordance reads sprintTimerProvider, whose build
-      // restores state from SharedPreferences.
+      // derives its state from the recorded Sprints.
       SharedPreferences.setMockInitialValues({});
       db = _openInMemory();
     });
@@ -442,17 +466,10 @@ void main() {
     testWidgets(
         'Start focus while a sprint persists for a different task (post-'
         'restart) surfaces the conflict and opens no TimeLog', (tester) async {
-      // A maxed focus-overtime sprint restores as active without arming a
-      // ticker — the persisted-sprint-survives-restart scenario where the
-      // in-memory focus state is empty but the sprint is still attached.
-      SharedPreferences.setMockInitialValues({
-        'sprint_active_task_id': 'other',
-        'sprint_active_task_title': 'Other task',
-        'sprint_phase': 'focus_overtime',
-        'sprint_end_time': DateTime.now().toUtc().toIso8601String(),
-      });
-
+      // A recorded Sprint that survived a restart: the in-memory focus state is
+      // empty but the Sprint and its TimeLog are still in the record.
       await _insertAt(db, id: 'other', title: 'Other task');
+      await _seedRunningSprint(db, 'other');
       final todo = await _insertAt(db, id: 'engage4', title: 'Engageable');
       final (widget, router) = _buildScreen(db, 'engage4', initialTodo: todo);
       await _showTaskDetail(tester, widget, router, 'engage4');
@@ -477,8 +494,9 @@ void main() {
       );
       final log =
           await tester.runAsync(() => db.timeLogDao.watchActiveLog().first);
-      expect(log, isNull,
-          reason: 'no TimeLog may open while a sprint is attached elsewhere');
+      expect(log!.taskId, 'other',
+          reason: 'no TimeLog may open while a sprint is attached elsewhere; '
+              'the existing engagement is untouched');
     });
 
     testWidgets(
@@ -487,15 +505,9 @@ void main() {
       // Sprint belongs to the tapped task; the in-memory Focus belongs to
       // another. A match on one tracker must not short-circuit past the
       // conflict on the other.
-      SharedPreferences.setMockInitialValues({
-        'sprint_active_task_id': 'engage5',
-        'sprint_active_task_title': 'Engageable',
-        'sprint_phase': 'focus_overtime',
-        'sprint_end_time': DateTime.now().toUtc().toIso8601String(),
-      });
-
       await _insertAt(db, id: 'other', title: 'Other task');
       final todo = await _insertAt(db, id: 'engage5', title: 'Engageable');
+      await _seedRunningSprint(db, 'engage5');
       final (widget, router) = _buildScreen(db, 'engage5', initialTodo: todo);
       await _showTaskDetail(tester, widget, router, 'engage5');
 
@@ -521,18 +533,15 @@ void main() {
     });
 
     testWidgets(
-        'Start focus with a matching Focus does not mask a sprint owned by '
-        'a different task — the conflict is surfaced', (tester) async {
-      // The inverse divergence: Focus belongs to the tapped task; a
-      // persisted sprint belongs to another.
-      SharedPreferences.setMockInitialValues({
-        'sprint_active_task_id': 'other',
-        'sprint_active_task_title': 'Other task',
-        'sprint_phase': 'focus_overtime',
-        'sprint_end_time': DateTime.now().toUtc().toIso8601String(),
-      });
-
+        'Start focus with a matching Focus finds no Sprint left over for a '
+        'different task — starting Focus ended it with its TimeLog',
+        (tester) async {
+      // Before Sprints were recorded a persisted Sprint could outlive the
+      // TimeLog it ran under, so a matching Focus could sit beside a Sprint
+      // owned by another task. A Sprint now never outlives its TimeLog: starting
+      // Focus on a task closes the previous task's TimeLog and its Sprint.
       await _insertAt(db, id: 'other', title: 'Other task');
+      await _seedRunningSprint(db, 'other');
       final todo = await _insertAt(db, id: 'engage6', title: 'Engageable');
       final (widget, router) = _buildScreen(db, 'engage6', initialTodo: todo);
       await _showTaskDetail(tester, widget, router, 'engage6');
@@ -546,17 +555,17 @@ void main() {
         () =>
             container.read(focusModeProvider.notifier).startFocus('engage6'),
       );
+      await tester.runAsync(() => pumpEventQueue());
+
+      final sprints = await tester.runAsync(() => db.select(db.sprints).get());
+      expect(sprints!.single.endedAt, isNotNull,
+          reason: 'the other task\'s Sprint ended with its TimeLog');
 
       await tapBarAction(tester, const Key('task_detail_start_focus'));
       await tester.pumpAndSettle();
 
-      expect(find.text('Active focus'), findsNothing,
-          reason: 'a matching Focus must not mask the conflicting sprint');
-      expect(
-        find.text(
-            'Another task is already in focus — finish or stop it first.'),
-        findsOneWidget,
-      );
+      expect(find.text('Active focus'), findsOneWidget,
+          reason: 'the matching Focus is the only engagement left');
     });
   });
 
