@@ -158,7 +158,7 @@ class FocusSessionTasks extends Table {
   IntColumn get position => integer()();
 
   /// Per-task disposition chosen during session review, for **Plan members**.
-  /// Off-Plan engaged Outcomes have no row here (the Plan never auto-grows —
+  /// Off-Plan engaged Outcomes have no row here (the Plan never grows automatically —
   /// ADR-0002); their Dispositions live in [FocusSessionDispositions] instead.
   /// NULL = not yet reviewed (active session) or done task.
   /// 'rollover' = carry forward to next session's pre-selected list.
@@ -177,6 +177,13 @@ class FocusSessionTasks extends Table {
   /// owner without a JOIN.
   TextColumn get userId => text()();
 
+  /// The moment the user deliberately added this Outcome to the Plan during
+  /// Execution (issue #700). NULL = chosen during Planning, i.e. the morning
+  /// commitment. A Plan reader needs no filter for it: the Plan stays exactly
+  /// the set of rows here; this only marks which of them joined late.
+  DateTimeColumn get addedDuringExecutionAt =>
+      dateTime().named('added_during_execution_at').nullable()();
+
   @override
   Set<Column<Object>> get primaryKey => {focusSessionId, taskId};
 }
@@ -191,7 +198,7 @@ class FocusSessionTasks extends Table {
 ///   - A Plan member's Disposition lives on [FocusSessionTasks.disposition]
 ///     (it already has a junction row from Planning).
 ///   - An off-Plan engaged Outcome has **no** `focus_session_tasks` row — the
-///     Plan is fixed at Planning and never auto-grows from engagement
+///     Plan never grows automatically from engagement
 ///     (ADR-0002) — so its Disposition is recorded here, keyed by the
 ///     (FocusSession, Outcome) pair per CONTEXT.md § Engagement (Disposition is
 ///     a property of that relationship, independent of Plan membership).
