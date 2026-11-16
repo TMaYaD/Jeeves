@@ -282,7 +282,7 @@ _Avoid_: Resolution, Decision, Handling, Action (overloaded)
 
 #### Relationships
 
-- The **Plan** is a *commitment* set captured during the Planning phase; it never grows automatically. A deliberate add during Execution is recorded as such ("Added during the day"), keeping the morning commitment recoverable. Off-Plan engagement is allowed and attributes to the session, but does not modify the Plan. The Plan-vs-actually-engaged gap is preserved as information — useful for retrospection, coaching, and future AI augmentation.
+- The **Plan** is a *commitment* set in Planning; it never grows automatically. A deliberate add is marked ("Added during the day"). Off-Plan engagement is allowed and attributes to the session, but does not modify the Plan. The Plan-vs-actually-engaged gap is preserved as information — useful for retrospection, coaching, and future AI augmentation.
 - **Focus** may point to any Outcome the user is engaging with, whether or not that Outcome is on the Plan.
 - A **TimeLog** writes attribute to the open FocusSession (if one exists at engagement time) regardless of whether the engaged Outcome is on the Plan. If no FocusSession is open, the TimeLog is ad hoc — no session attribution.
 - The **Review** phase surfaces every Outcome that was either on the Plan or engaged with during the session (the union), so neither off-Plan work nor planned-but-untouched Outcomes slip past disposition. Review splits that surface by **Settled**: Settled Outcomes are reported (grouped by how they settled) and take an implied **Disposition**; the rest are asked about one at a time.
