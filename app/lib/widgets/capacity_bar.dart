@@ -25,6 +25,7 @@ const kDefaultCountedFillColor = Color(0xFF93C5FD);
 /// 4px clip, `#E5E7EB` track — is preserved exactly.
 class CapacityBar extends StatelessWidget {
   const CapacityBar({
+    super.key,
     required this.realMinutes,
     required this.defaultMinutes,
     required this.availableMinutes,

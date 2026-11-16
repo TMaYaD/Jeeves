@@ -108,9 +108,7 @@ class FocusScreen extends ConsumerWidget {
                             ),
                           ),
                           const SizedBox(height: 16),
-                          if (planningDone &&
-                              activeSession != null &&
-                              sortedTasks.isNotEmpty)
+                          if (planningDone && sortedTasks.isNotEmpty)
                             _NowTimeline(
                               session: activeSession,
                               tasks: sortedTasks,
