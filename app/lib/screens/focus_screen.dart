@@ -17,6 +17,7 @@ import '../widgets/day_timeline/day_timeline.dart';
 import '../widgets/meta_chip.dart';
 import '../widgets/nudge_banner.dart'
     show InboxTooFullHead, NudgeEmptyState, RitualHead, nudgeSurfaceHeadProvider;
+import '../widgets/added_during_the_day_tag.dart';
 import '../widgets/outcome_row.dart';
 
 class FocusScreen extends ConsumerWidget {
@@ -40,6 +41,9 @@ class FocusScreen extends ConsumerWidget {
     // empty one, or the first frame would offer "End Session" past an
     // unfinished Outcome (#885).
     final reviewSurface = ref.watch(activeSessionReviewSurfaceProvider).value;
+    final addedDuringTheDayIds =
+        ref.watch(activeSessionAddedDuringExecutionTaskIdsProvider).value ??
+            const <String>{};
 
     return Scaffold(
       body: SafeArea(
@@ -149,6 +153,8 @@ class FocusScreen extends ConsumerWidget {
                                 todo: t,
                                 currentTaskId: currentTaskId,
                                 settlement: settlements[t.id],
+                                addedDuringTheDay:
+                                    addedDuringTheDayIds.contains(t.id),
                               ),
                             )
                           else if (sortedTasks.isEmpty && nudgeHead != null)
@@ -296,6 +302,7 @@ Widget _focusOutcomeRow(
   required String? currentTaskId,
   required SessionSettlement? settlement,
   required int sprintMinutes,
+  bool addedDuringTheDay = false,
 }) {
   final estimate = todo.timeEstimate;
   final isDone = todo.doneAt != null;
@@ -306,7 +313,7 @@ Widget _focusOutcomeRow(
     title: todo.title,
     struck: isDone || isSettled,
     onTap: () => context.push('/task/${todo.id}'),
-    meta: estimate == null && todo.dueDate == null
+    meta: estimate == null && todo.dueDate == null && !addedDuringTheDay
         ? null
         : Wrap(
             spacing: 8,
@@ -331,6 +338,7 @@ Widget _focusOutcomeRow(
                   ],
                 ),
               if (todo.dueDate != null) OutcomeMetaLine(dueDate: todo.dueDate),
+              if (addedDuringTheDay) const AddedDuringTheDayTag(),
             ],
           ),
     trailing: Row(

@@ -100,6 +100,9 @@ Widget _buildScreen({
       activeSessionProvider.overrideWith(
         (_) => Stream.value(activeSession),
       ),
+      activeSessionAddedDuringExecutionTaskIdsProvider.overrideWith(
+        (_) => Stream.value(const <String>{}),
+      ),
       lastClosedSessionRolloverTasksProvider.overrideWith(
         (_) => Stream.value(rolloverTasks),
       ),

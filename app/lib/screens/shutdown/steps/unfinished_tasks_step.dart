@@ -8,6 +8,7 @@ import '../../../providers/evening_shutdown_provider.dart';
 import '../../../providers/focus_session_planning_provider.dart';
 import '../../../widgets/process_to_handlers.dart';
 import '../../../widgets/reclarify_prompt_sheet.dart';
+import '../../../widgets/added_during_the_day_tag.dart';
 import '../../../widgets/meta_chip.dart';
 import '../../../widgets/outcome_review_card.dart';
 import '../../../providers/task_detail_provider.dart';
@@ -125,15 +126,28 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
     final loggedMinutes =
         ref.watch(loggedMinutesByOutcomeProvider).value?[current.id] ?? 0;
 
+    final addedDuringTheDay = ref
+            .watch(activeSessionAddedDuringExecutionTaskIdsProvider)
+            .value
+            ?.contains(current.id) ??
+        false;
     final currentAction = ref.watch(currentActionProvider(current.id)).value;
     final launchedByDailyPlanning = ref.watch(shutdownThenPlanProvider);
     return OutcomeReviewCard(
       key: ValueKey(current.id),
       todo: current,
       currentActionText: currentAction?.actionText,
-      meta: OutcomeMetaLine(
-        timeEstimateMinutes: current.timeEstimate,
-        timeLoggedMinutes: loggedMinutes > 0 ? loggedMinutes : null,
+      meta: Wrap(
+        spacing: 8,
+        runSpacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          OutcomeMetaLine(
+            timeEstimateMinutes: current.timeEstimate,
+            timeLoggedMinutes: loggedMinutes > 0 ? loggedMinutes : null,
+          ),
+          if (addedDuringTheDay) const AddedDuringTheDayTag(),
+        ],
       ),
       actions: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
