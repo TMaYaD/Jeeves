@@ -9,6 +9,9 @@ library;
 import 'package:drift/drift.dart' show Variable;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/sync/envelope.dart' show opClassContent;
+import 'package:jeeves/sync/hlc.dart';
+import 'package:jeeves/sync/host/change.dart';
+import 'package:jeeves/sync/signed_out_upload.dart';
 import 'package:jeeves/sync/sync_lifecycle.dart';
 
 import '../../test_helpers.dart';
@@ -180,6 +183,104 @@ void main() {
     await reloaded.enrolWithPassphrase(_passphrase);
     expect(await reloaded.activate(), SyncActivation.active);
     expect((await todosOf(reloaded)).map((row) => row['id']), [_deletedId]);
+  });
+
+  test('a newer edit from another device wins and is not re-authored',
+      () async {
+    final phone = await signedOutPhone();
+    clock.advance(1000);
+    await phone.domain.todoDao.updateFields(_editedId, title: 'Edited signed out');
+    final witness = await phoneNamed('B');
+    await witness.enrolWithPassphrase(_passphrase);
+    expect(await witness.activate(), SyncActivation.active);
+    clock.advance(1000);
+    await witness.domain.todoDao.updateFields(_editedId, title: 'Edited remotely');
+    await flush(witness);
+    final opsBeforeSignIn = server.storedOps.length;
+
+    expect(await phone.activate(), SyncActivation.active);
+    await flush(phone);
+
+    expect(server.storedOps.length, opsBeforeSignIn,
+        reason: 'the pull replaced the device-stamped field, so nothing is left '
+            'to author');
+    for (final device in [phone, witness]) {
+      final todos = await todosOf(device);
+      expect(
+          todos.firstWhere((row) => row['id'] == _editedId)['title'],
+          'Edited remotely');
+    }
+  });
+
+  test('a tag removed and put back while signed out ends assigned', () async {
+    final phone = await phoneNamed('A');
+    await phone.enrolAsFirstDevice(passphrase: _passphrase);
+    expect(await phone.activate(), SyncActivation.active);
+    await insert(phone, _editedId, _userId);
+    final tagId =
+        await phone.domain.tagDao.findOrCreateTag('errands', 'context', _userId);
+    await phone.domain.tagDao.assignTag(_editedId, tagId, _userId);
+    await flush(phone);
+    await phone.lifecycle!.deactivate();
+    phone.lifecycle = null;
+
+    clock.advance(1000);
+    await phone.domain.capturing(
+        () => phone.domain.tagDao.unassignTag(_editedId, tagId));
+    clock.advance(1000);
+    await phone.domain.tagDao.assignTag(_editedId, tagId, 'local');
+
+    expect(await phone.activate(), SyncActivation.active);
+    await flush(phone);
+    final witness = await phoneNamed('B');
+    await witness.enrolWithPassphrase(_passphrase);
+    expect(await witness.activate(), SyncActivation.active);
+
+    final links = await witness.domain
+        .customSelect('SELECT todo_id, tag_id FROM todo_tags')
+        .get();
+    expect([for (final row in links) row.data],
+        [
+      {'todo_id': _editedId, 'tag_id': tagId}
+    ]);
+  });
+
+  test('a write made while the pass reads stays newer than what was read',
+      () async {
+    final phone = await phoneNamed('A');
+    await phone.enrolAsFirstDevice(passphrase: _passphrase);
+    expect(await phone.activate(), SyncActivation.active);
+    await insert(phone, _editedId, _userId);
+    await flush(phone);
+    final gtdClient = phone.stack.defaultClient;
+
+    await runSignedOutUpload(
+      readChanges: () async {
+        // The read has already sampled the old value; the user writes now.
+        clock.advance(1000);
+        await phone.domain.todoDao.updateFields(_editedId, title: 'Typed meanwhile');
+        return [
+          Change(
+            collection: 'todos',
+            entityId: _editedId,
+            fields: {
+              'title': ClockedValue(
+                  'Read before the write', Hlc(0, 0, phone.host!.deviceNodeId)),
+            },
+          ),
+        ];
+      },
+      mintClock: phone.host!.clockForMember(phone.stack.identity.memberIdHex).send,
+      gtdClient: gtdClient,
+      userId: _userId,
+    );
+    await flush(phone);
+
+    final witness = await phoneNamed('B');
+    await witness.enrolWithPassphrase(_passphrase);
+    expect(await witness.activate(), SyncActivation.active);
+    expect(
+        (await todosOf(witness)).single['title'], 'Typed meanwhile');
   });
 
   test('device-stamped merge state is re-stamped under the member id',
