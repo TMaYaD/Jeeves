@@ -12,6 +12,7 @@ import '../../models/focus_session_planning_settings.dart';
 import '../../models/bypassed_outcome.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/build_version_provider.dart';
+import '../../providers/calendar_timeline_provider.dart';
 import '../../providers/clarify_mode_provider.dart';
 import '../../providers/dev_options_provider.dart';
 import '../../providers/focus_session_planning_settings_provider.dart';
@@ -434,8 +435,34 @@ class _FocusSessionPlanningSettings extends ConsumerWidget {
     final settings = ref.watch(focusSessionPlanningSettingsProvider);
     final notifier = ref.read(focusSessionPlanningSettingsProvider.notifier);
 
+    final calendar = ref.watch(calendarTimelineProvider);
+    final calendarSwitchOn = ref.watch(calendarSwitchProvider).asData?.value ??
+        calendar.isConnected;
     return Column(
       children: [
+        if (ref.watch(calendarSourceProvider).isSupported)
+        SwitchListTile(
+          key: const Key('calendar_timeline_toggle'),
+          secondary: const Icon(Icons.calendar_today_outlined,
+              color: Color(0xFF9CA3AF)),
+          title: const Text(
+            'Show my calendar on the timeline',
+            style: TextStyle(fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+          ),
+          subtitle: Text(
+            calendar.status == CalendarTimelineStatus.permissionRefused
+                ? 'Jeeves was not allowed to read your calendar. Allow it in '
+                    "your phone's settings."
+                : 'Read-only, on this device only. Events are never saved or '
+                    'synced.',
+            style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+          ),
+          value: calendarSwitchOn,
+          onChanged: (on) async {
+            await ref.read(calendarTimelineProvider.notifier).setSwitch(on);
+            ref.invalidate(calendarSwitchProvider);
+          },
+        ),
         ListTile(
           key: const Key('planning_time_tile'),
           leading: const Icon(Icons.schedule_outlined, color: Color(0xFF9CA3AF)),

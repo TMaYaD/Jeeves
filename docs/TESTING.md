@@ -173,6 +173,8 @@ The test skips when `DATABASE_URL` does not point at Postgres, so local SQLite-o
 
 The recording stand-in proves what the scheduler asked for, not what the OS delivers. On the PR's APK, with notifications allowed: for each Ritual in turn, set its time two or three minutes ahead in a state where it heads the Nudge queue, lock the phone and confirm the notification arrives; note how late. Then deny notifications in system settings, reopen the app and confirm the denied row appears under each enabled reminder switch.
 
+**Device calendar (debug dev build).** Add an event for later today in the Calendar app, then turn on "Show my calendar on the timeline" in Settings and Allow. The Now timeline draws it hatched with no tile over it; move it in the Calendar app and the timeline re-flows with the Undo notice. After `pm revoke … READ_CALENDAR` it says access was not allowed. `adb logcat -d` holds no event title.
+
 **Notification buttons (debug dev build).** With the app not running (`adb shell am kill`, check `pidof` is empty; never `force-stop`, it cancels the app's alarms), raise a Ritual reminder and tap each button from the shade. Open: the app comes forward on that Ritual. Skip: the notification goes, and `run-as … cat shared_prefs/FlutterSharedPreferences.xml` shows one `nudge_action_outbox.` entry. Snooze: same entry, `dumpsys alarm` lists an alarm at now plus the snooze, logcat has no `LateInitializationError`, and the reminder returns on time. Record device, Android version and SHA.
 
 ## Sync conflict resolution (manual)
