@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../database/gtd_database.dart';
 import '../../models/plan_capacity.dart';
 import '../../providers/clock_provider.dart';
 import '../../providers/database_provider.dart';
