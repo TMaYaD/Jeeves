@@ -81,7 +81,8 @@ class FolderDevice {
     final key = shownKey ??
         (await setup.candidates(folderId))
             .firstWhere((candidate) => candidate.memberId == other.memberId)
-            .signPublicKey!;
+            .signPublicKey ??
+        Uint8List(32); // a member with a problem has no key; setup refuses it itself
     await setup.pair(folderId, other.memberId, expectedSignPublicKey: key);
   }
 
