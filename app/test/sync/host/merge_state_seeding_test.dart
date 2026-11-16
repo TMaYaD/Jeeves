@@ -9,15 +9,19 @@ import 'dart:io';
 import 'package:drift/drift.dart' show BooleanExpressionOperators;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jeeves/sync/collection_codecs.dart';
 import 'package:jeeves/sync/hlc.dart';
 import 'package:jeeves/sync/host/change.dart';
 import 'package:jeeves/sync/host/merge_core.dart';
 import 'package:jeeves/sync/host/merge_state_seeder.dart';
+import 'package:jeeves/sync/host/sync_host.dart' show SyncHost;
 import 'package:jeeves/sync/host/sync_host_service.dart';
+import 'package:jeeves/sync/merge_strategy.dart';
 import 'package:jeeves/sync/sync_database.dart';
 
 import '../harness/reduced_state.dart';
 import 'host_harness.dart';
+import 'pre_host_rows.dart';
 
 const String _userId = 'seeding-user';
 const String _outcomeA = '3f2d1c4e-5a6b-4c8d-9e0f-1a2b3c4d5e6f';
@@ -123,6 +127,51 @@ void main() {
       expect(await _count(device.sync, 'change_sequence'), 0);
       expect(await _count(device.sync, 'row_tombstones'), 0);
       expect(await _count(device.sync, 'merge_state_seeding'), 1);
+    });
+
+    test('every collection with a codec has a fixture row and is seeded', () async {
+      final device = HostDevice.open('a');
+      addTearDown(device.close);
+      await writeRowInEveryCollection(device.domain);
+      final expectedIds = preHostEntityIdByCollection;
+      expect(expectedIds.keys.toSet(), collectionCodecs.keys.toSet(),
+          reason: 'a collection added to the codecs needs a fixture row');
+
+      final host = await device.startHost();
+      await host.ensureMergeStateSeeded();
+
+      final snapshot = await _snapshotValues(host);
+      for (final entry in expectedIds.entries) {
+        expect(snapshot, contains('${entry.key}/${entry.value}'),
+            reason: '${entry.key} row did not reach merge state');
+      }
+      final report = jsonDecode((await device.sync
+              .customSelect('SELECT report_json FROM merge_state_seeding')
+              .getSingle())
+          .read<String>('report_json')) as Map<String, Object?>;
+      expect(report['excluded_row_ids_by_collection'], isEmpty,
+          reason: 'every fixture row is carryable');
+    });
+
+    test('a full reprojection after the walk changes no domain row', () async {
+      final device = HostDevice.open('a');
+      addTearDown(device.close);
+      await writeRowInEveryCollection(device.domain);
+      final host = await device.startHost();
+      await host.ensureMergeStateSeeded();
+
+      final before = {
+        for (final codec in collectionCodecs.values)
+          codec.table: await _domainTable(device, codec.table),
+      };
+      await host.projector.project([
+        for (final entry in preHostEntityIdByCollection.entries)
+          (collection: entry.key, entityId: entry.value),
+      ]);
+      for (final codec in collectionCodecs.values) {
+        expect(await _domainTable(device, codec.table), before[codec.table],
+            reason: '${codec.table} changed when its seeded entity was projected');
+      }
     });
 
     test('a second walk changes nothing, and the marker stops a walk at all',
@@ -263,6 +312,17 @@ void main() {
       expect(keys, contains('todos/$_outcomeB'));
     });
 
+    test('a plugin sees a complete snapshot from inside start', () async {
+      final device = HostDevice.open('a');
+      addTearDown(device.close);
+      await _writeRowsThatPredateTheHost(device);
+      final host = await device.startHost();
+      final plugin = _SnapshotAtStartPlugin('relay');
+      await host.attach(plugin);
+      expect(plugin.keysSeenAtStart, contains('todos/$_outcomeA'));
+      expect(plugin.keysSeenAtStart, contains('todos/$_outcomeB'));
+    });
+
     test('a failing walk fails attach, records no cursor, and local writes drain',
         () async {
       final device = HostDevice.open('a');
@@ -319,6 +379,106 @@ void main() {
     });
   });
 
+  group('MergeCore.insertMissingFields', () {
+    final floor = Hlc(0, 0, 'f' * 32);
+    final real = Hlc(5, 0, 'b' * 32);
+
+    Future<List<String>> storedValues(SyncDatabase sync, String entity) async =>
+        [
+          for (final row in await (sync.select(sync.reducedFields)
+                    ..where((r) => r.entityId.equals(entity)))
+                  .get())
+            '${row.field}=${row.valueJson}',
+        ]..sort();
+
+    test('under LWW it fills what is missing and never touches what is held',
+        () async {
+      final sync = SyncDatabase(NativeDatabase.memory());
+      addTearDown(sync.close);
+      final core = MergeCore(sync);
+      await core.apply(Change(
+        collection: 'todos',
+        entityId: 'e1',
+        fields: {'title': ClockedValue('Real', real)},
+      ));
+
+      final inserted = await core.insertMissingFields(Change(
+        collection: 'todos',
+        entityId: 'e1',
+        fields: {
+          'title': ClockedValue('Seed', floor),
+          'notes': ClockedValue('Seeded notes', floor),
+        },
+      ));
+
+      expect(inserted, 1);
+      expect(await storedValues(sync, 'e1'),
+          ['notes="Seeded notes"', 'title="Real"']);
+      final titleClock = await (sync.select(sync.fieldClocks)
+            ..where((r) => r.field.equals('title')))
+          .getSingle();
+      expect([titleClock.wallMs, titleClock.memberIdHex], [5, 'b' * 32]);
+      expect(
+          await core.insertMissingFields(Change(
+            collection: 'todos',
+            entityId: 'e1',
+            fields: {'notes': ClockedValue('Other', floor)},
+          )),
+          0,
+          reason: 'a second call inserts nothing');
+      expect(await _count(sync, 'row_tombstones'), 0);
+    });
+
+    test('under the max-timestamp strategy a held value keeps value and clock',
+        () async {
+      final sync = SyncDatabase(NativeDatabase.memory());
+      addTearDown(sync.close);
+      final core = MergeCore(sync);
+      final march = jsonEncode('2026-03-01T00:00:00.000Z');
+      final february = jsonEncode('2026-02-01T00:00:00.000Z');
+      await core.apply(Change(
+        collection: userPreferencesCollection,
+        entityId: 'pref1',
+        fields: {
+          preferenceKeyField: ClockedValue(_preferenceKey, real),
+          preferenceValueField: ClockedValue(march, real),
+        },
+      ));
+
+      final inserted = await core.insertMissingFields(Change(
+        collection: userPreferencesCollection,
+        entityId: 'pref1',
+        fields: {
+          preferenceKeyField: ClockedValue(_preferenceKey, floor),
+          preferenceValueField: ClockedValue(february, floor),
+        },
+      ));
+
+      expect(inserted, 0);
+      final value = await (sync.select(sync.reducedFields)
+            ..where((r) => r.field.equals(preferenceValueField)))
+          .getSingle();
+      expect(jsonDecode(value.valueJson), march);
+      final clock = await (sync.select(sync.fieldClocks)
+            ..where((r) => r.field.equals(preferenceValueField)))
+          .getSingle();
+      expect([clock.wallMs, clock.memberIdHex], [5, 'b' * 32]);
+    });
+
+    test('it refuses a preference value that names no key', () async {
+      final sync = SyncDatabase(NativeDatabase.memory());
+      addTearDown(sync.close);
+      await expectLater(
+          MergeCore(sync).insertMissingFields(Change(
+            collection: userPreferencesCollection,
+            entityId: 'pref1',
+            fields: {preferenceValueField: ClockedValue('"x"', floor)},
+          )),
+          throwsA(anything));
+      expect(await _count(sync, 'field_clocks'), 0);
+    });
+  });
+
   test('a v10 sync store upgrades to v11 and keeps every merge-state row',
       () async {
     final directory = Directory.systemTemp.createTempSync('sync-v10-');
@@ -345,4 +505,20 @@ void main() {
     expect(field.read<String>('value_json'), '"Ship it"');
     expect(await _count(upgraded, 'field_clocks'), 1);
   });
+}
+
+/// Records the keys `snapshot()` holds at the moment the host starts it.
+class _SnapshotAtStartPlugin extends RelayPlugin {
+  _SnapshotAtStartPlugin(String id) : super(id, []);
+
+  Set<String> keysSeenAtStart = {};
+
+  @override
+  Future<void> start(SyncHost host) async {
+    await super.start(host);
+    keysSeenAtStart = {
+      await for (final change in host.snapshot())
+        '${change.collection}/${change.entityId}',
+    };
+  }
 }

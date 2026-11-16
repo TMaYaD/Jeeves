@@ -11,6 +11,8 @@ import 'dart:convert';
 import 'package:drift/drift.dart' show Variable;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/sync/envelope.dart' show opClassContent;
+import 'package:jeeves/sync/ids.dart'
+    show preferenceEntityId, userPreferencesWorkspaceId;
 import 'package:jeeves/sync/sync_lifecycle.dart';
 
 import '../../test_helpers.dart';
@@ -18,6 +20,7 @@ import '../harness/fake_sync_server.dart';
 import '../harness/sim_device.dart' show FakeClock;
 import '../harness/sim_workspace.dart' show simulationStartWallMs;
 import '../harness/stack_phone.dart';
+import 'pre_host_rows.dart';
 
 const String _userId = 'bridge-user';
 const String _outcomeBeforeEnrolment = '33333333-3333-4333-8333-333333333333';
@@ -139,5 +142,118 @@ void main() {
     expect(todo, hasLength(1),
         reason: 'the projector must not delete a row the user wrote');
     expect(jsonEncode(todo.single.read<String>('title')), '"Write the thing"');
+  });
+
+  group('rows that predate the host', () {
+    Future<List<List<Object?>>> realClocks(StackPhone phone) async => [
+          for (final row in await phone.syncStore
+              .customSelect('SELECT collection, entity_id, field, wall_ms, '
+                  'counter, member_id_hex FROM field_clocks WHERE wall_ms > 0 '
+                  'ORDER BY collection, entity_id, field')
+              .get())
+            [
+              row.read<String>('collection'),
+              row.read<String>('entity_id'),
+              row.read<String>('field'),
+              row.read<int>('wall_ms'),
+              row.read<int>('counter'),
+              row.read<String>('member_id_hex'),
+            ],
+        ];
+
+    test('seeded, then enrolled: every row reaches the log, once', () async {
+      final phone = await hostedPhone();
+      await writeRowInEveryCollection(phone.domain);
+      await phone.host!.ensureMergeStateSeeded();
+      expect(_contentOpCount(server), 0, reason: 'seeding authors nothing');
+
+      await phone.enrolAsFirstDevice();
+      expect(await phone.activate(), SyncActivation.active);
+
+      final afterEnrolment = _contentOpCount(server);
+      expect(afterEnrolment, greaterThan(0));
+      expect(
+          (await titleClock(phone, preHostOutcomeId))[2],
+          phone.stack.identity.memberIdHex,
+          reason: 'the upload re-asserted the seeded row under the member id');
+
+      await phone.stack.defaultClient.flushOutbox();
+      expect(_contentOpCount(server), afterEnrolment,
+          reason: 'nothing is authored a second time');
+    });
+
+    test('a value the log already holds beats the device\'s seeded one',
+        () async {
+      const passphrase = 'correct horse battery staple';
+      final first = await hostedPhone();
+      await first.enrolAsFirstDevice(passphrase: passphrase);
+      expect(await first.activate(), SyncActivation.active);
+      await first.domain.userPreferencesDao.set(_userId, 'theme', '"dark"');
+      await (await first.preferencesClient).flushOutbox();
+
+      final second = await StackPhone.create(
+        label: 'B',
+        userId: _userId,
+        server: server,
+        clock: clock,
+        hosted: true,
+      );
+      addTearDown(second.close);
+      final entityId = preferenceEntityId(
+          userPreferencesWorkspaceId(_userId), 'theme');
+      await second.domain.customInsert(
+        'INSERT INTO user_preferences (id, user_id, "key", value, updated_at) '
+        "VALUES (?, ?, 'theme', '\"light\"', '2026-01-01T00:00:00.000Z')",
+        variables: [Variable<String>(entityId), Variable<String>(_userId)],
+      );
+      await second.host!.ensureMergeStateSeeded();
+
+      await second.enrolWithPassphrase(passphrase);
+      expect(await second.activate(), SyncActivation.active);
+
+      Future<String> storedValue(StackPhone phone) async => (await phone
+              .syncStore
+              .customSelect("SELECT value_json FROM reduced_fields "
+                  "WHERE entity_id = ? AND field = 'value'",
+                  variables: [Variable<String>(entityId)])
+              .getSingle())
+          .read<String>('value_json');
+      expect(await storedValue(second), await storedValue(first),
+          reason: 'the account\'s value won; the floor-clock seed lost');
+      expect(
+          (await second.domain.customSelect(
+                  "SELECT value FROM user_preferences WHERE \"key\" = 'theme'")
+              .getSingle())
+              .read<String>('value'),
+          '"dark"');
+    });
+
+    test('on an enrolled device the pass changes no existing clock and authors '
+        'no op', () async {
+      final phone = await hostedPhone();
+      await phone.enrolAsFirstDevice();
+      expect(await phone.activate(), SyncActivation.active);
+      await writeOutcome(phone, _outcomeAfterEnrolment);
+      await phone.stack.defaultClient.flushOutbox();
+      final clocksBefore = await realClocks(phone);
+      final opsBefore = _contentOpCount(server);
+      final opLogBefore = (await phone.syncStore
+              .customSelect('SELECT COUNT(*) AS c FROM op_log')
+              .getSingle())
+          .read<int>('c');
+      expect(clocksBefore, isNotEmpty);
+
+      await phone.host!.ensureMergeStateSeeded();
+      await phone.stack.defaultClient.flushOutbox();
+
+      expect(await realClocks(phone), clocksBefore);
+      expect(_contentOpCount(server), opsBefore);
+      expect(
+          (await phone.syncStore
+                  .customSelect('SELECT COUNT(*) AS c FROM op_log')
+                  .getSingle())
+              .read<int>('c'),
+          opLogBefore);
+    });
   });
 }
