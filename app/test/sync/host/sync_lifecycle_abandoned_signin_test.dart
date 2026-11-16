@@ -12,6 +12,7 @@ import 'dart:typed_data';
 
 import 'package:drift/drift.dart' show Variable;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jeeves/sync/host/hosted_capture.dart' show readClockIdentity;
 import 'package:jeeves/sync/envelope.dart' show opClassContent;
 import 'package:jeeves/sync/key_wraps.dart' show MemberKeyWrap;
 import 'package:jeeves/sync/sync_lifecycle.dart';
@@ -177,13 +178,8 @@ void main() {
     return built;
   }
 
-  Future<String?> storedMemberId(StackPhone phone) async {
-    final row = await phone.syncStore
-        .customSelect(
-            'SELECT enrolled_member_id_hex AS m FROM device_clock_identity WHERE id = 1')
-        .getSingle();
-    return row.read<String?>('m');
-  }
+  Future<String?> storedMemberId(StackPhone phone) async =>
+      (await readClockIdentity(phone.domain)).enrolledMemberIdHex;
 
   Future<String> writeOutcomeClockMember(StackPhone phone) async {
     clock.advance(1000);
