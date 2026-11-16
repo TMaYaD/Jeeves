@@ -45,6 +45,7 @@ class FolderMemberCandidate {
     required this.deviceLabel,
     required this.fingerprint,
     required this.isPaired,
+    this.signPublicKey,
     this.problem,
   });
 
@@ -53,6 +54,10 @@ class FolderMemberCandidate {
 
   /// Empty when [problem] is set.
   final String fingerprint;
+
+  /// The key [fingerprint] was computed from; null when [problem] is set. Pairing
+  /// pins exactly this key, so the person pairs what they compared.
+  final Uint8List? signPublicKey;
   final bool isPaired;
 
   /// Why this member cannot be paired, or null.
@@ -220,6 +225,7 @@ class FolderSyncSetup {
           deviceLabel: member.deviceLabel,
           fingerprint: keyFingerprint(member.signPublicKey),
           isPaired: paired.contains(name),
+          signPublicKey: member.signPublicKey,
         ));
       } on FolderMetadataRefusal catch (refusal) {
         result.add(FolderMemberCandidate(
@@ -236,7 +242,13 @@ class FolderSyncSetup {
 
   /// Pin [memberId]'s key. The person has compared its fingerprint on both
   /// devices before calling this; nothing is read from a member until then.
-  Future<void> pair(String folderId, String memberId) async {
+  /// [expectedSignPublicKey] is the key whose fingerprint they compared: if the
+  /// member's file holds another key now, nothing is pinned.
+  Future<void> pair(
+    String folderId,
+    String memberId, {
+    required Uint8List expectedSignPublicKey,
+  }) async {
     if (await isEnrolled()) throw const FolderSyncRefusal(enrolledRefusalMessage);
     final binding = await _binding(folderId);
     if (!isCanonicalUuid(memberId) || memberId == binding.memberId) {
@@ -247,6 +259,11 @@ class FolderSyncSetup {
       member = await _readMember(folderId, memberId);
     } on FolderMetadataRefusal catch (refusal) {
       throw FolderSyncRefusal(refusal.message);
+    }
+    if (!sameBytes(expectedSignPublicKey, member.signPublicKey)) {
+      throw const FolderSyncRefusal(
+          "This device's file changed while you were checking it. Look at its "
+          'fingerprint again.');
     }
     final existing = await (database.select(database.folderPeers)
           ..where((row) => row.folderId.equals(folderId) & row.memberId.equals(memberId)))

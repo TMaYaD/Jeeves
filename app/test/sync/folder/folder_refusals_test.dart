@@ -106,6 +106,22 @@ void main() {
       expect(await a.device.domain.customSelect('SELECT id FROM todos').get(), hasLength(1));
     });
 
+    test('pairing pins only the key whose fingerprint was shown', () async {
+      final directory = _tempFolder();
+      final (a, b) = await _unpairedPair(directory);
+      final shown = (await a.setup.candidates(a.folderId)).single;
+      final other = await EnvelopeSigner.fromSeed(Uint8List(32)..fillRange(0, 32, 7));
+      File('${directory.path}/ops/${b.memberId}/$memberFileName').writeAsBytesSync(MemberFile(
+        folderId: a.folderId,
+        memberId: b.memberId,
+        signPublicKey: other.signPublicKey,
+        deviceLabel: 'Device b',
+      ).encode());
+      await expectLater(
+          a.pairWith(b, shownKey: shown.signPublicKey), throwsA(isA<FolderSyncRefusal>()));
+      expect(await a.device.sync.select(a.device.sync.folderPeers).get(), isEmpty);
+    });
+
     test('a changed key is refused rather than trusted', () async {
       final directory = _tempFolder();
       final (a, b) = await _unpairedPair(directory);
@@ -129,7 +145,10 @@ void main() {
       Directory('${directory.path}/ops/AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE').createSync();
       final found = await a.setup.candidates(a.folderId);
       expect(found.map((candidate) => candidate.memberId), [b.memberId]);
-      await expectLater(a.setup.pair(a.folderId, '../evil'), throwsA(isA<FolderSyncRefusal>()));
+      await expectLater(
+        a.setup.pair(a.folderId, '../evil', expectedSignPublicKey: Uint8List(32)),
+        throwsA(isA<FolderSyncRefusal>()),
+      );
     });
 
     test("another folder's member cannot be paired", () async {

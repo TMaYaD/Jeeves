@@ -5,6 +5,8 @@
 /// composes them with the host and the platform's folder access.
 library;
 
+import 'dart:typed_data';
+
 import 'device_key_store.dart';
 import 'folder/folder_setup.dart';
 import 'folder/op_log_folder_plugin.dart';
@@ -141,10 +143,14 @@ class FolderSyncController {
   }
 
   /// Pin [memberId] after the person compared fingerprints, and read it now.
-  Future<void> pair(String memberId) async {
+  Future<void> pair(String memberId, Uint8List expectedSignPublicKey) async {
     final binding = await activeBinding();
     if (binding == null) return;
-    await _setupFor(openFolder(binding.folderLocation)).pair(binding.folderId, memberId);
+    await _setupFor(openFolder(binding.folderLocation)).pair(
+      binding.folderId,
+      memberId,
+      expectedSignPublicKey: expectedSignPublicKey,
+    );
   }
 
   /// Turn folder sync off. Files already in the folder stay there.

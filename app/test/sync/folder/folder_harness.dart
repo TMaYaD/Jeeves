@@ -75,7 +75,15 @@ class FolderDevice {
     await host.attach(plugin!);
   }
 
-  Future<void> pairWith(FolderDevice other) => setup.pair(folderId, other.memberId);
+  /// Pairs as the screen does: pins the key from the candidate list the person
+  /// saw, unless [shownKey] says otherwise.
+  Future<void> pairWith(FolderDevice other, {Uint8List? shownKey}) async {
+    final key = shownKey ??
+        (await setup.candidates(folderId))
+            .firstWhere((candidate) => candidate.memberId == other.memberId)
+            .signPublicKey!;
+    await setup.pair(folderId, other.memberId, expectedSignPublicKey: key);
+  }
 
   Future<void> close() => device.close();
 }

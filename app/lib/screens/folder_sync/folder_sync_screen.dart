@@ -110,10 +110,11 @@ class _FolderSyncScreenState extends ConsumerState<FolderSyncScreen> {
       action: 'It matches, pair',
       actionKey: const Key('folder_sync_confirm_pair'),
     );
-    if (!accepted || !mounted) return;
+    final shownKey = member.signPublicKey;
+    if (!accepted || !mounted || shownKey == null) return;
     await _run(() async {
       final controller = await ref.read(folderSyncControllerProvider.future);
-      await controller.pair(member.memberId);
+      await controller.pair(member.memberId, shownKey);
     });
   }
 
