@@ -1,4 +1,5 @@
 <title>Jeeves Day Timeline</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@300;400;500;600;700;800&display=swap">
@@ -103,7 +104,6 @@ h2{font-size:20px;font-weight:700;margin:44px 0 4px}
 .bx .tag{background:var(--surf);color:var(--text)}
 .live{width:8px;height:8px;border-radius:50%;background:currentColor;flex:none;animation:pulse 1.6s ease-in-out infinite}
 @keyframes pulse{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,currentColor 50%,transparent)}50%{box-shadow:0 0 0 5px transparent}}
-@media (prefers-reduced-motion:reduce){.live,.dot.cur,.sk{animation:none}}
 .lane{position:absolute;right:0;width:14px;top:0;bottom:0;border-left:1px solid var(--line)}
 .sp{position:absolute;left:4px;width:7px;border-radius:2px;background:var(--pri2)}
 .sp.lv{background:repeating-linear-gradient(180deg,var(--pri2) 0 3px,transparent 3px 5px)}
@@ -189,6 +189,7 @@ h2{font-size:20px;font-weight:700;margin:44px 0 4px}
 .dtop .capwrap{flex:1;min-width:320px}
 .ul{margin:0;padding-left:18px;color:var(--mut);max-width:80ch}
 .ul li{margin:4px 0}
+@media (prefers-reduced-motion:reduce){.live,.dot.cur,.sk{animation:none}}
 </style>
 
 <div class="wrap">
@@ -230,18 +231,19 @@ function row(o){
   if(o.due)chips.push(`<span class="chip du">${I.cal}${o.due}</span>`);
   if(o.ctx)chips.push(`<span class="ctx">${o.ctx}</span>`);
   const hint=h?`<span class="hint"><span class="pips" aria-hidden="true">${'<u></u>'.repeat(Math.min(h,6))}</span>about ${h} sprint${h>1?'s':''}</span>`:'';
-  const extra=[o.added?'<span class="tag">Added during the day</span>':'',o.placed?`<span class="tag">Timebox ${o.placed}</span>`:''].join('');
+  const extra=[o.added?'<span class="tag">Added during the day</span>':'',o.placed?`<span class="tag">Suggested ${o.placed}</span>`:''].join('');
   return `<div class="task"><span class="st ${o.done?'done':''}"></span><div class="tb"><span class="ti">${o.t}</span><div class="chips">${chips.join('')}</div>${(hint||extra)?`<div class="chips">${hint}${extra}</div>`:''}</div>${o.act||''}</div>`;
 }
 /* ---------- capacity ---------- */
 function cap(est,noest,free,label){
   const scale=Math.max(est+noest,free);
-  const g=Math.min(est,.8*free),a=Math.max(0,Math.min(est-.8*free,.2*free)),r=Math.max(est-free,0);
+  /* one status tone for the estimated segment, keyed off the combined ratio (DESIGN.md § Capacity bar) */
+  const ratio=(est+noest)/free, tone=ratio>1?'var(--red)':(ratio>.8?'var(--amber)':'var(--green)');
   const p=x=>(x/scale*100).toFixed(2)+'%';
   const total=est+noest, over=total-free;
   const status=over>0?`${I.warn}Over by ${fmt(over)}`:(est+noest>.8*free?`${I.info}Near the limit`:`${I.check}Room to spare`);
   return `<div class="capwrap"><div class="capline"><span>${fmt(total)} planned of ${fmt(free)} free</span><span>${status}</span></div>
-  <div class="capbar-w"><div class="capbar"><i style="width:${p(g)};background:var(--green)"></i><i style="width:${p(a)};background:var(--amber)"></i><i style="width:${p(r)};background:var(--red)"></i><i style="width:${p(noest)};background:var(--lblue)"></i></div>${over>0?`<span class="capmark" style="left:${p(free)}"></span>`:''}</div>${label?`<div class="ctx">${label}</div>`:''}</div>`;
+  <div class="capbar-w"><div class="capbar"><i style="width:${p(est)};background:${tone}"></i><i style="width:${p(noest)};background:var(--lblue)"></i></div>${over>0?`<span class="capmark" style="left:${p(free)}"></span>`:''}</div>${label?`<div class="ctx">${label}</div>`:''}</div>`;
 }
 /* ---------- timeline ---------- */
 function tl(o){
@@ -470,9 +472,9 @@ function focusScreens(){
 }
 function breaks(){
   const short=focusScreen({title:'Break',brk:true,v:'P',task:'Short break',meta:'Draft the Q3 letter · logged 1h 15m, still counting',frac:.33,n:'Break',time:'02:01',done:3,hint:3,jv:['Three minutes, sir.','The letter will keep.'],btns:'<button class="btn" type="button">Stop</button><button class="btn p" type="button">Push on</button>'}).replace('class="ringw v-P ','class="ringw v-P ');
-  const long=focusScreen({title:'Long break',brk:true,cls:'long',v:'P',task:'Long break · 15m',meta:'Four sprints done. The count begins afresh after this.',frac:.2,n:'Long break',time:'12:00',sub:'Draft the Q3 letter · logged 1h 40m',done:4,hint:3,jv:['Quite earned, sir.','The work will keep for a quarter of an hour.'],
+  const long=focusScreen({title:'Long break',brk:true,cls:'long',v:'P',task:'Long break · 15m',meta:'Four sprints done. The count begins afresh after this.',frac:.2,n:'Long break',time:'12:00',sub:'Draft the Q3 letter · logged 1h 40m',done:3,hint:3,jv:['Quite earned, sir.','The work will keep for a quarter of an hour.'],
     btns:'<button class="btn" type="button">Stop</button><button class="btn p" type="button">Push on</button>',extra:''});
-  const longOver=focusScreen({title:'Long break',brk:true,cls:'long',v:'P',task:'Long break · 15m',meta:'Logged 1h 52m',frac:.28,over:true,n:'Long break',time:'+4:10',sub:'Overtime',done:4,hint:3,jv:['Take your time, sir.','I shall keep the minutes.'],btns:'<button class="btn" type="button">Stop</button><button class="btn p" type="button">Right ho</button>'});
+  const longOver=focusScreen({title:'Long break',brk:true,cls:'long',v:'P',task:'Long break · 15m',meta:'Logged 1h 52m',frac:.28,over:true,n:'Long break',time:'+4:10',sub:'Overtime',done:3,hint:3,jv:['Take your time, sir.','I shall keep the minutes.'],btns:'<button class="btn" type="button">Stop</button><button class="btn p" type="button">Right ho</button>'});
   const pool=`<div class="pool"><div><b>A longer pause, sir.</b><span>Four sprints is a respectable showing.</span></div><div><b>Quite earned, sir.</b><span>The work will keep for a quarter of an hour.</span></div><div><b>Might I suggest a turn about the room?</b><span>The chair will not take offence.</span></div><div><b>The tea is, I trust, still warm.</b><span>Fifteen minutes, and I shall say nothing of the clock.</span></div><div><b>I have cleared the next quarter-hour, sir.</b><span>Nothing requires you but the kettle.</span></div></div>`;
   return fig('Short break (break green)',short)+fig('Long break (break green as shipped, outer hairline ring, a full group of dots)',long)+fig('Long break · overtime (counter-clockwise, grows)',longOver)+fig('Jeeves pool for the long break',pool);
 }
@@ -498,7 +500,7 @@ function addScreens(){
   const s3=phone("Today's Plan",'',
    `<div class="pad">${cap(285,0,255)}</div><div class="list">${row({t:'Sort the garage',energy:'High',est:120,ctx:'@home',added:true,act:'<button class="btn sm" type="button">Place</button>'})}${row({t:'Draft the Q3 letter',energy:'High',est:60,logged:70,due:'Fri',placed:'10:00'})}</div>`+
    tl({from:'13:00',to:'16:00',ppm:.9,boxes:[{s:'13:30',d:120,t:'Sort the garage',tags:['Added during the day']}]}));
-  return fig('Where the add starts',s1)+fig('Warning that never blocks',s2)+fig('Marked on the row and its Timebox',s3);
+  return fig('Where the add starts',s1)+fig('Warning that never blocks',s2)+fig('Marked on the row and its tile',s3);
 }
 function settings(){
   const r=(a,b,v)=>`<div class="setrow"><div><b>${a}</b><small>${b}</small></div><div class="stepper"><button type="button" aria-label="Less">−</button><output>${v}</output><button type="button" aria-label="More">+</button></div></div>`;
@@ -526,7 +528,7 @@ $('#app').innerHTML=`
 <div class="grid">${states()}</div>
 
 <h2>Autoflow and overrides</h2>
-<p class="sub">By default no tile overlaps an event. Jeeves flows each Plan Outcome into the first gap that holds its estimate, and re-flows when the calendar changes. Outcomes are unordered, so a small one may fill an earlier gap; the steps within an Outcome keep their order. A gap that holds an Outcome whole is always preferred; failing that, it is split into pieces that fit the gaps. The chunk is one sprint plus its short break (23m at the defaults), so there is no extra setting; the last piece takes the remainder. Setting a time yourself pins it: it may overlap, and it never moves on its own. Moves are announced once, with Undo. Past and engaged Timeboxes are never re-flowed.</p>
+<p class="sub">By default no tile overlaps an event. Jeeves flows each Plan Outcome into the first gap that holds its estimate, and re-flows when the calendar changes. Outcomes are unordered, so a small one may fill an earlier gap; the steps within an Outcome keep their order. A gap that holds an Outcome whole is always preferred; failing that, it is split into pieces that fit the gaps. The chunk is one sprint plus its short break (23m at the defaults), so there is no extra setting; the last piece takes the remainder. Setting a time yourself pins it: it may overlap, and it never moves on its own. Moves are announced once, with Undo. Past and engaged suggested times are never re-flowed.</p>
 <div class="grid">${autoflow()}</div>
 
 <h2>Timeboxed Actions have limits</h2>
@@ -561,7 +563,6 @@ ${desktop()}
 <h2>Decisions to check</h2>
 <ul class="ul">
 <li><b>Sprint clock, preserved from the shipped app:</b> sprint ring #2563EB on #DBEAFE, break ring #10B981 on #D1FAE5, overtime blending amber to red on #FEF3C7. Fill follows the clock: a countdown drains full to empty, overtime grows empty to full. Direction: a sprint countdown drains counter-clockwise, a break countdown clockwise, sprint overtime clockwise, break overtime counter-clockwise. The Monastic, Paced and Instrument looks change only the drawing style, never these rules. Dots stay a vertical column beside the ring, solid blue when done or current, outlined #BFDBFE otherwise, the current one pulsing.</li>
-<li>Overtime uses amber, which DESIGN.md says is spent on the capacity bar and sync indicator. I kept the shipped behaviour; the two statements disagree and one of them will need amending.</li>
 <li>Dark-theme values for the clock colours are mine, since the shipped app is light only.</li>
 <li>The “now” line and live sprint on the timeline use primary blue.</li>
 <li>State is carried by shape and text too: ticks on done blocks, dashed outlines on not-engaged ones, “Overlaps …”, “Added during the day”, “Over by 40m”, dot fill versus hollow.</li>
@@ -570,8 +571,8 @@ ${desktop()}
 <li><b>Raising the estimate</b> is permanent; carrying on regardless never changes it.</li>
 <li><b>Chunking</b> uses the sprint-plus-break unit from Settings and affects layout only; sprints done and their lengths stay independent of the estimate. <b>Batching</b> is wanted; its algorithm is not designed yet. A chunked Outcome shows as separate tiles (“part 1”, “part 2”); a batch shows as adjacent tiles with no break between them. Open: a Timeboxed limit would be the total time on the Action across its pieces, not per piece.</li>
 <li><b>Overflow dots:</b> on a Timeboxed Action, dots for sprints started past the limit are red. The red dots are the only marker; no dash is drawn. Hollow hint dots stay blue. This is a change from the shipped dots, by your decision.</li>
-<li><b>Estimate stays quiet:</b> the “no warning past the hint” rule still holds for estimates. Red appears only for time past a Timebox.</li>
-<li><b>Autoflow:</b> an Outcome with no estimate flows using the assumed default. Only pinned starts are stored. Time-contexts are not built and not drawn; flow will take a Context’s hours as one more constraint beside gap length.</li>
+<li><b>Estimate stays quiet:</b> the “no warning past the hint” rule still holds for estimates. Red appears only for sprints past a Timeboxed limit.</li>
+<li><b>Autoflow:</b> an Outcome with no estimate flows using the assumed default. Only pinned starts are stored. Time contexts are built, but flow does not use them yet and they are not drawn here; flow will take an Action’s Time context as one more constraint beside gap length.</li>
 <li>Not designed here, per scope: the sprint-end sheet, estimate-versus-actual analytics.</li>
 </ul>
 `;

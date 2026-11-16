@@ -6,15 +6,16 @@ This document outlines the core aesthetic and functional principles of our desig
 
 ## Reference design prototypes
 
-Three design references are canonical for the execution-layer experience. Epic-level design work extends them; new surfaces must match their design language (and this document's tokens):
+Four design references are canonical for the execution-layer experience. Epic-level design work extends them; new surfaces must match their design language (and this document's tokens):
 
 | Project | Covers |
 |---|---|
 | [Jeeves — Focus Mode](https://claude.ai/design/p/e324ad40-21d8-4572-b90c-5356cc0839ce?file=Focus+Mode.html) | Mobile execution surfaces: Today's Plan list, Focus Mode sprint ring (Monastic / Paced / Instrument variants), sprint-resolution bottom sheet (Complete / Extend / Defer), Break, Task-complete — in light and dark themes, with tag-density options. |
-| [Jeeves — Daily Execution Layer](https://claude.ai/design/p/6a1ed3d8-1b97-4abd-8f45-0315ca69bc07?file=Jeeves+Daily+Execution+Layer.html) | The full desktop day loop (1440px sidebar shell): Morning planning (clarify → energy → selection → estimates) → Agenda → Timebox timeline → Focus → Shutdown (dispositions + journal), plus a mobile companion panel. Also the desktop-layout reference for cross-platform work. |
+| [Jeeves — Daily Execution Layer](https://claude.ai/design/p/6a1ed3d8-1b97-4abd-8f45-0315ca69bc07?file=Jeeves+Daily+Execution+Layer.html) | The full desktop day loop (1440px sidebar shell): Morning planning (clarify → energy → selection → estimates) → Agenda → day timeline → Focus → Shutdown (dispositions + journal), plus a mobile companion panel. Also the desktop-layout reference for cross-platform work. |
 | [Jeeves — System Trust guardrails](https://claude.ai/artifact/4cwXKxksQeWFdNesbQvAFQ) | The guardrail surfaces of TMaYaD/Jeeves#45: the Banner's Bertie buttons and swipe dismiss, the Now screen's empty-state nudge, Inbox too full, System Trust in Settings, the Weekly Review's Bypassed step — light and dark. |
+| [Day timeline and sprints](proposals/day-timeline-and-sprints-design.html) | The epic-level pass for TMaYaD/Jeeves#43, phone first and then wide: the day timeline with suggested-time tiles beside hatched calendar events, Autoflow chunking and batching, the Timeboxed switch on the estimate and its red overflow dots, Focus Mode's "Sprint N" with hint dots, short and long breaks, and the capacity bar — light and dark. Open the file in a browser. |
 
-The first two are accessible via the claude_design MCP (`https://api.anthropic.com/v1/design/mcp`, auth via `/design-login`); the third is a claude.ai Design canvas, shared from its page.
+The first two are accessible via the claude_design MCP (`https://api.anthropic.com/v1/design/mcp`, auth via `/design-login`); the third is a claude.ai Design canvas, shared from its page; the fourth is a page in this repository.
 
 ### Epic-level design precedes stories
 
