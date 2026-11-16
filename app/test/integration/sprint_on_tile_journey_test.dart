@@ -29,7 +29,6 @@ import 'package:jeeves/services/notification_service.dart';
 import 'package:jeeves/sync/collection_codecs.dart';
 import 'package:jeeves/sync/domain_projector.dart';
 import 'package:jeeves/sync/hlc.dart';
-import 'package:jeeves/sync/host/merge_state.dart';
 import 'package:jeeves/sync/op_payload.dart';
 import 'package:jeeves/sync/reducer.dart';
 import 'package:jeeves/sync/sync_database.dart';

@@ -397,7 +397,7 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
       now,
     );
     final detail =
-        [timeText, ...labels, if (sprintCount != null) sprintCount].join(' · ');
+        [timeText, ...labels, ?sprintCount].join(' · ');
 
     final body = Container(
       key: Key('day_timeline_tile_${piece.outcomeId}_${piece.part}'),
@@ -432,7 +432,7 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
                       [
                         _clock(piece.start),
                         if (placement.pieces.length > 1) 'part ${piece.part}',
-                        if (sprintCount != null) sprintCount,
+                        ?sprintCount,
                       ].join(' · '),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
