@@ -527,6 +527,132 @@ void main() {
     });
   });
 
+  group('the one-Project pass', () {
+    late SyncDatabase sync;
+    late DomainReconciler reconciler;
+
+    setUp(() {
+      sync = SyncDatabase(NativeDatabase.memory());
+      reconciler = DomainReconciler(
+        registry: CollectionRegistry(sync),
+        domain: db,
+      );
+    });
+    tearDown(() async => sync.close());
+
+    Future<void> link(String todoId, String tagId, {int? wallMs}) async {
+      await db.customInsert(
+        'INSERT INTO "todo_tags" ("id", "todo_id", "tag_id", "user_id") '
+        'VALUES (?, ?, ?, ?)',
+        variables: [
+          Variable<String>(todoTagIdFor(todoId, tagId)),
+          Variable<String>(todoId),
+          Variable<String>(tagId),
+          const Variable<String>(_userId),
+        ],
+      );
+      if (wallMs != null) {
+        await recordReducedField(sync, todoTagsCollection,
+            todoTagIdFor(todoId, tagId), 'tag_id', '"$tagId"',
+            withClock: true, wallMs: wallMs);
+      }
+    }
+
+    Future<Set<String>> linkedTags(String todoId) async =>
+        (await (db.select(db.todoTags)..where((t) => t.todoId.equals(todoId)))
+                .get())
+            .map((row) => row.tagId)
+            .toSet();
+
+    test('keeps the greater clock whichever tag id is smaller', () async {
+      await projectTagRow(_small, name: 'P1', type: 'project');
+      await projectTagRow(_large, name: 'P2', type: 'project');
+      await seedOutcome('o1');
+      await link('o1', _small, wallMs: 2000);
+      await link('o1', _large, wallMs: 1000);
+      capture.clear();
+
+      await reconciler.reconcile({todoTagsCollection});
+
+      expect(await linkedTags('o1'), {_small});
+      expect(
+        {for (final op in capture.recorded) op.entityId: op.tombstone},
+        {todoTagIdFor('o1', _large): true},
+        reason: 'one tombstone on the loser, nothing else, winner not re-asserted',
+      );
+      expect(await tagIds(), {_small, _large});
+    });
+
+    test('an exact clock tie goes to the smaller tag id', () async {
+      await projectTagRow(_small, name: 'P1', type: 'project');
+      await projectTagRow(_large, name: 'P2', type: 'project');
+      await seedOutcome('o1');
+      await link('o1', _small, wallMs: 1000);
+      await link('o1', _large, wallMs: 1000);
+
+      await reconciler.reconcile({todoTagsCollection});
+
+      expect(await linkedTags('o1'), {_small});
+    });
+
+    test('leaves an Outcome with a clock-less link alone', () async {
+      await projectTagRow(_small, name: 'P1', type: 'project');
+      await projectTagRow(_large, name: 'P2', type: 'project');
+      await seedOutcome('o1');
+      await link('o1', _small, wallMs: 1000);
+      await link('o1', _large);
+      capture.clear();
+
+      await reconciler.reconcile({todoTagsCollection});
+
+      expect(await linkedTags('o1'), {_small, _large});
+      expect(capture.recorded, isEmpty);
+    });
+
+    test('two context Tags and a Project are not a violation', () async {
+      await projectTagRow(_small, name: 'P1', type: 'project');
+      await projectTagRow(_large, name: '@home', type: 'context');
+      await projectTagRow(_third, name: '@work', type: 'context');
+      await seedOutcome('o1');
+      await link('o1', _small, wallMs: 1000);
+      await link('o1', _large, wallMs: 1000);
+      await link('o1', _third, wallMs: 1000);
+      capture.clear();
+
+      await reconciler.reconcile({todoTagsCollection});
+
+      expect(await linkedTags('o1'), {_small, _large, _third});
+      expect(capture.recorded, isEmpty);
+    });
+
+    test('a link to an absent Tag is not counted', () async {
+      await projectTagRow(_small, name: 'P1', type: 'project');
+      await seedOutcome('o1');
+      await link('o1', _small, wallMs: 1000);
+      await link('o1', _large, wallMs: 2000);
+      capture.clear();
+
+      await db.tagDao.outcomesWithMultipleProjects().then(
+            (contested) => expect(contested, isEmpty),
+          );
+      expect(await linkedTags('o1'), {_small, _large});
+    });
+
+    test('a second run authors nothing', () async {
+      await projectTagRow(_small, name: 'P1', type: 'project');
+      await projectTagRow(_large, name: 'P2', type: 'project');
+      await seedOutcome('o1');
+      await link('o1', _small, wallMs: 1000);
+      await link('o1', _large, wallMs: 2000);
+      await reconciler.reconcile({todoTagsCollection});
+      capture.clear();
+
+      await reconciler.reconcile({todoTagsCollection});
+
+      expect(capture.recorded, isEmpty);
+    });
+  });
+
   group('DomainProjector.project reports what it touched', () {
     test("the reconcile trigger is the projector's own touched set", () async {
       // `project` returns the collections whose rows actually changed, which is

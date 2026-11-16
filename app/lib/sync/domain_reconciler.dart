@@ -8,12 +8,15 @@
 /// ops, which means they cannot run inside the projector's un-captured
 /// transaction. They run after it.
 ///
-/// **Two passes, two independent detection queries** (ADR-0043):
+/// **Three passes, three independent detection queries** (ADR-0043):
 ///
 /// 1. **Fold** — collapse each duplicate `(name, type)` group onto `MIN(id)`
 ///    ([TagDao.foldDuplicateTags]).
 /// 2. **Rehome** — repoint junction rows whose `tag_id` has no row in `tags` at
 ///    all.
+/// 3. **One Project** — when an Outcome holds links to more than one Project
+///    ([resolveMultipleProjects]), keep the most recently asserted and unassign
+///    the rest.
 ///
 /// The second is not a tidy-up of the first; it recovers a state the first cannot
 /// see. With `X < Y < Z`: device A folds `Z→Y` and asserts its junction on Y, then
@@ -34,6 +37,7 @@ library;
 
 import 'package:drift/drift.dart';
 
+import '../database/daos/tag_dao.dart' show todoTagIdFor;
 import '../database/gtd_database.dart';
 import 'collection_codecs.dart';
 import 'domain_projector.dart';
@@ -90,6 +94,58 @@ class DomainReconciler {
     }
     await domain.tagDao.foldDuplicateTags();
     await rehomeDanglingTagLinks();
+    await resolveMultipleProjects();
+  }
+
+  /// Leave each Outcome with one Project: the link with the greatest clock wins
+  /// (ties go to the smaller tag id), and every other link is unassigned through
+  /// [TagDao.unassignTag] so the tombstone travels to peers.
+  ///
+  /// Each link is its own sync entity, so two devices assigning different Projects
+  /// author entities last-write-wins never compares; the writer's single-Project
+  /// rule can only remove links its own device can see. The winner is not
+  /// re-asserted: that would stamp it "now" and beat a genuinely later assignment
+  /// from a device still offline. An Outcome with a link that has no clock on
+  /// record is left alone — a local write not yet in merge state — and retried on
+  /// the next reconcile.
+  Future<void> resolveMultipleProjects() async {
+    final contested = await domain.tagDao.outcomesWithMultipleProjects();
+    if (contested.isEmpty) return;
+
+    final linksView = registry.register(todoTagsCollection);
+    for (final entry in contested.entries) {
+      final todoId = entry.key;
+      final clocks = <String,
+          ({int wallMs, int counter, String memberIdHex})>{};
+      for (final tagId in entry.value) {
+        final clock =
+            await linksView.readLatestClock(todoTagIdFor(todoId, tagId));
+        if (clock != null) clocks[tagId] = clock;
+      }
+      if (clocks.length != entry.value.length) continue;
+
+      int compare(String x, String y) {
+        final cx = clocks[x]!;
+        final cy = clocks[y]!;
+        final byClock = cx.wallMs != cy.wallMs
+            ? cx.wallMs.compareTo(cy.wallMs)
+            : cx.counter != cy.counter
+                ? cx.counter.compareTo(cy.counter)
+                : cx.memberIdHex.compareTo(cy.memberIdHex);
+        // Greater clock wins; on an exact tie the smaller tag id does.
+        return byClock != 0 ? byClock : y.compareTo(x);
+      }
+
+      final ranked = [...entry.value]..sort(compare);
+      final winner = ranked.last;
+      await domain.capturing(() async {
+        for (final tagId in entry.value) {
+          if (tagId == winner) continue;
+          await domain.tagDao.unassignTag(todoId, tagId);
+        }
+        domain.notifyTodosViewWrite(includeTodoTags: true);
+      });
+    }
   }
 
   /// Repoint every junction row whose `tag_id` has no row in `tags`.
