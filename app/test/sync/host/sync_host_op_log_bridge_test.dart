@@ -140,4 +140,68 @@ void main() {
         reason: 'the projector must not delete a row the user wrote');
     expect(jsonEncode(todo.single.read<String>('title')), '"Write the thing"');
   });
+
+  group('a rebuild of one Workspace leaves the other alone', () {
+    Future<List<Object?>> mergeStateOf(StackPhone phone, String collection) async {
+      final rows = <String>[];
+      for (final table in ['reduced_fields', 'field_clocks', 'row_tombstones']) {
+        final found = await phone.syncStore
+            .customSelect('SELECT * FROM $table WHERE collection = ? ORDER BY 1, 2, 3',
+                variables: [Variable<String>(collection)])
+            .get();
+        rows.add('$table:${found.map((row) => jsonEncode(row.data)).join('|')}');
+      }
+      return rows;
+    }
+
+    Future<StackPhone> enrolledPhoneWithBothWorkspaces() async {
+      final phone = await hostedPhone();
+      await phone.enrolAsFirstDevice();
+      expect(await phone.activate(), SyncActivation.active);
+      await writeOutcome(phone, _outcomeAfterEnrolment);
+      await phone.domain.userPreferencesDao.set(_userId, 'theme', '"dark"');
+      await phone.stack.defaultClient.flushOutbox();
+      await (await phone.preferencesClient).flushOutbox();
+      return phone;
+    }
+
+    Future<int> todoCount(StackPhone phone) async => (await phone.domain
+            .customSelect('SELECT id FROM todos WHERE id = ?',
+                variables: [Variable<String>(_outcomeAfterEnrolment)])
+            .get())
+        .length;
+
+    Future<String?> theme(StackPhone phone) =>
+        phone.domain.userPreferencesDao.get(_userId, 'theme');
+
+    test('rebuilding preferences keeps the GTD merge state and rows', () async {
+      final phone = await enrolledPhoneWithBothWorkspaces();
+      final gtdBefore = await mergeStateOf(phone, 'todos');
+      expect(gtdBefore.join(), contains(_outcomeAfterEnrolment));
+
+      final affected = await (await phone.preferencesClient).rebuildFromOpLog();
+      await phone.host!.projector.project(affected);
+
+      expect(affected.map((entity) => entity.collection).toSet(),
+          {'user_preferences'});
+      expect(await mergeStateOf(phone, 'todos'), gtdBefore);
+      expect(await todoCount(phone), 1);
+      expect(await theme(phone), '"dark"');
+    });
+
+    test('rebuilding GTD keeps the preferences merge state and rows', () async {
+      final phone = await enrolledPhoneWithBothWorkspaces();
+      final preferencesBefore = await mergeStateOf(phone, 'user_preferences');
+      expect(preferencesBefore.join(), contains('theme'));
+
+      final affected = await phone.stack.defaultClient.rebuildFromOpLog();
+      await phone.host!.projector.project(affected);
+
+      expect(affected.map((entity) => entity.collection),
+          isNot(contains('user_preferences')));
+      expect(await mergeStateOf(phone, 'user_preferences'), preferencesBefore);
+      expect(await theme(phone), '"dark"');
+      expect(await todoCount(phone), 1);
+    });
+  });
 }

@@ -457,6 +457,65 @@ void main() {
         reason: 'the rebuild has to surface an un-reduced entity to the projector',
       );
     });
+
+    test("leaves the other Workspace's merge state and domain rows alone",
+        () async {
+      // A Device holds the GTD and preferences Workspaces in one sync store, and
+      // merge state carries no Workspace. A rebuild of the GTD Workspace must
+      // therefore touch only the collections it owns: wiping everything and
+      // replaying only its own log would empty the preferences merge state and
+      // have the projector delete the preference's row in the same pull.
+      final losingAuthor = await chained(151);
+      final losingGrantee = await chained(161);
+      final winningAuthor = await chained(171);
+      final winningGrantee = await chained(181);
+      await workspace.a.domain.userPreferencesDao
+          .set(_userId, 'theme', '"dark"');
+      await workspace.syncAll();
+
+      Future<List<String>> preferencesMergeState() async {
+        final found = <String>[];
+        for (final table in ['reduced_fields', 'field_clocks', 'row_tombstones']) {
+          final rows = await workspace.a.database
+              .customSelect(
+                  "SELECT * FROM $table WHERE collection = 'user_preferences' "
+                  'ORDER BY 1, 2, 3')
+              .get();
+          found.addAll(rows.map((row) => '$table:${jsonEncode(row.data)}'));
+        }
+        return found;
+      }
+
+      Future<List<Map<String, Object?>>> preferenceRows() =>
+          domainRows(workspace.a.domain, 'user_preferences');
+
+      final mergeStateBefore = await preferencesMergeState();
+      final rowsBefore = await preferenceRows();
+      expect(mergeStateBefore, isNotEmpty);
+      expect(rowsBefore, isNotEmpty);
+
+      final head = workspace.controlChainHead();
+      await branch(
+        author: losingAuthor,
+        grantee: losingGrantee,
+        prevControlHash: head,
+        certWallMs: simulationStartWallMs + 7000,
+      );
+      final winner = await branch(
+        author: winningAuthor,
+        grantee: winningGrantee,
+        prevControlHash: head,
+        certWallMs: simulationStartWallMs + 3000,
+      );
+      workspace.server.omitSeqs.add(winner.seq);
+      await workspace.a.sync();
+      workspace.server.omitSeqs.remove(winner.seq);
+      // The pull that resolves the fork rebuilds the GTD Workspace.
+      await workspace.a.sync();
+
+      expect(await preferencesMergeState(), mergeStateBefore);
+      expect(await preferenceRows(), rowsBefore);
+    });
   });
 
   test('a persisted reducer-guard refusal survives the rebuild verbatim',
