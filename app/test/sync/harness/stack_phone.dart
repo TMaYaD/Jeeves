@@ -41,6 +41,15 @@ import 'package:jeeves/sync/workspace_key_store.dart';
 import 'fake_sync_server.dart';
 import 'sim_device.dart';
 
+/// What [StackPhone.addAccount] builds.
+class SecondAccount {
+  SecondAccount(this.stack, this.link, this.lifecycle);
+
+  final SyncStack stack;
+  final DeviceLink link;
+  final SyncLifecycle lifecycle;
+}
+
 class StackPhone {
   StackPhone._({
     required this.label,
@@ -251,6 +260,43 @@ class StackPhone {
       mintTagId: mintTagId ?? initialUploadTagIdSequence(label),
     );
     return existing.activate();
+  }
+
+  /// A second account signed in on this same device, as a user switch does it:
+  /// a new stack and lifecycle over this phone's one sync store, key stores,
+  /// domain store, host and capture seam, with its own link to the server.
+  ///
+  /// Not enrolled — the caller enrols it through the returned stack, as with
+  /// the phone's own account.
+  Future<SecondAccount> addAccount({
+    required String userId,
+    required FakeSyncServer server,
+    Duration flushDebounce = const Duration(seconds: 3),
+  }) async {
+    final secondLink = DeviceLink(server.connectAsUser(userId));
+    final secondStack = await _assemble(
+      userId: userId,
+      syncStore: syncStore,
+      keyStore: keyStore,
+      workspaceKeys: workspaceKeys,
+      pendingRotations: pendingRotations,
+      userTransport: secondLink,
+      domain: domain,
+      clock: clock,
+      host: host,
+    );
+    final secondLifecycle = SyncLifecycle(
+      stack: secondStack,
+      domain: domain,
+      capture: capture,
+      host: host,
+      signalTransport: secondLink,
+      timerFactory: secondLink.timers.create,
+      listenerDelay: secondLink.timers.delay,
+      flushDebounce: flushDebounce,
+      mintTagId: initialUploadTagIdSequence('$label-$userId'),
+    );
+    return SecondAccount(secondStack, secondLink, secondLifecycle);
   }
 
   /// Process death: drop the lifecycle, close the sync store and reopen it over
