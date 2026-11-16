@@ -65,7 +65,7 @@ void main() {
       // The app's own store, with the app's own capture binding: a write
       // through the DAO is a change the host merges, exactly as in production.
       databaseProvider.overrideWith((ref) => db),
-      syncDatabaseProvider.overrideWithValue(syncDb),
+      syncDatabaseProvider.overrideWith((ref) async => syncDb),
       // The Settings screen waits for the next time boundary, and the test's
       // clock is not the wall clock: the boundary would never come.
       nudgeBoundaryTickProvider.overrideWithValue(0),
