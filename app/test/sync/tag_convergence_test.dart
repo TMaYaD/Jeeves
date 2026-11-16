@@ -584,6 +584,130 @@ void main() {
     });
   });
 
+  group('one Project per Outcome across devices', () {
+    late SimWorkspace workspace;
+    late SimDevice a;
+    late SimDevice b;
+    late String outcome;
+    late String projectOne;
+    late String projectTwo;
+
+    setUp(() async {
+      workspace = await SimWorkspace.create();
+      addTearDown(workspace.close);
+      a = workspace.a;
+      b = workspace.b;
+      outcome = await outcomeOn(a, 'proj-outcome');
+      projectOne = _id('project-one');
+      projectTwo = _id('project-two');
+      await tagWithId(a, projectOne, name: 'Project One', type: 'project');
+      await tagWithId(a, projectTwo, name: 'Project Two', type: 'project');
+      await workspace.syncAll();
+      await settle([a, b]);
+    });
+
+    Future<void> assignProject(SimDevice device, String projectId) =>
+        device.domain.tagDao.enforceSingleProject(outcome, _userId, projectId);
+
+    Future<void> expectOneProject(
+      List<SimDevice> devices, {
+      required String winner,
+    }) async {
+      final links = await expectConverged(devices, 'todo_tags');
+      final projects = links
+          .where((row) =>
+              row['todo_id'] == outcome &&
+              (row['tag_id'] == projectOne || row['tag_id'] == projectTwo))
+          .toList();
+      expect(projects, hasLength(1), reason: 'an Outcome holds one Project');
+      expect(projects.single['tag_id'], winner);
+      // Nothing but the losing link is gone.
+      final tags = await expectConverged(devices, 'tags');
+      expect(tags.map((row) => row['id']), containsAll([projectOne, projectTwo]));
+      final outcomes = await expectConverged(devices, 'todos');
+      expect(outcomes.map((row) => row['id']), contains(outcome));
+      await expectReducedStateAgrees(devices);
+    }
+
+    test('the later of two offline assignments stands', () async {
+      b.goOffline();
+      await assignProject(a, projectOne);
+      workspace.clock.advance(60000);
+      await assignProject(b, projectTwo);
+
+      b.goOnline();
+      await settle([a, b]);
+
+      await expectOneProject([a, b], winner: projectTwo);
+    });
+
+    test('arrival order is not the rule: the first to sync can hold the later '
+        'assignment', () async {
+      b.goOffline();
+      await assignProject(b, projectTwo);
+      workspace.clock.advance(60000);
+      await assignProject(a, projectOne);
+
+      b.goOnline();
+      await settle([b, a]);
+
+      await expectOneProject([a, b], winner: projectOne);
+    });
+
+    test('a further sync authors nothing', () async {
+      b.goOffline();
+      await assignProject(a, projectOne);
+      workspace.clock.advance(60000);
+      await assignProject(b, projectTwo);
+      b.goOnline();
+      await settle([a, b]);
+
+      Future<int> opCount(SimDevice device) async => (await device.database
+              .customSelect('SELECT COUNT(*) AS n FROM op_log')
+              .getSingle())
+          .read<int>('n');
+      final before = [await opCount(a), await opCount(b)];
+      await a.sync();
+      await b.sync();
+      expect([await opCount(a), await opCount(b)], before);
+    });
+
+    test('with three devices, an older assignment arriving last loses',
+        () async {
+      final threeWay = await SimWorkspace.create(deviceCount: 3);
+      addTearDown(threeWay.close);
+      final [x, y, z] = threeWay.devices;
+      final threeOutcome = await outcomeOn(x, 'proj-outcome-3');
+      await tagWithId(x, projectOne, name: 'Project One', type: 'project');
+      await tagWithId(x, projectTwo, name: 'Project Two', type: 'project');
+      await threeWay.syncAll();
+      await settle([x, y, z]);
+
+      y.goOffline();
+      z.goOffline();
+      await y.domain.tagDao
+          .enforceSingleProject(threeOutcome, _userId, projectOne);
+      threeWay.clock.advance(60000);
+      await z.domain.tagDao
+          .enforceSingleProject(threeOutcome, _userId, projectTwo);
+
+      // The later assignment (z) syncs first; the older one (y) arrives last.
+      z.goOnline();
+      await settle([x, z]);
+      y.goOnline();
+      await settle([x, y, z]);
+
+      final links = await expectConverged([x, y, z], 'todo_tags');
+      expect(
+        links
+            .where((row) => row['todo_id'] == threeOutcome)
+            .map((row) => row['tag_id']),
+        [projectTwo],
+      );
+      await expectReducedStateAgrees([x, y, z]);
+    });
+  });
+
   group('a convergence pass that throws', () {
     test('leaves the pull completed, and is retried on the next one', () async {
       // The regression this guards is the one #605 exists to repair, with the
