@@ -371,6 +371,10 @@ class SyncHostService implements SyncHost, OutboxDrainer {
     }
   }
 
+  @override
+  Future<Change> mergedEntity(String collection, String entityId) =>
+      _readChange(collection, entityId);
+
   Future<Change> _readChange(String collection, String entityId) async {
     final fieldRows = await _sync.customSelect(
       'SELECT f.field AS field, f.value_json AS value_json, '

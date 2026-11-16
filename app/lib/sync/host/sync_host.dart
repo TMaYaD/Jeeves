@@ -18,6 +18,12 @@ abstract interface class SyncHost {
   /// Current merged state, for a plugin's first upload or full rewrite.
   Stream<Change> snapshot();
 
+  /// One entity's merged state — every live field with its clock, and its
+  /// tombstone — as the host holds it right now. What a plugin whose medium shows
+  /// state (rather than changes) renders from; [deliver] is then only the signal
+  /// that the entity changed, so the plugin never compares clocks itself.
+  Future<Change> mergedEntity(String collection, String entityId);
+
   /// A fresh clock, for a plugin whose medium carries none.
   Hlc mintClock();
 }
