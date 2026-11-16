@@ -134,9 +134,10 @@ void main() {
       (tester) async {
     final todo = await tester.runAsync(() async {
       final inserted = await insertFocusTodo(db, id: 'o1');
-      await db.timeLogDao.openLog(
-          taskId: 'o1', userId: focusUserId, now: DateTime.now());
-      final startedAt = DateTime.now().subtract(const Duration(minutes: 5));
+      final logStartedAt = DateTime.now().subtract(const Duration(minutes: 5));
+      await db.timeLogDao
+          .openLog(taskId: 'o1', userId: focusUserId, now: logStartedAt);
+      final startedAt = logStartedAt.add(const Duration(minutes: 1));
       await db.sprintDao.startSprint(
           taskId: 'o1',
           userId: focusUserId,
