@@ -109,14 +109,24 @@ class SyncHostService implements SyncHost, OutboxDrainer {
             (jsonDecode(row.read<String>('change_json')) as Map).cast<String, Object?>());
       } on Object catch (error) {
         debugPrint('sync host: dropped an unreadable pending change $changeId — $error');
-        await _deletePending(id);
+        try {
+          await _deletePending(id);
+        } on Object catch (deleteError) {
+          storageError = deleteError;
+          break;
+        }
         continue;
       }
       try {
         touched.addAll(await _mergeAndSequence(change, changeId, 'local'));
       } on SyncRejection catch (rejection) {
         debugPrint('sync host: refused pending change $changeId — $rejection');
-        await _deletePending(id);
+        try {
+          await _deletePending(id);
+        } on Object catch (deleteError) {
+          storageError = deleteError;
+          break;
+        }
         continue;
       } on Object catch (error) {
         // A storage error: leave this row and everything behind it for the next
@@ -124,11 +134,25 @@ class SyncHostService implements SyncHost, OutboxDrainer {
         storageError = error;
         break;
       }
-      await _deletePending(id);
+      try {
+        await _deletePending(id);
+      } on Object catch (error) {
+        // Merged but still in the outbox: the next drain replays it as a no-op
+        // merge (one sequence entry) and notifies then.
+        storageError = error;
+        break;
+      }
       merged.add(change);
     }
+    // Whatever merged and left the outbox is notified and delivered even when
+    // the projection or a later row failed — its outbox row is gone, so nothing
+    // else would hand it to the bridge.
     if (touched.isNotEmpty) {
-      await projector.project(touched);
+      try {
+        await projector.project(touched);
+      } on Object catch (error) {
+        storageError ??= error;
+      }
     }
     final listener = localChangeListener;
     if (listener != null && merged.isNotEmpty) {
@@ -138,8 +162,14 @@ class SyncHostService implements SyncHost, OutboxDrainer {
         debugPrint('sync host: op-log bridge failed — $error');
       }
     }
-    if (merged.isNotEmpty) unawaited(_triggerDelivery());
+    if (merged.isNotEmpty) _deliverInBackground();
     if (storageError != null) throw storageError;
+  }
+
+  void _deliverInBackground() {
+    unawaited(_triggerDelivery().catchError((Object error) {
+      debugPrint('sync host: delivery failed — $error');
+    }));
   }
 
   Future<void> _deletePending(int id) =>
@@ -171,22 +201,39 @@ class SyncHostService implements SyncHost, OutboxDrainer {
   @override
   Future<void> applyRemote(String sourcePluginId, List<Change> changes) async {
     final touched = <AffectedEntity>{};
+    Object? storageError;
     for (final change in changes) {
-      touched.addAll(await _mergeAndSequence(
-        change,
-        // A remote change has no outbox identity: derive a stable id from its
-        // content so redelivery of the same change is one sequence entry.
-        'remote:$sourcePluginId:'
-        '${crypto.sha256.convert(utf8.encode(jsonEncode(change.toJson())))}',
-        sourcePluginId,
-      ));
+      try {
+        touched.addAll(await _mergeAndSequence(
+          change,
+          // A remote change has no outbox identity: derive a stable id from its
+          // content so redelivery of the same change is one sequence entry.
+          'remote:$sourcePluginId:'
+          '${crypto.sha256.convert(utf8.encode(jsonEncode(change.toJson())))}',
+          sourcePluginId,
+        ));
+      } on SyncRejection catch (rejection) {
+        // One bad change must not stall the batch or leave what merged
+        // unprojected; a redelivery would refuse it again.
+        debugPrint('sync host: refused remote change from $sourcePluginId — $rejection');
+        continue;
+      } on Object catch (error) {
+        storageError = error;
+        break;
+      }
       final highest = change.highestClock;
       if (highest != null) _clock.receive(highest);
     }
-    if (touched.isEmpty) return;
-    final groups = await projector.project(touched);
-    await _reconcileProjected(groups);
-    unawaited(_triggerDelivery());
+    if (touched.isNotEmpty) {
+      try {
+        final groups = await projector.project(touched);
+        await _reconcileProjected(groups);
+      } on Object catch (error) {
+        storageError ??= error;
+      }
+      _deliverInBackground();
+    }
+    if (storageError != null) throw storageError;
   }
 
   /// Run the convergence passes over what a projection changed, containing any
@@ -343,7 +390,7 @@ class SyncHostService implements SyncHost, OutboxDrainer {
       [plugin.id],
     );
     await plugin.start(this);
-    unawaited(_triggerDelivery());
+    _deliverInBackground();
   }
 
   /// Stop [pluginId]. Its cursor is kept unless [forgetCursor], so a later attach

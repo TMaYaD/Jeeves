@@ -272,10 +272,21 @@ class SyncLifecycle {
     // Persisted before the bind, so a write on the first turn of the next cold
     // start is stamped with the member id too.
     await _host?.setEnrolledMember(_stack.identity.memberIdHex);
+    // A sign-out that landed during the write above has already cleared the
+    // member id; leave it cleared rather than binding a dead session.
+    if (deactivated()) {
+      await _host?.setEnrolledMember(null);
+      return SyncActivation.deactivated;
+    }
+    final preferencesClientForBind = await _stack
+        .workspaceClientFactory(userPreferencesWorkspaceId(_stack.userId));
+    if (deactivated()) {
+      await _host?.setEnrolledMember(null);
+      return SyncActivation.deactivated;
+    }
     await _capture.bind(
       gtdClient: gtdClient,
-      preferencesClient: await _stack
-          .workspaceClientFactory(userPreferencesWorkspaceId(_stack.userId)),
+      preferencesClient: preferencesClientForBind,
       onOpAuthored: _scheduleOutboxFlush,
     );
     if (deactivated()) return SyncActivation.deactivated;

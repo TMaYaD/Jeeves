@@ -8,6 +8,9 @@
 /// read model to project into.
 library;
 
+import 'dart:async';
+
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../services/api_service.dart';
@@ -49,6 +52,11 @@ final FutureProvider<SyncHostService> syncHostProvider =
   ref.onDispose(capture.detach);
   await host.start();
   capture.attach(host);
+  // A write that committed between the start-up drain and the attach waits in
+  // the outbox; drain it now rather than on the next write.
+  unawaited(host.drain().catchError((Object error) {
+    debugPrint('sync host: post-attach drain failed — $error');
+  }));
   return host;
 });
 
