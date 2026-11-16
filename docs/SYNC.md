@@ -168,6 +168,8 @@ The vault is the first plugin behind the host ([sync-plugins](proposals/sync-plu
 
 **Where it fails.** A folder that cannot be read or written is reported through the plugin's `PluginHealth` and the log. The drawer indicator does not read it yet (#916).
 
+**How the folder is reached.** One port (`VaultFolder`): list, read, write-and-rename, remove. A plain directory reaches it over `dart:io`; Android reaches it over the shared `jeeves/folder` document-tree channel, with the two operations the vault needs added to that channel. The document tree has no atomic replace, so a page is written through a temporary document and a rename.
+
 **Session sheets are read only.** A hand edit to a sheet is not applied, and the next write restores it: what editing a Plan, a TimeLog or a Disposition by hand should mean is not settled.
 
 ## Protocol surface
