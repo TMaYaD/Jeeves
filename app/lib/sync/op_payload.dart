@@ -36,6 +36,7 @@ import 'package:collection/collection.dart' show DeepCollectionEquality;
 
 import 'envelope.dart';
 import 'hlc.dart';
+import 'host/change.dart';
 
 /// Structural equality over decoded JSON values, which are arbitrarily nested
 /// lists and maps — so `==` on [FieldWrite.value] has to recurse rather than
@@ -180,6 +181,18 @@ class OpPayload {
       if (tombstoneHlc != null) 'tombstone_hlc': tombstoneHlc!.toJson(),
     };
   }
+
+  /// The op → [Change] conversion: a field's HLC is its own when it carries one,
+  /// else the op-level HLC, and a tombstone applies at its effective clock.
+  Change toChange() => Change(
+        collection: collection,
+        entityId: entityId,
+        fields: {
+          for (final entry in fields.entries)
+            entry.key: ClockedValue(entry.value.value, entry.value.hlc ?? hlc),
+        },
+        tombstone: tombstone ? effectiveTombstoneHlc : null,
+      );
 
   Uint8List encode() => Uint8List.fromList(utf8.encode(jsonEncode(toJson())));
 }
