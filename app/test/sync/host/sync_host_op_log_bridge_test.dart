@@ -144,6 +144,109 @@ void main() {
     expect(jsonEncode(todo.single.read<String>('title')), '"Write the thing"');
   });
 
+  group('a rebuild of one Workspace leaves the other alone', () {
+    Future<List<Object?>> mergeStateOf(StackPhone phone, String collection) async {
+      final rows = <String>[];
+      for (final table in ['reduced_fields', 'field_clocks', 'row_tombstones']) {
+        final found = await phone.syncStore
+            .customSelect('SELECT * FROM $table WHERE collection = ? ORDER BY 1, 2, 3',
+                variables: [Variable<String>(collection)])
+            .get();
+        rows.add('$table:${found.map((row) => jsonEncode(row.data)).join('|')}');
+      }
+      return rows;
+    }
+
+    Future<StackPhone> enrolledPhoneWithBothWorkspaces() async {
+      final phone = await hostedPhone();
+      await phone.enrolAsFirstDevice();
+      expect(await phone.activate(), SyncActivation.active);
+      await writeOutcome(phone, _outcomeAfterEnrolment);
+      await phone.domain.userPreferencesDao.set(_userId, 'theme', '"dark"');
+      await phone.stack.defaultClient.flushOutbox();
+      await (await phone.preferencesClient).flushOutbox();
+      return phone;
+    }
+
+    Future<int> todoCount(StackPhone phone) async => (await phone.domain
+            .customSelect('SELECT id FROM todos WHERE id = ?',
+                variables: [Variable<String>(_outcomeAfterEnrolment)])
+            .get())
+        .length;
+
+    Future<int> todoCountFor(StackPhone phone, String id) async => (await phone
+            .domain
+            .customSelect('SELECT id FROM todos WHERE id = ?',
+                variables: [Variable<String>(id)])
+            .get())
+        .length;
+
+    Future<String?> theme(StackPhone phone) =>
+        phone.domain.userPreferencesDao.get(_userId, 'theme');
+
+    test('device-node state of both Workspaces survives a rebuild of either',
+        () async {
+      final phone = await hostedPhone();
+      await writeOutcome(phone, _outcomeBeforeEnrolment);
+      await phone.domain.userPreferencesDao.set(_userId, 'theme', '"dark"');
+
+      Future<List<Object?>> themeClock() async {
+        final row = await phone.syncStore.customSelect(
+          "SELECT DISTINCT member_id_hex FROM field_clocks "
+          "WHERE collection = 'user_preferences'",
+        ).get();
+        return row.map((r) => r.read<String>('member_id_hex')).toList();
+      }
+
+      final nodeId = phone.host!.deviceNodeId;
+      expect(await themeClock(), [nodeId],
+          reason: 'precondition: the preference is clocked by the device node');
+
+      for (final client in [
+        phone.stack.defaultClient,
+        await phone.preferencesClient,
+      ]) {
+        final affected = await client.rebuildFromOpLog();
+        await phone.host!.projector.project(affected);
+
+        expect((await titleClock(phone, _outcomeBeforeEnrolment))[2], nodeId);
+        expect(await themeClock(), [nodeId]);
+        expect(await todoCountFor(phone, _outcomeBeforeEnrolment), 1);
+        expect(await theme(phone), '"dark"');
+      }
+    });
+
+    test('rebuilding preferences keeps the GTD merge state and rows', () async {
+      final phone = await enrolledPhoneWithBothWorkspaces();
+      final gtdBefore = await mergeStateOf(phone, 'todos');
+      expect(gtdBefore.join(), contains(_outcomeAfterEnrolment));
+
+      final affected = await (await phone.preferencesClient).rebuildFromOpLog();
+      await phone.host!.projector.project(affected);
+
+      expect(affected.map((entity) => entity.collection).toSet(),
+          {'user_preferences'});
+      expect(await mergeStateOf(phone, 'todos'), gtdBefore);
+      expect(await todoCount(phone), 1);
+      expect(await theme(phone), '"dark"');
+    });
+
+    test('rebuilding GTD keeps the preferences merge state and rows', () async {
+      final phone = await enrolledPhoneWithBothWorkspaces();
+      final preferencesBefore = await mergeStateOf(phone, 'user_preferences');
+      expect(preferencesBefore.join(), contains('theme'));
+
+      final affected = await phone.stack.defaultClient.rebuildFromOpLog();
+      await phone.host!.projector.project(affected);
+
+      expect(affected.map((entity) => entity.collection),
+          isNot(contains('user_preferences')));
+      expect(await mergeStateOf(phone, 'user_preferences'), preferencesBefore);
+      expect(await theme(phone), '"dark"');
+      expect(await todoCount(phone), 1);
+    });
+  });
+
   group('rows that predate the host', () {
     Future<List<List<Object?>>> realClocks(StackPhone phone) async => [
           for (final row in await phone.syncStore

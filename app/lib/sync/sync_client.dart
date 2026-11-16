@@ -60,6 +60,7 @@ import 'package:sqlite3/common.dart' show SqlExtendedError, SqliteException;
 import 'package:uuid/uuid.dart';
 
 import 'chain_verifier.dart';
+import 'collection_codecs.dart' show userPreferencesCollection;
 import 'control_payload.dart';
 import 'domain_projector.dart';
 import 'host/change.dart';
@@ -185,6 +186,15 @@ class SyncClient {
   /// every Device and no Service ever, and the boundary is structural rather than
   /// a policy the reducer could be talked out of.
   bool get isPreferencesWorkspace => workspaceId == userPreferencesWorkspaceId(userId);
+
+  /// Whether [collection] belongs to this client's Workspace.
+  ///
+  /// Mirrors the author-side routing (`user_preferences` goes to the preferences
+  /// Workspace, every other collection to the GTD one). Merge state has no
+  /// Workspace column, so this is how a rebuild tells its own entities from the
+  /// other Workspace's on the same Device.
+  bool ownsCollection(String collection) =>
+      (collection == userPreferencesCollection) == isPreferencesWorkspace;
   final MemberIdentity identity;
   final MemberDirectory directory;
 
@@ -1183,8 +1193,13 @@ class SyncClient {
     }
   }
 
-  /// Clear derived state and replay the retained log, recomputing **only** the
-  /// authorization verdict.
+  /// Clear this Workspace's derived state and replay its retained log,
+  /// recomputing **only** the authorization verdict.
+  ///
+  /// **Scoped to the collections this Workspace owns** ([ownsCollection]): the
+  /// other Workspace on the Device shares the merge tables, and its log is not
+  /// replayed here, so wiping its state would lose it (and delete its domain rows
+  /// in the same pull).
   ///
   /// The honest mechanism behind "re-verdict content after a fork resolution".
   /// The reduced substrate is a join-semilattice with **no per-seq lineage**, so
@@ -1218,20 +1233,29 @@ class SyncClient {
 
     // Read before the wipe: after it there is no way to tell an entity that
     // reduced to nothing from one this device never held.
-    final reducedBefore = await _reducedEntities();
+    final reducedBefore = {
+      for (final entity in await _reducedEntities())
+        if (ownsCollection(entity.collection)) entity,
+    };
 
     // Merge state whose winning clock is this device's own node id was never an
     // op: the log cannot rebuild it, and wiping it would make the projector delete
     // rows the user wrote. Saved here, merged back after the replay.
-    final carriedAcrossRebuild =
-        await host?.changesStampedByDevice() ?? const <Change>[];
+    final carriedAcrossRebuild = [
+      for (final change in await host?.changesStampedByDevice() ?? const <Change>[])
+        if (ownsCollection(change.collection)) change,
+    ];
 
     // Derived state only. The op log, the outbox, the applied control log and the
     // quarantine are all evidence, and evidence is not edited.
     await _db.transaction(() async {
-      await _db.delete(_db.reducedFields).go();
-      await _db.delete(_db.fieldClocks).go();
-      await _db.delete(_db.rowTombstones).go();
+      final preferences = isPreferencesWorkspace;
+      Expression<bool> owned(GeneratedColumn<String> collection) => preferences
+          ? collection.equals(userPreferencesCollection)
+          : collection.equals(userPreferencesCollection).not();
+      await (_db.delete(_db.reducedFields)..where((row) => owned(row.collection))).go();
+      await (_db.delete(_db.fieldClocks)..where((row) => owned(row.collection))).go();
+      await (_db.delete(_db.rowTombstones)..where((row) => owned(row.collection))).go();
     });
 
     final view = await grantsView();
