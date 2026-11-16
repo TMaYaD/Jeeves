@@ -19,7 +19,7 @@ import 'package:jeeves/sync/sync_transport.dart';
 
 import '../../test_helpers.dart';
 import '../harness/fake_sync_server.dart';
-import '../harness/sim_device.dart' show DeviceLink, FakeClock;
+import '../harness/sim_device.dart' show FakeClock;
 import '../harness/sim_workspace.dart' show simulationStartWallMs;
 import '../harness/stack_phone.dart';
 
