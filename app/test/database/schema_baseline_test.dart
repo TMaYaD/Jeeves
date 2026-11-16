@@ -1126,17 +1126,19 @@ void main() {
       await seed.customStatement('DROP TABLE actions');
       await seed.customStatement(v11Sql);
 
-      final createdMs =
-          DateTime.parse('2026-11-16T09:00:00.000Z').millisecondsSinceEpoch;
+      // The store spells an instant as ISO-8601 UTC text (`storeDateTimeAsText`
+      // on the schema), so the fixture writes one: an epoch integer would be
+      // read back as text and fail to parse.
+      final createdAt = '2026-11-16T09:00:00.000Z';
       await seed.customStatement(
         'INSERT INTO todos (id, title, user_id, created_at, intent) '
         "VALUES ('t1', 'Ship it', 'u1', ?, 'next')",
-        [createdMs],
+        [createdAt],
       );
       await seed.customStatement(
         'INSERT INTO actions (id, outcome_id, user_id, text, role, created_at) '
         "VALUES ('a1', 't1', 'u1', 'Call Bob', 'current', ?)",
-        [createdMs],
+        [createdAt],
       );
       await seed.customStatement('PRAGMA user_version = 11');
       await closeSeed();
