@@ -543,4 +543,48 @@ void main() {
       expect(find.byKey(const Key('nudge_empty_state')), findsNothing);
     });
   });
+
+  group('wide layout', () {
+    Future<void> pumpAtWidth(WidgetTester tester, double width) async {
+      tester.view.physicalSize = Size(width, 1600);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(_buildScreen(
+        activeSession: _openSession(),
+        tasks: [
+          Todo(
+            id: 'a', title: 'Write the report', userId: 'test-user',
+            createdAt: DateTime(2030), intent: 'next', timeEstimate: 30,
+          ),
+        ],
+      ));
+      await tester.pump();
+      await tester.pump();
+    }
+
+    testWidgets('a wide screen shows the Plan rows beside the timeline',
+        (tester) async {
+      await pumpAtWidth(tester, 1200);
+      expect(find.byKey(const ValueKey('plan-timeline-two-panes')),
+          findsOneWidget);
+      expect(find.byKey(const ValueKey('plan-timeline-stacked')), findsNothing);
+      final row = tester.getTopLeft(find.byType(OutcomeRow));
+      final timeline = tester.getTopLeft(find.byType(DayTimeline));
+      expect(row.dx, lessThan(timeline.dx));
+      // Two panes, not a third: nothing but the Plan and the timeline.
+      expect(find.byType(DayTimeline), findsOneWidget);
+    });
+
+    testWidgets('a narrow screen stacks the timeline above the Plan rows',
+        (tester) async {
+      await pumpAtWidth(tester, 400);
+      expect(find.byKey(const ValueKey('plan-timeline-stacked')),
+          findsOneWidget);
+      expect(find.byKey(const ValueKey('plan-timeline-two-panes')),
+          findsNothing);
+      final row = tester.getTopLeft(find.byType(OutcomeRow));
+      final timeline = tester.getTopLeft(find.byType(DayTimeline));
+      expect(timeline.dy, lessThan(row.dy));
+    });
+  });
 }
