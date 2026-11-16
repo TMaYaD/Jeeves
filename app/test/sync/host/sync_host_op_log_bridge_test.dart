@@ -240,10 +240,9 @@ void main() {
       await phone.stack.defaultClient.flushOutbox();
       final clocksBefore = await realClocks(phone);
       final opsBefore = _contentOpCount(server);
-      final opLogBefore = (await phone.syncStore
-              .customSelect('SELECT COUNT(*) AS c FROM op_log')
-              .getSingle())
-          .read<int>('c');
+      // `op_log` also records ops pulled back from the server, so it can grow
+      // with no authoring on this device; the server's own count cannot.
+      final storedOpsBefore = server.storedOps.length;
       expect(clocksBefore, isNotEmpty);
 
       await phone.host!.ensureMergeStateSeeded();
@@ -251,12 +250,8 @@ void main() {
 
       expect(await realClocks(phone), clocksBefore);
       expect(_contentOpCount(server), opsBefore);
-      expect(
-          (await phone.syncStore
-                  .customSelect('SELECT COUNT(*) AS c FROM op_log')
-                  .getSingle())
-              .read<int>('c'),
-          opLogBefore);
+      expect(server.storedOps.length, storedOpsBefore,
+          reason: 'no op of any class was authored');
     });
   });
 }
