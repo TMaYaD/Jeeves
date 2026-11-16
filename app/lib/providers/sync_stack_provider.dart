@@ -8,10 +8,14 @@
 /// read model to project into.
 library;
 
+import 'dart:async';
+
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../services/api_service.dart';
 import '../sync/device_key_store.dart';
+import '../sync/host/sync_host_service.dart';
 import '../sync/http_sync_transport.dart';
 import '../sync/sync_database.dart';
 import '../sync/sync_stack.dart';
@@ -28,6 +32,32 @@ final FutureProvider<SyncDatabase> syncDatabaseProvider =
   final database = await SyncStoreImpl().openDatabase();
   ref.onDispose(database.close);
   return database;
+});
+
+/// The device's sync host: merge state, the merge core, the projector and the
+/// reconciler, fed by the domain store's outbox.
+///
+/// Built without a signed-in user, so an un-enrolled device keeps clocks and merge
+/// state like any other. Eagerly watched from `main.dart` so its start-up drain —
+/// the crash replay of any change a killed process left in the outbox — runs.
+final FutureProvider<SyncHostService> syncHostProvider =
+    FutureProvider<SyncHostService>((ref) async {
+  ref.keepAlive();
+  final host = SyncHostService(
+    sync: await ref.watch(syncDatabaseProvider.future),
+    domain: ref.read(databaseProvider),
+    clock: ref.read(deviceClockProvider),
+  )..localChangeListener = ref.read(domainOpCaptureProvider).onLocalChanges;
+  final capture = ref.read(hostedDomainOpCaptureProvider);
+  ref.onDispose(capture.detach);
+  await host.start();
+  capture.attach(host);
+  // A write that committed between the start-up drain and the attach waits in
+  // the outbox; drain it now rather than on the next write.
+  unawaited(host.drain().catchError((Object error) {
+    debugPrint('sync host: post-attach drain failed — $error');
+  }));
+  return host;
 });
 
 /// Keychain on iOS/macOS, Keystore-backed on Android.
@@ -69,6 +99,7 @@ final FutureProvider<SyncStack> syncStackProvider =
     // The domain read model, attached at assembly so every client this stack
     // builds projects — including the one the enrolment ceremony pulls through.
     domain: ref.watch(databaseProvider),
+    host: await ref.watch(syncHostProvider.future),
     nowMs: () => DateTime.now().millisecondsSinceEpoch,
   );
 });

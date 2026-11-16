@@ -421,6 +421,36 @@ class PrunedAttestations extends Table {
   Set<Column<Object>> get primaryKey => {workspaceId, authorMemberId, authorSeq};
 }
 
+/// The sync host's durable, ordered record of every change it has merged — local
+/// writes and plugins' changes alike. A plugin's `deliver` reads the entries after
+/// its cursor ([PluginCursors]); entries every cursor has passed are pruned.
+///
+/// `AUTOINCREMENT` so a sequence number is never reused after pruning. `change_id`
+/// is unique: a crash between the merge commit and the outbox delete replays the
+/// same change, and the unique key turns that into a single entry.
+@DataClassName('ChangeSequenceRow')
+class ChangeSequence extends Table {
+  IntColumn get sequence => integer().autoIncrement()();
+
+  TextColumn get changeId => text().unique()();
+
+  /// `local`, or the id of the plugin that delivered it — so delivery never sends
+  /// a change back to its own source.
+  TextColumn get source => text()();
+
+  TextColumn get changeJson => text()();
+}
+
+/// Plugin id → the highest sequence number its `deliver` has acknowledged.
+@DataClassName('PluginCursorRow')
+class PluginCursors extends Table {
+  TextColumn get pluginId => text()();
+  IntColumn get acknowledgedSequence => integer()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {pluginId};
+}
+
 @DriftDatabase(
   tables: [
     OpLog,
@@ -438,6 +468,8 @@ class PrunedAttestations extends Table {
     EpochFloors,
     InitialUploadState,
     PrunedAttestations,
+    ChangeSequence,
+    PluginCursors,
   ],
 )
 class SyncDatabase extends _$SyncDatabase {
@@ -452,9 +484,10 @@ class SyncDatabase extends _$SyncDatabase {
   /// adds the per-account initial-upload marker (#591); v8 adds the prune
   /// attestations the verified chain floor is built from (#555); v9 adds
   /// `quarantined_ops.release_started_at`, the interrupted-chain-replay re-arm
-  /// marker (#620).
+  /// marker (#620); v10 adds the sync host's durable change sequence and its
+  /// per-plugin cursors.
   @override
-  int get schemaVersion => 9;
+  int get schemaVersion => 10;
 
   /// Additive only. A device that already holds a log keeps every byte of it:
   /// each step is `CREATE TABLE`s, an `ADD COLUMN` or a `CREATE INDEX`, and no
@@ -549,6 +582,13 @@ class SyncDatabase extends _$SyncDatabase {
               quarantinedOps,
               quarantinedOps.releaseStartedAt,
             );
+          }
+          if (from < 10) {
+            // The sync host's change sequence and plugin cursors: two new
+            // tables, nothing altered or backfilled. Merge state stays exactly
+            // where it was.
+            await migrator.createTable(changeSequence);
+            await migrator.createTable(pluginCursors);
           }
         },
       );

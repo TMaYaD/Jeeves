@@ -36,7 +36,13 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show debugPrint;
+
+import 'package:drift/drift.dart' show GeneratedDatabase;
+
 import 'collection_codecs.dart' show userPreferencesCollection;
+import 'host/change.dart';
+import 'hlc.dart';
 import 'sync_client.dart';
 
 /// One coalesced domain effect, ready to be authored as an op.
@@ -48,6 +54,10 @@ class CapturedOp {
 
   final Map<String, Object?> fields = <String, Object?>{};
   bool tombstone = false;
+
+  /// The clock the sync host stamped on this effect at commit, when it came from
+  /// the host. Null for an effect described straight through the seam.
+  Hlc? clock;
 
   @override
   String toString() => tombstone
@@ -147,6 +157,13 @@ abstract interface class DomainOpCapture {
   /// "authors nothing" enforced rather than incidental.
   Future<T> runInScope<T>(CaptureScope? scope, Future<T> Function() body);
 
+  /// Called by [GtdDatabase.capturing] at the end of the **outermost** body,
+  /// still inside the transaction: the point at which a binding may write the
+  /// scope's coalesced effects into the same store the domain rows went to, so the
+  /// two commit or roll back together. A nested scope is not asked — it merges into
+  /// its parent, which is.
+  Future<void> stageInTransaction(CaptureScope scope, GeneratedDatabase db);
+
   /// Close [scope], emitting its coalesced ops when it was the outermost and
   /// merging them into its parent otherwise. Awaited inside the same
   /// continuation as the commit so op authoring order matches domain write
@@ -183,6 +200,9 @@ class NoopDomainOpCapture implements DomainOpCapture {
 
   @override
   Future<void> commitScope(CaptureScope scope) async {}
+
+  @override
+  Future<void> stageInTransaction(CaptureScope scope, GeneratedDatabase db) async {}
 
   @override
   void rollbackScope(CaptureScope scope) {}
@@ -289,6 +309,16 @@ abstract class BufferedDomainOpCapture implements DomainOpCapture {
 
   @override
   CaptureScope beginScope() => CaptureScope._(_ambientScope);
+
+  @override
+  Future<void> stageInTransaction(CaptureScope scope, GeneratedDatabase db) async {}
+
+  /// Whether [scope] is the outermost open scope — the one whose commit flushes.
+  bool isOutermost(CaptureScope scope) => scope._flushTarget == null;
+
+  /// [scope]'s coalesced effects that carry any effect, in recorded order.
+  List<CapturedOp> effectsOf(CaptureScope scope) =>
+      [for (final op in scope._pending) if (_hasEffect(op)) op];
 
   @override
   Future<void> commitScope(CaptureScope scope) async {
@@ -481,13 +511,43 @@ class WorkspaceRoutingOpCapture extends BufferedDomainOpCapture {
         ? _preferencesClient
         : _gtdClient;
     if (client == null) return;
+    final hostClock = op.clock;
+    // A change the host clocked under the device node id (made before this
+    // device enrolled) is not this member's to author: the wire refuses an op
+    // whose clock does not name its author. It reaches the log through the
+    // enrolment upload instead.
+    if (hostClock != null && hostClock.memberIdHex != client.identity.memberIdHex) {
+      return;
+    }
     await client.capture(
       collection: op.collection,
       entityId: op.entityId,
       fields: op.fields,
       tombstone: op.tombstone,
+      clock: hostClock,
     );
     onOpAuthored?.call();
+  }
+
+  /// The sync host's hand-off: each change the host has merged, in order. A
+  /// refusal is contained per change — the domain write and the host's merge have
+  /// both committed, and sync is not a correctness dependency (ADR-0040).
+  Future<void> onLocalChanges(List<Change> changes) async {
+    for (final change in changes) {
+      final op = CapturedOp._(change.collection, change.entityId)
+        ..tombstone = change.tombstone != null
+        ..clock = change.highestClock;
+      if (!op.tombstone) {
+        for (final entry in change.fields.entries) {
+          op.fields[entry.key] = entry.value.value;
+        }
+      }
+      try {
+        await emit(op);
+      } on Object catch (error) {
+        debugPrint('op-log bridge: skipped ${change.collection}/${change.entityId} — $error');
+      }
+    }
   }
 
   @override

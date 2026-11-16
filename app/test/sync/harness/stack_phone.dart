@@ -26,6 +26,9 @@ import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/sync/device_key_store.dart';
 import 'package:jeeves/sync/domain_op_capture.dart';
 import 'package:jeeves/sync/enrolment.dart';
+import 'package:jeeves/sync/hlc.dart';
+import 'package:jeeves/sync/host/hosted_capture.dart';
+import 'package:jeeves/sync/host/sync_host_service.dart';
 import 'package:jeeves/sync/ids.dart';
 import 'package:jeeves/sync/sync_client.dart';
 import 'package:jeeves/sync/sync_database.dart';
@@ -53,6 +56,8 @@ class StackPhone {
     required this.storeDirectory,
     required this.clock,
     required this.lifecycle,
+    this.host,
+    this.hostedCapture,
   });
 
   /// Build the phone. Un-enrolled: no keys, no pinned Root, no member credential.
@@ -69,6 +74,7 @@ class StackPhone {
     UserTransport Function(DeviceLink)? userTransport,
     PendingRotationStore Function(PendingRotationStore)? pendingRotationStore,
     bool fileBacked = false,
+    bool hosted = false,
   }) async {
     driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
     final storeDirectory =
@@ -97,7 +103,24 @@ class StackPhone {
     // The capture seam exists before the store it writes through, and is bound to
     // nothing: this is the pre-enrolment state a real process starts in.
     final capture = WorkspaceRoutingOpCapture();
-    final domain = GtdDatabase(NativeDatabase.memory(), opCapture: capture);
+    // With [hosted] the domain store is wired the way production wires it: writes
+    // stage into the outbox and the sync host drains them, handing each merged
+    // change to [capture] — which is then only the op-log bridge.
+    final deviceClock = hosted
+        ? HlcClock(memberIdHex: '0' * 32, nowMs: () => clock.nowMs)
+        : null;
+    final hostedCapture =
+        hosted ? HostedDomainOpCapture(clock: deviceClock!) : null;
+    final domain = GtdDatabase(NativeDatabase.memory(),
+        opCapture: hostedCapture ?? capture);
+    final host = hosted
+        ? (SyncHostService(sync: syncStore, domain: domain, clock: deviceClock!)
+          ..localChangeListener = capture.onLocalChanges)
+        : null;
+    if (host != null) {
+      await host.start();
+      hostedCapture!.attach(host);
+    }
     // Decorated once and kept: the wrapper is the injected fault, and a relaunch
     // is a process death, not an unwrapping.
     final decorated = userTransport?.call(link) ?? link;
@@ -112,9 +135,12 @@ class StackPhone {
         userTransport: decorated,
         domain: domain,
         clock: clock,
+        host: host,
       ),
       domain: domain,
       capture: capture,
+      host: host,
+      hostedCapture: hostedCapture,
       link: link,
       userTransport: decorated,
       keyStore: keyStore,
@@ -136,6 +162,7 @@ class StackPhone {
     required UserTransport userTransport,
     required GtdDatabase domain,
     required FakeClock clock,
+    SyncHostService? host,
   }) =>
       // Assembled exactly as `syncStackProvider` assembles it, with the platform
       // parts swapped for the harness's. Both KDF arguments so the floor check
@@ -146,6 +173,7 @@ class StackPhone {
         keyStore: keyStore,
         userTransport: userTransport,
         domain: domain,
+        host: host,
         nowMs: () => clock.nowMs,
         // The platform keychain is unreachable in a unit test; the phone-held
         // in-memory store is the same swap `sim_device` makes, so a plaintext_v1
@@ -160,6 +188,10 @@ class StackPhone {
   final String label;
   final GtdDatabase domain;
   final WorkspaceRoutingOpCapture capture;
+
+  /// The sync host and the capture binding that feeds it, when built `hosted`.
+  final SyncHostService? host;
+  final HostedDomainOpCapture? hostedCapture;
   final DeviceLink link;
 
   /// The transport the stack is assembled over: [link] itself, or the decorator a
@@ -211,6 +243,7 @@ class StackPhone {
       stack: stack,
       domain: domain,
       capture: capture,
+      host: host,
       signalTransport: signalTransport ?? link,
       timerFactory: link.timers.create,
       listenerDelay: link.timers.delay,
@@ -241,6 +274,7 @@ class StackPhone {
       userTransport: userTransport,
       domain: domain,
       clock: clock,
+      host: host,
     );
   }
 

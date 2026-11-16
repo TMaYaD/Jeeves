@@ -50,6 +50,7 @@ final syncLifecycleProvider = FutureProvider<SyncLifecycle?>((ref) async {
     stack: await ref.watch(syncStackProvider.future),
     domain: ref.watch(databaseProvider),
     capture: ref.watch(domainOpCaptureProvider),
+    host: await ref.watch(syncHostProvider.future),
   );
   ref.onDispose(() => unawaited(lifecycle.deactivate()));
 

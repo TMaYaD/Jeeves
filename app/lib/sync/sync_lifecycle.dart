@@ -68,6 +68,7 @@ import 'package:drift/drift.dart';
 
 import '../database/gtd_database.dart';
 import 'domain_op_capture.dart';
+import 'host/sync_host_service.dart';
 import 'enrolment_state.dart';
 import 'ids.dart';
 import 'initial_upload.dart';
@@ -163,6 +164,7 @@ class SyncLifecycle {
     required SyncStack stack,
     required GtdDatabase domain,
     required WorkspaceRoutingOpCapture capture,
+    SyncHostService? host,
     SyncTransport? signalTransport,
     Timer Function(Duration, void Function())? timerFactory,
     Future<void> Function(Duration)? listenerDelay,
@@ -171,6 +173,7 @@ class SyncLifecycle {
   })  : _stack = stack,
         _domain = domain,
         _capture = capture,
+        _host = host,
         _signalTransport = signalTransport,
         _timerFactory = timerFactory ?? Timer.new,
         _listenerDelay = listenerDelay,
@@ -182,6 +185,10 @@ class SyncLifecycle {
   final SyncStack _stack;
   final GtdDatabase _domain;
   final WorkspaceRoutingOpCapture _capture;
+
+  /// The sync host, when the device has one. The lifecycle tells it whether local
+  /// writes are stamped with the member id (enrolled) or the device node id.
+  final SyncHostService? _host;
 
   /// The transport the signal sockets are opened over. Null means "the member
   /// transport this device minted", which is what production wants; the harness
@@ -242,9 +249,11 @@ class SyncLifecycle {
     final status = await _stack.readEnrolmentStatus();
     switch (status.state) {
       case EnrolmentState.notEnrolled:
+        await _host?.setEnrolledMember(null);
         _capture.unbind();
         return SyncActivation.notEnrolled;
       case EnrolmentState.foundingIncomplete:
+        await _host?.setEnrolledMember(null);
         _capture.unbind();
         return SyncActivation.foundingIncomplete;
       case EnrolmentState.enrolled:
@@ -260,10 +269,24 @@ class SyncLifecycle {
     // armed *through* bind, before it drains, so a buffered op schedules the
     // debounced flush rather than sitting in the outbox until the next write.
     final gtdClient = _stack.defaultClient;
+    // Persisted before the bind, so a write on the first turn of the next cold
+    // start is stamped with the member id too.
+    await _host?.setEnrolledMember(_stack.identity.memberIdHex);
+    // A sign-out that landed during the write above has already cleared the
+    // member id; leave it cleared rather than binding a dead session.
+    if (deactivated()) {
+      await _host?.setEnrolledMember(null);
+      return SyncActivation.deactivated;
+    }
+    final preferencesClientForBind = await _stack
+        .workspaceClientFactory(userPreferencesWorkspaceId(_stack.userId));
+    if (deactivated()) {
+      await _host?.setEnrolledMember(null);
+      return SyncActivation.deactivated;
+    }
     await _capture.bind(
       gtdClient: gtdClient,
-      preferencesClient: await _stack
-          .workspaceClientFactory(userPreferencesWorkspaceId(_stack.userId)),
+      preferencesClient: preferencesClientForBind,
       onOpAuthored: _scheduleOutboxFlush,
     );
     if (deactivated()) return SyncActivation.deactivated;
@@ -362,6 +385,11 @@ class SyncLifecycle {
     _capture
       ..onOpAuthored = null
       ..unbind();
+    try {
+      await _host?.setEnrolledMember(null);
+    } on Object {
+      // A store that is already closing has nothing to clear.
+    }
     final listeners = [..._listeners];
     _listeners.clear();
     for (final listener in listeners) {
@@ -416,6 +444,7 @@ class SyncLifecycle {
       gtdClient: gtdClient,
       preferencesClient: preferencesClient,
       readReducedCollection: readReduced,
+      readDeviceStampedEntityIds: _host?.entityIdsStampedByDevice,
     );
     await _markers.markComplete(
       userId: _stack.userId,

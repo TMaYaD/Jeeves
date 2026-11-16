@@ -37,6 +37,7 @@ import 'package:jeeves/sync/collection_codecs.dart';
 import 'package:jeeves/sync/device_key_store.dart';
 import 'package:jeeves/sync/domain_op_capture.dart';
 import 'package:jeeves/sync/hlc.dart';
+import 'package:jeeves/sync/host/sync_host_service.dart';
 import 'package:jeeves/sync/ids.dart';
 import 'package:jeeves/sync/member_identity.dart';
 import 'package:jeeves/sync/pending_rotation_store.dart';
@@ -212,6 +213,13 @@ void main() {
       domainOpCaptureProvider.overrideWithValue(capture),
       databaseProvider.overrideWithValue(domain),
       syncStackProvider.overrideWith((ref) async => stack),
+      // The lifecycle tells the host whether writes are stamped with the member
+      // id; it needs one even though this test's domain store has no outbox.
+      syncHostProvider.overrideWith((ref) async => SyncHostService(
+            sync: database,
+            domain: domain,
+            clock: HlcClock(memberIdHex: '0' * 32, nowMs: () => _nowMs),
+          )),
       authTokenProvider.overrideWith(_AnsweredUnverifiedAuth.new),
     ]);
     addTearDown(container.dispose);

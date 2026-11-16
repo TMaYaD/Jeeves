@@ -32,6 +32,7 @@ import 'domain_reconciler.dart';
 import 'enrolment_state.dart';
 import 'envelope.dart' show sameBytes;
 import 'hlc.dart';
+import 'host/sync_host_service.dart';
 import 'ids.dart';
 import 'member_identity.dart';
 import 'merge_strategy.dart';
@@ -79,6 +80,7 @@ class SyncStack {
     required UserTransport userTransport,
     required int Function() nowMs,
     GtdDatabase? domain,
+    SyncHostService? host,
     WorkspaceKeyStore? workspaceKeys,
     PendingRotationStore? pendingRotations,
     MergeStrategyRegistry strategies = const MergeStrategyRegistry(),
@@ -95,22 +97,31 @@ class SyncStack {
             signSeed: stored.signSeed,
             kexSeed: stored.kexSeed,
           );
-    final clock = HlcClock(memberIdHex: identity.memberIdHex, nowMs: nowMs);
+    // With a sync host the device has one clock state: the op-log stack mints
+    // from a view of it bound to its member id, so every clock the op-log client
+    // makes itself is exactly what it was.
+    final clock = host != null
+        ? host.clockForMember(identity.memberIdHex)
+        : HlcClock(memberIdHex: identity.memberIdHex, nowMs: nowMs);
     DateTime now() => DateTime.fromMillisecondsSinceEpoch(nowMs(), isUtc: true);
 
     // One registry, one projector and one reconciler over the whole device:
     // reduced state is keyed by collection and entity id, so both Workspaces feed
     // the same read model through the same views.
-    final registry = CollectionRegistry(database);
-    final projector = domain == null
-        ? null
-        : DomainProjector(registry: registry, domain: domain);
+    final registry = host?.registry ?? CollectionRegistry(database);
+    final projector = host != null
+        ? host.projector
+        : domain == null
+            ? null
+            : DomainProjector(registry: registry, domain: domain);
     // Attached alongside the projector, and consulted only at the pull tail: the
     // projector materialises reduced state, this takes the convergence decisions
     // that have to author ops to reach peers.
-    final reconciler = domain == null
-        ? null
-        : DomainReconciler(registry: registry, domain: domain);
+    final reconciler = host != null
+        ? host.reconciler
+        : domain == null
+            ? null
+            : DomainReconciler(registry: registry, domain: domain);
 
     // One store per device, keyed by Workspace inside — the platform keychain in
     // production, injected by a harness that needs N independent stores in one
@@ -136,7 +147,8 @@ class SyncStack {
       now: now,
     )
       ..projector = projector
-      ..reconciler = reconciler;
+      ..reconciler = reconciler
+      ..host = host;
 
     // One client per Workspace over the *same* store, identity, clock and
     // member directory: a device is two Workspaces of one User, not two devices.
@@ -161,7 +173,8 @@ class SyncStack {
           now: now,
         )
             ..projector = projector
-            ..reconciler = reconciler,
+            ..reconciler = reconciler
+            ..host = host,
       );
       // **Lazily, on every call, and never at construction.** The ceremony
       // reaches this factory twice at different points of its own progress:

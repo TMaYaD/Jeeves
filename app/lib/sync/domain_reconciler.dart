@@ -37,7 +37,7 @@ import 'package:drift/drift.dart';
 import '../database/gtd_database.dart';
 import 'collection_codecs.dart';
 import 'domain_projector.dart';
-import 'reducer.dart';
+import 'host/merge_state.dart';
 
 class DomainReconciler {
   DomainReconciler({required this.registry, required this.domain});

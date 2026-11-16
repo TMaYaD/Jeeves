@@ -415,6 +415,44 @@ class LocalMigrationMarkers extends Table {
   Set<Column<Object>> get primaryKey => {name};
 }
 
+/// The outbox between a domain write and the sync host: one clocked [Change]
+/// per entity per committed transaction, written in the **same transaction** as
+/// the domain rows it describes. The host drains it into merge state and deletes
+/// a row only after the sync store has committed it, so a process killed anywhere
+/// in between replays the row rather than losing the change.
+///
+/// **Device-local: no sync codec, no op.** It is a queue, not data — consuming a
+/// row is not data loss, because the change is in merge state first. `change_id`
+/// is minted once at capture and rides into the change sequence, which is what
+/// makes a replay after a crash between the two stores' commits a no-op.
+class PendingChanges extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get changeId => text().unique()();
+  TextColumn get changeJson => text()();
+}
+
+/// The one row naming this device to the clock: the random node id that breaks
+/// HLC ties when the device has no member id, and whether the op-log member id
+/// has taken over.
+///
+/// Lives in the domain store so a local write can be clocked without waiting on,
+/// or failing with, the sync store. **Device-local: never replicated** — a copied
+/// node id would make two devices indistinguishable to the tie-break.
+class DeviceClockIdentity extends Table {
+  /// Always 1: the table is a single row.
+  IntColumn get id => integer().withDefault(const Constant(1))();
+
+  /// 32 lowercase hex characters (16 random bytes).
+  TextColumn get deviceNodeId => text()();
+
+  /// The op-log member id while the device is enrolled, else null. Persisted so a
+  /// write on the first turn of an enrolled cold start is stamped with it.
+  TextColumn get enrolledMemberIdHex => text().nullable()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {id};
+}
+
 /// A file attached to a Capture — today, an image shared in through the
 /// Android share sheet. The bytes live in app-private storage at
 /// `relative_path` (relative to the application support directory).

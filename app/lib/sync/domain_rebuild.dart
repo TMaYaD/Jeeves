@@ -29,7 +29,7 @@ library;
 import '../database/gtd_database.dart';
 import 'domain_projector.dart';
 import 'domain_reconciler.dart';
-import 'reducer.dart';
+import 'host/merge_state.dart';
 import 'sync_database.dart';
 
 /// Project every entity in [sync]'s reduced state into [domain], and return how
