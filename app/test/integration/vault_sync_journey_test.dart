@@ -159,10 +159,11 @@ void main() {
 /// The one page in the vault's Outcomes folder.
 String _pagePath(Directory vault) {
   final outcomes = Directory('${vault.path}/Outcomes');
-  final files = outcomes.existsSync()
-      ? outcomes.listSync().whereType<File>().map((file) => file.path).toList()
-        ..sort()
-      : <String>[];
+  final files = <String>[];
+  if (outcomes.existsSync()) {
+    files.addAll(outcomes.listSync().whereType<File>().map((file) => file.path));
+    files.sort();
+  }
   expect(files, hasLength(1), reason: 'the Outcome has a page in the folder');
   return files.single;
 }
@@ -177,7 +178,7 @@ Future<void> _settleUntil(
   for (var round = 0; round < 40; round++) {
     await tester.runAsync(() => pumpEventQueue());
     await tester.pump(const Duration(milliseconds: 50));
-    if (await tester.runAsync(done)) return;
+    if (await tester.runAsync(done) ?? false) return;
   }
   fail('the vault did not settle in time');
 }
