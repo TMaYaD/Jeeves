@@ -19,47 +19,46 @@ import 'database_provider.dart';
 ///
 /// Null when the Outcome is not Timeboxed — which is what keeps every surface
 /// that reads this silent for a plain estimate.
-final timeboxedLimitStatusProvider =
-    StreamProvider.autoDispose.family<TimeboxedLimitStatus?, String>(
-  (ref, outcomeId) {
-    final db = ref.watch(databaseProvider);
-    return db.actionDao.watchCurrentAction(outcomeId).asyncExpand((action) {
-      if (action == null) {
-        return Stream<TimeboxedLimitStatus?>.value(null);
-      }
-      final limit = action.timeEstimate;
-      if (!isTimeboxedAction(
-        timeboxed: action.timeboxed,
-        timeEstimate: limit,
-      )) {
-        return Stream<TimeboxedLimitStatus?>.value(null);
-      }
-      final logs = (db.select(db.timeLogs)
-            ..where((t) => t.actionId.equals(action.id)))
-          .watch();
-      final sprints = (db.select(db.sprints)
-            ..where((s) => s.actionId.equals(action.id)))
-          .watch();
-      return _combineLatest(
-        logs,
-        sprints,
-        (logRows, sprintRows) => _status(
-          limitMinutes: limit!,
-          logs: logRows,
-          sprints: sprintRows,
-        ),
-      );
+final timeboxedLimitStatusProvider = StreamProvider.autoDispose
+    .family<TimeboxedLimitStatus?, String>((ref, outcomeId) {
+      final db = ref.watch(databaseProvider);
+      return db.actionDao.watchCurrentAction(outcomeId).asyncExpand((action) {
+        if (action == null) {
+          return Stream<TimeboxedLimitStatus?>.value(null);
+        }
+        final limit = action.timeEstimate;
+        if (!isTimeboxedAction(
+          timeboxed: action.timeboxed,
+          timeEstimate: limit,
+        )) {
+          return Stream<TimeboxedLimitStatus?>.value(null);
+        }
+        final logs = (db.select(
+          db.timeLogs,
+        )..where((t) => t.actionId.equals(action.id))).watch();
+        final sprints = (db.select(
+          db.sprints,
+        )..where((s) => s.actionId.equals(action.id))).watch();
+        return _combineLatest(
+          logs,
+          sprints,
+          (logRows, sprintRows) =>
+              _status(limitMinutes: limit!, logs: logRows, sprints: sprintRows),
+        );
+      });
     });
-  },
-);
 
 /// Which Outcomes currently have a Timeboxed Action, live.
 ///
 /// A map of Outcome id to whether that Outcome's current Action is Timeboxed.
 /// Used by the Focus list, where a row must show the mark without asking for
 /// each Outcome's Action one at a time.
-final currentTimeboxedProvider =
-    StreamProvider.autoDispose<Map<String, bool>>((ref) {
+///
+/// Not autoDispose, like the other list streams (`nextProvider` and its kin):
+/// the Focus screen is replaced as the user moves between surfaces, and a
+/// watch torn down and reopened on every move costs more than the one
+/// always-open query does.
+final currentTimeboxedProvider = StreamProvider<Map<String, bool>>((ref) {
   return ref.watch(databaseProvider).actionDao.watchCurrentTimeboxed();
 });
 
@@ -82,12 +81,12 @@ Future<TimeboxedLimitStatus?> readTimeboxedLimitStatus(
   if (!isTimeboxedAction(timeboxed: action.timeboxed, timeEstimate: limit)) {
     return null;
   }
-  final logs = await (db.select(db.timeLogs)
-        ..where((t) => t.actionId.equals(action.id)))
-      .get();
-  final sprints = await (db.select(db.sprints)
-        ..where((s) => s.actionId.equals(action.id)))
-      .get();
+  final logs = await (db.select(
+    db.timeLogs,
+  )..where((t) => t.actionId.equals(action.id))).get();
+  final sprints = await (db.select(
+    db.sprints,
+  )..where((s) => s.actionId.equals(action.id))).get();
   return _status(limitMinutes: limit!, logs: logs, sprints: sprints);
 }
 
@@ -150,22 +149,16 @@ Stream<R> _combineLatest<A, B, R>(
 
   controller = StreamController<R>(
     onListen: () {
-      subA = a.listen(
-        (v) {
-          latestA = v;
-          hasA = true;
-          emit();
-        },
-        onError: controller.addError,
-      );
-      subB = b.listen(
-        (v) {
-          latestB = v;
-          hasB = true;
-          emit();
-        },
-        onError: controller.addError,
-      );
+      subA = a.listen((v) {
+        latestA = v;
+        hasA = true;
+        emit();
+      }, onError: controller.addError);
+      subB = b.listen((v) {
+        latestB = v;
+        hasB = true;
+        emit();
+      }, onError: controller.addError);
     },
     onCancel: () async {
       await subA?.cancel();

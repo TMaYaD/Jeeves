@@ -900,6 +900,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     String? text,
     String? energyLevel,
     int? timeEstimate,
+    bool? timeboxed,
     bool clearEnergyLevel = false,
     bool clearTimeEstimate = false,
     required DateTime ts,
@@ -923,7 +924,18 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     // a limit with no estimate is not a limit, and a later estimate must not
     // bring the old limit back.
     final timeboxedClears = clearTimeEstimate && (row.timeboxed ?? false);
-    if (!textDiffers && !energyDiffers && !timeDiffers && !timeboxedClears) {
+    // The switch set explicitly (issue #923) — the estimate sheet offers the
+    // estimate and the switch together, so they are written in one row write
+    // with one timestamp. A clear wins: an estimate with no value cannot
+    // limit anything.
+    final timeboxedDiffers = timeboxed != null &&
+        !clearTimeEstimate &&
+        (row.timeboxed ?? false) != timeboxed;
+    if (!textDiffers &&
+        !energyDiffers &&
+        !timeDiffers &&
+        !timeboxedClears &&
+        !timeboxedDiffers) {
       return _noEffect;
     }
 
@@ -936,8 +948,11 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         timeEstimate: clearTimeEstimate
             ? const Value(null)
             : timeDiffers ? Value(timeEstimate) : const Value.absent(),
-        timeboxed:
-            timeboxedClears ? const Value(false) : const Value.absent(),
+        timeboxed: timeboxedDiffers
+            ? Value(timeboxed)
+            : timeboxedClears
+                ? const Value(false)
+                : const Value.absent(),
         updatedAt: Value(ts),
       ),
     );
@@ -951,6 +966,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         'time_estimate': null
       else if (timeDiffers)
         'time_estimate': timeEstimate,
+      if (timeboxedDiffers) 'timeboxed': timeboxed,
       if (timeboxedClears) 'timeboxed': false,
       'updated_at': encodeInstant(ts),
     });

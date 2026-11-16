@@ -18,8 +18,7 @@ library;
 bool isTimeboxedAction({
   required bool? timeboxed,
   required int? timeEstimate,
-}) =>
-    (timeboxed ?? false) && timeEstimate != null;
+}) => (timeboxed ?? false) && timeEstimate != null;
 
 /// What a Timeboxed Action's limit looks like right now.
 ///

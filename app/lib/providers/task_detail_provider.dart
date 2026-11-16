@@ -261,30 +261,37 @@ class TaskDetailNotifier {
     return present;
   }
 
-  /// Sets or clears the Timeboxed switch of the Action [actionId] the sheet
-  /// was opened for: whether its estimate is a limit rather than a guess
-  /// (issue #923).
+  /// Sets the estimate and the Timeboxed switch of the Action the sheet was
+  /// opened for, in one write (issue #923).
   ///
-  /// The switch lives on the Action, not the Outcome, so it is written
-  /// through the DAO with the same guard [setTimeContext] uses: the write is
-  /// dropped when that Action is no longer the Outcome's current one, so an
-  /// edit never lands on a successor the user did not see.
-  Future<bool> setTimeboxed(bool value, {required String actionId}) async {
-    var wrote = false;
-    final present = await _ifOutcomePresent(() async {
+  /// The estimate sheet offers the two together, so they are written together:
+  /// one transaction, one timestamp, and the estimate and the switch can never
+  /// disagree about which Action they belong to.
+  ///
+  /// [minutes] is the new estimate; null leaves it alone unless [clearEstimate]
+  /// says to clear it. [timeboxed] is the new switch; null leaves it alone.
+  ///
+  /// The switch lives on the Action, not the Outcome, so it is written with the
+  /// same guard [setTimeContext] uses: it is dropped when that Action is no
+  /// longer the Outcome's current one, so an edit never lands on a successor
+  /// the user did not see. The estimate is an Outcome's own, so it goes
+  /// whichever Action is current.
+  Future<bool> setEstimateAndTimeboxed({
+    required String actionId,
+    int? minutes,
+    bool clearEstimate = false,
+    bool? timeboxed,
+  }) async {
+    return _ifOutcomePresent(() async {
       final current = await _db.actionDao.getCurrentAction(_todoId);
-      if (current == null || current.id != actionId) return;
-      wrote = await _db.actionDao.applySetTimeboxed(
-        current.id,
-        value,
-        ts: DateTime.now().toUtc(),
+      final switchBelongs = current != null && current.id == actionId;
+      await _db.todoDao.updateFields(
+        _todoId,
+        timeEstimate: minutes,
+        clearTimeEstimate: clearEstimate,
+        timeboxed: switchBelongs ? timeboxed : null,
       );
     });
-    if (wrote) {
-      _db.notifyActionsViewWrite();
-      _db.notifyTodosViewWrite();
-    }
-    return present;
   }
 
   Future<bool> setDueDate(DateTime date) =>

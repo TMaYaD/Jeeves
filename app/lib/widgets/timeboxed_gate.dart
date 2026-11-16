@@ -12,6 +12,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../models/estimate.dart';
 import '../models/timeboxed.dart';
 import '../providers/database_provider.dart';
 import '../providers/task_detail_provider.dart';
@@ -64,9 +65,10 @@ Future<TimeboxedGateChoice?> showTimeboxedSprintGate(
 ///
 /// "Right ho" starts the Sprint. "Another sprint, regardless" asks once more
 /// and then starts it, leaving the estimate exactly as it was. "Raise the
-/// estimate…" opens the estimate sheet, and if the raised estimate moves the
-/// limit out of the way the Sprint starts after all; if it does not, the
-/// Sprint does not start. Nothing here is locked.
+/// estimate…" opens the estimate sheet one step up; if the raised estimate
+/// moves the limit out of the way the Sprint starts after all, and if it does
+/// not, the gate asks again with the figures as they now stand. Nothing here
+/// is locked.
 Future<void> guardSprintPastLimit(
   BuildContext context,
   WidgetRef ref, {
@@ -74,61 +76,81 @@ Future<void> guardSprintPastLimit(
   required Future<void> Function() start,
 }) async {
   final db = ref.read(databaseProvider);
-  final status = await readTimeboxedLimitStatus(db, outcomeId);
-  if (status == null) {
+  final initial = await readTimeboxedLimitStatus(db, outcomeId);
+  if (initial == null) {
     await start();
     return;
   }
   final now = DateTime.now().toUtc();
-  if (!status.hasPassedAt(now)) {
+  if (!initial.hasPassedAt(now)) {
     await start();
     return;
   }
-  final action = await db.actionDao.getCurrentAction(outcomeId);
+  var status = initial;
+  var action = await db.actionDao.getCurrentAction(outcomeId);
   if (!context.mounted) return;
-  final choice = await showTimeboxedSprintGate(
+  var choice = await showTimeboxedSprintGate(
     context,
     actionText: action?.actionText ?? '',
     status: status,
     now: now,
   );
+  // "Raise the estimate…" opens the estimate sheet. Whatever happens there —
+  // saved or cancelled — the gate asks again with the figures as they now
+  // stand, so the user is never left without a way on.
+  while (choice == TimeboxedGateChoice.raise) {
+    if (!context.mounted) return;
+    final saved = await _raiseTheEstimate(context, ref, outcomeId: outcomeId);
+    if (!context.mounted) return;
+    if (saved) {
+      // A raised estimate moves the limit with it. If the limit is no longer
+      // passed, the Sprint starts after all; if it is still passed, the gate
+      // asks again with the new figures.
+      final after = await readTimeboxedLimitStatus(db, outcomeId);
+      if (after == null || !after.hasPassedAt(now)) {
+        await start();
+        return;
+      }
+      status = after;
+      action = await db.actionDao.getCurrentAction(outcomeId);
+    }
+    if (!context.mounted) return;
+    choice = await showTimeboxedSprintGate(
+      context,
+      actionText: action?.actionText ?? '',
+      status: status,
+      now: now,
+    );
+  }
   if (choice == TimeboxedGateChoice.start ||
       choice == TimeboxedGateChoice.regardless) {
-    await start();
-    return;
-  }
-  if (choice != TimeboxedGateChoice.raise) return;
-
-  if (!context.mounted) return;
-  await _raiseTheEstimate(context, ref, outcomeId: outcomeId);
-
-  // A raised estimate moves the limit with it. If the limit is no longer
-  // passed, the Sprint starts after all; if it is still passed, it does not.
-  final after = await readTimeboxedLimitStatus(db, outcomeId);
-  if (after == null || !after.hasPassedAt(now)) {
     await start();
   }
 }
 
-/// Opens the estimate sheet for [outcomeId]'s current Action.
+/// Opens the estimate sheet for [outcomeId]'s current Action, one step above
+/// the estimate it has.
 ///
-/// The change is permanent, which is what the gate promises; raising the
-/// estimate clears the Timeboxed switch only if the estimate is cleared
-/// altogether (the estimate sheet's own rule).
-Future<void> _raiseTheEstimate(
+/// Returns whether the sheet was saved. The change is permanent, which is what
+/// the gate promises; raising the estimate clears the Timeboxed switch only if
+/// the estimate is cleared altogether (the estimate sheet's own rule).
+Future<bool> _raiseTheEstimate(
   BuildContext context,
   WidgetRef ref, {
   required String outcomeId,
 }) async {
   final db = ref.read(databaseProvider);
   final action = await db.actionDao.getCurrentAction(outcomeId);
-  if (action == null) return;
+  if (action == null) return false;
   final notifier = ref.read(taskDetailNotifierProvider(outcomeId));
-  if (!context.mounted) return;
-  await showOutcomeTimeEstimateSheet(
+  if (!context.mounted) return false;
+  return showOutcomeTimeEstimateSheet(
     context,
     notifier,
     current: action.timeEstimate,
+    // One step up the ladder: the sheet opens on the raised value, so the
+    // user confirms it rather than reaching for it.
+    initial: stepEstimateUp(action.timeEstimate),
     actionText: action.actionText,
     actionId: action.id,
     timeboxed: action.timeboxed ?? false,

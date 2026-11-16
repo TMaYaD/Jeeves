@@ -65,29 +65,39 @@ void showOutcomeContextTagEditor(BuildContext context, String todoId) {
 /// set here means the same minutes as one set on any other surface.
 ///
 /// The switch belongs to the Action, so it is written through [actionId]; the
-/// estimate belongs to the Outcome and is written through the notifier. With
-/// no estimate there is nothing to limit, so the switch is unavailable — and
+/// estimate belongs to the Outcome and is written through the notifier. Both
+/// are written together, in one transaction with one timestamp. With no
+/// estimate there is nothing to limit, so the switch is unavailable — and
 /// clearing the estimate clears the switch with it.
-Future<void> showOutcomeTimeEstimateSheet(
+///
+/// [initial] opens the sheet on a value other than the stored one — the
+/// gate's "Raise the estimate…" opens it one step up. Saving writes that
+/// value; cancelling writes nothing.
+///
+/// Returns whether the sheet was saved.
+Future<bool> showOutcomeTimeEstimateSheet(
   BuildContext context,
   TaskDetailNotifier notifier, {
   required int? current,
+  int? initial,
   String? actionText,
   String? actionId,
   bool timeboxed = false,
-}) {
-  return showModalBottomSheet<void>(
+}) async {
+  final saved = await showModalBottomSheet<bool>(
     context: context,
     backgroundColor: Colors.white,
     isScrollControlled: true,
     builder: (ctx) => _EstimateSheet(
       notifier: notifier,
       current: current,
+      initial: initial,
       actionText: actionText,
       actionId: actionId,
       timeboxed: timeboxed,
     ),
   );
+  return saved ?? false;
 }
 
 /// The sheet's body: a stepper over the estimate ladder and the Timeboxed
@@ -97,6 +107,7 @@ class _EstimateSheet extends StatefulWidget {
     required this.notifier,
     required this.current,
     required this.timeboxed,
+    this.initial,
     this.actionText,
     this.actionId,
   });
@@ -105,6 +116,9 @@ class _EstimateSheet extends StatefulWidget {
 
   /// The estimate as it stands now; null when there is none.
   final int? current;
+
+  /// The value the sheet opens on, when it is not the stored one.
+  final int? initial;
 
   /// The Action the Timeboxed switch belongs to; null where there is none to
   /// write (an Outcome with no current Action).
@@ -122,13 +136,14 @@ class _EstimateSheet extends StatefulWidget {
 
 class _EstimateSheetState extends State<_EstimateSheet> {
   /// The estimate as the sheet holds it: exactly what is stored, until the
-  /// user steps it onto the ladder.
-  late int? _minutes = widget.current;
+  /// user steps it onto the ladder — or the value the sheet was opened on.
+  late int? _minutes = widget.initial ?? widget.current;
 
-  /// Whether the user has moved the estimate. Until they do, saving leaves
-  /// the stored value alone: an estimate that is merely being given a
-  /// Timeboxed switch must not be quietly rewritten.
-  bool _stepped = false;
+  /// Whether the estimate has moved. Until it does, saving leaves the stored
+  /// value alone: an estimate that is merely being given a Timeboxed switch
+  /// must not be quietly rewritten.
+  late bool _stepped =
+      widget.initial != null && widget.initial != widget.current;
 
   /// The switch as the sheet holds it. Off whenever there is no estimate to
   /// limit.
@@ -160,20 +175,18 @@ class _EstimateSheetState extends State<_EstimateSheet> {
 
   Future<void> _save() async {
     final notifier = widget.notifier;
-    if (_stepped && _minutes != widget.current) {
-      if (_minutes == null) {
-        await notifier.clearTimeEstimate();
-      } else {
-        await notifier.setTimeEstimate(_minutes!);
-      }
+    final estimateMoved = _stepped && _minutes != widget.current;
+    final switchMoved = _hasEstimate && _timeboxed != widget.timeboxed;
+    if (estimateMoved || switchMoved) {
+      // One write, so the estimate and the switch land together.
+      await notifier.setEstimateAndTimeboxed(
+        actionId: widget.actionId ?? '',
+        minutes: estimateMoved ? _minutes : null,
+        clearEstimate: estimateMoved && _minutes == null,
+        timeboxed: switchMoved ? _timeboxed : null,
+      );
     }
-    // The switch rides the estimate: with no estimate there is no limit, and
-    // clearing the estimate has already cleared the switch with it.
-    final actionId = widget.actionId;
-    if (actionId != null && _hasEstimate && _timeboxed != widget.timeboxed) {
-      await notifier.setTimeboxed(_timeboxed, actionId: actionId);
-    }
-    if (mounted) Navigator.of(context).pop();
+    if (mounted) Navigator.of(context).pop(true);
   }
 
   @override
@@ -222,7 +235,11 @@ class _EstimateSheetState extends State<_EstimateSheet> {
                 const SizedBox(width: 16),
                 _TimeboxedToggle(
                   value: _timeboxed,
-                  enabled: _hasEstimate,
+                  enabled: _hasEstimate && widget.actionId != null,
+                  disabledReason: !_hasEstimate
+                      ? 'Set an estimate first — there is nothing to limit '
+                          'without one.'
+                      : 'This Outcome has no current Action to limit.',
                   onChanged: (value) => setState(() => _timeboxed = value),
                 ),
               ],
@@ -257,17 +274,22 @@ class _EstimateSheetState extends State<_EstimateSheet> {
 /// The Timeboxed switch: the mark of a limit, pressed or not.
 ///
 /// The mark is the estimate's own glyph; the press is the switch. With no
-/// estimate there is nothing to limit, so the switch is unavailable — and
-/// says why.
+/// estimate — or no Action to hold the switch — there is nothing to limit, so
+/// the switch is unavailable, and says why.
 class _TimeboxedToggle extends StatelessWidget {
   const _TimeboxedToggle({
     required this.value,
     required this.enabled,
+    required this.disabledReason,
     required this.onChanged,
   });
 
   final bool value;
   final bool enabled;
+
+  /// Why the switch is unavailable, when it is.
+  final String disabledReason;
+
   final ValueChanged<bool> onChanged;
 
   @override
@@ -279,7 +301,7 @@ class _TimeboxedToggle extends StatelessWidget {
       message: enabled
           ? 'Timeboxed: treat the estimate as a limit. Each sprint past it '
               'is discouraged.'
-          : 'Set an estimate first — there is nothing to limit without one.',
+          : disabledReason,
       child: InkWell(
         key: const Key('estimate_sheet_timeboxed'),
         onTap: enabled ? () => onChanged(!value) : null,

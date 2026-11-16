@@ -1575,6 +1575,7 @@ AND (
     String? notes,
     String? energyLevel,
     int? timeEstimate,
+    bool? timeboxed,
     DateTime? dueDate,
     bool clearNotes = false,
     bool clearEnergyLevel = false,
@@ -1589,15 +1590,19 @@ AND (
         notes != null ||
         energyLevel != null ||
         timeEstimate != null ||
+        timeboxed != null ||
         dueDate != null ||
         clearNotes ||
         clearEnergyLevel ||
         clearTimeEstimate ||
         clearDueDate;
     // Whether this call touches Action-grain metadata at all — the arm that
-    // must be mirrored to the current Action.
+    // must be mirrored to the current Action. The Timeboxed switch (issue
+    // #923) is Action-grain too: it has no Outcome column, but it belongs to
+    // the same current Action the estimate is mirrored onto.
     final touchesMetadata = energyLevel != null ||
         timeEstimate != null ||
+        timeboxed != null ||
         clearEnergyLevel ||
         clearTimeEstimate;
     final companion = TodosCompanion(
@@ -1658,6 +1663,7 @@ AND (
             current.id,
             energyLevel: energyLevel,
             timeEstimate: timeEstimate,
+            timeboxed: timeboxed,
             clearEnergyLevel: clearEnergyLevel,
             clearTimeEstimate: clearTimeEstimate,
             ts: ts,
