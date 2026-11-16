@@ -99,6 +99,16 @@ class HostedDomainOpCapture extends BufferedDomainOpCapture {
   Future<void> emit(CapturedOp op) async {}
 }
 
+/// Forgets the enrolled member id, so later writes are stamped with the device
+/// node id again.
+///
+/// One statement and no read first: when the row does not exist there is
+/// nothing to forget, and this must not mint a device node id as a side effect.
+Future<void> clearEnrolledMemberId(GeneratedDatabase db) => db.customStatement(
+      'UPDATE device_clock_identity SET enrolled_member_id_hex = NULL '
+      'WHERE id = 1',
+    );
+
 /// Reads — creating if absent — the device's clock identity through [db].
 ///
 /// Usable inside a transaction on the same connection.
