@@ -23,6 +23,8 @@ library;
 
 import 'dart:async';
 
+import 'dart:convert';
+
 import 'package:drift/drift.dart' show driftRuntimeOptions;
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -37,6 +39,9 @@ import 'package:jeeves/sync/collection_codecs.dart';
 import 'package:jeeves/sync/device_key_store.dart';
 import 'package:jeeves/sync/domain_op_capture.dart';
 import 'package:jeeves/sync/hlc.dart';
+import 'package:jeeves/sync/host/change.dart';
+import 'package:jeeves/sync/host/hosted_capture.dart'
+    show readClockIdentity;
 import 'package:jeeves/sync/host/sync_host_service.dart';
 import 'package:jeeves/sync/ids.dart';
 import 'package:jeeves/sync/member_identity.dart';
@@ -49,11 +54,13 @@ import 'package:jeeves/sync/sync_stack.dart';
 import 'package:jeeves/sync/workspace_key_store.dart';
 
 import '../sync/harness/fake_sync_server.dart';
+import '../sync/host/host_harness.dart';
 import '../sync/harness/sim_device.dart'
     show DeviceLink, harnessKdfParameters;
 import '../test_helpers.dart';
 
 const String _userId = 'provider-user';
+const String _lostSessionMemberIdHex = 'abababababababababababababababab';
 const int _nowMs = 1770000000000;
 const String _outcomeId = '55555555-5555-4555-8555-555555555555';
 
@@ -157,8 +164,12 @@ void main() {
   test('restore answered and still local settles the seam silent — an op is '
       'dropped', () async {
     final capture = WorkspaceRoutingOpCapture();
+    // The signed-out branch also reads the domain store, so it needs one.
+    final domain = GtdDatabase(NativeDatabase.memory());
+    addTearDown(domain.close);
     final container = ProviderContainer(overrides: [
       domainOpCaptureProvider.overrideWithValue(capture),
+      databaseProvider.overrideWithValue(domain),
       authTokenProvider.overrideWith(_AnsweredSignedOutAuth.new),
     ]);
     addTearDown(container.dispose);
@@ -176,6 +187,126 @@ void main() {
         gtdClient: gtdClient, preferencesClient: preferencesClient);
     expect(await outboxCount(), 0,
         reason: 'a write after the silent decision authors nothing');
+  });
+
+  /// A device whose process was killed while signed in: the previous account's
+  /// member id is still on the row, because `deactivate()` never ran.
+  Future<HostDevice> openDeviceLeftEnrolled() async {
+    final device = HostDevice.open('a');
+    addTearDown(device.close);
+    await device.domain.ensureDeviceClockIdentity();
+    await device.domain.customStatement(
+        'UPDATE device_clock_identity SET enrolled_member_id_hex = ?',
+        [_lostSessionMemberIdHex]);
+    return device;
+  }
+
+  Future<List<String>> stampsOfStagedChanges(GtdDatabase domain) async {
+    final rows = await domain
+        .customSelect('SELECT change_json FROM pending_changes')
+        .get();
+    return [
+      for (final row in rows)
+        Change.fromJson((jsonDecode(row.read<String>('change_json')) as Map)
+                .cast<String, Object?>())
+            .highestClock!
+            .memberIdHex,
+    ];
+  }
+
+  test('a launch that settles signed out forgets the member id a lost session '
+      'left, and writes are stamped with the device node id', () async {
+    final device = await openDeviceLeftEnrolled();
+    final deviceNodeId = (await readClockIdentity(device.domain)).deviceNodeId;
+    final container = ProviderContainer(overrides: [
+      domainOpCaptureProvider.overrideWithValue(WorkspaceRoutingOpCapture()),
+      databaseProvider.overrideWithValue(device.domain),
+      authTokenProvider.overrideWith(_AnsweredSignedOutAuth.new),
+    ]);
+    addTearDown(container.dispose);
+
+    expect(await container.read(authTokenProvider.future), isNull);
+    expect(await container.read(syncLifecycleProvider.future), isNull);
+
+    final identity = await readClockIdentity(device.domain);
+    expect(identity.enrolledMemberIdHex, isNull);
+    expect(identity.deviceNodeId, deviceNodeId);
+
+    await device.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'Signed out', userId: 'local');
+    final stamps = await stampsOfStagedChanges(device.domain);
+    expect(stamps, isNotEmpty);
+    expect(stamps, everyElement(deviceNodeId));
+  });
+
+  test('restore still pending leaves the stored member id alone', () async {
+    final device = await openDeviceLeftEnrolled();
+    final container = ProviderContainer(overrides: [
+      domainOpCaptureProvider.overrideWithValue(WorkspaceRoutingOpCapture()),
+      databaseProvider.overrideWithValue(device.domain),
+      authTokenProvider.overrideWith(_PendingAuth.new),
+    ]);
+    addTearDown(container.dispose);
+
+    expect(await container.read(syncLifecycleProvider.future), isNull);
+
+    expect((await readClockIdentity(device.domain)).enrolledMemberIdHex,
+        _lostSessionMemberIdHex);
+    await device.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'Relaunch', userId: 'local');
+    expect(await stampsOfStagedChanges(device.domain),
+        everyElement(_lostSessionMemberIdHex));
+  });
+
+  test('a sign-in racing the signed-out settle keeps the member id it stores',
+      () async {
+    final capture = WorkspaceRoutingOpCapture();
+    final link = DeviceLink(FakeSyncServer().connectAsUser(_userId));
+    final domain = GtdDatabase(NativeDatabase.memory(), opCapture: capture);
+    addTearDown(domain.close);
+    final stack = await SyncStack.assemble(
+      userId: _userId,
+      database: database,
+      keyStore: InMemoryDeviceKeyStore(),
+      userTransport: link,
+      domain: domain,
+      nowMs: () => _nowMs,
+      workspaceKeys: InMemoryWorkspaceKeyStore(),
+      pendingRotations: InMemoryPendingRotationStore(),
+      kdfParameters: harnessKdfParameters,
+      kdfFloor: harnessKdfParameters,
+    );
+    await stack.enrolment.enrolFirstDevice();
+    link.online = false;
+    await domain.ensureDeviceClockIdentity();
+    await domain.customStatement(
+        'UPDATE device_clock_identity SET enrolled_member_id_hex = ?',
+        [_lostSessionMemberIdHex]);
+
+    final container = ProviderContainer(overrides: [
+      domainOpCaptureProvider.overrideWithValue(capture),
+      databaseProvider.overrideWithValue(domain),
+      syncStackProvider.overrideWith((ref) async => stack),
+      syncHostProvider.overrideWith((ref) async => SyncHostService(
+            sync: database,
+            domain: domain,
+            clock: HlcClock(memberIdHex: '0' * 32, nowMs: () => _nowMs),
+          )),
+      authTokenProvider.overrideWith(_AnsweredSignedOutAuth.new),
+    ]);
+    addTearDown(container.dispose);
+    expect(await container.read(authTokenProvider.future), isNull);
+
+    // Start the signed-out build without awaiting it, then sign in at once.
+    final signedOutBuild = container.read(syncLifecycleProvider.future);
+    container.read(currentUserIdProvider.notifier).setUserId(_userId);
+    await signedOutBuild;
+    final lifecycle = await container.read(syncLifecycleProvider.future);
+    expect(lifecycle, isNotNull);
+    expect(await lifecycle!.activate(), SyncActivation.syncFailed);
+
+    expect((await readClockIdentity(domain)).enrolledMemberIdHex,
+        stack.identity.memberIdHex);
   });
 
   test('restore answered unverified builds a lifecycle and the seam ends bound',
