@@ -8,6 +8,7 @@ library;
 
 import 'dart:async';
 
+import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/gtd_database.dart';
@@ -22,31 +23,141 @@ import 'database_provider.dart';
 final timeboxedLimitStatusProvider = StreamProvider.autoDispose
     .family<TimeboxedLimitStatus?, String>((ref, outcomeId) {
       final db = ref.watch(databaseProvider);
-      return db.actionDao.watchCurrentAction(outcomeId).asyncExpand((action) {
-        if (action == null) {
-          return Stream<TimeboxedLimitStatus?>.value(null);
-        }
-        final limit = action.timeEstimate;
-        if (!isTimeboxedAction(
-          timeboxed: action.timeboxed,
-          timeEstimate: limit,
-        )) {
-          return Stream<TimeboxedLimitStatus?>.value(null);
-        }
-        final logs = (db.select(
-          db.timeLogs,
-        )..where((t) => t.actionId.equals(action.id))).watch();
-        final sprints = (db.select(
-          db.sprints,
-        )..where((s) => s.actionId.equals(action.id))).watch();
-        return _combineLatest(
-          logs,
-          sprints,
-          (logRows, sprintRows) =>
-              _status(limitMinutes: limit!, logs: logRows, sprints: sprintRows),
-        );
-      });
+      return _limitStatusStream(db, outcomeId);
     });
+
+/// The limit status of [outcomeId]'s current Action, live.
+///
+/// Three sources, one value: the current Action, the TimeLogs on it and the
+/// Sprints recorded against it. A change in any of them re-reads the others.
+///
+/// The three are watched together rather than with `asyncExpand`, which pauses
+/// its source while the inner stream is open — and the inner stream here never
+/// closes, so the Action's own changes (the switch turned off, the estimate
+/// raised) would never arrive, and the status would sit on the value it first
+/// took.
+///
+/// Nothing is emitted until all three have spoken once: a status read from a
+/// half-read set of rows would be a wrong answer, not a rough one.
+Stream<TimeboxedLimitStatus?> _limitStatusStream(
+  GtdDatabase db,
+  String outcomeId,
+) {
+  late StreamController<TimeboxedLimitStatus?> controller;
+  StreamSubscription<Action?>? actionSub;
+  StreamSubscription<List<TimeLog>>? logsSub;
+  StreamSubscription<List<Sprint>>? sprintsSub;
+  Action? action;
+  List<TimeLog> logs = const [];
+  List<Sprint> sprints = const [];
+  var haveAction = false;
+  var haveLogs = false;
+  var haveSprints = false;
+  var cancelled = false;
+
+  void emit() {
+    if (cancelled) return;
+    if (!haveAction || !haveLogs || !haveSprints) return;
+    controller.add(_statusOf(action, logs, sprints));
+  }
+
+  // A synchronous controller: the status lands on the reader in the same turn
+  // the rows change, not a turn later. A reader that asks for the status
+  // straight after a write should not be told about the value it just
+  // replaced.
+  controller = StreamController<TimeboxedLimitStatus?>(
+    sync: true,
+    onListen: () {
+      actionSub = db.actionDao.watchCurrentAction(outcomeId).listen((row) {
+        action = row;
+        haveAction = true;
+        emit();
+      }, onError: controller.addError);
+      logsSub = _logsOfCurrentAction(db, outcomeId).listen((rows) {
+        logs = rows;
+        haveLogs = true;
+        emit();
+      }, onError: controller.addError);
+      sprintsSub = _sprintsOfCurrentAction(db, outcomeId).listen((rows) {
+        sprints = rows;
+        haveSprints = true;
+        emit();
+      }, onError: controller.addError);
+    },
+    onCancel: () async {
+      cancelled = true;
+      await actionSub?.cancel();
+      await logsSub?.cancel();
+      await sprintsSub?.cancel();
+    },
+  );
+  return controller.stream;
+}
+
+/// The TimeLogs on [outcomeId]'s current Action, live.
+///
+/// Joined to the current Action so the rows follow it: when the Action is
+/// superseded, its logs leave the limit and the successor's take their place.
+Stream<List<TimeLog>> _logsOfCurrentAction(
+  GtdDatabase db,
+  String outcomeId,
+) {
+  final query = db.select(db.timeLogs).join([
+    innerJoin(db.actions, db.actions.id.equalsExp(db.timeLogs.actionId)),
+  ])
+    ..where(
+      db.actions.outcomeId.equals(outcomeId) &
+          db.actions.role.equals('current'),
+    );
+  return query
+      .watch()
+      .map((rows) => [for (final row in rows) row.readTable(db.timeLogs)]);
+}
+
+/// The Sprints recorded against [outcomeId]'s current Action, live.
+Stream<List<Sprint>> _sprintsOfCurrentAction(
+  GtdDatabase db,
+  String outcomeId,
+) {
+  final query = db.select(db.sprints).join([
+    innerJoin(db.actions, db.actions.id.equalsExp(db.sprints.actionId)),
+  ])
+    ..where(
+      db.actions.outcomeId.equals(outcomeId) &
+          db.actions.role.equals('current'),
+    );
+  return query
+      .watch()
+      .map((rows) => [for (final row in rows) row.readTable(db.sprints)]);
+}
+
+/// The status of one Action, from its stints and its Sprints.
+///
+/// Null when the Action is not Timeboxed — which is what keeps every surface
+/// that reads this silent for a plain estimate, and what makes the switch
+/// turned off leave no status behind.
+TimeboxedLimitStatus? _statusOf(
+  Action? action,
+  List<TimeLog> logs,
+  List<Sprint> sprints,
+) {
+  if (action == null) return null;
+  final limit = action.timeEstimate;
+  if (!isTimeboxedAction(
+    timeboxed: action.timeboxed,
+    timeEstimate: limit,
+  )) {
+    return null;
+  }
+  return _status(
+    limitMinutes: limit!,
+    logs: [for (final log in logs) if (log.actionId == action.id) log],
+    sprints: [
+      for (final sprint in sprints)
+        if (sprint.actionId == action.id) sprint,
+    ],
+  );
+}
 
 /// Which Outcomes currently have a Timeboxed Action, live.
 ///
@@ -123,48 +234,4 @@ TimeboxedLimitStatus _status({
     sprintsPastLimit: past,
     sprintStarts: List.unmodifiable(starts),
   );
-}
-
-/// Emits whenever either source emits, combining the latest value of each.
-///
-/// Hand-rolled rather than pulling in rxdart for a single call site: the two
-/// legs are independent Drift streams that must both stay live, and neither
-/// emits on a fixed schedule.
-Stream<R> _combineLatest<A, B, R>(
-  Stream<A> a,
-  Stream<B> b,
-  R Function(A, B) combine,
-) {
-  late StreamController<R> controller;
-  StreamSubscription<A>? subA;
-  StreamSubscription<B>? subB;
-  late A latestA;
-  late B latestB;
-  var hasA = false;
-  var hasB = false;
-
-  void emit() {
-    if (hasA && hasB) controller.add(combine(latestA, latestB));
-  }
-
-  controller = StreamController<R>(
-    onListen: () {
-      subA = a.listen((v) {
-        latestA = v;
-        hasA = true;
-        emit();
-      }, onError: controller.addError);
-      subB = b.listen((v) {
-        latestB = v;
-        hasB = true;
-        emit();
-      }, onError: controller.addError);
-    },
-    onCancel: () async {
-      await subA?.cancel();
-      await subB?.cancel();
-    },
-  );
-
-  return controller.stream;
 }
