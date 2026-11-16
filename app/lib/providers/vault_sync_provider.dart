@@ -23,6 +23,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../sync/host/sync_host_service.dart';
 import '../sync/vault/android_vault_folder.dart';
 import '../sync/vault/vault_folder_factory.dart';
 import '../sync/vault/vault_plugin.dart';
@@ -90,13 +91,7 @@ final vaultPluginProvider = FutureProvider<VaultPlugin?>((ref) async {
   ref.onDispose(() {
     timer.cancel();
     WidgetsBinding.instance.removeObserver(observer);
-    unawaited(() async {
-      // Forget the cursor: otherwise the change sequence grows with nobody
-      // reading it. Clear this device's base copies: they are copies, and the
-      // next start reads the folder again. The folder itself is left as it is.
-      await host.detach(plugin.id, forgetCursor: true);
-      await plugin.clearBases();
-    }());
+    unawaited(_forgetTheVault(host, plugin));
   });
 
   return plugin;
@@ -133,6 +128,24 @@ class VaultController {
 
 final vaultControllerProvider =
     Provider<VaultController>((ref) => VaultController(ref));
+
+/// Detach the plugin and drop this device's base copies.
+///
+/// Forget the cursor: otherwise the change sequence grows with nobody reading
+/// it. Clear this device's base copies: they are copies, and the next start
+/// reads the folder again. The folder itself is left as it is.
+///
+/// The store can already be closed when the app is shutting down — the vault
+/// is still on, and the next start picks the cursor up where it left off — so a
+/// closed store is logged, not thrown.
+Future<void> _forgetTheVault(SyncHostService host, VaultPlugin plugin) async {
+  try {
+    await host.detach(plugin.id, forgetCursor: true);
+    await plugin.clearBases();
+  } on Object catch (error) {
+    debugPrint('vault: detaching at shutdown failed — $error');
+  }
+}
 
 class _VaultResumeObserver with WidgetsBindingObserver {
   _VaultResumeObserver(this._onResumed);
