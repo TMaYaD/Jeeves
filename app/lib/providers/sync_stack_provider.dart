@@ -57,6 +57,12 @@ final FutureProvider<SyncHostService> syncHostProvider =
   unawaited(host.drain().catchError((Object error) {
     debugPrint('sync host: post-attach drain failed — $error');
   }));
+  // Walk the rows that predate the host into merge state, in the background: a
+  // fault here must never stop local writes or the host. `attach` waits for it
+  // (and retries it) before any plugin starts.
+  unawaited(host.ensureMergeStateSeeded().catchError((Object error) {
+    debugPrint('sync host: seeding merge state failed — $error');
+  }));
   return host;
 });
 

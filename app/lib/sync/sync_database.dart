@@ -451,6 +451,31 @@ class PluginCursors extends Table {
   Set<Column<Object>> get primaryKey => {pluginId};
 }
 
+/// Whether this device has walked its pre-existing domain rows into merge state.
+///
+/// A single row (`id = 1`), written after the last collection of the walk. Its
+/// absence is the retry condition: a killed or failed walk leaves it unset and
+/// the next start walks again, inserting only what is still missing. It lives in
+/// the sync store beside the merge state it describes, so a recreated sync store
+/// walks again while a rebuilt domain store (reprojected from merge state) does
+/// not.
+///
+/// Not named `cached_*`: the row records that an event happened; nothing is
+/// derived from it.
+@DataClassName('MergeStateSeedingRow')
+class MergeStateSeeding extends Table {
+  IntColumn get id => integer()();
+
+  /// When the walk finished, epoch milliseconds UTC.
+  IntColumn get completedAtUtcMs => integer()();
+
+  /// The completed walk's report: entities and fields inserted, rows excluded.
+  TextColumn get reportJson => text()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {id};
+}
+
 @DriftDatabase(
   tables: [
     OpLog,
@@ -470,6 +495,7 @@ class PluginCursors extends Table {
     PrunedAttestations,
     ChangeSequence,
     PluginCursors,
+    MergeStateSeeding,
   ],
 )
 class SyncDatabase extends _$SyncDatabase {
@@ -485,9 +511,10 @@ class SyncDatabase extends _$SyncDatabase {
   /// attestations the verified chain floor is built from (#555); v9 adds
   /// `quarantined_ops.release_started_at`, the interrupted-chain-replay re-arm
   /// marker (#620); v10 adds the sync host's durable change sequence and its
-  /// per-plugin cursors.
+  /// per-plugin cursors; v11 adds the marker that the pre-existing domain rows were
+  /// walked into merge state.
   @override
-  int get schemaVersion => 10;
+  int get schemaVersion => 11;
 
   /// Additive only. A device that already holds a log keeps every byte of it:
   /// each step is `CREATE TABLE`s, an `ADD COLUMN` or a `CREATE INDEX`, and no
@@ -589,6 +616,11 @@ class SyncDatabase extends _$SyncDatabase {
             // where it was.
             await migrator.createTable(changeSequence);
             await migrator.createTable(pluginCursors);
+          }
+          if (from < 11) {
+            // One new table, nothing altered or backfilled. An absent marker is
+            // exactly right for a device that predates it: it has not walked.
+            await migrator.createTable(mergeStateSeeding);
           }
         },
       );
