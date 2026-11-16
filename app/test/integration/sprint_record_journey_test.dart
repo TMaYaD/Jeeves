@@ -115,7 +115,6 @@ void main() {
       databaseProvider.overrideWithValue(db),
       focusSettingsProvider.overrideWith(_FixedFocusSettings.new),
     ]);
-    addTearDown(restarted.dispose);
     restarted.read(sprintTimerProvider);
     await tester.runAsync(() => pumpEventQueue(times: 20));
     final restored = restarted.read(sprintTimerProvider);
@@ -125,7 +124,8 @@ void main() {
     expect(restored.remaining, greaterThan(Duration.zero));
     expect(restored.remaining, lessThanOrEqualTo(const Duration(minutes: 20)));
 
-    // Unmount so the screen's timers are gone before the test ends.
+    // Dispose both so no ticker outlives the test.
+    restarted.dispose();
     await tester.pumpWidget(const SizedBox.shrink());
   });
 }
