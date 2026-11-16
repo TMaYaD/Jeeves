@@ -385,13 +385,14 @@ _Avoid_: Target, Quota
 
 ### Sync
 
-Sync is responsible for bidirectional offline-first replication of one User's data across their Devices. Most of its vocabulary is technical and lives in the Implementation tier; the user does not think in sync vocabulary — they expect data to follow them across devices and the app to work without connectivity, without naming the mechanisms that achieve either. What belongs in this section is the one term the user *does* meet, plus the Relationships subsection — the architectural discipline that keeps Sync from leaking upward into the contexts above it.
+Sync is responsible for bidirectional offline-first replication of one User's data across their Devices. Most of its vocabulary is technical and lives in the Implementation tier; the user does not think in sync vocabulary — they expect data to follow them across devices and the app to work without connectivity, without naming the mechanisms that achieve either. What belongs in this section is the term the user *does* meet — the **Vault** — plus the Relationships subsection — the discipline that keeps Sync from leaking upward into the contexts above it.
 
 #### Language
 
 - **Sync host**: the app-owned part of Sync that holds a device's merge state and feeds every plugin; it decides what a field's value is. Design: [sync-plugins](docs/proposals/sync-plugins.md).
 - **Sync plugin**: a carrier of **Changes** between this device and somewhere else; it never decides a value.
 - **Change**: one clocked, field-grain write to one entity, a deletion included.
+- **Vault**: a folder of Markdown pages that syncs a person's Outcomes, sessions and Captures as plain files they own, editable outside the app. The pages are the medium, not the truth: the sync host decides every value. The Settings tile names the offer ("Sync through a folder of pages"), not this term. Design: [SYNC.md](docs/SYNC.md#the-vault-a-folder-of-markdown-pages).
 
 _Avoid_: Provider, backend, driver (for plugin)
 
@@ -421,7 +422,7 @@ _Avoid_: Account (no tenancy wrapper exists — User is the identity), Owner (na
 
 **Workspace** *(a complete, isolated GTD system)*:
 The unit of partition, encryption, and replication — one Inbox, one set of Areas, one Next List, one Plan. Not a subset of a User's data but a whole system, as Allen advises for a functional workstation (GTD ch. 4). **A Workspace is one mind's system**: its Inbox, Next List and Plan hold personal *stance* — Intent, clarification stamps, what the User chose to do today — which has no shared meaning across two people. The standing position is therefore **delegation over co-ownership**: work is handed to another User by copying the Outcome into *their* Workspace while the sender keeps a PersonBlocker. A Capture always lands in the current Workspace, unprompted — capture must never ask a question; relocating it is a clarification verdict alongside carve / merge / discard. Isolation is a property of storage and membership, not of the User's view. Mechanics in [docs/SYNC.md](docs/SYNC.md).
-_Avoid_: Vault (password-manager connotation), Space (reads as a synonym for Area), Realm, Partition, Tenant, Desk (the physical metaphor is the origin, but "where I am" is **Context**'s job)
+_Avoid_: Vault (the Sync term for a folder of pages), Space (reads as a synonym for Area), Realm, Partition, Tenant, Desk (the physical metaphor is the origin, but "where I am" is **Context**'s job)
 
 **Member** *(a keyholder that can participate in Workspaces)*:
 An entity that can hold Workspace keys, author Ops, and authenticate to the sync server. Two kinds. A **Device** is owned by exactly one User and is granted every Workspace its User participates in, automatically. A **Service** is *registered, not owned* — it belongs to no User, and Users relate to it only through Grants, one named Workspace at a time.
