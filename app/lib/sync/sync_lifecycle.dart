@@ -367,7 +367,7 @@ class SyncLifecycle {
       // Sign-out landed while the sockets were opening. The sign-out already
       // cleared the member id and unbound capture; a newer account may own
       // both now, so dispose only the listeners this attempt just started.
-      await _disposeListeners();
+      await deactivate();
       return SyncActivation.deactivated;
     }
     return uploaded ? SyncActivation.active : SyncActivation.uploadIncomplete;
