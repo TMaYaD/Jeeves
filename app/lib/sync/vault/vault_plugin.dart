@@ -23,6 +23,7 @@ import '../ids.dart';
 import '../sync_database.dart';
 import 'page_codec.dart';
 import 'page_layout.dart';
+import 'page_tags.dart';
 import 'vault_folder.dart';
 
 class VaultPlugin implements SyncPlugin {
@@ -257,6 +258,33 @@ class VaultPlugin implements SyncPlugin {
       }
     }
 
+    if (key.kind == VaultPageKind.capture) {
+      final rootTombstoned = block.any((entry) =>
+          entry.isTombstone &&
+          entry.collection == capturesCollection &&
+          entry.entityId == key.entityId);
+      if (!rootTombstoned) {
+        _readCaptureFields(key, page, block, addField);
+      }
+    }
+
+    // The Labels and the Area the page shows.
+    for (final change in tagLinkChanges(
+      key: key,
+      page: page,
+      block: block,
+      mintClock: _host.mintClock,
+    )) {
+      for (final entry in change.fields.entries) {
+        addField(change.collection, change.entityId, entry.key,
+            entry.value.value, entry.value.hlc);
+      }
+      final tombstone = change.tombstone;
+      if (tombstone != null) {
+        addTombstone(change.collection, change.entityId, tombstone);
+      }
+    }
+
     return [
       for (final ref in refs.entries)
         Change(
@@ -315,6 +343,42 @@ class VaultPlugin implements SyncPlugin {
         addField(todosCollection, key.entityId, field.key, value,
             _host.mintClock());
       }
+    }
+  }
+
+  void _readCaptureFields(
+    VaultPageKey key,
+    PageModel page,
+    List<BlockEntry> block,
+    void Function(String, String, String, Object?, Hlc) addField,
+  ) {
+    final raw = page.frontmatter['clarified_at'];
+    final value = raw is String && raw.isNotEmpty ? raw : null;
+    BlockEntry? entry;
+    for (final candidate in block) {
+      if (candidate.collection == capturesCollection &&
+          candidate.entityId == key.entityId &&
+          candidate.field == 'clarified_at') {
+        entry = candidate;
+      }
+    }
+    if (entry == null) {
+      // Nothing said about it before: what the page shows is news.
+      if (value != null) {
+        addField(capturesCollection, key.entityId, 'clarified_at', value,
+            _host.mintClock());
+      }
+      return;
+    }
+    if (digestOf(value) == entry.digest) {
+      // What a device wrote at that clock. Its clock still has to reach the
+      // host, or a device that only sees the page would lack it.
+      addField(capturesCollection, key.entityId, 'clarified_at', value,
+          entry.hlc);
+    } else {
+      // A hand edit.
+      addField(capturesCollection, key.entityId, 'clarified_at', value,
+          _host.mintClock());
     }
   }
 
@@ -389,6 +453,12 @@ class VaultPlugin implements SyncPlugin {
       }
     }
 
+    // The planned Actions, in the order the page shows them. `position` is
+    // dense among the planned Actions of an Outcome, so the current Action and
+    // the done ones take none.
+    final planned = <({String actionId, int? mergedPosition})>[];
+    final placedLast = <({String actionId, int? mergedPosition})>[];
+
     final newOrdinals = <String, int>{};
     for (var i = 0; i < lines.length; i++) {
       final line = lines[i];
@@ -406,10 +476,23 @@ class VaultPlugin implements SyncPlugin {
           addField(actionsCollection, actionId, 'role', 'done', clock);
           addField(actionsCollection, actionId, 'done_at',
               encodeInstant(_instantOf(clock)), clock);
+          // A done Action is not in the queue any more.
+          if (fields['position'] != null) {
+            addField(actionsCollection, actionId, 'position', null, clock);
+          }
         } else if (!line.done && wasDone) {
-          final clock = _host.mintClock();
-          addField(actionsCollection, actionId, 'role', 'planned', clock);
-          addField(actionsCollection, actionId, 'position', i, clock);
+          // Un-ticking puts the Action back at the end of the queue.
+          addField(actionsCollection, actionId, 'role', 'planned',
+              _host.mintClock());
+          placedLast.add((
+            actionId: actionId,
+            mergedPosition: fields['position'] as int?,
+          ));
+        } else if (!line.done && fields['role'] == 'planned') {
+          planned.add((
+            actionId: actionId,
+            mergedPosition: fields['position'] as int?,
+          ));
         }
       } else if (userId != null) {
         final ordinal = newOrdinals.update(line.text, (count) => count + 1,
@@ -422,14 +505,24 @@ class VaultPlugin implements SyncPlugin {
         addField(actionsCollection, actionId, 'text', line.text, clock);
         addField(actionsCollection, actionId, 'role',
             line.done ? 'done' : 'planned', clock);
-        addField(actionsCollection, actionId, 'position', i, clock);
         addField(actionsCollection, actionId, 'created_at',
             encodeInstant(_instantOf(clock)), clock);
         if (line.done) {
           addField(actionsCollection, actionId, 'done_at',
               encodeInstant(_instantOf(clock)), clock);
+        } else {
+          planned.add((actionId: actionId, mergedPosition: null));
         }
       }
+    }
+    // The positions the order on the page means.
+    var position = 0;
+    for (final action in [...planned, ...placedLast]) {
+      if (action.mergedPosition != position) {
+        addField(actionsCollection, action.actionId, 'position', position,
+            _host.mintClock());
+      }
+      position++;
     }
     // A line that is gone, for an Action the block knows, is a deletion. A stale
     // copy lacks both the line and the block entry, so it deletes nothing.

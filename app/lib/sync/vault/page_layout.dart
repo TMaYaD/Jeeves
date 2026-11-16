@@ -100,11 +100,13 @@ String? linkedTagId(Change change) {
 /// Fields whose value the page shows, so a hand edit can be told from a copy by
 /// its digest. Every other field of every entity travels in the block.
 ///
-/// Only an Outcome's own fields. Action lines are matched to Actions by the
-/// clocks and values in the block, and session sheets and Inbox pages are not
-/// read for edits, so all of theirs travel in the block with their values.
+/// An Outcome's own fields, and a Capture's clarification. Action lines are
+/// matched to Actions by the clocks and values in the block, a Capture's title
+/// and notes are written once and never read back, and session sheets are read
+/// only, so all of theirs travel in the block with their values.
 const Map<String, Set<String>> _shownFields = {
   todosCollection: {'title', 'intent', 'due_date', 'notes'},
+  capturesCollection: {'clarified_at'},
 };
 
 /// Arrange the merged entities of one page.
@@ -135,7 +137,9 @@ PageModel layOutPage(VaultPageKey key, List<Change> entities) {
         change.entityId: change,
   };
   List<String> linkedNames(String type) {
-    final names = <String>[];
+    // A name is a name: two Tags with it (a duplicate a peer created, folded
+    // afterwards) are one name on the page.
+    final names = <String>{};
     for (final change in sorted) {
       final tagId = linkedTagId(change);
       if (tagId == null || change.tombstone != null) continue;
@@ -145,7 +149,7 @@ PageModel layOutPage(VaultPageKey key, List<Change> entities) {
         if (name is String) names.add(name);
       }
     }
-    return names..sort();
+    return names.toList()..sort();
   }
 
   switch (key.kind) {

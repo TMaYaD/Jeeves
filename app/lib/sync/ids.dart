@@ -12,7 +12,8 @@
 /// because the boundary is structural: every Device is granted it and no Service
 /// ever is, so a preference cannot leak through a Service grant.
 ///
-/// **Deterministic entity ids are the exception, and there are exactly two.**
+/// **Deterministic entity ids are the exception, and there are exactly three
+/// families.**
 ///
 /// 1. [preferenceEntityId] — a policy of the `user_preferences` KV collection.
 ///    Deriving the entity id from the key means two devices creating the same
@@ -21,17 +22,29 @@
 /// 2. **Junction collections** — `todo_tags`, `capture_outcomes`,
 ///    `capture_tags`, `focus_session_tasks`, `focus_session_dispositions`.
 ///    Their domain identity *is* the relation, and the shipped DAOs already
-///    derive their row ids as `uuid5` of the pair (`todoTagIdFor` and its
+///    derive their row ids as `uuid5` of the pair ([todoTagIdFor] and its
 ///    siblings) precisely so concurrent or replayed assignment collapses onto
 ///    one row. The op log carries that identity forward: two devices assigning
 ///    the same tag offline converge as one junction entity rather than forking.
 ///    Only [focusSessionTaskIdFor] is new (#550); the DAO mints the row under it
 ///    like its four siblings, and the domain projector still rewrites the column
 ///    for rows a pre-#550 device created at random.
+/// 3. **Entities a person created by typing into a vault page** — an Action
+///    ([vaultHandEditedActionIdFor]) and a Tag ([vaultHandEditedTagIdFor]).
+///    Their identity is what was typed, so two devices that read the same hand
+///    edit create one entity rather than one each. ADR-0019 is the precedent.
 ///
 /// Every other collection — Outcomes, Actions, Tags, Captures, FocusSessions,
-/// TimeLogs — keeps client-generated random UUIDs and must not copy either
-/// exception.
+/// TimeLogs — keeps client-generated random UUIDs and must not copy any of
+/// these exceptions.
+///
+/// **The Tag case is narrow, and it is the one ADR-0043 names as forbidden.**
+/// A Tag the *app* creates keeps its client-random id: that is what lets two
+/// devices each create "Alice"/`person` offline fork, and be folded afterwards
+/// by `DomainReconciler`. Only a Tag that exists because a person typed its
+/// name into a page is derived, and only so that the page means the same thing
+/// on every device. The reconciler's fold is what collapses it with an
+/// app-created Tag of the same name afterwards.
 ///
 /// **One store per Workspace, recorded.** The pair derivations contain no
 /// workspace id; they are collision-safe because a given entity pair exists in
@@ -94,3 +107,31 @@ String focusSessionTaskIdFor(String sessionId, String taskId) =>
 /// is the precedent); every other Action keeps a random id.
 String vaultHandEditedActionIdFor(String outcomeId, String text, int ordinal) =>
     _uuid.v5(Namespace.url.value, 'jeeves://vault_action/$outcomeId/$ordinal/$text');
+
+/// Deterministic `tags` entity id for a Tag a person typed into a vault page by
+/// hand: its kind and its name.
+///
+/// The narrow exception ADR-0043 names as forbidden, and the reason is narrow
+/// too: a Tag the *app* creates keeps a client-random id, so two devices that
+/// each create "Alice"/`person` offline fork and `DomainReconciler` folds them
+/// afterwards. A Tag that exists only because a person typed its name into a
+/// page has no other identity to converge on — the page is what both devices
+/// read — so it is named after what was typed, and the same fold collapses it
+/// with an app-created Tag of the same name if there is one.
+String vaultHandEditedTagIdFor(String name, String type) =>
+    _uuid.v5(Namespace.url.value, 'jeeves://vault_tag/$type/$name');
+
+/// Deterministic `todo_tags` entity id for the (Outcome, Tag) pair.
+///
+/// The junction family's home is here, so that a plugin which has to name a
+/// link — the vault, when a person types a label into a page — derives it the
+/// way the app does without reaching into the DAO layer. The derivation is
+/// unchanged: the same string, the same namespace, the same ids.
+String todoTagIdFor(String todoId, String tagId) =>
+    _uuid.v5(Namespace.url.value, 'jeeves://todo_tag/$todoId/$tagId');
+
+/// Deterministic `capture_tags` entity id for the (Capture, Tag) pair.
+///
+/// The sibling of [todoTagIdFor], for the same reason.
+String captureTagIdFor(String captureId, String tagId) =>
+    _uuid.v5(Namespace.url.value, 'jeeves://capture_tag/$captureId/$tagId');
