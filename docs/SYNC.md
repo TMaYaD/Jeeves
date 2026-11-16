@@ -107,6 +107,12 @@ member id takes over as the tie-break so the wire is unchanged. Clocks stamped u
 the device node id are never ops, so the enrolment upload does not skip them and a
 rebuild from the log carries them across. See [sync-plugins](proposals/sync-plugins.md).
 
+Rows that predate the host are seeded into merge state once per device, before any
+plugin can attach, so `snapshot()` holds the whole local dataset. Seeding inserts
+only fields merge state holds no value or clock for, each at the floor clock
+`Hlc(0, 0, <device node id>)`, so any real write from any time beats a seeded value.
+It writes no domain row, tombstone or change.
+
 ## Protocol surface
 
 Three things are wire contract rather than implementation detail. Changing any of

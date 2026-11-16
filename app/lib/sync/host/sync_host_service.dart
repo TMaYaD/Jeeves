@@ -29,6 +29,7 @@ import '../sync_rejection.dart';
 import 'change.dart';
 import 'hosted_capture.dart';
 import 'merge_core.dart';
+import 'merge_state_seeder.dart';
 import 'merge_state.dart';
 import 'sync_host.dart';
 
@@ -79,6 +80,31 @@ class SyncHostService implements SyncHost, OutboxDrainer {
   Future<void> start() async {
     _deviceNodeId = (await readClockIdentity(_domain)).deviceNodeId;
     await drain();
+  }
+
+  // --- Seeding ---------------------------------------------------------------
+
+  Future<void>? _seeding;
+
+  /// Walk the domain rows this device already holds into merge state, once per
+  /// device (see [MergeStateSeeder]). Concurrent callers share one walk; after a
+  /// failure the next call walks again, picking up only what is still missing.
+  /// Never touches the domain store beyond reading it.
+  Future<void> ensureMergeStateSeeded() {
+    final existing = _seeding;
+    if (existing != null) return existing;
+    final run = MergeStateSeeder(
+      sync: _sync,
+      domain: _domain,
+      core: _core,
+      deviceNodeId: deviceNodeId,
+    ).runIfIncomplete();
+    final shared = run.then((_) {});
+    _seeding = shared;
+    shared.then((_) {}, onError: (Object _) {
+      if (identical(_seeding, shared)) _seeding = null;
+    });
+    return shared;
   }
 
   // --- Local writes ----------------------------------------------------------
@@ -382,7 +408,12 @@ class SyncHostService implements SyncHost, OutboxDrainer {
   /// Attach [plugin]: record its cursor at the current head if it has none, start
   /// it, and deliver whatever it is owed. Earlier state reaches a new plugin
   /// through [snapshot].
+  ///
+  /// Waits for the seeding pass first, so the [snapshot] a plugin reads holds the
+  /// whole local dataset. If the pass fails, attaching fails and no cursor is
+  /// recorded.
   Future<void> attach(SyncPlugin plugin) async {
+    await ensureMergeStateSeeded();
     _plugins[plugin.id] = plugin;
     await _sync.customStatement(
       'INSERT OR IGNORE INTO plugin_cursors (plugin_id, acknowledged_sequence) '
