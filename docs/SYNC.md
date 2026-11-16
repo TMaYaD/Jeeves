@@ -90,6 +90,8 @@ Every current key, grouped by family:
 
 Bypassed Outcomes add three collections, `focus_session_planning_bypasses`, `focus_session_reschedules` (one row per session and Outcome, replaced by a later edit) and `outcome_bypass_decisions` (append-only), each registered in `collection_codecs.dart` and carried by the initial upload like any domain collection. Jeeves works without them leaving the device: they are ordinary local rows first.
 
+`focus_session_tasks.pinned_start_at` is the start time the user set on a Plan entry (an `instant`); it merges last-write-wins per field like `disposition`, and clearing it writes a null.
+
 ## Derived identity, and why merge does not need to care about it
 
 Two collections have a domain key that is not their `id` column: `focus_session_tasks` (the `(session, task)` pair) and `user_preferences` (the `(workspace, key)` pair). Their local DAO writes mint a row id of their own, so two devices creating the same logical row would otherwise fork into two entities that never merge.
@@ -106,6 +108,12 @@ clocks and merges its own writes, under a random device node id; once enrolled, 
 member id takes over as the tie-break so the wire is unchanged. Clocks stamped under
 the device node id are never ops, so the enrolment upload does not skip them and a
 rebuild from the log carries them across. See [sync-plugins](proposals/sync-plugins.md).
+
+Rows that predate the host are seeded into merge state once per device, before any
+plugin can attach, so `snapshot()` holds the whole local dataset. Seeding inserts
+only fields merge state holds no value or clock for, each at the floor clock
+`Hlc(0, 0, <device node id>)`, so any real write from any time beats a seeded value.
+It writes no domain row, tombstone or change.
 
 ## Protocol surface
 

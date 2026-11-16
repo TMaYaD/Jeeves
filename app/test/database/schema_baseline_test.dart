@@ -82,16 +82,16 @@ void main() {
   setUpAll(configureSqliteForTests);
 
   group('schema version', () {
-    test('is 8 — seven onUpgrade steps behind the fresh baseline', () async {
+    test('is 9 — eight onUpgrade steps behind the fresh baseline', () async {
       final db = _openInMemory();
       addTearDown(db.close);
-      expect(db.schemaVersion, 8);
+      expect(db.schemaVersion, 9);
       // A fresh file runs onCreate at the current version, not the ladder.
       expect(
         await db.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        8,
+        9,
       );
     });
   });
@@ -190,6 +190,7 @@ void main() {
           'id', // v17
           'disposition', // v16
           'user_id', // v22 (issue #381)
+          'pinned_start_at', // v9 (a time the user sets on a Plan entry)
         ]),
       );
     });
@@ -300,7 +301,7 @@ void main() {
       await seed.customStatement('PRAGMA user_version = 1');
       await seed.close();
 
-      // Open 2: Drift sees user_version=1 and schemaVersion=8, so it runs the
+      // Open 2: Drift sees user_version=1 and schemaVersion=9, so it runs the
       // whole ladder — the v2 drop asserted here, and the v3 `tags` recreate the
       // group below owns.
       final upgraded = GtdDatabase(
@@ -312,7 +313,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        8,
+        9,
       );
       expect(await _columnNames(upgraded, 'todos'),
           isNot(contains('time_spent_minutes')),
@@ -439,7 +440,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        8,
+        9,
       );
       expect(await _uniqueConstraintIndexes(upgraded, 'tags'), isEmpty,
           reason: 'v3 drops UNIQUE (name, type)');
@@ -499,7 +500,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        8,
+        9,
       );
       expect(await _objects(upgraded, 'table'), contains('capture_attachments'));
       expect(await _rows(upgraded, 'captures'), hasLength(1));
@@ -604,7 +605,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        8,
+        9,
       );
       expect(await _columnNames(upgraded, 'todos'), isNot(contains('clarified')),
           reason: 'v5 drops the dead flag');
@@ -705,7 +706,7 @@ void main() {
           await upgraded.customSelect('PRAGMA user_version').getSingle().then(
                 (r) => r.read<int>('user_version'),
               ),
-          8,
+          9,
         );
         expect(await _rows(upgraded, 'todos'), todosBefore);
         expect(await _rows(upgraded, 'captures'), capturesBefore);
@@ -842,6 +843,101 @@ void main() {
       expect(identity.read<String?>('enrolled_member_id_hex'), isNull);
       expect(
           await upgraded.customSelect('SELECT 1 FROM pending_changes').get(), isEmpty);
+    });
+  });
+
+  group('v9 onUpgrade adds focus_session_tasks.pinned_start_at', () {
+    test('adds a nullable column and keeps every existing Plan entry', () async {
+      final raw = sqlite3.openInMemory();
+      addTearDown(raw.close);
+
+      final seed = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      var seedClosed = false;
+      Future<void> closeSeed() async {
+        if (seedClosed) return;
+        seedClosed = true;
+        await seed.close();
+      }
+
+      addTearDown(closeSeed);
+
+      // A v8 `focus_session_tasks` table: the current declaration with the v9
+      // column cut out of the CREATE statement Drift itself emitted.
+      final createSql = (await seed
+              .customSelect("SELECT sql FROM sqlite_master "
+                  "WHERE type = 'table' AND name = 'focus_session_tasks'")
+              .getSingle())
+          .read<String>('sql');
+      final v8Sql = createSql.replaceFirst(
+        RegExp(r',\s*"?pinned_start_at"?\s+TEXT\s+NULL',
+            caseSensitive: false),
+        '',
+      );
+      expect(v8Sql, isNot(contains('pinned_start_at')),
+          reason: 'the fixture is only a v8 store without the column');
+      await seed.customStatement('DROP TABLE focus_session_tasks');
+      await seed.customStatement(v8Sql);
+
+      final createdMs =
+          DateTime.parse('2026-07-30T09:00:00.000Z').millisecondsSinceEpoch;
+      await seed.customStatement(
+        'INSERT INTO todos (id, title, user_id, created_at, intent) '
+        "VALUES ('t1', 'Ship it', 'u1', ?, 'next')",
+        [createdMs],
+      );
+      await seed.customStatement(
+        'INSERT INTO focus_sessions (id, user_id, started_at) '
+        "VALUES ('s1', 'u1', '2026-07-30T09:00:00.000Z')",
+      );
+      await seed.customStatement(
+        'INSERT INTO focus_session_tasks '
+        '(id, focus_session_id, task_id, position, user_id) '
+        "VALUES ('fst1', 's1', 't1', 0, 'u1')",
+      );
+      await seed.customStatement('PRAGMA user_version = 8');
+      await closeSeed();
+
+      final upgraded = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      addTearDown(upgraded.close);
+
+      expect(await _columnNames(upgraded, 'focus_session_tasks'),
+          contains('pinned_start_at'));
+      final rows = await upgraded
+          .customSelect('SELECT id, task_id, position, pinned_start_at '
+              'FROM focus_session_tasks')
+          .get();
+      expect(rows.single.read<String>('id'), 'fst1');
+      expect(rows.single.read<String>('task_id'), 't1');
+      expect(rows.single.read<int>('position'), 0);
+      expect(rows.single.read<String?>('pinned_start_at'), isNull,
+          reason: 'an existing entry reads "Jeeves places it"');
+    });
+
+    test('a store that already carries the column upgrades without failing',
+        () async {
+      final raw = sqlite3.openInMemory();
+      addTearDown(raw.close);
+
+      final seed = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      // The full v9 declaration with the version rewound: the guard must see
+      // the column and skip the ADD COLUMN rather than fail the ladder.
+      await seed.customStatement('SELECT 1');
+      await seed.customStatement('PRAGMA user_version = 8');
+      await seed.close();
+
+      final upgraded = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      addTearDown(upgraded.close);
+
+      expect(await _columnNames(upgraded, 'focus_session_tasks'),
+          contains('pinned_start_at'));
     });
   });
 }

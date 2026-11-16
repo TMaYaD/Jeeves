@@ -5,7 +5,7 @@ Realistic goals a first-time user would attempt. Each goal is exercised by a sep
 ## Capture & Inbox
 1. Capture five quick tasks into the inbox (cold-start brain dump).
 2. Clarify and organize the inbox to zero — outcome, energy/time/context, route to Next / Maybe / Waiting.
-3. Convert an inbox item into a project (parent + sub-actions) rather than a single action.
+3. Clarify an inbox item into an Outcome with a plan of several Actions rather than a single one.
 
 ## Planning & Daily Ritual
 4. Plan today using the Daily Planning ritual (energy check-in → review → estimates → summary).

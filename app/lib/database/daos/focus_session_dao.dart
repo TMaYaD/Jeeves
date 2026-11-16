@@ -136,11 +136,16 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
   /// Plan's own scope, so a Planning performance that is abandoned records
   /// nothing.
   ///
+  /// [pinnedStartByTaskId] carries the start times the user set during planning
+  /// (`pinned_start_at`), written with the Plan row. Entries for Outcomes not in
+  /// [taskIds] are ignored.
+  ///
   /// [now] is injectable for deterministic testing; defaults to [DateTime.now].
   Future<String> openSession({
     required String userId,
     required List<String> taskIds,
     Set<String> skippedTaskIds = const {},
+    Map<String, DateTime> pinnedStartByTaskId = const {},
     DateTime? now,
   }) async {
     final ts = (now ?? DateTime.now()).toUtc().toIso8601String();
@@ -197,11 +202,13 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
       // relying on the projector to realign a random id afterwards.
       for (var i = 0; i < taskIds.length; i++) {
         final planEntityId = focusSessionTaskIdFor(newId, taskIds[i]);
+        final pinnedStart = pinnedStartByTaskId[taskIds[i]]?.toUtc();
         await into(focusSessionTasks).insert(FocusSessionTasksCompanion(
           id: Value(planEntityId),
           focusSessionId: Value(newId),
           taskId: Value(taskIds[i]),
           position: Value(i),
+          pinnedStartAt: Value(pinnedStart),
           userId: Value(userId),
         ));
         attachedDatabase.opCapture.write(
@@ -212,6 +219,7 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
             'task_id': taskIds[i],
             'position': i,
             'disposition': null,
+            'pinned_start_at': encodeInstant(pinnedStart),
             'user_id': userId,
           },
         );
@@ -516,6 +524,40 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
         collection: focusSessionTasksCollection,
         entityId: focusSessionTaskIdFor(sessionId, taskId),
         fields: {'disposition': disposition},
+      );
+    });
+  }
+
+  /// Sets, or with a null [pinnedStartAt] clears, the start time the user set
+  /// for [taskId]'s Plan entry in [sessionId] ("Let Jeeves move it").
+  ///
+  /// Throws [StateError] if the Outcome is not in that session's Plan, like
+  /// [setTaskDisposition]. One field op, so it merges last-write-wins against a
+  /// concurrent edit of any other field of the entry.
+  Future<void> setPinnedStart({
+    required String sessionId,
+    required String taskId,
+    required DateTime? pinnedStartAt,
+  }) async {
+    final membership = await (select(focusSessionTasks)
+          ..where((fst) =>
+              fst.focusSessionId.equals(sessionId) &
+              fst.taskId.equals(taskId)))
+        .getSingleOrNull();
+    if (membership == null) {
+      throw StateError('Task $taskId is not part of session $sessionId');
+    }
+    final pinnedUtc = pinnedStartAt?.toUtc();
+    await attachedDatabase.capturing(() async {
+      await (update(focusSessionTasks)
+            ..where((fst) =>
+                fst.focusSessionId.equals(sessionId) &
+                fst.taskId.equals(taskId)))
+          .write(FocusSessionTasksCompanion(pinnedStartAt: Value(pinnedUtc)));
+      attachedDatabase.opCapture.write(
+        collection: focusSessionTasksCollection,
+        entityId: focusSessionTaskIdFor(sessionId, taskId),
+        fields: {'pinned_start_at': encodeInstant(pinnedUtc)},
       );
     });
   }

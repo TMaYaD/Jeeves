@@ -193,7 +193,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final UserPreferencesDao userPreferencesDao = UserPreferencesDao(this);
 
   @override
-  int get schemaVersion => 8;
+  int get schemaVersion => 9;
 
   /// Completes with the [OpeningDetails] of this store's one open.
   ///
@@ -327,6 +327,19 @@ class GtdDatabase extends _$GtdDatabase {
               await m.createTable(deviceClockIdentity);
             }
             await ensureDeviceClockIdentity();
+          }
+          // v9 (day timeline): `focus_session_tasks.pinned_start_at`, the start
+          // time the user set on a Plan entry. A nullable `ADD COLUMN` — no
+          // table rebuild, every existing entry reads NULL ("Jeeves places it"),
+          // nothing is lost. Guarded on the column's absence like v7.
+          if (from < 9) {
+            final existing = await m.database
+                .customSelect('PRAGMA table_info(focus_session_tasks)')
+                .get();
+            if (!existing
+                .any((row) => row.read<String>('name') == 'pinned_start_at')) {
+              await m.addColumn(focusSessionTasks, focusSessionTasks.pinnedStartAt);
+            }
           }
         }),
       );
