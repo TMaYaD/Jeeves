@@ -11,7 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/providers/folder_sync_provider.dart';
 import 'package:jeeves/screens/folder_sync/folder_sync_screen.dart';
 import 'package:jeeves/sync/device_key_store.dart';
-import 'package:jeeves/sync/folder/folder_sync_controller.dart';
+import 'package:jeeves/sync/folder_sync_controller.dart';
 import 'package:jeeves/sync/folder/segment_folder.dart';
 import 'package:jeeves/sync/host/sync_host_service.dart';
 

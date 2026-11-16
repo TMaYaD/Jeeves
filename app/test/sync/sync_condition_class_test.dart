@@ -101,7 +101,7 @@ void main() {
         reason: 'the app refused the bytes, which is the rule working',
       );
       expect(transientRefusalCodes, hasLength(5));
-      expect(actionableAlarmCodes, hasLength(4));
+      expect(actionableAlarmCodes, hasLength(5));
     });
 
     test('an unknown stored code never throws, and reads as reported', () {

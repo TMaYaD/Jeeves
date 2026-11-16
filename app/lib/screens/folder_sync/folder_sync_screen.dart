@@ -10,7 +10,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers/folder_sync_provider.dart';
 import '../../sync/folder/folder_setup.dart';
-import '../../sync/folder/folder_sync_controller.dart';
+import '../../sync/folder_sync_controller.dart';
 
 /// The wording the person accepts before a folder is used.
 const String folderNotEncryptedWarning =

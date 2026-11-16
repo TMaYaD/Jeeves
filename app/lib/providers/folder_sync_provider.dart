@@ -15,7 +15,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../sync/folder/android_segment_folder.dart';
 import '../sync/folder/folder_health.dart';
-import '../sync/folder/folder_sync_controller.dart';
+import '../sync/folder_sync_controller.dart';
 import '../sync/folder/segment_folder.dart';
 import '../sync/host/hosted_capture.dart';
 import '../sync/sync_health.dart';

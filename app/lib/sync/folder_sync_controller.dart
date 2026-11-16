@@ -5,12 +5,12 @@
 /// composes them with the host and the platform's folder access.
 library;
 
-import '../host/sync_host_service.dart';
-import '../device_key_store.dart';
-import '../sync_database.dart';
-import 'folder_setup.dart';
-import 'op_log_folder_plugin.dart';
-import 'segment_folder.dart';
+import 'device_key_store.dart';
+import 'folder/folder_setup.dart';
+import 'folder/op_log_folder_plugin.dart';
+import 'folder/segment_folder.dart';
+import 'host/sync_host_service.dart';
+import 'sync_database.dart';
 
 /// Opens a [SegmentFolder] for a stored location (a path, or an Android tree URI).
 typedef SegmentFolderOpener = SegmentFolder Function(String location);

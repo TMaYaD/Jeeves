@@ -200,6 +200,13 @@ class OpLogFolderPlugin implements SyncPlugin {
   }
 
   Future<void> _enqueue(_AuthorState state, Change change, String opName) async {
+    // The op format carries entity ids as canonical UUIDs; a receiver refuses any
+    // other, so one that would be refused is never signed into the folder.
+    if (!isCanonicalUuid(change.entityId)) {
+      debugPrint('op-log folder: skipped ${change.collection}/${change.entityId} — '
+          'its id is not a canonical UUID');
+      return;
+    }
     final built = payloadForChange(
       change,
       memberIdHex: _memberIdHex,

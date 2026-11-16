@@ -9,6 +9,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:drift/drift.dart' show Variable;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/sync/envelope.dart';
 import 'package:jeeves/sync/folder/folder_metadata.dart';
@@ -120,8 +121,24 @@ void main() {
       await _exchange(a, b);
       expect(await _todoRows(b.device), await _todoRows(a.device));
       expect((await _todoRows(b.device)).single['id'], preHostOutcomeId);
-      expect(await canonicalReducedState(b.device.sync),
-          await canonicalReducedState(a.device.sync));
+      // Every pre-existing entity whose id the op format can carry (a canonical
+      // UUID) reaches B with the same clocks; the fixture's few plain-string ids
+      // are refused at the author, as no receiver would apply them.
+      final carried = preHostEntityIdByCollection.entries
+          .where((entry) => isCanonicalUuid(entry.value))
+          .toList();
+      expect(carried.length, greaterThan(5));
+      for (final entry in carried) {
+        final onA = await a.device.sync.customSelect(
+            'SELECT field, value_json FROM reduced_fields WHERE collection = ? AND entity_id = ? ORDER BY field',
+            variables: [Variable<String>(entry.key), Variable<String>(entry.value)]).get();
+        final onB = await b.device.sync.customSelect(
+            'SELECT field, value_json FROM reduced_fields WHERE collection = ? AND entity_id = ? ORDER BY field',
+            variables: [Variable<String>(entry.key), Variable<String>(entry.value)]).get();
+        expect(onA, isNotEmpty, reason: '${entry.key} is seeded on A');
+        expect([for (final row in onB) row.data], [for (final row in onA) row.data],
+            reason: '${entry.key} converged');
+      }
     });
 
     test('a third device that joins later converges from the files alone', () async {
