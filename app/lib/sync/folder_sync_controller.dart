@@ -72,7 +72,7 @@ class FolderSyncController {
   /// folder"; without it nothing is written.
   Future<void> turnOn({
     required String location,
-    required String deviceLabel,
+    String? deviceLabel,
     required bool acknowledgedUnencrypted,
   }) async {
     if (!acknowledgedUnencrypted) {
@@ -83,7 +83,7 @@ class FolderSyncController {
     final folderId = await _setupFor(folder).bind(
       folderLocation: location,
       deviceNodeIdHex: host.deviceNodeId,
-      deviceLabel: deviceLabel,
+      deviceLabel: deviceLabel ?? 'Device ${host.deviceNodeId.substring(0, 4)}',
     );
     await _attach(folderId, folder);
   }
@@ -93,10 +93,22 @@ class FolderSyncController {
   Future<void> resume() async {
     final binding = await activeBinding();
     if (binding == null) return;
-    await _attach(binding.folderId, openFolder(binding.folderLocation));
+    try {
+      await _attach(binding.folderId, openFolder(binding.folderLocation));
+    } on FolderSyncRefusal {
+      // Signed in or enrolled since: the binding no longer stands.
+      if (!await isEnrolled()) rethrow;
+      await _setupFor(openFolder(binding.folderLocation)).unbind(binding.folderId);
+    }
   }
 
+  /// Look for other devices' changes now, as the app returns to the foreground.
+  Future<void> scanNow() async => _plugin?.scan();
+
+  OpLogFolderPlugin? _plugin;
+
   Future<void> _attach(String folderId, SegmentFolder folder) async {
+    _plugin = null;
     final plugin = OpLogFolderPlugin(
       database: database,
       folder: folder,
@@ -108,6 +120,7 @@ class FolderSyncController {
     );
     try {
       await host.attach(plugin);
+      _plugin = plugin;
     } on Object {
       await host.detach(opLogFolderPluginId, forgetCursor: true);
       rethrow;
@@ -138,6 +151,7 @@ class FolderSyncController {
   Future<void> turnOff() async {
     final binding = await activeBinding();
     if (binding == null) return;
+    _plugin = null;
     await host.detach(opLogFolderPluginId, forgetCursor: true);
     await _setupFor(openFolder(binding.folderLocation)).unbind(binding.folderId);
   }

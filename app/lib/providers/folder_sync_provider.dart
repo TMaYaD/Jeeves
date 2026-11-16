@@ -11,6 +11,8 @@ import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
+import 'package:flutter/widgets.dart'
+    show AppLifecycleState, WidgetsBinding, WidgetsBindingObserver;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../sync/folder/android_segment_folder.dart';
@@ -93,10 +95,36 @@ final FutureProvider<void> folderSyncResumeProvider = FutureProvider<void>((ref)
   ref.keepAlive();
   if (!ref.watch(folderPlatformProvider).isAvailable) return;
   try {
-    await (await ref.watch(folderSyncControllerProvider.future)).resume();
+    final controller = await ref.watch(folderSyncControllerProvider.future);
+    await controller.resume();
+    final observer = _ResumeScanObserver(controller);
+    WidgetsBinding.instance.addObserver(observer);
+    ref.onDispose(() => WidgetsBinding.instance.removeObserver(observer));
   } on Object catch (error) {
     debugPrint('folder sync: resume failed — $error');
   }
+});
+
+/// Looks for other devices' changes as soon as the app comes back to the front,
+/// rather than waiting for the next timer tick.
+class _ResumeScanObserver with WidgetsBindingObserver {
+  _ResumeScanObserver(this._controller);
+
+  final FolderSyncController _controller;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    _controller.scanNow().catchError((Object error) {
+      debugPrint('folder sync: scan on resume failed — $error');
+    });
+  }
+}
+
+/// Whether folder sync is turned on; the sign-in offer is not shown while it is.
+final folderSyncActiveProvider = FutureProvider.autoDispose<bool>((ref) async {
+  final controller = await ref.watch(folderSyncControllerProvider.future);
+  return await controller.activeBinding() != null;
 });
 
 /// The settings screen's view; invalidate it after any change.

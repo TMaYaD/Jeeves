@@ -76,6 +76,7 @@ class _FolderSyncScreenState extends ConsumerState<FolderSyncScreen> {
     }
     ref.invalidate(folderSyncSummaryProvider);
     ref.invalidate(folderSyncRowsProvider);
+    ref.invalidate(folderSyncActiveProvider);
     if (mounted) setState(() => _busy = false);
   }
 
@@ -94,7 +95,6 @@ class _FolderSyncScreenState extends ConsumerState<FolderSyncScreen> {
       final controller = await ref.read(folderSyncControllerProvider.future);
       await controller.turnOn(
         location: location,
-        deviceLabel: 'This device',
         acknowledgedUnencrypted: true,
       );
     });

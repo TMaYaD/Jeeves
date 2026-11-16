@@ -95,6 +95,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           const Divider(height: 1, color: Color(0xFFF3F4F6)),
           _sectionHeader('SYNC'),
           if (!isAuthenticated) ...[
+            // Folder sync is for a device that is not signed in; while it is on,
+            // the account offer is not made.
+            if (!(ref.watch(folderPlatformProvider).isAvailable &&
+                (ref.watch(folderSyncActiveProvider).valueOrNull ?? false)))
             ListTile(
               key: const Key('sign_in_to_sync_tile'),
               leading: const Icon(Icons.cloud_upload_outlined,

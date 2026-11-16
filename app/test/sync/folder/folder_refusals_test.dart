@@ -57,6 +57,38 @@ void main() {
     });
   });
 
+  group('a device that signs in while folder sync is on', () {
+    test('writes nothing more into the folder and reads nothing from it', () async {
+      final directory = _tempFolder();
+      final (a, b) = await _unpairedPair(directory);
+      await a.pairWith(b);
+      await b.pairWith(a);
+      await a.attach();
+      await b.attach();
+      await a.device.domain.todoDao
+          .insertOutcome(id: _outcomeA, title: 'Before sign-in', userId: _userId);
+      await a.host.deliverAll();
+      final before = snapshotOps(directory);
+
+      a.enrolled = true; // the person signs in; nothing re-attaches the plugin
+      a.device.wall.advance();
+      await a.device.domain.todoDao.insertOutcome(
+          id: '4a3e2d5f-6b7c-4d9e-8f01-2b3c4d5e6f70', title: 'After sign-in', userId: 'real-user');
+      await a.host.deliverAll();
+      expect(snapshotOps(directory).keys, unorderedEquals(before.keys));
+      for (final entry in before.entries) {
+        expect(snapshotOps(directory)[entry.key], entry.value, reason: entry.key);
+      }
+
+      await b.device.domain.todoDao.insertOutcome(
+          id: '5b4f3e60-7c8d-4eaf-9012-3c4d5e6f7081', title: 'From B', userId: _userId);
+      await b.host.deliverAll();
+      await expectLater(a.plugin!.scan(), throwsA(isA<FolderSyncRefusal>()));
+      final titles = await a.device.domain.customSelect('SELECT title FROM todos').get();
+      expect(titles.map((row) => row.read<String>('title')), isNot(contains('From B')));
+    });
+  });
+
   group('pairing', () {
     test('an unpaired member is left alone', () async {
       final directory = _tempFolder();

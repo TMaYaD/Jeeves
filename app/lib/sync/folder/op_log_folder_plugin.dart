@@ -124,9 +124,19 @@ class OpLogFolderPlugin implements SyncPlugin {
 
   /// Look for other devices' changes now: at start, on app resume and on a timer.
   Future<void> scan() => _locked(() async {
+        await _refuseIfEnrolled();
         await _appendPending();
         await _scanPeers();
       });
+
+  /// A device that has since signed in or been enrolled writes nothing more into
+  /// the folder and reads nothing from it, however it came to be attached.
+  Future<void> _refuseIfEnrolled() async {
+    if (!await isEnrolled()) return;
+    _timer?.cancel();
+    _timer = null;
+    throw const FolderSyncRefusal(enrolledRefusalMessage);
+  }
 
   Future<FolderSyncBindingRow> _binding() async =>
       await (database.select(database.folderSyncBindings)
@@ -151,6 +161,7 @@ class OpLogFolderPlugin implements SyncPlugin {
   Future<int> deliver(List<SequencedChange> changes) async {
     if (changes.isEmpty) return 0;
     await _locked(() async {
+      await _refuseIfEnrolled();
       await _enqueueDelivered(changes);
       try {
         await _appendPending();
@@ -224,6 +235,13 @@ class OpLogFolderPlugin implements SyncPlugin {
       prevAuthorHash: state.lastEnvelopeHash,
     );
     final envelope = await _signer.buildEnvelope(header, frameBody(built.payload.encode()));
+    if (envelope.length > maxEnvelopeBytes) {
+      // Every reader would treat it as never arriving; signing it would stall the
+      // chain, and throwing would wedge delivery of everything behind it.
+      debugPrint('op-log folder: skipped ${change.collection}/${change.entityId} — '
+          'its op is larger than $maxEnvelopeBytes bytes');
+      return;
+    }
     await database.into(database.folderPendingAppends).insert(
           FolderPendingAppendsCompanion.insert(
             folderId: folderId,
