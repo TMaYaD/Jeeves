@@ -25,7 +25,7 @@ const String preHostPreferenceValue = '"compact"';
 const String _tagId = 'pre-host-tag';
 const String _captureId = 'pre-host-capture';
 const String _sessionId = 'pre-host-session';
-const int _instantSeconds = 1700000000;
+const String _instant = '2026-01-01T00:00:00.000Z';
 
 /// The entity id each collection's row becomes in merge state.
 Map<String, String> get preHostEntityIdByCollection => {
@@ -66,12 +66,12 @@ Future<void> writeRowInEveryCollection(
   await run(
     "INSERT INTO todos (id, title, user_id, created_at, intent) "
     "VALUES (?, 'Old outcome', ?, ?, 'next')",
-    [preHostOutcomeId, preHostUserId, _instantSeconds],
+    [preHostOutcomeId, preHostUserId, _instant],
   );
   await run(
     "INSERT INTO actions (id, outcome_id, user_id, text, role, created_at) "
     "VALUES (?, ?, ?, 'Old action', 'current', ?)",
-    [ids[actionsCollection], preHostOutcomeId, preHostUserId, _instantSeconds],
+    [ids[actionsCollection], preHostOutcomeId, preHostUserId, _instant],
   );
   await run(
     "INSERT INTO tags (id, name, type, user_id) VALUES (?, 'home', 'context', ?)",
@@ -80,7 +80,7 @@ Future<void> writeRowInEveryCollection(
   await run(
     "INSERT INTO captures (id, title, user_id, created_at) "
     "VALUES (?, 'Old capture', ?, ?)",
-    [_captureId, preHostUserId, _instantSeconds],
+    [_captureId, preHostUserId, _instant],
   );
   await run(
     "INSERT INTO focus_sessions (id, user_id, started_at) "
@@ -103,7 +103,7 @@ Future<void> writeRowInEveryCollection(
       ids[captureOutcomesCollection],
       _captureId,
       preHostOutcomeId,
-      _instantSeconds,
+      _instant,
       preHostUserId,
     ],
   );
@@ -138,7 +138,7 @@ Future<void> writeRowInEveryCollection(
       ids[focusSessionPlanningBypassesCollection],
       _sessionId,
       preHostOutcomeId,
-      _instantSeconds,
+      _instant,
       preHostUserId,
     ],
   );
@@ -149,7 +149,7 @@ Future<void> writeRowInEveryCollection(
       ids[focusSessionReschedulesCollection],
       _sessionId,
       preHostOutcomeId,
-      _instantSeconds,
+      _instant,
       preHostUserId,
     ],
   );
@@ -159,7 +159,7 @@ Future<void> writeRowInEveryCollection(
     [
       ids[outcomeBypassDecisionsCollection],
       preHostOutcomeId,
-      _instantSeconds,
+      _instant,
       preHostUserId,
     ],
   );

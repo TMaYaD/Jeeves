@@ -235,6 +235,9 @@ void main() {
       expect(await phone.activate(), SyncActivation.active);
       await writeOutcome(phone, _outcomeAfterEnrolment);
       await phone.stack.defaultClient.flushOutbox();
+      // A second flush settles any housekeeping the first one leaves behind, so
+      // the baseline below is what the pass is compared against.
+      await phone.stack.defaultClient.flushOutbox();
       final clocksBefore = await realClocks(phone);
       final opsBefore = _contentOpCount(server);
       final opLogBefore = (await phone.syncStore
