@@ -577,7 +577,7 @@ void main() {
 
     testWidgets('a narrow screen stacks the timeline above the Plan rows',
         (tester) async {
-      await pumpAtWidth(tester, 400);
+      await pumpAtWidth(tester, 600);
       expect(find.byKey(const ValueKey('plan-timeline-stacked')),
           findsOneWidget);
       expect(find.byKey(const ValueKey('plan-timeline-two-panes')),
