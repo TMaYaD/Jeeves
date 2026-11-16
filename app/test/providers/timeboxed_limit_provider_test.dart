@@ -57,12 +57,20 @@ void main() {
   /// The provider is autoDispose, so something must keep it alive while the
   /// value is awaited — a bare read lets it be disposed before it has emitted,
   /// and the read then throws instead of answering.
+  ///
+  /// The read waits for the provider to settle first. The provider is live:
+  /// a write reaches it a turn later, so a read in the same turn as the write
+  /// answers with the value the write replaced. The subscription stays open
+  /// across the wait, so the provider is not disposed and rebuilt under the
+  /// read — the answer is the one the live provider settled on, and a provider
+  /// that never settles still fails the assertion.
   Future<TimeboxedLimitStatus?> status() async {
     final subscription = container.listen(
       timeboxedLimitStatusProvider('t1'),
       (_, _) {},
     );
     try {
+      await pumpEventQueue();
       return await container.read(timeboxedLimitStatusProvider('t1').future);
     } finally {
       subscription.close();
