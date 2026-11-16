@@ -436,6 +436,24 @@ void main() {
       expect(capture.forCollection(todosCollection), isEmpty);
     });
 
+    test('setTimeboxed captures timeboxed and updated_at, and stamps the '
+        'Outcome', () async {
+      final id = await seedOutcome();
+      await db.actionDao.setCurrentAction(id, 'Draft', now: _ts);
+      final actionId = only(actionsCollection).entityId;
+      capture.clear();
+      await db.actionDao.setTimeboxed(actionId, true, now: _ts);
+      final op = only(actionsCollection);
+      expect(op.fields['timeboxed'], isTrue);
+      expect(op.fields.containsKey('updated_at'), isTrue);
+      // The switch is Action metadata, but turning it is a clarifying act, so
+      // the Outcome's timestamp moves with it — unlike an organising tag,
+      // which leaves the Outcome alone.
+      final outcomeOp = only(todosCollection);
+      expect(outcomeOp.entityId, id);
+      expect(outcomeOp.fields.containsKey('last_clarified_at'), isTrue);
+    });
+
     test('a seeded promote captures the drafted effort on the actions op, not '
         'just the todos mirror', () async {
       final id = await seedOutcome();

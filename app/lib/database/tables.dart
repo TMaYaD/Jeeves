@@ -632,6 +632,11 @@ class Actions extends Table {
   /// NULL = not gated. Belongs to this Action row; never copied to a successor.
   TextColumn get timeContext => text().named('time_context').nullable()();
 
+  /// Timeboxed (issue #923): whether the estimate is a limit rather than a
+  /// guess. NULL and false both mean off. Belongs to this Action row; never
+  /// copied to a successor.
+  BoolColumn get timeboxed => boolean().nullable()();
+
   DateTimeColumn get createdAt => dateTime()();
 
   /// Client-stamped; a superseded row's timestamp is read from here.

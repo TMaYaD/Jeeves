@@ -82,6 +82,7 @@ import 'package:drift/drift.dart';
 import '../../utils/uuid.dart';
 
 import '../../models/time_context.dart';
+import '../../models/timeboxed.dart';
 import '../../sync/collection_codecs.dart';
 import '../gtd_database.dart';
 import 'sprint_dao.dart' show SprintDao;
@@ -246,6 +247,52 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
       'time_context': encoded,
       'updated_at': encodeInstant(ts),
     });
+    return true;
+  }
+
+  /// Sets the Timeboxed switch of the Action [actionId] (issue #923): whether
+  /// its estimate is a limit rather than a guess.
+  ///
+  /// Stamps `last_clarified_at` like an estimate edit does: the switch is
+  /// Action metadata (ADR-0001), not an organising tag, so turning it is a
+  /// clarifying micro-act. No-op when the row is gone or already holds the
+  /// same value.
+  Future<void> setTimeboxed(
+    String actionId,
+    bool value, {
+    DateTime? now,
+  }) async {
+    final ts = (now ?? DateTime.now()).toUtc();
+    final changed = await attachedDatabase.capturing(
+      () => applySetTimeboxed(actionId, value, ts: ts),
+    );
+    if (changed) {
+      attachedDatabase.notifyActionsViewWrite();
+      attachedDatabase.notifyTodosViewWrite();
+    }
+  }
+
+  /// Transaction-body variant of [setTimeboxed]; returns whether it wrote.
+  Future<bool> applySetTimeboxed(
+    String actionId,
+    bool value, {
+    required DateTime ts,
+  }) async {
+    final row = await (select(actions)..where((a) => a.id.equals(actionId)))
+        .getSingleOrNull();
+    if (row == null) return false;
+    if ((row.timeboxed ?? false) == value) return false;
+    await (update(actions)..where((a) => a.id.equals(actionId))).write(
+      ActionsCompanion(
+        timeboxed: Value(value),
+        updatedAt: Value(ts),
+      ),
+    );
+    _captureAction(actionId, {
+      'timeboxed': value,
+      'updated_at': encodeInstant(ts),
+    });
+    await _stampOutcome(row.outcomeId, ts);
     return true;
   }
 
@@ -586,6 +633,38 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     return result;
   }
 
+  /// Whether each Outcome's current Action is Timeboxed (issue #923), keyed
+  /// by Outcome id. An absent key means the Outcome is not Timeboxed.
+  ///
+  /// The read rule lives in [isTimeboxedAction]: the switch is on **and** the
+  /// Action has an estimate. Two devices can merge "the estimate was cleared"
+  /// with "the switch was turned on"; the rule reads that as off rather than
+  /// as a limit of nothing.
+  Stream<Map<String, bool>> watchCurrentTimeboxed() {
+    return (select(actions)..where((a) => a.role.equals('current')))
+        .watch()
+        .map(_timeboxedByOutcome);
+  }
+
+  Map<String, bool> _timeboxedByOutcome(List<Action> rows) {
+    final byOutcome = <String, List<Action>>{};
+    for (final a in rows) {
+      (byOutcome[a.outcomeId] ??= []).add(a);
+    }
+    final result = <String, bool>{};
+    for (final entry in byOutcome.entries) {
+      final winner = _pickWinner(entry.value);
+      if (winner == null) continue;
+      if (isTimeboxedAction(
+        timeboxed: winner.timeboxed,
+        timeEstimate: winner.timeEstimate,
+      )) {
+        result[entry.key] = true;
+      }
+    }
+    return result;
+  }
+
   /// Current Action text for each of [outcomeIds], keyed by Outcome id. An
   /// absent key means the Outcome is Actionless — the shape the one-at-a-time
   /// review snapshots consume, so a wizard step renders every item's Action
@@ -840,7 +919,13 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     final timeDiffers = clearTimeEstimate
         ? row.timeEstimate != null
         : timeEstimate != null && timeEstimate != row.timeEstimate;
-    if (!textDiffers && !energyDiffers && !timeDiffers) return _noEffect;
+    // Clearing the estimate clears the Timeboxed switch with it (issue #923):
+    // a limit with no estimate is not a limit, and a later estimate must not
+    // bring the old limit back.
+    final timeboxedClears = clearTimeEstimate && (row.timeboxed ?? false);
+    if (!textDiffers && !energyDiffers && !timeDiffers && !timeboxedClears) {
+      return _noEffect;
+    }
 
     await (update(actions)..where((a) => a.id.equals(actionId))).write(
       ActionsCompanion(
@@ -851,6 +936,8 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         timeEstimate: clearTimeEstimate
             ? const Value(null)
             : timeDiffers ? Value(timeEstimate) : const Value.absent(),
+        timeboxed:
+            timeboxedClears ? const Value(false) : const Value.absent(),
         updatedAt: Value(ts),
       ),
     );
@@ -864,6 +951,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         'time_estimate': null
       else if (timeDiffers)
         'time_estimate': timeEstimate,
+      if (timeboxedClears) 'timeboxed': false,
       'updated_at': encodeInstant(ts),
     });
     if (row.role == 'current') {
