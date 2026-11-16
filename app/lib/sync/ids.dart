@@ -86,3 +86,11 @@ String preferenceEntityId(String workspaceId, String preferenceKey) =>
 /// pre-#550 device created at random onto the same id every other device holds.
 String focusSessionTaskIdFor(String sessionId, String taskId) =>
     _uuid.v5(Namespace.url.value, 'jeeves://focus_session_task/$sessionId/$taskId');
+
+/// Deterministic `actions` entity id for a checklist line a person typed into a
+/// vault page by hand: the Outcome, the line's text, and its ordinal among
+/// identical new lines. Two devices that read the same hand edit then create one
+/// Action, not two. A third derived case beside the junction pairs (ADR-0019
+/// is the precedent); every other Action keeps a random id.
+String vaultHandEditedActionIdFor(String outcomeId, String text, int ordinal) =>
+    _uuid.v5(Namespace.url.value, 'jeeves://vault_action/$outcomeId/$ordinal/$text');

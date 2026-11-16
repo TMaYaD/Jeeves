@@ -99,11 +99,12 @@ String? linkedTagId(Change change) {
 
 /// Fields whose value the page shows, so a hand edit can be told from a copy by
 /// its digest. Every other field of every entity travels in the block.
+///
+/// Only an Outcome's own fields. Action lines are matched to Actions by the
+/// clocks and values in the block, and session sheets and Inbox pages are not
+/// read for edits, so all of theirs travel in the block with their values.
 const Map<String, Set<String>> _shownFields = {
   todosCollection: {'title', 'intent', 'due_date', 'notes'},
-  actionsCollection: {'text', 'role', 'position'},
-  capturesCollection: {'clarified_at'},
-  focusSessionsCollection: {'started_at', 'ended_at'},
 };
 
 /// Arrange the merged entities of one page.
