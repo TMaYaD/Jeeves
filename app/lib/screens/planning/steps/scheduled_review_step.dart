@@ -40,6 +40,9 @@ class _ScheduledReviewStepState extends ConsumerState<ScheduledReviewStep> {
 
         return ListView(
           physics: const ClampingScrollPhysics(),
+          // A short, finite column: build it whole, so the timeline's height
+          // never leaves the Plan's rows or Start Day unbuilt below the fold.
+          cacheExtent: 2000,
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
           children: [
             const Text(

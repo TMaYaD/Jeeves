@@ -99,6 +99,10 @@ class FocusScreen extends ConsumerWidget {
                       : null;
                   return ListView(
                         physics: const ClampingScrollPhysics(),
+                        // A short, finite column: build it whole, so the
+                        // timeline's height never leaves the Plan's rows or the
+                        // shutdown entry unbuilt below the fold.
+                        cacheExtent: 2000,
                         padding: const EdgeInsets.symmetric(
                             horizontal: 20, vertical: 8),
                         children: [
