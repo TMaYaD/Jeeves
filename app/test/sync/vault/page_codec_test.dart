@@ -44,7 +44,7 @@ void main() {
     expect(parsed.notes, 'Some notes.\n');
     expect(parsed.checklist, _page().checklist);
     expect(parsed.block!.length, 2);
-    expect(parsed.block!.last.carriedValue, 'go');
+    expect(parsed.block!.firstWhere((e) => e.field == 'intent').carriedValue, 'go');
     expect(renderPage(parsed), text, reason: 'a page is a pure function of its model');
   });
 
@@ -59,7 +59,8 @@ void main() {
   test('the block holds no double hyphen, so no value can close the comment', () {
     final text = renderPage(_page());
     final block = text.substring(text.lastIndexOf('<!-- jeeves-sync'));
-    expect(block.replaceFirst(RegExp(r'-->\n$'), '').contains('--'), isFalse);
+    final body = block.replaceFirst('<!-- ', '').replaceFirst(RegExp(r'-->\n$'), '');
+    expect(body.contains('--'), isFalse);
   });
 
   test('notes with a comment end or a task line survive', () {
