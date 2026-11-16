@@ -20,7 +20,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/gtd_database.dart';
 import '../models/action_draft.dart';
+import '../models/follow_up_change.dart';
 import '../models/routing_kind.dart';
+import '../models/time_context.dart';
 import '../providers/auth_provider.dart';
 import '../services/clarification_service.dart';
 import 'app_title_bar/app_title_bar.dart';
@@ -703,6 +705,7 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     String? actionText,
     String? actionTextIfActionless,
     Set<String>? personTagIds,
+    FollowUpChange? followUp,
   }) async {
     switch (widget.subject) {
       case OutcomeSubject(:final todo):
@@ -712,6 +715,7 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
           actionText: actionText,
           actionTextIfActionless: actionTextIfActionless,
           personTagIds: personTagIds,
+          followUp: followUp,
           userId: personTagIds != null ? ref.read(currentUserIdProvider) : null,
         );
       case CaptureSubject(:final capture, :final draft):
@@ -733,6 +737,7 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
               dueDate: d.dueDate,
               action: _mergedAction(d, actionText),
               personTagIds: personTagIds,
+              followUp: followUp,
               tagIds: d.tagIds,
             ),
           );
@@ -747,6 +752,7 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
             dueDate: d.dueDate,
             action: _mergedAction(d, actionText),
             personTagIds: personTagIds,
+            followUp: followUp,
             tagIds: d.tagIds,
           ),
         );
@@ -1023,12 +1029,24 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     // person-tag set atomically (clarifyToOutcome) or attaches it to the
     // Outcome it mints (clarifyCaptureToOutcome), so the picker has nothing
     // left to write.
-    final selected = await showPersonTagPicker(
+    // The follow-up row starts from the date the Outcome's current Action
+    // already carries (re-clarifying a Waiting For item).
+    final existingFollowUp = switch (widget.subject) {
+      OutcomeSubject(:final todo) => TimeContext.tryParse(
+        (await _clarification.getCurrentAction(todo.id))?.timeContext,
+      )?.fromDate,
+      CaptureSubject() => null,
+    };
+    if (!mounted) return;
+    final picked = await showPersonPicker(
       context,
       assignedPersonTagIds: assigned,
       requireSelection: true,
+      offerFollowUp: true,
+      initialFollowUpDate: existingFollowUp,
     );
-    if (selected == null || !mounted) return; // user cancelled
+    if (picked == null || !mounted) return; // user cancelled
+    final selected = picked.people;
 
     // No pre-check: the routing write checks the subject inside its own
     // transaction, so confirming into a row that vanished while the picker was
@@ -1053,6 +1071,7 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
       RoutingKind.waitingFor,
       personTagIds: selected,
       actionTextIfActionless: fallbackTitle,
+      followUp: picked.followUp,
     )) {
       return;
     }

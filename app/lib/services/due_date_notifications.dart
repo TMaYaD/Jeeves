@@ -58,38 +58,130 @@ tz.TZDateTime dueDateNotificationFireAt(DateTime dueDate, tz.Location location) 
 /// Separates the Outcome id from the requested fire instant in a payload.
 const kDueDateNotificationFireAtSeparator = '@';
 
-/// Payload for the notification of [outcomeId]. When [fireAt] is given it is
-/// recorded (epoch milliseconds), so a pending alarm can later be told apart
-/// from one scheduled for a different, since-changed due day.
-String dueDateNotificationPayload(String outcomeId, {DateTime? fireAt}) =>
+/// Payload for a notification whose payload starts with [prefix].
+String outcomeNotificationPayload(String prefix, String outcomeId,
+        {DateTime? fireAt}) =>
     fireAt == null
-        ? '$kDueDateNotificationPayloadPrefix$outcomeId'
-        : '$kDueDateNotificationPayloadPrefix$outcomeId'
+        ? '$prefix$outcomeId'
+        : '$prefix$outcomeId'
             '$kDueDateNotificationFireAtSeparator'
             '${fireAt.millisecondsSinceEpoch}';
 
-/// The fire instant (epoch milliseconds) recorded in a due-date payload, or
-/// null when the payload carries none.
-int? fireAtMillisFromNotificationPayload(String? payload) {
-  if (payload == null ||
-      !payload.startsWith(kDueDateNotificationPayloadPrefix)) {
-    return null;
-  }
+/// The fire instant (epoch milliseconds) recorded in a payload that starts with
+/// [prefix], or null when it carries none.
+int? outcomeNotificationFireAtMillis(String prefix, String? payload) {
+  if (payload == null || !payload.startsWith(prefix)) return null;
   final at = payload.lastIndexOf(kDueDateNotificationFireAtSeparator);
   if (at < 0) return null;
   return int.tryParse(payload.substring(at + 1));
 }
 
-/// The Outcome id carried by a due-date notification payload, or null.
-String? outcomeIdFromNotificationPayload(String? payload) {
-  if (payload == null ||
-      !payload.startsWith(kDueDateNotificationPayloadPrefix)) {
-    return null;
-  }
-  var id = payload.substring(kDueDateNotificationPayloadPrefix.length);
+/// The Outcome id carried by a payload that starts with [prefix], or null.
+String? outcomeNotificationOutcomeId(String prefix, String? payload) {
+  if (payload == null || !payload.startsWith(prefix)) return null;
+  var id = payload.substring(prefix.length);
   final at = id.indexOf(kDueDateNotificationFireAtSeparator);
   if (at >= 0) id = id.substring(0, at);
   return id.isEmpty ? null : id;
+}
+
+/// Payload for the notification of [outcomeId]. When [fireAt] is given it is
+/// recorded (epoch milliseconds), so a pending alarm can later be told apart
+/// from one scheduled for a different, since-changed due day.
+String dueDateNotificationPayload(String outcomeId, {DateTime? fireAt}) =>
+    outcomeNotificationPayload(kDueDateNotificationPayloadPrefix, outcomeId,
+        fireAt: fireAt);
+
+/// The fire instant (epoch milliseconds) recorded in a due-date payload, or
+/// null when the payload carries none.
+int? fireAtMillisFromNotificationPayload(String? payload) =>
+    outcomeNotificationFireAtMillis(
+        kDueDateNotificationPayloadPrefix, payload);
+
+/// The Outcome id carried by a due-date notification payload, or null.
+String? outcomeIdFromNotificationPayload(String? payload) =>
+    outcomeNotificationOutcomeId(kDueDateNotificationPayloadPrefix, payload);
+
+/// What the OS holds for one kind of Outcome notification. `pending` are still
+/// scheduled; `delivered` already fired and sit in the tray;
+/// `pendingFireAtMillis` maps a pending id to the instant recorded in its
+/// payload.
+typedef OutcomeNotificationsOnDevice = ({
+  Set<int> pending,
+  Map<int, int> pendingFireAtMillis,
+  Set<int> delivered
+});
+
+/// One kind of per-Outcome notification (due date, follow-up). A reconciler
+/// handles exactly one kind and, through [onDevice], sees and cancels only that
+/// kind's notifications — the two kinds share neither ids, payload prefix nor
+/// Android channel.
+class OutcomeNotificationKind {
+  const OutcomeNotificationKind({
+    required this.body,
+    required this.idFor,
+    required this.fireAtOn,
+    required this.payloadFor,
+    required this.schedule,
+    required this.onDevice,
+  });
+
+  /// Fixed notification text under the Outcome title.
+  final String body;
+
+  /// Stable notification id for an Outcome id.
+  final int Function(String outcomeId) idFor;
+
+  /// The instant the notification fires on the calendar day [day].
+  final tz.TZDateTime Function(DateTime day, tz.Location location) fireAtOn;
+
+  final String Function(String outcomeId, {DateTime? fireAt}) payloadFor;
+
+  final Future<void> Function(
+    NotificationService service, {
+    required int id,
+    required String title,
+    required String body,
+    required DateTime scheduledAt,
+    String? payload,
+  }) schedule;
+
+  final Future<OutcomeNotificationsOnDevice> Function(
+      NotificationService service) onDevice;
+}
+
+/// The due-date kind: `Due today` at 09:00 on the due day.
+final dueDateNotificationKind = OutcomeNotificationKind(
+  body: kDueDateNotificationBody,
+  idFor: dueDateNotificationId,
+  fireAtOn: dueDateNotificationFireAt,
+  payloadFor: dueDateNotificationPayload,
+  schedule: (service,
+          {required id,
+          required title,
+          required body,
+          required scheduledAt,
+          payload}) =>
+      service.scheduleReminder(
+          id: id,
+          title: title,
+          body: body,
+          scheduledAt: scheduledAt,
+          payload: payload),
+  onDevice: (service) => service.dueDateNotificationsOnDevice(),
+);
+
+/// An Outcome that should have a notification, on calendar day [day].
+class OutcomeNotificationCandidate {
+  const OutcomeNotificationCandidate({
+    required this.outcomeId,
+    required this.title,
+    required this.day,
+  });
+
+  final String outcomeId;
+  final String title;
+  final DateTime day;
 }
 
 class PlannedDueDateNotification {
@@ -137,18 +229,43 @@ DueDateNotificationPlan planDueDateNotifications(
   required tz.Location location,
   required DateTime now,
   int maxScheduled = kMaxScheduledDueDateNotifications,
+}) =>
+    planOutcomeNotifications(
+      _dueDateCandidates(outcomes),
+      kind: dueDateNotificationKind,
+      location: location,
+      now: now,
+      maxScheduled: maxScheduled,
+    );
+
+List<OutcomeNotificationCandidate> _dueDateCandidates(List<Todo> outcomes) => [
+      for (final outcome in outcomes)
+        if (outcome.dueDate != null)
+          OutcomeNotificationCandidate(
+            outcomeId: outcome.id,
+            title: outcome.title,
+            day: outcome.dueDate!,
+          ),
+    ];
+
+/// [planDueDateNotifications] for any [kind]: what should be pending for
+/// [candidates] at [now] in [location].
+DueDateNotificationPlan planOutcomeNotifications(
+  List<OutcomeNotificationCandidate> candidates, {
+  required OutcomeNotificationKind kind,
+  required tz.Location location,
+  required DateTime now,
+  int maxScheduled = kMaxScheduledDueDateNotifications,
 }) {
   final keepIds = <int>{};
   final passedFireTimes = <(int, int)>{};
   final futureById = <int, PlannedDueDateNotification>{};
-  for (final outcome in outcomes) {
-    final dueDate = outcome.dueDate;
-    if (dueDate == null) continue;
+  for (final candidate in candidates) {
     final planned = PlannedDueDateNotification(
-      id: dueDateNotificationId(outcome.id),
-      outcomeId: outcome.id,
-      title: outcome.title,
-      fireAt: dueDateNotificationFireAt(dueDate, location),
+      id: kind.idFor(candidate.outcomeId),
+      outcomeId: candidate.outcomeId,
+      title: candidate.title,
+      fireAt: kind.fireAtOn(candidate.day, location),
     );
     if (!planned.fireAt.isAfter(now)) {
       keepIds.add(planned.id);
@@ -179,33 +296,36 @@ DueDateNotificationPlan planDueDateNotifications(
   );
 }
 
-/// Keeps the OS's scheduled due-date notifications equal to the Outcomes
-/// emitted by [outcomes]. Runs reconciliations one at a time.
-class DueDateNotificationReconciler {
-  DueDateNotificationReconciler({
+/// Keeps the OS's scheduled notifications of one [OutcomeNotificationKind]
+/// equal to the Outcomes emitted by [candidates]. Runs reconciliations one at
+/// a time.
+class OutcomeNotificationReconciler {
+  OutcomeNotificationReconciler({
     required this.notifications,
-    required this.outcomes,
+    required this.kind,
+    required this.candidates,
     tz.Location Function()? location,
     DateTime Function()? now,
   })  : _location = location ?? (() => tz.local),
         _now = now ?? DateTime.now;
 
   final NotificationService notifications;
-  final Stream<List<Todo>> outcomes;
+  final OutcomeNotificationKind kind;
+  final Stream<List<OutcomeNotificationCandidate>> candidates;
   final tz.Location Function() _location;
   final DateTime Function() _now;
 
   final _scheduledById = <int, PlannedDueDateNotification>{};
-  List<Todo> _latestOutcomes = const [];
+  List<OutcomeNotificationCandidate> _latestOutcomes = const [];
   bool _rescheduleAll = false;
   Future<void> _queue = Future.value();
-  StreamSubscription<List<Todo>>? _subscription;
+  StreamSubscription<List<OutcomeNotificationCandidate>>? _subscription;
   AppLifecycleListener? _lifecycleListener;
 
   /// Starts listening. [listenToLifecycle] registers the timezone re-check on
   /// app resume; it needs a bound widgets binding.
   void start({bool listenToLifecycle = true}) {
-    _subscription = outcomes.listen((latest) {
+    _subscription = candidates.listen((latest) {
       _latestOutcomes = latest;
       _enqueue(() => _reconcile());
     });
@@ -232,7 +352,7 @@ class DueDateNotificationReconciler {
 
   Future<void> _enqueue(Future<void> Function() job) {
     _queue = _queue.then((_) => job()).catchError((Object e, StackTrace s) {
-      debugPrint('Due-date notification reconcile failed: $e\n$s');
+      debugPrint('Outcome notification reconcile failed: $e\n$s');
     });
     return _queue;
   }
@@ -243,13 +363,14 @@ class DueDateNotificationReconciler {
     // Pending ids are NOT reduced by the delivered ids: one Outcome has one
     // notification id, so an old tray entry and a newer pending alarm can share
     // it. Each pending alarm is judged by the fire instant recorded in it.
-    final onDevice = await notifications.dueDateNotificationsOnDevice();
+    final onDevice = await kind.onDevice(notifications);
     final stillPending = onDevice.pending;
     // Plan only after the awaited device query: it can take long enough for
     // a 09:00 alarm to fire meanwhile. Planning earlier would call that alarm
     // still-future, cancel its fresh tray entry and re-schedule a passed time.
-    final plan = planDueDateNotifications(
+    final plan = planOutcomeNotifications(
       _latestOutcomes,
+      kind: kind,
       location: _location(),
       now: _now(),
     );
@@ -291,18 +412,31 @@ class DueDateNotificationReconciler {
           !replacedIds.contains(planned.id)) {
         continue;
       }
-      await notifications.scheduleReminder(
+      await kind.schedule(
+        notifications,
         id: planned.id,
         title: planned.title,
-        body: kDueDateNotificationBody,
+        body: kind.body,
         scheduledAt: planned.fireAt,
-        payload: dueDateNotificationPayload(planned.outcomeId,
-            fireAt: planned.fireAt),
+        payload: kind.payloadFor(planned.outcomeId, fireAt: planned.fireAt),
       );
       _scheduledById[planned.id] = planned;
     }
     _rescheduleAll = false;
   }
+}
+
+/// The due-date reconciler: [outcomes] are the due-dated, open Outcomes.
+class DueDateNotificationReconciler extends OutcomeNotificationReconciler {
+  DueDateNotificationReconciler({
+    required super.notifications,
+    required Stream<List<Todo>> outcomes,
+    super.location,
+    super.now,
+  }) : super(
+          kind: dueDateNotificationKind,
+          candidates: outcomes.map(_dueDateCandidates),
+        );
 }
 
 /// Null on web, where the notification stack is not initialised.

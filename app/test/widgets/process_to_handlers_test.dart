@@ -11,7 +11,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/follow_up_change.dart';
 import 'package:jeeves/models/action_draft.dart';
+import 'package:jeeves/models/time_context.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
@@ -76,6 +78,7 @@ class _FailingClarificationService extends DaoClarificationService {
     String? promotePlannedActionId,
     String? replacingCurrentActionId,
     Set<String>? personTagIds,
+    FollowUpChange? followUp,
     String? userId,
   }) =>
       Future<bool>.error(StateError('write failed'));
@@ -677,6 +680,112 @@ void main() {
       );
       expect((await db.captureDao.getCapture('wfc2'))!.clarifiedAt, isNotNull);
       expect(afterArg, ProcessAction.waitingFor);
+    });
+  });
+
+  group('ProcessToHandlers — Waiting For follow-up date (#692)', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    Future<void> openPickerAndSelectAlice(WidgetTester tester) async {
+      await tester.tap(find.text('Waiting For'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Alice'));
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('the picker offers an optional follow-up row that starts empty',
+        (tester) async {
+      final todo = await _insertTodo(db, id: 'f1');
+      await _insertPersonTag(db, id: 'alice', name: 'Alice');
+      await tester.pumpWidget(_harness(db,
+          todo: todo, personTags: [_personTag('alice', 'Alice')]));
+      await tester.tap(find.text('Waiting For'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Follow up from…'), findsOneWidget);
+      expect(find.byKey(const Key('follow-up-clear')), findsNothing);
+    });
+
+    testWidgets('confirming without touching the row writes no follow-up',
+        (tester) async {
+      final todo = await _insertTodo(db, id: 'f2');
+      await _insertPersonTag(db, id: 'alice', name: 'Alice');
+      await tester.pumpWidget(_harness(db,
+          todo: todo, personTags: [_personTag('alice', 'Alice')]));
+      await openPickerAndSelectAlice(tester);
+      await tester.tap(find.widgetWithText(FilledButton, 'Done'));
+      await tester.pumpAndSettle();
+
+      expect(await db.actionDao.getCurrentAction('f2'), isNull,
+          reason: 'untouched row: today\'s intent-only routing');
+    });
+
+    testWidgets('setting a date stores it as the TimeContext `from` of an '
+        'Action made from the title', (tester) async {
+      final todo = await _insertTodo(db, id: 'f3', title: 'Contract');
+      await _insertPersonTag(db, id: 'alice', name: 'Alice');
+      await tester.pumpWidget(_harness(db,
+          todo: todo, personTags: [_personTag('alice', 'Alice')]));
+      await openPickerAndSelectAlice(tester);
+      await tester.tap(find.byKey(const Key('follow-up-from')));
+      await tester.pumpAndSettle();
+      // The date picker opens on today; OK keeps it.
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Follow up from '), findsOneWidget);
+      await tester.tap(find.widgetWithText(FilledButton, 'Done'));
+      await tester.pumpAndSettle();
+
+      final action = (await db.actionDao.getCurrentAction('f3'))!;
+      expect(action.actionText, 'Contract');
+      final today = DateTime.now();
+      expect(TimeContext.tryParse(action.timeContext)!.fromDate,
+          DateTime(today.year, today.month, today.day));
+      expect((await db.todoDao.getTodo('f3'))!.dueDate, isNull);
+    });
+
+    testWidgets('cancelling the date picker or the sheet writes nothing',
+        (tester) async {
+      final todo = await _insertTodo(db, id: 'f4');
+      await _insertPersonTag(db, id: 'alice', name: 'Alice');
+      await tester.pumpWidget(_harness(db,
+          todo: todo, personTags: [_personTag('alice', 'Alice')]));
+      await openPickerAndSelectAlice(tester);
+      await tester.tap(find.byKey(const Key('follow-up-from')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.descendant(
+          of: find.byType(DatePickerDialog), matching: find.text('Cancel')));
+      await tester.pumpAndSettle();
+      expect(find.text('Follow up from…'), findsOneWidget);
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel')); // the sheet's
+      await tester.pumpAndSettle();
+
+      expect(await db.actionDao.getCurrentAction('f4'), isNull);
+    });
+
+    testWidgets('an existing date shows on the row and can be cleared',
+        (tester) async {
+      final todo = await _insertTodo(db, id: 'f5');
+      await _insertPersonTag(db, id: 'alice', name: 'Alice');
+      await seedCurrentAction(db,
+          outcomeId: 'f5', text: 'Chase', userId: _userId);
+      final future = DateTime.now().add(const Duration(days: 10));
+      await db.actionDao.setTimeContext(
+          'action-f5', TimeContext.create(fromDate: future));
+      await tester.pumpWidget(_harness(db,
+          todo: todo, personTags: [_personTag('alice', 'Alice')]));
+      await openPickerAndSelectAlice(tester);
+      expect(find.textContaining('Follow up from '), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('follow-up-clear')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Done'));
+      await tester.pumpAndSettle();
+
+      expect((await db.actionDao.getCurrentAction('f5'))!.timeContext, isNull);
     });
   });
 

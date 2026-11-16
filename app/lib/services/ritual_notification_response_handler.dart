@@ -3,6 +3,8 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import '../models/ritual.dart';
 import '../providers/nudge_action_outbox.dart';
 import 'due_date_notifications.dart' show outcomeIdFromNotificationPayload;
+import 'follow_up_notifications.dart'
+    show followUpOutcomeIdFromNotificationPayload;
 import 'notification_service.dart';
 
 /// Handles a tap on a notification or one of its action buttons (foreground and
@@ -38,7 +40,8 @@ Future<void> handleRitualNotificationResponse(
       if (response.payload == 'focus') {
         navigate('/focus/active');
       } else {
-        final outcomeId = outcomeIdFromNotificationPayload(response.payload);
+        final outcomeId = outcomeIdFromNotificationPayload(response.payload) ??
+            followUpOutcomeIdFromNotificationPayload(response.payload);
         final ritual = ritualIdFromNotificationPayload(response.payload);
         navigate(outcomeId != null
             ? '/task/$outcomeId'

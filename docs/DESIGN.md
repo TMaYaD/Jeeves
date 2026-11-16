@@ -561,6 +561,7 @@ Paths are under `app/lib/`; DPR means Daily Planning and ES means Evening Shutdo
 | Peek | No project or status control | Peeking must not change pick-up state. |
 | Clarify | Outlined fields, required title, inline pickers; draft for Captures; routing sets status | Clarification is a form. |
 | Clarify due picker | Today through +365 days | A new deadline is not set in the past. |
+| Waiting For sheet follow-up | Optional `Follow up from <date>` row on the routing bar's sheet; same bounds as the Time context From picker; × clears | A wait can carry a date to come back on. |
 | Waiting For | Person appears in group header | Avoid repeating the person on every row. |
 | Focus | Sprint count beside estimate; settled title struck | Supports engagement and settlement. |
 | Focus carried-over | Muted and read-only | Records yesterday rather than offering work to act on. |

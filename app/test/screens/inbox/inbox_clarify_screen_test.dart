@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/follow_up_change.dart';
 import 'package:jeeves/models/action_draft.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
@@ -160,6 +161,7 @@ class _FailingClarificationService extends DaoClarificationService {
     DateTime? dueDate,
     ActionDraft? action,
     Set<String>? personTagIds,
+    FollowUpChange? followUp,
     Set<String> tagIds = const {},
     String? outcomeId,
     DateTime? now,
@@ -185,6 +187,7 @@ class _BlockingClarificationService extends DaoClarificationService {
     DateTime? dueDate,
     ActionDraft? action,
     Set<String>? personTagIds,
+    FollowUpChange? followUp,
     Set<String> tagIds = const {},
     String? outcomeId,
     DateTime? now,
@@ -199,6 +202,7 @@ class _BlockingClarificationService extends DaoClarificationService {
       dueDate: dueDate,
       action: action,
       personTagIds: personTagIds,
+      followUp: followUp,
       tagIds: tagIds,
       outcomeId: outcomeId,
       now: now,

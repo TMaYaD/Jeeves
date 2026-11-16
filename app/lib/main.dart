@@ -15,6 +15,7 @@ import 'providers/onboarding_provider.dart';
 import 'providers/sync_lifecycle_provider.dart';
 import 'router.dart';
 import 'services/due_date_notifications.dart';
+import 'services/follow_up_notifications.dart';
 import 'services/notification_service.dart';
 import 'services/nudge_notification_scheduler.dart';
 import 'services/ritual_notification_response_handler.dart';
@@ -101,6 +102,8 @@ class JeevesApp extends ConsumerWidget {
     // Keeps a notification scheduled for each due-dated Outcome (09:00 on its
     // due day). Nothing else reads it, so without this watch it never runs.
     ref.watch(dueDateNotificationReconcilerProvider);
+    // The same for Waiting For follow-up dates (09:00 on the date).
+    ref.watch(followUpNotificationReconcilerProvider);
     // Keeps the Ritual notifications equal to the projection of the Nudge
     // queue over the coming week. Nothing else reads it.
     ref.watch(nudgeNotificationSchedulerProvider);

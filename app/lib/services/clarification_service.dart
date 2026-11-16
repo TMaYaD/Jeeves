@@ -27,6 +27,7 @@ import '../utils/uuid.dart';
 
 import '../database/gtd_database.dart';
 import '../models/action_draft.dart';
+import '../models/follow_up_change.dart';
 import '../models/routing_kind.dart';
 import '../providers/database_provider.dart';
 
@@ -97,6 +98,7 @@ abstract class ClarificationService {
     DateTime? dueDate,
     ActionDraft? action,
     Set<String>? personTagIds,
+    FollowUpChange? followUp,
     Set<String> tagIds = const {},
     String? outcomeId,
     DateTime? now,
@@ -137,6 +139,7 @@ abstract class ClarificationService {
     DateTime? dueDate,
     ActionDraft? action,
     Set<String>? personTagIds,
+    FollowUpChange? followUp,
     Set<String> tagIds = const {},
     String? outcomeId,
     DateTime? now,
@@ -229,6 +232,10 @@ abstract class ClarificationService {
   /// route, so a failed Action write leaves the route unapplied (#709).
   /// Mutually exclusive with [actionText]; must be non-blank.
   ///
+  /// [followUp], Waiting For only: sets or removes the follow-up date (the
+  /// `from` of the current Action's TimeContext) in the same transaction; see
+  /// [TodoDao.applyRouting]. Null leaves it untouched.
+  ///
   /// [promotePlannedActionId] promotes that `planned` Action to `current` (the
   /// Next Action dialog's queue tap, ADR-0004 story 5) in the same transaction
   /// as the route, so a failed route leaves the queue untouched (#788). With
@@ -247,6 +254,7 @@ abstract class ClarificationService {
     String? promotePlannedActionId,
     String? replacingCurrentActionId,
     Set<String>? personTagIds,
+    FollowUpChange? followUp,
     String? userId,
   });
 
@@ -312,6 +320,7 @@ class DaoClarificationService implements ClarificationService {
     DateTime? dueDate,
     ActionDraft? action,
     Set<String>? personTagIds,
+    FollowUpChange? followUp,
     Set<String> tagIds = const {},
     String? outcomeId,
     DateTime? now,
@@ -363,6 +372,7 @@ class DaoClarificationService implements ClarificationService {
         to: to,
         actionText: action?.text,
         personTagIds: personTagIds,
+        followUp: followUp,
         userId: personTagIds != null ? userId : null,
         now: now,
       );
@@ -436,6 +446,7 @@ class DaoClarificationService implements ClarificationService {
     DateTime? dueDate,
     ActionDraft? action,
     Set<String>? personTagIds,
+    FollowUpChange? followUp,
     Set<String> tagIds = const {},
     String? outcomeId,
     DateTime? now,
@@ -469,6 +480,7 @@ class DaoClarificationService implements ClarificationService {
           to: to,
           actionText: action?.text,
           personTagIds: personTagIds,
+          followUp: followUp,
           userId: personTagIds != null ? userId : null,
           now: now,
         );
@@ -547,6 +559,7 @@ class DaoClarificationService implements ClarificationService {
     String? promotePlannedActionId,
     String? replacingCurrentActionId,
     Set<String>? personTagIds,
+    FollowUpChange? followUp,
     String? userId,
   }) =>
       _db.todoDao.applyRouting(
@@ -557,6 +570,7 @@ class DaoClarificationService implements ClarificationService {
         promotePlannedActionId: promotePlannedActionId,
         replacingCurrentActionId: replacingCurrentActionId,
         personTagIds: personTagIds,
+        followUp: followUp,
         userId: userId,
       );
 
