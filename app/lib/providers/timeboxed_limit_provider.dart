@@ -53,6 +53,16 @@ final timeboxedLimitStatusProvider =
   },
 );
 
+/// Which Outcomes currently have a Timeboxed Action, live.
+///
+/// A map of Outcome id to whether that Outcome's current Action is Timeboxed.
+/// Used by the Focus list, where a row must show the mark without asking for
+/// each Outcome's Action one at a time.
+final currentTimeboxedProvider =
+    StreamProvider.autoDispose<Map<String, bool>>((ref) {
+  return ref.watch(databaseProvider).actionDao.watchCurrentTimeboxed();
+});
+
 /// The status of one Timeboxed Action, from its stints and its Sprints.
 TimeboxedLimitStatus _status({
   required int limitMinutes,

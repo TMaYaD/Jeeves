@@ -7,6 +7,7 @@ import '../providers/database_provider.dart';
 import '../providers/focus_session_planning_provider.dart';
 import '../providers/focus_session_provider.dart';
 import '../providers/focus_settings_provider.dart';
+import '../providers/timeboxed_limit_provider.dart';
 import '../providers/sprint_timer_provider.dart'
     show findBatchingCandidates, sprintTimerProvider;
 import '../models/day_timeline.dart';
@@ -43,6 +44,11 @@ class FocusScreen extends ConsumerWidget {
     final addedDuringTheDayIds =
         ref.watch(activeSessionAddedDuringExecutionTaskIdsProvider).value ??
             const <String>{};
+    // Which Outcomes are Timeboxed (issue #923). The mark rides the estimate
+    // on the row; absent from the map == not Timeboxed, and the map is empty
+    // until the first emission lands, so no row shows a mark speculatively.
+    final timeboxedIds = ref.watch(currentTimeboxedProvider).value ??
+        const <String, bool>{};
 
     return Scaffold(
       body: SafeArea(
@@ -161,6 +167,7 @@ class FocusScreen extends ConsumerWidget {
                                 settlement: settlements[t.id],
                                 addedDuringTheDay:
                                     addedDuringTheDayIds.contains(t.id),
+                                timeboxed: timeboxedIds[t.id] ?? false,
                               ),
                             )
                           else if (sortedTasks.isEmpty && nudgeHead != null)
@@ -310,6 +317,7 @@ Widget _focusOutcomeRow(
   required SessionSettlement? settlement,
   required int sprintMinutes,
   bool addedDuringTheDay = false,
+  bool timeboxed = false,
 }) {
   final estimate = todo.timeEstimate;
   final isDone = todo.doneAt != null;
@@ -332,7 +340,8 @@ Widget _focusOutcomeRow(
                   spacing: 6,
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    OutcomeMetaLine(timeEstimateMinutes: estimate),
+                    OutcomeMetaLine(
+                        timeEstimateMinutes: estimate, timeboxed: timeboxed),
                     if (estimate > sprintMinutes) ...[
                       Text(
                         '· ${(estimate / sprintMinutes).ceil()} sprints',

@@ -261,6 +261,32 @@ class TaskDetailNotifier {
     return present;
   }
 
+  /// Sets or clears the Timeboxed switch of the Action [actionId] the sheet
+  /// was opened for: whether its estimate is a limit rather than a guess
+  /// (issue #923).
+  ///
+  /// The switch lives on the Action, not the Outcome, so it is written
+  /// through the DAO with the same guard [setTimeContext] uses: the write is
+  /// dropped when that Action is no longer the Outcome's current one, so an
+  /// edit never lands on a successor the user did not see.
+  Future<bool> setTimeboxed(bool value, {required String actionId}) async {
+    var wrote = false;
+    final present = await _ifOutcomePresent(() async {
+      final current = await _db.actionDao.getCurrentAction(_todoId);
+      if (current == null || current.id != actionId) return;
+      wrote = await _db.actionDao.applySetTimeboxed(
+        current.id,
+        value,
+        ts: DateTime.now().toUtc(),
+      );
+    });
+    if (wrote) {
+      _db.notifyActionsViewWrite();
+      _db.notifyTodosViewWrite();
+    }
+    return present;
+  }
+
   Future<bool> setDueDate(DateTime date) =>
       _ifOutcomePresent(() => _db.todoDao.updateFields(
         _todoId,

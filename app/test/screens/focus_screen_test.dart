@@ -22,6 +22,8 @@ import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/providers/focus_settings_provider.dart';
 import 'package:jeeves/providers/nudge_triggers.dart';
 import 'package:jeeves/providers/system_trust_provider.dart';
+import 'package:jeeves/providers/timeboxed_limit_provider.dart';
+import 'package:jeeves/widgets/timeboxed_glyph.dart';
 import 'package:jeeves/models/ritual.dart';
 import 'package:jeeves/widgets/nudge_banner.dart';
 import 'package:jeeves/screens/focus_screen.dart';
@@ -80,6 +82,7 @@ Widget _buildScreen({
   NudgeSurfaceHead? head,
   List<Todo>? reviewSurface,
   Stream<List<Todo>>? reviewSurfaceStream,
+  Map<String, bool> timeboxed = const {},
 }) {
   final router = GoRouter(
     initialLocation: '/focus',
@@ -129,6 +132,9 @@ Widget _buildScreen({
       // The Inbox too full empty state reads the Capture count; unoverridden
       // it reaches the live Drift-backed inbox provider.
       unprocessedCaptureCountProvider.overrideWith((ref) => 51),
+      // Which Outcomes are Timeboxed (issue #923). Stubbed: a live Drift
+      // watch would outlive the test.
+      currentTimeboxedProvider.overrideWith((_) => Stream.value(timeboxed)),
     ],
     child: MaterialApp.router(routerConfig: router),
   );
@@ -229,6 +235,36 @@ void main() {
     expect(find.textContaining('sprints'), findsOneWidget);
     expect(find.text('Start'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a Timeboxed Outcome carries the limit mark on its row',
+      (tester) async {
+    await tester.pumpWidget(_buildScreen(
+      activeSession: _openSession(),
+      tasks: [Todo(
+        id: 't1', title: 'Bounded work', userId: 'test-user',
+        createdAt: DateTime(2030), intent: 'next', timeEstimate: 30,
+      )],
+      timeboxed: {'t1': true},
+    ));
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byType(TimeboxedGlyph), findsOneWidget);
+  });
+
+  testWidgets('a plain estimate carries no limit mark', (tester) async {
+    await tester.pumpWidget(_buildScreen(
+      activeSession: _openSession(),
+      tasks: [Todo(
+        id: 't1', title: 'Open work', userId: 'test-user',
+        createdAt: DateTime(2030), intent: 'next', timeEstimate: 30,
+      )],
+    ));
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byType(TimeboxedGlyph), findsNothing);
   });
 
   testWidgets(

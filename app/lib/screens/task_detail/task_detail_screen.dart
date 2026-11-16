@@ -11,6 +11,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../database/daos/action_dao.dart' show TerminatedAction;
 import '../../database/gtd_database.dart';
+import '../../models/timeboxed.dart';
 import '../../providers/focus_session_provider.dart';
 import '../../providers/sprint_timer_provider.dart' show sprintTimerProvider;
 import '../../providers/task_detail_provider.dart';
@@ -197,6 +198,9 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   Widget build(BuildContext context) {
     final todoAsync = ref.watch(taskDetailTodoProvider(widget.todoId));
     final tagsAsync = ref.watch(taskTagsProvider(widget.todoId));
+    // The Timeboxed switch lives on the Action, not the Outcome (issue #923),
+    // so the mark on the estimate tag is read from the current Action.
+    final action = ref.watch(currentActionProvider(widget.todoId)).value;
 
     return GestureDetector(
       onTap: () => FocusScope.of(context).unfocus(),
@@ -309,13 +313,23 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                       OutcomeAttributeStrip(
                         energyLevel: todo.energyLevel,
                         timeEstimateMinutes: todo.timeEstimate,
+                        timeboxed: isTimeboxedAction(
+                          timeboxed: action?.timeboxed,
+                          timeEstimate: todo.timeEstimate,
+                        ),
                         dueDate: todo.dueDate,
                         timeContextChip:
                             TimeContextChip(outcomeId: widget.todoId),
                         onEnergyTap: () => showOutcomeEnergyLevelSheet(
                             context, _notifier, todo.energyLevel),
                         onEstimateTap: () => showOutcomeTimeEstimateSheet(
-                            context, _notifier, todo.timeEstimate),
+                          context,
+                          _notifier,
+                          current: todo.timeEstimate,
+                          actionText: action?.actionText ?? todo.title,
+                          actionId: action?.id,
+                          timeboxed: action?.timeboxed ?? false,
+                        ),
                         onDueTap: () async {
                           final picked = await pickOutcomeDueDate(context, todo.dueDate);
                           if (picked != null) {

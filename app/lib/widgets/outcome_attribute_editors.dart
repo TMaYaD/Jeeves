@@ -7,10 +7,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/gtd_database.dart';
+import '../models/estimate.dart';
 import '../providers/task_detail_provider.dart';
-import 'clarify_shared_widgets.dart';
 import 'context_tag_picker.dart';
 import 'meta_chip.dart';
+import 'timeboxed_glyph.dart';
 
 void showOutcomeContextTagEditor(BuildContext context, String todoId) {
   showModalBottomSheet(
@@ -56,50 +57,244 @@ void showOutcomeContextTagEditor(BuildContext context, String todoId) {
   );
 }
 
+/// The estimate sheet: the estimate, and whether it is a limit.
+///
+/// A stepper rather than a list of options, because the sheet now carries a
+/// second decision — **Timeboxed** (issue #923) — and a list of options
+/// leaves no room for it. The steps walk the shared ladder, so an estimate
+/// set here means the same minutes as one set on any other surface.
+///
+/// The switch belongs to the Action, so it is written through [actionId]; the
+/// estimate belongs to the Outcome and is written through the notifier. With
+/// no estimate there is nothing to limit, so the switch is unavailable — and
+/// clearing the estimate clears the switch with it.
 Future<void> showOutcomeTimeEstimateSheet(
-    BuildContext context, TaskDetailNotifier notifier, int? current) async {
-  // The shared ladder plus a `null` "None" row — the same options and the
-  // same labels the clarify surfaces and the planned-action sheet offer, so
-  // an estimate reads identically wherever it is set or shown.
-  final times = <int?>[...kEstimateOptionsMinutes, null];
-  showModalBottomSheet(
+  BuildContext context,
+  TaskDetailNotifier notifier, {
+  required int? current,
+  String? actionText,
+  String? actionId,
+  bool timeboxed = false,
+}) {
+  return showModalBottomSheet<void>(
     context: context,
     backgroundColor: Colors.white,
-    builder: (ctx) => SafeArea(
+    isScrollControlled: true,
+    builder: (ctx) => _EstimateSheet(
+      notifier: notifier,
+      current: current,
+      actionText: actionText,
+      actionId: actionId,
+      timeboxed: timeboxed,
+    ),
+  );
+}
+
+/// The sheet's body: a stepper over the estimate ladder and the Timeboxed
+/// switch beside it.
+class _EstimateSheet extends StatefulWidget {
+  const _EstimateSheet({
+    required this.notifier,
+    required this.current,
+    required this.timeboxed,
+    this.actionText,
+    this.actionId,
+  });
+
+  final TaskDetailNotifier notifier;
+
+  /// The estimate as it stands now; null when there is none.
+  final int? current;
+
+  /// The Action the Timeboxed switch belongs to; null where there is none to
+  /// write (an Outcome with no current Action).
+  final String? actionId;
+
+  /// The Action's title, for the sheet's heading.
+  final String? actionText;
+
+  /// Whether the Action's estimate is a limit right now.
+  final bool timeboxed;
+
+  @override
+  State<_EstimateSheet> createState() => _EstimateSheetState();
+}
+
+class _EstimateSheetState extends State<_EstimateSheet> {
+  /// The estimate as the sheet holds it: exactly what is stored, until the
+  /// user steps it onto the ladder.
+  late int? _minutes = widget.current;
+
+  /// Whether the user has moved the estimate. Until they do, saving leaves
+  /// the stored value alone: an estimate that is merely being given a
+  /// Timeboxed switch must not be quietly rewritten.
+  bool _stepped = false;
+
+  /// The switch as the sheet holds it. Off whenever there is no estimate to
+  /// limit.
+  late bool _timeboxed = widget.timeboxed;
+
+  bool get _hasEstimate => _minutes != null;
+
+  /// Whether the ladder has a step above the current value.
+  bool get _atTop => _minutes != null && stepEstimateUp(_minutes) == null;
+
+  void _stepDown() {
+    setState(() {
+      _minutes = stepEstimateDown(_minutes);
+      _stepped = true;
+      // No estimate, no limit to mark.
+      if (_minutes == null) _timeboxed = false;
+    });
+  }
+
+  void _stepUp() {
+    setState(() {
+      final next = stepEstimateUp(_minutes);
+      // At the top of the ladder there is nowhere to go; the estimate stands.
+      if (next == null) return;
+      _minutes = next;
+      _stepped = true;
+    });
+  }
+
+  Future<void> _save() async {
+    final notifier = widget.notifier;
+    if (_stepped && _minutes != widget.current) {
+      if (_minutes == null) {
+        await notifier.clearTimeEstimate();
+      } else {
+        await notifier.setTimeEstimate(_minutes!);
+      }
+    }
+    // The switch rides the estimate: with no estimate there is no limit, and
+    // clearing the estimate has already cleared the switch with it.
+    final actionId = widget.actionId;
+    if (actionId != null && _hasEstimate && _timeboxed != widget.timeboxed) {
+      await notifier.setTimeboxed(_timeboxed, actionId: actionId);
+    }
+    if (mounted) Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 16),
+        padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-              child: Text('Time Estimate', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            Text(
+              widget.actionText == null
+                  ? 'Estimate'
+                  : 'Estimate · ${widget.actionText}',
+              style: const TextStyle(
+                  fontSize: 18, fontWeight: FontWeight.bold),
             ),
-            const Divider(color: Color(0xFFF3F4F6)),
-            Flexible(
-              child: ListView(
-                shrinkWrap: true,
-                children: times.map((val) => ListTile(
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 24),
-                  title: Text(val == null ? 'None' : formatMinutesLabel(val), style: const TextStyle(color: Color(0xFF374151))),
-                  trailing: val == current ? const Icon(Icons.check, color: Color(0xFF2563EB)) : null,
-                  onTap: () {
-                    if (val == null) {
-                      notifier.clearTimeEstimate();
-                    } else {
-                      notifier.setTimeEstimate(val);
-                    }
-                    Navigator.pop(ctx);
-                  },
-                )).toList(),
-              ),
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                IconButton(
+                  key: const Key('estimate_sheet_less'),
+                  onPressed: _hasEstimate ? _stepDown : null,
+                  icon: const Icon(Icons.remove),
+                  tooltip: 'Less',
+                ),
+                Expanded(
+                  child: Center(
+                    child: Text(
+                      key: const Key('estimate_sheet_value'),
+                      _hasEstimate
+                          ? formatMinutesLabel(_minutes!)
+                          : 'No estimate',
+                      style: const TextStyle(
+                          fontSize: 20, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ),
+                IconButton(
+                  key: const Key('estimate_sheet_more'),
+                  onPressed: _atTop ? null : _stepUp,
+                  icon: const Icon(Icons.add),
+                  tooltip: 'More',
+                ),
+                const SizedBox(width: 16),
+                _TimeboxedToggle(
+                  value: _timeboxed,
+                  enabled: _hasEstimate,
+                  onChanged: (value) => setState(() => _timeboxed = value),
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  key: const Key('estimate_sheet_cancel'),
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Cancel'),
+                ),
+                const SizedBox(width: 12),
+                FilledButton(
+                  key: const Key('estimate_sheet_save'),
+                  onPressed: _save,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF2667B7),
+                  ),
+                  child: const Text('Very good'),
+                ),
+              ],
             ),
           ],
         ),
       ),
-    ),
-  );
+    );
+  }
+}
+
+/// The Timeboxed switch: the mark of a limit, pressed or not.
+///
+/// The mark is the estimate's own glyph; the press is the switch. With no
+/// estimate there is nothing to limit, so the switch is unavailable — and
+/// says why.
+class _TimeboxedToggle extends StatelessWidget {
+  const _TimeboxedToggle({
+    required this.value,
+    required this.enabled,
+    required this.onChanged,
+  });
+
+  final bool value;
+  final bool enabled;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    const on = Color(0xFF2563EB);
+    const off = Color(0xFF9CA3AF);
+    final ink = enabled && value ? on : off;
+    return Tooltip(
+      message: enabled
+          ? 'Timeboxed: treat the estimate as a limit. Each sprint past it '
+              'is discouraged.'
+          : 'Set an estimate first — there is nothing to limit without one.',
+      child: InkWell(
+        key: const Key('estimate_sheet_timeboxed'),
+        onTap: enabled ? () => onChanged(!value) : null,
+        borderRadius: BorderRadius.circular(4),
+        child: Container(
+          padding: const EdgeInsets.all(6),
+          decoration: BoxDecoration(
+            color: value && enabled ? on.withValues(alpha: 0.08) : null,
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: TimeboxedGlyph(size: 16, color: ink),
+        ),
+      ),
+    );
+  }
 }
 
 Future<void> showOutcomeEnergyLevelSheet(
