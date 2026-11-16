@@ -213,17 +213,47 @@ class SprintDao extends DatabaseAccessor<GtdDatabase> with _$SprintDaoMixin {
   /// rows the caller has just closed — inside the caller's capturing
   /// transaction.
   ///
-  /// A Sprint belongs to a TimeLog when it is the user's latest Sprint on the
-  /// log's Action that started at or after the log did and has no stored end.
-  /// A same-user Sprint that belongs to another, still-open TimeLog (two offline
-  /// devices each opened one) is left running.
+  /// A Sprint belongs to a TimeLog when it is the user's *earliest* open Sprint
+  /// on the log's Action that started at or after the log did and before the
+  /// start of any later, still-open TimeLog of the same user on that Action.
+  /// Two offline devices that each opened a TimeLog and a Sprint on one Action
+  /// therefore map one-to-one, and closing the older TimeLog leaves the newer
+  /// one's Sprint running.
   static Future<void> closeRunningSprintsOfLogs(
     GtdDatabase db,
     DateTime ts,
     Iterable<TimeLog> closedLogs,
   ) async {
+    DateTime? ms(String iso) {
+      final parsed = DateTime.tryParse(iso)?.toUtc();
+      // Sprint instants are millisecond-truncated; a TimeLog's may not be.
+      return parsed == null
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch(parsed.millisecondsSinceEpoch,
+              isUtc: true);
+    }
+
     for (final log in closedLogs) {
-      final logStart = DateTime.tryParse(log.startedAt)?.toUtc();
+      final logStart = ms(log.startedAt);
+      final actionMatches = log.actionId == null
+          ? db.timeLogs.actionId.isNull()
+          : db.timeLogs.actionId.equals(log.actionId!);
+      final laterOpenLogs = await (db.select(db.timeLogs)
+            ..where((t) =>
+                t.userId.equals(log.userId) &
+                t.endedAt.isNull() &
+                t.id.isNotValue(log.id) &
+                actionMatches))
+          .get();
+      DateTime? upperBound;
+      for (final other in laterOpenLogs) {
+        final otherStart = ms(other.startedAt);
+        if (otherStart == null || logStart == null) continue;
+        if (!otherStart.isAfter(logStart)) continue;
+        if (upperBound == null || otherStart.isBefore(upperBound)) {
+          upperBound = otherStart;
+        }
+      }
       final candidates = await (db.select(db.sprints)
             ..where((s) =>
                 s.userId.equals(log.userId) &
@@ -232,18 +262,16 @@ class SprintDao extends DatabaseAccessor<GtdDatabase> with _$SprintDaoMixin {
                     ? s.actionId.isNull()
                     : s.actionId.equals(log.actionId!)))
             ..orderBy([
-              (s) => OrderingTerm.desc(s.startedAt),
-              (s) => OrderingTerm.desc(s.id),
+              (s) => OrderingTerm.asc(s.startedAt),
+              (s) => OrderingTerm.asc(s.id),
             ]))
           .get();
       for (final sprint in candidates) {
         final start = DateTime.tryParse(sprint.startedAt)?.toUtc();
-        // The Sprint start is truncated to the millisecond; the log's is not.
-        if (logStart != null &&
-            start != null &&
-            start.isBefore(DateTime.fromMillisecondsSinceEpoch(
-                logStart.millisecondsSinceEpoch,
-                isUtc: true))) {
+        if (logStart != null && start != null && start.isBefore(logStart)) {
+          continue;
+        }
+        if (upperBound != null && start != null && !start.isBefore(upperBound)) {
           continue;
         }
         await _endSprintById(db, ts, sprint.id);

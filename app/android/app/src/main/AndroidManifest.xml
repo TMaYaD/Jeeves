@@ -3,7 +3,12 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <!-- Required for exact sprint/break end notifications that fire during Doze mode -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
+    <!-- Backup is off: a restored phone would inherit the source phone's device
+         identity and sync state. See res/xml and docs/REQUIREMENTS.md (Epic 11). -->
     <application
+        android:allowBackup="false"
+        android:fullBackupContent="@xml/full_backup_content"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:label="@string/app_name"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">

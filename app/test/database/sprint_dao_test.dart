@@ -275,6 +275,41 @@ void main() {
           reason: "the other TimeLog's Sprint keeps running");
     });
 
+    test(
+        'two offline TimeLogs on the same Action: closing the older ends its '
+        'own Sprint, not the newer one', () async {
+      final outcome = await seedOutcome();
+      await db.timeLogDao.openLog(taskId: outcome, userId: _userId, now: _t0);
+      await db.sprintDao.startSprint(
+          taskId: outcome, userId: _userId, plannedDurationMinutes: 25, now: _t0);
+      final firstLog = await db.select(db.timeLogs).getSingle();
+      // Device two, offline, on the same Action: its own open TimeLog and a
+      // later Sprint, converged in without going through openLog.
+      await db.into(db.timeLogs).insert(TimeLogsCompanion.insert(
+          id: 'log-2',
+          userId: _userId,
+          taskId: outcome,
+          actionId: Value(firstLog.actionId),
+          startedAt: _at(2).toIso8601String()));
+      await db.into(db.sprints).insert(SprintsCompanion.insert(
+          id: 'sprint-2',
+          userId: _userId,
+          actionId: Value(firstLog.actionId),
+          startedAt: encodeInstant(_at(2))!,
+          plannedDurationMinutes: 25));
+
+      // Close only the older TimeLog, as the helper is handed it.
+      await db.capturing(() => SprintDao.closeRunningSprintsOfLogs(
+          db, _at(7), [firstLog]));
+
+      final all = await rows();
+      expect(all.firstWhere((r) => r.id != 'sprint-2').endedAt,
+          encodeInstant(_at(7)),
+          reason: "the older TimeLog's own Sprint ends");
+      expect(all.firstWhere((r) => r.id == 'sprint-2').endedAt, isNull,
+          reason: "the newer TimeLog's Sprint keeps running");
+    });
+
     test("closing one user's Sprint leaves another user's open", () async {
       final outcome = await seedOutcome();
       await db.sprintDao.startSprint(

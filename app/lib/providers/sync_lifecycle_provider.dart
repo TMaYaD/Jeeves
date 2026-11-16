@@ -17,6 +17,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../sync/host/hosted_capture.dart' show clearEnrolledMemberId;
 import '../sync/sync_lifecycle.dart';
 import 'auth_provider.dart';
 import 'database_provider.dart';
@@ -42,7 +43,22 @@ final syncLifecycleProvider = FutureProvider<SyncLifecycle?>((ref) async {
     // keeps a token refresh from churning this provider.
     final restorePending =
         ref.watch(authTokenProvider.select((token) => token.isLoading));
-    if (!restorePending) ref.watch(domainOpCaptureProvider).unbind();
+    if (restorePending) return null;
+    ref.watch(domainOpCaptureProvider).unbind();
+    // A lifecycle would also have settled the stored member id, and none exists
+    // here. A process killed while signed in never ran `deactivate()`, so the
+    // previous account's member id can still be on the row — and every write made
+    // signed out would be stamped with it while nothing authors it. Cleared on
+    // the domain store directly, issued in this same turn: going through the
+    // sync host would await its start between the decision and the write, and a
+    // sign-in landing in that wait would have its freshly stored id wiped.
+    final domain = ref.watch(databaseProvider);
+    try {
+      await clearEnrolledMemberId(domain);
+    } catch (error) {
+      // Not worth an error state: two status providers await this one.
+      debugPrint('sync lifecycle: clearing the member id failed — $error');
+    }
     return null;
   }
 

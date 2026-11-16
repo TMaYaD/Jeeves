@@ -524,6 +524,7 @@ their reasons so that a new surface can reuse the same contract.
 | Representation | Fields and layout | Interaction contract |
 |---|---|---|
 | `OutcomeMetaLine` | Read-only chips, ordered energy · estimate · time logged · due. Unset attributes omitted; the caller supplies the attributes it shows. | No gestures; the containing surface owns the tap target. |
+| [`AddedDuringTheDayTag`](../app/lib/widgets/added_during_the_day_tag.dart) | Text tag `Added during the day`, marking an Outcome added to the Plan during Execution rather than chosen in Planning. Last item in the row's meta line. 12sp medium `#4B5563` on `#F3F4F6`, no icon; the text carries the state, not colour. Shown on the Now screen's Plan list and on the Evening Shutdown unfinished-Outcome card and Settled rows. | No gestures; the containing surface owns the tap target. |
 | [`OutcomeRow`](../app/lib/widgets/outcome_row.dart) | Optional leading slot, title (normal, muted or struck), secondary line, metadata (default `OutcomeMetaLine`), optional trailing slot. Flat or framed with r12 border and h16/v12 padding. | Whole-row tap and long-press callbacks. No ink or chevron when no tap callback exists. |
 | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Banner (icon, text, tone), people chips, title, current Action, notes, optional metadata and actions. Absent Action and notes are omitted. | Injected `ProcessToHandlers` or resolution buttons. |
 | Outcome detail / [`OutcomeAttributeStrip`](../app/lib/widgets/outcome_attribute_strip.dart) | Title → editable attribute strip → contexts → people → Plan → notes. Strip uses the metadata order with shared attribute editors. | Each editable chip has an ancestor tap target; logged time stays read-only. |
@@ -547,10 +548,10 @@ Paths are under `app/lib/`; DPR means Daily Planning and ES means Evening Shutdo
 | DPR plan summary — `screens/planning/steps/plan_summary_step.dart` | Title, off-Up-Next reason, estimate, energy | Framed `OutcomeRow`, checkbox and selection controls | Peek, long-press selection, Select/Skip/Undo |
 | DPR re-clarify — `screens/planning/steps/task_review_step.dart` | Hint, title, notes, current Action | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | `ProcessToHandlers` |
 | DPR scheduled — `screens/planning/steps/scheduled_review_step.dart` | Title, due, estimate | Framed `OutcomeRow` | None |
-| ES settled — `screens/shutdown/steps/settled_review_step.dart` | Settlement icon, title, estimate vs actual | Framed `OutcomeRow` | None |
-| ES disposition — `screens/shutdown/steps/unfinished_tasks_step.dart` | Title, current Action, notes, estimate, logged | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Done (verdict sheet) / Roll over / Return to Next / Defer |
+| ES settled — `screens/shutdown/steps/settled_review_step.dart` | Settlement icon, title, estimate vs actual, added-during-the-day tag | Framed `OutcomeRow` | None |
+| ES disposition — `screens/shutdown/steps/unfinished_tasks_step.dart` | Title, current Action, notes, estimate, logged, added-during-the-day tag | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Done (verdict sheet) / Roll over / Return to Next / Defer |
 | Weekly review — `screens/periodic_review/steps/list_review_step.dart` | Banner, people, title, current Action, notes | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Injected `ProcessToHandlers` |
-| Focus — `screens/focus_screen.dart` | Title, due, estimate, sprint count | Flat `OutcomeRow`, trailing Start/status | Open detail; Start/Resume |
+| Focus — `screens/focus_screen.dart` | Title, due, estimate, sprint count, added-during-the-day tag | Flat `OutcomeRow`, trailing Start/status | Open detail; Start/Resume |
 | Focus carried-over — `screens/focus_screen.dart` | Muted title, estimate | Flat `OutcomeRow`, leading icon | None |
 | Search — `screens/search/widgets/search_result_tile.dart` | Title, snippet, match hint, status | Flat `OutcomeRow` | Capture → clarify; Outcome → detail |
 | GTD lists / Project — `screens/common/gtd_list_screen.dart` | Title, energy, estimate, due when set | Flat `OutcomeRow` | Open detail; long-press multi-selects |
