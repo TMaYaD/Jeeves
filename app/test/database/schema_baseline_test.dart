@@ -82,7 +82,7 @@ void main() {
   setUpAll(configureSqliteForTests);
 
   group('schema version', () {
-    test('is 10 — nine onUpgrade steps behind the fresh baseline', () async {
+    test('is 11 — ten onUpgrade steps behind the fresh baseline', () async {
       final db = _openInMemory();
       addTearDown(db.close);
       expect(db.schemaVersion, 11);
@@ -91,7 +91,7 @@ void main() {
         await db.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        10,
+        11,
       );
     });
   });
