@@ -152,6 +152,8 @@ To build a hybrid productivity application that merges the rigid organizational 
 
   Intent survives in one direction only. A row the export buckets into Next or Waiting is left at whatever Intent the user has since given it, so a locally demoted Outcome stays demoted. A row the export buckets into Someday/Maybe or Trash is re-bucketed there on every run, so a local promotion of such a row back to Next does not survive a re-import — a known asymmetry, not a deliberate ownership rule.
 
+* **Android system backup carries no Jeeves data.** Jeeves opts out of Android's cloud backup and phone-to-phone transfer. A phone set up from another phone's backup starts as a new, empty Jeeves with its own device identity. A person's data reaches a new phone through sync, or through the export; nothing else moves it.
+
 * **Build version in Settings → About:** Settings → About always shows the running build's version name and build number, plus the short commit sha when the build carries one (CI builds do; local builds omit it) (e.g. `Version 1.3.0-alpha.17 (412) · a1b2c3d`), read from the build rather than a checked-in value, so a rollout can be checked from the device.
 
 * **Export (developer options):** The app can export the current user's GTD data to a JSON file: Captures, Outcomes, Actions, Tags (Labels, Areas, Contexts, Projects, Persons), TimeLogs, FocusSessions and their links. No preference and no credential is ever exported. The export is the same encoding sync uses ([ADR-0047](adr/0047-export-is-the-op-log-wire-encoding-and-import-detects-it-silently.md)), so a round-trip loses nothing.

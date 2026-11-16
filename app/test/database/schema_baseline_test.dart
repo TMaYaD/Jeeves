@@ -942,6 +942,33 @@ void main() {
     });
   });
 
+  group('device identity is minted per store', () {
+    test('two fresh stores get different node ids and no enrolled member',
+        () async {
+      Future<Map<String, String?>> identityOf(GtdDatabase db) async {
+        final row = await db
+            .customSelect('SELECT device_node_id, enrolled_member_id_hex '
+                'FROM device_clock_identity')
+            .getSingle();
+        return {
+          'node': row.read<String>('device_node_id'),
+          'member': row.read<String?>('enrolled_member_id_hex'),
+        };
+      }
+
+      final first = _openInMemory();
+      final second = _openInMemory();
+      addTearDown(first.close);
+      addTearDown(second.close);
+
+      final a = await identityOf(first);
+      final b = await identityOf(second);
+      expect(a['node'], isNot(b['node']));
+      expect(a['member'], isNull);
+      expect(b['member'], isNull);
+    });
+  });
+
   group('v10 onUpgrade adds focus_session_tasks.added_during_execution_at', () {
     test('adds a nullable column and keeps every existing Plan entry', () async {
       final raw = sqlite3.openInMemory();
