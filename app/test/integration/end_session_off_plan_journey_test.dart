@@ -118,6 +118,7 @@ void main() {
         expect(find.text('End Session'), findsNothing);
         expect(find.text('Begin Evening Shutdown'), findsOneWidget);
 
+        await tester.ensureVisible(find.text('Begin Evening Shutdown'));
         await tester.tap(find.text('Begin Evening Shutdown'));
         await settleWithRealAsync(tester);
         expect(find.text('shutdown-route'), findsOneWidget);
@@ -148,6 +149,7 @@ void main() {
       await settleWithRealAsync(tester);
 
       expect(find.text('End Session'), findsOneWidget);
+      await tester.ensureVisible(find.text('End Session'));
       await tester.tap(find.text('End Session'));
       await settleWithRealAsync(tester);
       expect(find.text('inbox-route'), findsOneWidget);

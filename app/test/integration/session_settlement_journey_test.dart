@@ -36,6 +36,7 @@ import 'package:jeeves/screens/active_focus_screen.dart' show focusNextTask;
 import 'package:jeeves/screens/focus_screen.dart';
 import 'package:jeeves/services/clarification_service.dart';
 import 'package:jeeves/services/notification_service.dart';
+import 'package:jeeves/widgets/outcome_row.dart';
 import 'package:jeeves/widgets/reclarify_prompt_sheet.dart';
 
 import '../helpers/settle.dart';
@@ -87,6 +88,11 @@ Widget _nowScreen(GtdDatabase db) {
     child: MaterialApp.router(routerConfig: router),
   );
 }
+
+/// A Plan row's title. The same title also names the Outcome's tile on the day
+/// timeline, so a bare `find.text` would find two.
+Finder _rowTitle(String title) => find.descendant(
+    of: find.byType(OutcomeRow), matching: find.text(title));
 
 void main() {
   setUpAll(configureSqliteForTests);
@@ -162,9 +168,9 @@ void main() {
       await tester.pumpWidget(_nowScreen(db));
       await settleWithRealAsync(tester);
 
-      final struck = tester.widget<Text>(find.text('Draft the proposal'));
+      final struck = tester.widget<Text>(_rowTitle('Draft the proposal'));
       expect(struck.style?.decoration, TextDecoration.lineThrough);
-      final live = tester.widget<Text>(find.text('Book the venue'));
+      final live = tester.widget<Text>(_rowTitle('Book the venue'));
       expect(live.style?.decoration, isNot(TextDecoration.lineThrough));
       expect(find.text('Start'), findsOneWidget);
 
@@ -295,9 +301,9 @@ void main() {
       await tester.pumpWidget(_nowScreen(db));
       await settleWithRealAsync(tester);
 
-      final struck = tester.widget<Text>(find.text('Plan member'));
+      final struck = tester.widget<Text>(_rowTitle('Plan member'));
       expect(struck.style?.decoration, TextDecoration.lineThrough);
-      final live = tester.widget<Text>(find.text('No verdict yet'));
+      final live = tester.widget<Text>(_rowTitle('No verdict yet'));
       expect(live.style?.decoration, isNot(TextDecoration.lineThrough));
 
       await tester.pumpWidget(const SizedBox.shrink());

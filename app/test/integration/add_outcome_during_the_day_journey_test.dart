@@ -6,6 +6,7 @@
 /// instant with the default 480 available minutes, so "time left" is exact.
 library;
 
+import 'package:jeeves/widgets/outcome_row.dart';
 import 'package:jeeves/providers/day_timeline_provider.dart';
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
@@ -52,6 +53,11 @@ Future<void> _insertOutcome(GtdDatabase db, String id,
         [estimate, id]);
   }
 }
+
+/// A Plan row's title on Now. The same title also names the Outcome's tile on
+/// the day timeline, so a bare `find.text` would find two.
+Finder _nowRowTitle(String title) => find.descendant(
+    of: find.byType(OutcomeRow), matching: find.text(title));
 
 Widget _app(GtdDatabase db, {required DateTime now}) {
   final router = GoRouter(
@@ -124,8 +130,8 @@ void main() {
     await settleWithRealAsync(tester);
 
     // Back on Now: both Outcomes are on the Plan, only the added one is marked.
-    expect(find.text('Outcome morning'), findsOneWidget);
-    expect(find.text('Outcome later'), findsOneWidget);
+    expect(_nowRowTitle('Outcome morning'), findsOneWidget);
+    expect(_nowRowTitle('Outcome later'), findsOneWidget);
     expect(find.byType(AddedDuringTheDayTag), findsOneWidget);
     expect(find.text(AddedDuringTheDayTag.label), findsOneWidget);
 
@@ -156,7 +162,7 @@ void main() {
     await tester.tap(find.byKey(const Key('add_to_plan_confirm')));
     await settleWithRealAsync(tester);
 
-    expect(find.text('Outcome later'), findsOneWidget);
+    expect(_nowRowTitle('Outcome later'), findsOneWidget);
     expect(find.byType(AddedDuringTheDayTag), findsOneWidget);
 
     await _dispose(tester);

@@ -146,6 +146,7 @@ void main() {
     try {
       await openCompletionView(tester);
 
+      await tester.ensureVisible(find.text('Start Day'));
       await tester.tap(find.text('Start Day'));
       await _pumpFrames(tester);
 
@@ -163,6 +164,7 @@ void main() {
     await openCompletionView(tester);
     hold.armed = true;
 
+    await tester.ensureVisible(find.text('Start Day'));
     await tester.tap(find.text('Start Day'));
     for (var i = 0; i < 20 && !hold.reached.isCompleted; i++) {
       await tester.runAsync(() => pumpEventQueue());

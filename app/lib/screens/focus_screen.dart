@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -98,14 +97,15 @@ class FocusScreen extends ConsumerWidget {
                                       RitualId.eveningShutdown))
                       ? surfaceHead
                       : null;
-                  return ListView(
-                        physics: const ClampingScrollPhysics(),
-                        // A short, finite column: build it whole, so the
-                        // timeline's height never leaves the Plan's rows or the
-                        // shutdown entry unbuilt below the fold.
-                        scrollCacheExtent: const ScrollCacheExtent.pixels(2000),
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 20, vertical: 8),
+                  // A column, not a lazy list: it is short and finite, and the
+                  // timeline's height must never leave the Plan's rows or the
+                  // shutdown entry unbuilt below the fold.
+                  return SingleChildScrollView(
+                      physics: const ClampingScrollPhysics(),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 20, vertical: 8),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           const Text(
                             "Today's Schedule",
@@ -240,7 +240,8 @@ class FocusScreen extends ConsumerWidget {
                           ],
                           const SizedBox(height: 32),
                         ],
-                      );
+                      ),
+                    );
                 },
               ),
             ),
