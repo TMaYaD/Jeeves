@@ -171,8 +171,47 @@ void main() {
             .get())
         .length;
 
+    Future<int> todoCountFor(StackPhone phone, String id) async => (await phone
+            .domain
+            .customSelect('SELECT id FROM todos WHERE id = ?',
+                variables: [Variable<String>(id)])
+            .get())
+        .length;
+
     Future<String?> theme(StackPhone phone) =>
         phone.domain.userPreferencesDao.get(_userId, 'theme');
+
+    test('device-node state of both Workspaces survives a rebuild of either',
+        () async {
+      final phone = await hostedPhone();
+      await writeOutcome(phone, _outcomeBeforeEnrolment);
+      await phone.domain.userPreferencesDao.set(_userId, 'theme', '"dark"');
+
+      Future<List<Object?>> themeClock() async {
+        final row = await phone.syncStore.customSelect(
+          "SELECT DISTINCT member_id_hex FROM field_clocks "
+          "WHERE collection = 'user_preferences'",
+        ).get();
+        return row.map((r) => r.read<String>('member_id_hex')).toList();
+      }
+
+      final nodeId = phone.host!.deviceNodeId;
+      expect(await themeClock(), [nodeId],
+          reason: 'precondition: the preference is clocked by the device node');
+
+      for (final client in [
+        phone.stack.defaultClient,
+        await phone.preferencesClient,
+      ]) {
+        final affected = await client.rebuildFromOpLog();
+        await phone.host!.projector.project(affected);
+
+        expect((await titleClock(phone, _outcomeBeforeEnrolment))[2], nodeId);
+        expect(await themeClock(), [nodeId]);
+        expect(await todoCountFor(phone, _outcomeBeforeEnrolment), 1);
+        expect(await theme(phone), '"dark"');
+      }
+    });
 
     test('rebuilding preferences keeps the GTD merge state and rows', () async {
       final phone = await enrolledPhoneWithBothWorkspaces();
