@@ -137,7 +137,7 @@ void main() {
         NativeDatabase.opened(raw, closeUnderlyingOnClose: false));
     await upgraded.customSelect('SELECT 1').get();
     expect(
-        (raw.select('PRAGMA user_version').first.values.first as int), 10,
+        (raw.select('PRAGMA user_version').first.values.first as int), 11,
         reason: 'the schema upgrade committed');
     expect(await upgraded.select(upgraded.localMigrationMarkers).get(),
         isEmpty,

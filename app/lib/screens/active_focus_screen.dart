@@ -132,7 +132,7 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
     final todoId = todo.id;
     _notificationTimer?.cancel();
     NotificationService.instance.cancelFocusNotification();
-    // Await the stop: stopSprint() persists sprint history (via _clearPrefs)
+    // Await the stop: stopSprint() ends the recorded Sprint
     // before returning, so discarding the future would swallow storage errors
     // and race the cleanup against completeCurrentAction. The first context use
     // below (the re-clarify sheet) is already guarded by `if (!mounted)`, and

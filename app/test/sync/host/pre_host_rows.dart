@@ -34,6 +34,7 @@ Map<String, String> get preHostEntityIdByCollection => {
       tagsCollection: _tagId,
       capturesCollection: _captureId,
       timeLogsCollection: 'pre-host-time-log',
+      sprintsCollection: 'pre-host-sprint',
       focusSessionsCollection: _sessionId,
       todoTagsCollection: todoTagIdFor(preHostOutcomeId, _tagId),
       captureOutcomesCollection:
@@ -91,6 +92,12 @@ Future<void> writeRowInEveryCollection(
     "INSERT INTO time_logs (id, user_id, task_id, started_at) "
     "VALUES (?, ?, ?, '2026-01-01T00:00:00.000Z')",
     [ids[timeLogsCollection], preHostUserId, preHostOutcomeId],
+  );
+  await run(
+    "INSERT INTO sprints (id, user_id, action_id, started_at, ended_at, "
+    "planned_duration_minutes) "
+    "VALUES (?, ?, ?, '2026-01-01T00:00:00.000Z', '2026-01-01T00:20:00.000Z', 20)",
+    [ids[sprintsCollection], preHostUserId, ids[actionsCollection]],
   );
   await run(
     "INSERT INTO todo_tags (id, todo_id, tag_id, user_id) VALUES (?, ?, ?, ?)",

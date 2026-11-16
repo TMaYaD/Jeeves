@@ -118,6 +118,45 @@ void main() {
     });
   });
 
+  group('minTimestampValue', () {
+    const first = '2026-07-28T09:20:00.000Z';
+    const second = '2026-07-28T09:30:00.000Z';
+
+    test('the earlier end survives a newer write carrying a later one', () {
+      final reduced =
+          _reduce(minTimestampValue, [_w(first, 1000), _w(second, 3000)])!;
+      expect(reduced.value, first);
+      expect(reduced.clock, Hlc(3000, 0, _memberA));
+    });
+
+    test('an end beats a still-open Sprint, whichever arrives last', () {
+      expect(_reduce(minTimestampValue, [_w(null, 3000), _w(first, 1000)])!.value,
+          first);
+      expect(_reduce(minTimestampValue, [_w(first, 1000), _w(null, 3000)])!.value,
+          first,
+          reason: 'an end can never be cleared');
+    });
+
+    test('is a lattice over null, unparseable and tied values', () {
+      _expectLattice(minTimestampValue, [
+        _w(null, 1000),
+        _w(second, 2000, _memberB),
+        _w(first, 3000),
+        _w('not-a-time', 4000, _memberB),
+      ]);
+    });
+
+    test('the registry selects it for sprints.ended_at only', () {
+      const registry = MergeStrategyRegistry();
+      expect(registry.resolve(collection: 'sprints', field: 'ended_at'),
+          same(minTimestampValue));
+      expect(registry.resolve(collection: 'sprints', field: 'started_at'),
+          same(lww));
+      expect(registry.resolve(collection: 'time_logs', field: 'ended_at'),
+          same(lww));
+    });
+  });
+
   group('setMerge', () {
     test('unions concurrent additions, canonically sorted', () {
       final reduced = _reduce(setMerge, [

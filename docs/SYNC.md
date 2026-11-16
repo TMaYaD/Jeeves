@@ -43,6 +43,7 @@ ResolvedPreference resolveWithStrategy(...);          // strategy-explicit varia
 
 - **`lww` (default, non-destructive).** The later write wins, ordered by **HLC** — not by `updated_at`, which is an ordinary replicated field a device could write out of order. Correct for scalars where the latest intent on any device should win. Ties break on member id, deterministically, so two devices never disagree about a tie.
 - **`maxTimestampValue`.** For snooze "until" floors. Among two live writes the later *value* (parsed as a timestamp) wins, so a stale write can never regress an active snooze and re-fire a notification the user silenced. A **tombstone (clear/un-snooze) is arbitrated against a live value by LWW** — a clear silences the snooze, but a later re-snooze survives a stale clear, and a stale clear does not undo a fresher re-snooze. Any key ending in `snoozed_until` is classified here automatically.
+- **`minTimestampValue`.** For the Sprint end (`sprints.ended_at`), the mirror of `maxTimestampValue`: any end beats a still-open Sprint, and of two ends the **earlier** wins, whichever device wrote last. An end can only move earlier and is never cleared. Chosen from the change's collection and field, never from stored state.
 - **`setMerge`.** Union of the two JSON-list values so concurrent additions on two devices both survive. **No production key uses this today**; it is provisioned so a new list/set-shaped key (filter selections, pinned items) cannot ship under naive LWW that would drop concurrent additions. New list/set keys **must** be registered as `setMerge` before use.
 
 Every strategy owes ADR-0030's obligations: merge must be commutative, associative and idempotent. A strategy that is not is a divergence bug, not a preference.
@@ -87,6 +88,19 @@ Every current key, grouped by family:
 | *(none today)* | list/set | `setMerge` | Provisioned for future filter/pin selections |
 
 **Snooze arbitration departs deliberately from the blanket LWW default**: between two live values the later *value* wins so a floor never regresses, while a clear is arbitrated against a live value by last-write-wins.
+
+### Sprints
+
+A Sprint (`sprints`: Action, start, end, set length) is recorded locally first and replicated like a TimeLog. Only `ended_at` is arbitrated; every other field is LWW.
+
+| Situation | Result |
+|---|---|
+| One device wrote the Sprint | It stands. |
+| One device ended it, another left it open | The end stands. |
+| Two devices ended it at different instants | The earlier end stands, on both. |
+| Left open, and the user has a later Sprint | Reads as ending 1 ms before the later one starts. Derived when read (`sprintRecordsWithEffectiveEnds`), never written, so no device authors a convergence write. |
+
+A stored end later than the next Sprint's start (closed late on an offline device) stays as recorded. A Sprint ends in the same transaction as the TimeLog it ran under.
 
 Bypassed Outcomes add three collections, `focus_session_planning_bypasses`, `focus_session_reschedules` (one row per session and Outcome, replaced by a later edit) and `outcome_bypass_decisions` (append-only), each registered in `collection_codecs.dart` and carried by the initial upload like any domain collection. Jeeves works without them leaving the device: they are ordinary local rows first.
 
@@ -169,5 +183,6 @@ through.
 ## What is asserted, and where
 
 - **Merge semantics**: `app/test/sync/merge_strategy_test.dart`, `app/test/services/user_preferences_conflict_test.dart`, and the golden vectors in `spec/sync/reducer_v1_vectors.json` (shared with the server's Python reducer, so a divergence is caught cross-language).
+- **Sprints**: `app/test/sync/host/sprint_record_convergence_test.dart` (two devices through the relay plugin), the lattice cases in `merge_strategy_test.dart`, and `app/test/database/sprint_dao_test.dart` (derived end, TimeLog close sites).
 - **Convergence end to end**: `app/test/sync/convergence_test.dart` and `full_day_convergence_test.dart` run two simulated devices through enrol → write → sign → append → pull → verify → reduce and assert byte-identical reduced state.
 - **Projection**: `app/test/sync/projector_view_notify_test.dart` (a reduced-in row reaches the watching queries) and `domain_rebuild_test.dart` (a fresh domain store rebuilt from the log, tombstones included).
