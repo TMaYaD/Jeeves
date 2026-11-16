@@ -6,6 +6,12 @@ import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/screens/planning/steps/scheduled_review_step.dart';
 import 'package:jeeves/widgets/outcome_row.dart';
 
+/// The planning draft without its database preloads: this test renders one step.
+class _PlanningWithNoDatabase extends FocusSessionPlanningNotifier {
+  @override
+  FocusSessionPlanningState build() => const FocusSessionPlanningState();
+}
+
 void main() {
   testWidgets('scheduled Outcomes use read-only rows in due-date order', (
     tester,
@@ -22,8 +28,11 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          currentTimeContextsProvider
-              .overrideWith((_) => Stream.value(const {})),
+          planningTimeContextsProvider.overrideWith((_) async => const {}),
+          dayTimelineSettingsProvider
+              .overrideWithValue(const DayTimelineSettings()),
+          focusSessionPlanningProvider
+              .overrideWith(_PlanningWithNoDatabase.new),
           focusSessionPlanningSelectedTasksProvider.overrideWith(
             (_) => Stream.value([
               todo('No due date', null),

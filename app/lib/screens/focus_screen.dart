@@ -5,7 +5,6 @@ import 'package:go_router/go_router.dart';
 import '../models/ritual.dart';
 import '../providers/database_provider.dart';
 import '../providers/focus_session_planning_provider.dart';
-import '../providers/focus_session_planning_settings_provider.dart';
 import '../providers/focus_session_provider.dart';
 import '../providers/focus_settings_provider.dart';
 import '../providers/sprint_timer_provider.dart'
@@ -633,14 +632,11 @@ class _NowTimeline extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final extras = ref.watch(nowTimelineExtrasProvider);
-    final focusSettings = ref.watch(focusSettingsProvider);
-    final defaultEstimate =
-        ref.watch(focusSessionPlanningSettingsProvider).defaultTimeEstimate;
     final flowOrigin =
         roundUpToFiveMinutes(DateTime.parse(session.startedAt).toLocal());
     final entries = dayTimelineEntriesFor(
       tasks: tasks,
-      defaultEstimateMinutes: defaultEstimate,
+      defaultEstimateMinutes: extras.settings.defaultEstimateMinutes,
       now: ref.read(clockProvider)(),
       timeContexts: extras.timeContexts,
       pinnedStarts: extras.pinnedStarts,
@@ -652,8 +648,7 @@ class _NowTimeline extends ConsumerWidget {
       entries: entries,
       flowOrigin: flowOrigin,
       availableMinutes: extras.availableMinutes,
-      chunkUnitMinutes:
-          focusSettings.sprintDurationMinutes + focusSettings.breakDurationMinutes,
+      chunkUnitMinutes: extras.settings.chunkUnitMinutes,
       onSetPinnedStart: (outcomeId, startAt) => ref
           .read(databaseProvider)
           .focusSessionDao

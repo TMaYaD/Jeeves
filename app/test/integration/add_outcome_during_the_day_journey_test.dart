@@ -6,6 +6,7 @@
 /// instant with the default 480 available minutes, so "time left" is exact.
 library;
 
+import 'package:jeeves/providers/day_timeline_provider.dart';
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -71,6 +72,7 @@ Widget _app(GtdDatabase db, {required DateTime now}) {
   );
   return ProviderScope(
     overrides: [
+      nowTimelineExtrasProvider.overrideWithValue(const NowTimelineExtras()),
       databaseProvider.overrideWithValue(db),
       clockProvider.overrideWithValue(() => now),
       notificationServiceProvider.overrideWithValue(StubNotificationService()),

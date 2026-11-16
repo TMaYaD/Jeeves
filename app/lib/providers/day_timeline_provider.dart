@@ -9,6 +9,8 @@ import '../models/time_context.dart';
 import 'database_provider.dart';
 import 'focus_session_planning_provider.dart'
     show kFallbackAvailableMinutes, kLastSessionAvailableMinutesKey;
+import 'focus_session_planning_settings_provider.dart';
+import 'focus_settings_provider.dart';
 import 'synced_preferences_provider.dart' show syncedPreferencesProvider;
 
 /// The last layout worked out. Memory only: it is never stored, synced or
@@ -35,10 +37,38 @@ final activeSessionEngagedTaskIdsProvider = StreamProvider<Set<String>>((ref) {
       .watchActiveSessionEngagedTaskIds();
 });
 
-/// The current Action's Time context for every Outcome that has one.
+/// The current Action's Time context for every Outcome that has one, live.
 final currentTimeContextsProvider =
     StreamProvider<Map<String, TimeContext>>((ref) {
   return ref.watch(databaseProvider).actionDao.watchCurrentTimeContexts();
+});
+
+/// The same, read once when the planning completion screen opens: a screen
+/// that is left within a minute needs no live query.
+final planningTimeContextsProvider =
+    FutureProvider.autoDispose<Map<String, TimeContext>>((ref) {
+  return ref.watch(databaseProvider).actionDao.getCurrentTimeContexts();
+});
+
+/// The two settings the timeline reads: what an Outcome with no estimate counts
+/// as, and the chunking unit (sprint plus short break).
+class DayTimelineSettings {
+  const DayTimelineSettings({
+    this.defaultEstimateMinutes = 10,
+    this.chunkUnitMinutes = 23,
+  });
+
+  final int defaultEstimateMinutes;
+  final int chunkUnitMinutes;
+}
+
+final dayTimelineSettingsProvider = Provider<DayTimelineSettings>((ref) {
+  final focus = ref.watch(focusSettingsProvider);
+  return DayTimelineSettings(
+    defaultEstimateMinutes: ref.watch(
+        focusSessionPlanningSettingsProvider.select((s) => s.defaultTimeEstimate)),
+    chunkUnitMinutes: focus.sprintDurationMinutes + focus.breakDurationMinutes,
+  );
 });
 
 /// Everything the Now screen's timeline reads beyond the Plan's Outcomes,
@@ -49,6 +79,7 @@ class NowTimelineExtras {
     this.engagedTaskIds = const {},
     this.timeContexts = const {},
     this.availableMinutes = kFallbackAvailableMinutes,
+    this.settings = const DayTimelineSettings(),
   });
 
   final Map<String, DateTime> pinnedStarts;
@@ -58,6 +89,7 @@ class NowTimelineExtras {
   /// The available time the open session was planned with; the preference that
   /// remembers it, or the fallback when none was recorded.
   final int availableMinutes;
+  final DayTimelineSettings settings;
 }
 
 final nowTimelineExtrasProvider = Provider<NowTimelineExtras>((ref) {
@@ -77,5 +109,6 @@ final nowTimelineExtrasProvider = Provider<NowTimelineExtras>((ref) {
     availableMinutes: remembered != null && remembered > 0
         ? remembered
         : kFallbackAvailableMinutes,
+    settings: ref.watch(dayTimelineSettingsProvider),
   );
 });

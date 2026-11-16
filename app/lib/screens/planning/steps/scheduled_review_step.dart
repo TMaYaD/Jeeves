@@ -8,8 +8,6 @@ import '../../../models/day_timeline.dart';
 import '../../../providers/clock_provider.dart';
 import '../../../providers/day_timeline_provider.dart';
 import '../../../providers/focus_session_planning_provider.dart';
-import '../../../providers/focus_session_planning_settings_provider.dart';
-import '../../../providers/focus_settings_provider.dart';
 import '../../../widgets/day_timeline/day_timeline.dart';
 import '../../../widgets/outcome_row.dart';
 
@@ -107,14 +105,12 @@ class _ScheduledReviewStepState extends ConsumerState<ScheduledReviewStep> {
 
   Widget _timeline(List<Todo> tasks) {
     final planning = ref.watch(focusSessionPlanningProvider);
-    final focusSettings = ref.watch(focusSettingsProvider);
-    final defaultEstimate =
-        ref.watch(focusSessionPlanningSettingsProvider).defaultTimeEstimate;
+    final settings = ref.watch(dayTimelineSettingsProvider);
     final timeContexts =
-        ref.watch(currentTimeContextsProvider).asData?.value ?? const {};
+        ref.watch(planningTimeContextsProvider).asData?.value ?? const {};
     final entries = dayTimelineEntriesFor(
       tasks: tasks,
-      defaultEstimateMinutes: defaultEstimate,
+      defaultEstimateMinutes: settings.defaultEstimateMinutes,
       now: _flowOrigin,
       timeContexts: timeContexts,
       pinnedStarts: planning.pinnedStartByTaskId,
@@ -124,8 +120,7 @@ class _ScheduledReviewStepState extends ConsumerState<ScheduledReviewStep> {
       entries: entries,
       flowOrigin: _flowOrigin,
       availableMinutes: planning.availableMinutes,
-      chunkUnitMinutes:
-          focusSettings.sprintDurationMinutes + focusSettings.breakDurationMinutes,
+      chunkUnitMinutes: settings.chunkUnitMinutes,
       onSetPinnedStart: (outcomeId, startAt) async => ref
           .read(focusSessionPlanningProvider.notifier)
           .setPinnedStart(outcomeId, startAt),
