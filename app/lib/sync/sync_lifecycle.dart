@@ -247,6 +247,10 @@ class SyncLifecycle {
     bool deactivated() => generation != _generation;
 
     final status = await _stack.readEnrolmentStatus();
+    // Nothing is written or bound yet, so an attempt abandoned during the read
+    // owns nothing: it must not run the enrolment-decision clear or unbind
+    // against whichever account is signed in by now.
+    if (deactivated()) return SyncActivation.deactivated;
     switch (status.state) {
       case EnrolmentState.notEnrolled:
         await _host?.setEnrolledMember(null);
@@ -259,7 +263,6 @@ class SyncLifecycle {
       case EnrolmentState.enrolled:
         break;
     }
-    if (deactivated()) return SyncActivation.deactivated;
 
     // Bind capture before any network, from the local reads alone: the enrolment
     // decision is what disposes of the buffered ops, and it must not wait on the
@@ -273,15 +276,16 @@ class SyncLifecycle {
     // start is stamped with the member id too.
     await _host?.setEnrolledMember(_stack.identity.memberIdHex);
     // A sign-out that landed during the write above has already cleared the
-    // member id; leave it cleared rather than binding a dead session.
+    // member id; leave it cleared rather than binding a dead session. Clear
+    // only our own id: a newer account may have stored its own since.
     if (deactivated()) {
-      await _host?.setEnrolledMember(null);
+      await _host?.clearEnrolledMemberIfEquals(_stack.identity.memberIdHex);
       return SyncActivation.deactivated;
     }
     final preferencesClientForBind = await _stack
         .workspaceClientFactory(userPreferencesWorkspaceId(_stack.userId));
     if (deactivated()) {
-      await _host?.setEnrolledMember(null);
+      await _host?.clearEnrolledMemberIfEquals(_stack.identity.memberIdHex);
       return SyncActivation.deactivated;
     }
     await _capture.bind(
@@ -360,10 +364,10 @@ class SyncLifecycle {
     if (deactivated()) return SyncActivation.deactivated;
     await _startListeners(gtdClient, preferencesClient);
     if (deactivated()) {
-      // Sign-out landed while the sockets were opening. Run the teardown again
-      // rather than leave listeners this instance has already stopped tracking:
-      // every step of it is idempotent.
-      await deactivate();
+      // Sign-out landed while the sockets were opening. The sign-out already
+      // cleared the member id and unbound capture; a newer account may own
+      // both now, so dispose only the listeners this attempt just started.
+      await _disposeListeners();
       return SyncActivation.deactivated;
     }
     return uploaded ? SyncActivation.active : SyncActivation.uploadIncomplete;
@@ -390,6 +394,10 @@ class SyncLifecycle {
     } on Object {
       // A store that is already closing has nothing to clear.
     }
+    await _disposeListeners();
+  }
+
+  Future<void> _disposeListeners() async {
     final listeners = [..._listeners];
     _listeners.clear();
     for (final listener in listeners) {

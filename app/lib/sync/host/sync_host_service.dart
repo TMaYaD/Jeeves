@@ -370,6 +370,19 @@ class SyncHostService implements SyncHost, OutboxDrainer {
     );
   }
 
+  /// Clear the stored member id only if it still equals [memberIdHex].
+  ///
+  /// For an abandoned activation undoing its own write: the compare and the
+  /// clear are one statement, so a newer account's id is never wiped.
+  Future<void> clearEnrolledMemberIfEquals(String memberIdHex) async {
+    await readClockIdentity(_domain);
+    await _domain.customStatement(
+      'UPDATE device_clock_identity SET enrolled_member_id_hex = NULL '
+      'WHERE id = 1 AND enrolled_member_id_hex = ?',
+      [memberIdHex],
+    );
+  }
+
   /// Merge changes saved from before a wipe back in, and project them.
   Future<void> restore(List<Change> changes) async {
     for (final change in changes) {
