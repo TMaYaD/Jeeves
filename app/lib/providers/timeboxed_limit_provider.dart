@@ -63,6 +63,34 @@ final currentTimeboxedProvider =
   return ref.watch(databaseProvider).actionDao.watchCurrentTimeboxed();
 });
 
+/// The limit status of [outcomeId]'s current Action, read fresh.
+///
+/// The live provider above is the right thing for a surface that *shows* the
+/// limit. The gate is different: it decides whether to interrupt the user
+/// *now*, and the limit may have been passed since the last emission — a
+/// Sprint can pass the limit while nobody is looking. So the gate reads the
+/// rows itself.
+///
+/// Null when the Outcome is not Timeboxed, or has no current Action.
+Future<TimeboxedLimitStatus?> readTimeboxedLimitStatus(
+  GtdDatabase db,
+  String outcomeId,
+) async {
+  final action = await db.actionDao.getCurrentAction(outcomeId);
+  if (action == null) return null;
+  final limit = action.timeEstimate;
+  if (!isTimeboxedAction(timeboxed: action.timeboxed, timeEstimate: limit)) {
+    return null;
+  }
+  final logs = await (db.select(db.timeLogs)
+        ..where((t) => t.actionId.equals(action.id)))
+      .get();
+  final sprints = await (db.select(db.sprints)
+        ..where((s) => s.actionId.equals(action.id)))
+      .get();
+  return _status(limitMinutes: limit!, logs: logs, sprints: sprints);
+}
+
 /// The status of one Timeboxed Action, from its stints and its Sprints.
 TimeboxedLimitStatus _status({
   required int limitMinutes,

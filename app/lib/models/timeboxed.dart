@@ -54,6 +54,17 @@ class TimeboxedLimitStatus {
   /// Whether the limit has been reached.
   bool get hasPassed => limitPassedAt != null;
 
+  /// Whether the limit has passed by [now].
+  ///
+  /// [limitPassedAt] can be in the future: an open stint runs on, so the limit
+  /// is reached inside it — at an instant that has not arrived yet. Such a
+  /// limit has not been passed, and nothing should say it has.
+  bool hasPassedAt(DateTime now) {
+    final passed = limitPassedAt;
+    if (passed == null) return false;
+    return !now.toUtc().isBefore(passed);
+  }
+
   /// The minutes past the limit at [now]; zero while the limit has not passed.
   int minutesPast(DateTime now) {
     final passed = limitPassedAt;
@@ -74,4 +85,61 @@ class TimeboxedLimitStatus {
     if (sprintStarts.last.isBefore(passed)) return null;
     return sprintsPastLimit;
   }
+}
+
+/// Jeeves' advice before a Sprint that would start past a Timeboxed limit
+/// (issue #923).
+///
+/// The shape is the app's Jeeves treatment: a bold headline over a quieter
+/// line (docs/DESIGN.md § Voice).
+class TimeboxedAdvice {
+  const TimeboxedAdvice({required this.headline, required this.detail});
+
+  /// The bold line — 16px, w700, ink.
+  final String headline;
+
+  /// The quieter line under it — 13px, w500, muted.
+  final String detail;
+}
+
+/// The advice for the Sprint that would be the [nth] past the limit.
+///
+/// One-based: 1 is the first Sprint started past the limit. The tone grows
+/// firmer with each further one, as the story asks — the first states the
+/// fact, the second notes the habit, the third and beyond say plainly that
+/// the day is moving on.
+TimeboxedAdvice timeboxedAdviceFor(int nth) {
+  if (nth <= 1) {
+    return const TimeboxedAdvice(
+      headline: 'The limit has run its course, sir.',
+      detail: 'Another sprint would be the first beyond it.',
+    );
+  }
+  if (nth == 2) {
+    return const TimeboxedAdvice(
+      headline: 'That would be the second past the limit, sir.',
+      detail: 'A limit passed once may be an accident. Twice is a habit.',
+    );
+  }
+  return TimeboxedAdvice(
+    headline: 'That would be the ${englishOrdinal(nth)} past the limit, sir.',
+    detail:
+        'I do not wish to nag. The rest of the day, however, is beginning '
+        'to notice.',
+  );
+}
+
+/// The English ordinal for [n]: 1st, 2nd, 3rd, 4th, 11th, 21st.
+String englishOrdinal(int n) {
+  if (n <= 0) return '$n';
+  final suffix = switch (n % 100) {
+    11 || 12 || 13 => 'th',
+    _ => switch (n % 10) {
+      1 => 'st',
+      2 => 'nd',
+      3 => 'rd',
+      _ => 'th',
+    },
+  };
+  return '$n$suffix';
 }

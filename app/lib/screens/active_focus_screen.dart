@@ -5,9 +5,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../database/gtd_database.dart' show Todo;
+import '../models/timeboxed.dart';
 import '../providers/focus_session_planning_provider.dart'
     show
         SessionSettlement,
@@ -16,13 +18,17 @@ import '../providers/focus_session_planning_provider.dart'
 import '../providers/focus_session_provider.dart';
 import '../providers/sprint_timer_provider.dart';
 import '../providers/task_detail_provider.dart';
+import '../providers/timeboxed_limit_provider.dart';
 import '../services/clarification_service.dart';
 import '../services/notification_service.dart';
 import '../widgets/app_title_bar/app_title_bar.dart';
 import '../widgets/capture/capture_action.dart';
 import '../widgets/elapsed_timer_widget.dart';
+import '../widgets/meta_chip.dart' show formatMinutesLabel;
 import '../widgets/process_to_handlers.dart' show ProcessAction;
 import '../widgets/reclarify_prompt_sheet.dart';
+import '../widgets/timeboxed_gate.dart';
+import '../widgets/timeboxed_limit_strip.dart';
 
 /// The focus-list transition message shown after a Focus "Done" verdict
 /// resolves.
@@ -292,12 +298,20 @@ class _FocusBodyState extends ConsumerState<_FocusBody>
     )..repeat(reverse: true);
     _pageController = PageController();
 
-    // Sprint starts the moment focus mode starts.
+    // Sprint starts the moment focus mode starts — unless the Action is
+    // Timeboxed and its limit has already passed, in which case Jeeves
+    // advises first and the user confirms (issue #923).
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final timer = ref.read(sprintTimerProvider);
       if (!timer.isActive && !timer.isProcessing) {
-        ref.read(sprintTimerProvider.notifier).startSprint(widget.todo);
+        unawaited(guardSprintPastLimit(
+          context,
+          ref,
+          outcomeId: widget.todo.id,
+          start: () async =>
+              ref.read(sprintTimerProvider.notifier).startSprint(widget.todo),
+        ));
       }
     });
   }
@@ -314,10 +328,14 @@ class _FocusBodyState extends ConsumerState<_FocusBody>
     final todo = widget.todo;
     final timer = ref.watch(sprintTimerProvider);
     final notifier = ref.read(sprintTimerProvider.notifier);
+    final limit = ref.watch(timeboxedLimitStatusProvider(todo.id));
 
     final isBreak = timer.isBreak;
     final ringColor =
         isBreak ? const Color(0xFF10B981) : const Color(0xFF2563EB);
+    // One clock for the whole frame: the strip says how far past the limit
+    // the work is, and that must not disagree with whether it has passed.
+    final now = DateTime.now().toUtc();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -325,6 +343,18 @@ class _FocusBodyState extends ConsumerState<_FocusBody>
         // The back affordance and task title live in the shared title bar
         //; the sprint-aware Jeeves banner leads the body.
         const ElapsedTimerWidget(),
+        // A Timeboxed Action whose limit has passed says so, and says how
+        // far past it is (issue #923).
+        if (limit != null && limit.hasPassedAt(now))
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: TimeboxedLimitStrip(
+              headline:
+                  'Limit passed at ${DateFormat('HH:mm').format(limit.limitPassedAt!.toLocal())}'
+                  ' · ${formatMinutesLabel(limit.minutesPast(now))} past',
+              detail: _limitDetail(limit),
+            ),
+          ),
         // Carousel: sprint ring (page 0) | notes (page 1)
         Expanded(
           child: PageView(
@@ -335,11 +365,19 @@ class _FocusBodyState extends ConsumerState<_FocusBody>
                 timer: timer,
                 ringColor: ringColor,
                 pulseCtrl: _pulseCtrl,
+                limit: limit,
                 onPhaseSkip: timer.isProcessing
                     ? null
                     : () {
                         if (isBreak) {
-                          notifier.skipBreak();
+                          // Skipping the break starts the next Sprint, so
+                          // it goes past the same gate (issue #923).
+                          unawaited(guardSprintPastLimit(
+                            context,
+                            ref,
+                            outcomeId: todo.id,
+                            start: () async => notifier.skipBreak(),
+                          ));
                         } else {
                           notifier.startBreak();
                         }
@@ -395,6 +433,19 @@ class _FocusBodyState extends ConsumerState<_FocusBody>
       ],
     );
   }
+
+  /// The strip's quieter line: how many Sprints started past the limit.
+  ///
+  /// A Sprint that was already running when the limit passed does not count —
+  /// it was started before the limit, and the story says such a Sprint runs
+  /// to its end (issue #923).
+  String _limitDetail(TimeboxedLimitStatus limit) {
+    final past = limit.sprintsPastLimit;
+    if (past == 0) return 'This sprint started before the limit';
+    return past == 1
+        ? '1 sprint past the limit'
+        : '$past sprints past the limit';
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -406,11 +457,15 @@ class _TimerPage extends StatelessWidget {
     required this.timer,
     required this.ringColor,
     required this.pulseCtrl,
+    this.limit,
     this.onPhaseSkip,
   });
   final SprintTimerState timer;
   final Color ringColor;
   final AnimationController pulseCtrl;
+
+  /// The limit status of the Outcome's current Action, when it is Timeboxed.
+  final TimeboxedLimitStatus? limit;
   final VoidCallback? onPhaseSkip;
 
   @override
@@ -437,6 +492,7 @@ class _TimerPage extends StatelessWidget {
               _SprintDotsColumn(
                 timer: timer,
                 pulseCtrl: pulseCtrl,
+                limit: widget.limit,
               ),
             ],
           ),
@@ -901,31 +957,59 @@ class _SprintRingState extends State<_SprintRing>
 // ---------------------------------------------------------------------------
 
 class _SprintDotsColumn extends StatelessWidget {
-  const _SprintDotsColumn({required this.timer, required this.pulseCtrl});
+  const _SprintDotsColumn({
+    required this.timer,
+    required this.pulseCtrl,
+    this.limit,
+  });
   final SprintTimerState timer;
   final AnimationController pulseCtrl;
+
+  /// The limit status of the Outcome's current Action, when it is Timeboxed.
+  final TimeboxedLimitStatus? limit;
 
   @override
   Widget build(BuildContext context) {
     final total = timer.totalSprints;
     final completedCount =
         timer.isBreak ? timer.sprintNumber : timer.sprintNumber - 1;
+    // The first recorded Sprint that started at or after the limit: from
+    // there on, the dots are red (issue #923). The dots and the recorded
+    // Sprints count alike — the Action's Sprints, oldest first — so the dot
+    // for the k-th Sprint is the k-th recorded start.
+    final starts = limit?.sprintStarts ?? const <DateTime>[];
+    final passedAt = limit?.limitPassedAt;
+    var firstPast = starts.length;
+    if (passedAt != null) {
+      for (var i = 0; i < starts.length; i++) {
+        if (!starts[i].isBefore(passedAt)) {
+          firstPast = i;
+          break;
+        }
+      }
+    }
 
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: List.generate(total, (i) {
         final isCompleted = i < completedCount;
         final isCurrent = !timer.isBreak && i == timer.sprintNumber - 1;
+        final isFilled = isCompleted || isCurrent;
+        // Red means a limit has been passed (docs/DESIGN.md § Colour).
+        final isPastLimit = isFilled && i >= firstPast;
 
         Widget dot = Container(
+          key: ValueKey('sprint_dot_$i'),
           width: 14,
           height: 14,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: isCompleted || isCurrent
-                ? const Color(0xFF2563EB)
-                : Colors.transparent,
-            border: isCompleted || isCurrent
+            color: isPastLimit
+                ? const Color(0xFFDC2626)
+                : isFilled
+                    ? const Color(0xFF2563EB)
+                    : Colors.transparent,
+            border: isFilled
                 ? null
                 : Border.all(color: const Color(0xFFBFDBFE), width: 2),
           ),

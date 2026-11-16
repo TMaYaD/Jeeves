@@ -20,11 +20,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/timeboxed.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
 import 'package:jeeves/providers/focus_session_provider.dart';
 import 'package:jeeves/providers/sprint_timer_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
+import 'package:jeeves/providers/timeboxed_limit_provider.dart';
 import 'package:jeeves/screens/active_focus_screen.dart';
 
 const focusUserId = 'local';
@@ -104,6 +106,10 @@ Widget focusHarness(
   // controller here, exactly as a live Drift watch would emit, without leaving
   // a pending timer behind on dispose.
   Stream<Todo?>? todoStream,
+  // The Timeboxed limit status the screen shows. Stubbed, like the todo
+  // subject: it is a live Drift watch, and a widget test cannot let one
+  // deliver. Pass a status to exercise the limit strip and the red dots.
+  TimeboxedLimitStatus? timeboxedLimit,
   // Extra overrides, e.g. a fixed `focusSettingsProvider` for tests that run the
   // real sprint timer and must not open the synced-preferences watch.
   List<Override> overrides = const [],
@@ -136,6 +142,11 @@ Widget focusHarness(
       activeSessionSettlementsProvider.overrideWith(
         (_) => Stream.value(const <String, SessionSettlement>{}),
       ),
+      // The Timeboxed limit status is a live Drift watch for the same reason:
+      // it is stubbed here, and a test that needs the limit strip or the red
+      // dots passes the status it wants to see.
+      timeboxedLimitStatusProvider(todo.id)
+          .overrideWith((_) => Stream.value(timeboxedLimit)),
       ...overrides,
     ],
     child: MaterialApp.router(routerConfig: router),
