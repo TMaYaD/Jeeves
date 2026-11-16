@@ -428,7 +428,7 @@ void main() {
 
 /// How many tag links the Outcome has.
 Future<int> _linkCount(_VaultDevice device, String outcomeId) async {
-  final row = await device.domain.customSelect(
+  final row = await device.device.domain.customSelect(
     'SELECT COUNT(*) AS c FROM todo_tags WHERE todo_id = ?',
     variables: [Variable<String>(outcomeId)],
   ).getSingle();
