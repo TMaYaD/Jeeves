@@ -465,6 +465,7 @@ class FocusSessionPlanningState {
     this.inboxNav = const SnapshotNav<String>(),
     this.inboxRoutings = const {},
     this.pendingSelectedTaskIds = const [],
+    this.pinnedStartByTaskId = const {},
     this.reviewedTaskIds = const [],
     this.reviewNav = const SnapshotNav<Todo>(),
     this.reviewActions = const {},
@@ -512,6 +513,12 @@ class FocusSessionPlanningState {
   /// is called.
   final List<String> pendingSelectedTaskIds;
 
+  /// Start times the user has set on the day's plan entries, keyed by task id.
+  /// Only members of [pendingSelectedTaskIds] hold a pin; absent = Jeeves places
+  /// it. Written with the Plan rows by [FocusSessionPlanningNotifier.startDay]'s
+  /// `openSession` call.
+  final Map<String, DateTime> pinnedStartByTaskId;
+
   /// Task IDs the user has reviewed but skipped (not selected).
   final List<String> reviewedTaskIds;
 
@@ -557,6 +564,7 @@ class FocusSessionPlanningState {
     SnapshotNav<String>? inboxNav,
     Map<int, RoutingKind>? inboxRoutings,
     List<String>? pendingSelectedTaskIds,
+    Map<String, DateTime>? pinnedStartByTaskId,
     List<String>? reviewedTaskIds,
     SnapshotNav<Todo>? reviewNav,
     Map<int, ReviewActionRecord>? reviewActions,
@@ -574,6 +582,7 @@ class FocusSessionPlanningState {
         inboxRoutings: inboxRoutings ?? this.inboxRoutings,
         pendingSelectedTaskIds:
             pendingSelectedTaskIds ?? this.pendingSelectedTaskIds,
+        pinnedStartByTaskId: pinnedStartByTaskId ?? this.pinnedStartByTaskId,
         reviewedTaskIds: reviewedTaskIds ?? this.reviewedTaskIds,
         reviewNav: reviewNav ?? this.reviewNav,
         reviewActions: reviewActions ?? this.reviewActions,
@@ -1004,6 +1013,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
       // Remove from selected list if the user previously selected this task.
       pendingSelectedTaskIds:
           state.pendingSelectedTaskIds.where((t) => t != id).toList(),
+      pinnedStartByTaskId: _withoutPin(id),
     );
   }
 
@@ -1012,7 +1022,23 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     state = state.copyWith(
       pendingSelectedTaskIds:
           state.pendingSelectedTaskIds.where((t) => t != id).toList(),
+      pinnedStartByTaskId: _withoutPin(id),
       reviewedTaskIds: state.reviewedTaskIds.where((t) => t != id).toList(),
+    );
+  }
+
+  Map<String, DateTime> _withoutPin(String id) =>
+      Map.of(state.pinnedStartByTaskId)..remove(id);
+
+  /// Sets, or with a null [startAt] clears, the start time the user gives [id]
+  /// in today's plan. In-memory; committed with the Plan by [startDay]. A task
+  /// that is not selected cannot hold a pin, so this is then a no-op.
+  void setPinnedStart(String id, DateTime? startAt) {
+    if (!state.pendingSelectedTaskIds.contains(id)) return;
+    state = state.copyWith(
+      pinnedStartByTaskId: startAt == null
+          ? _withoutPin(id)
+          : {...state.pinnedStartByTaskId, id: startAt.toUtc()},
     );
   }
 
@@ -1149,6 +1175,7 @@ class FocusSessionPlanningNotifier extends Notifier<FocusSessionPlanningState> {
     final startedSessionId = await _db.focusSessionDao.openSession(
       userId: _userId,
       taskIds: state.pendingSelectedTaskIds,
+      pinnedStartByTaskId: state.pinnedStartByTaskId,
       // The Outcomes the user tapped Skip on (the set the skipped list shows):
       // each counts as a pass-over toward Bypassed.
       skippedTaskIds: state.reviewedTaskIds

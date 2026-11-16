@@ -719,6 +719,71 @@ void main() {
       expect(planOp.fields['position'], 0);
     });
 
+    test('openSession writes a time set during planning with the Plan row',
+        () async {
+      final pinned = await seedOutcome(id: 'pinned-1', title: 'Pinned');
+      final free = await seedOutcome(id: 'free-1', title: 'Free');
+      final pin = DateTime.utc(2026, 11, 16, 9, 30);
+      final sessionId = await db.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: [pinned, free],
+        pinnedStartByTaskId: {pinned: pin},
+        now: _ts,
+      );
+      final byKey = {
+        for (final op in capture.recorded) '${op.collection}/${op.entityId}': op,
+      };
+      final pinnedOp =
+          byKey['$focusSessionTasksCollection/${focusSessionTaskIdFor(sessionId, pinned)}']!;
+      final freeOp =
+          byKey['$focusSessionTasksCollection/${focusSessionTaskIdFor(sessionId, free)}']!;
+      expect(pinnedOp.fields['pinned_start_at'], '2026-11-16T09:30:00.000Z');
+      expect(freeOp.fields['pinned_start_at'], isNull);
+      expect(freeOp.fields.containsKey('pinned_start_at'), isTrue,
+          reason: 'the row is authored whole, with the field null');
+    });
+
+    test('setPinnedStart authors one field op, and null clears it', () async {
+      final outcome = await seedOutcome();
+      final sessionId = await db.focusSessionDao
+          .openSession(userId: _userId, taskIds: [outcome], now: _ts);
+      capture.clear();
+      await db.focusSessionDao.setPinnedStart(
+        sessionId: sessionId,
+        taskId: outcome,
+        pinnedStartAt: DateTime.utc(2026, 11, 16, 14, 5, 0, 987, 654),
+      );
+      final setOp = only(focusSessionTasksCollection);
+      expect(setOp.entityId, focusSessionTaskIdFor(sessionId, outcome));
+      expect(setOp.fields, {'pinned_start_at': '2026-11-16T14:05:00.987Z'});
+
+      capture.clear();
+      await db.focusSessionDao.setPinnedStart(
+        sessionId: sessionId,
+        taskId: outcome,
+        pinnedStartAt: null,
+      );
+      expect(only(focusSessionTasksCollection).fields,
+          {'pinned_start_at': null});
+    });
+
+    test('setPinnedStart refuses an Outcome that is not in the Plan', () async {
+      final planned = await seedOutcome(id: 'planned-1', title: 'Planned');
+      final other = await seedOutcome(id: 'other-1', title: 'Other');
+      final sessionId = await db.focusSessionDao
+          .openSession(userId: _userId, taskIds: [planned], now: _ts);
+      capture.clear();
+      await expectLater(
+        db.focusSessionDao.setPinnedStart(
+          sessionId: sessionId,
+          taskId: other,
+          pinnedStartAt: DateTime.utc(2026, 11, 16, 9),
+        ),
+        throwsStateError,
+      );
+      expect(capture.recorded, isEmpty);
+    });
+
     test('setCurrentTask moves the pointer and opens a log', () async {
       final outcome = await seedOutcome();
       final sessionId = await db.focusSessionDao

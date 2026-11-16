@@ -169,6 +169,51 @@ void main() {
     await expectTableConverges('focus_session_tasks', orderBy: 'position');
   });
 
+  test('focus_session_tasks.pinned_start_at round-trips as an instant, set '
+      'at open and later cleared', () async {
+    final pinnedAtOpen = await outcomeOnA(id: _id('pinned-at-open'));
+    final pinnedLater = await outcomeOnA(id: _id('pinned-later'));
+    final unpinned = await outcomeOnA(id: _id('unpinned'));
+    final openPin = DateTime.utc(2026, 11, 16, 9, 0, 0, 123);
+    final sessionId = await a.domain.focusSessionDao.openSession(
+      userId: _userId,
+      taskIds: [pinnedAtOpen, pinnedLater, unpinned],
+      pinnedStartByTaskId: {pinnedAtOpen: openPin},
+      now: a.clock.asDateTime,
+    );
+    final laterPin = DateTime.utc(2026, 11, 16, 14, 45);
+    await a.domain.focusSessionDao.setPinnedStart(
+      sessionId: sessionId,
+      taskId: pinnedLater,
+      pinnedStartAt: laterPin,
+    );
+    await workspace.syncAll();
+    await expectTableConverges('focus_session_tasks', orderBy: 'position');
+
+    Future<DateTime?> pinOnB(String taskId) async {
+      final row = await b.domain.customSelect(
+        'SELECT pinned_start_at FROM focus_session_tasks WHERE task_id = ?',
+        variables: [Variable<String>(taskId)],
+      ).getSingle();
+      final stored = row.read<String?>('pinned_start_at');
+      return stored == null ? null : DateTime.parse(stored).toUtc();
+    }
+
+    expect(await pinOnB(pinnedAtOpen), openPin);
+    expect(await pinOnB(pinnedLater), laterPin);
+    expect(await pinOnB(unpinned), isNull);
+
+    a.clock.advance(60000);
+    await a.domain.focusSessionDao.setPinnedStart(
+      sessionId: sessionId,
+      taskId: pinnedLater,
+      pinnedStartAt: null,
+    );
+    await workspace.syncAll();
+    await expectTableConverges('focus_session_tasks', orderBy: 'position');
+    expect(await pinOnB(pinnedLater), isNull);
+  });
+
   test('focus_session_dispositions round-trip for off-Plan engagement',
       () async {
     final planned = await outcomeOnA(id: _id('planned-1'));

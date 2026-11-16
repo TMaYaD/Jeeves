@@ -414,6 +414,60 @@ void main() {
     );
   });
 
+  test('a time set on a Plan entry converges, and clearing it converges too',
+      () async {
+    final a = workspace.a;
+    final b = workspace.b;
+    final outcomeId = _overlapId('pinned-outcome');
+    await a.domain.todoDao.insertOutcome(
+      id: outcomeId,
+      title: 'Write the report',
+      userId: _specUserId,
+      now: a.clock.asDateTime,
+    );
+    final sessionId = await a.domain.focusSessionDao.openSession(
+      userId: _specUserId,
+      taskIds: [outcomeId],
+      now: a.clock.asDateTime,
+    );
+    await workspace.syncAll();
+
+    Future<String?> pinnedOn(SimDevice device) async {
+      final row = await device.domain
+          .customSelect('SELECT pinned_start_at FROM focus_session_tasks')
+          .getSingle();
+      final stored = row.read<String?>('pinned_start_at');
+      return stored == null
+          ? null
+          : DateTime.parse(stored).toUtc().toIso8601String();
+    }
+
+    expect(await pinnedOn(b), isNull, reason: 'nothing set yet');
+
+    final nineThirty = DateTime.utc(2026, 11, 16, 9, 30);
+    await a.domain.focusSessionDao.setPinnedStart(
+      sessionId: sessionId,
+      taskId: outcomeId,
+      pinnedStartAt: nineThirty,
+    );
+    await workspace.syncAll();
+    expect(await pinnedOn(a), nineThirty.toIso8601String());
+    expect(await pinnedOn(b), nineThirty.toIso8601String(),
+        reason: 'the other device holds the time the user set');
+
+    // "Let Jeeves move it" on the second device writes null, and null wins as
+    // the later write on both.
+    b.clock.advance(60000);
+    await b.domain.focusSessionDao.setPinnedStart(
+      sessionId: sessionId,
+      taskId: outcomeId,
+      pinnedStartAt: null,
+    );
+    await workspace.syncAll();
+    expect(await pinnedOn(a), isNull);
+    expect(await pinnedOn(b), isNull);
+  });
+
   // --- AC 4: nothing the server says is trusted -----------------------------
 
   test('the golden negative vectors quarantine and never apply', () async {
