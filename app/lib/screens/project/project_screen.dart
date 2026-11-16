@@ -30,7 +30,7 @@ class ProjectScreen extends ConsumerWidget {
       showFilterBar: false,
       emptyIcon: Icons.folder_outlined,
       emptyTitle: 'No Outcomes in this project',
-      emptySubtitle: 'Tag an Outcome with this project to see it here.',
+      emptySubtitle: 'Assign an Outcome to this project to see it here.',
     );
   }
 }
