@@ -5,8 +5,6 @@
 /// composes them with the host and the platform's folder access.
 library;
 
-import 'package:drift/drift.dart';
-
 import '../host/sync_host_service.dart';
 import '../device_key_store.dart';
 import '../sync_database.dart';

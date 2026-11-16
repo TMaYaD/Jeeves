@@ -5,8 +5,6 @@
 /// thin pass-through; the same contract is exercised over `dart:io` instead.
 library;
 
-import 'dart:typed_data';
-
 import 'package:flutter/services.dart';
 
 import 'segment_folder.dart';
