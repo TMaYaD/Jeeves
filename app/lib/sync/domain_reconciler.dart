@@ -46,11 +46,12 @@ import 'host/merge_state.dart';
 class DomainReconciler {
   DomainReconciler({required this.registry, required this.domain});
 
-  /// Reduced state, read for one thing only: the last-asserted `(name, type)` of
-  /// a Tag entity whose row is gone. The pair is recoverable nowhere else, and the
-  /// alternative — never tombstoning losers — leaves duplicates on screen for
-  /// ever. It is a deliberately widened seam (a domain repair reading the sync
-  /// substrate), reviewed as such rather than absorbed as a detail.
+  /// Reduced state, read for two things: the last-asserted `(name, type)` of a
+  /// Tag entity whose row is gone (recoverable nowhere else; without it
+  /// duplicates stay on screen for ever), and the clock of each `todo_tags` link
+  /// (to pick the most recently assigned Project link as the survivor). It is a
+  /// deliberately widened seam (a domain repair reading the sync substrate),
+  /// reviewed as such rather than absorbed as a detail.
   final CollectionRegistry registry;
 
   final GtdDatabase domain;
