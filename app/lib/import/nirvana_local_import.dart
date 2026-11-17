@@ -38,6 +38,7 @@ import 'package:uuid/enums.dart' show Namespace;
 
 import '../database/gtd_database.dart';
 import '../models/intent.dart';
+import 'import_progress.dart';
 import 'jeeves_export.dart' show isJeevesExport, importJeevesExport;
 import 'nirvana_item.dart';
 import 'nirvana_parser.dart';
@@ -56,11 +57,38 @@ class ImportResult {
     required this.importedCount,
     required this.skippedCount,
     required this.projectTagsCreated,
+    this.failedRecords = const <ImportFailure>[],
   });
 
   final int importedCount;
   final int skippedCount;
   final int projectTagsCreated;
+
+  /// Records the import could not take, each named with the reason.
+  ///
+  /// Empty for an import that took everything it was given. Not empty means
+  /// the file carried something this device would not have — and the user is
+  /// told which, because "some of it did not import" is not an answer.
+  final List<ImportFailure> failedRecords;
+}
+
+/// One thing an import could not take: what it was, and why.
+///
+/// **A failure is named, never counted.** "3 records failed" leaves the user
+/// with nothing to act on; "todos/8f3c… — the store would not take that
+/// value" points at the record in their own file.
+class ImportFailure {
+  const ImportFailure({required this.record, required this.reason});
+
+  /// What could not be taken — a collection and an id ("todos/8f3c…"), or a
+  /// description of the unit that failed.
+  final String record;
+
+  /// Why it could not be taken, in the words the failure used.
+  final String reason;
+
+  @override
+  String toString() => '$record — $reason';
 }
 
 /// Perform an on-device Nirvana import.
@@ -70,6 +98,10 @@ class ImportResult {
 /// [userId] is the local user id (may be 'local' for unauthenticated users).
 /// [db] is the local Drift database.
 ///
+/// [onProgress], if given, is called as the import advances. A file with
+/// thousands of items takes minutes, and an import that cannot say how far it
+/// has got looks exactly like one that has stopped.
+///
 /// Throws [ParseError] on structurally invalid files.
 Future<ImportResult> importNirvanaLocally({
   required Uint8List bytes,
@@ -77,6 +109,7 @@ Future<ImportResult> importNirvanaLocally({
   required String format,
   required String userId,
   required GtdDatabase db,
+  ImportProgressCallback? onProgress,
 }) async {
   // Decode bytes — try UTF-8 first, fall back to latin-1.
   String content;
@@ -92,7 +125,12 @@ Future<ImportResult> importNirvanaLocally({
   // can never carry — and nothing in the UI or copy distinguishes it. The
   // Nirvana `format` hint is ignored here on purpose; the content decides.
   if (isJeevesExport(content)) {
-    return importJeevesExport(content: content, userId: userId, db: db);
+    return importJeevesExport(
+      content: content,
+      userId: userId,
+      db: db,
+      onProgress: onProgress,
+    );
   }
 
   final effectiveFormat =
@@ -307,6 +345,13 @@ Future<ImportResult> importNirvanaLocally({
         importedCount++;
       }
     });
+    // Say how far the import has got. A file with thousands of items takes
+    // minutes, and an import that cannot say so looks exactly like one that
+    // has stopped.
+    onProgress?.call(ImportProgress(
+      processedRows: batchStart + batch.length,
+      totalRows: tasks.length,
+    ));
   }
 
   return ImportResult(
