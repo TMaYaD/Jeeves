@@ -151,6 +151,41 @@ void main() {
     expect(current.runningSprintPastLimitNumber, 1);
   });
 
+  test('a Sprint running when the limit passes is not interrupted', () async {
+    await db.actionDao.setTimeboxed(await actionId(), true, now: _ts);
+    // Work logged from before the instant, and still running: the stint
+    // counts on, so the limit is reached inside it.
+    await db.timeLogDao.openLog(
+      taskId: 't1',
+      userId: _userId,
+      now: _ts.subtract(const Duration(minutes: 50)),
+    );
+    // The Sprint started before the limit passed, and is still running.
+    final sprintId = await db.sprintDao.startSprint(
+      taskId: 't1',
+      userId: _userId,
+      plannedDurationMinutes: 20,
+      now: _ts.subtract(const Duration(minutes: 45)),
+    );
+
+    final current = await status();
+
+    // The limit passed twenty minutes before the instant.
+    expect(current!.hasPassedAt(_ts), isTrue);
+    expect(current.limitPassedAt, _ts.subtract(const Duration(minutes: 20)));
+
+    // The running Sprint started before the limit, so it is not one of the
+    // ones past it — and nothing ends it.
+    expect(current.sprintsBeforeLimit, 1);
+    expect(current.sprintsPastLimit, 0);
+    expect(current.runningSprintPastLimitNumber, isNull);
+    final sprint = (await (db.select(db.sprints)
+          ..where((s) => s.id.equals(sprintId)))
+        .get())
+        .single;
+    expect(sprint.endedAt, isNull);
+  });
+
   test('turning the switch off leaves no status behind', () async {
     final id = await actionId();
     await db.actionDao.setTimeboxed(id, true, now: _ts);

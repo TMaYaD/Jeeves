@@ -304,6 +304,62 @@ void main() {
     });
   });
 
+  testWidgets('a Sprint already past the limit asks again, in a firmer tone', (
+    tester,
+  ) async {
+    await tester.runAsync(
+      () => _seed(db, timeEstimate: 30, timeboxed: true),
+    );
+    await tester.runAsync(
+      () => _logTime(db, const Duration(minutes: 50)),
+    );
+    // One Sprint has already been started past the limit, and has finished:
+    // this is the second one past the limit.
+    await tester.runAsync(
+      () => db.sprintDao.startSprint(
+        taskId: _outcomeId,
+        userId: _userId,
+        plannedDurationMinutes: 25,
+        now: DateTime.now().toUtc().subtract(const Duration(minutes: 10)),
+      ),
+    );
+    await tester.runAsync(
+      () => db.sprintDao.endRunningSprint(
+        userId: _userId,
+        now: DateTime.now().toUtc().subtract(const Duration(minutes: 5)),
+      ),
+    );
+
+    await _withApp(tester, db, () async {
+      await _settle(tester);
+
+      await tapBarAction(tester, const Key('task_detail_start_focus'));
+      await _settle(tester);
+
+      // The gate asks again, and says how many Sprints have gone past.
+      expect(find.byKey(const Key('timeboxed_gate_stop')), findsOneWidget);
+      expect(find.text('Sprints past the limit so far: 1'), findsOneWidget);
+
+      // The tone is firmer than the first time: the second past the limit is
+      // not the first, and the advice says so.
+      expect(
+        find.text('That would be the second past the limit, sir.'),
+        findsOneWidget,
+      );
+      expect(find.text('The limit has run its course, sir.'), findsNothing);
+
+      // Carrying on leaves the estimate exactly as it was.
+      await tester.tap(find.byKey(const Key('timeboxed_gate_regardless')));
+      await _settle(tester);
+      await tester.tap(find.byKey(const Key('timeboxed_gate_confirm')));
+      await _settle(tester);
+      final action = (await tester.runAsync(
+        () => db.actionDao.getCurrentAction(_outcomeId),
+      ))!;
+      expect(action.timeEstimate, 30);
+    });
+  });
+
   testWidgets('"Raise the estimate…" above the logged time starts the Sprint', (
     tester,
   ) async {
