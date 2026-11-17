@@ -17,6 +17,7 @@
 @TestOn('!browser')
 library;
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:drift/native.dart';
@@ -37,6 +38,7 @@ import 'package:jeeves/services/notification_service.dart';
 import 'package:jeeves/sync/sync_database.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../helpers/settle.dart';
 import '../test_helpers.dart';
 
 const String _outcomeId = '3f2d1c4e-5a6b-4c8d-9e0f-1a2b3c4d5e6f';
@@ -119,31 +121,51 @@ void main() {
       await tester.tap(tile);
       await _settleUntil(
         tester,
-        () async =>
-            find.text('Stop syncing through this folder').evaluate().isNotEmpty,
+        () => find.text('Stop syncing through this folder').evaluate().isNotEmpty,
       );
       expect(find.text('Stop syncing through this folder'), findsOneWidget);
 
       // The plugin attaches: the vault is running, not merely configured.
-      final host = (await tester.runAsync(
-        () => container.read(syncHostProvider.future),
-      ))!;
-      final plugin = await tester.runAsync(
-        () => container.read(vaultPluginProvider.future),
+      Object? pluginError;
+      var pluginAttached = false;
+      unawaited(
+        container.read(vaultPluginProvider.future).then(
+          (plugin) => pluginAttached = plugin != null,
+          onError: (Object error) => pluginError = error,
+        ),
       );
-      expect(plugin, isNotNull);
+      await _settleUntil(tester, () {
+        final error = pluginError;
+        if (error != null) fail('the vault plugin did not start: $error');
+        return pluginAttached;
+      });
 
       // An Outcome created in the app.
-      await tester.runAsync(() => db.todoDao.insertOutcome(
-            id: _outcomeId,
-            title: 'Old title',
-            userId: _userId,
-          ));
-      await tester.runAsync(() => host.deliverAll());
+      //
+      // The write is started here and not awaited: the app's write path waits
+      // for the host's drain, and the drain waits for the store's own
+      // watchers — continuations that run on the test's clock. Awaiting the
+      // write would stop the clock it is waiting on. So the test keeps the
+      // clock moving and watches the folder for the page the write produces.
+      Object? writeError;
+      var written = false;
+      unawaited(
+        db.todoDao
+            .insertOutcome(id: _outcomeId, title: 'Old title', userId: _userId)
+            .then(
+              (_) => written = true,
+              onError: (Object error) => writeError = error,
+            ),
+      );
+      await _settleUntil(tester, () {
+        final error = writeError;
+        if (error != null) fail('the app write failed: $error');
+        return written && _pagesIn(vault).isNotEmpty;
+      });
 
       // Its page is in the folder.
       final path = _pagePath(vault);
-      final page = (await tester.runAsync(() => File(path).readAsString())) ?? '';
+      final page = File(path).readAsStringSync();
       expect(page, contains('title: Old title'));
 
       // The app is on the list, showing the Outcome.
@@ -152,26 +174,25 @@ void main() {
       expect(find.text('Old title'), findsOneWidget);
 
       // A person edits the page in another tool.
-      await tester.runAsync(() => File(path).writeAsString(
-            page.replaceFirst('title: Old title', 'title: New title'),
-          ));
+      await tester.runAsync(
+        () => File(path).writeAsString(
+          page.replaceFirst('title: Old title', 'title: New title'),
+        ),
+      );
 
       // The app comes forward.
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
 
       // The edit reaches the app, and the app shows it.
-      await _settleUntil(tester, () async {
-        final row = await db.todoDao.getTodo(_outcomeId);
-        return row?.title == 'New title';
-      });
-      await _settle(tester);
+      await _settleUntil(
+        tester,
+        () => find.text('New title').evaluate().isNotEmpty,
+      );
       expect(find.text('New title'), findsOneWidget);
       expect(find.text('Old title'), findsNothing);
 
       // And the page says so too.
-      final rewritten =
-          (await tester.runAsync(() => File(path).readAsString())) ?? '';
-      expect(rewritten, contains('title: New title'));
+      expect(File(path).readAsStringSync(), contains('title: New title'));
     } finally {
       // The tree comes down first, so the watchers let go of the store, and the
       // container goes in the real zone, where the vault's own teardown can
@@ -183,14 +204,23 @@ void main() {
   });
 }
 
+/// The pages in the vault's Outcomes folder.
+List<String> _pagesIn(Directory vault) {
+  final outcomes = Directory('${vault.path}/Outcomes');
+  if (!outcomes.existsSync()) return const [];
+  final pages = outcomes
+      .listSync()
+      .whereType<File>()
+      .where((file) => file.path.endsWith('.md'))
+      .map((file) => file.path)
+      .toList();
+  pages.sort();
+  return pages;
+}
+
 /// The one page in the vault's Outcomes folder.
 String _pagePath(Directory vault) {
-  final outcomes = Directory('${vault.path}/Outcomes');
-  final files = <String>[];
-  if (outcomes.existsSync()) {
-    files.addAll(outcomes.listSync().whereType<File>().map((file) => file.path));
-    files.sort();
-  }
+  final files = _pagesIn(vault);
   expect(files, hasLength(1), reason: 'the Outcome has a page in the folder');
   return files.single;
 }
@@ -199,21 +229,17 @@ String _pagePath(Directory vault) {
 /// test's clock pumped so the continuations that started in the test's own zone
 /// run too.
 Future<void> _settle(WidgetTester tester) async {
-  for (var round = 0; round < 6; round++) {
-    await tester.runAsync(() => pumpEventQueue());
-    await tester.pump(const Duration(milliseconds: 150));
-  }
+  await settleWithRealAsync(tester, rounds: 3);
 }
 
 /// The same, until [done] says the work is done.
-Future<void> _settleUntil(
-  WidgetTester tester,
-  Future<bool> Function() done,
-) async {
+///
+/// [done] is asked in the test's own zone and answers from what the test can
+/// see without touching the store: the widget tree, or the folder on disk.
+Future<void> _settleUntil(WidgetTester tester, bool Function() done) async {
   for (var round = 0; round < 40; round++) {
-    await tester.runAsync(() => pumpEventQueue());
-    await tester.pump(const Duration(milliseconds: 50));
-    if (await tester.runAsync(done) ?? false) return;
+    await settleWithRealAsync(tester, rounds: 1);
+    if (done()) return;
   }
   fail('the vault did not settle in time');
 }
