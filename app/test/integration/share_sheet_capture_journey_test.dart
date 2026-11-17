@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/capture/share_inbox.dart';
@@ -18,6 +19,10 @@ import '../test_helpers.dart';
 const _fixtures = 'test/fixtures/share_inbox';
 const _imageShareId = '44444444-4444-4444-8444-444444444444';
 
+/// The channel the app asks where its documents directory is.
+const MethodChannel _pathProviderChannel =
+    MethodChannel('plugins.flutter.io/path_provider');
+
 Future<void> _settle(WidgetTester tester) async {
   for (var i = 0; i < 6; i++) {
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
@@ -30,6 +35,9 @@ void main() {
 
   late GtdDatabase db;
   late Directory filesDirectory;
+
+  final messenger =
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
@@ -47,9 +55,22 @@ void main() {
     File(p.join(attachments.path, '$_imageShareId.png'))
         .writeAsBytesSync(base64Decode(
             'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='));
+
+    // **The drain asks the platform where the local stores are before it
+    // writes anything**, and there is no platform here. Point it at this
+    // test's directory: there is no store file in it, so the verdict is
+    // "nothing to refuse" — the same verdict a device with no stores yet
+    // gets — and the drain goes ahead.
+    messenger.setMockMethodCallHandler(_pathProviderChannel, (call) async {
+      if (call.method == 'getApplicationDocumentsDirectory') {
+        return filesDirectory.path;
+      }
+      return null;
+    });
   });
 
   tearDown(() async {
+    messenger.setMockMethodCallHandler(_pathProviderChannel, null);
     await db.close();
     await filesDirectory.delete(recursive: true);
   });
