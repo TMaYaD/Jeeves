@@ -297,22 +297,33 @@ class _TimeboxedToggle extends StatelessWidget {
     const on = Color(0xFF2563EB);
     const off = Color(0xFF9CA3AF);
     final ink = enabled && value ? on : off;
-    return Tooltip(
-      message: enabled
-          ? 'Timeboxed: treat the estimate as a limit. Each sprint past it '
-              'is discouraged.'
-          : disabledReason,
-      child: InkWell(
-        key: const Key('estimate_sheet_timeboxed'),
-        onTap: enabled ? () => onChanged(!value) : null,
-        borderRadius: BorderRadius.circular(4),
-        child: Container(
-          padding: const EdgeInsets.all(6),
-          decoration: BoxDecoration(
-            color: value && enabled ? on.withValues(alpha: 0.08) : null,
-            borderRadius: BorderRadius.circular(4),
+    return Semantics(
+      button: true,
+      toggled: value,
+      enabled: enabled,
+      label: enabled
+          ? 'Timeboxed: the estimate is a limit. Each sprint past it is '
+              'discouraged.'
+          : 'Timeboxed: $disabledReason',
+      excludeSemantics: true,
+      onTap: enabled ? () => onChanged(!value) : null,
+      child: Tooltip(
+        message: enabled
+            ? 'Timeboxed: treat the estimate as a limit. Each sprint past it '
+                'is discouraged.'
+            : disabledReason,
+        child: InkWell(
+          key: const Key('estimate_sheet_timeboxed'),
+          onTap: enabled ? () => onChanged(!value) : null,
+          borderRadius: BorderRadius.circular(4),
+          child: Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: value && enabled ? on.withValues(alpha: 0.08) : null,
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: TimeboxedGlyph(size: 16, color: ink),
           ),
-          child: TimeboxedGlyph(size: 16, color: ink),
         ),
       ),
     );

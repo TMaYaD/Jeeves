@@ -10,7 +10,12 @@ import 'package:flutter/material.dart';
 
 /// The mark of a Timeboxed Action: the estimate, with a limit under it.
 class TimeboxedGlyph extends StatelessWidget {
-  const TimeboxedGlyph({super.key, this.size = 12, this.color});
+  const TimeboxedGlyph({
+    super.key,
+    this.size = 12,
+    this.color,
+    this.semanticLabel = 'Timeboxed',
+  });
 
   /// The width and the clock's diameter, in logical pixels.
   final double size;
@@ -18,10 +23,17 @@ class TimeboxedGlyph extends StatelessWidget {
   /// The ink. The estimate chip's own colour by default.
   final Color? color;
 
+  /// What a screen reader is told. Null says nothing.
+  ///
+  /// The mark is drawn, so without a label it is invisible to anyone who
+  /// cannot see it — and "the estimate is a limit" is the whole of what the
+  /// mark means.
+  final String? semanticLabel;
+
   @override
   Widget build(BuildContext context) {
     final ink = color ?? const Color(0xFF2563EB);
-    return Column(
+    final mark = Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         Icon(Icons.timer_outlined, size: size, color: ink),
@@ -31,6 +43,13 @@ class TimeboxedGlyph extends StatelessWidget {
           decoration: BoxDecoration(color: ink),
         ),
       ],
+    );
+    final label = semanticLabel;
+    if (label == null) return mark;
+    return Semantics(
+      label: label,
+      excludeSemantics: true,
+      child: mark,
     );
   }
 }
