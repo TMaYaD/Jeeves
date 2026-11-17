@@ -102,6 +102,13 @@ class SyncedPreferencesNotifier
     await _migrateSharedPreferencesIfNeeded(dao, userId);
     if (!ref.mounted) return const SyncedPreferences({});
 
+    // Carry the newest value of each setting on the device into the current
+    // user's copy of it. The device keeps one preference row per (user id,
+    // key), and the user id changes on sign-in and on sign-out, so without
+    // this the app would swap between two copies of every setting.
+    await dao.carryNewestPreferencesInto(userId);
+    if (!ref.mounted) return const SyncedPreferences({});
+
     // Load initial snapshot.
     final initial = await dao.getAll(userId);
     if (!ref.mounted) return const SyncedPreferences({});
