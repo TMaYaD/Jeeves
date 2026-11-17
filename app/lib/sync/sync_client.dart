@@ -3382,11 +3382,21 @@ class SyncClient {
   /// Raise or re-raise one accusation, keyed by `(workspace, kind, author)`.
   ///
   /// Re-raising un-resolves: an accusation that stands again is not history.
+  /// It also un-decides: the User's answer was about the accusation as it
+  /// stood then, and a new accusation is a new question. The row keeps the
+  /// answer only until the next time the accusation stands again.
+  ///
+  /// [repostFromAuthorSeq] is the author's chain position this device's writes
+  /// would be reposted from, for the rollback alarm where the server lost
+  /// writes it had acknowledged. Null for every other alarm, and null for the
+  /// rollback raised when the server holds a position this device never wrote —
+  /// there is no agreed position to repost from.
   Future<int> _raiseAlarm(
     IntegrityAlarmKind kind, {
     required String detail,
     String? authorMemberId,
     int? quarantineOpRowId,
+    int? repostFromAuthorSeq,
   }) async {
     final now = _now();
     final existing = await (_db.select(_db.integrityAlarms)
@@ -3407,6 +3417,9 @@ class SyncClient {
         lastDetectedAt: Value(now),
         resolvedAt: const Value(null),
         quarantineOpRowId: Value(alarm.quarantineOpRowId ?? quarantineOpRowId),
+        resolution: const Value(null),
+        resolutionDecidedAt: const Value(null),
+        repostFromAuthorSeq: Value(repostFromAuthorSeq),
       ));
       return alarm.id;
     }
@@ -3420,6 +3433,7 @@ class SyncClient {
             occurrenceCount: 1,
             firstDetectedAt: now,
             lastDetectedAt: now,
+            repostFromAuthorSeq: Value(repostFromAuthorSeq),
           ),
         );
   }
@@ -3478,6 +3492,14 @@ class SyncClient {
   /// SQL behind both [health] and [watchSyncHealth], so the one-shot and the
   /// stream cannot report different numbers.
   ///
+  /// The two counts that ask the User for something — `actionable_alarm_count`
+  /// and `reportable_quarantine_count` — also skip the rows the User has
+  /// already answered (`resolution IS NULL`). A decided condition is still
+  /// *unresolved*: it happened, and the User should still be told it happened.
+  /// It is just no longer something to be asked about, so it does not drive
+  /// the indicator. `unresolved_alarm_count` and `quarantine_count` keep
+  /// counting every row.
+  ///
   /// The two class-filtered counts inline their code lists rather than binding
   /// them, and the lists are **generated from the classification itself**
   /// (`sync_condition_class.dart`) rather than written out here: a hand-written
@@ -3492,13 +3514,15 @@ SELECT
     WHERE workspace_id = ? AND released_at IS NULL) AS quarantine_count,
   (SELECT COUNT(*) FROM quarantined_ops
     WHERE workspace_id = ? AND released_at IS NULL
-      AND reason NOT IN (${_sqlCodeList(transientRefusalCodes)}))
+      AND reason NOT IN (${_sqlCodeList(transientRefusalCodes)})
+      AND resolution IS NULL)
     AS reportable_quarantine_count,
   (SELECT COUNT(*) FROM integrity_alarms
     WHERE workspace_id = ? AND resolved_at IS NULL) AS unresolved_alarm_count,
   (SELECT COUNT(*) FROM integrity_alarms
     WHERE workspace_id = ? AND resolved_at IS NULL
-      AND kind IN (${_sqlCodeList(actionableAlarmCodes)}))
+      AND kind IN (${_sqlCodeList(actionableAlarmCodes)})
+      AND resolution IS NULL)
     AS actionable_alarm_count,
   (SELECT group_concat(DISTINCT kind) FROM integrity_alarms
     WHERE workspace_id = ? AND resolved_at IS NULL) AS alarm_kinds,

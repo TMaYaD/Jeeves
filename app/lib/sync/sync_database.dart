@@ -151,6 +151,18 @@ class QuarantinedOps extends Table {
   /// so the re-arm predicate matches interrupted replays alone, never a
   /// permanently standing fork.
   DateTimeColumn get releaseStartedAt => dateTime().nullable()();
+
+  /// The decision the user recorded about this refused op, as an
+  /// `AlarmResolution.code` — see `alarm_resolution.dart`. Null until a
+  /// decision is made.
+  ///
+  /// A decided row is no longer *reportable*: the user has already answered
+  /// it, so it must not ask again. The row itself is kept — the refusal
+  /// happened, and hiding it would lose the record.
+  TextColumn get resolution => text().nullable()();
+
+  /// When the user recorded [resolution].
+  DateTimeColumn get resolutionDecidedAt => dateTime().nullable()();
 }
 
 /// What the server or an author stands accused of — the per-event vocabulary,
@@ -199,6 +211,31 @@ class IntegrityAlarms extends Table {
   DateTimeColumn get firstDetectedAt => dateTime()();
   DateTimeColumn get lastDetectedAt => dateTime()();
   DateTimeColumn get resolvedAt => dateTime().nullable()();
+
+  /// The decision the user recorded about this accusation, as an
+  /// `AlarmResolution.code` — see `alarm_resolution.dart`. Null until a
+  /// decision is made.
+  ///
+  /// A decision and a heal are different things. [resolvedAt] says the
+  /// accusation no longer stands (the gap closed, the rows were released);
+  /// [resolution] says the user answered it — took upstream, kept ours, or
+  /// rejected it for good. A decided alarm stops being *actionable* while it
+  /// stays *unresolved*, because the user still has to know it happened.
+  TextColumn get resolution => text().nullable()();
+
+  /// When the user recorded [resolution].
+  DateTimeColumn get resolutionDecidedAt => dateTime().nullable()();
+
+  /// The author's chain position this device's writes were reposted from, when
+  /// the alarm is one the user can answer by keeping its own work.
+  ///
+  /// Set when the server was found to have lost writes it had already
+  /// acknowledged: the client's own ops are still in the outbox, and keeping
+  /// them means reposting from the last position the server and this device
+  /// agreed on. Null for every other alarm, and null for the rollback alarm
+  /// raised when the server holds a position this device never wrote — there
+  /// is no agreed position to repost from.
+  IntColumn get repostFromAuthorSeq => integer().nullable()();
 }
 
 /// The reduced value of one field of one entity. Visibility is decided at read
@@ -512,9 +549,10 @@ class SyncDatabase extends _$SyncDatabase {
   /// `quarantined_ops.release_started_at`, the interrupted-chain-replay re-arm
   /// marker (#620); v10 adds the sync host's durable change sequence and its
   /// per-plugin cursors; v11 adds the marker that the pre-existing domain rows were
-  /// walked into merge state.
+  /// walked into merge state; v12 adds the columns that record the user's
+  /// decision on an integrity alarm or a refused op (#575).
   @override
-  int get schemaVersion => 11;
+  int get schemaVersion => 12;
 
   /// Additive only. A device that already holds a log keeps every byte of it:
   /// each step is `CREATE TABLE`s, an `ADD COLUMN` or a `CREATE INDEX`, and no
@@ -621,6 +659,26 @@ class SyncDatabase extends _$SyncDatabase {
             // One new table, nothing altered or backfilled. An absent marker is
             // exactly right for a device that predates it: it has not walked.
             await migrator.createTable(mergeStateSeeding);
+          }
+          if (from < 12) {
+            // Five new columns, nothing altered or backfilled. Every one of
+            // them is null until the user decides something, which is exactly
+            // right for a device that predates the decision: nothing has been
+            // decided yet.
+            await migrator.addColumn(integrityAlarms, integrityAlarms.resolution);
+            await migrator.addColumn(
+              integrityAlarms,
+              integrityAlarms.resolutionDecidedAt,
+            );
+            await migrator.addColumn(
+              integrityAlarms,
+              integrityAlarms.repostFromAuthorSeq,
+            );
+            await migrator.addColumn(quarantinedOps, quarantinedOps.resolution);
+            await migrator.addColumn(
+              quarantinedOps,
+              quarantinedOps.resolutionDecidedAt,
+            );
           }
         },
       );

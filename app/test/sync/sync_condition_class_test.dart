@@ -369,5 +369,76 @@ void main() {
       expect(classOfAlarmCode('from_the_future'), SyncConditionClass.reported);
       expect(classOfRefusalCode('from_the_future'), SyncConditionClass.reported);
     });
+
+    test('I7 a decided actionable alarm is reported, but is not an error',
+        () async {
+      // The decision is written straight into the column: there is no API for
+      // it yet, and what is under test is what the health query does with one.
+      workspace = await SimWorkspace.create(deviceCount: 1);
+      final a = workspace.a;
+      await a.authorLocal('one');
+      await a.authorLocal('two');
+      await a.sync();
+      final ownSeqs = [
+        for (final row in await a.loggedOps())
+          if (row.authorMemberId == a.identity.memberId) row.seq,
+      ]..sort();
+      workspace.server.rollbackToSeq(ownSeqs.last - 1);
+      await a.authorLocal('three');
+
+      final before = await a.sync();
+      expect(before.actionableAlarmCount, greaterThan(0),
+          reason: 'the rollback is the condition this test is built on');
+
+      await a.database.customStatement(
+        'UPDATE integrity_alarms SET resolution = ?, resolution_decided_at = ? '
+        'WHERE workspace_id = ? AND kind = ?',
+        [
+          'kept_ours',
+          1754006400000,
+          a.client.workspaceId,
+          IntegrityAlarmKind.ownWritesRollback.code,
+        ],
+      );
+
+      final health = await a.client.health();
+      expect(health.unresolvedAlarmCount, 1,
+          reason: 'the accusation still stands, and the user still gets to '
+              'know it happened');
+      expect(health.actionableAlarmCount, 0,
+          reason: 'the user has answered it; it is no longer something to ask '
+              'about, so it does not drive the indicator');
+      expect(health.degraded, isFalse);
+      expect(health.hasSomethingToReport, isTrue);
+    });
+
+    test('I8 a decided refusal is no longer reportable', () async {
+      workspace = await SimWorkspace.create(deviceCount: 1);
+      final a = workspace.a;
+      await a.authorLocal('mine');
+      await a.sync();
+      final authored = await a.client.authoredEnvelopes();
+      final tampered = Uint8List.fromList(authored.last);
+      tampered[headerLengthBytes + 8] ^= 0x01;
+      workspace.server.injectUnchecked(workspace.workspaceId, tampered);
+      await a.sync();
+
+      final before = await a.client.health();
+      expect(before.reportableQuarantineCount, 1,
+          reason: 'a forgery is worth reporting until the user says otherwise');
+
+      await a.database.customStatement(
+        'UPDATE quarantined_ops SET resolution = ?, resolution_decided_at = ? '
+        'WHERE workspace_id = ?',
+        ['rejected_permanently', 1754006400000, a.client.workspaceId],
+      );
+
+      final health = await a.client.health();
+      expect(health.quarantineCount, 1, reason: 'the refusal still stands');
+      expect(health.reportableQuarantineCount, 0,
+          reason: 'the user has answered it; the screen does not ask again');
+      expect(health.unresolvedAlarmCount, 1,
+          reason: 'the alarm the forgery raised is a separate question');
+    });
   });
 }
