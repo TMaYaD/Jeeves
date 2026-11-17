@@ -87,7 +87,7 @@ Future<void> _until(
   Future<bool> Function() condition, {
   required String what,
 }) async {
-  final deadline = DateTime.now().add(const Duration(minutes: 3));
+  final deadline = DateTime.now().add(const Duration(seconds: 30));
   while (!await condition()) {
     if (DateTime.now().isAfter(deadline)) {
       fail('timed out waiting until $what');
@@ -291,5 +291,5 @@ void main() {
         await restarted.container.read(domainStoreRebuildProvider.future), 0);
     await restarted.container.read(syncHostProvider.future);
     await expectEdited(restarted.db, 'after a restart');
-  }, timeout: const Timeout(Duration(minutes: 10)));
+  });
 }
