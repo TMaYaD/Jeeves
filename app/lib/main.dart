@@ -7,6 +7,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'capture/share_inbox_host.dart';
+import 'database/store_schema.dart';
 import 'providers/auth_provider.dart';
 import 'providers/database_provider.dart';
 import 'providers/time_context_provider.dart';
@@ -15,6 +16,7 @@ import 'providers/onboarding_provider.dart';
 import 'providers/sync_lifecycle_provider.dart';
 import 'providers/sync_stack_provider.dart';
 import 'router.dart';
+import 'screens/store_too_new/store_too_new_screen.dart';
 import 'services/due_date_notifications.dart';
 import 'services/follow_up_notifications.dart';
 import 'services/legacy_sprint_prefs_cleanup.dart';
@@ -29,6 +31,14 @@ Future<void> main() async {
   await initOnboardingCompletion();
   await removeLegacySprintPrefs();
 
+  // **The startup gate.** Read the two local stores' schema versions before
+  // anything opens them: a store written by a newer build is left exactly as
+  // it is, and the app says so instead of opening it. The read happens here,
+  // before the first frame, so the verdict is known before anything can open a
+  // store — and the provider is overridden with it, so the two files are read
+  // once per launch.
+  final storeVersions = await readLocalStoreVersions();
+
   // flutter_local_notifications uses platform channels unavailable on web.
   // Skip the entire notification stack on web; push notifications are a
   // separate feature (PWA Web Push) tracked outside this issue.
@@ -36,7 +46,10 @@ Future<void> main() async {
     // Initialize notification service with the action handler registered
     // before any notification can fire (including cold-start launch).
     await NotificationService.initialize(
-      onNotificationResponse: _handleNotificationResponse,
+      onNotificationResponse: (response) => _handleNotificationResponse(
+        response,
+        storeVersions: storeVersions,
+      ),
     );
     await NotificationService.instance.requestPermissions();
 
@@ -46,21 +59,41 @@ Future<void> main() async {
     final launchDetails = await NotificationService.instance.getLaunchDetails();
     if (launchDetails?.didNotificationLaunchApp == true &&
         launchDetails?.notificationResponse != null) {
-      _handleNotificationResponse(launchDetails!.notificationResponse!);
+      _handleNotificationResponse(
+        launchDetails!.notificationResponse!,
+        storeVersions: storeVersions,
+      );
     }
   }
 
-  runApp(const ProviderScope(child: JeevesApp()));
+  runApp(
+    ProviderScope(
+      overrides: [
+        // The gate already read the two files; the providers use what it read
+        // rather than reading them again.
+        localStoreVersionsProvider.overrideWith((ref) async => storeVersions),
+      ],
+      child: JeevesApp(storeVersions: storeVersions),
+    ),
+  );
 }
 
 /// Plugin callback for notification taps and action buttons. The logic lives in
 /// [handleRitualNotificationResponse]; this binds it to the real plugin and
 /// router.
 ///
+/// **A store written by a newer build is not this build's to act on:** the
+/// handler records a Nudge's dismissal or snooze in the very store this build
+/// cannot read, so it does nothing at all.
+///
 /// The `@pragma('vm:entry-point')` annotation keeps this function alive in
 /// release builds so the OS can call it when the app is in the background.
 @pragma('vm:entry-point')
-void _handleNotificationResponse(NotificationResponse response) {
+void _handleNotificationResponse(
+  NotificationResponse response, {
+  required LocalStoreVersions storeVersions,
+}) {
+  if (storeVersions.refusal != null) return;
   unawaited(handleRitualNotificationResponse(
     response,
     service: NotificationService.instance,
@@ -69,10 +102,27 @@ void _handleNotificationResponse(NotificationResponse response) {
 }
 
 class JeevesApp extends ConsumerWidget {
-  const JeevesApp({super.key});
+  const JeevesApp({super.key, required this.storeVersions});
+
+  /// What the two local store files carried when the app started.
+  ///
+  /// Read by the startup gate before the first frame, so the verdict is known
+  /// before any provider can open a store.
+  final LocalStoreVersions storeVersions;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // **A store written by a newer build is left alone.** The check comes
+    // before every provider below, so nothing opens a store, and the app says
+    // what happened instead of showing an empty or broken home screen.
+    if (storeVersions.refusal != null) {
+      return MaterialApp(
+        title: 'Jeeves',
+        theme: _jeevesTheme,
+        home: const StoreTooNewScreen(),
+      );
+    }
+
     // Eagerly materialise [domainStoreRebuildProvider] so a device whose domain
     // store has not yet been replayed into replays its local op log now — first
     // launch after the cutover, or any launch after one that failed part-way.
@@ -113,12 +163,7 @@ class JeevesApp extends ConsumerWidget {
     ref.watch(nudgeNotificationSchedulerProvider);
     return MaterialApp.router(
       title: 'Jeeves',
-      theme: ThemeData(
-        colorSchemeSeed: const Color(0xFF2667B7),
-        useMaterial3: true,
-        fontFamily: 'Manrope',
-        scaffoldBackgroundColor: Colors.white,
-      ),
+      theme: _jeevesTheme,
       routerConfig: appRouter,
       // Only Android has a share-sheet receiver that queues shares.
       builder: (context, child) =>
@@ -128,3 +173,12 @@ class JeevesApp extends ConsumerWidget {
     );
   }
 }
+
+/// The app's theme, shared by the router's app and by the blocking screen the
+/// startup gate shows in its place.
+final ThemeData _jeevesTheme = ThemeData(
+  colorSchemeSeed: const Color(0xFF2667B7),
+  useMaterial3: true,
+  fontFamily: 'Manrope',
+  scaffoldBackgroundColor: Colors.white,
+);

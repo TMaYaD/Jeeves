@@ -6,6 +6,7 @@ import 'package:sqlite_async/sqlite_async.dart' show SqliteDatabase;
 
 import '../database/domain_store.dart';
 import '../database/gtd_database.dart';
+import '../database/store_schema.dart';
 import '../sync/domain_op_capture.dart';
 import '../sync/domain_rebuild.dart';
 import '../sync/hlc.dart';
@@ -41,6 +42,25 @@ final Provider<HostedDomainOpCapture> hostedDomainOpCaptureProvider =
 final Provider<WorkspaceRoutingOpCapture> domainOpCaptureProvider =
     Provider<WorkspaceRoutingOpCapture>((ref) => WorkspaceRoutingOpCapture());
 
+/// The schema versions the two local store files carry, read before anything
+/// opens them.
+///
+/// **Both stores, judged together.** A build that can read the op log but not
+/// the read model would project reduced state into a read model it cannot
+/// migrate; a build that can read the read model but not the op log would keep
+/// syncing from a log it does not understand. So a build that cannot read one
+/// of them reads neither, and leaves both files exactly as they are.
+///
+/// `main.dart` reads the versions before the first frame and overrides this
+/// provider with what it read, so the two files are read once per launch. The
+/// read here is the fallback for a launch that did not: a test, or an entry
+/// point that runs before the app's own gate.
+final FutureProvider<LocalStoreVersions> localStoreVersionsProvider =
+    FutureProvider<LocalStoreVersions>((ref) async {
+  ref.keepAlive();
+  return readLocalStoreVersions();
+});
+
 /// The domain store's own SQLite file, opened once.
 ///
 /// Two stores per device by design (see `sync/domain_projector.dart`): this one is
@@ -48,9 +68,15 @@ final Provider<WorkspaceRoutingOpCapture> domainOpCaptureProvider =
 /// It reports whether the op log still owes it a replay — which is what
 /// [domainStoreRebuildProvider] keys on. The open creates its own file and
 /// deletes nothing (issue #673).
+///
+/// **It refuses a store written by a newer build:** the file is left exactly
+/// as it is, and the refusal is what the app's blocking screen is built
+/// from.
 final FutureProvider<DomainStoreOpening> domainStoreProvider =
     FutureProvider<DomainStoreOpening>((ref) async {
   ref.keepAlive();
+  final refusal = (await ref.read(localStoreVersionsProvider.future)).refusal;
+  if (refusal != null) throw refusal;
   final opening = await DomainStoreImpl().openDatabase();
   ref.onDispose(opening.database.close);
   return opening;

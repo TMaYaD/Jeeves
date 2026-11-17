@@ -14,6 +14,8 @@ library;
 
 import 'package:drift/drift.dart';
 
+import '../database/store_version_error.dart';
+
 part 'sync_database.g.dart';
 
 /// Every envelope this device has received, byte for byte, in arrival order.
@@ -514,7 +516,15 @@ class SyncDatabase extends _$SyncDatabase {
   /// per-plugin cursors; v11 adds the marker that the pre-existing domain rows were
   /// walked into merge state.
   @override
-  int get schemaVersion => 11;
+  int get schemaVersion => supportedSchemaVersion;
+
+  /// The schema version this build reads and writes.
+  ///
+  /// The number the store's file carries in `PRAGMA user_version`. A file
+  /// carrying a **higher** version was written by a newer build, and this
+  /// build refuses it: the op log is the evidence every merge verdict is
+  /// derived from, and a build that cannot read it must not relabel it.
+  static const int supportedSchemaVersion = 11;
 
   /// Additive only. A device that already holds a log keeps every byte of it:
   /// each step is `CREATE TABLE`s, an `ADD COLUMN` or a `CREATE INDEX`, and no
@@ -526,6 +536,19 @@ class SyncDatabase extends _$SyncDatabase {
   MigrationStrategy get migration => MigrationStrategy(
         onCreate: (migrator) => migrator.createAll(),
         onUpgrade: (migrator, from, to) async {
+          // A store written by a newer build. Drift calls
+          // `onUpgrade` for **any** version difference, a downgrade included,
+          // so this is where an older build meets a newer file. Refuse before
+          // touching anything: the file keeps its version and every row, and
+          // the app says the data belongs to a newer Jeeves instead of
+          // relabelling it with a version this build does not understand.
+          if (from > to) {
+            throw StoreVersionTooNewError(
+              storeName: 'op log',
+              storedVersion: from,
+              supportedVersion: to,
+            );
+          }
           if (from < 2) {
             await migrator.createTable(rootPins);
             await migrator.createTable(controlChainState);

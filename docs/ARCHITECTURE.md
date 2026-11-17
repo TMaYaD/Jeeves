@@ -96,6 +96,10 @@ Every device holds two SQLite files, deliberately not one.
 Two files rather than two schemas in one file, so that an operation whose whole
 premise is that the read model can be discarded cannot take the evidence with it.
 
+**A store written by a newer build is never opened.** Each file carries its
+schema version, and a build that meets a higher one opens neither store and
+changes nothing in either — it says the data belongs to a newer Jeeves instead.
+
 ## The sync spine
 
 `app/lib/sync/` is the largest region in the client and has its own map:

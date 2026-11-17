@@ -26,9 +26,15 @@ import 'database_provider.dart';
 import 'user_constants.dart';
 
 /// The process-wide op-log store, opened once and closed on disposal.
+///
+/// **It refuses a store written by a newer build:** the file is left exactly
+/// as it is, and the refusal is what the app's blocking screen is built
+/// from.
 final FutureProvider<SyncDatabase> syncDatabaseProvider =
     FutureProvider<SyncDatabase>((ref) async {
   ref.keepAlive();
+  final refusal = (await ref.read(localStoreVersionsProvider.future)).refusal;
+  if (refusal != null) throw refusal;
   final database = await SyncStoreImpl().openDatabase();
   ref.onDispose(database.close);
   return database;

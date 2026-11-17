@@ -132,7 +132,7 @@ To build a hybrid productivity application that merges the rigid organizational 
 
 ### Epic 11: Data Portability & Migration
 **Goal:** Reduce switching costs and prevent vendor lock-in.
-* **Import from Nirvana:** One-time migration of tasks, projects, contexts, and metadata from Nirvana GTD export (CSV or JSON), preserving GTD state and hierarchy. Each source state is classified by the table below; an unclarified item becomes a **Capture** and a clarified one an **Outcome**. Clarified items are bucketed by Intent, Completion and Person tags:
+* **Import from Nirvana:** One-time migration of tasks, projects, contexts, and metadata from Nirvana GTD export (CSV or JSON), preserving GTD state and hierarchy. Each source state is classified by the table below; an unclarified item becomes a **Capture**, a clarified one an **Outcome**. Clarified items are bucketed by Intent, Completion and Person tags:
 
 | Nirvana state | Import outcome |
 | :--- | :--- |
@@ -143,23 +143,25 @@ To build a hybrid productivity application that merges the rigid organizational 
 | Trash | Clarified Outcome, Intent Trash. |
 | Completed — Logbook, non-empty `COMPLETED` (CSV), or non-zero `completed` (JSON), regardless of state | Completion set (the completion date, or import time when unparseable), Intent Next. Completed wins: no `@scheduled`/`@repeating`/`@reference` auto-tag is injected. |
 
-  JSON exports carry state ints rather than literals: the recognised (clarified) set is `{1–7, 9, 10}`, of which `{3, 4, 5, 9, 10}` map to Someday/Maybe and `{6}` to Trash, with auto-tags 3 → `@scheduled`, 9 → `@repeating`, 10 → `@reference`; 0 and unrecognised ints fall to the Inbox row above.
+  JSON exports carry state ints rather than literals: the recognised set is `{1–7, 9, 10}`, of which `{3, 4, 5, 9, 10}` map to Someday/Maybe and `{6}` to Trash, with auto-tags 3 → `@scheduled`, 9 → `@repeating`, 10 → `@reference`; 0 and unrecognised ints fall to the Inbox row above.
 
   Re-importing the same export is safe to repeat. Item ids are deterministic, so a second run lands on the rows the first run wrote and updates them in place. It refreshes only what the export owns — title, notes, Completion, clarified state, due date, time estimate, energy level, capture source — while later user edits survive untouched: priority, location, when the last next action was completed, and creation date. A Capture the user has since clarified likewise stays clarified and keeps its provenance links instead of being pushed back to the Inbox.
 
-  **Imported data syncs.** Outcomes, Captures, Tags and their tag links are each recorded on the op log like any other edit ([SYNC.md](SYNC.md)), so an import performed on one enrolled device appears on every other, and a device enrolling later rebuilds it from the log alone. Importing *before* signing up for sync works too: enrolling uploads the existing store ([ADR-0034](adr/0034-sync-starts-at-enrolment.md)). Neither ordering strands data.
+  **Imported data syncs.** Outcomes, Captures, Tags and their tag links are recorded on the op log like any other edit ([SYNC.md](SYNC.md)), so an import on one device appears on every other, and a device enrolling later rebuilds it from the log alone. Importing *before* signing up for sync works too: enrolling uploads the existing store ([ADR-0034](adr/0034-sync-starts-at-enrolment.md)). Neither ordering strands data.
 
   **An import saves in batches, so an interrupted import keeps what it finished.** Re-running the same export completes what an interruption left behind without duplicates. Project tags are saved before the first task batch, so an interruption between them can leave Tags with no Tasks — harmless, and resolved on the re-run.
 
   Intent survives in one direction only. A row the export buckets into Next or Waiting keeps whatever Intent the user has since given it, so a locally demoted Outcome stays demoted. A row the export buckets into Someday/Maybe or Trash is re-bucketed there on every run, so a local promotion of such a row back to Next does not survive a re-import — a known asymmetry, not a deliberate ownership rule.
 
-* **Android system backup carries no Jeeves data.** Jeeves opts out of Android's cloud backup and phone-to-phone transfer. A phone set up from another phone's backup starts as a new, empty Jeeves with its own device identity. A person's data reaches a new phone through sync, or through the export; nothing else moves it.
+* **Android system backup carries no Jeeves data.** Jeeves opts out of Android's cloud backup and phone-to-phone transfer. A phone set up from another phone's backup starts as a new, empty Jeeves with its own device identity. A person's data reaches a new phone through sync or the export; nothing else moves it.
 
-* **Build version in Settings → About:** Settings → About always shows the running build's version name and build number, plus the short commit sha when the build carries one (CI builds do; local builds omit it) (e.g. `Version 1.3.0-alpha.17 (412) · a1b2c3d`), read from the build rather than a checked-in value, so a rollout can be checked from the device.
+* **An older build never touches data written by a newer one.** When a local store carries a schema version this build does not know, neither store is opened: nothing is migrated, projected, synced or written, and the file keeps its version and every row. The app says the data was last used by a newer Jeeves, and that nothing was changed or deleted.
+
+* **Build version in Settings → About:** Settings → About always shows the running build's version name and build number, plus the short commit sha when the build carries one (CI builds do; local builds omit it) (e.g. `Version 1.3.0-alpha.17 (412) · a1b2c3d`), read from the build rather than a checked-in value.
 
 * **Export (developer options):** The app can export the current user's GTD data to a JSON file: Captures, Outcomes, Actions, Tags (Labels, Areas, Contexts, Projects, Persons), TimeLogs, FocusSessions and their links. No preference and no credential is ever exported. The export is the same encoding sync uses ([ADR-0047](adr/0047-export-is-the-op-log-wire-encoding-and-import-detects-it-silently.md)), so a round-trip loses nothing.
 
-  **The export UI is a hidden Easter egg.** It is reached only by tapping the "Jeeves" name in Settings → About seven times (the Android developer-mode gesture), which reveals a **Developer Options** section with an *Export data* item; the unlock is session-scoped and never persisted. The file is saved through the platform save dialog, on mobile and desktop alike.
+  **The export UI is a hidden Easter egg.** Reached only by tapping the "Jeeves" name in Settings → About seven times (the Android developer-mode gesture), it reveals a **Developer Options** section with an *Export data* item; the unlock is session-scoped and never persisted. The file is saved through the platform save dialog, on mobile and desktop alike.
 
 * **Import supports the Jeeves export silently:** The existing *Import from Nirvana* surface re-imports a Jeeves export with no UI or copy change and no sign that a second format — or export at all — exists. The file is recognised by its shape ([ADR-0047](adr/0047-export-is-the-op-log-wire-encoding-and-import-detects-it-silently.md)). Each imported item is saved and recorded on the op log, so it syncs to the user's other devices exactly as a Nirvana import does, and importing works fully offline on an un-enrolled device. Imported items are re-owned by the importing account. A re-import updates the same items in place rather than duplicating them — the export→import→export round-trip is byte-identical.
 

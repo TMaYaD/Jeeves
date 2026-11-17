@@ -65,6 +65,12 @@ Currently: **trunk-only.** Features may merge between `v<target>-beta` and `v<ta
 
 This is acceptable at single-contributor scale. Switch to a release branch (`release/<target>`) when feature merges during beta cycles start producing tester confusion or when the team grows past 1–2 contributors. Until then, the dual-merge tax of release branches isn't worth paying.
 
+## Going back to an older build
+
+**Uninstalling is the only way back, and it deletes the local data.** Android refuses to install a build with a lower `versionCode` over a newer one, so going back means uninstalling first — and uninstalling deletes the app's private folder, which holds both local stores. The older build then starts empty, and the newer build's data goes with it. Jeeves opts out of Android's cloud backup, so nothing puts it back.
+
+**A build that meets a store it cannot read refuses it.** Each local store file carries its schema version, and a build whose own version is lower opens neither store and changes nothing in either; it says the data was last used by a newer Jeeves, and that nothing was changed or deleted. Putting the newer build back on the device opens the data again with every row intact — as long as it was never uninstalled.
+
 ## What this means for the workflow
 
 - `.github/workflows/cd-app.yml` is the source of truth. The `version` job computes `version` and `pubspec_version`; downstream build/publish jobs stamp those into `pubspec.yaml` and produce APK/AAB/web artifacts.
