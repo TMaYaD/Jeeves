@@ -17,7 +17,6 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
-import 'package:jeeves/database/tables.dart';
 
 import '../test_helpers.dart';
 
