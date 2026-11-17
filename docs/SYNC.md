@@ -130,6 +130,13 @@ only fields merge state holds no value or clock for, each at the floor clock
 `Hlc(0, 0, <device node id>)`, so any real write from any time beats a seeded value.
 It writes no domain row, tombstone or change.
 
+Merge state reaches the domain store through the projector, which gives up the
+store's writer between batches — a whole-store re-projection (after a schema upgrade,
+or a rebuild from the log) never holds a user's edit back for its length. That walk,
+and only that walk, leaves alone an entity whose local change is still in the outbox.
+A remote change is always projected on arrival. `DomainProjector.project`
+(`sync/domain_projector.dart`) gives the reason for each.
+
 ## Protocol surface
 
 Three things are wire contract rather than implementation detail. Changing any of
