@@ -301,8 +301,12 @@ class _FocusBodyState extends ConsumerState<_FocusBody>
     // Sprint starts the moment focus mode starts. The Timeboxed gate is
     // asked *before* the engagement begins — at the button that starts it —
     // so a Sprint that is declined leaves no TimeLog behind (issue #923).
-    // This path is the one that is not gated: an engagement that was already
-    // under way when the app was closed carries on.
+    // This callback is what starts the Sprint on that path, so the gate is
+    // not asked here. It is also the one path that starts a Sprint with no
+    // gate at all: when the app reopens on an engagement already under way
+    // — the TimeLog is open and no Sprint has been recorded since it
+    // opened — the Sprint carries on without asking. That engagement has
+    // already begun, so there is nothing left to ask about.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final timer = ref.read(sprintTimerProvider);
