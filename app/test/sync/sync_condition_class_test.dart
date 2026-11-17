@@ -395,7 +395,7 @@ void main() {
         'WHERE workspace_id = ? AND kind = ?',
         [
           'kept_ours',
-          1754006400000,
+          '2026-08-01T00:00:00.000Z',
           a.client.workspaceId,
           IntegrityAlarmKind.ownWritesRollback.code,
         ],
@@ -430,7 +430,7 @@ void main() {
       await a.database.customStatement(
         'UPDATE quarantined_ops SET resolution = ?, resolution_decided_at = ? '
         'WHERE workspace_id = ?',
-        ['rejected_permanently', 1754006400000, a.client.workspaceId],
+        ['rejected_permanently', '2026-08-01T00:00:00.000Z', a.client.workspaceId],
       );
 
       final health = await a.client.health();

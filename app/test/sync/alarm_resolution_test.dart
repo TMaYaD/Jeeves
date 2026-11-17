@@ -216,12 +216,12 @@ void main() {
         'INSERT INTO integrity_alarms (workspace_id, kind, detail, '
         'occurrence_count, first_detected_at, last_detected_at) '
         "VALUES ('workspace-1', 'own_writes_rollback', 'the server lost a write', "
-        '1, 1754006400000, 1754006400000)',
+        "1, '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z')",
       );
       await seed.customStatement(
         'INSERT INTO quarantined_ops (workspace_id, reason, detail, envelope, '
         "detected_at) VALUES ('workspace-1', 'bad_signature', 'forged', X'', "
-        '1754006400000)',
+        "'2026-08-01T00:00:00.000Z')",
       );
       await seed.customStatement('PRAGMA user_version = 11');
       await seed.close();
