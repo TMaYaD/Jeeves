@@ -121,6 +121,11 @@ final Provider<GtdDatabase> databaseProvider = Provider<GtdDatabase>((ref) {
 /// [GtdDatabase.opened] — a future fed by `beforeOpen`, which drift runs on every
 /// open, so a launch that migrates nothing resolves it rather than hanging here.
 ///
+/// **The walk does not hold the store.** The projector takes the writer in
+/// small chunks (`sync/domain_projector.dart`), so an edit made while a
+/// re-projection of the whole store is under way waits for one chunk, not for
+/// the walk.
+///
 /// **A failure is logged, not swallowed.** It propagates into this provider's
 /// error state as well, but nothing reads that state — the console line is what a
 /// missing-data report is diagnosed from, the same convention
@@ -134,12 +139,24 @@ final FutureProvider<int> domainStoreRebuildProvider =
   await domain.customSelect('SELECT 1').getSingle();
   final details = await domain.opened;
   if (!opening.needsRebuild && !details.hadUpgrade) return 0;
+  final walk = Stopwatch()..start();
   try {
     final projected = await rebuildDomainFromOpLog(
       sync: await ref.read(syncDatabaseProvider.future),
       domain: domain,
     );
     opening.markRebuilt();
+    // One line per walk that did anything: how much it covered and how long it
+    // took is the first thing a "the app was slow after the update" report
+    // needs, and nothing else records it.
+    if (projected > 0) {
+      debugPrint(
+        'domain store rebuild: projected $projected entities in '
+        '${walk.elapsedMilliseconds} ms '
+        '(${details.hadUpgrade ? 'schema upgrade '
+            '${details.versionBefore} -> ${details.versionNow}' : 'first replay'})',
+      );
+    }
     return projected;
   } on Object catch (error) {
     debugPrint('domain store rebuild: failed, will retry next launch — $error');
