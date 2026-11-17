@@ -572,7 +572,31 @@ class SyncDatabase extends _$SyncDatabase {
             await migrator.addColumn(syncCursors, syncCursors.lastSyncCompletedAt);
           }
           if (from < 4) {
-            await migrator.createTable(integrityAlarms);
+            // The alarm table **as v4 had it**, written out rather than created
+            // from the current class.
+            //
+            // The class carries the columns v12 added, and creating the table
+            // from it would give a device upgrading from before v4 a table that
+            // already has them — so the v12 step would add them a second time.
+            // A duplicate column fails the whole migration, and a store that
+            // cannot open is a device that cannot sync.
+            //
+            // This is the ladder's premise made concrete: each step leaves the
+            // schema that version had, so the steps after it can add what they
+            // add. The shape below is v4's, and it does not change again.
+            await customStatement('''
+CREATE TABLE integrity_alarms (
+  id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  workspace_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  author_member_id TEXT,
+  detail TEXT NOT NULL,
+  quarantine_op_row_id INTEGER,
+  occurrence_count INTEGER NOT NULL,
+  first_detected_at TEXT NOT NULL,
+  last_detected_at TEXT NOT NULL,
+  resolved_at TEXT
+)''');
             await migrator.addColumn(quarantinedOps, quarantinedOps.authorMemberId);
             await migrator.addColumn(quarantinedOps, quarantinedOps.authorSeq);
             await migrator.addColumn(quarantinedOps, quarantinedOps.releasedAt);
