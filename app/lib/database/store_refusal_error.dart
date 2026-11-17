@@ -23,7 +23,7 @@ library;
 /// Sealed, because the two reasons below are the only ones there are, and the
 /// app's screens tell them apart.
 sealed class StoreRefusalError extends Error {
-  StoreRefusalError(this.storeName);
+  StoreRefusalError({required this.storeName});
 
   /// Which of the two stores the file belongs to: the domain read model, or
   /// the op log.
