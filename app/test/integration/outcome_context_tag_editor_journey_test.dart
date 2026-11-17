@@ -17,6 +17,7 @@ import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/screens/task_detail/task_detail_screen.dart';
 import 'package:jeeves/widgets/dotted_add_button.dart';
+import 'package:jeeves/widgets/tag_text.dart';
 
 import '../test_helpers.dart';
 
@@ -45,6 +46,17 @@ Future<void> _pumpFor(WidgetTester tester, [int steps = 4]) async {
   }
 }
 
+/// The names of the tag chips in the cloud, in the order they are rendered.
+/// The applied row above the cloud holds chips of its own, so the finder is
+/// scoped to the cloud.
+List<String> _cloudNames(WidgetTester tester) => tester
+    .widgetList<TagText>(find.descendant(
+      of: find.byKey(const Key('context_tag_picker_cloud'), skipOffstage: false),
+      matching: find.byType(TagText, skipOffstage: false),
+    ))
+    .map((t) => t.tag.name)
+    .toList();
+
 void main() {
   setUpAll(configureSqliteForTests);
 
@@ -59,8 +71,15 @@ void main() {
       await _insertContext(db, name);
       await db.tagDao.assignTag(i <= 2 ? 'o1' : 'o2', name, 'local');
     }
+    // Two more applied to o1, so the applied tags sit at both ends of the
+    // alphabetical order.
+    await db.tagDao.assignTag('o1', 'a09', 'local');
+    await db.tagDao.assignTag('o1', 'a14', 'local');
     // A tag no Outcome carries.
     await _insertContext(db, 'zz-unused');
+    // Another one no Outcome carries, between the numbered ones and
+    // zz-unused by name.
+    await _insertContext(db, 'Bravo');
   });
   tearDown(() async => db.close());
 
@@ -81,8 +100,8 @@ void main() {
     expect(find.byKey(const Key('tag_chip_a03')), findsNothing);
     expect(find.byType(DottedAddButton), findsOneWidget);
 
-    // The + opens the organised cloud: applied tags pinned, every tag shown,
-    // and a Find field.
+    // The + opens the organised cloud: every tag shown in name order, and a
+    // Find field.
     await tester.tap(find.byType(DottedAddButton));
     await _pumpFor(tester);
     final cloud =
@@ -90,6 +109,11 @@ void main() {
     Finder chipInCloud(String id) => find.descendant(
         of: cloud,
         matching: find.byKey(Key('tag_chip_$id'), skipOffstage: false));
+    expect(_cloudNames(tester), [
+      for (var i = 1; i <= 14; i++) 'a${i.toString().padLeft(2, '0')}',
+      'Bravo',
+      'zz-unused',
+    ]);
     expect(find.textContaining('✓ @a01'), findsOneWidget);
     expect(chipInCloud('a03'), findsOneWidget);
     expect(chipInCloud('a13'), findsOneWidget);
@@ -123,6 +147,13 @@ void main() {
         .get());
     expect(linked!.map((r) => r.tagId), contains(created!.single.id));
     expect(find.textContaining('✓ @Errands'), findsWidgets);
+    // The new tag joins the cloud in its alphabetical place.
+    expect(_cloudNames(tester), [
+      for (var i = 1; i <= 14; i++) 'a${i.toString().padLeft(2, '0')}',
+      'Bravo',
+      'Errands',
+      'zz-unused',
+    ]);
 
     // Tapping an unapplied tag applies it; tapping an applied one removes it.
     await tester.enterText(find.byKey(const Key('tag_cloud_find_field')), 'a05');

@@ -12,6 +12,9 @@ TagWithCount _twc(String id, String name, int count) => TagWithCount(
 List<String> _ids(TagCloudLayout l) =>
     l.visibleTags.map((t) => t.tag.id).toList();
 
+List<String> _names(TagCloudLayout l) =>
+    l.visibleTags.map((t) => t.tag.name).toList();
+
 TagCloudLayout _organise(
   List<TagWithCount> tags, {
   Set<String> selected = const {},
@@ -28,21 +31,22 @@ List<TagWithCount> _many(int n) =>
 
 void main() {
   group('organiseTagCloud', () {
-    test('orders by count descending, ties by name ignoring case', () {
+    test('orders by name ignoring case, whatever the counts or selection',
+        () {
       final layout = _organise([
-        _twc('a', 'Zebra', 2),
-        _twc('b', 'apple', 2),
-        _twc('c', 'mid', 5),
-      ]);
-      expect(_ids(layout), ['c', 'b', 'a']);
+        _twc('z', 'Zebra', 2),
+        _twc('a', 'apple', 9),
+        _twc('m', 'Mid', 5),
+      ], selected: {'z'});
+      expect(_names(layout), ['apple', 'Mid', 'Zebra']);
     });
 
-    test('pins selected tags first even with a low count', () {
+    test('names equal but for case keep a fixed order by id', () {
       final layout = _organise([
-        _twc('a', 'busy', 9),
-        _twc('b', 'quiet', 1),
-      ], selected: {'b'});
-      expect(_ids(layout), ['b', 'a']);
+        _twc('b', 'Home', 1),
+        _twc('a', 'home', 1),
+      ]);
+      expect(_ids(layout), ['a', 'b']);
     });
 
     test('hides tags with no active tasks unless selected', () {
@@ -51,7 +55,7 @@ void main() {
         _twc('b', 'idle', 0),
         _twc('c', 'idle-selected', 0),
       ], selected: {'c'});
-      expect(_ids(layout), ['c', 'a']);
+      expect(_ids(layout), ['a', 'c']);
     });
 
     test('every eligible tag is visible', () {
@@ -101,14 +105,14 @@ void main() {
       expect(_ids(layout), ['a']);
     });
 
-    test('keeps unused tags, ordered last, when asked', () {
+    test('keeps unused tags, in name order, when asked', () {
       final layout = organiseTagCloud(
         tags: [_twc('b', 'idle', 0), _twc('a', 'used', 1)],
         selectedIds: const {},
         query: '',
         includeUnusedTags: true,
       );
-      expect(_ids(layout), ['a', 'b']);
+      expect(_ids(layout), ['b', 'a']);
     });
   });
 

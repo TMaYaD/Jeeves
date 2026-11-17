@@ -31,9 +31,10 @@ String typedTagName(String query) =>
 
 /// Orders, filters and sizes a tag cloud.
 ///
-/// Selected tags come first, then the rest by active count (highest first),
-/// ties by name ignoring case. A non-empty [query] (case-insensitive, leading
-/// `@` ignored) filters the cloud to the matching tags. Font size steps
+/// Tags are ordered by name, ignoring case; two names that differ only by
+/// case keep a fixed order by tag id. Selection and active count do not
+/// affect the order. A non-empty [query] (case-insensitive, leading `@`
+/// ignored) filters the cloud to the matching tags. Font size steps
 /// 15 / 13 / 12 sp by count relative to the busiest visible tag. Tags with no
 /// active count are dropped unless selected, or unless [includeUnusedTags] is
 /// set.
@@ -48,12 +49,10 @@ TagCloudLayout organiseTagCloud({
           includeUnusedTags || t.count > 0 || selectedIds.contains(t.tag.id))
       .toList()
     ..sort((a, b) {
-      final aSelected = selectedIds.contains(a.tag.id);
-      final bSelected = selectedIds.contains(b.tag.id);
-      if (aSelected != bSelected) return aSelected ? -1 : 1;
-      final byCount = b.count.compareTo(a.count);
-      if (byCount != 0) return byCount;
-      return a.tag.name.toLowerCase().compareTo(b.tag.name.toLowerCase());
+      final byName =
+          a.tag.name.toLowerCase().compareTo(b.tag.name.toLowerCase());
+      if (byName != 0) return byName;
+      return a.tag.id.compareTo(b.tag.id);
     });
 
   final needle = cleanTagCloudQuery(query);

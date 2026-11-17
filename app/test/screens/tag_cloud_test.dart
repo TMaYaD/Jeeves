@@ -125,6 +125,13 @@ Future<void> _openDrawer(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
+/// The names of the tag chips in the drawer cloud, in the order they are
+/// rendered.
+List<String> _cloudNames(WidgetTester tester) => tester
+    .widgetList<TagText>(find.byType(TagText, skipOffstage: false))
+    .map((t) => t.tag.name)
+    .toList();
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -201,7 +208,7 @@ void main() {
     });
 
     testWidgets(
-        'find journey: narrow, tap, pinned first, field survives few matches',
+        'find journey: narrow, tap, field survives few matches',
         (tester) async {
       await tester.pumpWidget(_buildShell(contextTagsWithCount: twenty()));
       await tester.pump();
@@ -226,12 +233,12 @@ void main() {
 
       await tester.tap(find.byKey(const Key('tag_cloud_find_clear')));
       await tester.pumpAndSettle();
-      // The selected low-count tag is now pinned among the visible tags.
+      // Selecting a tag does not move it: the cloud stays alphabetical.
       expect(find.byKey(const Key('tag_chip_t19'), skipOffstage: false),
           findsOneWidget);
       expect(find.byType(TagText, skipOffstage: false), findsNWidgets(20));
       final firstChip = tester.widget<TagText>(find.byType(TagText).first);
-      expect(firstChip.tag.id, 't19');
+      expect(firstChip.tag.id, 't0');
 
       await tester.tap(find.byKey(const Key('tag_cloud_clear_filters')));
       await tester.pumpAndSettle();
@@ -344,6 +351,17 @@ void main() {
           await db.tagDao.assignTag('todo$k', id, userId);
         }
       }
+      // One more context tag: capitalised and on every todo, so the
+      // alphabetical order has to be proved past the last padded name.
+      await db.tagDao.upsertTag(TagsCompanion(
+        id: const Value('zulu'),
+        name: const Value('Zulu'),
+        type: const Value('context'),
+        userId: const Value(userId),
+      ));
+      for (var k = 0; k < 20; k++) {
+        await db.tagDao.assignTag('todo$k', 'zulu', userId);
+      }
       // Staged here, outside FakeAsync: a live drift watch inside the widget
       // test would hang (docs/TESTING.md).
       counted = await db.tagDao.watchTagsWithActiveCount('context').first;
@@ -351,17 +369,23 @@ void main() {
 
     tearDown(() async => db.close());
 
-    testWidgets('find, select, pin, clear', (tester) async {
+    testWidgets('all shown, alphabetical, find, select, clear',
+        (tester) async {
       await tester.pumpWidget(_buildShell(contextTagsWithCount: counted));
       await tester.pump();
       await _openDrawer(tester);
 
-      expect(find.byType(TagText, skipOffstage: false), findsNWidgets(20));
+      expect(find.byType(TagText, skipOffstage: false), findsNWidgets(21));
       expect(find.byKey(const Key('tag_cloud_show_more')), findsNothing);
       expect(find.textContaining('Show '), findsNothing);
       expect(
           find.byKey(const Key('tag_chip_t19'), skipOffstage: false),
           findsOneWidget);
+      final expectedOrder = [
+        for (var i = 0; i < 20; i++) 'tag${i.toString().padLeft(2, '0')}',
+        'Zulu',
+      ];
+      expect(_cloudNames(tester), expectedOrder);
 
       await tester.enterText(
           find.byKey(const Key('tag_cloud_find_field')), 'tag19');
@@ -376,9 +400,8 @@ void main() {
       await tester.enterText(
           find.byKey(const Key('tag_cloud_find_field')), '');
       await tester.pumpAndSettle();
-      // Selected tag is pinned first although its count is the lowest.
-      final firstTag = tester.widget<TagText>(find.byType(TagText).first);
-      expect(firstTag.tag.name, 'tag19');
+      // Selecting a tag does not move it: the cloud stays alphabetical.
+      expect(_cloudNames(tester), expectedOrder);
 
       await tester.tap(find.byKey(const Key('tag_cloud_clear_filters')));
       await tester.pumpAndSettle();
