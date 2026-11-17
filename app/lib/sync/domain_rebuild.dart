@@ -47,10 +47,13 @@ Future<int> rebuildDomainFromOpLog({
   // state the projector does, and a second registry would be a second binding to
   // the same store for no gain.
   final registry = CollectionRegistry(sync);
+  // The one caller that leaves an entity with a local change in the outbox
+  // alone: this walk is long, edits land while it runs, and it re-delivers
+  // what merge state already held (see [DomainProjector.project]).
   final touched = await DomainProjector(
     registry: registry,
     domain: domain,
-  ).project(entities);
+  ).project(entities, leaveEntitiesAwaitingMerge: true);
   await DomainReconciler(registry: registry, domain: domain)
       .reconcile(touched);
   return entities.length;
