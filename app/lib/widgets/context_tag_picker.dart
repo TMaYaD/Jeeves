@@ -10,22 +10,27 @@ import 'dotted_add_button.dart';
 import 'tag_cloud_view.dart';
 import 'tag_list.dart';
 
-/// Context-tag editor: the applied tags and a dotted `+` that reveals the
-/// searchable tag cloud (the drawer's cloud, plus `Add "<name>"` for a name no
-/// tag has yet). Long-pressing a tag opens a palette color picker.
+/// Context-tag editor.
+///
+/// With [cloudOnly] the widget is the searchable tag cloud alone: no applied
+/// row, no dotted `+`. Otherwise it shows the applied tags and a dotted `+`
+/// that reveals the cloud (the drawer's cloud, plus `Add "<name>"` for a name
+/// no tag has yet). Long-pressing a tag opens a palette color picker.
 class ContextTagPickerWidget extends ConsumerStatefulWidget {
   const ContextTagPickerWidget({
     super.key,
     required this.assignedTags,
     required this.onAssign,
     required this.onRemove,
-    this.cloudInitiallyOpen = false,
+    this.cloudOnly = false,
   });
 
   final List<Tag> assignedTags;
   final ValueChanged<Tag> onAssign;
   final ValueChanged<Tag> onRemove;
-  final bool cloudInitiallyOpen;
+
+  /// Show the tag cloud alone: no applied-tag row and no dotted `+`.
+  final bool cloudOnly;
 
   @override
   ConsumerState<ContextTagPickerWidget> createState() =>
@@ -34,11 +39,15 @@ class ContextTagPickerWidget extends ConsumerStatefulWidget {
 
 class _ContextTagPickerWidgetState
     extends ConsumerState<ContextTagPickerWidget> {
-  late bool _cloudOpen = widget.cloudInitiallyOpen;
+  bool _cloudOpen = false;
 
   @override
   Widget build(BuildContext context) {
     final assignedIds = widget.assignedTags.map((t) => t.id).toSet();
+
+    if (widget.cloudOnly) {
+      return _buildCloud(assignedIds);
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -58,27 +67,32 @@ class _ContextTagPickerWidgetState
         if (_cloudOpen)
           Padding(
             padding: const EdgeInsets.only(top: 12),
-            child: Consumer(
-              builder: (context, ref, _) {
-                final tags =
-                    ref.watch(contextTagsWithCountProvider).asData?.value ??
-                        const <TagWithCount>[];
-                return TagCloudView(
-                  key: const Key('context_tag_picker_cloud'),
-                  tags: tags,
-                  selectedIds: assignedIds,
-                  includeUnusedTags: true,
-                  alwaysOfferFindField: true,
-                  onTap: (tag) => assignedIds.contains(tag.id)
-                      ? widget.onRemove(tag)
-                      : widget.onAssign(tag),
-                  onLongPress: (tag) => _showColorPicker(context, tag),
-                  onCreateTag: _createContext,
-                );
-              },
-            ),
+            child: _buildCloud(assignedIds),
           ),
       ],
+    );
+  }
+
+  /// The searchable tag cloud over every context tag, with `Find…` always
+  /// offered. Tapping a tag applies it, or removes it when it is applied.
+  Widget _buildCloud(Set<String> assignedIds) {
+    return Consumer(
+      builder: (context, ref, _) {
+        final tags = ref.watch(contextTagsWithCountProvider).asData?.value ??
+            const <TagWithCount>[];
+        return TagCloudView(
+          key: const Key('context_tag_picker_cloud'),
+          tags: tags,
+          selectedIds: assignedIds,
+          includeUnusedTags: true,
+          alwaysOfferFindField: true,
+          onTap: (tag) => assignedIds.contains(tag.id)
+              ? widget.onRemove(tag)
+              : widget.onAssign(tag),
+          onLongPress: (tag) => _showColorPicker(context, tag),
+          onCreateTag: _createContext,
+        );
+      },
     );
   }
 

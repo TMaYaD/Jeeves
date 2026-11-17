@@ -1,10 +1,11 @@
 /// Journey: editing an Outcome's context tags from the detail screen (#880).
 ///
 /// The real [TaskDetailScreen] over a real in-memory database. The tag section
-/// shows only applied tags and a dotted `+`; the `+` opens the searchable tag
-/// cloud, where a name no tag has can be created and applied in one step. Live
-/// Drift watches are running, so the test pumps fixed durations rather than
-/// `pumpAndSettle` (TESTING.md).
+/// shows only applied tags and a dotted `+`; the `+` opens the Edit Context
+/// Tags sheet, which is the searchable tag cloud alone — no applied row and no
+/// dotted `+` — where a name no tag has can be created and applied in one
+/// step. Live Drift watches are running, so the test pumps fixed durations
+/// rather than `pumpAndSettle` (TESTING.md).
 library;
 
 import 'package:drift/drift.dart' hide isNull, isNotNull;
@@ -104,6 +105,20 @@ void main() {
     // Find field.
     await tester.tap(find.byType(DottedAddButton));
     await _pumpFor(tester);
+
+    // The sheet is the cloud alone: no dotted `+` of its own, and the applied
+    // tags live in the cloud rather than in a row above it. The only dotted
+    // `+` left is the main page's, under the sheet.
+    expect(find.byKey(const Key('context_tag_picker_add')), findsNothing);
+    expect(find.byType(DottedAddButton), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(BottomSheet),
+        matching: find.byKey(const Key('tag_chip_a01')),
+      ),
+      findsOneWidget,
+    );
+
     final cloud =
         find.byKey(const Key('context_tag_picker_cloud'), skipOffstage: false);
     Finder chipInCloud(String id) => find.descendant(
