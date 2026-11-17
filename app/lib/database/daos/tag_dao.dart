@@ -656,6 +656,42 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
     });
   }
 
+  /// Removes the Outcome's Project link — the link, not the Project Tag.
+  ///
+  /// The removal-side counterpart of [enforceSingleProject]: an Outcome holds
+  /// at most one Project, so clearing it drops the junction row and authors
+  /// the tombstone a peer needs to drop it too. Without that tombstone the
+  /// removal stays on this device, and the next pull restores the Project the
+  /// user just cleared.
+  ///
+  /// A junction that was not there to begin with describes no effect, so
+  /// clearing an Outcome that holds no Project authors nothing.
+  Future<void> removeProjectFromTodo(String todoId) async {
+    await attachedDatabase.capturing(() async {
+      final projectTagIds =
+          await (select(tags)..where((t) => t.type.equals('project')))
+              .map((t) => t.id)
+              .get();
+      if (projectTagIds.isEmpty) return;
+
+      final held = await (select(todoTags)
+            ..where(
+              (jt) => jt.todoId.equals(todoId) & jt.tagId.isIn(projectTagIds),
+            ))
+          .get();
+      if (held.isEmpty) return;
+
+      await (delete(todoTags)
+            ..where(
+              (jt) => jt.todoId.equals(todoId) & jt.tagId.isIn(projectTagIds),
+            ))
+          .go();
+      for (final row in held) {
+        _tombstoneTodoTag(todoId, row.tagId);
+      }
+    });
+  }
+
   // ── Bulk Organising (list multi-select) ────────────────────────────────────
   //
   // Each method is ONE `capturing` scope = one transaction: a throw rolls the

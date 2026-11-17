@@ -26,6 +26,7 @@ import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/intent.dart';
 import 'package:jeeves/models/routing_kind.dart';
 import 'package:jeeves/models/time_context.dart';
+import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/sync/collection_codecs.dart';
 import 'package:jeeves/sync/domain_op_capture.dart';
 import 'package:jeeves/sync/ids.dart'
@@ -582,6 +583,128 @@ void main() {
       expect(capture.recorded.map((o) => o.collection).toSet(),
           {todoTagsCollection});
       expect(capture.forCollection(todoTagsCollection), hasLength(6));
+    });
+  });
+
+  // The four removal paths on the task detail screen (#782). Each one drops a
+  // link the user asked to drop, so each one has to *describe* the drop:
+  // unassignment is a tombstone op, never row absence, or the removal never
+  // leaves the device and the next pull restores the tag the user removed.
+  group('the four removal paths', () {
+    TaskDetailNotifier notifierFor(String todoId) =>
+        TaskDetailNotifier(db: db, userId: _userId, todoId: todoId);
+
+    test('removing a context tombstones the link', () async {
+      final id = await seedOutcome();
+      final context = await db.tagDao.findOrCreateTag('home', 'context', _userId);
+      final notifier = notifierFor(id);
+      await notifier.assignContextTag(context);
+      capture.clear();
+
+      expect(await notifier.removeContextTag(context), isTrue);
+
+      final junction = only(todoTagsCollection);
+      expect(junction.entityId, todoTagIdFor(id, context));
+      expect(junction.tombstone, isTrue);
+      expect(await db.select(db.todoTags).get(), isEmpty);
+    });
+
+    test('removing a person tombstones the link and stamps the Outcome',
+        () async {
+      final id = await seedOutcome();
+      final person = await db.tagDao.createPersonTag('Alice', _userId);
+      final notifier = notifierFor(id);
+      await notifier.assignPersonTag(person);
+      capture.clear();
+
+      expect(await notifier.removePersonTag(person), isTrue);
+
+      final junction = only(todoTagsCollection);
+      expect(junction.entityId, todoTagIdFor(id, person));
+      expect(junction.tombstone, isTrue);
+      expect(only(todosCollection).fields.containsKey('last_clarified_at'),
+          isTrue);
+      expect(await db.select(db.todoTags).get(), isEmpty);
+    });
+
+    test('clearing every person tombstones each link it drops', () async {
+      final id = await seedOutcome();
+      final alice = await db.tagDao.createPersonTag('Alice', _userId);
+      final bob = await db.tagDao.createPersonTag('Bob', _userId);
+      final notifier = notifierFor(id);
+      await notifier.setPersonTags({alice, bob});
+      capture.clear();
+
+      expect(await notifier.clearAllPersonTags(), isTrue);
+
+      final junctions = capture.forCollection(todoTagsCollection);
+      expect(junctions, hasLength(2));
+      expect(junctions.map((op) => op.entityId).toSet(),
+          {todoTagIdFor(id, alice), todoTagIdFor(id, bob)});
+      expect(junctions.every((op) => op.tombstone), isTrue);
+      expect(await db.select(db.todoTags).get(), isEmpty);
+    });
+
+    test('clearing the Project tombstones the link', () async {
+      final id = await seedOutcome();
+      final project =
+          await db.tagDao.findOrCreateTag('Move house', 'project', _userId);
+      final notifier = notifierFor(id);
+      await notifier.assignProject(project);
+      capture.clear();
+
+      expect(await notifier.clearProject(), isTrue);
+
+      final junction = only(todoTagsCollection);
+      expect(junction.entityId, todoTagIdFor(id, project));
+      expect(junction.tombstone, isTrue);
+      expect(await db.select(db.todoTags).get(), isEmpty);
+    });
+
+    // The removal and its tombstone are one transaction, so a rolled-back
+    // removal leaves the link in place and authors nothing: there is no
+    // halfway state in which the peer has dropped the tag and this device has
+    // not.
+    test('a rolled-back removal keeps the link and authors no op', () async {
+      final id = await seedOutcome();
+      final context = await db.tagDao.findOrCreateTag('home', 'context', _userId);
+      final notifier = notifierFor(id);
+      await notifier.assignContextTag(context);
+      capture.clear();
+
+      await expectLater(
+        db.capturing(() async {
+          await notifier.removeContextTag(context);
+          throw StateError('rolled back after the removal');
+        }),
+        throwsStateError,
+      );
+
+      expect(await db.select(db.todoTags).get(), hasLength(1));
+      expect(capture.recorded, isEmpty,
+          reason: 'the tombstone cannot escape the removal\'s transaction');
+    });
+
+    test('a rolled-back clear keeps every person link and authors no op',
+        () async {
+      final id = await seedOutcome();
+      final alice = await db.tagDao.createPersonTag('Alice', _userId);
+      final bob = await db.tagDao.createPersonTag('Bob', _userId);
+      final notifier = notifierFor(id);
+      await notifier.setPersonTags({alice, bob});
+      capture.clear();
+
+      await expectLater(
+        db.capturing(() async {
+          await notifier.clearAllPersonTags();
+          throw StateError('rolled back after the clear');
+        }),
+        throwsStateError,
+      );
+
+      expect(await db.select(db.todoTags).get(), hasLength(2));
+      expect(capture.recorded, isEmpty,
+          reason: 'the tombstones cannot escape the clear\'s transaction');
     });
   });
 
