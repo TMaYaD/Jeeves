@@ -26,7 +26,17 @@ class Todos extends Table {
   static const int maxTitleLength = 500;
 
   TextColumn get id => text().clientDefault(() => uuid.v4())();
-  TextColumn get title => text().withLength(max: maxTitleLength)();
+
+  /// The limit is a literal here on purpose, and it must stay equal to
+  /// [maxTitleLength].
+  ///
+  /// Drift reads a length constraint out of the source with `readIntLiteral`,
+  /// which takes an integer literal and nothing else. A constant reference is
+  /// not a literal, so it reads as "no limit": the generated code drops the
+  /// check and the store accepts a title of any length. Nothing says so — the
+  /// column simply stops refusing. `outcome_title_limit_test.dart` holds the
+  /// two numbers together.
+  TextColumn get title => text().withLength(max: 500)();
   TextColumn get notes => text().nullable()();
   IntColumn get priority => integer().nullable()();
   DateTimeColumn get dueDate => dateTime().nullable()();
