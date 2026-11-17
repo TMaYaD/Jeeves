@@ -67,13 +67,24 @@ void main() {
 
   late Directory directory;
   late List<MethodCall> pluginCalls;
-  late FlutterLocalNotificationsPlatform originalPlatform;
+
+  /// The platform instance the app would have found before this test put its
+  /// own there.
+  ///
+  /// It is a late field, and nothing sets it in a test process: the device's
+  /// plugin registration does, and there is no device here. Reading it before
+  /// anything has set it throws, so it is read defensively.
+  FlutterLocalNotificationsPlatform? originalPlatform;
 
   final messenger =
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
 
   setUpAll(() {
-    originalPlatform = FlutterLocalNotificationsPlatform.instance;
+    try {
+      originalPlatform = FlutterLocalNotificationsPlatform.instance;
+    } on Error {
+      originalPlatform = null;
+    }
   });
 
   setUp(() {
@@ -127,7 +138,10 @@ void main() {
   });
 
   tearDownAll(() {
-    FlutterLocalNotificationsPlatform.instance = originalPlatform;
+    final original = originalPlatform;
+    if (original != null) {
+      FlutterLocalNotificationsPlatform.instance = original;
+    }
   });
 
   /// The platform delivering a notification action tap to the running app.
