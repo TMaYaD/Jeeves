@@ -314,9 +314,12 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                       OutcomeAttributeStrip(
                         energyLevel: todo.energyLevel,
                         timeEstimateMinutes: todo.timeEstimate,
+                        // The limit is the Action's own estimate — that is
+                        // what the limit is derived from — so the mark
+                        // follows the Action, not the Outcome's mirror.
                         timeboxed: isTimeboxedAction(
                           timeboxed: action?.timeboxed,
-                          timeEstimate: todo.timeEstimate,
+                          timeEstimate: action?.timeEstimate,
                         ),
                         dueDate: todo.dueDate,
                         timeContextChip:
@@ -329,7 +332,12 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                           current: todo.timeEstimate,
                           actionText: action?.actionText ?? todo.title,
                           actionId: action?.id,
-                          timeboxed: action?.timeboxed ?? false,
+                          // The switch reads as the limit does: on only
+                          // when there is an estimate to limit.
+                          timeboxed: isTimeboxedAction(
+                            timeboxed: action?.timeboxed,
+                            timeEstimate: action?.timeEstimate,
+                          ),
                         ),
                         onDueTap: () async {
                           final picked = await pickOutcomeDueDate(context, todo.dueDate);

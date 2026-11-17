@@ -24,7 +24,9 @@ class TimeLogInterval {
   final String? startedAt;
 
   /// The stint's end, as stored. Null means the stint is still open: it runs
-  /// on, so the limit can be reached inside it.
+  /// on, so the limit can be reached inside it. An end that does not parse is
+  /// read the same way — the stint runs on rather than counting for a length
+  /// nobody can read.
   final String? endedAt;
 }
 

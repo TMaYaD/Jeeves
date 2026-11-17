@@ -171,7 +171,12 @@ Future<bool> _raiseTheEstimate(
     initial: stepEstimateUp(action.timeEstimate),
     actionText: action.actionText,
     actionId: action.id,
-    timeboxed: action.timeboxed ?? false,
+    // The switch reads as the limit does: on only when there is an estimate
+    // to limit.
+    timeboxed: isTimeboxedAction(
+      timeboxed: action.timeboxed,
+      timeEstimate: action.timeEstimate,
+    ),
   );
 }
 

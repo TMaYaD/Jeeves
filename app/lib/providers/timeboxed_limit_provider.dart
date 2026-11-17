@@ -54,11 +54,29 @@ Stream<TimeboxedLimitStatus?> _limitStatusStream(
   var haveLogs = false;
   var haveSprints = false;
   var cancelled = false;
+  // A synchronous controller cannot fire an event while it is firing one. A
+  // write that lands during the delivery would ask for exactly that, so the
+  // ask is held and made again on the next turn.
+  var delivering = false;
+  var pending = false;
 
   void emit() {
     if (cancelled) return;
     if (!haveAction || !haveLogs || !haveSprints) return;
-    controller.add(_statusOf(action, logs, sprints));
+    if (delivering) {
+      pending = true;
+      return;
+    }
+    delivering = true;
+    try {
+      controller.add(_statusOf(action, logs, sprints));
+    } finally {
+      delivering = false;
+    }
+    if (pending) {
+      pending = false;
+      scheduleMicrotask(emit);
+    }
   }
 
   // A synchronous controller: the status lands on the reader in the same turn

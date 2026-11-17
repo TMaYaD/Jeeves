@@ -260,7 +260,7 @@ class _OutcomePeekSheetState extends ConsumerState<OutcomePeekSheet> {
                             timeEstimateMinutes: timeEstimate,
                             timeboxed: isTimeboxedAction(
                               timeboxed: action?.timeboxed,
-                              timeEstimate: timeEstimate,
+                              timeEstimate: action?.timeEstimate,
                             ),
                             timeLoggedMinutes: timeLogged,
                             dueDate: dueDate,
@@ -274,7 +274,12 @@ class _OutcomePeekSheetState extends ConsumerState<OutcomePeekSheet> {
                               current: timeEstimate,
                               actionText: action?.actionText ?? todo.title,
                               actionId: action?.id,
-                              timeboxed: action?.timeboxed ?? false,
+                              // The switch reads as the limit does: on only
+                              // when there is an estimate to limit.
+                              timeboxed: isTimeboxedAction(
+                                timeboxed: action?.timeboxed,
+                                timeEstimate: action?.timeEstimate,
+                              ),
                             ),
                             onDueTap: () async {
                               final picked = await pickOutcomeDueDate(context, dueDate);

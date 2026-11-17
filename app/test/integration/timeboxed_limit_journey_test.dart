@@ -360,6 +360,37 @@ void main() {
     });
   });
 
+  testWidgets('a limit of nothing is not a limit: the mark goes', (
+    tester,
+  ) async {
+    await tester.runAsync(
+      () => _seed(db, timeEstimate: 30, timeboxed: true),
+    );
+    // A merge left the Outcome's mirror holding the estimate while the
+    // Action's own copy was cleared. The limit is the Action's estimate, so
+    // there is no limit — and the mark does not say there is.
+    await tester.runAsync(() async {
+      await db.customStatement('UPDATE actions SET time_estimate = NULL');
+      await db.customStatement('UPDATE todos SET time_estimate = 30');
+    });
+
+    await _withApp(tester, db, () async {
+      await _settle(tester);
+
+      final chip = find.byKey(const Key('outcome_attribute_time'));
+      // The estimate is still on show — it is the Outcome's.
+      expect(
+        find.descendant(of: chip, matching: find.text('30m')),
+        findsOneWidget,
+      );
+      // But the mark is gone: there is nothing to limit.
+      expect(
+        find.descendant(of: chip, matching: find.byType(TimeboxedGlyph)),
+        findsNothing,
+      );
+    });
+  });
+
   testWidgets('"Raise the estimate…" above the logged time starts the Sprint', (
     tester,
   ) async {
