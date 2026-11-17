@@ -46,17 +46,28 @@
 /// the duplicate, so the duplicate has to be representable (ADR-0043, #605).
 library;
 
+import 'dart:convert';
+
 import 'package:drift/drift.dart';
 
 import '../database/gtd_database.dart';
 import 'collection_codecs.dart';
 import 'host/merge_state.dart';
 
+/// How many entities one domain-store transaction projects, so a domain write
+/// waits for at most one chunk.
+const int projectionChunkEntityCount = 50;
+
 class DomainProjector {
-  DomainProjector({required this.registry, required this.domain});
+  DomainProjector({
+    required this.registry,
+    required this.domain,
+    this.chunkEntityCount = projectionChunkEntityCount,
+  });
 
   final CollectionRegistry registry;
   final GtdDatabase domain;
+  final int chunkEntityCount;
 
   /// Project every entity in [affected], fire the view notifies for the
   /// collection groups that changed, and return those groups.
@@ -66,30 +77,91 @@ class DomainProjector {
   /// wrote, not guessed at from the batch. It is the same set the notifies fire
   /// for, so a collection whose only entity was *held back* — a required column
   /// has not arrived yet — is absent from both.
+  ///
+  /// **The domain store's writer is given up every [chunkEntityCount]
+  /// entities.** [affected] can be everything merge state holds — the
+  /// re-projection after a schema upgrade, a Workspace rebuilt from its log —
+  /// and every DAO write waits for the same writer. One transaction for the
+  /// whole set would hold each edit the user makes back, silently, until the
+  /// last entity was written. Projection is idempotent on reduced state, so a
+  /// set interrupted between two chunks is completed by projecting it again;
+  /// the groups the committed chunks changed are notified even then.
+  ///
+  /// **An entity whose local change is still in the outbox is left alone**
+  /// ([_entitiesAwaitingMerge]).
   Future<Set<String>> project(Iterable<AffectedEntity> affected) async {
     final touched = <String>{};
-    if (affected.isEmpty) return touched;
-    // The projector materialises reduced state that is already on the op log,
-    // so it must author nothing — the one sanctioned un-captured domain
-    // transaction (GtdDatabase refuses a bare `transaction` outside a capturing
-    // zone).
-    await domain.uncapturedTransaction(() async {
-      for (final entity in affected) {
-        final codec = collectionCodecs[entity.collection];
-        // Reduction is collection-generic; projection is not. An op for a
-        // collection this build does not know still reduces — it simply has no
-        // typed row to become.
-        if (codec == null) continue;
-        final view = registry.register(entity.collection);
-        final live = await view.readEntity(entity.entityId);
-        final changed = live == null || live.isEmpty
-            ? await _delete(codec, entity.entityId, view)
-            : await _upsert(codec, entity.entityId, live);
-        if (changed) touched.add(entity.collection);
+    final entities = affected.toList(growable: false);
+    if (entities.isEmpty) return touched;
+    try {
+      for (var start = 0; start < entities.length; start += chunkEntityCount) {
+        final end = start + chunkEntityCount > entities.length
+            ? entities.length
+            : start + chunkEntityCount;
+        touched.addAll(await _projectChunk(entities.sublist(start, end)));
       }
-    });
-    notify(touched);
+    } finally {
+      notify(touched);
+    }
     return touched;
+  }
+
+  /// Project [chunk] in one transaction and return the groups it changed.
+  ///
+  /// The projector materialises reduced state that is already on the op log, so
+  /// it must author nothing — the one sanctioned un-captured domain transaction
+  /// (GtdDatabase refuses a bare `transaction` outside a capturing zone).
+  Future<Set<String>> _projectChunk(List<AffectedEntity> chunk) =>
+      domain.uncapturedTransaction(() async {
+        final touched = <String>{};
+        final awaitingMerge = await _entitiesAwaitingMerge();
+        for (final entity in chunk) {
+          final codec = collectionCodecs[entity.collection];
+          // Reduction is collection-generic; projection is not. An op for a
+          // collection this build does not know still reduces — it simply has
+          // no typed row to become.
+          if (codec == null) continue;
+          if (awaitingMerge.contains(entity)) continue;
+          final view = registry.register(entity.collection);
+          final live = await view.readEntity(entity.entityId);
+          final changed = live == null || live.isEmpty
+              ? await _delete(codec, entity.entityId, view)
+              : await _upsert(codec, entity.entityId, live);
+          if (changed) touched.add(entity.collection);
+        }
+        return touched;
+      });
+
+  /// The entities with a local change committed to the outbox and not merged
+  /// yet. Their domain rows are **ahead** of merge state, so writing merge state
+  /// over them would take the user's edit off the screen until the sync host's
+  /// drain put it back. The drain projects every entity it merges, so skipping
+  /// one here loses nothing.
+  ///
+  /// Read inside the chunk's transaction, which makes it exact: an outbox row is
+  /// written in the same transaction as the domain rows it describes and is
+  /// deleted only after its merge committed, and neither can happen while this
+  /// transaction holds the writer.
+  Future<Set<AffectedEntity>> _entitiesAwaitingMerge() async {
+    final rows = await domain
+        .customSelect('SELECT change_json FROM pending_changes')
+        .get();
+    final entities = <AffectedEntity>{};
+    for (final row in rows) {
+      try {
+        final change = jsonDecode(row.read<String>('change_json'));
+        if (change
+            case {
+              'collection': final String collection,
+              'entity_id': final String entityId,
+            }) {
+          entities.add((collection: collection, entityId: entityId));
+        }
+      } on FormatException {
+        // An unreadable row names no entity; the drain drops it.
+      }
+    }
+    return entities;
   }
 
   /// Fire the self-notify helper for every collection group in [collections].
