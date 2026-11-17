@@ -31,6 +31,21 @@
 /// bounds how many signed-but-unqueued ops a process death can strand, and the
 /// row ids are the export's own — deterministic — so re-running the same export
 /// converges rather than duplicating.
+///
+/// **An import always finishes.** A file is a snapshot of somebody's data, and
+/// one record in it that this build cannot take — a value a column will not
+/// hold, a key that resolves to nothing — must not stop the rest of the file
+/// from arriving. A record that cannot be written is named and set aside, the
+/// rest of its batch still lands, and the summary says what was left out and
+/// why. A batch that fails whole is retaken one record at a time, so the
+/// records that are fine still arrive and the one that is not is named rather
+/// than taking the file down with it.
+///
+/// **An import says where it is.** A file with thousands of records takes
+/// minutes — every record is written *and* described on the op log, and
+/// signing is not cheap — so the import reports its progress
+/// ([ImportProgress]) and the views refresh per batch. An import that cannot
+/// say how far it has got looks exactly like an import that has stopped.
 library;
 
 import 'dart:convert';
@@ -39,7 +54,8 @@ import 'package:drift/drift.dart';
 
 import '../database/gtd_database.dart';
 import '../sync/collection_codecs.dart';
-import 'nirvana_local_import.dart' show ImportResult;
+import 'import_progress.dart';
+import 'nirvana_local_import.dart' show ImportFailure, ImportResult;
 import 'nirvana_parser.dart' show ParseError;
 
 /// The export format version, carried under [jeevesExportEnvelopeKey]. Bumped
@@ -218,11 +234,16 @@ class _PendingRow {
 /// are written in [jeevesExportCollections] order, batched into `capturing`
 /// scopes so each batch commits and authors together.
 ///
+/// [onProgress], if given, is called as the import advances — once per batch,
+/// with the number of records finished and the number the file carried. An
+/// import that reports nothing is an import the user has to guess at.
+///
 /// The returned [ImportResult] reuses the Nirvana shape so no calling surface
 /// changes: [ImportResult.importedCount] counts the Outcomes imported (the
 /// "tasks" the existing copy speaks of), [ImportResult.skippedCount] the rows
-/// the file carried but this device did not keep, and `projectTagsCreated`
-/// stays zero.
+/// the file carried but this device did not keep, `projectTagsCreated` stays
+/// zero, and [ImportResult.failedRecords] names every record that could not
+/// be taken and says why.
 ///
 /// **A file this build cannot fully read is refused, never partially
 /// imported.** The migration this format exists for is one-shot, so an import
@@ -249,6 +270,7 @@ Future<ImportResult> importJeevesExport({
   required String userId,
   required GtdDatabase db,
   Map<String, String> renames = jeevesExportCollectionRenames,
+  ImportProgressCallback? onProgress,
 }) async {
   final Object? decoded;
   try {
@@ -348,29 +370,23 @@ Future<ImportResult> importJeevesExport({
   }
 
   var importedOutcomeCount = 0;
+  final failures = <ImportFailure>[];
+  final totalRowCount = work.length;
+  var processedRowCount = 0;
   for (var start = 0; start < work.length; start += jeevesImportBatchSize) {
-    final batch = work.skip(start).take(jeevesImportBatchSize);
-    await db.capturing(() async {
-      for (final row in batch) {
-        final fields = _importFields(row.codec, row.raw, userId);
-        // Author the op only if the local row was actually persisted. When
-        // [_writeRow] cannot locate the row (an unresolvable junction key),
-        // it skips both the write and the count, so the op log never asserts a
-        // row this device did not keep and importedCount never overstates.
-        if (!await _writeRow(db, row.codec, row.id, fields)) {
-          skippedRowCount++;
-          continue;
-        }
-        // The op that makes this row reach the user's other devices. On an
-        // un-enrolled device the seam drops it; on an enrolled one it syncs.
-        db.opCapture.write(
-          collection: row.codec.collection,
-          entityId: row.id,
-          fields: fields,
-        );
-        if (row.codec.collection == todosCollection) importedOutcomeCount++;
-      }
-    });
+    final batch = work.skip(start).take(jeevesImportBatchSize).toList();
+    final taken = await _takeBatch(db, batch, userId, failures);
+    importedOutcomeCount += taken.importedOutcomes;
+    skippedRowCount += taken.skipped;
+    processedRowCount += batch.length;
+    onProgress?.call(ImportProgress(
+      processedRows: processedRowCount,
+      totalRows: totalRowCount,
+    ));
+    // The rows just committed are visible now, not only when the whole file
+    // is done: an import that takes minutes must not look like a screen that
+    // has stopped.
+    _notifyAllViews(db);
   }
 
   _notifyAllViews(db);
@@ -378,7 +394,133 @@ Future<ImportResult> importJeevesExport({
     importedCount: importedOutcomeCount,
     skippedCount: skippedRowCount,
     projectTagsCreated: 0,
+    failedRecords: failures,
   );
+}
+
+/// What became of one record in the file.
+enum _RecordOutcome {
+  /// Written and described on the op log.
+  imported,
+
+  /// Not taken, and not a failure either: the row could not be located (an
+  /// unresolvable junction key), so this device had nothing to keep.
+  skipped,
+
+  /// The store would not take it. Named in the summary, with the reason.
+  failed,
+}
+
+/// Take a batch of records: one transaction, one capturing scope, one burst
+/// of authored ops.
+///
+/// **A batch that fails is retaken one record at a time.** The batch is the
+/// transaction, so a failure anywhere in it takes the whole thing down — and
+/// the failure that matters is not always the record's own: an op that cannot
+/// be described on the log takes its batch with it, after the rows have
+/// committed. Retaking the batch record by record means the records that are
+/// fine still arrive, and the one that is not is named rather than taking the
+/// rest of the file down with it.
+Future<({int importedOutcomes, int skipped})> _takeBatch(
+  GtdDatabase db,
+  List<_PendingRow> batch,
+  String userId,
+  List<ImportFailure> failures,
+) async {
+  var importedOutcomes = 0;
+  var skipped = 0;
+  // The failures of this attempt are held aside until the attempt is known to
+  // have stuck: a batch that fails and is retaken record by record supersedes
+  // them, and a failure the retry then took is not a failure at all.
+  final attemptFailures = <ImportFailure>[];
+  void count(_PendingRow row, _RecordOutcome outcome) {
+    if (outcome == _RecordOutcome.imported &&
+        row.codec.collection == todosCollection) {
+      importedOutcomes++;
+    }
+    if (outcome == _RecordOutcome.skipped) skipped++;
+  }
+
+  try {
+    await db.capturing(() async {
+      for (final row in batch) {
+        count(row, await _takeRecord(db, row, userId, attemptFailures));
+      }
+    });
+    failures.addAll(attemptFailures);
+    return (importedOutcomes: importedOutcomes, skipped: skipped);
+  } catch (_) {
+    // The batch could not be taken whole. Start again, one record at a time.
+    importedOutcomes = 0;
+    skipped = 0;
+    for (final row in batch) {
+      try {
+        await db.capturing(() async {
+          count(row, await _takeRecord(db, row, userId, failures));
+        });
+      } catch (error) {
+        // The record's row committed and its op could not be described on the
+        // log. Name it: the row is here, but it is not on the log, and only
+        // the user can decide what to do about that.
+        failures.add(ImportFailure(
+          record: _recordName(row),
+          reason: _describeFailure(error),
+        ));
+      }
+    }
+    return (importedOutcomes: importedOutcomes, skipped: skipped);
+  }
+}
+
+/// Take one record: write it, then describe it on the op log.
+///
+/// The op is described only once the row is persisted, so the log never
+/// asserts a row this device did not keep.
+///
+/// **A record the store will not take is named and set aside, not fatal.** The
+/// file is a snapshot of somebody's data; one record in it that this build
+/// cannot hold must not stop the rest of it from arriving.
+Future<_RecordOutcome> _takeRecord(
+  GtdDatabase db,
+  _PendingRow row,
+  String userId,
+  List<ImportFailure> failures,
+) async {
+  final fields = _importFields(row.codec, row.raw, userId);
+  try {
+    // Author the op only if the local row was actually persisted. When
+    // [_writeRow] cannot locate the row (an unresolvable junction key),
+    // it skips both the write and the count, so the op log never asserts a
+    // row this device did not keep and importedCount never overstates.
+    if (!await _writeRow(db, row.codec, row.id, fields)) {
+      return _RecordOutcome.skipped;
+    }
+  } catch (error) {
+    failures.add(ImportFailure(
+      record: _recordName(row),
+      reason: _describeFailure(error),
+    ));
+    return _RecordOutcome.failed;
+  }
+  // The op that makes this row reach the user's other devices. On an
+  // un-enrolled device the seam drops it; on an enrolled one it syncs.
+  db.opCapture.write(
+    collection: row.codec.collection,
+    entityId: row.id,
+    fields: fields,
+  );
+  return _RecordOutcome.imported;
+}
+
+/// How a record is named in a failure report: its collection and its id.
+String _recordName(_PendingRow row) => '${row.codec.collection}/${row.id}';
+
+/// A failure reason a user can read: what went wrong, without the noise.
+String _describeFailure(Object error) {
+  final text = error.toString();
+  const limit = 160;
+  if (text.length <= limit) return text;
+  return '${text.substring(0, limit - 1)}…';
 }
 
 /// Refuse a file whose envelope version this build has no code for.

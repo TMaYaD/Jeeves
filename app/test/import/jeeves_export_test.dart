@@ -5,6 +5,7 @@ import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/import/import_progress.dart';
 import 'package:jeeves/import/jeeves_export.dart';
 import 'package:jeeves/import/nirvana_local_import.dart';
 import 'package:jeeves/import/nirvana_parser.dart' show ParseError;
@@ -817,6 +818,223 @@ void main() {
       expect(result.importedCount, 2);
       expect(await restored.select(restored.todos).get(), hasLength(2));
       expect(await restored.select(restored.tags).get(), hasLength(4));
+    });
+  });
+
+  // The import is how a user gets their data back, so it has to *finish*:
+  // say where it is, set aside what it cannot take, and say what it left out.
+  //
+  // Before this, one record the store would not hold stopped the whole file
+  // with an error that named neither the record nor its position — and since
+  // the file was read in the same order every time, every re-run stopped at
+  // the same record. The user saw an import that ran, and ran, and never
+  // finished: the symptom this group exists to end.
+  group('an import that finishes', () {
+    /// A file of [outcomeCount] Outcomes, [tagCount] Tags, and one junction
+    /// per Outcome — the shape a real export has.
+    String fileOf({required int outcomeCount, required int tagCount}) =>
+        jsonEncode({
+          jeevesExportEnvelopeKey: jeevesExportVersion,
+          jeevesExportCollectionsKey: {
+            'tags': [
+              for (var i = 0; i < tagCount; i++)
+                {
+                  'id': 'tag-$i',
+                  'name': 'tag $i',
+                  'type': 'context',
+                  'user_id': _userId,
+                }
+            ],
+            'todos': [
+              for (var i = 0; i < outcomeCount; i++)
+                {
+                  'id': 'todo-$i',
+                  'title': 'Outcome $i',
+                  'notes': 'Notes for outcome $i',
+                  'created_at': '2026-07-28T05:00:00.000Z',
+                  'updated_at': '2026-07-28T05:00:00.000Z',
+                  'user_id': _userId,
+                  'intent': 'next',
+                }
+            ],
+            'todo_tags': [
+              for (var i = 0; i < outcomeCount; i++)
+                {
+                  'id': 'tt-$i',
+                  'todo_id': 'todo-$i',
+                  'tag_id': 'tag-${i % tagCount}',
+                  'user_id': _userId,
+                }
+            ],
+          },
+        });
+
+    test('a file with a thousand records lands, and says how far it got',
+        () async {
+      // A thousand records is a real person's data, and it spans several
+      // batches — the shape the import has to survive at.
+      const outcomeCount = 400;
+      const tagCount = 400;
+      final content = fileOf(outcomeCount: outcomeCount, tagCount: tagCount);
+
+      final recorder = RecordingDomainOpCapture();
+      final db = _openInMemory(recorder: recorder);
+      addTearDown(db.close);
+
+      final reports = <ImportProgress>[];
+      final stopwatch = Stopwatch()..start();
+      await importJeevesExport(
+        content: content,
+        userId: _userId,
+        db: db,
+        onProgress: reports.add,
+      );
+      stopwatch.stop();
+
+      // The import finished, and finished inside a budget: an import whose
+      // cost grows with the file is fine, an import that does not come back
+      // is not. (The suite's own 60s per-test budget is the outer bound;
+      // this is the claim about the work itself.)
+      expect(stopwatch.elapsed, lessThan(const Duration(seconds: 45)),
+          reason: 'a thousand records took ${stopwatch.elapsed}');
+
+      // Everything landed — no duplicates, nothing lost.
+      expect(await db.select(db.todos).get(), hasLength(outcomeCount));
+      expect(await db.select(db.tags).get(), hasLength(tagCount));
+      expect(await db.select(db.todoTags).get(), hasLength(outcomeCount));
+
+      // And the import said where it was, the whole way: the reports only
+      // ever move forward, and the last one is the end of the file.
+      expect(reports, isNotEmpty);
+      for (var i = 1; i < reports.length; i++) {
+        expect(reports[i].processedRows,
+            greaterThanOrEqualTo(reports[i - 1].processedRows),
+            reason: 'progress went backwards');
+      }
+      expect(reports.last.processedRows, reports.last.totalRows);
+      expect(reports.last.totalRows, outcomeCount + tagCount + outcomeCount);
+      expect(reports.last.fraction, 1);
+    });
+
+    test('a record the store will not take is named, and the rest lands',
+        () async {
+      // A record with no created_at: the column is NOT NULL, so the store
+      // will not take it. That is the shape a bad record in a real file has
+      // — a value this build cannot hold.
+      final content = jsonEncode({
+        jeevesExportEnvelopeKey: jeevesExportVersion,
+        jeevesExportCollectionsKey: {
+          'todos': [
+            {
+              'id': 'todo-good',
+              'title': 'Keep me',
+              'created_at': '2026-07-28T05:00:00.000Z',
+              'user_id': _userId,
+              'intent': 'next',
+            },
+            {
+              'id': 'todo-bad',
+              'title': 'No created_at here',
+              'user_id': _userId,
+              'intent': 'next',
+            },
+          ],
+        },
+      });
+
+      final recorder = RecordingDomainOpCapture();
+      final db = _openInMemory(recorder: recorder);
+      addTearDown(db.close);
+
+      final result = await importJeevesExport(
+        content: content,
+        userId: _userId,
+        db: db,
+      );
+
+      // The import finished — it did not stop at the bad record.
+      expect(await db.select(db.todos).get(), hasLength(1));
+      expect(result.importedCount, 1);
+
+      // And it named the record it left out, and why.
+      expect(result.failedRecords, hasLength(1));
+      expect(result.failedRecords.single.record, 'todos/todo-bad');
+      expect(result.failedRecords.single.reason, contains('created_at'),
+          reason: 'the reason must point at the value the store refused');
+
+      // The bad record is not on the op log either: a record this device
+      // did not keep is never asserted to the other devices.
+      expect(recorder.keys, isNot(contains('todos/todo-bad')));
+      expect(recorder.keys, contains('todos/todo-good'));
+    });
+
+    test('the failures reach the user through the import surface', () async {
+      // The whole point is that the user is told. Drive the real entry point
+      // and the real notifier: the import finishes, and what it left out
+      // arrives in the state the screen reads.
+      final db = _openInMemory();
+      addTearDown(db.close);
+      final container = ProviderContainer(
+        overrides: [databaseProvider.overrideWithValue(db)],
+      );
+      addTearDown(container.dispose);
+
+      final content = jsonEncode({
+        jeevesExportEnvelopeKey: jeevesExportVersion,
+        jeevesExportCollectionsKey: {
+          'todos': [
+            {
+              'id': 'todo-good',
+              'title': 'Keep me',
+              'created_at': '2026-07-28T05:00:00.000Z',
+              'user_id': 'local',
+              'intent': 'next',
+            },
+            {
+              'id': 'todo-bad',
+              'title': 'No created_at here',
+              'user_id': 'local',
+              'intent': 'next',
+            },
+          ],
+        },
+      });
+
+      await container.read(importNotifierProvider.notifier).importFile(
+            Uint8List.fromList(utf8.encode(content)),
+            'backup.json',
+            'auto',
+          );
+
+      final state = container.read(importNotifierProvider);
+      expect(state.error, isNull,
+          reason: 'the import finished; it did not fail');
+      expect(state.result != null, isTrue);
+      expect(state.result!.failedRecords.single.record, 'todos/todo-bad');
+      expect(state.result!.importedCount, 1);
+    });
+
+    test('a partial import followed by a re-run completes it, with no '
+        'duplicates', () async {
+      // What an interruption leaves: the first run saw only part of the file.
+      final partial = fileOf(outcomeCount: 100, tagCount: 10);
+      final whole = fileOf(outcomeCount: 400, tagCount: 10);
+
+      final db = _openInMemory();
+      addTearDown(db.close);
+
+      await importJeevesExport(content: partial, userId: _userId, db: db);
+      expect(await db.select(db.todos).get(), hasLength(100));
+
+      await importJeevesExport(content: whole, userId: _userId, db: db);
+
+      // The re-run landed on the rows the first run wrote and completed the
+      // rest: every Outcome is there, exactly once.
+      final todos = await db.select(db.todos).get();
+      expect(todos, hasLength(400));
+      expect(todos.map((t) => t.id).toSet(), hasLength(400),
+          reason: 'a re-run duplicated a row');
+      expect(await db.select(db.todoTags).get(), hasLength(400));
     });
   });
 }
