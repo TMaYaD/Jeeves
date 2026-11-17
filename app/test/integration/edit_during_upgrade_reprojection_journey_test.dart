@@ -225,6 +225,19 @@ void main() {
         upgraded.container.read(domainStoreRebuildProvider.future);
     final rowsToReproject = _outcomeCount * 2;
 
+    // The two detail screens the user has open, and what they are about to
+    // enter — read before the walk is looked at, so that the edits can follow
+    // the look with nothing in between.
+    final outcome = upgraded.container
+        .read(taskDetailNotifierProvider(_editedOutcomeId));
+    final actionOwner = upgraded.container
+        .read(taskDetailNotifierProvider(_outcomeWithEditedActionId));
+    final action = (await db.actionDao.getCurrentAction(
+      _outcomeWithEditedActionId,
+    ))!;
+    final dueDate = DateTime.utc(2027, 3, 14);
+    final timeContext = TimeContext.create(days: {1, 3})!;
+
     // The walk is part-way: it has re-projected some rows and has others still
     // to go. A walk that writes the whole store in one transaction is never
     // seen like this — it goes from nothing done to everything done.
@@ -241,17 +254,11 @@ void main() {
       what: 'the upgrade re-projection is part-way through the store',
     );
 
-    // The user opens an Outcome and changes every field the detail screen
-    // offers, then edits the current Action of another.
-    final outcome = upgraded.container
-        .read(taskDetailNotifierProvider(_editedOutcomeId));
-    final actionOwner = upgraded.container
-        .read(taskDetailNotifierProvider(_outcomeWithEditedActionId));
-    final action = (await db.actionDao.getCurrentAction(
-      _outcomeWithEditedActionId,
-    ))!;
-    final dueDate = DateTime.utc(2027, 3, 14);
-    final timeContext = TimeContext.create(days: {1, 3})!;
+    // The user changes every field the detail screen offers on one Outcome, and
+    // edits the current Action of another. Nothing is awaited between seeing
+    // the walk part-way and making the edits, and the first thing each edit does
+    // is ask for the writer — so they are in its queue behind, at most, the one
+    // batch the walk has already asked for.
     final edits = <Future<bool>>[
       outcome.updateTitle('Edited title'),
       outcome.updateNotes('Edited notes'),
