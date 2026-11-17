@@ -345,4 +345,27 @@ void main() {
     );
     expect(find.text('Sprints past the limit so far: 1'), findsOneWidget);
   });
+
+  testWidgets('a sheet that goes without a choice leaves the gate open', (
+    tester,
+  ) async {
+    await makeTimeboxed();
+    await logTime(const Duration(minutes: 50));
+    await tester.pumpWidget(harness(onStart: () {}));
+
+    await tester.tap(find.byKey(const Key('open_gate')));
+    await settle(tester);
+    expect(find.byKey(const Key('timeboxed_gate_stop')), findsOneWidget);
+
+    // The sheet goes without a choice — the screen is left, as it is when the
+    // user walks away from it.
+    await tester.pumpWidget(harness(onStart: () {}));
+    await settle(tester);
+
+    // The gate asks again: a sheet that was never answered is not a gate that
+    // has been shut.
+    await tester.tap(find.byKey(const Key('open_gate')));
+    await settle(tester);
+    expect(find.byKey(const Key('timeboxed_gate_stop')), findsOneWidget);
+  });
 }

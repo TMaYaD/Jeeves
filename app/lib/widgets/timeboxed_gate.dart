@@ -50,6 +50,7 @@ Future<TimeboxedGateChoice?> showTimeboxedSprintGate(
 }) {
   if (_gateSheetOpen) return Future.value(null);
   _gateSheetOpen = true;
+  final sheetId = ++_openGateSheetId;
   return showModalBottomSheet<TimeboxedGateChoice>(
     context: context,
     isScrollControlled: true,
@@ -57,10 +58,14 @@ Future<TimeboxedGateChoice?> showTimeboxedSprintGate(
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(8)),
     ),
-    builder: (_) =>
-        _TimeboxedGateSheet(actionText: actionText, status: status, now: now),
+    builder: (_) => _TimeboxedGateSheet(
+      actionText: actionText,
+      status: status,
+      now: now,
+      onClosed: () => _closeGateSheet(sheetId),
+    ),
   ).whenComplete(() {
-    _gateSheetOpen = false;
+    _closeGateSheet(sheetId);
   });
 }
 
@@ -69,6 +74,20 @@ Future<TimeboxedGateChoice?> showTimeboxedSprintGate(
 /// Two quick taps on Start would otherwise open two sheets, and the second
 /// one's answer would start the Sprint behind the first.
 bool _gateSheetOpen = false;
+
+/// Which sheet is the open one.
+///
+/// A sheet clears the flag when it is disposed, not when its future
+/// completes: a sheet dismissed without a choice never completes that future,
+/// and the gate would then be shut for good. The id keeps a sheet that is on
+/// its way out from clearing the flag of the sheet that replaced it.
+int _openGateSheetId = 0;
+
+/// Clears the flag, unless a later sheet has taken over.
+void _closeGateSheet(int sheetId) {
+  if (sheetId != _openGateSheetId) return;
+  _gateSheetOpen = false;
+}
 
 /// Runs [start], unless the Outcome's current Action is Timeboxed and its
 /// limit has already been passed — in which case Jeeves advises first and the
@@ -186,6 +205,7 @@ class _TimeboxedGateSheet extends StatefulWidget {
     required this.actionText,
     required this.status,
     required this.now,
+    required this.onClosed,
   });
 
   /// The Action's text — what the Sprint would run on.
@@ -197,6 +217,9 @@ class _TimeboxedGateSheet extends StatefulWidget {
   /// The instant the gate opened.
   final DateTime now;
 
+  /// Called when the sheet is disposed — however it went.
+  final VoidCallback onClosed;
+
   @override
   State<_TimeboxedGateSheet> createState() => _TimeboxedGateSheetState();
 }
@@ -205,6 +228,13 @@ class _TimeboxedGateSheetState extends State<_TimeboxedGateSheet> {
   /// Whether the user has already asked to carry on regardless; the sheet
   /// asks once more before it starts the Sprint.
   bool _askedAgain = false;
+
+  @override
+  void dispose() {
+    // The sheet is gone, whatever happened to it: the gate is open again.
+    widget.onClosed();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
