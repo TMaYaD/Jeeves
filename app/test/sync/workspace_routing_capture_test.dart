@@ -87,19 +87,26 @@ void main() {
         },
       );
 
-  void writePreference() => capture.write(
+  /// A preference stored under [userId].
+  ///
+  /// The entity id derives from *that* user's preferences Workspace, which is
+  /// what makes a row stored under `'local'` name an entity the account's
+  /// Workspace does not hold.
+  void writePreferenceFor(String userId) => capture.write(
         collection: userPreferencesCollection,
         entityId: preferenceEntityId(
-          userPreferencesWorkspaceId(_userId),
+          userPreferencesWorkspaceId(userId),
           'clarify_mode',
         ),
         fields: {
           'key': 'clarify_mode',
           'value': '"oneToOne"',
           'updated_at': '2026-02-01T09:00:00.000Z',
-          'user_id': _userId,
+          'user_id': userId,
         },
       );
+
+  void writePreference() => writePreferenceFor(_userId);
 
   test('undecided, ops are held — nothing authored until a decision', () async {
     await capturing(() {
@@ -128,6 +135,40 @@ void main() {
       defaultWorkspaceId(_userId),
       userPreferencesWorkspaceId(_userId),
     ]);
+  });
+
+  test('a preference stored under another user id is not authored', () async {
+    await capture.bind(
+        gtdClient: gtdClient, preferencesClient: preferencesClient);
+
+    // Stored under the signed-out user id, so its entity id derives from the
+    // `'local'` preferences Workspace — an entity this account's Workspace does
+    // not hold. Authoring it would put a row under another user's id on the
+    // account's log, where the account's other devices would read it.
+    await capturing(() => writePreferenceFor('local'));
+    expect(await queuedWorkspaceIds(), isEmpty,
+        reason: "a row stored under 'local' is not this Workspace's to author");
+
+    // The account's own row is authored.
+    await capturing(() => writePreferenceFor(_userId));
+    expect(await queuedWorkspaceIds(), [userPreferencesWorkspaceId(_userId)]);
+  });
+
+  test('a buffered preference under another user id is discarded by the drain, '
+      'and the op queued behind it still authors', () async {
+    // Written while undecided, so both ops sit in the buffer: the preference
+    // first, then the Outcome behind it.
+    await capturing(() => writePreferenceFor('local'));
+    await capturing(writeOutcome);
+    expect(await queuedWorkspaceIds(), isEmpty, reason: 'held while undecided');
+
+    await capture.bind(
+        gtdClient: gtdClient, preferencesClient: preferencesClient);
+
+    // The preference is discarded, and the discard is not a reason to strand
+    // the op queued behind it.
+    expect(await queuedWorkspaceIds(), [defaultWorkspaceId(_userId)],
+        reason: 'the discarded preference does not hold the drain open');
   });
 
   test('binding drains ops buffered while undecided, in write order', () async {
