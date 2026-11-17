@@ -59,6 +59,7 @@ import 'package:drift/drift.dart';
 import 'package:sqlite3/common.dart' show SqlExtendedError, SqliteException;
 import 'package:uuid/uuid.dart';
 
+import 'alarm_resolution.dart';
 import 'chain_verifier.dart';
 import 'collection_codecs.dart' show userPreferencesCollection;
 import 'control_payload.dart';
@@ -3286,25 +3287,34 @@ class SyncClient {
   /// bytes — only [_refuseStaleServe] has one. Accusations are collected by kind
   /// before any is raised, so one refused op bumps a kind's occurrence count once
   /// even when both routes arrive at the same accusation.
+  ///
+  /// **A refusal the user has already answered raises nothing.** The row the
+  /// refusal is filed under carries the decision, and a server re-serving the
+  /// same bytes must not put the accusation back in front of the user: the
+  /// decision was about those bytes. The accusation about the *serving* is a
+  /// separate matter and still stands — it is not about the refused change, it
+  /// is about how the server offered it.
   Future<void> _refuse(
     PulledOp pulled,
     SyncRejection rejection,
     OpHeader? header, {
     ({IntegrityAlarmKind kind, String detail})? servingAccusation,
   }) async {
-    final quarantineRowId = await _quarantine(pulled, rejection, header);
+    final quarantineRow = await _quarantine(pulled, rejection, header);
     final accusations = <IntegrityAlarmKind, String>{};
     if (servingAccusation != null) {
       accusations[servingAccusation.kind] = servingAccusation.detail;
     }
     final escalated = alarmForRejection(rejection.reason);
-    if (escalated != null) accusations.putIfAbsent(escalated, () => rejection.message);
+    if (escalated != null && quarantineRow.resolution == null) {
+      accusations.putIfAbsent(escalated, () => rejection.message);
+    }
     for (final accusation in accusations.entries) {
       await _raiseAlarm(
         accusation.key,
         authorMemberId: header?.authorMemberId,
         detail: accusation.value,
-        quarantineOpRowId: quarantineRowId,
+        quarantineOpRowId: quarantineRow.id,
       );
     }
   }
@@ -3314,8 +3324,9 @@ class SyncClient {
   /// Dedupe lives here rather than in one caller so it is a property of every
   /// quarantine path: a server re-serving the same refused bytes on every sync
   /// raises the alarm's occurrence count instead of growing the table without
-  /// bound. Returns the row the refusal is filed under.
-  Future<int> _quarantine(
+  /// bound. Returns the row the refusal is filed under, so the caller can see
+  /// whether the user has already answered it.
+  Future<QuarantineRow> _quarantine(
     PulledOp pulled,
     SyncRejection rejection,
     OpHeader? header,
@@ -3328,9 +3339,9 @@ class SyncClient {
               row.releasedAt.isNull()))
         .get();
     for (final row in existing) {
-      if (sameBytes(row.envelope, pulled.envelope)) return row.id;
+      if (sameBytes(row.envelope, pulled.envelope)) return row;
     }
-    return _db.into(_db.quarantinedOps).insert(
+    final rowId = await _db.into(_db.quarantinedOps).insert(
           QuarantinedOpsCompanion.insert(
             workspaceId: workspaceId,
             seq: Value(pulled.seq),
@@ -3342,6 +3353,9 @@ class SyncClient {
             authorSeq: Value(header?.authorSeq),
           ),
         );
+    return await (_db.select(_db.quarantinedOps)
+          ..where((row) => row.id.equals(rowId)))
+        .getSingle();
   }
 
   // --- Integrity alarms --------------------------------------------------------
@@ -3449,6 +3463,219 @@ class SyncClient {
                   ? row.authorMemberId.isNull()
                   : row.authorMemberId.equals(authorMemberId))))
         .write(IntegrityAlarmsCompanion(resolvedAt: Value(_now())));
+  }
+
+  // --- Resolutions ------------------------------------------------------------
+
+  /// Record the user's decision on an integrity alarm.
+  ///
+  /// The decision is written twice, in one transaction: on every refused change
+  /// the accusation covers, and on the alarm itself. The refused rows are the
+  /// durable history — never cleared, never deleted — and the alarm's row says
+  /// what the answer is *now*. **Nothing is deleted and no envelope is
+  /// touched**: refusing a change for good is a statement about it, not an
+  /// erasure of it.
+  ///
+  /// [resolution] must be one the alarm's kind offers
+  /// ([resolutionsOfferedForAlarmRow]). Anything else throws [StateError]
+  /// without writing a row, and so does an alarm belonging to another
+  /// Workspace — a client answers only for its own Workspace.
+  ///
+  /// A decision this build cannot carry out yet throws [UnsupportedError], also
+  /// without writing. Which ones those are changes as the rest of #575 lands,
+  /// so the error names the decision rather than failing quietly.
+  Future<void> resolveAlarm(int alarmRowId, AlarmResolution resolution) async {
+    final alarm = await (_db.select(_db.integrityAlarms)
+          ..where((row) => row.id.equals(alarmRowId)))
+        .getSingleOrNull();
+    if (alarm == null) {
+      throw StateError('no integrity alarm with row id $alarmRowId');
+    }
+    if (alarm.workspaceId != workspaceId) {
+      throw StateError(
+        'integrity alarm $alarmRowId belongs to another Workspace',
+      );
+    }
+    final kind = integrityAlarmKindByCodeOrNull(alarm.kind);
+    if (kind == null) {
+      // A store written by a newer build can hold a code this one has never
+      // heard of. It offers no decision, and asking about it is a mistake.
+      throw StateError('an unknown alarm kind ${alarm.kind} offers no resolution');
+    }
+    if (!resolutionsOfferedForAlarmRow(alarm).contains(resolution)) {
+      throw StateError(
+        'a ${alarm.kind} alarm offers no ${resolution.code} resolution',
+      );
+    }
+    switch (resolution) {
+      case AlarmResolution.tookUpstream:
+        throw UnsupportedError(
+          'taking upstream is not implemented yet (#575)',
+        );
+      case AlarmResolution.keptOurs:
+        if (kind != IntegrityAlarmKind.ownWritesDivergence) {
+          throw UnsupportedError(
+            'keeping ours on a ${alarm.kind} alarm is not implemented yet (#575)',
+          );
+        }
+        break;
+      case AlarmResolution.rejectedPermanently:
+        break;
+    }
+    final now = _now();
+    final covered = await _rowsCoveredByAlarm(alarm, kind);
+    await _db.transaction(() async {
+      for (final row in covered) {
+        await (_db.update(_db.quarantinedOps)
+              ..where((r) => r.id.equals(row.id)))
+            .write(QuarantinedOpsCompanion(
+          resolution: Value(resolution.code),
+          resolutionDecidedAt: Value(now),
+        ));
+      }
+      await (_db.update(_db.integrityAlarms)
+            ..where((row) => row.id.equals(alarm.id)))
+          .write(IntegrityAlarmsCompanion(
+        resolution: Value(resolution.code),
+        resolutionDecidedAt: Value(now),
+        resolvedAt: Value(now),
+      ));
+      if (kind == IntegrityAlarmKind.authorChainFork) {
+        await _settleGapAlarmOf(alarm, resolution, now);
+      }
+    });
+  }
+
+  /// Record the user's decision on one refused change.
+  ///
+  /// A refusal that escalates to an alarm is settled on that alarm, not here —
+  /// the alarm is what the screen shows and what the user answers. What arrives
+  /// here is a refusal that stands on its own: a codec that will not read, a
+  /// certificate that will not verify. The decision goes on the row, and the
+  /// row is kept.
+  ///
+  /// The same rules as [resolveAlarm]: a decision the reason does not offer
+  /// throws [StateError], another Workspace's row throws [StateError], and
+  /// nothing is written either way.
+  Future<void> resolveRefusedItem(
+    int quarantineRowId,
+    AlarmResolution resolution,
+  ) async {
+    final row = await (_db.select(_db.quarantinedOps)
+          ..where((r) => r.id.equals(quarantineRowId)))
+        .getSingleOrNull();
+    if (row == null) {
+      throw StateError('no refused change with row id $quarantineRowId');
+    }
+    if (row.workspaceId != workspaceId) {
+      throw StateError(
+        'refused change $quarantineRowId belongs to another Workspace',
+      );
+    }
+    if (!resolutionsForRefusalCode(row.reason).contains(resolution)) {
+      throw StateError(
+        'a ${row.reason} refusal offers no ${resolution.code} resolution',
+      );
+    }
+    await (_db.update(_db.quarantinedOps)
+          ..where((r) => r.id.equals(row.id)))
+        .write(QuarantinedOpsCompanion(
+      resolution: Value(resolution.code),
+      resolutionDecidedAt: Value(_now()),
+    ));
+  }
+
+  /// The refused changes an alarm covers.
+  ///
+  /// **Same Workspace, same author, unreleased, undecided, and refusing for
+  /// this kind of reason** — the escalation the accusation was raised for. A
+  /// row the user has already answered is not covered again, and a released row
+  /// is out of it entirely: it was re-admitted, so there is nothing left to
+  /// decide about it.
+  ///
+  /// A fork is the one kind with no reason of its own. Its rows are the
+  /// author's gap rows at or below the effective chain head — the continuations
+  /// that lost their position — because a fork is not a refusal but the choice
+  /// between two of them.
+  Future<List<QuarantineRow>> _rowsCoveredByAlarm(
+    IntegrityAlarmRow alarm,
+    IntegrityAlarmKind kind,
+  ) async {
+    final author = alarm.authorMemberId;
+    final candidates = await (_db.select(_db.quarantinedOps)
+          ..where((row) =>
+              row.workspaceId.equals(workspaceId) &
+              row.releasedAt.isNull() &
+              row.resolution.isNull() &
+              (author == null
+                  ? row.authorMemberId.isNull()
+                  : row.authorMemberId.equals(author))))
+        .get();
+    if (kind == IntegrityAlarmKind.authorChainFork) {
+      if (author == null) return const [];
+      final headSeq = await effectiveChainHeadSeq(author);
+      return [
+        for (final row in candidates)
+          if (row.reason == SyncRejectionReason.authorChainGap.code &&
+              row.authorSeq != null &&
+              row.authorSeq! <= headSeq)
+            row,
+      ];
+    }
+    return [
+      for (final row in candidates)
+        if (_escalatesTo(row.reason, kind)) row,
+    ];
+  }
+
+  /// Whether a refusal reason escalates to this kind of accusation.
+  ///
+  /// An unknown reason code escalates to nothing: it cannot name a kind, and a
+  /// store written by a newer build must not make a decision cover a row this
+  /// build cannot classify.
+  static bool _escalatesTo(String reasonCode, IntegrityAlarmKind kind) {
+    final reason = syncRejectionReasonByCodeOrNull(reasonCode);
+    return reason != null && alarmForRejection(reason) == kind;
+  }
+
+  /// Settle the author's gap alarm with a fork's decision, once no unreleased,
+  /// undecided gap row is left for that author.
+  ///
+  /// The gap alarm stands because a refused change of that author is still
+  /// waiting; once the fork's decision has stamped every one of those rows the
+  /// wait is over, and the alarm goes with it. **Undecided** is what counts: a
+  /// row the user has already answered is not a reason to keep asking.
+  ///
+  /// Only a standing alarm is stamped. One that no longer stands has nothing
+  /// left to settle, and a decision written on it would be a claim about an
+  /// accusation that has already been answered by the world.
+  Future<void> _settleGapAlarmOf(
+    IntegrityAlarmRow fork,
+    AlarmResolution resolution,
+    DateTime now,
+  ) async {
+    final author = fork.authorMemberId;
+    if (author == null) return;
+    final standing = await (_db.select(_db.quarantinedOps)
+          ..where((row) =>
+              row.workspaceId.equals(workspaceId) &
+              row.authorMemberId.equals(author) &
+              row.releasedAt.isNull() &
+              row.resolution.isNull() &
+              row.reason.equals(SyncRejectionReason.authorChainGap.code)))
+        .get();
+    if (standing.isNotEmpty) return;
+    await (_db.update(_db.integrityAlarms)
+          ..where((row) =>
+              row.workspaceId.equals(workspaceId) &
+              row.kind.equals(IntegrityAlarmKind.authorChainGap.code) &
+              row.authorMemberId.equals(author) &
+              row.resolvedAt.isNull()))
+        .write(IntegrityAlarmsCompanion(
+      resolution: Value(resolution.code),
+      resolutionDecidedAt: Value(now),
+      resolvedAt: Value(now),
+    ));
   }
 
   Future<int> _cursor() async {

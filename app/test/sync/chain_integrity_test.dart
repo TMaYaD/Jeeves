@@ -17,6 +17,7 @@ import 'dart:typed_data';
 
 import 'package:drift/drift.dart' show OrderingTerm;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jeeves/sync/alarm_resolution.dart';
 import 'package:jeeves/sync/chain_verifier.dart';
 import 'package:jeeves/sync/envelope.dart';
 import 'package:jeeves/sync/hlc.dart';
@@ -832,6 +833,338 @@ void main() {
         (await a.client.quarantined()).single.reason,
         SyncRejectionReason.badSignature.code,
       );
+    });
+  });
+
+  // --- Resolutions: the user answers an alarm -------------------------------
+
+  group('resolutions', () {
+    /// The device's own op, tampered with, refused by the fail-closed rule.
+    ///
+    /// The signature covers `header || body`, so the receive path refuses it
+    /// outright — an accusation raised against a forgery, and the refusal it is
+    /// filed under. The bytes are returned so a test can say they are still the
+    /// bytes.
+    Future<
+        ({
+          IntegrityAlarmRow alarm,
+          QuarantineRow row,
+          Uint8List tampered,
+          List<Uint8List> authored,
+        })> plantTamperedEnvelope() async {
+      await a.authorLocal(workspace, 'mine');
+      await a.sync();
+      final authored = await a.client.authoredEnvelopes();
+      final tampered = Uint8List.fromList(authored.last);
+      tampered[headerLengthBytes + 8] ^= 0x01;
+      workspace.server.injectUnchecked(workspace.workspaceId, tampered);
+      await a.sync();
+      final alarm =
+          (await a.alarmsByKind())[IntegrityAlarmKind.signatureInvalid.code]!;
+      final row = (await a.client.quarantined()).single;
+      return (alarm: alarm, row: row, tampered: tampered, authored: authored);
+    }
+
+    test('rejecting a refused change for good settles the alarm and keeps the bytes',
+        () async {
+      final planted = await plantTamperedEnvelope();
+      expect(planted.alarm.resolution, isNull);
+      expect(planted.alarm.resolvedAt, isNull);
+
+      await a.client.resolveAlarm(
+        planted.alarm.id,
+        AlarmResolution.rejectedPermanently,
+      );
+
+      final settled =
+          (await a.alarmsByKind())[IntegrityAlarmKind.signatureInvalid.code]!;
+      expect(settled.resolution, AlarmResolution.rejectedPermanently.code);
+      expect(settled.resolutionDecidedAt, isNotNull);
+      expect(settled.resolvedAt, isNotNull);
+
+      // Nothing is deleted, and the bytes are the evidence they always were.
+      final rows = await a.client.quarantined();
+      expect(rows.length, 1);
+      expect(rows.single.id, planted.row.id);
+      expect(sameBytes(rows.single.envelope, planted.tampered), isTrue);
+      expect(rows.single.releasedAt, isNull);
+      // The decision is recorded on the refused change too: that row is the
+      // durable history, and the alarm only says what the answer is now.
+      expect(rows.single.resolution, AlarmResolution.rejectedPermanently.code);
+      expect(rows.single.resolutionDecidedAt, isNotNull);
+
+      final health = await a.client.health();
+      expect(health.clean, isTrue);
+      expect(health.hasSomethingToReport, isFalse);
+      expect(health.actionableAlarmCount, 0);
+      expect(health.unresolvedAlarmCount, 0);
+      expect(health.reportableQuarantineCount, 0);
+    });
+
+    test('a re-serve of the same bytes raises nothing again', () async {
+      final planted = await plantTamperedEnvelope();
+      await a.client.resolveAlarm(
+        planted.alarm.id,
+        AlarmResolution.rejectedPermanently,
+      );
+
+      await a.client.resetCursorForReplay();
+      await a.sync();
+
+      final after =
+          (await a.alarmsByKind())[IntegrityAlarmKind.signatureInvalid.code]!;
+      expect(after.resolvedAt, isNotNull);
+      expect(after.resolution, AlarmResolution.rejectedPermanently.code);
+      expect(
+        (await a.client.quarantined()).length,
+        1,
+        reason: 'the same bytes are still one refusal, not two',
+      );
+    });
+
+    test('a second, different forgery stands the accusation again', () async {
+      final planted = await plantTamperedEnvelope();
+      await a.client.resolveAlarm(
+        planted.alarm.id,
+        AlarmResolution.rejectedPermanently,
+      );
+
+      // A different forgery of the same op: a new accusation, not the old one.
+      final second = Uint8List.fromList(planted.authored.last);
+      second[headerLengthBytes + 8] ^= 0x02;
+      workspace.server.injectUnchecked(workspace.workspaceId, second);
+      await a.sync();
+
+      final after =
+          (await a.alarmsByKind())[IntegrityAlarmKind.signatureInvalid.code]!;
+      expect(after.resolvedAt, isNull);
+      expect(after.resolution, isNull);
+      expect(after.resolutionDecidedAt, isNull);
+
+      // The settled refusal stays settled; the new one is a new question.
+      final rows = await a.client.quarantined();
+      expect(rows.length, 2);
+      expect(
+        rows
+            .where((row) =>
+                row.resolution == AlarmResolution.rejectedPermanently.code)
+            .length,
+        1,
+      );
+      expect(rows.where((row) => row.resolution == null).length, 1);
+    });
+
+    test('rejecting a fork for good settles it and the gap it held open',
+        () async {
+      // The forged-claimant scenario: two envelopes claim the peer's position
+      // 5, the forgery is quarantined first, and the genuine continuation is
+      // released when its predecessor lands. The forgery is what is left.
+      final first = await _op(workspace, peer, 'one');
+      await peerSession.postOps(workspace.workspaceId, [first]);
+      await a.sync();
+
+      final genuineSecond = await _op(workspace, peer, 'two');
+      final genuineThird = await _op(workspace, peer, 'three');
+
+      peer.nextAuthorSeq = firstPeerContentAuthorSeq + 2;
+      peer.lastEnvelopeHash =
+          Uint8List.fromList(List<int>.filled(prevAuthorHashBytes, 0x7f));
+      final forgedThird = await _op(workspace, peer, 'forged');
+
+      workspace.server.injectUnchecked(workspace.workspaceId, forgedThird);
+      await a.sync();
+      workspace.server.injectUnchecked(workspace.workspaceId, genuineThird);
+      await a.sync();
+      workspace.server.injectUnchecked(workspace.workspaceId, genuineSecond);
+      await a.sync();
+
+      final forgedRow = (await a.client.quarantined())
+          .singleWhere((row) => sameBytes(row.envelope, forgedThird));
+      final fork =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainFork.code]!;
+      expect(fork.resolvedAt, isNull);
+      expect(
+        (await a.client.health()).degraded,
+        isTrue,
+        reason: 'the gap the forgery holds open is actionable',
+      );
+
+      await a.client.resolveAlarm(fork.id, AlarmResolution.rejectedPermanently);
+
+      final alarms = await a.alarmsByKind();
+      final settledFork = alarms[IntegrityAlarmKind.authorChainFork.code]!;
+      expect(settledFork.resolution, AlarmResolution.rejectedPermanently.code);
+      expect(settledFork.resolvedAt, isNotNull);
+      // The gap alarm stood because the forged row was still waiting; with the
+      // row answered there is nothing left to wait for.
+      final settledGap = alarms[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(settledGap.resolution, AlarmResolution.rejectedPermanently.code);
+      expect(settledGap.resolvedAt, isNotNull);
+
+      // The forgery is still there, still refused, and now answered.
+      final rows = await a.client.quarantined();
+      final settled = rows.singleWhere((row) => sameBytes(row.envelope, forgedThird));
+      expect(settled.id, forgedRow.id);
+      expect(settled.releasedAt, isNull);
+      expect(settled.resolution, AlarmResolution.rejectedPermanently.code);
+      expect(
+        (await a.client.health()).degraded,
+        isFalse,
+        reason: 'nothing actionable is left standing',
+      );
+    });
+
+    test('keeping ours on a divergence settles the other copy', () async {
+      await a.authorLocal(workspace, 'mine');
+      await a.sync();
+      final authored = await a.client.authoredEnvelopes();
+      final nextAuthorSeq = authored.length + 1;
+
+      // A different envelope at a position this device has authored but not yet
+      // pulled back — the copy that lost, and the one our answer is about.
+      await a.authorLocal(workspace, 'local');
+      final substitute = await a.identity.signer.buildEnvelope(
+        OpHeader(
+          workspaceId: workspace.workspaceId,
+          opClass: opClassContent,
+          opId: _uuid.v4(),
+          authorMemberId: a.identity.memberId,
+          authorKeyId: a.identity.keyId,
+          authorSeq: nextAuthorSeq,
+          prevAuthorHash: envelopeHash(authored.last),
+        ),
+        frameBody(Uint8List.fromList(utf8.encode(jsonEncode({
+          'collection': _harnessCollection,
+          'id': _docId(workspace),
+          'fields': {
+            'step': {'v': 'not what we wrote'},
+          },
+          'hlc': [workspace.clock.nowMs, 0, a.identity.memberIdHex],
+        })))),
+      );
+      workspace.server.injectUnchecked(workspace.workspaceId, substitute);
+      await a.client.pull();
+
+      final divergence =
+          (await a.alarmsByKind())[IntegrityAlarmKind.ownWritesDivergence.code]!;
+      final row = (await a.client.quarantined()).single;
+      expect(row.reason, SyncRejectionReason.ownWritesDivergence.code);
+
+      await a.client.resolveAlarm(divergence.id, AlarmResolution.keptOurs);
+
+      final settled =
+          (await a.alarmsByKind())[IntegrityAlarmKind.ownWritesDivergence.code]!;
+      expect(settled.resolution, AlarmResolution.keptOurs.code);
+      expect(settled.resolutionDecidedAt, isNotNull);
+      expect(settled.resolvedAt, isNotNull);
+      expect(
+        (await a.client.quarantined()).single.resolution,
+        AlarmResolution.keptOurs.code,
+      );
+      // Ours is what stands, and it stood all along.
+      expect(await _doc(a, workspace), {'step': 'local'});
+    });
+
+    test('a refusal with no alarm of its own is answered on the row',
+        () async {
+      final future = workspace.clock.nowMs + 3600000;
+      final refused = await peer.nextEnvelope(
+        workspace.workspaceId,
+        payloadJson: jsonEncode({
+          'collection': _harnessCollection,
+          'id': _docId(workspace),
+          'fields': {
+            'step': {'v': 'from the future'},
+          },
+          'hlc': [future, 0, memberIdToHex(peer.memberId)],
+        }),
+      );
+      final honest = await _op(workspace, peer, 'honest');
+      await peerSession.postOps(workspace.workspaceId, [refused, honest]);
+
+      await a.sync();
+
+      final row = (await a.client.quarantined()).single;
+      expect(row.reason, SyncRejectionReason.hlcInTheFuture.code);
+      expect(row.resolution, isNull);
+      expect((await a.client.health()).reportableQuarantineCount, 1);
+
+      await a.client.resolveRefusedItem(
+        row.id,
+        AlarmResolution.rejectedPermanently,
+      );
+
+      final settled = (await a.client.quarantined()).single;
+      expect(settled.resolution, AlarmResolution.rejectedPermanently.code);
+      expect(settled.resolutionDecidedAt, isNotNull);
+      expect(sameBytes(settled.envelope, refused), isTrue);
+      expect(settled.releasedAt, isNull);
+      expect((await a.client.health()).reportableQuarantineCount, 0);
+      // A refusal that escalates to an alarm is answered on the alarm, not here.
+      await expectLater(
+        a.client.resolveRefusedItem(row.id, AlarmResolution.keptOurs),
+        throwsA(isA<StateError>()),
+      );
+    });
+
+    test('a resolution the kind does not offer is refused outright', () async {
+      final planted = await plantTamperedEnvelope();
+
+      await expectLater(
+        a.client.resolveAlarm(planted.alarm.id, AlarmResolution.keptOurs),
+        throwsA(isA<StateError>()),
+      );
+
+      // Nothing was written.
+      final alarm =
+          (await a.alarmsByKind())[IntegrityAlarmKind.signatureInvalid.code]!;
+      expect(alarm.resolution, isNull);
+      expect(alarm.resolutionDecidedAt, isNull);
+      expect(alarm.resolvedAt, isNull);
+      expect((await a.client.quarantined()).single.resolution, isNull);
+    });
+
+    test("another Workspace's alarm is not this client's to answer", () async {
+      final planted = await plantTamperedEnvelope();
+      final preferences = await a.preferencesClient;
+
+      await expectLater(
+        preferences.resolveAlarm(
+          planted.alarm.id,
+          AlarmResolution.rejectedPermanently,
+        ),
+        throwsA(isA<StateError>()),
+      );
+      expect(
+        (await a.alarmsByKind())[IntegrityAlarmKind.signatureInvalid.code]!
+            .resolution,
+        isNull,
+      );
+    });
+
+    test('taking upstream is not implemented yet, and says so', () async {
+      // A gap alarm: the one kind that offers taking upstream.
+      final first = await _op(workspace, peer, 'one');
+      final withheld = await _op(workspace, peer, 'two');
+      final third = await _op(workspace, peer, 'three');
+      final appended = await peerSession.postOps(
+        workspace.workspaceId,
+        [first, withheld, third],
+      );
+      workspace.server.omitSeqs.add(appended[1].seq);
+
+      await a.sync();
+
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      await expectLater(
+        a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream),
+        throwsA(isA<UnsupportedError>()),
+      );
+      final after =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(after.resolution, isNull);
+      expect(after.resolvedAt, isNull);
     });
   });
 
