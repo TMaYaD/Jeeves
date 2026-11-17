@@ -114,8 +114,10 @@ void main() {
       'Bravo',
       'zz-unused',
     ]);
-    expect(find.textContaining('✓ @a01'), findsOneWidget);
-    expect(chipInCloud('a03'), findsOneWidget);
+    // An applied tag is a badge in the cloud; an unapplied one is plain text.
+    expect(tester.widget<TagText>(chipInCloud('a01')).selected, isTrue);
+    expect(tester.widget<TagText>(chipInCloud('a03')).selected, isFalse);
+    expect(find.textContaining('✓'), findsNothing);
     expect(chipInCloud('a13'), findsOneWidget);
     expect(chipInCloud('a14'), findsOneWidget);
     expect(find.byKey(const Key('tag_cloud_show_more')), findsNothing);
@@ -146,7 +148,8 @@ void main() {
           ..where((t) => t.todoId.equals('o1')))
         .get());
     expect(linked!.map((r) => r.tagId), contains(created!.single.id));
-    expect(find.textContaining('✓ @Errands'), findsWidgets);
+    expect(
+        tester.widget<TagText>(chipInCloud(created!.single.id)).selected, isTrue);
     // The new tag joins the cloud in its alphabetical place.
     expect(_cloudNames(tester), [
       for (var i = 1; i <= 14; i++) 'a${i.toString().padLeft(2, '0')}',
@@ -165,6 +168,7 @@ void main() {
             .get()))!
         .map((r) => r.tagId);
     expect(ids, contains('a05'));
+    expect(tester.widget<TagText>(chipInCloud('a05')).selected, isTrue);
     await tester.tap(chipInCloud('a05'));
     await _pumpFor(tester);
     ids = (await tester.runAsync(() => (db.select(db.todoTags)
@@ -172,6 +176,7 @@ void main() {
             .get()))!
         .map((r) => r.tagId);
     expect(ids, isNot(contains('a05')));
+    expect(tester.widget<TagText>(chipInCloud('a05')).selected, isFalse);
 
     // Long-press opens the colour picker.
     await tester.longPress(chipInCloud('a05'));

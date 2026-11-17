@@ -35,6 +35,7 @@ import 'package:jeeves/widgets/next_action_dialog.dart';
 import 'package:jeeves/widgets/person_tag_picker.dart';
 import 'package:jeeves/widgets/process_to_handlers.dart';
 import 'package:jeeves/widgets/state_surfaces.dart';
+import 'package:jeeves/widgets/tag_text.dart';
 
 import '../test_helpers.dart';
 
@@ -787,8 +788,12 @@ void main() {
       await refreshTags(tester, 't-ctx-assign');
 
       expect(await _joinedTagIds(db, 't-ctx-assign'), contains('c1'));
-      // Selected chips render with a ✓ prefix (TagText selected state).
-      expect(find.text('✓ @home'), findsOneWidget);
+      // The cloud's chip for an applied tag renders as a badge.
+      final cloudChip = find.descendant(
+        of: find.byKey(const Key('context_tag_picker_cloud')),
+        matching: find.byKey(const Key('tag_chip_c1')),
+      );
+      expect(tester.widget<TagText>(cloudChip).selected, isTrue);
     });
 
     testWidgets('detaching a context tag removes the join row', (tester) async {
@@ -811,7 +816,6 @@ void main() {
       await refreshTags(tester, 't-ctx-remove');
 
       expect(await _joinedTagIds(db, 't-ctx-remove'), isNot(contains('c1')));
-      expect(find.text('✓ @home'), findsNothing);
     });
 
     testWidgets('assigning a project tag persists via DAO', (tester) async {
@@ -928,7 +932,11 @@ void main() {
       await expectInvariants();
 
       // Detach context.
-      await tester.tap(find.text('✓ @home'));
+      final cloudChip = find.descendant(
+        of: find.byKey(const Key('context_tag_picker_cloud')),
+        matching: find.byKey(const Key('tag_chip_c1')),
+      );
+      await tester.tap(cloudChip);
       await tester.pumpAndSettle();
       await refreshTags(tester, 'orth-$intent');
       await expectInvariants();
@@ -989,7 +997,6 @@ void main() {
 
       // No person-tag chip and no path to the person picker sheet.
       expect(find.text('@Alice'), findsNothing);
-      expect(find.text('✓ @Alice'), findsNothing);
       expect(find.byType(PersonTagPickerSheet), findsNothing);
     });
   });

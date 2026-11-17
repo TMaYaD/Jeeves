@@ -392,10 +392,17 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(TagText), findsOneWidget);
       expect(find.byKey(const Key('tag_chip_t19')), findsOneWidget);
+      expect(
+          tester.widget<TagText>(find.byKey(const Key('tag_chip_t19'))).selected,
+          isFalse);
 
       await tester.tap(find.byKey(const Key('tag_chip_t19')));
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('tag_cloud_clear_filters')), findsOneWidget);
+      // A selected tag is a badge.
+      expect(
+          tester.widget<TagText>(find.byKey(const Key('tag_chip_t19'))).selected,
+          isTrue);
 
       await tester.enterText(
           find.byKey(const Key('tag_cloud_find_field')), '');
@@ -406,6 +413,9 @@ void main() {
       await tester.tap(find.byKey(const Key('tag_cloud_clear_filters')));
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('tag_cloud_clear_filters')), findsNothing);
+      expect(
+          tester.widget<TagText>(find.byKey(const Key('tag_chip_t19'))).selected,
+          isFalse);
     });
   });
 

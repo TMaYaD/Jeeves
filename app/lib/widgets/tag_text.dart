@@ -3,7 +3,8 @@
 ///
 /// This is the single source-of-truth for how a tag looks across the app —
 /// nav drawer, task detail, list items, clarify flow, etc.  No background,
-/// no border, no chip shape.
+/// no border, no chip shape — except a selected tag, which renders as a
+/// badge (see `docs/DESIGN.md` § Tag cloud).
 library;
 
 import 'package:flutter/material.dart';
@@ -13,9 +14,10 @@ import '../utils/tag_colors.dart';
 
 /// Renders [tag] as `@name` text in the tag's stored color.
 ///
-/// [selected] adds a ✓ prefix and heavier weight.  [trailingCount] appends
-/// ` (n)` when non-null and > 0.  [onDismiss] adds a small × hit-target to
-/// the right.  [onTap] / [onLongPress] wire up gesture handling.
+/// [selected] renders the tag as a badge: the same text at weight 700 on a
+/// tinted background, and no ✓ prefix.  [trailingCount] appends ` (n)` when
+/// non-null and > 0.  [onDismiss] adds a small × hit-target to the right.
+/// [onTap] / [onLongPress] wire up gesture handling.
 class TagText extends StatelessWidget {
   const TagText({
     super.key,
@@ -44,7 +46,6 @@ class TagText extends StatelessWidget {
     final effectiveWeight = selected ? FontWeight.w700 : fontWeight;
 
     final label = StringBuffer();
-    if (selected) label.write('✓ ');
     label.write('@${tag.name}');
     if (trailingCount != null && trailingCount! > 0) {
       label.write(' ($trailingCount)');
@@ -54,6 +55,17 @@ class TagText extends StatelessWidget {
       label.toString(),
       style: TextStyle(fontSize: fontSize, fontWeight: effectiveWeight, color: color),
     );
+
+    if (selected) {
+      content = Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.15),
+          borderRadius: const BorderRadius.circular(4),
+        ),
+        child: content,
+      );
+    }
 
     if (onDismiss != null) {
       content = Row(
@@ -75,6 +87,10 @@ class TagText extends StatelessWidget {
         onLongPress: onLongPress,
         child: content,
       );
+    }
+
+    if (selected) {
+      content = Semantics(selected: true, child: content);
     }
 
     return content;
