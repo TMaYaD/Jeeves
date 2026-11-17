@@ -561,11 +561,19 @@ Future<InitialUploadPlan> buildInitialUploadPlan({
         rowId: legacyRowId ?? entityId,
         raw: 'collapsed onto $entityId',
       ));
+      // Two rows for one preference key are one setting held under two user
+      // ids: the copy the device kept while signed out and the copy the
+      // account brought. The newer of the two is the setting, so the collapse
+      // keeps it — keeping the first row in table order would publish the
+      // older copy and undo a change made after sign-in. Every other
+      // collection keeps the first row, as before.
+      final keepNewer = collection == userPreferencesCollection &&
+          _isNewerPreferenceRow(encoded.fields, existing.fields);
       byEntityId[entityId] = PlannedEntity(
         workspace: workspace,
         collection: collection,
         entityId: entityId,
-        fields: existing.fields,
+        fields: keepNewer ? encoded.fields : existing.fields,
         legacyRowIds: [...existing.legacyRowIds, ?legacyRowId],
       );
     }
@@ -596,6 +604,30 @@ Future<InitialUploadPlan> buildInitialUploadPlan({
         tagsCollection: resolution.endorsedSpineLabelIds,
     },
   );
+}
+
+/// Whether [candidate] holds a strictly newer `updated_at` than [kept].
+///
+/// The same rule the device's own carry applies
+/// (`UserPreferencesDao.carryNewestPreferencesInto`), so the copy the device
+/// keeps and the value the first upload publishes agree on which of two rows
+/// is the newer one: a timestamp that cannot be read counts as the oldest, and
+/// two rows stamped the same instant count as equal, so the first row is kept.
+bool _isNewerPreferenceRow(
+  Map<String, Object?> candidate,
+  Map<String, Object?> kept,
+) {
+  final candidateAt = _readInstant(candidate['updated_at']);
+  final keptAt = _readInstant(kept['updated_at']);
+  if (candidateAt == null) return false;
+  if (keptAt == null) return true;
+  return candidateAt.isAfter(keptAt);
+}
+
+/// The instant [raw] names, or null when it names none.
+DateTime? _readInstant(Object? raw) {
+  if (raw is! String || raw.isEmpty) return null;
+  return DateTime.tryParse(raw)?.toUtc();
 }
 
 /// The derived entity id for one legacy row, or null when its identity columns

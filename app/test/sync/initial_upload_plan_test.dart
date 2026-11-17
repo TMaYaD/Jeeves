@@ -21,6 +21,23 @@ String Function() _minter() {
   return () => _id('minted/${++minted}');
 }
 
+/// One `user_preferences` row: the key is the same for both copies of a
+/// setting, so what tells the rows apart is the user id they sit under and
+/// the instant they were written.
+Map<String, Object?> _preferenceRow(
+  String label,
+  String userId,
+  String value,
+  String updatedAt,
+) =>
+    {
+      'id': _id(label),
+      'key': 'clarify_mode',
+      'value': value,
+      'updated_at': updatedAt,
+      'user_id': userId,
+    };
+
 /// A row source over a literal store, so the transform's inputs are visible in
 /// the test rather than assembled by a fixture.
 InitialUploadRowSource _rows(Map<String, List<Map<String, Object?>>> store) =>
@@ -555,6 +572,82 @@ void main() {
       // `PreferencesStore.set` does not write, and the reseed must.
       expect(entity.fields['key'], 'clarify_mode');
       expect(entity.fields['user_id'], _userId);
+      expect(entity.fields['updated_at'], '2026-07-01T07:00:00.000Z');
+    });
+
+    test('keeps the newer of two rows for one preference key', () async {
+      // The device kept one copy of the setting while signed out and the
+      // account brought another. The newer one is the setting.
+      final plan = await _plan({
+        'user_preferences': [
+          _preferenceRow(
+            'preference/local',
+            'local',
+            '"oneToOne"',
+            '2026-07-01T07:00:00.000Z',
+          ),
+          _preferenceRow(
+            'preference/account',
+            _userId,
+            '"askEachTime"',
+            '2026-07-02T07:00:00.000Z',
+          ),
+        ],
+      });
+      final entity = plan.entitiesFor(userPreferencesCollection).single;
+      expect(entity.fields['value'], '"askEachTime"');
+      expect(entity.fields['updated_at'], '2026-07-02T07:00:00.000Z');
+      // The collapse is still counted, and both rows are still named.
+      expect(
+        plan.anomalies.where((one) => one.kind == collapsedDuplicateRow),
+        hasLength(1),
+      );
+      expect(entity.legacyRowIds, hasLength(2));
+    });
+
+    test('keeps the newer of two rows for one preference key in any order',
+        () async {
+      final plan = await _plan({
+        'user_preferences': [
+          _preferenceRow(
+            'preference/account',
+            _userId,
+            '"askEachTime"',
+            '2026-07-02T07:00:00.000Z',
+          ),
+          _preferenceRow(
+            'preference/local',
+            'local',
+            '"oneToOne"',
+            '2026-07-01T07:00:00.000Z',
+          ),
+        ],
+      });
+      final entity = plan.entitiesFor(userPreferencesCollection).single;
+      expect(entity.fields['value'], '"askEachTime"');
+      expect(entity.fields['updated_at'], '2026-07-02T07:00:00.000Z');
+    });
+
+    test('keeps the first of two rows for one preference key with equal '
+        'timestamps', () async {
+      final plan = await _plan({
+        'user_preferences': [
+          _preferenceRow(
+            'preference/local',
+            'local',
+            '"oneToOne"',
+            '2026-07-01T07:00:00.000Z',
+          ),
+          _preferenceRow(
+            'preference/account',
+            _userId,
+            '"askEachTime"',
+            '2026-07-01T07:00:00.000Z',
+          ),
+        ],
+      });
+      final entity = plan.entitiesFor(userPreferencesCollection).single;
+      expect(entity.fields['value'], '"oneToOne"');
       expect(entity.fields['updated_at'], '2026-07-01T07:00:00.000Z');
     });
 
