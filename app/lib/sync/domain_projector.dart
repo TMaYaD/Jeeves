@@ -63,7 +63,18 @@ class DomainProjector {
     required this.registry,
     required this.domain,
     this.chunkEntityCount = projectionChunkEntityCount,
-  });
+  }) {
+    // [project] advances by this count: at zero it would open one empty
+    // transaction after another and never reach the second entity, and below
+    // zero it would ask for a range that does not exist.
+    if (chunkEntityCount < 1) {
+      throw ArgumentError.value(
+        chunkEntityCount,
+        'chunkEntityCount',
+        'must be at least 1',
+      );
+    }
+  }
 
   final CollectionRegistry registry;
   final GtdDatabase domain;
