@@ -420,7 +420,8 @@ enum _CaptureDecision {
 ///   lifecycle runs before it reaches [bind]. While [undecided] every emitted op
 ///   is buffered; [bind] drains the buffer in write order (authoring each, firing
 ///   [onOpAuthored] so the debounced flush is scheduled) before any live op; and
-///   [unbind] discards it. A write landing mid-drain is appended behind the
+///   [unbind] discards it, handing the host-clocked ops it will never author
+///   back to the sync host. A write landing mid-drain is appended behind the
 ///   pending tail, so authoring order always matches domain write order.
 ///
 /// It extends [BufferedDomainOpCapture] rather than reimplementing the buffer, so
@@ -449,6 +450,45 @@ class WorkspaceRoutingOpCapture extends BufferedDomainOpCapture {
   /// op is when [bind] drains it.
   void Function()? onOpAuthored;
 
+  /// Where the changes this bridge will never author are handed back, so the
+  /// sync host can take their clocks back under the device node id.
+  ///
+  /// A change the bridge drops leaves a clock in merge state that names a
+  /// member no op ever carried, and only the host can re-stamp it. Null until
+  /// the host is wired up, which is a bridge that reports nothing.
+  Future<void> Function(List<UnauthoredClock> unauthored)? onChangesLeftUnauthored;
+
+  /// The tail of the hand-back chain: every report made so far, in order.
+  Future<void> _handBackTail = Future<void>.value();
+
+  /// Completes once every op left unauthored so far has been reported.
+  Future<void> get unauthoredHandedBack => _handBackTail;
+
+  /// Report [ops] as changes this bridge will never author.
+  ///
+  /// Only the host-clocked ones: an op described straight through the seam
+  /// carries no clock, so there is nothing in merge state to take back.
+  ///
+  /// The reports are chained, so one sink call follows another in the order the
+  /// reports were made, and a sink that fails does not strand the ones behind
+  /// it.
+  Future<void> _leaveUnauthored(List<CapturedOp> ops) {
+    final sink = onChangesLeftUnauthored;
+    final clocks = <UnauthoredClock>[
+      for (final op in ops)
+        if (op.clock != null)
+          (collection: op.collection, entityId: op.entityId, clock: op.clock!),
+    ];
+    if (sink == null || clocks.isEmpty) return _handBackTail;
+    return _handBackTail = _handBackTail.then((_) async {
+      try {
+        await sink(clocks);
+      } on Object catch (error) {
+        debugPrint('op-log bridge: handing back unauthored clocks failed — $error');
+      }
+    });
+  }
+
   bool get isBound => _decision == _CaptureDecision.bound;
 
   /// Settle the decision to "author": record the clients, arm [onOpAuthored]
@@ -472,9 +512,15 @@ class WorkspaceRoutingOpCapture extends BufferedDomainOpCapture {
   /// or a call from [_CaptureDecision.undecided], is a no-op beyond clearing.
   /// A scope open across the transition still closes cleanly; its ops are
   /// dropped. A later [bind] authors only the writes made after it.
+  ///
+  /// The host-clocked ops it discards are handed back to the sync host, so
+  /// their clocks stop naming a member no op ever carried. The report is not
+  /// awaited: this stays synchronous, and [unauthoredHandedBack] is how a
+  /// caller waits for it.
   void unbind() {
     _gtdClient = null;
     _preferencesClient = null;
+    unawaited(_leaveUnauthored(List.of(_pending)));
     _pending.clear();
     _decision = _CaptureDecision.silent;
   }
@@ -517,6 +563,9 @@ class WorkspaceRoutingOpCapture extends BufferedDomainOpCapture {
     // whose clock does not name its author. It reaches the log through the
     // enrolment upload instead.
     if (hostClock != null && hostClock.memberIdHex != client.identity.memberIdHex) {
+      // The clock names a member this device cannot author for, so the change
+      // is handed back to the host rather than lost with the member it names.
+      await _leaveUnauthored([op]);
       return;
     }
     await client.capture(
@@ -556,6 +605,10 @@ class WorkspaceRoutingOpCapture extends BufferedDomainOpCapture {
       case _CaptureDecision.undecided:
         _pending.add(op);
       case _CaptureDecision.silent:
+        // The decision is settled and this op will never be authored, so its
+        // clock is handed back to the host rather than left naming a member
+        // no op carried.
+        await _leaveUnauthored([op]);
         return;
       case _CaptureDecision.bound:
         if (_draining) {

@@ -48,6 +48,11 @@ final FutureProvider<SyncHostService> syncHostProvider =
     domain: ref.read(databaseProvider),
     clock: ref.read(deviceClockProvider),
   )..localChangeListener = ref.read(domainOpCaptureProvider).onLocalChanges;
+  // A change the bridge will never author is handed back, so the host can take
+  // its clock back under the device node id. Wired before the start-up drain,
+  // because that drain can deliver a change the bridge will drop.
+  ref.read(domainOpCaptureProvider).onChangesLeftUnauthored =
+      host.restampUnauthoredClocksAsDevice;
   final capture = ref.read(hostedDomainOpCaptureProvider);
   ref.onDispose(capture.detach);
   await host.start();

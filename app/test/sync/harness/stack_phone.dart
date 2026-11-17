@@ -127,6 +127,9 @@ class StackPhone {
           ..localChangeListener = capture.onLocalChanges)
         : null;
     if (host != null) {
+      // A change the bridge will never author is handed back to the host, so
+      // its clock can be taken back under the device node id.
+      capture.onChangesLeftUnauthored = host.restampUnauthoredClocksAsDevice;
       await host.start();
       hostedCapture!.attach(host);
     }
@@ -336,6 +339,8 @@ class StackPhone {
     lifecycle = null;
     capture = WorkspaceRoutingOpCapture();
     host!.localChangeListener = capture.onLocalChanges;
+    // The fresh bridge reports to the same host the dead process left behind.
+    capture.onChangesLeftUnauthored = host!.restampUnauthoredClocksAsDevice;
     await host!.setEnrolledMember(memberIdHex);
   }
 

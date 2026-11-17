@@ -44,7 +44,8 @@ final syncLifecycleProvider = FutureProvider<SyncLifecycle?>((ref) async {
     final restorePending =
         ref.watch(authTokenProvider.select((token) => token.isLoading));
     if (restorePending) return null;
-    ref.watch(domainOpCaptureProvider).unbind();
+    final capture = ref.watch(domainOpCaptureProvider);
+    capture.unbind();
     // A lifecycle would also have settled the stored member id, and none exists
     // here. A process killed while signed in never ran `deactivate()`, so the
     // previous account's member id can still be on the row — and every write made
@@ -59,6 +60,10 @@ final syncLifecycleProvider = FutureProvider<SyncLifecycle?>((ref) async {
       // Not worth an error state: two status providers await this one.
       debugPrint('sync lifecycle: clearing the member id failed — $error');
     }
+    // The bridge reported the changes it will never author; wait for the host
+    // to take their clocks back, so a caller that reads the merge state after
+    // this sees them under the device node id.
+    await capture.unauthoredHandedBack;
     return null;
   }
 
