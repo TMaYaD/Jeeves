@@ -87,9 +87,19 @@ class DomainProjector {
   /// set interrupted between two chunks is completed by projecting it again;
   /// the groups the committed chunks changed are notified even then.
   ///
-  /// **An entity whose local change is still in the outbox is left alone**
-  /// ([_entitiesAwaitingMerge]).
-  Future<Set<String>> project(Iterable<AffectedEntity> affected) async {
+  /// **[leaveEntitiesAwaitingMerge] is for a re-projection of the whole store
+  /// and nothing else.** With it, an entity whose local change is still in the
+  /// outbox is not written ([_entitiesAwaitingMerge]): its domain row is ahead
+  /// of merge state, and the outbox drain projects it once that change has
+  /// merged. Every other caller projects each entity it names. A change a peer
+  /// made reaches the domain store through this call alone, and the convergence
+  /// passes run on the groups it returns — an entity held back here would be
+  /// written later by the drain, which runs no such pass, so an Outcome a peer
+  /// assigned to a second Project would keep both.
+  Future<Set<String>> project(
+    Iterable<AffectedEntity> affected, {
+    bool leaveEntitiesAwaitingMerge = false,
+  }) async {
     final touched = <String>{};
     final entities = affected.toList(growable: false);
     if (entities.isEmpty) return touched;
@@ -98,7 +108,10 @@ class DomainProjector {
         final end = start + chunkEntityCount > entities.length
             ? entities.length
             : start + chunkEntityCount;
-        touched.addAll(await _projectChunk(entities.sublist(start, end)));
+        touched.addAll(await _projectChunk(
+          entities.sublist(start, end),
+          leaveEntitiesAwaitingMerge: leaveEntitiesAwaitingMerge,
+        ));
       }
     } finally {
       notify(touched);
@@ -111,10 +124,15 @@ class DomainProjector {
   /// The projector materialises reduced state that is already on the op log, so
   /// it must author nothing — the one sanctioned un-captured domain transaction
   /// (GtdDatabase refuses a bare `transaction` outside a capturing zone).
-  Future<Set<String>> _projectChunk(List<AffectedEntity> chunk) =>
+  Future<Set<String>> _projectChunk(
+    List<AffectedEntity> chunk, {
+    required bool leaveEntitiesAwaitingMerge,
+  }) =>
       domain.uncapturedTransaction(() async {
         final touched = <String>{};
-        final awaitingMerge = await _entitiesAwaitingMerge();
+        final awaitingMerge = leaveEntitiesAwaitingMerge
+            ? await _entitiesAwaitingMerge()
+            : const <AffectedEntity>{};
         for (final entity in chunk) {
           final codec = collectionCodecs[entity.collection];
           // Reduction is collection-generic; projection is not. An op for a
@@ -133,10 +151,11 @@ class DomainProjector {
       });
 
   /// The entities with a local change committed to the outbox and not merged
-  /// yet. Their domain rows are **ahead** of merge state, so writing merge state
-  /// over them would take the user's edit off the screen until the sync host's
-  /// drain put it back. The drain projects every entity it merges, so skipping
-  /// one here loses nothing.
+  /// yet. Their domain rows are **ahead** of merge state, so a whole-store walk
+  /// that wrote merge state over them would take the user's edit off the screen
+  /// until the sync host's drain put it back — which, on the first launch after
+  /// an update, can be as far off as the host's own start. The drain projects
+  /// every entity it merges.
   ///
   /// Read inside the chunk's transaction, which makes it exact: an outbox row is
   /// written in the same transaction as the domain rows it describes and is
