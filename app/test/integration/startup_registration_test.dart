@@ -252,6 +252,11 @@ void main() {
 
     expect(versions.refusal, isA<StoreVersionTooNewError>());
 
+    // The widget test's own invariant check runs inside the test body, so
+    // the platform override has to be back where it was before the body
+    // ends. The startup above is the part that needed it.
+    debugDefaultTargetPlatformOverride = null;
+
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
