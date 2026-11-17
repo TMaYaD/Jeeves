@@ -81,19 +81,20 @@ void main() {
     expect(find.byKey(const Key('tag_chip_a03')), findsNothing);
     expect(find.byType(DottedAddButton), findsOneWidget);
 
-    // The + opens the organised cloud: applied tags pinned, capped at 12 with
-    // show-more, and a Find field.
+    // The + opens the organised cloud: applied tags pinned, every tag shown,
+    // and a Find field.
     await tester.tap(find.byType(DottedAddButton));
     await _pumpFor(tester);
-    final cloud = find.byKey(const Key('context_tag_picker_cloud'));
-    Finder chipInCloud(String id) =>
-        find.descendant(of: cloud, matching: find.byKey(Key('tag_chip_$id')));
+    final cloud =
+        find.byKey(const Key('context_tag_picker_cloud'), skipOffstage: false);
+    Finder chipInCloud(String id) => find.descendant(
+        of: cloud,
+        matching: find.byKey(Key('tag_chip_$id'), skipOffstage: false));
     expect(find.textContaining('✓ @a01'), findsOneWidget);
     expect(chipInCloud('a03'), findsOneWidget);
-    expect(chipInCloud('a12'), findsOneWidget);
-    expect(chipInCloud('a13'), findsNothing);
-    expect(find.byKey(const Key('tag_cloud_show_more')), findsOneWidget);
-    expect(find.text('Show 3 more'), findsOneWidget);
+    expect(chipInCloud('a13'), findsOneWidget);
+    expect(chipInCloud('a14'), findsOneWidget);
+    expect(find.byKey(const Key('tag_cloud_show_more')), findsNothing);
     expect(find.byKey(const Key('tag_cloud_find_field')), findsOneWidget);
 
     // Search ignores case and a leading @; a tag nobody uses is findable and

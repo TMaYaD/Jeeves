@@ -16,13 +16,11 @@ TagCloudLayout _organise(
   List<TagWithCount> tags, {
   Set<String> selected = const {},
   String query = '',
-  bool expanded = false,
 }) =>
     organiseTagCloud(
       tags: tags,
       selectedIds: selected,
       query: query,
-      expanded: expanded,
     );
 
 List<TagWithCount> _many(int n) =>
@@ -56,38 +54,21 @@ void main() {
       expect(_ids(layout), ['c', 'a']);
     });
 
-    test('collapsed view caps at 12 and counts the hidden remainder', () {
-      final layout = _organise(_many(20));
-      expect(layout.visibleTags, hasLength(12));
-      expect(layout.hiddenTagCount, 8);
-      expect(layout.offerFindField, isTrue);
+    test('every eligible tag is visible', () {
+      expect(_organise(_many(20)).visibleTags, hasLength(20));
+      expect(_organise(_many(60)).visibleTags, hasLength(60));
     });
 
-    test('expanded view shows every tag', () {
-      final layout = _organise(_many(20), expanded: true);
-      expect(layout.visibleTags, hasLength(20));
-      expect(layout.hiddenTagCount, 0);
+    test('offerFindField is false at twelve eligible tags, true at thirteen',
+        () {
+      expect(_organise(_many(12)).offerFindField, isFalse);
+      expect(_organise(_many(13)).offerFindField, isTrue);
     });
 
-    test('selected tags beyond the cap are all visible', () {
-      final tags = _many(20);
-      final selected = {for (final t in tags.take(15)) t.tag.id};
-      final layout = _organise(tags, selected: selected);
-      expect(layout.visibleTags, hasLength(15));
-      expect(layout.hiddenTagCount, 5);
-    });
-
-    test('no find field at or under the cap', () {
-      final layout = _organise(_many(12));
-      expect(layout.offerFindField, isFalse);
-      expect(layout.hiddenTagCount, 0);
-    });
-
-    test('query matches case-insensitively, ignores leading @, lifts cap', () {
+    test('query matches case-insensitively and ignores a leading @', () {
       final tags = [..._many(20), _twc('x', 'Errands', 1)];
       final layout = _organise(tags, query: '@errAND');
       expect(_ids(layout), ['x']);
-      expect(layout.hiddenTagCount, 0);
       expect(layout.offerFindField, isTrue);
     });
 
@@ -125,7 +106,6 @@ void main() {
         tags: [_twc('b', 'idle', 0), _twc('a', 'used', 1)],
         selectedIds: const {},
         query: '',
-        expanded: false,
         includeUnusedTags: true,
       );
       expect(_ids(layout), ['a', 'b']);
