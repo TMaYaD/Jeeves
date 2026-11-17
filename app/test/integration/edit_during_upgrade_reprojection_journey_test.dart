@@ -25,7 +25,8 @@ import 'package:drift_sqlite_async/drift_sqlite_async.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
-import 'package:sqlite_async/sqlite_async.dart' show SqliteDatabase;
+import 'package:sqlite_async/sqlite_async.dart'
+    show SqliteDatabase, SqliteReadContext;
 
 import 'package:jeeves/database/domain_store.dart';
 import 'package:jeeves/database/gtd_database.dart';
@@ -39,8 +40,8 @@ import 'package:jeeves/sync/sync_database.dart';
 
 import '../test_helpers.dart';
 
-/// Enough rows that the walk is many batches long, so "the edit landed while the
-/// walk was still going" does not depend on timing.
+/// Enough rows that the walk is several batches long: the edits are made once
+/// the first batches are in, and have to reach the writer before the last.
 const int _outcomeCount = 200;
 
 const String _editedOutcomeId = 'outcome-7';
@@ -71,6 +72,9 @@ class _Launch {
 
   GtdDatabase get db => container.read(databaseProvider);
 
+  /// The store file [db] is open over.
+  SqliteDatabase get store => _domainFile!;
+
   /// Shut both stores before the next launch opens the same files.
   Future<void> close() async {
     if (_closed) return;
@@ -83,27 +87,41 @@ class _Launch {
   }
 }
 
-Future<void> _until(
-  Future<bool> Function() condition, {
+/// Read the store from inside its writer queue until a reading satisfies
+/// [condition].
+///
+/// The walk takes the writer once per batch and the queue is first come, first
+/// served. So a reading asked for while a batch is being written is taken when
+/// that batch commits and before the next one starts, the walk cannot get two
+/// batches in between two readings, and nothing is written while a reading is
+/// being taken. A reading is therefore one consistent picture of how far the
+/// walk has got *and* what the user's edits have done — which a pair of polls
+/// from outside the queue is not, because the walk can finish between them on a
+/// machine that happens to be quick or busy.
+///
+/// [condition] reads through the connection it is handed, in plain SQL: the
+/// store refuses a DAO read made from inside its writer queue.
+Future<void> _untilBetweenWrites(
+  SqliteDatabase store,
+  Future<bool> Function(SqliteReadContext queued) condition, {
   required String what,
 }) async {
   final deadline = DateTime.now().add(const Duration(seconds: 30));
-  while (!await condition()) {
+  while (!await store.writeLock(condition)) {
     if (DateTime.now().isAfter(deadline)) {
       fail('timed out waiting until $what');
     }
-    await Future<void>.delayed(const Duration(milliseconds: 2));
   }
 }
 
 /// Rows of the read model the re-projection has not reached yet.
-Future<int> _rowsNotYetReprojected(GtdDatabase db) async {
-  final row = await db.customSelect(
+Future<int> _rowsNotYetReprojected(SqliteReadContext store) async {
+  final row = await store.get(
     'SELECT (SELECT count(*) FROM todos WHERE notes = ?) + '
     '(SELECT count(*) FROM actions WHERE text = ?) AS remaining',
-    variables: [Variable<String>(_drifted), Variable<String>(_drifted)],
-  ).getSingle();
-  return row.read<int>('remaining');
+    [_drifted, _drifted],
+  );
+  return row['remaining'] as int;
 }
 
 void main() {
@@ -207,10 +225,20 @@ void main() {
         upgraded.container.read(domainStoreRebuildProvider.future);
     final rowsToReproject = _outcomeCount * 2;
 
-    // The walk is under way: it has re-projected something.
-    await _until(
-      () async => await _rowsNotYetReprojected(db) < rowsToReproject,
-      what: 'the upgrade re-projection has started',
+    // The walk is part-way: it has re-projected some rows and has others still
+    // to go. A walk that writes the whole store in one transaction is never
+    // seen like this — it goes from nothing done to everything done.
+    await _untilBetweenWrites(
+      upgraded.store,
+      (queued) async {
+        final rowsToGo = await _rowsNotYetReprojected(queued);
+        if (rowsToGo == 0) {
+          fail('the re-projection finished without the store ever being seen '
+              'part-way: it kept the writer from its first row to its last');
+        }
+        return rowsToGo < rowsToReproject;
+      },
+      what: 'the upgrade re-projection is part-way through the store',
     );
 
     // The user opens an Outcome and changes every field the detail screen
@@ -257,31 +285,38 @@ void main() {
           reason: 'Action time context, $when');
     }
 
-    // Every edit is in the store...
-    await _until(
-      () async {
-        final todo = await db.todoDao.getTodo(_editedOutcomeId);
-        final current =
-            await db.actionDao.getCurrentAction(_outcomeWithEditedActionId);
-        return todo?.title == 'Edited title' &&
-            todo?.notes == 'Edited notes' &&
-            todo?.energyLevel == 'high' &&
-            todo?.timeEstimate == 45 &&
-            todo?.dueDate != null &&
-            current?.actionText == 'Edited action' &&
-            current?.timeContext == timeContext.encode();
+    // Every edit is in the store while the walk still has rows to go: both
+    // facts from the one reading that first finds the edits there.
+    late final int rowsToGoWhenEditsLanded;
+    await _untilBetweenWrites(
+      upgraded.store,
+      (queued) async {
+        final outcomeEdited = await queued.getOptional(
+          'SELECT 1 FROM todos WHERE id = ? AND title = ? AND notes = ? '
+          'AND energy_level = ? AND time_estimate = ? AND due_date IS NOT NULL',
+          [_editedOutcomeId, 'Edited title', 'Edited notes', 'high', 45],
+        );
+        final actionEdited = await queued.getOptional(
+          'SELECT 1 FROM actions WHERE outcome_id = ? AND text = ? '
+          'AND time_context = ?',
+          [_outcomeWithEditedActionId, 'Edited action', timeContext.encode()],
+        );
+        final landed = outcomeEdited != null && actionEdited != null;
+        if (landed) {
+          rowsToGoWhenEditsLanded = await _rowsNotYetReprojected(queued);
+        }
+        return landed;
       },
       what: 'every edit is in the store',
     );
-    // ...while the walk still has rows to go.
-    expect(await _rowsNotYetReprojected(db), greaterThan(0),
+    expect(rowsToGoWhenEditsLanded, greaterThan(0),
         reason: 'the edits must land while the re-projection is still walking '
             'the store, not after it has let go of the writer at the very end');
 
     expect(await Future.wait(edits), everyElement(isTrue));
     expect(await reprojection, greaterThanOrEqualTo(rowsToReproject));
     await host.drain();
-    expect(await _rowsNotYetReprojected(db), 0);
+    expect(await _rowsNotYetReprojected(upgraded.store), 0);
     await expectEdited(db, 'once the re-projection has finished');
     await upgraded.close();
 
