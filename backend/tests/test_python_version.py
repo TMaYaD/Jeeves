@@ -25,7 +25,7 @@ from packaging.version import Version
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 
-# `FROM python:3.14.7-slim@sha256:<64 hex>`.  The tag is everything up to the
+# `FROM python:3.15.2-slim@sha256:<64 hex>`.  The tag is everything up to the
 # digest; the version is the tag up to its first `-`, which drops the `-slim`
 # variant suffix and keeps a prerelease marker like `3.15.0rc1`.
 _FROM_PYTHON = re.compile(
@@ -67,7 +67,7 @@ def test_dockerfile_base_image_satisfies_requires_python() -> None:
 def test_test_run_interpreter_satisfies_requires_python() -> None:
     band = _requires_python()
     # Release level first, and separately. `sys.version_info[:3]` drops
-    # `releaselevel`, so 3.14.0rc1 would arrive below as a plain `3.14.0` and
+    # `releaselevel`, so 3.15.0rc1 would arrive below as a plain `3.15.0` and
     # sail through the band — the very hole this file exists to close, reopened
     # on the CI side instead of the image side. The band means supported stable
     # interpreters; a prerelease is never one, whatever its numbers say.

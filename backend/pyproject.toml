@@ -21,9 +21,10 @@ description = "Jeeves — FastAPI backend"
 # `pip install -e .` refuses an interpreter outside this band — a base-image
 # bump past the ceiling fails the build instead of shipping an untested
 # interpreter.  Dependabot walked the tag to 3.15.0rc1 and prod ran a release
-# candidate for three weeks precisely because nothing said no.  Widening this
-# to `<3.16` is how a Python minor upgrade is taken, deliberately, in one edit.
-requires-python = ">=3.14,<3.15"
+# candidate for three weeks precisely because nothing said no.  A Python minor
+# upgrade is taken by widening this band to the next minor and moving the
+# Dockerfile `FROM` with it, deliberately, in one edit.
+requires-python = ">=3.15,<3.16"
 
 dependencies = [
     "fastapi>=0.111.0",
