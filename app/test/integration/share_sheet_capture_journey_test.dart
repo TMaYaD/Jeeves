@@ -31,6 +31,11 @@ Future<void> _settle(WidgetTester tester) async {
 }
 
 void main() {
+  // The platform channel the drain asks about the documents directory is
+  // reached through the test binding's messenger, and the binding has to exist
+  // before the messenger is fetched.
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   setUpAll(configureSqliteForTests);
 
   late GtdDatabase db;
