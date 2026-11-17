@@ -4,16 +4,18 @@
 // It exists so the analyser can resolve the reader on every platform, and so a
 // web build compiles without pretending to carry an on-disk store. A browser
 // reaches this rather than silently reporting a version it never read.
-Future<({int? domainStoreVersion, int? syncStoreVersion})>
-    readStoreFileVersions() async {
+import 'store_file_probe.dart';
+
+Future<({StoreFileProbe domainStore, StoreFileProbe syncStore})>
+    readStoreFileProbes() async {
   throw UnsupportedError(
     'The local stores have no web implementation: the fleet is one Android '
     'phone. Run the app on the device.',
   );
 }
 
-Future<({int? domainStoreVersion, int? syncStoreVersion})>
-    readStoreFileVersionsIn(String directoryPath) async {
+Future<({StoreFileProbe domainStore, StoreFileProbe syncStore})>
+    readStoreFileProbesIn(String directoryPath) async {
   throw UnsupportedError(
     'The local stores have no web implementation: the fleet is one Android '
     'phone. Run the app on the device.',

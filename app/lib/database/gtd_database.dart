@@ -34,7 +34,7 @@ import 'daos/time_log_dao.dart';
 import 'daos/todo_dao.dart';
 import 'daos/user_preferences_dao.dart';
 import '../sync/domain_op_capture.dart';
-import 'store_version_error.dart';
+import 'store_refusal_error.dart';
 import 'tables.dart';
 
 export 'tables.dart';

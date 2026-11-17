@@ -25,13 +25,14 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/domain_store.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/database/store_schema.dart';
-import 'package:jeeves/database/store_version_error.dart';
+import 'package:jeeves/database/store_refusal_error.dart';
 import 'package:jeeves/main.dart';
 import 'package:jeeves/providers/build_version_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/sync_stack_provider.dart';
-import 'package:jeeves/screens/store_too_new/store_too_new_copy.dart';
-import 'package:jeeves/screens/store_too_new/store_too_new_screen.dart';
+import 'package:jeeves/screens/store_blocked/store_blocked_screen.dart';
+import 'package:jeeves/screens/store_blocked/store_too_new_copy.dart';
+import 'package:jeeves/screens/store_blocked/store_unreadable_copy.dart';
 import 'package:jeeves/sync/sync_database.dart';
 import 'package:jeeves/sync/sync_store.dart';
 import 'package:path/path.dart' as p;
@@ -175,8 +176,9 @@ void main() {
       () => readLocalStoreVersionsIn(directory.path),
     ))!;
     expect(versions.refusal, isNotNull);
-    expect(versions.refusal!.storeName, 'domain read model');
-    expect(versions.refusal!.storedVersion,
+    expect(versions.tooNew, isNotNull);
+    expect(versions.tooNew!.storeName, 'domain read model');
+    expect(versions.tooNew!.storedVersion,
         GtdDatabase.supportedSchemaVersion + 1);
 
     // **Neither store is opened.** The op log is refused too: a build that
@@ -209,10 +211,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.byType(StoreTooNewScreen), findsOneWidget);
-    expect(find.text(storeTooNewTitle), findsOneWidget);
-    expect(find.text(storeTooNewExplanation), findsOneWidget);
-    expect(find.text(storeTooNewAdvice), findsOneWidget);
+    expect(find.byType(StoreBlockedScreen), findsOneWidget);
+    expect(find.text(storeTooNewCopy.title), findsOneWidget);
+    expect(find.text(storeTooNewCopy.explanation), findsOneWidget);
+    expect(find.text(storeTooNewCopy.advice), findsOneWidget);
     expect(find.text('Running version: $_versionLabel'), findsOneWidget);
 
     // **Nothing on the screen can throw the data away.**
@@ -248,8 +250,9 @@ void main() {
     // is too new.
     final versions = await readLocalStoreVersionsIn(directory.path);
     expect(versions.refusal, isNotNull);
-    expect(versions.refusal!.storeName, 'op log');
-    expect(versions.refusal!.storedVersion,
+    expect(versions.tooNew, isNotNull);
+    expect(versions.tooNew!.storeName, 'op log');
+    expect(versions.tooNew!.storedVersion,
         SyncDatabase.supportedSchemaVersion + 1);
 
     // **The read model this build could read is not opened either.** A build
@@ -276,6 +279,81 @@ void main() {
     expect(_userVersionOf(domainFile), GtdDatabase.supportedSchemaVersion);
     expect(_rowsOf(domainFile, 'todos'), hasLength(1));
     expect(_rowsOf(domainFile, 'todos').first['title'], 'Ring Alice back');
+  });
+
+  testWidgets(
+      'a store this build cannot read stops the app, and leaves the other '
+      'store alone', (tester) async {
+    await tester.runAsync(() async {
+      await seedStores(directory.path);
+    });
+    final domainFile = p.join(directory.path, domainStoreFileName);
+    final syncFile = p.join(directory.path, syncStoreFileName);
+    final domainBefore = File(domainFile).readAsBytesSync();
+
+    // **The op log is held under an exclusive SQLite lock.** The file is
+    // there, and this build cannot get to the version inside it — which says
+    // nothing about the schema it carries: it may be a store a newer build
+    // wrote, and this build would not know.
+    final locked = sqlite3.open(syncFile);
+    locked.execute('BEGIN EXCLUSIVE');
+    addTearDown(() {
+      locked.execute('ROLLBACK');
+      locked.close();
+    });
+
+    // **The check is inconclusive, and an inconclusive check refuses.**
+    final versions = (await tester.runAsync(
+      () => readLocalStoreVersionsIn(directory.path),
+    ))!;
+    expect(versions.unreadable, isNotNull);
+    expect(versions.unreadable!.storeName, 'op log');
+    expect(versions.refusal, isNotNull);
+
+    // **Neither store is opened.** The read model this build could have read
+    // is not opened either.
+    await tester.runAsync(() async {
+      final container = ProviderContainer(overrides: [
+        localStoreVersionsProvider.overrideWith((ref) async => versions),
+      ]);
+      addTearDown(container.dispose);
+      await expectLater(
+        container.read(domainStoreProvider.future),
+        throwsA(isA<StoreVersionUnreadableError>()),
+        reason: 'the read model is not opened',
+      );
+      await expectLater(
+        container.read(syncDatabaseProvider.future),
+        throwsA(isA<StoreVersionUnreadableError>()),
+        reason: 'the op log is not opened either',
+      );
+    });
+
+    // **The app says what happened** — and it does not claim the data belongs
+    // to a newer Jeeves, because nothing here knows that.
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          buildVersionLabelProvider.overrideWith((ref) async => _versionLabel),
+        ],
+        child: JeevesApp(storeVersions: versions),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byType(StoreBlockedScreen), findsOneWidget);
+    expect(find.text(storeUnreadableCopy.title), findsOneWidget);
+    expect(find.text(storeUnreadableCopy.explanation), findsOneWidget);
+    expect(find.text(storeTooNewCopy.title), findsNothing,
+        reason: 'nothing here knows the data belongs to a newer Jeeves');
+
+    // **The store that could be read is exactly as it was.**
+    await tester.runAsync(() async {
+      expect(File(domainFile).readAsBytesSync(), domainBefore,
+          reason: 'the read model is not touched by a refusal');
+      expect(_userVersionOf(domainFile), GtdDatabase.supportedSchemaVersion);
+      expect(_rowsOf(domainFile, 'todos'), hasLength(1));
+      expect(_rowsOf(domainFile, 'todos').first['title'], 'Ring Alice back');
+    });
   });
 
   // A plain test, not a widget test: this one is nothing but file work, and

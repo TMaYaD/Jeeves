@@ -14,7 +14,7 @@ library;
 
 import 'package:drift/drift.dart';
 
-import '../database/store_version_error.dart';
+import '../database/store_refusal_error.dart';
 
 part 'sync_database.g.dart';
 

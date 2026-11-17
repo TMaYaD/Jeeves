@@ -1,23 +1,31 @@
-/// The screen a build shows when the local data on the device was written by a
-/// newer build of Jeeves.
+/// The screen a build shows when it cannot open the local data on the device.
+///
+/// It stands in for the app in two cases: the data was written by a newer
+/// build of Jeeves, and the data could not be read at all. The words differ
+/// — `store_too_new_copy.dart` and `store_unreadable_copy.dart` — and the
+/// screen is the same, because the promise it makes is the same.
 ///
 /// **It offers no action at all.** There is no button that
-/// deletes the store, resets it or starts fresh: the data is intact and
-/// belongs to a newer Jeeves, and the only thing that can read it is that
-/// newer Jeeves. A control that offered to throw the data away would be the
-/// one thing on this screen that could destroy it.
+/// deletes the store, resets it or starts fresh: the data is intact, and
+/// whether it belongs to a newer Jeeves or simply could not be read, the
+/// only thing that can read it is a build that understands it. A control that
+/// offered to throw the data away would be the one thing on this screen that
+/// could destroy it.
 ///
-/// The words are `store_too_new_copy.dart`'s.
+/// The words are the copy file's.
 library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers/build_version_provider.dart';
-import 'store_too_new_copy.dart';
+import 'store_blocked_copy.dart';
 
-class StoreTooNewScreen extends ConsumerWidget {
-  const StoreTooNewScreen({super.key});
+class StoreBlockedScreen extends ConsumerWidget {
+  const StoreBlockedScreen({super.key, required this.copy});
+
+  /// The words this screen says, and why it is here.
+  final StoreBlockedCopy copy;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -35,16 +43,16 @@ class StoreTooNewScreen extends ConsumerWidget {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(storeTooNewTitle, style: theme.textTheme.headlineSmall),
+                  Text(copy.title, style: theme.textTheme.headlineSmall),
                   const SizedBox(height: 16),
-                  Text(storeTooNewExplanation,
+                  Text(copy.explanation,
                       style: theme.textTheme.bodyMedium),
                   const SizedBox(height: 12),
-                  Text(storeTooNewAdvice, style: theme.textTheme.bodyMedium),
+                  Text(copy.advice, style: theme.textTheme.bodyMedium),
                   const SizedBox(height: 24),
                   buildVersion.when(
                     data: (label) => Text(
-                      '$storeTooNewRunningVersionLabel$label',
+                      '$storeBlockedRunningVersionLabel$label',
                       style: theme.textTheme.bodySmall
                           ?.copyWith(color: const Color(0xFF6B7280)),
                     ),

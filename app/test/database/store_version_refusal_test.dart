@@ -21,7 +21,7 @@ import 'package:drift_sqlite_async/drift_sqlite_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/domain_store.dart';
 import 'package:jeeves/database/gtd_database.dart';
-import 'package:jeeves/database/store_version_error.dart';
+import 'package:jeeves/database/store_refusal_error.dart';
 import 'package:jeeves/sync/sync_database.dart';
 import 'package:jeeves/sync/sync_store.dart';
 import 'package:path/path.dart' as p;
