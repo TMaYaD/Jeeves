@@ -272,17 +272,21 @@ class _SummaryCard extends StatelessWidget {
                 size: 20,
               ),
               const SizedBox(width: 8),
-              Text(
-                result.failedRecords.isEmpty
-                    ? 'Import complete'
-                    : 'Import finished with ${result.failedRecords.length} '
-                        'record${result.failedRecords.length == 1 ? '' : 's'} '
-                        'left out',
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  color: result.failedRecords.isEmpty
-                      ? const Color(0xFF15803D)
-                      : const Color(0xFFB45309),
+              // Flexible, so a long heading wraps on a narrow screen instead
+              // of overflowing it.
+              Flexible(
+                child: Text(
+                  result.failedRecords.isEmpty
+                      ? 'Import complete'
+                      : 'Import finished with ${result.failedRecords.length} '
+                          'record${result.failedRecords.length == 1 ? '' : 's'} '
+                          'left out',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: result.failedRecords.isEmpty
+                        ? const Color(0xFF15803D)
+                        : const Color(0xFFB45309),
+                  ),
                 ),
               ),
             ],

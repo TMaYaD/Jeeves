@@ -14,6 +14,8 @@ import 'package:jeeves/providers/import_provider.dart';
 import 'package:jeeves/services/export_service.dart';
 import 'package:jeeves/sync/domain_op_capture.dart'
     show NoopDomainOpCapture, RecordingDomainOpCapture;
+import 'package:jeeves/sync/hlc.dart';
+import 'package:jeeves/sync/host/hosted_capture.dart';
 
 import '../test_helpers.dart';
 
@@ -1035,6 +1037,95 @@ void main() {
       expect(todos.map((t) => t.id).toSet(), hasLength(400),
           reason: 'a re-run duplicated a row');
       expect(await db.select(db.todoTags).get(), hasLength(400));
+    });
+  });
+
+  // The rows and the changes that describe them commit together, so a change
+  // the log will not take takes its rows with it. The import has to notice
+  // that the row is gone: counting a record whose change never committed
+  // reports a record this device did not keep.
+  group('a capture that will not stage the log\'s changes', () {
+    late GtdDatabase db;
+
+    setUp(() async {
+      // The production capture over a real store. Nothing is faked: the
+      // outbox refuses one record's change, and the refusal happens where it
+      // happens in production — inside the transaction, before the commit.
+      final clock = HlcClock(memberIdHex: '0' * 32, nowMs: () => 1700000000000);
+      db = GtdDatabase(
+        NativeDatabase.memory(),
+        opCapture: HostedDomainOpCapture(clock: clock),
+      );
+      await db.customStatement(
+        "CREATE TRIGGER refuse_one_change BEFORE INSERT ON pending_changes "
+        "WHEN NEW.change_json LIKE '%\"entity_id\":\"todo-bad\"%' "
+        "BEGIN SELECT RAISE(ABORT, 'the outbox refused this change'); END",
+      );
+    });
+
+    tearDown(() async => db.close());
+
+    test('the batch is taken back, the records are retaken one at a time, '
+        'and the count is true', () async {
+      final content = jsonEncode({
+        jeevesExportEnvelopeKey: jeevesExportVersion,
+        jeevesExportCollectionsKey: {
+          'todos': [
+            {
+              'id': 'todo-good',
+              'title': 'Keep me',
+              'created_at': '2026-07-28T05:00:00.000Z',
+              'user_id': _userId,
+              'intent': 'next',
+            },
+            {
+              'id': 'todo-bad',
+              'title': 'The outbox will not take this one',
+              'created_at': '2026-07-28T05:00:00.000Z',
+              'user_id': _userId,
+              'intent': 'next',
+            },
+          ],
+        },
+      });
+
+      final result = await importJeevesExport(
+        content: content,
+        userId: _userId,
+        db: db,
+      );
+
+      // The sibling landed. The batch could not be staged whole, so it was
+      // taken back and the records retaken one at a time — and one bad record
+      // did not take the other down with it.
+      final todos = await db.select(db.todos).get();
+      expect(todos.map((t) => t.id), ['todo-good']);
+
+      // The record the outbox refused is not here: its change could not be
+      // staged, so the row went with it.
+      expect(todos.map((t) => t.id), isNot(contains('todo-bad')));
+
+      // And the count says what the store holds: one record imported, not
+      // two. The count is taken after the scope commits, so a record that
+      // rolled back is never counted.
+      expect(result.importedCount, 1);
+      expect(result.skippedCount, 0);
+
+      // It is named, so the user knows it is missing.
+      expect(result.failedRecords, hasLength(1));
+      expect(result.failedRecords.single.record, 'todos/todo-bad');
+      expect(result.failedRecords.single.reason, contains('refused'),
+          reason: 'the reason must say what the store refused');
+
+      // And the log asserts only the row this device kept: the batch's
+      // change for the sibling was rolled back with the batch and staged
+      // again by the retry, so it is there exactly once.
+      final staged = await db
+          .customSelect('SELECT change_json FROM pending_changes')
+          .get();
+      expect(staged, hasLength(1));
+      expect(staged.single.read<String>('change_json'),
+          contains('"entity_id":"todo-good"'));
     });
   });
 }

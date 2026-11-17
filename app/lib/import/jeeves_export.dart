@@ -416,11 +416,12 @@ enum _RecordOutcome {
 ///
 /// **A batch that fails is retaken one record at a time.** The batch is the
 /// transaction, so a failure anywhere in it takes the whole thing down — and
-/// the failure that matters is not always the record's own: an op that cannot
-/// be described on the log takes its batch with it, after the rows have
-/// committed. Retaking the batch record by record means the records that are
-/// fine still arrive, and the one that is not is named rather than taking the
-/// rest of the file down with it.
+/// the failure that matters is not always the record's own: a change that
+/// cannot be staged on the log takes its batch with it, rows and all, because
+/// the rows and the changes that describe them commit together. Retaking the
+/// batch record by record means the records that are fine still arrive, and
+/// the one that is not is named rather than taking the rest of the file down
+/// with it.
 Future<({int importedOutcomes, int skipped})> _takeBatch(
   GtdDatabase db,
   List<_PendingRow> batch,
@@ -442,11 +443,18 @@ Future<({int importedOutcomes, int skipped})> _takeBatch(
   }
 
   try {
+    final outcomes = <_RecordOutcome>[];
     await db.capturing(() async {
       for (final row in batch) {
-        count(row, await _takeRecord(db, row, userId, attemptFailures));
+        outcomes.add(await _takeRecord(db, row, userId, attemptFailures));
       }
     });
+    // Counted here, and not before: the scope has committed, so the rows it
+    // wrote are in the store. A scope that fails takes its rows with it, and
+    // a record this device did not keep is never counted.
+    for (var i = 0; i < outcomes.length; i++) {
+      count(batch[i], outcomes[i]);
+    }
     failures.addAll(attemptFailures);
     return (importedOutcomes: importedOutcomes, skipped: skipped);
   } catch (_) {
@@ -454,14 +462,18 @@ Future<({int importedOutcomes, int skipped})> _takeBatch(
     importedOutcomes = 0;
     skipped = 0;
     for (final row in batch) {
+      var outcome = _RecordOutcome.failed;
       try {
         await db.capturing(() async {
-          count(row, await _takeRecord(db, row, userId, failures));
+          outcome = await _takeRecord(db, row, userId, failures);
         });
+        // The scope committed: the row is in the store, so it counts.
+        count(row, outcome);
       } catch (error) {
-        // The record's row committed and its op could not be described on the
-        // log. Name it: the row is here, but it is not on the log, and only
-        // the user can decide what to do about that.
+        // The scope did not commit: either the row rolled back with it, or
+        // its change could not be described on the log. Either way the record
+        // is not among the imported, so it does not count. Name it, so the
+        // user knows it is missing.
         failures.add(ImportFailure(
           record: _recordName(row),
           reason: _describeFailure(error),
