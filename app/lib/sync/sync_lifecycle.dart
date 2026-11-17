@@ -78,7 +78,6 @@ import 'initial_upload_plan.dart';
 import 'reducer.dart';
 import 'signal_listener.dart';
 import 'signed_out_upload.dart';
-import 'collection_codecs.dart' show userPreferencesCollection;
 import 'sync_client.dart';
 import 'sync_database.dart';
 import 'sync_stack.dart';
@@ -443,6 +442,7 @@ class SyncLifecycle {
     if (marker != null) {
       await _uploadSignedOutChanges(
         gtdClient: gtdClient,
+        preferencesClient: preferencesClient,
         completedAtUtcMs: marker.completedAtUtcMs,
       );
       return;
@@ -473,10 +473,17 @@ class SyncLifecycle {
   }
 
   /// What the device wrote while nobody was signed in, after this account's
-  /// initial upload. Preferences are left out: a signed-out preference lives under
-  /// the local profile and is not what the account shows after sign-in.
+  /// initial upload.
+  ///
+  /// A preference is uploaded only when it is the account's own: its key derives
+  /// to the entity id the account's preferences Workspace holds. A setting
+  /// carried into the account at sign-in is the account's own, and reaches the
+  /// account's other devices; a row stored under the signed-out `'local'` id
+  /// names an entity that Workspace does not hold, and stays off the log.
+  /// Every other collection goes to the default Workspace, as it always has.
   Future<void> _uploadSignedOutChanges({
     required SyncClient gtdClient,
+    required SyncClient preferencesClient,
     required int completedAtUtcMs,
   }) async {
     final host = _host;
@@ -484,10 +491,10 @@ class SyncLifecycle {
     final report = await runSignedOutUpload(
       readChanges: () => host.visibleChangesStampedByDeviceAfter(
         completedAtUtcMs,
-        excludedCollections: {userPreferencesCollection},
       ),
       mintClock: host.clockForMember(_stack.identity.memberIdHex).send,
       gtdClient: gtdClient,
+      preferencesClient: preferencesClient,
       userId: _stack.userId,
     );
     if (report.authoredOpCount > 0) _scheduleOutboxFlush();
