@@ -229,6 +229,40 @@ void main() {
     expect(ids, {morning, afternoon});
   });
 
+  test('a session sheet edited by hand is not applied, and is written back',
+      () async {
+    final a = await _open('a', root);
+    await a.device.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'Plan', userId: _userId);
+    final session = await a.device.domain.focusSessionDao.openSession(
+      userId: _userId,
+      taskIds: [_outcomeId],
+      now: DateTime.utc(2026, 11, 17, 9),
+    );
+    await a.device.domain.focusSessionDao
+        .closeSession(sessionId: session, now: DateTime.utc(2026, 11, 17, 10));
+    await a.device.host!.deliverAll();
+    await a.plugin.rescan();
+
+    final sheets = await a.folder.listMarkdownFiles('Sessions');
+    expect(sheets, hasLength(1));
+    final path = sheets.single;
+    final original = (await a.folder.read(path))!;
+
+    // A sheet is read only: a hand edit to it is not applied, and the next
+    // write puts the sheet back as it was.
+    final edited = original.replaceFirst(
+        RegExp(r'^started: .*$', multiLine: true), 'started: 2026-11-17T11:00:00.000Z');
+    expect(edited, isNot(original),
+        reason: 'the sheet carries the time the session started');
+    await a.folder.writeAtomically(path, edited);
+    a.device.wall.advance(5000);
+    await a.plugin.rescan();
+
+    expect(await a.folder.read(path), original,
+        reason: 'the hand edit is not applied, and the sheet is written back');
+  });
+
   test('a Label typed into a page becomes a Tag and a link', () async {
     final a = await _open('a', root);
     await a.device.domain.todoDao
@@ -334,8 +368,58 @@ void main() {
     expect(await a.outcomePage(), contains('- [ ] second\n- [ ] first'));
   });
 
-  test("a Capture's clarification typed by hand reaches the app", () async {
+  test('a line that is retitled and moved is one Action removed and one added',
+      () async {
     final a = await _open('a', root);
+    await a.device.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'Plan', userId: _userId);
+    await a.device.domain.actionDao.addPlannedAction(
+      _outcomeId,
+      'first',
+      now: DateTime.utc(2026, 11, 17, 8),
+    );
+    await a.device.domain.actionDao.addPlannedAction(
+      _outcomeId,
+      'second',
+      now: DateTime.utc(2026, 11, 17, 8),
+    );
+    await a.device.host!.deliverAll();
+    await a.plugin.rescan();
+
+    final path = await a.outcomePath();
+    final page = await a.outcomePage();
+    expect(page, contains('- [ ] first\n- [ ] second'));
+    final before = await a.device.domain.customSelect(
+      'SELECT id, text FROM actions WHERE outcome_id = ? ORDER BY position',
+      variables: [Variable<String>(_outcomeId)],
+    ).get();
+    final firstId = before
+        .firstWhere((row) => row.read<String>('text') == 'first')
+        .read<String>('id');
+
+    // "first" is retitled and moved below "second". A line that is both is one
+    // Action removed and one added: the text no longer names the Action, and
+    // the line no longer sits where it was.
+    await a.folder.writeAtomically(
+      path,
+      page.replaceFirst(
+          '- [ ] first\n- [ ] second', '- [ ] second\n- [ ] FIRST'),
+    );
+    a.device.wall.advance(5000);
+    await a.plugin.rescan();
+
+    final after = await a.device.domain.customSelect(
+      'SELECT id, text FROM actions WHERE outcome_id = ? ORDER BY position',
+      variables: [Variable<String>(_outcomeId)],
+    ).get();
+    expect(after.map((row) => row.read<String>('text')).toList(),
+        ['second', 'FIRST']);
+    expect(after.map((row) => row.read<String>('id')), isNot(contains(firstId)),
+        reason: 'the Action that was there is removed');
+    expect(after.map((row) => row.read<String>('id')).toSet(), hasLength(2));
+  });
+
+  test("a Capture's clarification typed by hand reaches the app", () async {    final a = await _open('a', root);
     await a.device.domain.captureDao.insertCapture(
       CapturesCompanion(
         id: const Value('capture-1'),
@@ -365,6 +449,44 @@ void main() {
     expect(capture?.clarifiedAt, DateTime.utc(2026, 11, 17, 9));
     expect(await a.folder.read(path),
         contains('clarified_at: 2026-11-17T09:00:00.000Z'));
+  });
+
+  test("a Capture's body edited by hand is not read back, and is written back",
+      () async {
+    final a = await _open('a', root);
+    await a.device.domain.captureDao.insertCapture(
+      CapturesCompanion(
+        id: const Value('capture-1'),
+        title: const Value('An idea'),
+        notes: const Value('the body'),
+        captureSource: const Value('manual'),
+        createdAt: Value(DateTime.utc(2026, 11, 17, 8)),
+        updatedAt: Value(DateTime.utc(2026, 11, 17, 8)),
+        userId: const Value(_userId),
+      ),
+    );
+    await a.device.host!.deliverAll();
+    await a.plugin.rescan();
+
+    final pages = await a.folder.listMarkdownFiles('Inbox');
+    expect(pages, hasLength(1));
+    final path = pages.single;
+    final original = (await a.folder.read(path))!;
+    expect(original, contains('the body'));
+
+    // The body of a Capture is written once and never read back: a hand edit
+    // to it is not what the Capture says, and the page is written as it was.
+    final edited = original.replaceFirst('the body', 'a body written by hand');
+    expect(edited, isNot(original));
+    await a.folder.writeAtomically(path, edited);
+    a.device.wall.advance(5000);
+    await a.plugin.rescan();
+
+    final capture = await a.device.domain.captureDao.getCapture('capture-1');
+    expect(capture?.notes, 'the body',
+        reason: 'the body is not read back');
+    expect(await a.folder.read(path), original,
+        reason: 'the page is written back as it was');
   });
 
   test('a page whose block was deleted still shows the hand edit', () async {
