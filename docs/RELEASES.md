@@ -71,6 +71,14 @@ This is acceptable at single-contributor scale. Switch to a release branch (`rel
 
 **A build that meets a store it cannot read refuses it.** Each local store file carries its schema version, and a build whose own version is lower opens neither store and changes nothing in either; it says the data was last used by a newer Jeeves, and that nothing was changed or deleted. Putting the newer build back on the device opens the data again with every row intact — as long as it was never uninstalled.
 
+**When a release is a show-stopper: export first, then fix forward.**
+
+1. **Export the data first**, on the build that still has it: Settings → tap the Jeeves nameplate seven times → Developer options → Export data. An uninstall takes the only copy with it, and nothing puts it back.
+2. **Fix forward rather than back.** A build that carries the fix opens the data in place, with every row. An older build can only be installed by uninstalling the newer one, so going back is a data-loss event by construction, whatever the older build would have done with the stores.
+3. **If an older build was installed anyway**, it starts empty, and the export is the way back: import it, and read what the import says — an import that cannot place part of a file says so rather than dropping it.
+
+**A revert carries the migration with it.** A revert that lowers a store's schema version, or drops a migration step, ships a build that meets a store at the higher version. Nothing is dropped on the spot, but the older build writes its own lower version into the file, re-projects the store, and the next launch can fail on a migration step that has already run. Keep the schema version and the migration steps in the revert, and ship the build that refuses a store it cannot read: the store then stays at the version it was left at, and the reverted build opens it.
+
 ## What this means for the workflow
 
 - `.github/workflows/cd-app.yml` is the source of truth. The `version` job computes `version` and `pubspec_version`; downstream build/publish jobs stamp those into `pubspec.yaml` and produce APK/AAB/web artifacts.
