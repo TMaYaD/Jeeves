@@ -48,6 +48,8 @@ Future<TimeboxedGateChoice?> showTimeboxedSprintGate(
   required TimeboxedLimitStatus status,
   required DateTime now,
 }) {
+  if (_gateSheetOpen) return Future.value(null);
+  _gateSheetOpen = true;
   return showModalBottomSheet<TimeboxedGateChoice>(
     context: context,
     isScrollControlled: true,
@@ -57,8 +59,16 @@ Future<TimeboxedGateChoice?> showTimeboxedSprintGate(
     ),
     builder: (_) =>
         _TimeboxedGateSheet(actionText: actionText, status: status, now: now),
-  );
+  ).whenComplete(() {
+    _gateSheetOpen = false;
+  });
 }
+
+/// Whether a gate sheet is already up.
+///
+/// Two quick taps on Start would otherwise open two sheets, and the second
+/// one's answer would start the Sprint behind the first.
+bool _gateSheetOpen = false;
 
 /// Runs [start], unless the Outcome's current Action is Timeboxed and its
 /// limit has already been passed — in which case Jeeves advises first and the
@@ -83,7 +93,7 @@ Future<void> guardSprintPastLimit(
     await start();
     return;
   }
-  final now = DateTime.now().toUtc();
+  var now = DateTime.now().toUtc();
   if (!initial.hasPassedAt(now)) {
     await start();
     return;
@@ -107,6 +117,10 @@ Future<void> guardSprintPastLimit(
     if (!context.mounted) return;
     final saved = await _raiseTheEstimate(context, ref, outcomeId: outcomeId);
     if (!context.mounted) return;
+    // The clock is read again: the estimate sheet was open for a while, and
+    // the limit may have passed while it was. The figures the sheet shows are
+    // counted from the same instant.
+    now = DateTime.now().toUtc();
     if (saved) {
       // A raised estimate moves the limit with it. If the limit is no longer
       // passed, the Sprint starts after all; if it is still passed, the gate
