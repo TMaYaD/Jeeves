@@ -268,7 +268,8 @@ void main() {
 
       expect(_userVersionOf(file), SyncDatabase.supportedSchemaVersion + 1);
       expect(_rowsOf(file, 'reduced_fields'), hasLength(1));
-      expect(_rowsOf(file, 'reduced_fields').first['valueJson'],
+      // The raw row carries the column's SQLite name, not its Dart name.
+      expect(_rowsOf(file, 'reduced_fields').first['value_json'],
           '"Ring Alice back"');
       expect(_rowsOf(file, 'future_only'), hasLength(1));
     });

@@ -6,13 +6,20 @@
 ///   - by the startup gate, which reads both store files before anything opens
 ///     them.
 ///
+/// **It is an [Error] on purpose.** A refusal is final: a store written by a
+/// newer build does not become readable by waiting. Riverpod retries a
+/// provider that failed with an `Exception`, so the refusal would reach its
+/// caller tens of seconds late, and inside a widget test — where the retry
+/// timer is fake — it would never arrive at all. Riverpod does not retry a
+/// failure that is an `Error`, which is what a refusal is.
+///
 /// Its own file so the store classes can throw it without importing the module
 /// that reads the files: that module needs the store classes' schema versions,
 /// and an import cycle between them would leave the rule in neither.
 library;
 
-class StoreVersionTooNewError implements Exception {
-  const StoreVersionTooNewError({
+class StoreVersionTooNewError extends Error {
+  StoreVersionTooNewError({
     required this.storeName,
     required this.storedVersion,
     required this.supportedVersion,

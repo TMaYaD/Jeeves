@@ -158,14 +158,22 @@ void main() {
   testWidgets(
       'a build that meets a newer build\'s data refuses it, changes nothing '
       'and says so', (tester) async {
-    await seedStores(directory.path);
-    await relabelDomainStoreAsANewerBuild(directory.path);
+    // **The store work runs in a real-async turn.** A file-backed store is
+    // opened through an isolate, and an isolate never answers inside the fake
+    // clock a widget test runs on: the wait would never end, and no timeout
+    // would fire (docs/TESTING.md).
+    await tester.runAsync(() async {
+      await seedStores(directory.path);
+      await relabelDomainStoreAsANewerBuild(directory.path);
+    });
     final domainFile = p.join(directory.path, domainStoreFileName);
     final syncFile = p.join(directory.path, syncStoreFileName);
     final marker = File(p.join(directory.path, domainRebuildMarkerFileName));
 
     // **The gate reads the two files before anything opens them.**
-    final versions = await readLocalStoreVersionsIn(directory.path);
+    final versions = (await tester.runAsync(
+      () => readLocalStoreVersionsIn(directory.path),
+    ))!;
     expect(versions.refusal, isNotNull);
     expect(versions.refusal!.storeName, 'domain read model');
     expect(versions.refusal!.storedVersion,
@@ -173,20 +181,22 @@ void main() {
 
     // **Neither store is opened.** The op log is refused too: a build that
     // cannot read the read model would project reduced state into it.
-    final container = ProviderContainer(overrides: [
-      localStoreVersionsProvider.overrideWith((ref) async => versions),
-    ]);
-    addTearDown(container.dispose);
-    await expectLater(
-      container.read(domainStoreProvider.future),
-      throwsA(isA<StoreVersionTooNewError>()),
-      reason: 'the read model is not opened',
-    );
-    await expectLater(
-      container.read(syncDatabaseProvider.future),
-      throwsA(isA<StoreVersionTooNewError>()),
-      reason: 'the op log is not opened either',
-    );
+    await tester.runAsync(() async {
+      final container = ProviderContainer(overrides: [
+        localStoreVersionsProvider.overrideWith((ref) async => versions),
+      ]);
+      addTearDown(container.dispose);
+      await expectLater(
+        container.read(domainStoreProvider.future),
+        throwsA(isA<StoreVersionTooNewError>()),
+        reason: 'the read model is not opened',
+      );
+      await expectLater(
+        container.read(syncDatabaseProvider.future),
+        throwsA(isA<StoreVersionTooNewError>()),
+        reason: 'the op log is not opened either',
+      );
+    });
 
     // **The app says what happened.**
     await tester.pumpWidget(
@@ -213,15 +223,18 @@ void main() {
     expect(find.byType(IconButton), findsNothing);
 
     // **Both files are exactly as the newer build left them.**
-    expect(_userVersionOf(domainFile), GtdDatabase.supportedSchemaVersion + 1);
-    expect(_rowsOf(domainFile, 'todos'), hasLength(1));
-    expect(_rowsOf(domainFile, 'todos').first['title'], 'Ring Alice back');
-    expect(_rowsOf(domainFile, 'future_only'), hasLength(0),
-        reason: "the newer build's table is still empty, and still there");
-    expect(_userVersionOf(syncFile), SyncDatabase.supportedSchemaVersion);
-    expect(_rowsOf(syncFile, 'reduced_fields'), hasLength(1));
-    expect(marker.existsSync(), isFalse,
-        reason: 'no replay ran, so there is no marker of a finished replay');
+    await tester.runAsync(() async {
+      expect(_userVersionOf(domainFile),
+          GtdDatabase.supportedSchemaVersion + 1);
+      expect(_rowsOf(domainFile, 'todos'), hasLength(1));
+      expect(_rowsOf(domainFile, 'todos').first['title'], 'Ring Alice back');
+      expect(_rowsOf(domainFile, 'future_only'), hasLength(0),
+          reason: "the newer build's table is still empty, and still there");
+      expect(_userVersionOf(syncFile), SyncDatabase.supportedSchemaVersion);
+      expect(_rowsOf(syncFile, 'reduced_fields'), hasLength(1));
+      expect(marker.existsSync(), isFalse,
+          reason: 'no replay ran, so there is no marker of a finished replay');
+    });
   });
 
   test('when only the op log is newer, the read model is left alone too',
@@ -265,8 +278,10 @@ void main() {
     expect(_rowsOf(domainFile, 'todos').first['title'], 'Ring Alice back');
   });
 
-  testWidgets('a build that understands the store opens it with every row',
-      (tester) async {
+  // A plain test, not a widget test: this one is nothing but file work, and
+  // the store is opened through an isolate, which a widget test's fake clock
+  // would never answer.
+  test('a build that understands the store opens it with every row', () async {
     await seedStores(directory.path);
     await relabelDomainStoreAsANewerBuild(directory.path);
     final domainFile = p.join(directory.path, domainStoreFileName);
