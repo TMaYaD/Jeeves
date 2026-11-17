@@ -17,6 +17,8 @@ import 'package:jeeves/sync/chain_verifier.dart';
 import 'package:jeeves/sync/sync_database.dart';
 import 'package:jeeves/sync/sync_rejection.dart';
 
+import 'harness/v12_columns.dart';
+
 /// Every alarm kind, and the decisions it may be given.
 ///
 /// A kind with **no** decision has a filed issue standing for it, and the
@@ -202,16 +204,8 @@ void main() {
 
       final seed = SyncDatabase(NativeDatabase(file));
       // Take the five new columns back out, so the file on disk is what a v11
-      // store held. SQLite has understood `DROP COLUMN` since 3.35, and this
-      // is a test fixture rather than a migration a device has to survive.
-      await seed.customStatement('ALTER TABLE integrity_alarms DROP COLUMN resolution');
-      await seed.customStatement(
-          'ALTER TABLE integrity_alarms DROP COLUMN resolution_decided_at');
-      await seed.customStatement(
-          'ALTER TABLE integrity_alarms DROP COLUMN repost_from_author_seq');
-      await seed.customStatement('ALTER TABLE quarantined_ops DROP COLUMN resolution');
-      await seed.customStatement(
-          'ALTER TABLE quarantined_ops DROP COLUMN resolution_decided_at');
+      // store held.
+      await dropV12Columns(seed);
       await seed.customStatement(
         'INSERT INTO integrity_alarms (workspace_id, kind, detail, '
         'occurrence_count, first_detected_at, last_detected_at) '
