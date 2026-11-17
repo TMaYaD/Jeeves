@@ -91,7 +91,7 @@ void main() {
         _containsWord(storeTooNewExplanation, 'newer'),
         isTrue,
         reason: 'the user has to learn that the data belongs to a newer '
-            'Jeeves: ${storeTooNewExplanation}',
+            'Jeeves: $storeTooNewExplanation',
       );
       expect(storeTooNewExplanation, contains('newer version of Jeeves'));
     });
@@ -101,7 +101,7 @@ void main() {
         storeTooNewExplanation.toLowerCase(),
         contains('cannot read'),
         reason: 'the user has to learn why the data is not on screen: '
-            '${storeTooNewExplanation}',
+            '$storeTooNewExplanation',
       );
     });
 

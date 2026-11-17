@@ -6,6 +6,9 @@
 /// what happened — in plain words, with a version to quote and with nothing
 /// on the screen that could throw the data away.
 ///
+/// Both directions are covered: a newer read model and a newer op log each
+/// leave the other store alone, because the two files are judged together.
+///
 /// The store-level refusals are pinned in
 /// `database/store_version_refusal_test.dart`, and the read that finds the
 /// version in `database/store_schema_io_test.dart`.
@@ -93,6 +96,23 @@ Future<void> relabelDomainStoreAsANewerBuild(String directoryPath) async {
   }
 }
 
+/// The op log as a newer build would leave it: a version this build does not
+/// know, and a table it does not know.
+Future<void> relabelSyncStoreAsANewerBuild(String directoryPath) async {
+  final sync = SyncDatabase(
+      NativeDatabase(File(p.join(directoryPath, syncStoreFileName))));
+  try {
+    await sync.customStatement(
+      'PRAGMA user_version = ${SyncDatabase.supportedSchemaVersion + 1}',
+    );
+    await sync.customStatement(
+      'CREATE TABLE future_only (id TEXT PRIMARY KEY, note TEXT)',
+    );
+  } finally {
+    await sync.close();
+  }
+}
+
 /// The schema version the file at [path] carries.
 ///
 /// The connection is read-write, and has to be: the domain store is in
@@ -142,6 +162,7 @@ void main() {
     await relabelDomainStoreAsANewerBuild(directory.path);
     final domainFile = p.join(directory.path, domainStoreFileName);
     final syncFile = p.join(directory.path, syncStoreFileName);
+    final marker = File(p.join(directory.path, domainRebuildMarkerFileName));
 
     // **The gate reads the two files before anything opens them.**
     final versions = await readLocalStoreVersionsIn(directory.path);
@@ -199,6 +220,49 @@ void main() {
         reason: "the newer build's table is still empty, and still there");
     expect(_userVersionOf(syncFile), SyncDatabase.supportedSchemaVersion);
     expect(_rowsOf(syncFile, 'reduced_fields'), hasLength(1));
+    expect(marker.existsSync(), isFalse,
+        reason: 'no replay ran, so there is no marker of a finished replay');
+  });
+
+  test('when only the op log is newer, the read model is left alone too',
+      () async {
+    await seedStores(directory.path);
+    await relabelSyncStoreAsANewerBuild(directory.path);
+    final domainFile = p.join(directory.path, domainStoreFileName);
+    final marker = File(p.join(directory.path, domainRebuildMarkerFileName));
+
+    // **The gate judges the two files together.** The op log is the one that
+    // is too new.
+    final versions = await readLocalStoreVersionsIn(directory.path);
+    expect(versions.refusal, isNotNull);
+    expect(versions.refusal!.storeName, 'op log');
+    expect(versions.refusal!.storedVersion,
+        SyncDatabase.supportedSchemaVersion + 1);
+
+    // **The read model this build could read is not opened either.** A build
+    // that cannot read the op log must not project into a read model it would
+    // then have to reconcile against a log it does not understand.
+    final container = ProviderContainer(overrides: [
+      localStoreVersionsProvider.overrideWith((ref) async => versions),
+    ]);
+    addTearDown(container.dispose);
+    await expectLater(
+      container.read(domainStoreProvider.future),
+      throwsA(isA<StoreVersionTooNewError>()),
+      reason: 'the read model is not opened either',
+    );
+    await expectLater(
+      container.read(syncDatabaseProvider.future),
+      throwsA(isA<StoreVersionTooNewError>()),
+      reason: 'the op log is not opened',
+    );
+
+    // **No replay ran, and the read model is exactly as it was.**
+    expect(marker.existsSync(), isFalse,
+        reason: 'a replay into the read model would have written the marker');
+    expect(_userVersionOf(domainFile), GtdDatabase.supportedSchemaVersion);
+    expect(_rowsOf(domainFile, 'todos'), hasLength(1));
+    expect(_rowsOf(domainFile, 'todos').first['title'], 'Ring Alice back');
   });
 
   testWidgets('a build that understands the store opens it with every row',
