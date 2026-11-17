@@ -159,12 +159,13 @@ void main() {
           ..where((t) => t.name.equals('Errands') & t.type.equals('context')))
         .get());
     expect(created, hasLength(1));
+    final createdTag = created!.single;
     final linked = await tester.runAsync(() => (db.select(db.todoTags)
           ..where((t) => t.todoId.equals('o1')))
         .get());
-    expect(linked!.map((r) => r.tagId), contains(created!.single.id));
+    expect(linked!.map((r) => r.tagId), contains(createdTag.id));
     expect(
-        tester.widget<TagText>(chipInCloud(created!.single.id)).selected, isTrue);
+        tester.widget<TagText>(chipInCloud(createdTag.id)).selected, isTrue);
     // The new tag joins the cloud in its alphabetical place.
     expect(_cloudNames(tester), [
       for (var i = 1; i <= 14; i++) 'a${i.toString().padLeft(2, '0')}',
