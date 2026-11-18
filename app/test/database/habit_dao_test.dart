@@ -18,6 +18,13 @@ final _later = DateTime.utc(2026, 11, 19, 9, 30, 0, 456);
 /// The first commitment of a Habit that is simply done every day.
 const _everyDay = HabitCommitmentDraft(repeatKind: HabitRepeatKind.everyDay);
 
+/// The first commitment of a Habit that is measured against a target.
+const _measurable = HabitCommitmentDraft(
+  repeatKind: HabitRepeatKind.everyDay,
+  unitLabel: 'pages',
+  dailyTargetAmount: 20,
+);
+
 void main() {
   setUpAll(configureSqliteForTests);
 
@@ -36,12 +43,13 @@ void main() {
       String title = 'Read a book',
       String today = '2026-11-18',
       HabitCommitmentDraft commitment = _everyDay,
+      DateTime? now,
     }) =>
         db.habitDao.createHabit(
           userId: _userId,
           title: title,
           today: today,
-          now: _now,
+          now: now ?? _now,
           firstCommitment: commitment,
         );
 
@@ -684,6 +692,590 @@ void main() {
           anchorHabitId: c,
         );
         expect((await db.habitDao.habitById(a))!.anchorHabitId, c);
+      });
+    });
+
+    group('addCheckIn', () {
+      test('keeps every Check-in made on one day', () async {
+        final habitId = await createHabit();
+
+        final first = await db.habitDao.addCheckIn(
+          habitId: habitId,
+          userId: _userId,
+          countsForDay: '2026-11-18',
+          now: _now,
+        );
+        final second = await db.habitDao.addCheckIn(
+          habitId: habitId,
+          userId: _userId,
+          countsForDay: '2026-11-18',
+          now: _later,
+        );
+
+        final checkIns =
+            await db.habitDao.checkInsFor(habitId, '2026-11-18', '2026-11-18');
+        expect(checkIns, hasLength(2));
+        expect(checkIns.map((c) => c.id), containsAllInOrder([first, second]));
+        expect(checkIns.every((c) => c.countsForDay == '2026-11-18'), isTrue);
+      });
+
+      test('checks in on a day that is past', () async {
+        final habitId = await createHabit(today: '2026-11-18');
+
+        final id = await db.habitDao.addCheckIn(
+          habitId: habitId,
+          userId: _userId,
+          countsForDay: '2026-11-10',
+          now: _now,
+        );
+
+        final checkIns =
+            await db.habitDao.checkInsFor(habitId, '2026-11-01', '2026-11-30');
+        expect(checkIns.map((c) => c.id), [id]);
+      });
+
+      test('refuses an amount on a binary Habit\'s day', () async {
+        final habitId = await createHabit();
+
+        await expectLater(
+          db.habitDao.addCheckIn(
+            habitId: habitId,
+            userId: _userId,
+            countsForDay: '2026-11-18',
+            now: _now,
+            measuredAmount: 3,
+          ),
+          throwsArgumentError,
+        );
+        expect(
+          await db.habitDao.checkInsFor(habitId, '2026-11-18', '2026-11-18'),
+          isEmpty,
+        );
+      });
+
+      test('refuses a missing amount on a measurable Habit\'s day', () async {
+        final habitId = await createHabit(commitment: _measurable);
+
+        await expectLater(
+          db.habitDao.addCheckIn(
+            habitId: habitId,
+            userId: _userId,
+            countsForDay: '2026-11-18',
+            now: _now,
+          ),
+          throwsArgumentError,
+        );
+        expect(
+          await db.habitDao.checkInsFor(habitId, '2026-11-18', '2026-11-18'),
+          isEmpty,
+        );
+      });
+
+      test('judges the day by the commitment in force', () async {
+        // A binary Habit that becomes measurable on the third day.
+        final habitId = await createHabit();
+        await db.habitDao.setCommitment(
+          habitId: habitId,
+          userId: _userId,
+          today: '2026-11-20',
+          now: _later,
+          commitment: _measurable,
+        );
+
+        // Before the change the Habit is binary, so an amount is refused.
+        await expectLater(
+          db.habitDao.addCheckIn(
+            habitId: habitId,
+            userId: _userId,
+            countsForDay: '2026-11-19',
+            now: _now,
+            measuredAmount: 5,
+          ),
+          throwsArgumentError,
+        );
+        // From the change on, it is measurable, so an amount is needed.
+        await expectLater(
+          db.habitDao.addCheckIn(
+            habitId: habitId,
+            userId: _userId,
+            countsForDay: '2026-11-20',
+            now: _now,
+          ),
+          throwsArgumentError,
+        );
+        await db.habitDao.addCheckIn(
+          habitId: habitId,
+          userId: _userId,
+          countsForDay: '2026-11-20',
+          now: _now,
+          measuredAmount: 5,
+        );
+        expect(
+          await db.habitDao.checkInsFor(habitId, '2026-11-20', '2026-11-20'),
+          hasLength(1),
+        );
+      });
+
+      test('authors no op — the habit tables are local', () async {
+        final habitId = await createHabit();
+        await db.habitDao.addCheckIn(
+          habitId: habitId,
+          userId: _userId,
+          countsForDay: '2026-11-18',
+          now: _now,
+        );
+        expect(capture.recorded, isEmpty);
+      });
+
+      test('refuses a Habit that is not there', () async {
+        await expectLater(
+          db.habitDao.addCheckIn(
+            habitId: 'no-such-habit',
+            userId: _userId,
+            countsForDay: '2026-11-18',
+            now: _now,
+          ),
+          throwsArgumentError,
+        );
+      });
+
+      test('refuses a day that is not a day', () async {
+        final habitId = await createHabit();
+        await expectLater(
+          db.habitDao.addCheckIn(
+            habitId: habitId,
+            userId: _userId,
+            countsForDay: '18 November',
+            now: _now,
+          ),
+          throwsArgumentError,
+        );
+      });
+    });
+
+    group('changeCheckInAmount and removeCheckIn', () {
+      Future<String> checkInOf(String habitId) => db.habitDao.addCheckIn(
+            habitId: habitId,
+            userId: _userId,
+            countsForDay: '2026-11-18',
+            now: _now,
+            measuredAmount: 5,
+          );
+
+      test('changes the amount of a Check-in', () async {
+        final habitId = await createHabit(commitment: _measurable);
+        final id = await checkInOf(habitId);
+
+        await db.habitDao.changeCheckInAmount(
+          checkInId: id,
+          userId: _userId,
+          measuredAmount: 12,
+        );
+
+        final checkIns =
+            await db.habitDao.checkInsFor(habitId, '2026-11-18', '2026-11-18');
+        expect(checkIns.single.measuredAmount, 12);
+      });
+
+      test('refuses an amount on a binary Habit', () async {
+        final habitId = await createHabit();
+        final id = await db.habitDao.addCheckIn(
+          habitId: habitId,
+          userId: _userId,
+          countsForDay: '2026-11-18',
+          now: _now,
+        );
+
+        await expectLater(
+          db.habitDao.changeCheckInAmount(
+            checkInId: id,
+            userId: _userId,
+            measuredAmount: 5,
+          ),
+          throwsArgumentError,
+        );
+      });
+
+      test('refuses to drop the amount of a measurable Habit', () async {
+        final habitId = await createHabit(commitment: _measurable);
+        final id = await checkInOf(habitId);
+
+        await expectLater(
+          db.habitDao.changeCheckInAmount(
+            checkInId: id,
+            userId: _userId,
+            measuredAmount: null,
+          ),
+          throwsArgumentError,
+        );
+        final checkIns =
+            await db.habitDao.checkInsFor(habitId, '2026-11-18', '2026-11-18');
+        expect(checkIns.single.measuredAmount, 5);
+      });
+
+      test('removes one Check-in and keeps the others', () async {
+        final habitId = await createHabit();
+        final first = await db.habitDao.addCheckIn(
+          habitId: habitId,
+          userId: _userId,
+          countsForDay: '2026-11-18',
+          now: _now,
+        );
+        final second = await db.habitDao.addCheckIn(
+          habitId: habitId,
+          userId: _userId,
+          countsForDay: '2026-11-19',
+          now: _later,
+        );
+
+        await db.habitDao.removeCheckIn(checkInId: first, userId: _userId);
+
+        final checkIns =
+            await db.habitDao.checkInsFor(habitId, '2026-11-18', '2026-11-19');
+        expect(checkIns.map((c) => c.id), [second]);
+      });
+
+      test('refuses a Check-in that is not there', () async {
+        await expectLater(
+          db.habitDao.removeCheckIn(checkInId: 'no-such-check-in', userId: _userId),
+          throwsArgumentError,
+        );
+      });
+    });
+
+    group('checkInsFor', () {
+      test('gives the Check-ins of the range, oldest day first', () async {
+        final habitId = await createHabit();
+        await db.habitDao.addCheckIn(
+          habitId: habitId,
+          userId: _userId,
+          countsForDay: '2026-11-20',
+          now: _now,
+        );
+        await db.habitDao.addCheckIn(
+          habitId: habitId,
+          userId: _userId,
+          countsForDay: '2026-11-18',
+          now: _now,
+        );
+        await db.habitDao.addCheckIn(
+          habitId: habitId,
+          userId: _userId,
+          countsForDay: '2026-11-19',
+          now: _now,
+        );
+
+        final inRange =
+            await db.habitDao.checkInsFor(habitId, '2026-11-19', '2026-11-20');
+        expect(inRange.map((c) => c.countsForDay),
+            containsAllInOrder(['2026-11-19', '2026-11-20']));
+
+        final all = await db.habitDao.checkInsFor(habitId, '2026-11-01', '2026-11-30');
+        expect(all.map((c) => c.countsForDay),
+            containsAllInOrder(
+                ['2026-11-18', '2026-11-19', '2026-11-20']));
+      });
+
+      test('is empty for a range that ends before it starts', () async {
+        final habitId = await createHabit();
+        await db.habitDao.addCheckIn(
+          habitId: habitId,
+          userId: _userId,
+          countsForDay: '2026-11-18',
+          now: _now,
+        );
+
+        expect(
+          await db.habitDao.checkInsFor(habitId, '2026-11-20', '2026-11-10'),
+          isEmpty,
+        );
+      });
+    });
+
+    group('pause, resume, archive and restore', () {
+      test('a pause with an end date reads as active from that date', () async {
+        final habitId = await createHabit();
+
+        await db.habitDao.pause(
+          habitId: habitId,
+          userId: _userId,
+          today: '2026-11-18',
+          now: _now,
+          resumesOn: '2026-11-25',
+        );
+
+        expect(await db.habitDao.stateOn(habitId, '2026-11-17'),
+            HabitState.active);
+        expect(await db.habitDao.stateOn(habitId, '2026-11-18'),
+            HabitState.paused);
+        expect(await db.habitDao.stateOn(habitId, '2026-11-24'),
+            HabitState.paused);
+        expect(await db.habitDao.stateOn(habitId, '2026-11-25'),
+            HabitState.active);
+      });
+
+      test('an open pause stays paused', () async {
+        final habitId = await createHabit();
+
+        await db.habitDao.pause(
+          habitId: habitId,
+          userId: _userId,
+          today: '2026-11-18',
+          now: _now,
+        );
+
+        expect(await db.habitDao.stateOn(habitId, '2026-12-31'),
+            HabitState.paused);
+      });
+
+      test('refuses a pause on a paused Habit', () async {
+        final habitId = await createHabit();
+        await db.habitDao.pause(
+          habitId: habitId,
+          userId: _userId,
+          today: '2026-11-18',
+          now: _now,
+        );
+
+        await expectLater(
+          db.habitDao.pause(
+            habitId: habitId,
+            userId: _userId,
+            today: '2026-11-20',
+            now: _later,
+          ),
+          throwsArgumentError,
+        );
+      });
+
+      test('refuses a pause on an archived Habit', () async {
+        final habitId = await createHabit();
+        await db.habitDao.archive(
+          habitId: habitId,
+          userId: _userId,
+          today: '2026-11-18',
+          now: _now,
+        );
+
+        await expectLater(
+          db.habitDao.pause(
+            habitId: habitId,
+            userId: _userId,
+            today: '2026-11-20',
+            now: _later,
+          ),
+          throwsArgumentError,
+        );
+      });
+
+      test('refuses a pause that ends on or before the day it starts', () async {
+        final habitId = await createHabit();
+
+        await expectLater(
+          db.habitDao.pause(
+            habitId: habitId,
+            userId: _userId,
+            today: '2026-11-18',
+            now: _now,
+            resumesOn: '2026-11-18',
+          ),
+          throwsArgumentError,
+        );
+        await expectLater(
+          db.habitDao.pause(
+            habitId: habitId,
+            userId: _userId,
+            today: '2026-11-18',
+            now: _now,
+            resumesOn: '2026-11-10',
+          ),
+          throwsArgumentError,
+        );
+        expect(await db.habitDao.stateOn(habitId, '2026-11-18'),
+            HabitState.active);
+      });
+
+      test('resume closes the pause at that day', () async {
+        final habitId = await createHabit();
+        await db.habitDao.pause(
+          habitId: habitId,
+          userId: _userId,
+          today: '2026-11-18',
+          now: _now,
+        );
+
+        await db.habitDao.resume(
+          habitId: habitId,
+          userId: _userId,
+          today: '2026-11-20',
+          now: _later,
+        );
+
+        expect(await db.habitDao.stateOn(habitId, '2026-11-19'),
+            HabitState.paused);
+        expect(await db.habitDao.stateOn(habitId, '2026-11-20'),
+            HabitState.active);
+      });
+
+      test('archive closes an open pause and archives the Habit', () async {
+        final habitId = await createHabit();
+        await db.habitDao.pause(
+          habitId: habitId,
+          userId: _userId,
+          today: '2026-11-18',
+          now: _now,
+        );
+
+        await db.habitDao.archive(
+          habitId: habitId,
+          userId: _userId,
+          today: '2026-11-20',
+          now: _later,
+        );
+
+        expect(await db.habitDao.stateOn(habitId, '2026-11-19'),
+            HabitState.paused);
+        expect(await db.habitDao.stateOn(habitId, '2026-11-20'),
+            HabitState.archived);
+        expect(await db.habitDao.stateOn(habitId, '2026-11-25'),
+            HabitState.archived);
+      });
+
+      test('restore closes the archive and the Habit is active again', () async {
+        final habitId = await createHabit();
+        await db.habitDao.archive(
+          habitId: habitId,
+          userId: _userId,
+          today: '2026-11-20',
+          now: _now,
+        );
+
+        await db.habitDao.restore(
+          habitId: habitId,
+          userId: _userId,
+          today: '2026-11-25',
+          now: _later,
+        );
+
+        expect(await db.habitDao.stateOn(habitId, '2026-11-24'),
+            HabitState.archived);
+        expect(await db.habitDao.stateOn(habitId, '2026-11-25'),
+            HabitState.active);
+      });
+
+      test('refuses to resume a Habit that is not paused', () async {
+        final habitId = await createHabit();
+
+        await expectLater(
+          db.habitDao.resume(
+            habitId: habitId,
+            userId: _userId,
+            today: '2026-11-18',
+            now: _now,
+          ),
+          throwsArgumentError,
+        );
+      });
+
+      test('refuses to archive a Habit that is already archived', () async {
+        final habitId = await createHabit();
+        await db.habitDao.archive(
+          habitId: habitId,
+          userId: _userId,
+          today: '2026-11-18',
+          now: _now,
+        );
+
+        await expectLater(
+          db.habitDao.archive(
+            habitId: habitId,
+            userId: _userId,
+            today: '2026-11-20',
+            now: _later,
+          ),
+          throwsArgumentError,
+        );
+      });
+
+      test('refuses to restore a Habit that is not archived', () async {
+        final habitId = await createHabit();
+
+        await expectLater(
+          db.habitDao.restore(
+            habitId: habitId,
+            userId: _userId,
+            today: '2026-11-18',
+            now: _now,
+          ),
+          throwsArgumentError,
+        );
+      });
+
+      test('authors no op — the habit tables are local', () async {
+        final habitId = await createHabit();
+        await db.habitDao.pause(
+          habitId: habitId,
+          userId: _userId,
+          today: '2026-11-18',
+          now: _now,
+        );
+        await db.habitDao.resume(
+          habitId: habitId,
+          userId: _userId,
+          today: '2026-11-20',
+          now: _later,
+        );
+        await db.habitDao.archive(
+          habitId: habitId,
+          userId: _userId,
+          today: '2026-11-21',
+          now: _later,
+        );
+        await db.habitDao.restore(
+          habitId: habitId,
+          userId: _userId,
+          today: '2026-11-22',
+          now: _later,
+        );
+        expect(capture.recorded, isEmpty);
+      });
+    });
+
+    group('watchHabits', () {
+      test('gives the Habits with their state on the day, oldest first',
+          () async {
+        final first = await createHabit(title: 'First');
+        final second = await createHabit(title: 'Second', now: _later);
+        await db.habitDao.pause(
+          habitId: second,
+          userId: _userId,
+          today: '2026-11-18',
+          now: _now,
+        );
+
+        final watched = await db.habitDao.watchHabits('2026-11-18').first;
+        expect(watched.map((h) => h.habit.id), [first, second]);
+        expect(watched.map((h) => h.state),
+            [HabitState.active, HabitState.paused]);
+      });
+
+      test('filters by the archived state', () async {
+        final first = await createHabit(title: 'First');
+        final second = await createHabit(title: 'Second', now: _later);
+        await db.habitDao.archive(
+          habitId: second,
+          userId: _userId,
+          today: '2026-11-18',
+          now: _now,
+        );
+
+        final archived =
+            await db.habitDao.watchHabits('2026-11-18', archived: true).first;
+        expect(archived.map((h) => h.habit.id), [second]);
+
+        final live =
+            await db.habitDao.watchHabits('2026-11-18', archived: false).first;
+        expect(live.map((h) => h.habit.id), [first]);
       });
     });
   });

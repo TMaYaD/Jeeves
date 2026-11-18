@@ -15,11 +15,15 @@
 ///
 /// **There is no delete path.** A Habit is paused, archived and restored, and
 /// everything it holds survives all three. A Habit that is gone is a Habit the
-/// user archived.
+/// user archived. A Check-in can be taken back, because a user who checked in
+/// by mistake means to take it back — that is a correction, not a delete path
+/// for a Habit.
 ///
-/// The writes take the user the write is for, the day it is made (`today`, a
-/// day key) and an injectable `now`, so a caller decides what "today" means —
-/// the day being closed is not always the day the clock says.
+/// The writes take the user the write is for. A write that stamps an instant
+/// takes an injectable `now`, and a write that takes effect on a day takes
+/// that day as `today`, so a caller decides what "today" means — the day
+/// being closed is not always the day the clock says. A pause, an archive and
+/// a restore take the day they take effect on and stamp the Habit as edited.
 library;
 
 import 'package:drift/drift.dart';
@@ -69,6 +73,43 @@ enum HabitAnchorKind {
     }
     return null;
   }
+}
+
+/// Where a Habit sits in its life on a given day.
+///
+/// The state is **derived**, never stored: it is read from the dated pause and
+/// archive periods that cover the day. A day covered by an archived period is
+/// archived; a day covered by a paused period and by no archived one is
+/// paused; anything else is active.
+///
+/// The two words that are not `active` are the words the period rows carry
+/// (`habit_inactive_periods.kind`), so a state and the period it comes from
+/// never disagree about what they are called.
+enum HabitState {
+  /// The Habit is live: not paused and not archived.
+  active,
+
+  /// The Habit is paused on that day.
+  paused,
+
+  /// The Habit is archived on that day.
+  archived,
+}
+
+/// A Habit and the state it is in on a given day.
+///
+/// The pair is what a list of Habits needs: the Habit and where it stands
+/// that day. The state is read from the Habit's periods, so it is never
+/// stored beside the Habit.
+class HabitWithState {
+  /// The Habit.
+  final Habit habit;
+
+  /// The state of the Habit on the day that was asked for.
+  final HabitState state;
+
+  /// The pair of a Habit and its state.
+  const HabitWithState({required this.habit, required this.state});
 }
 
 /// The repeat rule and the target of a commitment, before the store knows
@@ -153,7 +194,14 @@ const Set<String> habitPartsOfDay = {'morning', 'afternoon', 'evening'};
 /// A local clock time, `HH:MM`, 24-hour.
 final RegExp habitClockTimePattern = RegExp(r'^([01]\d|2[0-3]):([0-5]\d)$');
 
-@DriftAccessor(tables: [Habits, HabitCommitments, HabitInactivePeriods])
+/// The kind of a period in which the Habit is paused.
+const String _pausedKind = 'paused';
+
+/// The kind of a period in which the Habit is archived.
+const String _archivedKind = 'archived';
+
+@DriftAccessor(
+    tables: [Habits, HabitCommitments, HabitCheckIns, HabitInactivePeriods])
 class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
   HabitDao(super.db);
 
@@ -273,9 +321,7 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
       await into(habitCommitments)
           .insert(_commitmentCompanion(built, userId));
       // The Habit's own row is stamped too: its rule just changed.
-      await (update(habits)..where((h) => h.id.equals(habitId))).write(
-        HabitsCompanion(updatedAt: Value(encodeInstant(instant))),
-      );
+      await _stampEdited(habitId, instant);
     });
     return commitmentId;
   }
@@ -350,6 +396,249 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
     });
   }
 
+  /// Records that the user did the Habit on [countsForDay].
+  ///
+  /// A day can hold several Check-ins — two glasses of water are two
+  /// Check-ins, not one row with a count of two — so every call adds a row
+  /// and none of them replaces another.
+  ///
+  /// The day can be any day, including one that is past: a user catches up
+  /// on what they did yesterday.
+  ///
+  /// **A Check-in carries no copy of the target.** What the day's Check-ins
+  /// are read against is the commitment in force that day, so a Check-in
+  /// added before a target change is judged by the old target and one added
+  /// after it by the new one. That is why the amount is checked against the
+  /// commitment in force on [countsForDay]: a measurable Habit needs an
+  /// amount, and a binary one refuses it.
+  ///
+  /// Throws an [ArgumentError] for a Habit that is not there, for a day that
+  /// is not a day, for an amount that is not more than zero, for an amount on
+  /// a binary Habit's day, and for a missing amount on a measurable one.
+  ///
+  /// Returns the Check-in's id.
+  Future<String> addCheckIn({
+    required String habitId,
+    required String userId,
+    required String countsForDay,
+    required DateTime now,
+    double? measuredAmount,
+  }) async {
+    final day = _validatedDay(countsForDay, 'countsForDay');
+    final amount = _validatedAmount(measuredAmount);
+    final instant = _storedInstant(now);
+    final checkInId = uuid.v4();
+    await attachedDatabase.capturing(() async {
+      await _requireHabit(habitId, userId);
+      await _requireAmountMatches(habitId, day, amount);
+      await into(habitCheckIns).insert(HabitCheckInsCompanion.insert(
+            id: Value(checkInId),
+            userId: userId,
+            habitId: habitId,
+            countsForDay: day,
+            checkedInAt: encodeInstant(instant)!,
+            measuredAmount: Value(amount),
+          ));
+    });
+    return checkInId;
+  }
+
+  /// Changes how much a Check-in says was done.
+  ///
+  /// The Check-in keeps its day and its time; only the amount moves. The new
+  /// amount is held to the same rule as a new Check-in: it must be more than
+  /// zero, a measurable Habit's Check-in keeps an amount, and a binary one's
+  /// has none.
+  ///
+  /// Throws an [ArgumentError] for a Check-in that is not there, for an
+  /// amount that is not more than zero, and for an amount that the Habit's
+  /// commitment on that day does not allow.
+  Future<void> changeCheckInAmount({
+    required String checkInId,
+    required String userId,
+    double? measuredAmount,
+  }) async {
+    final amount = _validatedAmount(measuredAmount);
+    await attachedDatabase.capturing(() async {
+      final checkIn = await _requireCheckIn(checkInId, userId);
+      await _requireAmountMatches(checkIn.habitId, checkIn.countsForDay, amount);
+      await (update(habitCheckIns)..where((c) => c.id.equals(checkInId))).write(
+            HabitCheckInsCompanion(measuredAmount: Value(amount)),
+          );
+    });
+  }
+
+  /// Removes a Check-in.
+  ///
+  /// **This is a user correction, not a delete path for a Habit.** A user
+  /// who checked in by mistake takes the Check-in back; the Habit, its
+  /// commitments and its other Check-ins are untouched.
+  ///
+  /// Throws an [ArgumentError] for a Check-in that is not there.
+  Future<void> removeCheckIn({
+    required String checkInId,
+    required String userId,
+  }) async {
+    await attachedDatabase.capturing(() async {
+      await _requireCheckIn(checkInId, userId);
+      await (delete(habitCheckIns)..where((c) => c.id.equals(checkInId))).go();
+    });
+  }
+
+  /// Pauses a Habit from [today].
+  ///
+  /// A pause with an end date ends by itself: [resumesOn] is the first day
+  /// the Habit is active again, and no timer is needed to end it. A pause
+  /// without one stays paused until the user resumes it.
+  ///
+  /// The pause changes nothing else about the Habit: its Check-ins and its
+  /// commitments are kept, and the days before the pause still read the
+  /// commitment they were judged by.
+  ///
+  /// Throws an [ArgumentError] for a Habit that is not there, for a Habit
+  /// that is already paused or archived on [today], for a [resumesOn] that
+  /// is not a day, and for a [resumesOn] that is on or before [today] — a
+  /// pause that ends the day it starts is no pause at all.
+  Future<void> pause({
+    required String habitId,
+    required String userId,
+    required String today,
+    required DateTime now,
+    String? resumesOn,
+  }) async {
+    final startDay = _validatedDay(today, 'today');
+    final endDay =
+        resumesOn == null ? null : _validatedDay(resumesOn, 'resumesOn');
+    final instant = _storedInstant(now);
+    await attachedDatabase.capturing(() async {
+      await _requireHabit(habitId, userId);
+      final state = await stateOn(habitId, startDay);
+      if (state == HabitState.paused) {
+        throw ArgumentError.value(
+            habitId, 'habitId', 'The Habit is already paused on that day.');
+      }
+      if (state == HabitState.archived) {
+        throw ArgumentError.value(
+            habitId, 'habitId', 'An archived Habit cannot be paused.');
+      }
+      if (endDay != null && endDay.compareTo(startDay) <= 0) {
+        throw ArgumentError.value(resumesOn, 'resumesOn',
+            'A pause ends after the day it starts.');
+      }
+      await into(habitInactivePeriods).insert(HabitInactivePeriodsCompanion.insert(
+            id: Value(uuid.v4()),
+            userId: userId,
+            habitId: habitId,
+            kind: _pausedKind,
+            startsOn: startDay,
+            endsBefore: Value(endDay),
+          ));
+      await _stampEdited(habitId, instant);
+    });
+  }
+
+  /// Ends a Habit's pause at [today], so the Habit is active from that day.
+  ///
+  /// The pause keeps the days it covered: the Habit was paused on them, and
+  /// a later day does not make that untrue.
+  ///
+  /// Throws an [ArgumentError] for a Habit that is not there, for an
+  /// archived Habit, and for a Habit that is not paused.
+  Future<void> resume({
+    required String habitId,
+    required String userId,
+    required String today,
+    required DateTime now,
+  }) async {
+    final day = _validatedDay(today, 'today');
+    final instant = _storedInstant(now);
+    await attachedDatabase.capturing(() async {
+      await _requireHabit(habitId, userId);
+      final state = await stateOn(habitId, day);
+      if (state == HabitState.archived) {
+        throw ArgumentError.value(
+            habitId, 'habitId', 'An archived Habit cannot be resumed.');
+      }
+      if (state != HabitState.paused) {
+        throw ArgumentError.value(
+            habitId, 'habitId', 'The Habit is not paused.');
+      }
+      await _closeOpenPause(habitId, day);
+      await _stampEdited(habitId, instant);
+    });
+  }
+
+  /// Archives a Habit from [today].
+  ///
+  /// **Archiving is not deleting.** Everything the Habit holds — its
+  /// Check-ins, its commitments and its pauses — stays, and the Habit can be
+  /// restored. The archived period carries the days it covers, so whether
+  /// those days count as missed is a later question the dates can answer.
+  ///
+  /// An open pause is closed at [today]: a Habit is paused and archived at
+  /// the same time is a contradiction, and the archive is the one that
+  /// stands.
+  ///
+  /// Throws an [ArgumentError] for a Habit that is not there and for a Habit
+  /// that is already archived.
+  Future<void> archive({
+    required String habitId,
+    required String userId,
+    required String today,
+    required DateTime now,
+  }) async {
+    final day = _validatedDay(today, 'today');
+    final instant = _storedInstant(now);
+    await attachedDatabase.capturing(() async {
+      await _requireHabit(habitId, userId);
+      final state = await stateOn(habitId, day);
+      if (state == HabitState.archived) {
+        throw ArgumentError.value(
+            habitId, 'habitId', 'The Habit is already archived.');
+      }
+      await _closeOpenPause(habitId, day);
+      await into(habitInactivePeriods).insert(HabitInactivePeriodsCompanion.insert(
+            id: Value(uuid.v4()),
+            userId: userId,
+            habitId: habitId,
+            kind: _archivedKind,
+            startsOn: day,
+          ));
+      await _stampEdited(habitId, instant);
+    });
+  }
+
+  /// Ends a Habit's archive at [today], so the Habit is active from that day.
+  ///
+  /// The archived days stay archived: the Habit was archived on them, and
+  /// restoring it now does not make that untrue.
+  ///
+  /// Throws an [ArgumentError] for a Habit that is not there and for a Habit
+  /// that is not archived.
+  Future<void> restore({
+    required String habitId,
+    required String userId,
+    required String today,
+    required DateTime now,
+  }) async {
+    final day = _validatedDay(today, 'today');
+    final instant = _storedInstant(now);
+    await attachedDatabase.capturing(() async {
+      await _requireHabit(habitId, userId);
+      final state = await stateOn(habitId, day);
+      if (state != HabitState.archived) {
+        throw ArgumentError.value(
+            habitId, 'habitId', 'The Habit is not archived.');
+      }
+      await (update(habitInactivePeriods)..where((p) =>
+              p.habitId.equals(habitId) &
+              p.kind.equals(_archivedKind) &
+              p.endsBefore.isNull()))
+          .write(HabitInactivePeriodsCompanion(endsBefore: Value(day)));
+      await _stampEdited(habitId, instant);
+    });
+  }
+
   // --- reads ----------------------------------------------------------------
 
   /// The Habit with [habitId], or null when there is none.
@@ -375,6 +664,88 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
       if (commitment != null) commitments.add(commitment);
     }
     return commitments;
+  }
+
+  /// The Check-ins of a Habit between [fromDay] and [toDay], both included.
+  ///
+  /// Oldest day first, and within a day oldest Check-in first.
+  ///
+  /// A range that ends before it starts is empty: there is no day in it.
+  Future<List<HabitCheckIn>> checkInsFor(
+    String habitId,
+    String fromDay,
+    String toDay,
+  ) async {
+    final from = _validatedDay(fromDay, 'fromDay');
+    final to = _validatedDay(toDay, 'toDay');
+    if (to.compareTo(from) < 0) return const [];
+    return (select(habitCheckIns)
+          ..where((c) =>
+              c.habitId.equals(habitId) &
+              c.countsForDay.isBiggerOrEqualValue(from) &
+              c.countsForDay.isSmallerOrEqualValue(to))
+          ..orderBy([
+            (c) => OrderingTerm.asc(c.countsForDay),
+            (c) => OrderingTerm.asc(c.checkedInAt),
+            (c) => OrderingTerm.asc(c.id),
+          ]))
+        .get();
+  }
+
+  /// The state of a Habit on [day].
+  ///
+  /// The state is derived from the Habit's dated periods, so this is a
+  /// question about the rows and not a flag on the Habit: "was this Habit
+  /// paused on Tuesday?" is answered the same way whatever the Habit's state
+  /// is today.
+  Future<HabitState> stateOn(String habitId, String day) async {
+    final dayKey = _validatedDay(day, 'day');
+    final periods = await _periodsFor(habitId);
+    return _stateOf(periods, dayKey);
+  }
+
+  /// The Habits with the state each of them is in on [today], oldest first.
+  ///
+  /// The stream re-reads when a Habit or one of its periods changes, so a
+  /// screen that shows the Habits of a day keeps up with a pause, an archive
+  /// or a restore.
+  ///
+  /// [archived] narrows the list to the archived Habits (true) or to the
+  /// ones that are not archived (false); left out, both are given.
+  Stream<List<HabitWithState>> watchHabits(String today, {bool? archived}) {
+    final day = _validatedDay(today, 'today');
+    final query = select(habits).join([
+      leftOuterJoin(
+        habitInactivePeriods,
+        habitInactivePeriods.habitId.equalsExp(habits.id),
+      ),
+    ]);
+    query.orderBy([
+      OrderingTerm(expression: habits.createdAt),
+      OrderingTerm(expression: habits.id),
+    ]);
+    return query.watch().map((rows) {
+      final habitsById = <String, Habit>{};
+      final periodsByHabit = <String, List<HabitInactivePeriod>>{};
+      for (final row in rows) {
+        final habit = row.readTable(habits);
+        habitsById.putIfAbsent(habit.id, () => habit);
+        final period = row.readTableOrNull(habitInactivePeriods);
+        if (period != null) {
+          (periodsByHabit[habit.id] ??= <HabitInactivePeriod>[]).add(period);
+        }
+      }
+      final result = <HabitWithState>[];
+      for (final habit in habitsById.values) {
+        final state = _stateOf(
+            periodsByHabit[habit.id] ?? const <HabitInactivePeriod>[], day);
+        if (archived != null && (state == HabitState.archived) != archived) {
+          continue;
+        }
+        result.add(HabitWithState(habit: habit, state: state));
+      }
+      return result;
+    });
   }
 
   // --- internals ------------------------------------------------------------
@@ -404,17 +775,109 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
   /// archived period covers it. A period covers a day when it starts on or
   /// before that day and has not ended before it.
   Future<bool> _isArchivedOn(String habitId, String dayKey) async {
-    final periods = await (select(habitInactivePeriods)
-          ..where((p) =>
-              p.habitId.equals(habitId) & p.kind.equals('archived')))
-        .get();
+    final periods = await _periodsFor(habitId);
+    return _stateOf(periods, dayKey) == HabitState.archived;
+  }
+
+  /// Stamps the Habit as edited.
+  ///
+  /// A pause, an archive and a restore change the Habit's own state, so the
+  /// Habit is edited on that day as well as on the day its details or its
+  /// rule changed.
+  Future<void> _stampEdited(String habitId, DateTime instant) async {
+    await (update(habits)..where((h) => h.id.equals(habitId))).write(
+          HabitsCompanion(updatedAt: Value(encodeInstant(instant))),
+        );
+  }
+
+  /// The periods of a Habit, whichever kind they are.
+  Future<List<HabitInactivePeriod>> _periodsFor(String habitId) async =>
+      (select(habitInactivePeriods)..where((p) => p.habitId.equals(habitId)))
+          .get();
+
+  /// The state a Habit is in on [dayKey], given the periods that cover it.
+  ///
+  /// An archived period wins over a paused one: a Habit that was archived
+  /// on a day was archived on that day, whatever else was true of it.
+  static HabitState _stateOf(
+      List<HabitInactivePeriod> periods, String dayKey) {
+    var paused = false;
     for (final period in periods) {
-      if (period.startsOn.compareTo(dayKey) > 0) continue;
-      final endsBefore = period.endsBefore;
-      if (endsBefore != null && dayKey.compareTo(endsBefore) >= 0) continue;
-      return true;
+      if (!_coversDay(period, dayKey)) continue;
+      if (period.kind == _archivedKind) return HabitState.archived;
+      if (period.kind == _pausedKind) paused = true;
     }
-    return false;
+    return paused ? HabitState.paused : HabitState.active;
+  }
+
+  /// Whether a period covers a day.
+  ///
+  /// A period covers a day when it starts on or before that day and has not
+  /// ended before it — `ends_before` is the first day the Habit is active
+  /// again, so the day it names is not part of the period.
+  static bool _coversDay(HabitInactivePeriod period, String dayKey) {
+    if (period.startsOn.compareTo(dayKey) > 0) return false;
+    final endsBefore = period.endsBefore;
+    if (endsBefore != null && dayKey.compareTo(endsBefore) >= 0) return false;
+    return true;
+  }
+
+  /// Closes an open pause at [day].
+  ///
+  /// A Habit holds at most one open pause, but the write closes every open
+  /// pause it has, so a Habit cannot be left paused by a row that was
+  /// already there.
+  Future<void> _closeOpenPause(String habitId, String day) async {
+    await (update(habitInactivePeriods)..where((p) =>
+            p.habitId.equals(habitId) &
+            p.kind.equals(_pausedKind) &
+            p.endsBefore.isNull()))
+        .write(HabitInactivePeriodsCompanion(endsBefore: Value(day)));
+  }
+
+  /// The Check-in with [checkInId], or an [ArgumentError] when there is no
+  /// such Check-in or it belongs to another user.
+  Future<HabitCheckIn> _requireCheckIn(String checkInId, String userId) async {
+    final row = await (select(habitCheckIns)..where((c) => c.id.equals(checkInId)))
+        .getSingleOrNull();
+    if (row == null) {
+      throw ArgumentError.value(
+          checkInId, 'checkInId', 'There is no Check-in with that id.');
+    }
+    if (row.userId != userId) {
+      throw ArgumentError.value(
+          checkInId, 'checkInId', 'The Check-in belongs to another user.');
+    }
+    return row;
+  }
+
+  /// Whether the Habit is measured against a target on [dayKey].
+  ///
+  /// The rule is the commitment in force on that day, so a Habit that
+  /// changes its target is binary before the change and measurable after it.
+  /// A day before the first commitment has no rule, and is binary.
+  Future<bool> _isMeasurableOn(String habitId, String dayKey) async {
+    final commitment =
+        commitmentInForceOn(await commitmentsFor(habitId), dayKey);
+    return commitment?.isMeasurable ?? false;
+  }
+
+  /// Holds a Check-in's amount to the rule the Habit is judged by on that
+  /// day.
+  ///
+  /// A measurable Habit needs an amount — "5 of 20 pages" is not a
+  /// Check-in — and a binary one refuses one.
+  Future<void> _requireAmountMatches(
+      String habitId, String dayKey, double? amount) async {
+    final measurable = await _isMeasurableOn(habitId, dayKey);
+    if (measurable && amount == null) {
+      throw ArgumentError.value(amount, 'measuredAmount',
+          'This Habit is measured against a target, so its Check-in needs an amount.');
+    }
+    if (!measurable && amount != null) {
+      throw ArgumentError.value(amount, 'measuredAmount',
+          'This Habit is binary, so its Check-in has no amount.');
+    }
   }
 
   /// Whether the chain of anchors from [targetId] reaches [habitId].
@@ -530,6 +993,32 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
           'A Habit takes more than zero minutes.');
     }
     return minutes;
+  }
+
+  /// A day, checked: a local calendar day, `YYYY-MM-DD`.
+  ///
+  /// A day is the unit the whole Habit model is written in — a Check-in
+  /// counts for one, a period covers them — so a day that is not a day is
+  /// refused before it reaches the store.
+  static String _validatedDay(String dayKey, String name) {
+    if (habitDateFromDayKey(dayKey) == null) {
+      throw ArgumentError.value(
+          dayKey, name, 'A day is a local calendar day (YYYY-MM-DD).');
+    }
+    return dayKey;
+  }
+
+  /// How much was done, checked: null, or more than zero.
+  ///
+  /// Zero is not an amount — it says nothing was done, which is the absence
+  /// of a Check-in and not a Check-in of nothing.
+  static double? _validatedAmount(double? amount) {
+    if (amount == null) return null;
+    if (!amount.isFinite || amount <= 0) {
+      throw ArgumentError.value(
+          amount, 'measuredAmount', 'An amount is more than zero.');
+    }
+    return amount;
   }
 
   /// The anchor values that belong to [kind], checked.
