@@ -192,7 +192,7 @@ through.
 
 | Kind | Class | Resolution | What the decision does on the device |
 |---|---|---|---|
-| `author_chain_gap` | actionable | **Take upstream** (one-time) | Re-verifies each held change of that device (signature, decrypt, shape, grant at its own seq), merges it through the host's merge core, projects and reconciles. Rows are stamped and stay eligible for normal chain release, so if the missing change arrives later the log heals and the re-apply is a no-op. `op_log` is not touched. Also settles that device's `author_chain_fork`. |
+| `author_chain_gap` | actionable | **Take upstream** (one-time) | The held changes of that device reach this device's own records, and their rows are stamped. The rows stay eligible for normal chain release, so if the missing change arrives later the log heals and the apply is a no-op. The alarm is settled only once the change has reached the records — a failure there leaves the accusation standing and the decision on offer. `op_log` is not touched. Also settles that device's `author_chain_fork`. |
 | `own_writes_rollback` (server lost writes it had acknowledged) | actionable | **Keep ours** | Marks this device's own outbox rows from the position the server expects as unsent, so the next flush re-sends the same signed bytes. Nothing is re-numbered or re-signed. The alarm is *decided* at once and *resolved* when the re-send is acknowledged — every row from that position onwards sent. |
 | `own_writes_rollback` (server holds a position this device never wrote) | actionable | none — #974 | Needs a new device key or re-enrolment. |
 | `own_writes_divergence` | reported | **Keep ours** (no upload) | Ours is already on the log. Records that the other copy is refused for good. |
@@ -206,6 +206,8 @@ through.
 | Unknown code, self-healing refusal | — | none | Listed (unknown) or hidden (self-healing), as the classification says. |
 
 A decision is recorded on every refused change it covers and on the alarm itself. Nothing is deleted: the refused bytes stay. Taking upstream merges a held change into local state without writing it to the op log; it settles that one conflict, and a standing form is tracked in #975.
+
+What each decision *runs* is in `app/lib/sync/sync_client.dart`; this table says what a decision is for and what it leaves behind, not the steps it takes.
 
 ## What is asserted, and where
 

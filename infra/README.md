@@ -253,8 +253,27 @@ rsync -a --delete \
 nothing whether the trees match or not, so an empty dry run reads as
 "identical" even when the guest still holds an older commit. A whole suite
 then passes against the guest's stale tree — the branch's own tests are
-absent from it and nothing fails. Compare a checksum of a file the commit
-touched, or grep the guest for a string only that commit adds.
+absent from it and nothing fails. Dry-run the same transfer with `-c`, so
+the comparison is by checksum and by item, over the whole tree and with the
+same `-e` and `--exclude` options:
+
+```bash
+rsync -anci --delete \
+  --exclude=.git --exclude=build/ --exclude=.dart_tool/ --exclude=.gradle/ \
+  -e 'ssh -p 2222 -i ~/.ssh/id_ed25519' \
+  <mac-jeeves-checkout>/ paperclipai@127.0.0.1:~/jeeves/
+```
+
+An empty list means the guest matches the export byte for byte. Anything
+listed is named: a file that would be transferred, or deleted, so a stale or
+missing test is read off the list rather than inferred. Sync everything the
+list names before you build.
+
+**Give a parallel run its own directory.** `~/jeeves` is one shared checkout,
+and two runs that sync different branches into it overwrite each other's
+tree: the second sync wins, and the first run then compiles and tests the
+second run's sources — which pass, and mean nothing. A run that shares the
+guest with another syncs into `~/jeeves-<its-own-name>/` and builds there.
 
 Then, on the guest, the same command `pr-apk.yml` runs:
 
