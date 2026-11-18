@@ -86,7 +86,7 @@ void main() {
     expect(
       tester.getSemantics(find.byKey(const Key('context_tag_picker_add'))),
       matchesSemantics(
-        label: 'Add context tag',
+        label: 'Add label',
         isButton: true,
         hasTapAction: true,
       ),
@@ -183,7 +183,7 @@ void main() {
     await tester.tap(find.byKey(const Key('tag_cloud_add_tag')));
     await _pump(tester);
 
-    expect(find.text('Failed to create tag. Please try again.'),
+    expect(find.text('Failed to create label. Please try again.'),
         findsOneWidget);
     expect(assigned, isEmpty);
     expect(find.byKey(const Key('tag_cloud_add_tag')), findsOneWidget);

@@ -24,7 +24,7 @@ void showOutcomeContextTagEditor(BuildContext context, String todoId) {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Edit Context Tags', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const Text('Edit Labels', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 16),
           Consumer(
             builder: (context, ref, _) {

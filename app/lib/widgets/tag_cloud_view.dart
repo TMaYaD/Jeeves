@@ -242,7 +242,7 @@ class _TagCloudViewState extends State<TagCloudView> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-              content: Text('Failed to create tag. Please try again.')),
+              content: Text('Failed to create label. Please try again.')),
         );
       }
     } finally {
