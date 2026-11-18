@@ -9,6 +9,7 @@ import '../../../providers/clock_provider.dart';
 import '../../../providers/day_timeline_provider.dart';
 import '../../../providers/focus_session_planning_provider.dart';
 import '../../../widgets/day_timeline/day_timeline.dart';
+import '../../../widgets/day_timeline/plan_and_timeline_layout.dart';
 import '../../../widgets/outcome_row.dart';
 
 class ScheduledReviewStep extends ConsumerStatefulWidget {
@@ -46,65 +47,52 @@ class _ScheduledReviewStepState extends ConsumerState<ScheduledReviewStep> {
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Text(
-              "Today's Schedule",
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-                color: Color(0xFF1A1A2E),
+            children: [
+              PlanAndTimelineLayout(
+                timelineHeading: "Today's Schedule",
+                // Plan order, not the due-date order of the rows: Autoflow
+                // places in Plan position order.
+                timeline: tasks.isNotEmpty
+                    ? _timeline(tasks)
+                    : const SizedBox.shrink(),
+                planHeading: "Today's Tasks",
+                planChildren: [
+                  if (sortedTasks.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      child: Text(
+                        'No tasks selected — go back and select some!',
+                        style: TextStyle(fontSize: 14, color: Colors.grey[400]),
+                        textAlign: TextAlign.center,
+                      ),
+                    )
+                  else
+                    ...sortedTasks.map((t) => OutcomeRow(
+                          title: t.title,
+                          timeEstimateMinutes: t.timeEstimate,
+                          dueDate: t.dueDate,
+                          framed: true,
+                          leading: const Icon(Icons.check_circle_outline,
+                              size: 20, color: Color(0xFF16A34A)),
+                        )),
+                ],
               ),
-            ),
-            const SizedBox(height: 16),
-            // Plan order, not the due-date order of the rows: Autoflow places in
-            // Plan position order.
-            if (tasks.isNotEmpty) _timeline(tasks),
-            const SizedBox(height: 36),
-            const Divider(height: 1, color: Color(0xFFF3F4F6)),
-            const SizedBox(height: 36),
-            const Text(
-              "Today's Tasks",
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-                color: Color(0xFF1A1A2E),
-              ),
-            ),
-            const SizedBox(height: 16),
-            if (sortedTasks.isEmpty)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                child: Text(
-                  'No tasks selected — go back and select some!',
-                  style: TextStyle(fontSize: 14, color: Colors.grey[400]),
-                  textAlign: TextAlign.center,
+              const SizedBox(height: 48),
+              FilledButton(
+                onPressed: () => _startDay(context, ref),
+                style: FilledButton.styleFrom(
+                  backgroundColor: const Color(0xFF2563EB),
+                  minimumSize: const Size.fromHeight(52),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
                 ),
-              )
-            else
-              ...sortedTasks.map((t) => OutcomeRow(
-                title: t.title,
-                timeEstimateMinutes: t.timeEstimate,
-                dueDate: t.dueDate,
-                framed: true,
-                leading: const Icon(Icons.check_circle_outline,
-                    size: 20, color: Color(0xFF16A34A)),
-              )),
-            const SizedBox(height: 48),
-            FilledButton(
-              onPressed: () => _startDay(context, ref),
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFF2563EB),
-                minimumSize: const Size.fromHeight(52),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12)),
+                child: const Text(
+                  'Start Day',
+                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                ),
               ),
-              child: const Text(
-                'Start Day',
-                style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
-              ),
-            ),
-            const SizedBox(height: 32),
-          ],
+              const SizedBox(height: 32),
+            ],
           ),
         );
       },
