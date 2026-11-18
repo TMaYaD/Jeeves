@@ -2764,6 +2764,29 @@ class SyncClient {
   Future<Uint8List> appliedControlHead() async =>
       (await _controlChain())?.lastControlPayloadHash ?? zeroPrevControlHash;
 
+  /// Whether this Workspace's applied control log already holds **this device's**
+  /// own registration.
+  ///
+  /// A registration is a `workspace_genesis` — the device founded the Workspace —
+  /// or a `member_register` — it joined one. The *author* is what makes it this
+  /// device's: the control log is shared by every Member of the Workspace, and
+  /// a peer's registration says nothing about whether this device may claim one.
+  ///
+  /// Read from the applied log and not from the member directory, because the
+  /// directory is shared by the Workspaces of one User: it would report this
+  /// device as registered in a Workspace it has never claimed.
+  Future<bool> ownRegistrationApplied() async {
+    final memberId = identity.memberId;
+    for (final row in await _appliedControlLog()) {
+      if (row.authorMemberId != memberId) continue;
+      if (row.controlType == controlTypeMemberRegister ||
+          row.controlType == controlTypeWorkspaceGenesis) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   // --- Control fork resolution (F14e) ----------------------------------------
 
   /// Whether an arriving control op wins its position, and what to do if it does.

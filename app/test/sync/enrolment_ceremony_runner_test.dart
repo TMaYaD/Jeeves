@@ -20,8 +20,10 @@ import 'package:drift/drift.dart' show driftRuntimeOptions;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/screens/enrolment/enrolment_ceremony_runner.dart';
+import 'package:jeeves/sync/control_payload.dart';
 import 'package:jeeves/sync/device_key_store.dart';
 import 'package:jeeves/sync/enrolment_state.dart';
+import 'package:jeeves/sync/envelope.dart' show opClassControl, parseBody, splitEnvelope;
 import 'package:jeeves/sync/ids.dart';
 import 'package:jeeves/sync/recovery_escrow.dart';
 import 'package:jeeves/sync/sync_database.dart';
@@ -158,6 +160,50 @@ void main() {
       keyStore: keyStore,
       faults: faults,
     );
+  }
+
+  /// The control op types one Member authored in one Workspace, read from what
+  /// the server stored.
+  ///
+  /// The server's log is the record of what a Workspace holds, so this is how a
+  /// test says "this device is registered exactly once here" — and the only way
+  /// that says anything about the *device* rather than about the Workspace.
+  List<String> controlTypesAuthoredBy(String workspaceId, String memberId) => [
+        for (final op in server.storedOps)
+          if (op.workspaceId == workspaceId &&
+              op.header?.authorMemberId == memberId &&
+              op.header?.opClass == opClassControl)
+            ControlPayload.decode(parseBody(splitEnvelope(op.envelope).body))
+                .controlType,
+      ];
+
+  /// The end state every interrupted-and-resumed enrolment must leave: one
+  /// registration and one Grant per Workspace, an empty queue in each, and a
+  /// device that reads as enrolled and keeps syncing.
+  Future<void> expectEnrolledAndClean(_CeremonyDevice device) async {
+    final status = await device.runner.status();
+    expect(status.state, EnrolmentState.enrolled);
+    for (final workspaceId in derivableWorkspaceIds(_userId)) {
+      final types =
+          controlTypesAuthoredBy(workspaceId, device.stack.identity.memberId);
+      expect(
+        types.where((type) =>
+            type == controlTypeWorkspaceGenesis || type == controlTypeMemberRegister),
+        hasLength(1),
+        reason: '$workspaceId holds exactly one registration from this device',
+      );
+      expect(
+        types.where((type) => type == controlTypeGrant),
+        hasLength(1),
+        reason: '$workspaceId holds exactly one Grant from this device',
+      );
+      final client = workspaceId == device.stack.defaultClient.workspaceId
+          ? device.stack.defaultClient
+          : await device.stack.workspaceClientFactory(workspaceId);
+      expect((await client.health()).pendingOpCount, 0,
+          reason: '$workspaceId has an empty queue');
+      await client.sync();
+    }
   }
 
   test('a fresh device founds the account and reads back as enrolled', () async {
@@ -388,5 +434,102 @@ void main() {
     expect(status.memberId, second.stack.identity.memberId);
     expect(status.memberId, isNot(founder.stack.identity.memberId));
     expect(status.foundedWorkspaceIds, derivableWorkspaceIds(_userId));
+  });
+
+  // --- Resuming an interrupted enrolment -------------------------------------
+  //
+  // An enrolment that stops half-way is resumed by entering the passphrase
+  // again, and the resume runs the whole ceremony again. What the resume must
+  // not do is register the device a second time: the Workspace it already
+  // registered in refuses the second registration (a registration is the
+  // author's op 1), and the refusal wedges the device's send queue for good.
+
+  test('a founding device interrupted between its Workspaces resumes once',
+      () async {
+    final device = await phone();
+    final passphrase = await device.runner.generatePassphrase();
+
+    // The pull is the first thing the ceremony does in a Workspace, so failing
+    // the preferences pull stops the ceremony between the two.
+    device.link.failNextPullForWorkspaceId = userPreferencesWorkspaceId(_userId);
+
+    await expectLater(
+      device.runner.found(passphrase),
+      throwsA(isA<SyncTransportException>()
+          .having((error) => error.isUnreachable, 'isUnreachable', isTrue)),
+    );
+
+    // The default Workspace was registered before the interruption; the
+    // preferences one was not.
+    final interrupted = await device.runner.status();
+    expect(interrupted.state, EnrolmentState.foundingIncomplete);
+    expect(interrupted.foundedWorkspaceIds, [defaultWorkspaceId(_userId)]);
+
+    await device.runner.resume(passphrase);
+
+    await expectEnrolledAndClean(device);
+  });
+
+  test('a joining device interrupted between its Workspaces resumes once',
+      () async {
+    final founder = await phone();
+    final passphrase = await founder.runner.generatePassphrase();
+    await founder.runner.found(passphrase);
+
+    final second = await phone();
+    second.link.failNextPullForWorkspaceId = userPreferencesWorkspaceId(_userId);
+
+    await expectLater(
+      second.runner.resume(passphrase),
+      throwsA(isA<SyncTransportException>()
+          .having((error) => error.isUnreachable, 'isUnreachable', isTrue)),
+    );
+
+    final interrupted = await second.runner.status();
+    expect(interrupted.state, EnrolmentState.foundingIncomplete);
+    expect(interrupted.foundedWorkspaceIds, [defaultWorkspaceId(_userId)]);
+
+    await second.runner.resume(passphrase);
+
+    await expectEnrolledAndClean(second);
+  });
+
+  test('a registration the server took and the device never heard of is not '
+      'repeated by the founding device', () async {
+    final device = await phone();
+    final passphrase = await device.runner.generatePassphrase();
+
+    // The server takes the batch; the response never arrives.
+    device.link.dropPostResponse = true;
+
+    await expectLater(
+      device.runner.found(passphrase),
+      throwsA(isA<SyncTransportException>()
+          .having((error) => error.isUnreachable, 'isUnreachable', isTrue)),
+    );
+
+    await device.runner.resume(passphrase);
+
+    await expectEnrolledAndClean(device);
+  });
+
+  test('a registration the server took and the device never heard of is not '
+      'repeated by a joining device', () async {
+    final founder = await phone();
+    final passphrase = await founder.runner.generatePassphrase();
+    await founder.runner.found(passphrase);
+
+    final second = await phone();
+    second.link.dropPostResponse = true;
+
+    await expectLater(
+      second.runner.resume(passphrase),
+      throwsA(isA<SyncTransportException>()
+          .having((error) => error.isUnreachable, 'isUnreachable', isTrue)),
+    );
+
+    await second.runner.resume(passphrase);
+
+    await expectEnrolledAndClean(second);
   });
 }
