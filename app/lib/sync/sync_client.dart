@@ -45,7 +45,9 @@
 /// and seq ordering guarantees it is pulled before any of that author's content
 /// ops, so the pull itself hydrates the directory in order. A directory refresh
 /// racing a pull is not a hazard this client manages; it is a hazard this
-/// client cannot have.
+/// client cannot have. After a relaunch the directory is restored from the
+/// applied control log at assembly, because the pull cursor outlives the
+/// process and the registrations would never be served again.
 library;
 
 import 'dart:async' show Completer, unawaited;

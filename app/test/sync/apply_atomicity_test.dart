@@ -17,10 +17,11 @@
 ///    server that genuinely serves *different* bytes for one slot still earns the
 ///    `author_chain_slot_collision` alarm. Both are asserted, distinctly.
 ///
-/// Everything crash-recovered here is **self-authored**: the reopened client has
-/// only this device's own keys (a real relaunch rebuilds no peer directory), so a
-/// re-verified op must be one the device itself signed — which every #618 case
-/// is.
+/// Everything crash-recovered here is **self-authored**: a re-verified op must
+/// be one the device itself signed — which every #618 case is. The reopened
+/// client's directory is restored from the applied control log, the way a real
+/// relaunch restores it, so a peer-authored op would verify after a reopen too;
+/// these cases simply do not have one.
 @TestOn('!browser')
 library;
 
@@ -648,16 +649,15 @@ void main() {
       // the only thing that can drive this.
       //
       // The recovery pull is driven on the *same* client rather than a reopened
-      // one. Reopening (`SimDevice.reopenSyncStore`) hands the new `SyncClient` a
-      // fresh, empty `MemberDirectory` (see the file-level doc comment above: "a
-      // real relaunch rebuilds no peer directory") — fine for the self-authored
-      // #618/#620 cases, but `pruner` and `subject` are peers here, learned only
-      // via `_enrolPeer`'s live pull. A reopened client would have no record of
-      // their keys, and the attested-author loop's envelope verification would
-      // reject with `memberNotChainedToRoot` instead of recovering. Proving the
-      // durable-marker path (`_authorsWithInterruptedChainReplay`) rather than the
-      // transient `_chainSuccessorReplayRetryRequired` flag would need the harness
-      // to rehydrate the peer directory on reopen, which it does not currently do.
+      // one. This Workspace is memory-backed, so there is no file to reopen at
+      // all — and `pruner` and `subject` are peers here, learned only via
+      // `_enrolPeer`'s live pull, so a reopened client would have to rehydrate
+      // their keys from the applied control log before the attested-author
+      // loop's envelopes would verify. The harness does that now (#980), but
+      // this test's device has no file to reopen: proving the durable-marker
+      // path (`_authorsWithInterruptedChainReplay`) rather than the transient
+      // `_chainSuccessorReplayRetryRequired` flag would need a file-backed
+      // Workspace.
       faults.disarm();
       await a.client.pull();
       expect(await a.client.quarantined(includeReleased: false), isEmpty,
