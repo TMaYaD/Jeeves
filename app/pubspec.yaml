@@ -41,7 +41,7 @@ dependencies:
   web_socket_channel: ^3.0.3
 
   # Notifications
-  flutter_local_notifications: ^23.0.0
+  flutter_local_notifications: ^23.0.2
   flutter_timezone: ^5.1.1
   timezone: ^0.11.2
   # firebase_messaging: ^16.1.3   # Uncomment when Firebase is configured
@@ -66,13 +66,13 @@ dependencies:
   package_info_plus: ^10.2.2
 
   # File import
-  file_picker: ^13.3.2
+  file_picker: ^13.3.3
 
   # Encrypted token storage (JWT)
   flutter_secure_storage: ^11.2.0
 
   # Brand / SVG
-  flutter_svg: ^2.3.2
+  flutter_svg: ^2.4.0
 
   # Utilities
   # `DeepCollectionEquality` for op-payload field values, which are arbitrarily
