@@ -532,4 +532,55 @@ void main() {
 
     await expectEnrolledAndClean(second);
   });
+
+  test('a registration that never left the device is authored once', () async {
+    final founder = await phone();
+    final passphrase = await founder.runner.generatePassphrase();
+    await founder.runner.found(passphrase);
+
+    final second = await phone();
+    // The default Workspace, so the interruption is before this device has
+    // registered anywhere at all.
+    second.link.failNextPostForWorkspaceId = defaultWorkspaceId(_userId);
+
+    await expectLater(
+      second.runner.resume(passphrase),
+      throwsA(isA<SyncTransportException>()
+          .having((error) => error.isUnreachable, 'isUnreachable', isTrue)),
+    );
+
+    // The server never saw this device at all.
+    expect(
+      controlTypesAuthoredBy(
+          defaultWorkspaceId(_userId), second.stack.identity.memberId),
+      isEmpty,
+    );
+
+    await second.runner.resume(passphrase);
+
+    await expectEnrolledAndClean(second);
+  });
+
+  test('a founding device whose registration never left the device founds it '
+      'once', () async {
+    final device = await phone();
+    final passphrase = await device.runner.generatePassphrase();
+    device.link.failNextPostForWorkspaceId = defaultWorkspaceId(_userId);
+
+    await expectLater(
+      device.runner.found(passphrase),
+      throwsA(isA<SyncTransportException>()
+          .having((error) => error.isUnreachable, 'isUnreachable', isTrue)),
+    );
+
+    expect(
+      controlTypesAuthoredBy(
+          defaultWorkspaceId(_userId), device.stack.identity.memberId),
+      isEmpty,
+    );
+
+    await device.runner.resume(passphrase);
+
+    await expectEnrolledAndClean(device);
+  });
 }

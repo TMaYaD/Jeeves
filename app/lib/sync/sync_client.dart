@@ -888,7 +888,7 @@ class SyncClient {
   /// log, and exactly one genesis may exist. Retaining the queue here would wedge
   /// it for ever — our genesis can never become acceptable — so the staged ops go
   /// and the author chain rewinds to what the log actually acknowledges. See
-  /// [_dropSupersededGenesis].
+  /// [_dropUnacceptedOps].
   /// The queue is posted in [maxOpsPerBatch] chunks, in `author_seq` order, each
   /// acknowledged before the next goes out. Unchunked, a device that authored
   /// more than the server's cap while offline would re-POST the same oversized
@@ -918,7 +918,7 @@ class SyncClient {
         if (refusal.code != genesisNotFirstCode) rethrow;
         // Genesis sits at the head of the queue, so everything still unsent is
         // queued behind it and goes with it — not just this chunk.
-        await _dropSupersededGenesis(pending.sublist(start));
+        await _dropUnacceptedOps(pending.sublist(start));
         return FlushOutcome.genesisSuperseded;
       }
       await _markSent(chunk);
@@ -932,7 +932,14 @@ class SyncClient {
             ..where((row) => row.id.isIn([for (final row in acknowledged) row.id])))
           .write(OutboxCompanion(sentAt: Value(_now())));
 
-  /// Discard a genesis the race is already lost, and everything queued behind it.
+  /// Drop this Workspace's unsent control ops, and rewind the author chain to
+  /// the head the log attests.
+  ///
+  /// **The caller's rows are the only ones dropped.** Two callers, one routine:
+  /// a genesis the race is already lost (the flush's case) and an enrolment that
+  /// was interrupted before its registration reached the server
+  /// ([discardUnsentControlOps]'s case). Both are the same fact: the batch was
+  /// never accepted, so the positions its rows claim are unspent.
   ///
   /// **This is not the outbox being edited as evidence.** The outbox is authored
   /// truth about what the *server holds* — that is what the own-writes comparison
@@ -947,7 +954,7 @@ class SyncClient {
   /// a device that has just lost a founding race is nothing at all.
   ///
   /// No alarm. A lost race is two honest devices doing the same correct thing.
-  Future<void> _dropSupersededGenesis(List<OutboxRow> superseded) async {
+  Future<void> _dropUnacceptedOps(List<OutboxRow> superseded) async {
     // Read the re-derived head *before* the transaction, so clearing `authorState`
     // and rewriting it are one atomic step. The head derives from `op_log`, which
     // this transaction does not touch, so reading it first is safe — whereas a
@@ -981,6 +988,38 @@ class SyncClient {
             );
       }
     });
+  }
+
+  /// Drop this Workspace's unsent **control** ops, and rewind the author chain
+  /// to the head the log attests.
+  ///
+  /// The case is an enrolment that was interrupted before its registration
+  /// reached the server: the queue still holds the registration the server has
+  /// never seen, and re-authoring one behind it would claim an author position
+  /// the log says is free while the queue says otherwise. Dropping the queued
+  /// rows and re-authoring against the freshly pulled head is what keeps the
+  /// chain honest — and the head is the log's, not a remembered number.
+  ///
+  /// **Only control ops are ever dropped.** A queued content op is the user's
+  /// own work, and discarding it is not this call's business: every unsent row
+  /// is read first, and the call refuses rather than deleting anything if one
+  /// of them is not a control op.
+  Future<void> discardUnsentControlOps() async {
+    final pending = await (_db.select(_db.outbox)
+          ..where((row) => row.workspaceId.equals(workspaceId) & row.sentAt.isNull())
+          ..orderBy([(row) => OrderingTerm(expression: row.authorSeq)]))
+        .get();
+    if (pending.isEmpty) return;
+    for (final row in pending) {
+      final header = OpHeader.parse(row.envelope);
+      if (header.opClass != opClassControl) {
+        throw StateError(
+          'refusing to discard unsent op ${header.opId}: it is a content op, '
+          'and only control ops may be dropped',
+        );
+      }
+    }
+    await _dropUnacceptedOps(pending);
   }
 
   /// The own-writes verdict on one refused POST.

@@ -1226,6 +1226,11 @@ class EnrolmentService {
       return FlushOutcome.flushed;
     }
 
+    // Ops an earlier attempt left queued that never reached the server: the
+    // log the pull just read does not hold them, so they are re-authored
+    // against the head it attests rather than posted behind it.
+    await scoped.discardUnsentControlOps();
+
     final observedHead = await scoped.appliedControlHead();
     final observedEmpty = sameBytes(observedHead, zeroPrevControlHash);
 
