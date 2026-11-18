@@ -1,6 +1,10 @@
 /// Attribute editors shared by the Task Detail screen and the Daily Planning
 /// Outcome peek: time estimate, energy and context-tag sheets, and the due-date
 /// picker. A behaviour-preserving move out of `task_detail_screen.dart`.
+///
+/// The sheets report every change through callbacks rather than writing
+/// through an Outcome's notifier, so a surface that is not an Outcome — a
+/// habit's energy and estimate, say — can offer the same editors.
 library;
 
 import 'package:flutter/material.dart';
@@ -12,7 +16,41 @@ import 'clarify_shared_widgets.dart';
 import 'context_tag_picker.dart';
 import 'meta_chip.dart';
 
-void showOutcomeContextTagEditor(BuildContext context, String todoId) {
+/// Opens the sheet that edits a set of labels: the applied tags and a dotted
+/// `+` that opens the searchable tag cloud, or with [cloudOnly] the cloud alone.
+///
+/// [watchAssignedTags] reads the labels already applied; it runs inside the
+/// sheet, so the sheet keeps up with labels applied or removed while it is
+/// open. [onAssign] and [onRemove] report every change, and [title] names the
+/// sheet for the caller.
+void showLabelEditorSheet(
+  BuildContext context, {
+  required List<Tag> Function(WidgetRef ref) watchAssignedTags,
+  required void Function(WidgetRef ref, Tag tag) onAssign,
+  required void Function(WidgetRef ref, Tag tag) onRemove,
+  String title = 'Edit Labels',
+  bool cloudOnly = false,
+}) {
+  _showLabelSheet(
+    context,
+    title: title,
+    body: (_) => Consumer(
+      builder: (context, ref, _) => ContextTagPickerWidget(
+        cloudOnly: cloudOnly,
+        assignedTags: watchAssignedTags(ref),
+        onAssign: (tag) => onAssign(ref, tag),
+        onRemove: (tag) => onRemove(ref, tag),
+      ),
+    ),
+  );
+}
+
+/// The shell every label sheet shares: a title and its body.
+void _showLabelSheet(
+  BuildContext context, {
+  required String title,
+  required Widget Function(BuildContext context) body,
+}) {
   showModalBottomSheet(
     context: context,
     isScrollControlled: true,
@@ -24,31 +62,9 @@ void showOutcomeContextTagEditor(BuildContext context, String todoId) {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Edit Labels', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 16),
-          Consumer(
-            builder: (context, ref, _) {
-              final tags =
-                  ref.watch(taskTagsProvider(todoId)).asData?.value ??
-                      const <Tag>[];
-              final contextTags =
-                  tags.where((t) => t.type == 'context').toList();
-              return ContextTagPickerWidget(
-                cloudOnly: true,
-                assignedTags: contextTags,
-                onAssign: (tag) =>
-                    ref
-                        .read(taskDetailNotifierProvider(todoId))
-                        .assignContextTag(tag.id)
-                        .ignore(),
-                onRemove: (tag) =>
-                    ref
-                        .read(taskDetailNotifierProvider(todoId))
-                        .removeContextTag(tag.id)
-                        .ignore(),
-              );
-            },
-          ),
+          body(ctx),
         ],
        ),
       ),
@@ -56,8 +72,35 @@ void showOutcomeContextTagEditor(BuildContext context, String todoId) {
   );
 }
 
+/// Opens the Outcome's labels: [showLabelEditorSheet] over the Outcome's
+/// context tags and its notifier.
+void showOutcomeContextTagEditor(BuildContext context, String todoId) {
+  showLabelEditorSheet(
+    context,
+    cloudOnly: true,
+    watchAssignedTags: (ref) =>
+        (ref.watch(taskTagsProvider(todoId)).asData?.value ?? const <Tag>[])
+            .where((t) => t.type == 'context')
+            .toList(),
+    onAssign: (ref, tag) => ref
+        .read(taskDetailNotifierProvider(todoId))
+        .assignContextTag(tag.id)
+        .ignore(),
+    onRemove: (ref, tag) => ref
+        .read(taskDetailNotifierProvider(todoId))
+        .removeContextTag(tag.id)
+        .ignore(),
+  );
+}
+
+/// Opens the time-estimate sheet. [onSet] receives the chosen number of
+/// minutes, [onClear] removes the estimate.
 Future<void> showOutcomeTimeEstimateSheet(
-    BuildContext context, TaskDetailNotifier notifier, int? current) async {
+  BuildContext context, {
+  required ValueChanged<int> onSet,
+  required VoidCallback onClear,
+  int? current,
+}) async {
   // The shared ladder plus a `null` "None" row — the same options and the
   // same labels the clarify surfaces and the planned-action sheet offer, so
   // an estimate reads identically wherever it is set or shown.
@@ -86,9 +129,9 @@ Future<void> showOutcomeTimeEstimateSheet(
                   trailing: val == current ? const Icon(Icons.check, color: Color(0xFF2563EB)) : null,
                   onTap: () {
                     if (val == null) {
-                      notifier.clearTimeEstimate();
+                      onClear();
                     } else {
-                      notifier.setTimeEstimate(val);
+                      onSet(val);
                     }
                     Navigator.pop(ctx);
                   },
@@ -102,8 +145,14 @@ Future<void> showOutcomeTimeEstimateSheet(
   );
 }
 
+/// Opens the energy sheet. [onSet] receives the chosen level, [onClear]
+/// removes it.
 Future<void> showOutcomeEnergyLevelSheet(
-    BuildContext context, TaskDetailNotifier notifier, String? current) async {
+  BuildContext context, {
+  required ValueChanged<String> onSet,
+  required VoidCallback onClear,
+  String? current,
+}) async {
   showModalBottomSheet(
     context: context,
     backgroundColor: Colors.white,
@@ -125,9 +174,9 @@ Future<void> showOutcomeEnergyLevelSheet(
               emptySelectionAllowed: true,
               onSelectionChanged: (s) {
                 if (s.isEmpty || s.first == null) {
-                  notifier.clearEnergyLevel();
+                  onClear();
                 } else {
-                  notifier.setEnergyLevel(s.first!);
+                  onSet(s.first!);
                 }
                 Navigator.pop(ctx);
               },

@@ -259,7 +259,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                     children: [
                       // Project Picker Custom UI
                       ProjectPickerWidget(
-                        currentProjectTag: projectTag,
+                        currentTag: projectTag,
                         onAssign: (tag) => _notifier.assignProject(tag.id).ignore(),
                         onClear: () => _notifier.clearProject().ignore(),
                         customChild: Padding(
@@ -313,9 +313,17 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                         timeContextChip:
                             TimeContextChip(outcomeId: widget.todoId),
                         onEnergyTap: () => showOutcomeEnergyLevelSheet(
-                            context, _notifier, todo.energyLevel),
+                          context,
+                          onSet: (level) => _notifier.setEnergyLevel(level).ignore(),
+                          onClear: () => _notifier.clearEnergyLevel().ignore(),
+                          current: todo.energyLevel,
+                        ),
                         onEstimateTap: () => showOutcomeTimeEstimateSheet(
-                            context, _notifier, todo.timeEstimate),
+                          context,
+                          onSet: (minutes) => _notifier.setTimeEstimate(minutes).ignore(),
+                          onClear: () => _notifier.clearTimeEstimate().ignore(),
+                          current: todo.timeEstimate,
+                        ),
                         onDueTap: () async {
                           final picked = await pickOutcomeDueDate(context, todo.dueDate);
                           if (picked != null) {
