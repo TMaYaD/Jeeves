@@ -1323,6 +1323,21 @@ class SyncClient {
         await _stampRefused(row.seq, rejection.reason);
       }
     }
+    // A change the User took upstream is applied again here. The wipe above
+    // cleared the merge state, and the log cannot rebuild it: the change was
+    // never logged, because it was refused. Only the changes the User has
+    // answered for, and only while they are still held, are re-applied — in the
+    // order they arrived in, so the merge sees them the way it saw them before.
+    final takenUpstream = await (_db.select(_db.quarantinedOps)
+          ..where((row) =>
+              row.workspaceId.equals(workspaceId) &
+              row.resolution.equals(AlarmResolution.tookUpstream.code) &
+              row.releasedAt.isNull())
+          ..orderBy([(row) => OrderingTerm(expression: row.seq)]))
+        .get();
+    for (final row in takenUpstream) {
+      affected.addAll(await _applyHeldChange(row));
+    }
     if (carriedAcrossRebuild.isNotEmpty) {
       await host!.restore(carriedAcrossRebuild);
     }
@@ -3467,6 +3482,144 @@ class SyncClient {
 
   // --- Resolutions ------------------------------------------------------------
 
+  /// Apply one held change, without checking where it sits in its author's
+  /// chain.
+  ///
+  /// The fail-closed rule says a change from an author whose chain has a hole
+  /// does not apply until the hole closes. **Taking upstream is the User
+  /// breaking that rule on purpose**: this change's *position* is unverified,
+  /// and every other check about it runs exactly as it does on the receive
+  /// path — the author's signature over the bytes, the codec, the payload's
+  /// shape, and the author's Grant at the change's own server seq.
+  ///
+  /// The chain verdict is the one check left out, and so is the `op_log`
+  /// write: the change was refused, so it was never logged, and logging it now
+  /// would put bytes in the log that the chain never vouched for. The row stays
+  /// where it is — held, with no `released_at` — so the normal chain release
+  /// still owns it: if the missing change ever arrives, the log heals and this
+  /// re-apply is a no-op.
+  ///
+  /// Returns the entities the change touched. An **empty set means the change
+  /// did not apply**: a refusal — corrupt bytes, a missing key, a revoked Grant
+  /// — leaves the row exactly as it was.
+  Future<Set<AffectedEntity>> _applyHeldChange(QuarantineRow row) async {
+    try {
+      final parts = splitEnvelope(row.envelope);
+      final header = OpHeader.parse(parts.header);
+      final signPk =
+          directory.publicKeyFor(header.authorMemberId, header.authorKeyId);
+      await verifyEnvelope(row.envelope, signPk);
+      final payload =
+          await _decodeContentPayload(header, parts.header, parts.body);
+      guardOpClassShape(payload, opClass: header.opClass);
+      final seq = row.seq;
+      // A held row with no transport seq has no position to read a Grant at,
+      // and no position to be the log's own.
+      if (seq == null) return const {};
+      // The Grant is read at the change's **own** server seq, never against
+      // current control state — the same rule the receive path follows.
+      final authorization = (await grantsView()).verdictFor(
+        authorMemberId: header.authorMemberId,
+        opClass: header.opClass,
+        seq: seq,
+      );
+      if (authorization != null) return const {};
+      final affected = await _reducer.apply(
+        payload,
+        authorMemberIdHex: memberIdToHex(header.authorMemberId),
+      );
+      _clock.receive(payload.hlc);
+      return affected;
+    } on SyncRejection {
+      return const {};
+    }
+  }
+
+  /// Apply the changes the User decided to take from the server, and settle the
+  /// accusation they were holding open.
+  ///
+  /// The decision is the User's: the server's chain is the one to keep, so the
+  /// changes it holds are applied even though their position in that chain was
+  /// never verified. Everything else about them is still checked — see
+  /// [_applyHeldChange].
+  ///
+  /// The rows are stamped `took_upstream` and **stay held**: the change was
+  /// never logged, and the chain release still owns the row, so the log heals
+  /// on its own if the missing change ever arrives.
+  ///
+  /// The alarm is settled only when nothing is left undecided. A change that
+  /// cannot be applied — corrupt bytes, a revoked Grant — leaves its row
+  /// undecided, and an undecided row keeps the alarm standing: the User asked
+  /// for the server's version, and the server's version could not be read.
+  Future<void> _takeUpstream(IntegrityAlarmRow alarm) async {
+    final author = alarm.authorMemberId;
+    final held = await (_db.select(_db.quarantinedOps)
+          ..where((row) =>
+              row.workspaceId.equals(workspaceId) &
+              row.releasedAt.isNull() &
+              row.resolution.isNull() &
+              row.reason.equals(SyncRejectionReason.authorChainGap.code) &
+              (author == null
+                  ? row.authorMemberId.isNull()
+                  : row.authorMemberId.equals(author)))
+          ..orderBy([
+            (row) => OrderingTerm(expression: row.authorSeq),
+            (row) => OrderingTerm(expression: row.id),
+          ]))
+        .get();
+    final affected = <AffectedEntity>{};
+    final decided = <int>{};
+    final now = _now();
+    await _db.transaction(() async {
+      for (final row in held) {
+        final touched = await _applyHeldChange(row);
+        if (touched.isEmpty) continue;
+        affected.addAll(touched);
+        decided.add(row.id);
+        await (_db.update(_db.quarantinedOps)..where((r) => r.id.equals(row.id)))
+            .write(QuarantinedOpsCompanion(
+          resolution: Value(AlarmResolution.tookUpstream.code),
+          resolutionDecidedAt: Value(now),
+        ));
+      }
+      if (decided.length == held.length) {
+        // Nothing is left to decide about this author, so the accusation is
+        // settled — and so is the fork the gap was holding open.
+        await (_db.update(_db.integrityAlarms)
+              ..where((row) =>
+                  row.workspaceId.equals(workspaceId) &
+                  row.kind.equals(IntegrityAlarmKind.authorChainGap.code) &
+                  (author == null
+                      ? row.authorMemberId.isNull()
+                      : row.authorMemberId.equals(author)) &
+                  row.resolvedAt.isNull()))
+            .write(IntegrityAlarmsCompanion(
+          resolution: Value(AlarmResolution.tookUpstream.code),
+          resolutionDecidedAt: Value(now),
+          resolvedAt: Value(now),
+        ));
+        await (_db.update(_db.integrityAlarms)
+              ..where((row) =>
+                  row.workspaceId.equals(workspaceId) &
+                  row.kind.equals(IntegrityAlarmKind.authorChainFork.code) &
+                  (author == null
+                      ? row.authorMemberId.isNull()
+                      : row.authorMemberId.equals(author)) &
+                  row.resolvedAt.isNull()))
+            .write(IntegrityAlarmsCompanion(
+          resolution: Value(AlarmResolution.tookUpstream.code),
+          resolutionDecidedAt: Value(now),
+          resolvedAt: Value(now),
+        ));
+      }
+    });
+    // The projection is the tail of the receive order, as it is at the end of a
+    // pull: what the applied changes touched is projected once, and the
+    // convergence passes run over what it changed.
+    final touched = await projector?.project(affected);
+    if (touched != null) await _reconcileProjected(touched);
+  }
+
   /// Record the user's decision on an integrity alarm.
   ///
   /// The decision is written twice, in one transaction: on every refused change
@@ -3484,6 +3637,10 @@ class SyncClient {
   /// A decision this build cannot carry out yet throws [UnsupportedError], also
   /// without writing. Which ones those are changes as the rest of #575 lands,
   /// so the error names the decision rather than failing quietly.
+  ///
+  /// **Taking upstream is the exception**: it has its own path
+  /// ([_takeUpstream]), because it applies the held changes rather than only
+  /// writing a decision about them.
   Future<void> resolveAlarm(int alarmRowId, AlarmResolution resolution) async {
     final alarm = await (_db.select(_db.integrityAlarms)
           ..where((row) => row.id.equals(alarmRowId)))
@@ -3509,9 +3666,10 @@ class SyncClient {
     }
     switch (resolution) {
       case AlarmResolution.tookUpstream:
-        throw UnsupportedError(
-          'taking upstream is not implemented yet (#575)',
-        );
+        // The one decision that relaxes a rule: the held changes are applied
+        // without their chain position being verified.
+        await _takeUpstream(alarm);
+        return;
       case AlarmResolution.keptOurs:
         if (kind != IntegrityAlarmKind.ownWritesDivergence) {
           throw UnsupportedError(

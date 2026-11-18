@@ -15,7 +15,7 @@ library;
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:drift/drift.dart' show OrderingTerm;
+import 'package:drift/drift.dart' show OrderingTerm, Value;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/sync/alarm_resolution.dart';
 import 'package:jeeves/sync/chain_verifier.dart';
@@ -1142,8 +1142,13 @@ void main() {
       );
     });
 
-    test('taking upstream is not implemented yet, and says so', () async {
-      // A gap alarm: the one kind that offers taking upstream.
+    // --- Taking upstream: the User breaks the fail-closed rule on purpose ---
+
+    /// The withheld-change recipe: the peer's second content op never arrives,
+    /// so its third lands beyond the verified head and is held.
+    ///
+    /// Returns the transport seq of each of the three ops, in order.
+    Future<List<int>> withholdTheMiddleChange() async {
       final first = await _op(workspace, peer, 'one');
       final withheld = await _op(workspace, peer, 'two');
       final third = await _op(workspace, peer, 'three');
@@ -1152,19 +1157,133 @@ void main() {
         [first, withheld, third],
       );
       workspace.server.omitSeqs.add(appended[1].seq);
-
       await a.sync();
+      return [for (final op in appended) op.seq];
+    }
+
+    test('taking upstream applies the held change and settles the alarm',
+        () async {
+      await withholdTheMiddleChange();
+
+      // The later change is held, not applied, and it is the accusation.
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(gap.resolvedAt, isNull);
+      expect((await a.client.health()).actionableAlarmCount, 1);
+      expect(await _doc(a, workspace), {'step': 'one'});
+      final heldBefore = await a.client.quarantined();
+      expect(heldBefore.single.releasedAt, isNull);
+      final logBefore = await a.loggedOps();
+
+      await a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+
+      // The change is in the reduced state now.
+      expect(await _doc(a, workspace), {'step': 'three'});
+      final settled =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(settled.resolution, AlarmResolution.tookUpstream.code);
+      expect(settled.resolutionDecidedAt, isNotNull);
+      expect(settled.resolvedAt, isNotNull);
+      expect((await a.client.health()).clean, isTrue);
+
+      // The row is still held. The decision did not make the change verified,
+      // and the chain release still owns the row.
+      final heldAfter = await a.client.quarantined();
+      expect(heldAfter.single.id, heldBefore.single.id);
+      expect(heldAfter.single.releasedAt, isNull);
+      expect(heldAfter.single.resolution, AlarmResolution.tookUpstream.code);
+
+      // The log is unchanged: a change whose position was never verified is
+      // not written into the log.
+      final logAfter = await a.loggedOps();
+      expect(logAfter.length, logBefore.length);
+      expect(
+        logAfter.map((row) => row.seq).toList(),
+        logBefore.map((row) => row.seq).toList(),
+      );
+    });
+
+    test('a change that arrives after the decision is released, and heals the log',
+        () async {
+      final seqs = await withholdTheMiddleChange();
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      await a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+
+      // The missing change turns up, and the chain heals without asking again.
+      workspace.server.omitSeqs.remove(seqs[1]);
+      await a.client.resetCursorForReplay();
+      await a.sync();
+
+      final released = (await a.client.quarantined()).single;
+      expect(released.releasedAt, isNotNull);
+      // Nothing changed twice: the change that was taken upstream is the state.
+      expect(await _doc(a, workspace), {'step': 'three'});
+      final after =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(after.resolvedAt, isNotNull);
+    });
+
+    test('a rebuild from the log keeps a change that was taken upstream',
+        () async {
+      await withholdTheMiddleChange();
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      await a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+
+      // A rebuild wipes the merge state and replays the log — and the log does
+      // not hold this change, because it was never logged.
+      await a.client.rebuildFromOpLog();
+
+      expect(await _doc(a, workspace), {'step': 'three'});
+    });
+
+    test('a change the device sends after the decision stands the alarm again',
+        () async {
+      await withholdTheMiddleChange();
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      await a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+
+      // The peer's next change, held back as well: a new accusation, and a new
+      // question — the last answer was about the changes held then.
+      final fourth = await _op(workspace, peer, 'four');
+      workspace.server.injectUnchecked(workspace.workspaceId, fourth);
+      await a.sync();
+
+      final after =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(after.resolvedAt, isNull);
+      expect(after.resolution, isNull);
+      expect((await a.client.health()).actionableAlarmCount, 1);
+    });
+
+    test('a held change whose bytes were corrupted stays held, and the alarm stands',
+        () async {
+      await withholdTheMiddleChange();
+      final held = (await a.client.quarantined()).single;
+      // The stored bytes are corrupted after they were stored.
+      final corrupted = Uint8List.fromList(held.envelope);
+      corrupted[headerLengthBytes + 8] ^= 0x01;
+      await (a.database.update(a.database.quarantinedOps)
+            ..where((row) => row.id.equals(held.id)))
+          .write(QuarantinedOpsCompanion(envelope: Value(corrupted)));
 
       final gap =
           (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
-      await expectLater(
-        a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream),
-        throwsA(isA<UnsupportedError>()),
-      );
-      final after =
-          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      await a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+
+      // The change could not be read, so it was not taken: the row stays
+      // undecided, and an undecided row keeps the accusation standing.
+      final after = (await a.client.quarantined()).single;
+      expect(after.id, held.id);
       expect(after.resolution, isNull);
-      expect(after.resolvedAt, isNull);
+      expect(after.releasedAt, isNull);
+      final stillStanding =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(stillStanding.resolvedAt, isNull);
+      expect(stillStanding.resolution, isNull);
+      expect((await a.client.health()).actionableAlarmCount, 1);
     });
   });
 
