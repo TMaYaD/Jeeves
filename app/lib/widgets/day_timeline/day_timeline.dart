@@ -75,6 +75,7 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
   final _stackKey = GlobalKey();
   late DayLayout _layout;
   late String _inputsSignature;
+  late String _sprintsSignature;
   late DateTime _windowStart;
   late DateTime _windowEnd;
   late final ScrollController _scrollController;
@@ -84,6 +85,7 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _inputsSignature = _signatureOf(widget);
+    _sprintsSignature = _sprintsSignatureOf(widget);
     _recompute();
     // Open on the now line, or on the start of the day when it is not in view.
     final now = ref.read(clockProvider)();
@@ -110,9 +112,19 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
   void didUpdateWidget(DayTimeline oldWidget) {
     super.didUpdateWidget(oldWidget);
     final signature = _signatureOf(widget);
+    final sprintsSignature = _sprintsSignatureOf(widget);
     if (signature != _inputsSignature) {
       _inputsSignature = signature;
+      _sprintsSignature = sprintsSignature;
       _recompute();
+      return;
+    }
+    // The Sprints done are a record of the day, not a plan: a Sprint that
+    // arrives late grows the window to hold it. The planned pieces stay where
+    // they are — a record never re-flows a plan.
+    if (sprintsSignature != _sprintsSignature) {
+      _sprintsSignature = sprintsSignature;
+      _computeWindow();
     }
   }
 
@@ -126,6 +138,13 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
           '${event.start.millisecondsSinceEpoch}-${event.end.millisecondsSinceEpoch}',
       ].join(';');
 
+  /// The Sprints the lane draws, by id and time: what the window must hold.
+  static String _sprintsSignatureOf(DayTimeline widget) => [
+        for (final mark in widget.sprintMarks)
+          '${mark.id}-${mark.startedAt.millisecondsSinceEpoch}-'
+              '${mark.endedAt?.millisecondsSinceEpoch ?? 0}',
+      ].join(';');
+
   void _recompute() {
     _layout = flowDay(
       scope: widget.scope,
@@ -137,6 +156,20 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
       entries: widget.entries,
       events: widget.events,
     );
+    _computeWindow();
+  }
+
+  /// The stretch of the day the timeline draws.
+  ///
+  /// The planned pieces, the available time, and the Sprints done. A Sprint is
+  /// a record of what happened, not a plan: one that ran past the planned
+  /// window is drawn where it ran, so the window grows to hold it. The planned
+  /// placements are not moved — the window only says how much of the day is
+  /// drawn.
+  ///
+  /// [now] is the instant the window is drawn for; a Sprint still running
+  /// reaches to it, so the window moves on as the Sprint goes on.
+  void _computeWindow([DateTime? now]) {
     final dayEnd =
         widget.flowOrigin.add(Duration(minutes: widget.availableMinutes));
     var first = widget.flowOrigin;
@@ -147,10 +180,35 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
         if (piece.end.isAfter(last)) last = piece.end;
       }
     }
+    final at = now ?? ref.read(clockProvider)();
+    for (final mark in _marksInLane()) {
+      if (mark.startedAt.isBefore(first)) first = mark.startedAt;
+      // A running Sprint has no end yet: it reaches to now.
+      final end = mark.endedAt ?? at;
+      if (end.isAfter(last)) last = end;
+    }
     _windowStart = DateTime(first.year, first.month, first.day, first.hour);
     final endsOnTheHour = last.minute == 0 && last.second == 0;
     _windowEnd = DateTime(last.year, last.month, last.day, last.hour)
         .add(Duration(hours: endsOnTheHour ? 0 : 1));
+  }
+
+  /// The Sprints the lane draws: the day's, on the Outcomes the day carries.
+  ///
+  /// A Sprint from another day is not part of this day's record, and a Sprint
+  /// on an Outcome the day does not carry has no tile to belong to. The window
+  /// holds exactly these, so a Sprint that is not drawn does not stretch it.
+  List<TileSprintMark> _marksInLane() {
+    final byOutcome = tileSprintMarksOfDay(
+      widget.sprintMarks,
+      widget.flowOrigin,
+    );
+    return [
+      for (final entry in widget.entries)
+        for (final mark
+            in byOutcome[entry.outcomeId] ?? const <TileSprintMark>[])
+          mark,
+    ];
   }
 
   DayTimelineEntry _entryFor(String outcomeId) =>
@@ -223,6 +281,9 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
   @override
   Widget build(BuildContext context) {
     final now = ref.read(clockProvider)();
+    // The window is drawn for the instant it is drawn at: a Sprint still
+    // running grows the window as it goes on, the way the now line moves.
+    _computeWindow(now);
     final dayEnd =
         widget.flowOrigin.add(Duration(minutes: widget.availableMinutes));
     final freeMinutes = freeGaps(widget.flowOrigin, dayEnd, widget.events)
@@ -310,7 +371,7 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
                 for (final placement in _layout.entries)
                   for (final piece in placement.pieces)
                     _tile(placement, piece, now, sprintsByOutcome),
-                _lane(sprintsByOutcome, now),
+                _lane(now),
                 if (!now.isBefore(_windowStart) && now.isBefore(_windowEnd))
                   Positioned(
                     key: const Key('day_timeline_now_line'),
@@ -490,18 +551,10 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
   /// A Sprint is drawn where it happened, so one that ran past its tile or
   /// fell short of it is not "corrected" to fit: the lane and the tile are
   /// two records of the same day, never reconciled.
-  Widget _lane(
-    Map<String, List<TileSprintMark>> sprintsByOutcome,
-    DateTime now,
-  ) {
+  Widget _lane(DateTime now) {
     // Only the Sprints of the day's Plan entries: a Sprint on an Outcome the
     // day does not carry has no tile to belong to.
-    final marks = [
-      for (final entry in widget.entries)
-        for (final mark
-            in sprintsByOutcome[entry.outcomeId] ?? const <TileSprintMark>[])
-          mark,
-    ];
+    final marks = _marksInLane();
     return Positioned(
       key: const Key('day_timeline_sprint_lane'),
       right: 0,

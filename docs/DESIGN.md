@@ -408,11 +408,11 @@ This pattern is used on Step 5 (Build Today's Plan) of the Daily Planning ritual
 The Plan Summary capacity bar fills in two segments. Minutes from Outcomes with a real time estimate render in the load-status tone — green (`#16A34A`) at or below 0.8 of available time, amber (`#F59E0B`) up to 1.0, red (`#DC2626`) over — keyed off the *combined* ratio so the warn/over thresholds are unchanged. Minutes contributed by selected Outcomes that carry **no** estimate (counted at the configurable default, see REQUIREMENTS Daily Planning Step 5) render immediately after them as a lighter-blue segment (`#93C5FD`, Tailwind blue-300 — same family as the Daily Planning accent `#2563EB`). The lighter blue marks that provenance; the estimate-less cards themselves look exactly like any other card (no chip). When nothing is counted at the default the bar is a single status-tone fill, unchanged. The bar keeps its 10px height, 4px corner radius, and `#E5E7EB` track.
 
 ### Timeline tile
-A Plan entry's suggested time, tall as its estimate, no sprint blocks; a chunked piece reads "part N", a user-set time "Set by you". Upcoming pale blue, running blue, done grey, unstarted amber. Events: hatched, read-only. Sprints done: a lane at its right edge. Timeboxed: heavier bottom edge.
+A Plan entry's suggested time, tall as its estimate, no sprint blocks; a chunked piece reads "part N", a user-set time "Set by you". Upcoming pale blue, running blue, done grey, unstarted amber. Events: hatched, read-only. Timeboxed: heavier bottom edge.
 
 | Element | Contract |
 |---|---|
-| Sprint lane | Each recorded Sprint is a bar in the lane at the real time it ran — the lane is a record, never a correction of the tile. |
+| Sprint lane | Each recorded Sprint is a bar in the lane at the real time it ran — a record, never a correction of the tile. The day's window grows to hold a Sprint that ran outside it; the planned tiles do not move. |
 | Sprint count | The tile's detail line ends with the Outcome's Sprints and their time: "2 sprints · 46m". A running Sprint counts the time since it started. |
 
 ### Outcome peek sheet

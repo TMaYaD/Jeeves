@@ -264,6 +264,58 @@ void main() {
     expect(find.textContaining('2 sprints · 46m'), findsOneWidget);
   });
 
+  testWidgets('a Sprint that ran outside the planned window is still drawn',
+      (tester) async {
+    // The plan is 09:00-10:00; the Sprint ran 10:10-10:33, past it.
+    await tester.pumpWidget(_app([
+      _entry('a', 60),
+    ], availableMinutes: 60, sprints: [
+      _sprint('s1', 'a',
+          startedAt: DateTime(2030, 3, 15, 10, 10),
+          endedAt: DateTime(2030, 3, 15, 10, 33)),
+    ]));
+
+    final lane =
+        tester.getRect(find.byKey(const Key('day_timeline_sprint_lane')));
+    final mark =
+        tester.getRect(find.byKey(const Key('day_timeline_sprint_s1')));
+
+    // The window grew to hold the Sprint: 09:00 to 11:00, not 09:00 to 10:00.
+    expect(lane.height, 120);
+    // The bar is inside the lane, so it is drawn rather than clipped away.
+    expect(mark.top, greaterThanOrEqualTo(lane.top));
+    expect(mark.bottom, lessThanOrEqualTo(lane.bottom));
+  });
+
+  testWidgets('a Sprint that arrives late grows the window, and the plan '
+      'stays where it was', (tester) async {
+    await tester.pumpWidget(_app([_entry('a', 60)], availableMinutes: 60));
+
+    final laneBefore =
+        tester.getRect(find.byKey(const Key('day_timeline_sprint_lane')));
+    expect(laneBefore.height, 60);
+
+    // The Sprint arrives by sync, after the timeline was drawn.
+    await tester.pumpWidget(_app([_entry('a', 60)], availableMinutes: 60, sprints: [
+      _sprint('s1', 'a',
+          startedAt: DateTime(2030, 3, 15, 10, 10),
+          endedAt: DateTime(2030, 3, 15, 10, 33)),
+    ]));
+
+    final lane =
+        tester.getRect(find.byKey(const Key('day_timeline_sprint_lane')));
+    final mark =
+        tester.getRect(find.byKey(const Key('day_timeline_sprint_s1')));
+    expect(lane.height, 120);
+    expect(mark.bottom, lessThanOrEqualTo(lane.bottom));
+
+    // The plan did not move: the tile still starts at the window's start and
+    // is still the length it was. A record never re-flows a plan.
+    final tile = tester.getRect(find.byKey(const Key('day_timeline_tile_a_1')));
+    expect(tile.top, lane.top);
+    expect(tile.height, 60);
+  });
+
   testWidgets('a running Sprint counts the time since it started',
       (tester) async {
     await tester.pumpWidget(_app([
