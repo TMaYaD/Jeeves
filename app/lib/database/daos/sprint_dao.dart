@@ -307,39 +307,50 @@ class SprintDao extends DatabaseAccessor<GtdDatabase> with _$SprintDaoMixin {
   /// A Sprint whose Action was deleted has no Outcome: its Sprints detach and
   /// are never deleted, and a detached Sprint belongs to no Outcome's tile.
   Future<List<SprintOutcomeRecord>> getRecordsByOutcome() async =>
-      _recordsWithOutcome(await select(sprints).get());
+      _recordsWithOutcome(await _sprintsWithTheirActions().get());
 
   /// The same, live: a Sprint projected in by a peer (the sync host writes the
   /// row and notifies) reaches the reader without a restart.
+  ///
+  /// The watch covers the Actions as well as the Sprints. Sync may deliver a
+  /// Sprint before the Action it ran on — the two are separate collections and
+  /// either may arrive first — and a Sprint reaches the reader only once its
+  /// Action is there. A watch on the Sprints alone would leave that Sprint
+  /// missing until the next Sprint write or a restart.
   Stream<List<SprintOutcomeRecord>> watchRecordsByOutcome() {
-    // The watch is on `sprints` alone: a Sprint projected in by a peer is written
-    // outside Drift's own bookkeeping and announced by `notifySprintsViewWrite`,
-    // which names that table.
-    return select(sprints).watch().asyncMap(_recordsWithOutcome);
+    // The join is what makes the watch cover both tables: a joined watch is
+    // refreshed when either side changes. The projector announces the Actions
+    // through `notifyActionsViewWrite` and the Sprints through
+    // `notifySprintsViewWrite`, because a projected row is written outside
+    // Drift's own bookkeeping and the notify is all there is.
+    return _sprintsWithTheirActions().watch().map(_recordsWithOutcome);
   }
+
+  /// The recorded Sprints joined to the Action each ran on.
+  ///
+  /// A left join: a Sprint whose Action is not here yet — it has not arrived
+  /// from a peer — is still a Sprint, and joins to nothing.
+  JoinedSelectStatement _sprintsWithTheirActions() => select(sprints).join([
+        leftOuterJoin(actions, actions.id.equalsExp(sprints.actionId)),
+      ]);
 
   /// The recorded Sprints of [rows], each with the Outcome its Action belongs
   /// to. A Sprint whose Action is gone has no Outcome and is left out.
-  Future<List<SprintOutcomeRecord>> _recordsWithOutcome(List<Sprint> rows) async {
-    final records = sprintRecordsWithEffectiveEnds(rows);
-    final actionIds = {
-      for (final record in records)
-        if (record.actionId != null) record.actionId!,
-    };
-    if (actionIds.isEmpty) return const <SprintOutcomeRecord>[];
-    final actionRows =
-        await (select(actions)..where((a) => a.id.isIn(actionIds))).get();
-    final outcomeIdByActionId = {
-      for (final action in actionRows) action.id: action.outcomeId,
-    };
-    return [
-      for (final record in records)
-        if (record.actionId != null)
-          () {
-            final outcomeId = outcomeIdByActionId[record.actionId!];
-            if (outcomeId == null) return null;
-            return SprintOutcomeRecord(record: record, outcomeId: outcomeId);
-          }(),
-    ].whereType<SprintOutcomeRecord>().toList();
+  List<SprintOutcomeRecord> _recordsWithOutcome(List<TypedResult> rows) {
+    final sprintRows = <Sprint>[];
+    final outcomeIdBySprintId = <String, String?>{};
+    for (final row in rows) {
+      final sprint = row.readTable(sprints);
+      sprintRows.add(sprint);
+      outcomeIdBySprintId[sprint.id] = row.readTableOrNull(actions)?.outcomeId;
+    }
+    final records = sprintRecordsWithEffectiveEnds(sprintRows);
+    final withOutcome = <SprintOutcomeRecord>[];
+    for (final record in records) {
+      final outcomeId = outcomeIdBySprintId[record.id];
+      if (outcomeId == null) continue;
+      withOutcome.add(SprintOutcomeRecord(record: record, outcomeId: outcomeId));
+    }
+    return withOutcome;
   }
 }

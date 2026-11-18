@@ -204,4 +204,71 @@ void main() {
       await teardownApp(tester);
     }
   });
+
+  testWidgets('a Sprint that arrives before its Action is counted once the '
+      'Action arrives', (tester) async {
+    try {
+      await openNowScreen(tester);
+      expect(find.textContaining('1 sprint · 23m'), findsNothing);
+
+      // The peer recorded a Sprint on an Action this device has not seen yet.
+      // The two are separate collections, so either may converge first: the
+      // Sprint's op arrives first, and the row lands with an Action that is
+      // not here — so it belongs to no Outcome's tile yet.
+      await tester.runAsync(() async {
+        final affected = await reducer.apply(
+          OpPayload(
+            collection: sprintsCollection,
+            entityId: 'sprint-before-its-action',
+            hlc: Hlc(DateTime.now().millisecondsSinceEpoch, 0, _member),
+            fields: {
+              'user_id': FieldWrite(_userId),
+              'action_id': FieldWrite('action-from-a-peer'),
+              'started_at': FieldWrite(encodeInstant(_sprintStart)),
+              'ended_at': FieldWrite(encodeInstant(_sprintEnd)),
+              'planned_duration_minutes': FieldWrite(23),
+            },
+          ),
+          authorMemberIdHex: _member,
+        );
+        await projector.project(affected);
+      });
+
+      await _pumpFrames(tester, frames: 20);
+
+      // The Sprint row is in the store, and it is still on no tile: the Action
+      // it ran on has not arrived.
+      final rows = (await tester.runAsync(() => db.select(db.sprints).get()))!;
+      expect(rows, hasLength(1));
+      expect(find.textContaining('1 sprint · 23m'), findsNothing);
+
+      // The Action converges after it. The Sprint now belongs to an Outcome,
+      // and the tile shows it — with no further Sprint write.
+      await tester.runAsync(() async {
+        final affected = await reducer.apply(
+          OpPayload(
+            collection: actionsCollection,
+            entityId: 'action-from-a-peer',
+            hlc: Hlc(DateTime.now().millisecondsSinceEpoch, 0, _member),
+            fields: {
+              'outcome_id': FieldWrite('report'),
+              'user_id': FieldWrite(_userId),
+              'text': FieldWrite('Draft the report'),
+              'role': FieldWrite('done'),
+              'created_at': FieldWrite(encodeInstant(_sessionStart)),
+            },
+          ),
+          authorMemberIdHex: _member,
+        );
+        await projector.project(affected);
+      });
+
+      await _pumpFrames(tester, frames: 20);
+
+      expect(find.byKey(const Key('day_timeline_tile_report_1')), findsOneWidget);
+      expect(find.textContaining('1 sprint · 23m'), findsOneWidget);
+    } finally {
+      await teardownApp(tester);
+    }
+  });
 }
