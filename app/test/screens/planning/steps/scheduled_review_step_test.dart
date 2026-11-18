@@ -98,4 +98,59 @@ void main() {
     final rows = tester.widgetList<OutcomeRow>(find.byType(OutcomeRow));
     expect(rows.map((r) => r.title), ['second in Plan', 'first in Plan']);
   });
+
+  group('wide layout', () {
+    Future<void> pumpAtWidth(WidgetTester tester, double width) async {
+      tester.view.physicalSize = Size(width, 1600);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            planningTimeContextsProvider.overrideWith((_) async => const {}),
+            dayTimelineSettingsProvider
+                .overrideWithValue(const DayTimelineSettings()),
+            focusSessionPlanningProvider
+                .overrideWith(_PlanningWithNoDatabase.new),
+            focusSessionPlanningSelectedTasksProvider.overrideWith(
+              (_) => Stream.value([
+                Todo(
+                  id: 'a',
+                  title: 'Write the report',
+                  userId: 'local',
+                  createdAt: DateTime(2030),
+                  intent: 'next',
+                  timeEstimate: 30,
+                ),
+              ]),
+            ),
+          ],
+          child:
+              const MaterialApp(home: Scaffold(body: ScheduledReviewStep())),
+        ),
+      );
+      await tester.pump();
+    }
+
+    testWidgets('a wide screen shows the Plan rows beside the timeline',
+        (tester) async {
+      await pumpAtWidth(tester, 1200);
+      expect(find.byKey(const ValueKey('plan-timeline-two-panes')),
+          findsOneWidget);
+      final row = tester.getTopLeft(find.byType(OutcomeRow));
+      final timeline = tester.getTopLeft(find.byType(DayTimeline));
+      expect(row.dx, lessThan(timeline.dx));
+      expect(find.text('Start Day'), findsOneWidget);
+    });
+
+    testWidgets('a narrow screen stacks the timeline above the Plan rows',
+        (tester) async {
+      await pumpAtWidth(tester, 400);
+      expect(find.byKey(const ValueKey('plan-timeline-stacked')),
+          findsOneWidget);
+      final row = tester.getTopLeft(find.byType(OutcomeRow));
+      final timeline = tester.getTopLeft(find.byType(DayTimeline));
+      expect(timeline.dy, lessThan(row.dy));
+    });
+  });
 }

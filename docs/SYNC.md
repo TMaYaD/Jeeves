@@ -120,14 +120,22 @@ field-grain write) under the strategy registry; the op-log reducer only checks t
 op-level guards and converts an op to a `Change`. A device with no enrolment still
 clocks and merges its own writes, under a random device node id; once enrolled, its
 member id takes over as the tie-break so the wire is unchanged. Clocks stamped under
-the device node id are never ops, so the enrolment upload does not skip them and a
-rebuild from the log carries them across. See [sync-plugins](proposals/sync-plugins.md).
+the device node id are never ops, so the enrolment upload does not skip them, a
+rebuild from the log carries them across, and an account's later sign-in authors
+those made since its upload completed — creates, edits and deletes, not preferences. See [sync-plugins](proposals/sync-plugins.md).
 
 Rows that predate the host are seeded into merge state once per device, before any
 plugin can attach, so `snapshot()` holds the whole local dataset. Seeding inserts
 only fields merge state holds no value or clock for, each at the floor clock
 `Hlc(0, 0, <device node id>)`, so any real write from any time beats a seeded value.
 It writes no domain row, tombstone or change.
+
+Merge state reaches the domain store through the projector, which gives up the
+store's writer between batches — a whole-store re-projection (after a schema upgrade,
+or a rebuild from the log) never holds a user's edit back for its length. That walk,
+and only that walk, leaves alone an entity whose local change is still in the outbox.
+A remote change is always projected on arrival. `DomainProjector.project`
+(`sync/domain_projector.dart`) gives the reason for each.
 
 ## Protocol surface
 

@@ -34,9 +34,11 @@ class _ImportScreenState extends ConsumerState<ImportScreen> {
               content: Text(
                 'Imported ${r.importedCount} tasks'
                 '${r.projectTagsCreated > 0 ? ', ${r.projectTagsCreated} projects created' : ''}'
-                '${r.skippedCount > 0 ? ' (${r.skippedCount} skipped)' : ''}',
+                '${r.skippedCount > 0 ? ' (${r.skippedCount} skipped)' : ''}'
+                '${r.failedRecords.isNotEmpty ? ' — ${r.failedRecords.length} left out' : ''}',
               ),
-              backgroundColor: Colors.green[700],
+              backgroundColor:
+                  r.failedRecords.isEmpty ? Colors.green[700] : Colors.amber[800],
             ),
           );
         }
@@ -150,15 +152,7 @@ class _ImportScreenState extends ConsumerState<ImportScreen> {
           ],
           const SizedBox(height: 24),
           if (importState.isLoading) ...[
-            const LinearProgressIndicator(
-              color: Color(0xFF2563EB),
-              backgroundColor: Color(0xFFDBEAFE),
-            ),
-            const SizedBox(height: 8),
-            const Center(
-              child: Text('Importing…',
-                  style: TextStyle(color: Color(0xFF6B7280))),
-            ),
+            _ImportProgressBar(importState: importState),
           ] else ...[
             FilledButton(
               onPressed: _selectedBytes != null ? _import : null,
@@ -266,13 +260,35 @@ class _SummaryCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          Row(
             children: [
-              Icon(Icons.check_circle, color: Color(0xFF16A34A), size: 20),
-              SizedBox(width: 8),
-              Text('Import complete',
+              Icon(
+                result.failedRecords.isEmpty
+                    ? Icons.check_circle
+                    : Icons.warning_amber_rounded,
+                color: result.failedRecords.isEmpty
+                    ? const Color(0xFF16A34A)
+                    : const Color(0xFFD97706),
+                size: 20,
+              ),
+              const SizedBox(width: 8),
+              // Flexible, so a long heading wraps on a narrow screen instead
+              // of overflowing it.
+              Flexible(
+                child: Text(
+                  result.failedRecords.isEmpty
+                      ? 'Import complete'
+                      : 'Import finished with ${result.failedRecords.length} '
+                          'record${result.failedRecords.length == 1 ? '' : 's'} '
+                          'left out',
                   style: TextStyle(
-                      fontWeight: FontWeight.w600, color: Color(0xFF15803D))),
+                    fontWeight: FontWeight.w600,
+                    color: result.failedRecords.isEmpty
+                        ? const Color(0xFF15803D)
+                        : const Color(0xFFB45309),
+                  ),
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 12),
@@ -280,8 +296,86 @@ class _SummaryCard extends StatelessWidget {
           _SummaryRow(label: 'Projects created', value: result.projectTagsCreated),
           if (result.skippedCount > 0)
             _SummaryRow(label: 'Items skipped', value: result.skippedCount),
+          if (result.failedRecords.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            _FailedRecords(failures: result.failedRecords),
+          ],
         ],
       ),
+    );
+  }
+}
+
+/// The records an import could not take, named.
+///
+/// **Each one says what it was and why.** "3 records failed" is not something
+/// the user can act on; the record and the reason are what they can act on.
+class _FailedRecords extends StatelessWidget {
+  const _FailedRecords({required this.failures});
+
+  final List<ImportFailure> failures;
+
+  /// How many to name. The rest are counted: a file with a thousand bad
+  /// records is a story about the file, not a list to read.
+  static const int _namedLimit = 10;
+
+  @override
+  Widget build(BuildContext context) {
+    final named = failures.take(_namedLimit).toList();
+    final rest = failures.length - named.length;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (final failure in named)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Text(
+              '${failure.record} — ${failure.reason}',
+              style: const TextStyle(color: Color(0xFF374151), fontSize: 12),
+            ),
+          ),
+        if (rest > 0)
+          Text(
+            'and $rest more',
+            style: const TextStyle(color: Color(0xFF6B7280), fontSize: 12),
+          ),
+      ],
+    );
+  }
+}
+
+/// The progress of a running import.
+///
+/// **A number that moves.** An import of a large file takes minutes, and a
+/// bar that cannot say how far it has got leaves the user deciding between
+/// waiting and giving up on a screen that looks exactly the same either way.
+class _ImportProgressBar extends StatelessWidget {
+  const _ImportProgressBar({required this.importState});
+
+  final ImportState importState;
+
+  @override
+  Widget build(BuildContext context) {
+    final progress = importState.progress;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        LinearProgressIndicator(
+          value: progress?.fraction,
+          color: const Color(0xFF2563EB),
+          backgroundColor: const Color(0xFFDBEAFE),
+        ),
+        const SizedBox(height: 8),
+        Center(
+          child: Text(
+            progress == null
+                ? 'Importing…'
+                : 'Importing ${progress.processedRows} of '
+                    '${progress.totalRows} records…',
+            style: const TextStyle(color: Color(0xFF6B7280)),
+          ),
+        ),
+      ],
     );
   }
 }
