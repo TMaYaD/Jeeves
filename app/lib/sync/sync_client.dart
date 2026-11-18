@@ -902,7 +902,10 @@ class SyncClient {
           ..where((row) => row.workspaceId.equals(workspaceId) & row.sentAt.isNull())
           ..orderBy([(row) => OrderingTerm(expression: row.authorSeq)]))
         .get();
-    if (pending.isEmpty) return FlushOutcome.flushed;
+    if (pending.isEmpty) {
+      await _settleKeptOursRollback();
+      return FlushOutcome.flushed;
+    }
 
     for (var start = 0; start < pending.length; start += maxOpsPerBatch) {
       final chunk = pending.sublist(
@@ -924,7 +927,32 @@ class SyncClient {
       }
       await _markSent(chunk);
     }
+    await _settleKeptOursRollback();
     return FlushOutcome.flushed;
+  }
+
+  /// Resolve the rollback alarm the User settled by keeping this device's own
+  /// writes, now that the server has acknowledged the upload.
+  ///
+  /// **The decision and the resolution are two moments.** The decision is the
+  /// User's answer, recorded the moment they answer it; the resolution is the
+  /// server acknowledging the re-send that answer asked for. The alarm stands
+  /// in between — decided, unresolved, and reported — because the accusation
+  /// has not been answered by the server yet.
+  ///
+  /// Only an alarm the User answered with *keep ours*, and only this member's
+  /// own rollback, is settled here. A re-send the server refuses again goes
+  /// down the refusal path instead, which re-raises the alarm and takes the
+  /// decision with it.
+  Future<void> _settleKeptOursRollback() async {
+    await (_db.update(_db.integrityAlarms)
+          ..where((row) =>
+              row.workspaceId.equals(workspaceId) &
+              row.kind.equals(IntegrityAlarmKind.ownWritesRollback.code) &
+              row.authorMemberId.equals(identity.memberId) &
+              row.resolution.equals(AlarmResolution.keptOurs.code) &
+              row.resolvedAt.isNull()))
+        .write(IntegrityAlarmsCompanion(resolvedAt: Value(_now())));
   }
 
   /// Stamp one acknowledged chunk in a single UPDATE.
@@ -1004,6 +1032,12 @@ class SyncClient {
       await _raiseAlarm(
         IntegrityAlarmKind.ownWritesRollback,
         authorMemberId: identity.memberId,
+        // The position the server and this device last agreed on: everything
+        // from here up was acknowledged and is now gone from the server. That
+        // is where this device's writes can be put back, so the alarm carries
+        // it — a rollback the User answers by keeping its own work needs to
+        // know where to start.
+        repostFromAuthorSeq: expected,
         detail: 'the server expects author_seq $expected, at or below the '
             '$acknowledged it has already acknowledged — either it rolled this '
             "device's writes back, or this device was restored from an older "
@@ -3620,6 +3654,45 @@ class SyncClient {
     if (touched != null) await _reconcileProjected(touched);
   }
 
+  /// Keep this device's own writes: mark them unsent again, so the next flush
+  /// puts them back.
+  ///
+  /// The server had lost writes it had acknowledged, and the User has said
+  /// this device's version is the one to keep. The work is to re-post those
+  /// writes, and **the bytes are already signed**: the outbox rows from the
+  /// position the server expects are marked unsent, so the next flush posts
+  /// the very same envelopes. Nothing is rebuilt, re-signed or re-numbered —
+  /// re-numbering this device's own chain is the one thing a rollback must
+  /// never do.
+  ///
+  /// The decision is recorded and **the accusation stays standing**: the
+  /// upload is still in flight, so the alarm is decided but unresolved, and
+  /// the flush resolves it when the server acknowledges the re-send. That is
+  /// the whole of "in progress" here — the bytes are queued, not the alarm
+  /// quietly closed.
+  Future<void> _keepOurs(IntegrityAlarmRow alarm) async {
+    final from = alarm.repostFromAuthorSeq;
+    if (from == null) {
+      throw StateError(
+        'a rollback alarm with no agreed position offers no way to keep ours',
+      );
+    }
+    final now = _now();
+    await _db.transaction(() async {
+      await (_db.update(_db.outbox)
+            ..where((row) =>
+                row.workspaceId.equals(workspaceId) &
+                row.authorSeq.isBiggerOrEqualValue(from)))
+          .write(OutboxCompanion(sentAt: const Value<DateTime?>(null)));
+      await (_db.update(_db.integrityAlarms)
+            ..where((row) => row.id.equals(alarm.id)))
+          .write(IntegrityAlarmsCompanion(
+        resolution: Value(AlarmResolution.keptOurs.code),
+        resolutionDecidedAt: Value(now),
+      ));
+    });
+  }
+
   /// Record the user's decision on an integrity alarm.
   ///
   /// The decision is written twice, in one transaction: on every refused change
@@ -3640,7 +3713,8 @@ class SyncClient {
   ///
   /// **Taking upstream is the exception**: it has its own path
   /// ([_takeUpstream]), because it applies the held changes rather than only
-  /// writing a decision about them.
+  /// writing a decision about them. **Keeping ours on a rollback has one too**
+  /// ([_keepOurs]), because its work is an upload rather than a note.
   Future<void> resolveAlarm(int alarmRowId, AlarmResolution resolution) async {
     final alarm = await (_db.select(_db.integrityAlarms)
           ..where((row) => row.id.equals(alarmRowId)))
@@ -3671,6 +3745,12 @@ class SyncClient {
         await _takeUpstream(alarm);
         return;
       case AlarmResolution.keptOurs:
+        if (kind == IntegrityAlarmKind.ownWritesRollback) {
+          // The one resolution whose work is an upload: this device's own
+          // writes are marked unsent again, so the next flush re-posts them.
+          await _keepOurs(alarm);
+          return;
+        }
         if (kind != IntegrityAlarmKind.ownWritesDivergence) {
           throw UnsupportedError(
             'keeping ours on a ${alarm.kind} alarm is not implemented yet (#575)',

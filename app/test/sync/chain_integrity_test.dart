@@ -17,8 +17,10 @@ import 'dart:typed_data';
 
 import 'package:drift/drift.dart' show OrderingTerm, Value;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jeeves/providers/sync_status_provider.dart';
 import 'package:jeeves/sync/alarm_resolution.dart';
 import 'package:jeeves/sync/chain_verifier.dart';
+import 'package:jeeves/sync/enrolment_state.dart';
 import 'package:jeeves/sync/envelope.dart';
 import 'package:jeeves/sync/hlc.dart';
 import 'package:jeeves/sync/ids.dart';
@@ -1283,6 +1285,164 @@ void main() {
           (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
       expect(stillStanding.resolvedAt, isNull);
       expect(stillStanding.resolution, isNull);
+      expect((await a.client.health()).actionableAlarmCount, 1);
+    });
+
+    // --- Keeping ours on a rollback: the upload is in flight ----------------
+
+    /// The rollback recipe: the server forgets a write it had acknowledged.
+    ///
+    /// Two writes are acknowledged, the server drops the last one, and this
+    /// device authors a third — so the flush is refused and the server says it
+    /// expects a position this device has already written past.
+    Future<IntegrityAlarmRow> rollTheServerBack() async {
+      await a.authorLocal(workspace, 'one');
+      await a.authorLocal(workspace, 'two');
+      await a.sync();
+      final ownSeqs = [
+        for (final row in await a.loggedOps())
+          if (row.authorMemberId == a.identity.memberId) row.seq,
+      ]..sort();
+      workspace.server.rollbackToSeq(ownSeqs.last - 1);
+      await a.authorLocal(workspace, 'three');
+      await a.sync();
+      return (await a.alarmsByKind())[IntegrityAlarmKind.ownWritesRollback.code]!;
+    }
+
+    /// The author positions the server holds under this device's key.
+    List<int> serverAuthorSeqs() => [
+          for (final op in workspace.server.storedOps)
+            if (op.workspaceId == workspace.workspaceId &&
+                op.header?.authorMemberId == a.identity.memberId)
+              op.header!.authorSeq,
+        ];
+
+    /// The outbox rows this device has yet to have acknowledged.
+    Future<List<int>> unsentAuthorSeqs() async {
+      final rows = await (a.database.select(a.database.outbox)
+            ..where((row) => row.sentAt.isNull()))
+          .get();
+      return [for (final row in rows) row.authorSeq]..sort();
+    }
+
+    test('keeping ours on a rollback re-sends this device\'s own writes',
+        () async {
+      final rollback = await rollTheServerBack();
+      expect(rollback.resolvedAt, isNull);
+      expect(
+        resolutionsOfferedForAlarmRow(rollback),
+        [AlarmResolution.keptOurs],
+        reason: 'the rollback knows the position to repost from',
+      );
+      final authoredBefore = await a.client.authoredEnvelopes();
+
+      await a.client.resolveAlarm(rollback.id, AlarmResolution.keptOurs);
+
+      // The decision is recorded; the accusation stands until the upload is
+      // acknowledged.
+      final decided =
+          (await a.alarmsByKind())[IntegrityAlarmKind.ownWritesRollback.code]!;
+      expect(decided.resolution, AlarmResolution.keptOurs.code);
+      expect(decided.resolutionDecidedAt, isNotNull);
+      expect(decided.resolvedAt, isNull);
+
+      // Two writes are queued again, so the device is busy rather than broken.
+      final unsent = await unsentAuthorSeqs();
+      expect(unsent.length, 2);
+      final health = await a.client.health();
+      expect(health.actionableAlarmCount, 0);
+      expect(health.unresolvedAlarmCount, 1);
+      expect(health.pendingOpCount, 2);
+      expect(
+        syncStatusFor(
+          enrolment: EnrolmentState.enrolled,
+          hasMemberCredential: true,
+          health: [health],
+        ),
+        SyncStatus.syncing,
+      );
+
+      final after = await a.sync();
+
+      // The server holds this device's writes again.
+      expect(serverAuthorSeqs(), containsAll(unsent));
+      final settled =
+          (await a.alarmsByKind())[IntegrityAlarmKind.ownWritesRollback.code]!;
+      expect(settled.resolvedAt, isNotNull);
+      expect(settled.resolution, AlarmResolution.keptOurs.code);
+      expect(after.clean, isTrue);
+      expect(
+        syncStatusFor(
+          enrolment: EnrolmentState.enrolled,
+          hasMemberCredential: true,
+          health: [after],
+        ),
+        SyncStatus.synced,
+      );
+
+      // The same signed bytes: nothing was rebuilt, re-signed or re-numbered.
+      final authoredAfter = await a.client.authoredEnvelopes();
+      expect(authoredAfter.length, authoredBefore.length);
+      for (var index = 0; index < authoredBefore.length; index++) {
+        expect(
+          sameBytes(authoredAfter[index], authoredBefore[index]),
+          isTrue,
+          reason: 'op $index is the bytes this device signed the first time',
+        );
+      }
+    });
+
+    test('a server holding a position this device never wrote offers no answer',
+        () async {
+      // The other half of the rollback verdict: the server holds a position
+      // under this device's key that this device never wrote. There is no
+      // agreed position to repost from, so there is nothing to offer — and no
+      // answer to refuse.
+      final ahead = await a.identity.signer.buildEnvelope(
+        OpHeader(
+          workspaceId: workspace.workspaceId,
+          opClass: opClassContent,
+          opId: _uuid.v4(),
+          authorMemberId: a.identity.memberId,
+          authorKeyId: a.identity.keyId,
+          authorSeq: 9,
+        ),
+        frameBody(Uint8List.fromList(utf8.encode('{"collection":"test"}'))),
+      );
+      workspace.server.injectUnchecked(workspace.workspaceId, ahead);
+      await a.sync();
+      await a.authorLocal(workspace, 'mine');
+      await peerSession.postOps(
+        workspace.workspaceId,
+        [await _op(workspace, peer, 'from the peer')],
+      );
+      await a.sync();
+
+      final rollback =
+          (await a.alarmsByKind())[IntegrityAlarmKind.ownWritesRollback.code]!;
+      expect(rollback.repostFromAuthorSeq, isNull);
+      expect(resolutionsOfferedForAlarmRow(rollback), isEmpty);
+      await expectLater(
+        a.client.resolveAlarm(rollback.id, AlarmResolution.keptOurs),
+        throwsA(isA<StateError>()),
+      );
+    });
+
+    test('a rollback again before the upload stands the alarm again', () async {
+      final rollback = await rollTheServerBack();
+      await a.client.resolveAlarm(rollback.id, AlarmResolution.keptOurs);
+
+      // The server forgets this device's writes again, before the re-send goes
+      // out. The refusal is a new accusation, and it takes the decision with
+      // it: the last answer was about the writes the server had then.
+      workspace.server.rollbackToSeq(0);
+      await a.sync();
+
+      final after =
+          (await a.alarmsByKind())[IntegrityAlarmKind.ownWritesRollback.code]!;
+      expect(after.resolution, isNull);
+      expect(after.resolutionDecidedAt, isNull);
+      expect(after.resolvedAt, isNull);
       expect((await a.client.health()).actionableAlarmCount, 1);
     });
   });

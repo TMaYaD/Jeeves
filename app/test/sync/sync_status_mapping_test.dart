@@ -43,6 +43,19 @@ void main() {
   /// A wrap that has not arrived. Neither an error nor worth interrupting for.
   const waitingOnDelivery = SyncHealth(quarantineCount: 1);
 
+  /// An actionable alarm the user has answered, with this device's own writes
+  /// queued again: the answer is still being carried out.
+  ///
+  /// The alarm is **not** actionable in the health query's sense — a decided
+  /// alarm is not counted there — so this is a standing condition that asks
+  /// the user for nothing, over a queue that is moving.
+  const decidedAndUploading = SyncHealth(
+    pendingOpCount: 2,
+    unresolvedAlarmCount: 1,
+    actionableAlarmCount: 0,
+    alarmKinds: {'own_writes_rollback'},
+  );
+
   SyncStatus statusOf(
     EnrolmentState enrolment,
     List<SyncHealth> health, {
@@ -145,6 +158,17 @@ void main() {
         statusOf(EnrolmentState.enrolled, [accused],
             hasMemberCredential: false),
         SyncStatus.error,
+      );
+    });
+
+    test('a decided accusation with a queue in flight is syncing, not an error',
+        () {
+      // The user has answered it, so it is nothing to paint the device red
+      // for — and the writes they asked to keep are on their way up. The
+      // in-progress state is the blue one, never amber and never red.
+      expect(
+        statusOf(EnrolmentState.enrolled, [decidedAndUploading]),
+        SyncStatus.syncing,
       );
     });
 
