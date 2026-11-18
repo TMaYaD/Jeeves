@@ -10,6 +10,7 @@ import '../../sync/collection_codecs.dart';
 import '../../sync/ids.dart' show focusSessionTaskIdFor;
 import '../gtd_database.dart';
 import 'action_dao.dart';
+import 'sprint_dao.dart' show SprintDao;
 import 'time_log_dao.dart' show TimeLogDao;
 import 'todo_dao.dart' show TodoDao;
 
@@ -415,6 +416,9 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
         fields: {'ended_at': tsIso},
       );
     }
+    // A Sprint never outlives its TimeLog (issue #910).
+    await SprintDao.closeRunningSprintsOfLogs(
+        attachedDatabase, DateTime.parse(tsIso), open);
   }
 
   /// Atomically closes any open time log for the session, optionally opens a
@@ -457,6 +461,9 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
           DateTime.parse(ts),
         );
       }
+      // A Sprint never outlives its TimeLog (issue #910).
+      await SprintDao.closeRunningSprintsOfLogs(
+          attachedDatabase, DateTime.parse(ts), stillOpen);
 
       // Open a new time log if a task is being focused, attributing it to the
       // Outcome's current Action resolved inside this transaction (issue #476).

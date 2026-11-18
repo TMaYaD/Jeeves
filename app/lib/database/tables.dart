@@ -122,6 +122,38 @@ class TimeLogs extends Table {
 }
 
 // ---------------------------------------------------------------------------
+// sprints
+// ---------------------------------------------------------------------------
+
+/// One row per recorded Sprint (issue #910): a timebox spent on an Action.
+///
+/// Timestamps are canonical ISO-8601 UTC text with exactly three fractional
+/// digits (`2026-07-28T05:12:03.042Z`), so the stored row equals what peers
+/// receive. `ended_at` is null while the Sprint runs; when two devices end one
+/// Sprint at different instants the earlier end stands (`min_timestamp_value`).
+/// A Break is the gap between Sprints and is not recorded.
+class Sprints extends Table {
+  TextColumn get id => text()();
+  TextColumn get userId => text()();
+
+  /// The Action the Sprint ran on. NULL once that Action was deleted
+  /// (`ON DELETE SET NULL`, like `time_logs.action_id`): its Sprints detach,
+  /// they are never deleted.
+  TextColumn get actionId =>
+      text().nullable().references(Actions, #id, onDelete: KeyAction.setNull)();
+
+  TextColumn get startedAt => text()();
+  TextColumn get endedAt => text().nullable()();
+
+  /// The Sprint length that was set when it started, so a restart or a second
+  /// device can show the countdown without device-only storage.
+  IntColumn get plannedDurationMinutes => integer()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {id};
+}
+
+// ---------------------------------------------------------------------------
 // focus_sessions
 // ---------------------------------------------------------------------------
 
