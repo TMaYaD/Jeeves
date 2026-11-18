@@ -364,6 +364,7 @@ void main() {
 
   testWidgets('a split Outcome counts its Sprints once', (tester) async {
     // The set time leaves two 30-minute gaps; 50 minutes fits neither whole.
+    // The pieces are short tiles, so the count joins their one line.
     await tester.pumpWidget(_app([
       _entry('blocker', 60, pinned: DateTime(2030, 3, 15, 9, 30)),
       _entry('split', 50),
@@ -375,6 +376,8 @@ void main() {
 
     expect(find.byKey(const Key('day_timeline_tile_split_1')), findsOneWidget);
     expect(find.byKey(const Key('day_timeline_tile_split_2')), findsOneWidget);
+    // The count is the Outcome's: it is on the piece that opens the tiles,
+    // and on the other piece it is not.
     expect(find.textContaining('1 sprint · 23m'), findsOneWidget);
   });
 }

@@ -752,6 +752,14 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
       now,
     );
     final detail = [timeText, ...labels, ?sprintCount].join(' · ');
+    // A short tile has one line and no detail line of its own, so the count
+    // joins the time there. The count still belongs to the Outcome: it is on
+    // the piece that opens the Outcome's tiles, and on no other.
+    final compactText = [
+      _clock(piece.start),
+      if (placement.pieces.length > 1) 'part ${piece.part}',
+      ?sprintCount,
+    ].join(' · ');
 
     final body = Container(
       key: Key('day_timeline_tile_${piece.outcomeId}_${piece.part}'),
@@ -783,10 +791,7 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
                   ),
                   const SizedBox(width: 8),
                   Text(
-                      [
-                        _clock(piece.start),
-                        if (placement.pieces.length > 1) 'part ${piece.part}',
-                      ].join(' · '),
+                      compactText,
                       style: TextStyle(fontSize: 11, color: foreground)),
                 ],
               )
