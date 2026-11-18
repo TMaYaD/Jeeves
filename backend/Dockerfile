@@ -14,8 +14,8 @@ FROM python:3.14.10-slim@sha256:9aaa474097d094040649f2162a627c0049b408f52138d980
 WORKDIR /app
 
 COPY pyproject.toml .
-RUN pip install --no-cache-dir -e ./missing-directory
+RUN pip install --no-cache-dir -e .
 
 COPY . .
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "app.main:missing", "--host", "0.0.0.0", "--port", "8000"]
