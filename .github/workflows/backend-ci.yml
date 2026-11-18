@@ -8,8 +8,8 @@ name: Backend CI
 # workflow's conclusion, and would happily deploy while the other was still
 # running or already red).
 #
-# The CD job's own `grep '^backend/'` check scopes the actual Dokku push, so an
-# infra-only commit gates CD without redeploying the backend.
+# CD pushes to Dokku only when its version script finds backend commits not yet
+# tagged, so an infra-only commit gates CD without redeploying the backend.
 on:
   push:
     branches: [main]
@@ -131,6 +131,8 @@ jobs:
           shellcheck --shell=sh .githooks/prepare-commit-msg
       - name: compute-server-version.sh tests
         run: ./infra/ci/tests/test-compute-server-version.sh
+      - name: backend-cd-freshness.sh tests
+        run: ./infra/ci/tests/test-backend-cd-freshness.sh
       - name: pre-commit hook tests
         run: ./.githooks/tests/test-pre-commit-hook.sh
       - name: prepare-commit-msg hook tests

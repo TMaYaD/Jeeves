@@ -20,30 +20,6 @@ jobs:
       contents: write
 
     steps:
-      # Backend CI runs per push and two of them finish in whatever order their
-      # test jobs happen to take, so a *successful* run is not necessarily the
-      # *latest* one.  Deploying from a superseded run force-pushes older
-      # backend code over newer, on top of migrations that have already run —
-      # the drift this pipeline exists to prevent, arriving by a different
-      # route.  The concurrency group above
-      # serialises these runs but says nothing about their order, so compare
-      # the SHA rather than assume it.
-      - name: Check the deployed commit is still main's tip
-        id: freshness
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
-        run: |
-          TIP=$(gh api "repos/${REPO}/commits/main" --jq .sha)
-          if [ "${TIP}" = "${RUN_SHA}" ]; then
-            echo "current=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "Superseded: this run is for ${RUN_SHA}, main is at ${TIP}."
-            echo "The run for ${TIP} deploys it — skipping to avoid going backwards."
-            echo "current=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
@@ -52,31 +28,33 @@ jobs:
           # never used, so don't persist it into .git/config.
           persist-credentials: false
 
-      # HEAD^..HEAD is the complete change set only when the tip is a merge
-      # commit — HEAD^ is then main as it was before the merge, so the range
-      # covers the whole PR.  For any other tip (a direct multi-commit push to
-      # main) earlier commits fall outside it, and a backend change in one of
-      # them would be missed: the Dokku push would be skipped while the publish
-      # step below still ran, shipping buckets whose migration never deployed.
-      # That is the exact failure this pipeline exists to prevent, so when the
-      # range can't be trusted we deploy rather than guess.
-      - name: Check for backend changes
-        id: backend-changes
+      # Backend CI runs per push and two of them finish in whatever order their
+      # test jobs happen to take, so a *successful* run is not necessarily the
+      # *latest* one.  Deploying a superseded run force-pushes older backend
+      # code over newer, on top of migrations that have already run.  But a
+      # newer tip only deploys this change if it gets its own CD run, and it
+      # does not when it touches nothing Backend CI triggers on.  The script
+      # therefore skips this run only when a later commit will trigger one, and
+      # otherwise lets it deploy its own commit — whose backend/ is identical to
+      # the tip's.  The concurrency group above serialises runs but says nothing
+      # about their order, so compare commits rather than assume.
+      - name: Check this run is not superseded by a later Backend CD run
+        id: freshness
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          if ! git rev-parse --verify --quiet HEAD^2 >/dev/null; then
-            echo "Tip is not a merge commit — pushed range is unbounded, deploying."
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          elif git diff --name-only HEAD^ HEAD | grep -q '^backend/'; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          fi
+          set -euo pipefail
+          TIP=$(gh api "repos/${REPO}/commits/main" --jq .sha)
+          ./infra/ci/backend-cd-freshness.sh "${RUN_SHA}" "${TIP}" | tee -a "$GITHUB_OUTPUT"
 
       # The version is computed from the commits since the last server/v* tag
-      # that touch backend/ — a finer filter than the HEAD^..HEAD grep above,
-      # and the one that actually decides whether a release exists.  The
-      # checkout's fetch-depth: 0 brings the tags along with the history, so no
-      # extra fetch option is needed.  The script only reads, and hard-fails if
+      # that touch backend/.  The same walk decides the tag and whether to push
+      # (the deploy output), so a tagged change is always deployed by the run
+      # that tags it, whatever the tip commit itself touches.  The checkout's
+      # fetch-depth: 0 brings the tags along with the history, so no extra
+      # fetch option is needed.  The script only reads, and hard-fails if
       # the baseline tag was never seeded, so a forgotten seed stops the
       # pipeline instead of silently mislabelling a deploy.
       - name: Compute server version
@@ -90,8 +68,8 @@ jobs:
       # property of the commit, not of deploy success — /health is what reports
       # deployed reality.  A failed deploy therefore leaves a tag for code that
       # never ran, which is visible and is corrected by the next deploy;
-      # tagging afterwards would instead let a failed sync-rules publish
-      # withhold a tag from a backend that did ship.
+      # tagging afterwards would instead let a failed push withhold a tag from
+      # a backend that did ship.
       #
       # Creating the release also creates the tag, so nothing has to push over
       # the checkout's deliberately credential-less git remote.  Re-runs are
@@ -118,10 +96,8 @@ jobs:
             --title "Server ${VERSION}" \
             --notes "${NOTES}"
 
-      # Not gated on backend-changes: the sync-rules publish below runs on
-      # every CD, including infra-only commits that skip the Dokku push.
       - name: Set up SSH
-        if: steps.freshness.outputs.current == 'true'
+        if: steps.freshness.outputs.current == 'true' && steps.server-version.outputs.deploy == 'true'
         uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555 # v0.10.0
         with:
           ssh-private-key: ${{ secrets.DOKKU_SSH_PRIVATE_KEY }}
@@ -142,7 +118,7 @@ jobs:
       # Rotating the host or its key means updating DOKKU_HOST_KEY.  See
       # "Deploy host trust" in docs/BACKEND_GUIDELINES.md.
       - name: Pin the Dokku host key
-        if: steps.freshness.outputs.current == 'true'
+        if: steps.freshness.outputs.current == 'true' && steps.server-version.outputs.deploy == 'true'
         env:
           DOKKU_HOST: ${{ vars.DOKKU_HOST }}
           DOKKU_HOST_KEY: ${{ vars.DOKKU_HOST_KEY }}
@@ -167,14 +143,13 @@ jobs:
           fi
 
       # Dokku builds from a git archive with no `.git`, so the running process
-      # cannot derive its own version — it has to be handed one.  This is a
-      # convergence step, not a release step, so it is gated only on the push
-      # that follows and not on a tag having been cut: a defensive deploy of an
-      # already-tagged range, or a re-run after a failed push, still lands
-      # /health on the version the tags claim.  --no-restart because the push
-      # below rebuilds and restarts with the new env anyway.
+      # cannot derive its own version — it has to be handed one.  It is gated
+      # on the push that follows, not on a tag having been cut: a re-run after
+      # a failed push still lands /health on the version the tags claim.
+      # --no-restart because the push below rebuilds and restarts with the new
+      # env anyway.
       - name: Inject the server version into Dokku
-        if: steps.freshness.outputs.current == 'true' && steps.backend-changes.outputs.changed == 'true'
+        if: steps.freshness.outputs.current == 'true' && steps.server-version.outputs.deploy == 'true'
         env:
           VERSION: ${{ steps.server-version.outputs.version }}
           DOKKU_HOST: ${{ vars.DOKKU_HOST }}
@@ -191,7 +166,7 @@ jobs:
             config:set --no-restart jeeves "SERVER_VERSION=${VERSION}"
 
       - name: Deploy to Dokku
-        if: steps.freshness.outputs.current == 'true' && steps.backend-changes.outputs.changed == 'true'
+        if: steps.freshness.outputs.current == 'true' && steps.server-version.outputs.deploy == 'true'
         env:
           DOKKU_HOST: ${{ vars.DOKKU_HOST }}
           # Same pinning as the step above, applied to the transport git uses.
