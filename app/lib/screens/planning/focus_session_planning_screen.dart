@@ -23,12 +23,12 @@ import '../../providers/focus_session_planning_provider.dart';
 import '../../widgets/ceremony/ceremony_pop_scope.dart';
 import '../../widgets/ceremony/intro_step.dart';
 import '../../widgets/ceremony/wizard.dart';
-import 'steps/day_checkin_energy_step.dart';
-import 'steps/day_checkin_time_step.dart';
+import 'steps/energy_check_step.dart';
 import 'steps/inbox_clarification_step.dart';
 import 'steps/plan_summary_step.dart';
 import 'steps/scheduled_review_step.dart';
 import 'steps/task_review_step.dart';
+import 'steps/time_check_step.dart';
 
 class FocusSessionPlanningScreen extends ConsumerStatefulWidget {
   const FocusSessionPlanningScreen({super.key});
@@ -176,7 +176,7 @@ class _FocusSessionPlanningScreenState
 
   /// The duration-estimate intro (#486): a real first step excluded from the
   /// progress count. The estimate is `2 min × (inbox + review counts) + 5 min`
-  /// (the flat covers the Energy/Time check-ins and task selection), sourced
+  /// (the flat covers the Energy/Time checks and task selection), sourced
   /// from [focusSessionPlanningIntroCountsProvider] — count-only reads that
   /// leave the inbox/review snapshot lifecycles untouched. Loading until the
   /// counts resolve; the CTA proceeds regardless.
@@ -323,7 +323,7 @@ class _FocusSessionPlanningScreenState
     // crossing into Time is a plain step advance.
     return WizardStep(
       title: _stepTitles[3],
-      body: const DayCheckinEnergyStep(),
+      body: const EnergyCheckStep(),
       activeFraction: state.energyLevel != null ? 1.0 : 0.0,
       subtitle: _workingStepSubtitle(3),
       footer: WizardFooter(
@@ -341,7 +341,7 @@ class _FocusSessionPlanningScreenState
   ) {
     return WizardStep(
       title: _stepTitles[4],
-      body: const DayCheckinTimeStep(),
+      body: const TimeCheckStep(),
       activeFraction: state.availableTimeSet ? 1.0 : 0.0,
       subtitle: _workingStepSubtitle(4),
       footer: WizardFooter(

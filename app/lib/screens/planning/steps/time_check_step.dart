@@ -12,14 +12,14 @@ import '../../../providers/focus_session_planning_provider.dart';
 import '../../../providers/shutdown_settings_provider.dart';
 import '../../../services/calendar/calendar_types.dart';
 
-class DayCheckinTimeStep extends ConsumerStatefulWidget {
-  const DayCheckinTimeStep({super.key});
+class TimeCheckStep extends ConsumerStatefulWidget {
+  const TimeCheckStep({super.key});
 
   @override
-  ConsumerState<DayCheckinTimeStep> createState() => _DayCheckinTimeStepState();
+  ConsumerState<TimeCheckStep> createState() => _TimeCheckStepState();
 }
 
-class _DayCheckinTimeStepState extends ConsumerState<DayCheckinTimeStep> {
+class _TimeCheckStepState extends ConsumerState<TimeCheckStep> {
   late TextEditingController _hoursCtrl;
   late TextEditingController _minutesCtrl;
 
