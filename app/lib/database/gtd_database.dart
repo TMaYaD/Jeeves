@@ -27,6 +27,7 @@ import '../utils/uuid.dart';
 import 'daos/action_dao.dart';
 import 'daos/capture_dao.dart';
 import 'daos/focus_session_dao.dart';
+import 'daos/habit_dao.dart';
 import 'daos/search_dao.dart';
 import 'daos/tag_dao.dart';
 import 'daos/sprint_dao.dart';
@@ -42,7 +43,7 @@ part 'gtd_database.g.dart';
 
 @DriftDatabase(
   tables: [Todos, Tags, TodoTags, TimeLogs, Sprints, FocusSessions, FocusSessionTasks, FocusSessionDispositions, FocusSessionPlanningBypasses, FocusSessionReschedules, OutcomeBypassDecisions, UserPreferences, Captures, CaptureAttachments, CaptureOutcomes, CaptureTags, Actions, LocalMigrationMarkers, PendingChanges, DeviceClockIdentity, Habits, HabitCommitments, HabitCheckIns, HabitInactivePeriods, HabitTags],
-  daos: [TagDao, TodoDao, TimeLogDao, SprintDao, FocusSessionDao, CaptureDao, ActionDao],
+  daos: [TagDao, TodoDao, TimeLogDao, SprintDao, FocusSessionDao, CaptureDao, ActionDao, HabitDao],
 )
 class GtdDatabase extends _$GtdDatabase {
   GtdDatabase(super.executor, {this.opCapture = const NoopDomainOpCapture()});

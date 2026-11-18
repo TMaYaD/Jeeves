@@ -735,6 +735,11 @@ class Habits extends Table {
 ///
 /// This is a code name, not a glossary term: the design calls it "the
 /// commitment a period is judged by".
+///
+/// The stored row is `HabitCommitmentRow`, not `HabitCommitment`: the domain
+/// value of that name (`models/habit_commitment.dart`) is what the app
+/// reasons about, and the row is only its stored form.
+@DataClassName('HabitCommitmentRow')
 class HabitCommitments extends Table {
   /// Client-random UUIDv4, minted by the writer.
   TextColumn get id => text().clientDefault(() => uuid.v4())();
