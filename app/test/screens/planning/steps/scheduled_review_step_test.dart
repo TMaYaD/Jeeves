@@ -108,6 +108,7 @@ void main() {
         ProviderScope(
           overrides: [
             planningTimeContextsProvider.overrideWith((_) async => const {}),
+            planningSprintMarksProvider.overrideWith((_) async => const []),
             dayTimelineSettingsProvider
                 .overrideWithValue(const DayTimelineSettings()),
             focusSessionPlanningProvider
