@@ -6,7 +6,7 @@ This document outlines the core aesthetic and functional principles of our desig
 
 ## Reference design prototypes
 
-Four design references are canonical for the execution-layer experience. Epic-level design work extends them; new surfaces must match their design language (and this document's tokens):
+Five design references are canonical for the execution-layer experience. Epic-level design work extends them; new surfaces must match their design language (and this document's tokens):
 
 | Project | Covers |
 |---|---|
@@ -14,8 +14,9 @@ Four design references are canonical for the execution-layer experience. Epic-le
 | [Jeeves — Daily Execution Layer](https://claude.ai/design/p/6a1ed3d8-1b97-4abd-8f45-0315ca69bc07?file=Jeeves+Daily+Execution+Layer.html) | The full desktop day loop (1440px sidebar shell): Morning planning (clarify → energy → selection → estimates) → Agenda → day timeline → Focus → Shutdown (dispositions + journal), plus a mobile companion panel. Also the desktop-layout reference for cross-platform work. |
 | [Jeeves — System Trust guardrails](https://claude.ai/artifact/4cwXKxksQeWFdNesbQvAFQ) | The guardrail surfaces of TMaYaD/Jeeves#45: the Banner's Bertie buttons and swipe dismiss, the Now screen's empty-state nudge, Inbox too full, System Trust in Settings, the Weekly Review's Bypassed step — light and dark. |
 | [Day timeline and sprints](proposals/day-timeline-and-sprints-design.html) | The epic-level pass for TMaYaD/Jeeves#43, phone first and then wide: the day timeline with suggested-time tiles beside hatched calendar events, Autoflow chunking and batching, the Timeboxed switch on the estimate and its red overflow dots, Focus Mode's "Sprint N" with hint dots, short and long breaks, and the capacity bar — light and dark. Open the file in a browser. |
+| [Jeeves — Habits](https://claude.ai/artifact/PNwLJBVCVMv6QTG7MRSLRR) | Every habit surface of TMaYaD/Jeeves#400: list, detail, field editors, Check-in, Planning, Shutdown, Focus, reminders. |
 
-The first two are accessible via the claude_design MCP (`https://api.anthropic.com/v1/design/mcp`, auth via `/design-login`); the third is a claude.ai Design canvas, shared from its page; the fourth is a page in this repository.
+The first two are accessible via the claude_design MCP (`https://api.anthropic.com/v1/design/mcp`, auth via `/design-login`); the third and fifth are claude.ai Design canvases, shared from their page; the fourth is in this repository.
 
 ### Epic-level design precedes stories
 
