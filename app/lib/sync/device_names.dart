@@ -16,6 +16,10 @@
 /// Nothing here is a ceremony step and nothing waits on the user: a device
 /// that has never been named is simply unnamed until the user names it, and a
 /// failure to name it is a log line, never a crash.
+///
+/// **Reading a name is a separate question from writing one.** A peer that
+/// sees an id on a change may turn it into that device's name, or into nothing
+/// — never into the raw id. See [DeviceNames.nameOf].
 library;
 
 import 'dart:convert';
@@ -26,6 +30,7 @@ import 'package:flutter/foundation.dart' show debugPrint;
 import '../database/gtd_database.dart';
 import 'hlc.dart';
 import 'host/hosted_capture.dart';
+import 'sync_client.dart';
 
 /// The preference key holding the name of the device with [nodeId].
 ///
@@ -77,19 +82,28 @@ String? normaliseDeviceName(Object? raw) {
   return String.fromCharCodes(runes.take(maxDeviceNameLength));
 }
 
-/// Reads and writes the names this device gives itself.
+/// Reads and writes the names this device gives itself, and resolves the names
+/// of the peers it can see.
 class DeviceNames {
   DeviceNames({
     required GtdDatabase db,
     required Future<String?> Function() readPlatformName,
+    Future<bool> Function(String nodeIdHex)? isVerifiedDevice,
   })  : _db = db,
-        _readPlatformName = readPlatformName;
+        _readPlatformName = readPlatformName,
+        _isVerifiedDevice = isVerifiedDevice;
 
   final GtdDatabase _db;
 
   /// The platform's own name for this device ("Pixel 8"), or `null` when the
   /// platform has none to give or the read failed.
   final Future<String?> Function() _readPlatformName;
+
+  /// Whether a peer id is a Device this device has verified.
+  ///
+  /// Absent means no peer is verified: a device that has not been told how to
+  /// check shows names for its own ids only.
+  final Future<bool> Function(String nodeIdHex)? _isVerifiedDevice;
 
   /// This device's own ids: the device node id it was born with, and the
   /// member id it was given when it enrolled.
@@ -236,4 +250,72 @@ class DeviceNames {
     }
     return normaliseDeviceName(decoded);
   }
+
+  /// The name of the device with [nodeId], or `null` when there is no name to
+  /// show.
+  ///
+  /// A name is shown for **this device's own ids**, and for a peer whose
+  /// identity the chain rules have verified — a peer with an applied Grant in
+  /// the preferences Workspace. Anything else, and any stored value that is
+  /// absent, tombstoned or not a name, is `null`: the caller phrases the
+  /// `null` case in its own words.
+  ///
+  /// **The resolver never returns an id.** A name that is exactly the id it
+  /// was asked about is refused, so no caller can put a raw id on screen by
+  /// accident.
+  Future<String?> nameOf(String userId, String nodeId) async {
+    final hex = memberIdToHex(nodeId);
+    if (!memberIdHexPattern.hasMatch(hex)) return null;
+
+    if (!await _isOwnId(hex) && !await _isVerified(hex)) return null;
+
+    final stored = await _db.userPreferencesDao.get(userId, deviceNameKey(hex));
+    final name = _decodeName(stored);
+    if (name == null) return null;
+    if (name == hex) return null;
+    return name;
+  }
+
+  /// Whether [hex] is one of this device's own ids.
+  Future<bool> _isOwnId(String hex) async {
+    for (final id in await ownNodeIds()) {
+      if (memberIdToHex(id) == hex) return true;
+    }
+    return false;
+  }
+
+  /// Whether the peer with id [hex] is a verified Device.
+  ///
+  /// A verification that fails is a peer that is not verified: the answer to
+  /// "may I show this device's name?" is never "yes" because a check broke.
+  Future<bool> _isVerified(String hex) async {
+    final predicate = _isVerifiedDevice;
+    if (predicate == null) return false;
+    try {
+      return await predicate(hex);
+    } on Object catch (error) {
+      debugPrint('device names: verification failed — $error');
+      return false;
+    }
+  }
+}
+
+/// Whether the device with id [nodeIdHex] holds a Grant in the control log
+/// [preferencesClient] has applied.
+///
+/// The applied control log holds only Grants that passed the chain rules, and
+/// in the preferences Workspace only Devices can be granted — so a Grant here
+/// is the evidence that an id belongs to a Device this device trusts.
+///
+/// A **revoked** Grant counts too: a device that was trusted keeps its name
+/// for the changes it made while it was trusted.
+Future<bool> deviceHasAppliedGrant(
+  SyncClient preferencesClient,
+  String nodeIdHex,
+) async {
+  final view = await preferencesClient.grantsView();
+  for (final grant in view.grants.values) {
+    if (memberIdToHex(grant.memberId) == nodeIdHex) return true;
+  }
+  return false;
 }

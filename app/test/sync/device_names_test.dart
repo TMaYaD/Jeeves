@@ -294,4 +294,155 @@ void main() {
       expect(emitted.last, isNull);
     });
   });
+
+  group('nameOf', () {
+    late GtdDatabase db;
+
+    setUp(() {
+      db = _openDb();
+    });
+    tearDown(() => db.close());
+
+    DeviceNames names({Future<bool> Function(String nodeIdHex)? isVerifiedDevice}) =>
+        DeviceNames(
+          db: db,
+          readPlatformName: () async => 'Pixel 8',
+          isVerifiedDevice: isVerifiedDevice,
+        );
+
+    /// Stores a raw preference value for [hex], exactly as another device
+    /// would have written it. A `null` value is a tombstone.
+    Future<void> store(String hex, String? value) =>
+        db.userPreferencesDao.set(_userId, deviceNameKey(hex), value);
+
+    /// A peer device's id: never one of this device's own ids.
+    const peerHex = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+
+    /// The resolver must never answer with the id it was asked about: an id
+    /// on screen is the failure this whole change exists to remove.
+    void expectNotAnId(String? name, String id) {
+      expect(name, isNotNull);
+      expect(name, isNot(equals(id)));
+      expect(name!.contains(id), isFalse,
+          reason: 'a name must not carry the id inside it');
+    }
+
+    test('resolves this device\'s own node id without a predicate', () async {
+      final nodeId = await _deviceNodeId(db);
+      await store(nodeId, jsonEncode('My Phone'));
+
+      final name = await names().nameOf(_userId, nodeId);
+
+      expect(name, 'My Phone');
+      expectNotAnId(name, nodeId);
+    });
+
+    test('resolves this device\'s own member id without a predicate',
+        () async {
+      await _enrol(db, _memberHex);
+      await store(_memberHex, jsonEncode('My Phone'));
+
+      final name = await names().nameOf(_userId, _memberHex);
+
+      expect(name, 'My Phone');
+      expectNotAnId(name, _memberHex);
+    });
+
+    test('resolves a peer with a stored name when the peer is verified',
+        () async {
+      await store(peerHex, jsonEncode("Asha's Pixel"));
+
+      final name = await names(
+        isVerifiedDevice: (id) async => id == peerHex,
+      ).nameOf(_userId, peerHex);
+
+      expect(name, "Asha's Pixel");
+      expectNotAnId(name, peerHex);
+    });
+
+    test('a peer that is not verified has no name', () async {
+      await store(peerHex, jsonEncode("Asha's Pixel"));
+
+      final refused = await names(
+        isVerifiedDevice: (id) async => false,
+      ).nameOf(_userId, peerHex);
+      final unasked = await names().nameOf(_userId, peerHex);
+      final broken = await names(
+        isVerifiedDevice: (id) async => throw StateError('no chain rules'),
+      ).nameOf(_userId, peerHex);
+
+      expect(refused, isNull);
+      expect(unasked, isNull);
+      expect(broken, isNull);
+    });
+
+    test('an id with no stored name has no name', () async {
+      final nodeId = await _deviceNodeId(db);
+
+      final name = await names().nameOf(_userId, nodeId);
+
+      expect(name, isNull);
+    });
+
+    test('a tombstoned name has no name', () async {
+      await store(peerHex, null);
+
+      final name = await names(
+        isVerifiedDevice: (id) async => true,
+      ).nameOf(_userId, peerHex);
+
+      expect(name, isNull);
+    });
+
+    test('a stored value that is not a string has no name', () async {
+      await store(peerHex, jsonEncode(42));
+
+      final name = await names(
+        isVerifiedDevice: (id) async => true,
+      ).nameOf(_userId, peerHex);
+
+      expect(name, isNull);
+    });
+
+    test('a stored value that is not JSON has no name', () async {
+      await store(peerHex, 'not json');
+
+      final name = await names(
+        isVerifiedDevice: (id) async => true,
+      ).nameOf(_userId, peerHex);
+
+      expect(name, isNull);
+    });
+
+    test('a long name with a newline is one line of 40 characters', () async {
+      await store(peerHex, jsonEncode('${'x' * 100}\n${'y' * 99}'));
+
+      final name = await names(
+        isVerifiedDevice: (id) async => true,
+      ).nameOf(_userId, peerHex);
+
+      expect(name, 'x' * 40);
+      expect(name!.length, 40);
+      expect(name.contains('\n'), isFalse);
+      expectNotAnId(name, peerHex);
+    });
+
+    test('a malformed id has no name', () async {
+      final name = await names(
+        isVerifiedDevice: (id) async => true,
+      ).nameOf(_userId, 'not-an-id');
+
+      expect(name, isNull);
+    });
+
+    test('a name that is the id itself is not shown', () async {
+      await store(peerHex, jsonEncode(peerHex));
+
+      final name = await names(
+        isVerifiedDevice: (id) async => true,
+      ).nameOf(_userId, peerHex);
+
+      expect(name, isNull);
+    });
+  });
 }
