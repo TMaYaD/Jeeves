@@ -51,8 +51,8 @@ class _FocusSessionPlanningScreenState
     'Before we begin',
     'Clarify Inbox',
     'Review Tasks',
-    'Energy Check-in',
-    'Time Check-in',
+    'Energy Check',
+    'Time Check',
     'Build Today\'s Plan',
   ];
 
