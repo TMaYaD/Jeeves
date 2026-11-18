@@ -12,10 +12,12 @@
 @TestOn('!browser')
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:drift/drift.dart' show OrderingTerm, Value;
+import 'package:drift/drift.dart'
+    show OrderingTerm, QueryExecutor, QueryInterceptor, Value;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/providers/sync_status_provider.dart';
 import 'package:jeeves/sync/alarm_resolution.dart';
@@ -103,6 +105,14 @@ String _docId(SimWorkspace workspace) =>
 
 Future<Map<String, Object?>?> _doc(SimDevice device, SimWorkspace workspace) =>
     device.registry.register(_harnessCollection).readEntity(_docId(workspace));
+
+/// This device's own envelope at [authorSeq] — the bytes it signed.
+Future<Uint8List> _outboxEnvelope(SimDevice device, int authorSeq) async {
+  final row = await (device.database.select(device.database.outbox)
+        ..where((r) => r.authorSeq.equals(authorSeq)))
+      .getSingle();
+  return row.envelope;
+}
 
 void main() {
   /// The peer's first *content* op sits at this position in its own chain.
@@ -1390,6 +1400,49 @@ void main() {
           reason: 'op $index is the bytes this device signed the first time',
         );
       }
+    });
+
+    test('a flush that read its queue before the answer does not settle it',
+        () async {
+      final rollback = await rollTheServerBack();
+      final from = rollback.repostFromAuthorSeq!;
+
+      // The server holds this device's write at the agreed position again — a
+      // restore, the same bytes this device signed. The queued write can go
+      // out, so the flush below is accepted.
+      final lost = await _outboxEnvelope(a, from);
+      workspace.server.injectUnchecked(workspace.workspaceId, lost);
+
+      // A flush is already running when the User answers: it read its queue
+      // before the answer, so it carries the queued write and not the re-send
+      // the answer asked for.
+      final gate = Completer<void>();
+      a.link.postGate = gate;
+      final flush = a.client.flushOutbox();
+      await a.link.postGateReached.future;
+
+      // The User answers while the flush is holding its batch.
+      await a.client.resolveAlarm(rollback.id, AlarmResolution.keptOurs);
+      gate.complete();
+      await flush;
+
+      // The decision is recorded, but the re-send has not been acknowledged:
+      // the flush never carried the bytes from the agreed position.
+      final decided =
+          (await a.alarmsByKind())[IntegrityAlarmKind.ownWritesRollback.code]!;
+      expect(decided.resolution, AlarmResolution.keptOurs.code);
+      expect(decided.resolvedAt, isNull);
+      expect(
+        await unsentAuthorSeqs(),
+        contains(from),
+        reason: 'the write from the agreed position is still queued',
+      );
+
+      // The re-send goes out, and only then does the accusation close.
+      await a.client.flushOutbox();
+      final settled =
+          (await a.alarmsByKind())[IntegrityAlarmKind.ownWritesRollback.code]!;
+      expect(settled.resolvedAt, isNotNull);
     });
 
     test('a server holding a position this device never wrote offers no answer',

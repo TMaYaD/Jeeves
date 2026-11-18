@@ -944,16 +944,51 @@ class SyncClient {
   /// own rollback, is settled here. A re-send the server refuses again goes
   /// down the refusal path instead, which re-raises the alarm and takes the
   /// decision with it.
+  ///
+  /// **The settlement is tied to the re-send, not to the flush that happens to
+  /// be running.** A flush that read its queue before the User answered carries
+  /// the queued write and not the re-send the answer asked for; if it settled
+  /// the accusation, the accusation would be closed over bytes the server has
+  /// never been sent. So the accusation is settled only when every row from
+  /// the agreed position onwards has been sent — the re-send acknowledged.
   Future<void> _settleKeptOursRollback() async {
-    await (_db.update(_db.integrityAlarms)
+    final decided = await (_db.select(_db.integrityAlarms)
           ..where((row) =>
               row.workspaceId.equals(workspaceId) &
               row.kind.equals(IntegrityAlarmKind.ownWritesRollback.code) &
               row.authorMemberId.equals(identity.memberId) &
               row.resolution.equals(AlarmResolution.keptOurs.code) &
               row.resolvedAt.isNull()))
-        .write(IntegrityAlarmsCompanion(resolvedAt: Value(_now())));
+        .get();
+    if (decided.isEmpty) return;
+    final now = _now();
+    for (final alarm in decided) {
+      final from = alarm.repostFromAuthorSeq;
+      // No agreed position means no re-send to wait for: the accusation was
+      // answered, and there is nothing this flush could acknowledge.
+      if (from == null) continue;
+      await (_db.update(_db.integrityAlarms)
+            ..where((row) =>
+                row.id.equals(alarm.id) &
+                row.resolvedAt.isNull() &
+                _noUnsentOutboxRowFrom(from)))
+          .write(IntegrityAlarmsCompanion(resolvedAt: Value(now)));
+    }
   }
+
+  /// No outbox row from [from] onwards is still waiting to be sent.
+  ///
+  /// The re-send the User asked for runs from the position the server and this
+  /// device last agreed on, so every row from there onwards is part of it: the
+  /// accusation is settled when the last of them has been acknowledged, and not
+  /// before.
+  Expression<bool> _noUnsentOutboxRowFrom(int from) => notExistsQuery(
+        _db.select(_db.outbox)
+          ..where((row) =>
+              row.workspaceId.equals(workspaceId) &
+              row.authorSeq.isBiggerOrEqualValue(from) &
+              row.sentAt.isNull()),
+      );
 
   /// Stamp one acknowledged chunk in a single UPDATE.
   Future<void> _markSent(List<OutboxRow> acknowledged) =>

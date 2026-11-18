@@ -202,6 +202,18 @@ class DeviceLink implements SyncTransport, UserTransport {
   /// already running.
   Completer<void>? pullGate;
 
+  /// Holds an upload mid-flight, so a test can decide what the User answers
+  /// while a flush is already running.
+  ///
+  /// The hold is **before** the server sees the batch: the flush has read its
+  /// queue and is waiting to post it, which is the moment a decision taken
+  /// elsewhere can land behind the flush's back.
+  Completer<void>? postGate;
+
+  /// Completes when a POST has reached [postGate] — the point at which the
+  /// flush has read its queue and is holding the batch.
+  final Completer<void> postGateReached = Completer<void>();
+
   /// Fails the next [pullOps] — the poke-triggered sync failing on the one step
   /// a poke exists to trigger.
   Object? pullFailure;
@@ -292,6 +304,11 @@ class DeviceLink implements SyncTransport, UserTransport {
     List<Uint8List> envelopes,
   ) async {
     _requireOnline();
+    final gate = postGate;
+    if (gate != null) {
+      if (!postGateReached.isCompleted) postGateReached.complete();
+      await gate.future;
+    }
     final results = await _member.postOps(workspaceId, envelopes);
     if (dropPostResponse) {
       dropPostResponse = false;
