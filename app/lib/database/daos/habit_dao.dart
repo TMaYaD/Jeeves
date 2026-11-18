@@ -27,6 +27,7 @@
 library;
 
 import 'package:drift/drift.dart';
+import 'package:uuid/enums.dart' show Namespace;
 
 import '../../models/habit_commitment.dart';
 import '../../sync/collection_codecs.dart' show encodeInstant;
@@ -34,6 +35,15 @@ import '../../utils/uuid.dart';
 import '../gtd_database.dart';
 
 part 'habit_dao.g.dart';
+
+/// Deterministic `habit_tags.id` for the (habitId, tagId) pair.
+///
+/// The junction row's logical identity is the pair, so the id is derived from
+/// it: writing the same pair twice lands on the same row instead of
+/// accumulating duplicates, and a merge that moves a row onto a pair that
+/// already holds one collapses onto it.
+String habitTagIdFor(String habitId, String tagId) =>
+    uuid.v5(Namespace.url.value, 'jeeves://habit_tag/$habitId/$tagId');
 
 /// Where a Habit sits in the day.
 ///
@@ -191,6 +201,19 @@ const Set<String> habitEnergyLevels = {'low', 'medium', 'high'};
 /// The three parts of the day a Habit can be anchored to.
 const Set<String> habitPartsOfDay = {'morning', 'afternoon', 'evening'};
 
+/// The tag types a Label may be.
+///
+/// A Label is a tag the Outcome Labels editor offers. `context` is in the set
+/// because #997 has not decided which of the two the `context` rows are, and
+/// a Habit should take the Labels the user can see wherever they live. An
+/// Area, a Project and a Person are not Labels: an Area is set with
+/// `setArea` and there is one per Habit, and a Project and a Person belong to
+/// an Outcome.
+const Set<String> habitLabelTagTypes = {'label', 'context'};
+
+/// The tag type an Area is.
+const String habitAreaTagType = 'area';
+
 /// A local clock time, `HH:MM`, 24-hour.
 final RegExp habitClockTimePattern = RegExp(r'^([01]\d|2[0-3]):([0-5]\d)$');
 
@@ -200,8 +223,14 @@ const String _pausedKind = 'paused';
 /// The kind of a period in which the Habit is archived.
 const String _archivedKind = 'archived';
 
-@DriftAccessor(
-    tables: [Habits, HabitCommitments, HabitCheckIns, HabitInactivePeriods])
+@DriftAccessor(tables: [
+  Habits,
+  HabitCommitments,
+  HabitCheckIns,
+  HabitInactivePeriods,
+  HabitTags,
+  Tags,
+])
 class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
   HabitDao(super.db);
 
@@ -639,6 +668,90 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
     });
   }
 
+  // --- Area and Labels ------------------------------------------------------
+
+  /// Sets the Habit's Area, replacing the Area it already has.
+  ///
+  /// **A Habit has at most one Area.** The Area is the part of life the Habit
+  /// belongs to, and two of them would say the Habit belongs to two places at
+  /// once — so giving a new Area takes the old one away, and giving null
+  /// takes the Area away and leaves the Habit with none.
+  ///
+  /// A row whose tag has no row of its own goes too: the tag was deleted
+  /// where the Habit could not see it, and a row pointing at nothing says
+  /// nothing about what the Habit holds.
+  ///
+  /// Throws an [ArgumentError] for a Habit that is not there, for a tag that
+  /// is not there, and for a tag that is not an `area` tag — a Label given as
+  /// an Area would be a row that lies about what it is.
+  Future<void> setArea({
+    required String habitId,
+    required String userId,
+    required String? areaTagId,
+  }) async {
+    await attachedDatabase.capturing(() async {
+      await _requireHabit(habitId, userId);
+      // The Area is checked before the old one is taken away, so a refused
+      // Area leaves the Habit with the Area it had.
+      final tag = areaTagId == null ? null : await _requireTag(areaTagId);
+      if (tag != null && tag.type != habitAreaTagType) {
+        throw ArgumentError.value(areaTagId, 'areaTagId',
+            'An Area is an area tag, not a ${tag.type} tag.');
+      }
+      await _removeAreaRows(habitId);
+      if (tag == null) return;
+      await _insertHabitTag(habitId, tag.id, userId);
+    });
+  }
+
+  /// Gives the Habit a Label.
+  ///
+  /// A Habit takes any number of Labels. Which tags may be one is
+  /// [habitLabelTagTypes] — the tags the Outcome Labels editor offers.
+  ///
+  /// An Area, a Project and a Person are refused: an Area is set with
+  /// [setArea] and there is one per Habit, and a Project and a Person belong
+  /// to an Outcome. A row carrying one of them here would be a claim the
+  /// Habit has no business making.
+  ///
+  /// Throws an [ArgumentError] for a Habit that is not there, for a tag that
+  /// is not there, and for a tag whose type is not a Label's.
+  Future<void> assignLabel({
+    required String habitId,
+    required String userId,
+    required String tagId,
+  }) async {
+    await attachedDatabase.capturing(() async {
+      await _requireHabit(habitId, userId);
+      final tag = await _requireTag(tagId);
+      _requireLabelType(tag);
+      await _insertHabitTag(habitId, tag.id, userId);
+    });
+  }
+
+  /// Takes a Label off the Habit.
+  ///
+  /// The same rule as [assignLabel] holds here: a tag that is not a Label is
+  /// refused, so an Area and a Label can never be quietly swapped for one
+  /// another by writing through the wrong door.
+  ///
+  /// Throws an [ArgumentError] for a Habit that is not there, for a tag that
+  /// is not there, and for a tag whose type is not a Label's.
+  Future<void> unassignLabel({
+    required String habitId,
+    required String userId,
+    required String tagId,
+  }) async {
+    await attachedDatabase.capturing(() async {
+      await _requireHabit(habitId, userId);
+      final tag = await _requireTag(tagId);
+      _requireLabelType(tag);
+      await (delete(habitTags)
+            ..where((ht) => ht.habitId.equals(habitId) & ht.tagId.equals(tagId)))
+          .go();
+    });
+  }
+
   // --- reads ----------------------------------------------------------------
 
   /// The Habit with [habitId], or null when there is none.
@@ -748,7 +861,82 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
     });
   }
 
+  /// The tags a Habit holds — its Area and its Labels — by name.
+  ///
+  /// The read joins `tags`, so a junction row whose tag is gone is not
+  /// returned: a row pointing at nothing is not a tag the Habit holds. That
+  /// is what makes a Tag deleted somewhere else invisible here rather than a
+  /// dangling claim.
+  Future<List<Tag>> tagsFor(String habitId) async {
+    final query = select(habitTags).join([
+      innerJoin(tags, tags.id.equalsExp(habitTags.tagId)),
+    ])
+      ..where(habitTags.habitId.equals(habitId));
+    query.orderBy([
+      OrderingTerm.asc(tags.name),
+      OrderingTerm.asc(tags.id),
+    ]);
+    final rows = await query.get();
+    return [for (final row in rows) row.readTable(tags)];
+  }
+
   // --- internals ------------------------------------------------------------
+
+  /// The tag with [tagId], or an [ArgumentError] when there is no such tag.
+  Future<Tag> _requireTag(String tagId) async {
+    final tag = await (select(tags)..where((t) => t.id.equals(tagId)))
+        .getSingleOrNull();
+    if (tag == null) {
+      throw ArgumentError.value(tagId, 'tagId', 'There is no Tag with that id.');
+    }
+    return tag;
+  }
+
+  /// Refuses a tag that is not a Label.
+  ///
+  /// The same refusal [assignLabel] and [unassignLabel] both make, so a Label
+  /// and an Area are never swapped for one another by writing through the
+  /// wrong door.
+  static void _requireLabelType(Tag tag) {
+    if (!habitLabelTagTypes.contains(tag.type)) {
+      throw ArgumentError.value(
+          tag.id,
+          'tagId',
+          'A Habit takes a label or a context tag as a Label, not a '
+              '${tag.type} tag.');
+    }
+  }
+
+  /// Removes the Habit's Area row, and any row whose tag is gone.
+  Future<void> _removeAreaRows(String habitId) async {
+    final rows = await (select(habitTags)
+          ..where((ht) => ht.habitId.equals(habitId)))
+        .get();
+    for (final row in rows) {
+      final tag = await (select(tags)..where((t) => t.id.equals(row.tagId)))
+          .getSingleOrNull();
+      if (tag == null || tag.type == habitAreaTagType) {
+        await (delete(habitTags)..where((ht) => ht.id.equals(row.id))).go();
+      }
+    }
+  }
+
+  /// Writes the junction row for the (habitId, tagId) pair.
+  ///
+  /// The id is derived from the pair, so writing the same pair twice lands on
+  /// the same row instead of accumulating duplicates.
+  Future<void> _insertHabitTag(
+      String habitId, String tagId, String userId) async {
+    await into(habitTags).insert(
+      HabitTagsCompanion.insert(
+        id: habitTagIdFor(habitId, tagId),
+        habitId: habitId,
+        tagId: tagId,
+        userId: userId,
+      ),
+      mode: InsertMode.insertOrReplace,
+    );
+  }
 
   /// The Habit's row, or an [ArgumentError] when there is no such Habit or it
   /// belongs to another user.

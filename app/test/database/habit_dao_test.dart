@@ -1241,6 +1241,169 @@ void main() {
       });
     });
 
+    group('Area and Labels', () {
+      Future<String> createTag(String id, String name, String type) async {
+        await db.into(db.tags).insert(TagsCompanion(
+          id: Value(id),
+          name: Value(name),
+          type: Value(type),
+          userId: const Value(_userId),
+        ));
+        return id;
+      }
+
+      /// The tag ids the Habit's junction rows hold, in row order.
+      ///
+      /// Read through the rows rather than through [HabitDao.tagsFor]: the
+      /// read hides an orphan, so a row that outlived its tag would not show
+      /// up there, and a test that claims "the first Area is gone" wants the
+      /// row gone too.
+      Future<List<String>> habitTagIds(String habitId) async {
+        final rows = await (db.select(db.habitTags)
+              ..where((ht) => ht.habitId.equals(habitId)))
+            .get();
+        return rows.map((row) => row.tagId).toList();
+      }
+
+      test('a second Area replaces the first', () async {
+        final habitId = await createHabit();
+        await createTag('area-one', 'Health', 'area');
+        await createTag('area-two', 'Work', 'area');
+
+        await db.habitDao.setArea(
+            habitId: habitId, userId: _userId, areaTagId: 'area-one');
+        await db.habitDao.setArea(
+            habitId: habitId, userId: _userId, areaTagId: 'area-two');
+
+        final tags = await db.habitDao.tagsFor(habitId);
+        expect(tags, hasLength(1));
+        expect(tags.single.id, 'area-two');
+        expect(await habitTagIds(habitId), ['area-two'],
+            reason: 'a Habit has one Area: the first one must be gone, not '
+                'merely out of the read');
+      });
+
+      test('taking the Area away leaves the Habit with none', () async {
+        final habitId = await createHabit();
+        await createTag('area-one', 'Health', 'area');
+        await db.habitDao.setArea(
+            habitId: habitId, userId: _userId, areaTagId: 'area-one');
+
+        await db.habitDao.setArea(
+            habitId: habitId, userId: _userId, areaTagId: null);
+
+        expect(await db.habitDao.tagsFor(habitId), isEmpty);
+        expect(await habitTagIds(habitId), isEmpty);
+      });
+
+      test('refuses a tag that is not an Area', () async {
+        final habitId = await createHabit();
+        await createTag('label-one', 'Deep work', 'label');
+
+        await expectLater(
+          db.habitDao.setArea(
+              habitId: habitId, userId: _userId, areaTagId: 'label-one'),
+          throwsArgumentError,
+        );
+        expect(await db.habitDao.tagsFor(habitId), isEmpty);
+      });
+
+      test('a refused Project tag', () async {
+        final habitId = await createHabit();
+        await createTag('proj-one', 'Book', 'project');
+
+        await expectLater(
+          db.habitDao.assignLabel(
+              habitId: habitId, userId: _userId, tagId: 'proj-one'),
+          throwsArgumentError,
+        );
+        expect(await db.habitDao.tagsFor(habitId), isEmpty,
+            reason: 'a refused tag must leave no row behind');
+      });
+
+      test('refuses an Area and a Person as a Label', () async {
+        final habitId = await createHabit();
+        await createTag('area-one', 'Health', 'area');
+        await createTag('person-one', 'Alice', 'person');
+
+        for (final tagId in ['area-one', 'person-one']) {
+          await expectLater(
+            db.habitDao.assignLabel(
+                habitId: habitId, userId: _userId, tagId: tagId),
+            throwsArgumentError,
+          );
+          await expectLater(
+            db.habitDao.unassignLabel(
+                habitId: habitId, userId: _userId, tagId: tagId),
+            throwsArgumentError,
+          );
+        }
+        expect(await db.habitDao.tagsFor(habitId), isEmpty);
+      });
+
+      test('gives the Habit its Labels and takes one away', () async {
+        final habitId = await createHabit();
+        await createTag('label-one', 'Deep work', 'label');
+        await createTag('label-two', 'Focus', 'context');
+
+        await db.habitDao.assignLabel(
+            habitId: habitId, userId: _userId, tagId: 'label-one');
+        await db.habitDao.assignLabel(
+            habitId: habitId, userId: _userId, tagId: 'label-two');
+
+        expect((await db.habitDao.tagsFor(habitId)).map((t) => t.id).toSet(),
+            {'label-one', 'label-two'});
+
+        await db.habitDao.unassignLabel(
+            habitId: habitId, userId: _userId, tagId: 'label-one');
+
+        final tags = await db.habitDao.tagsFor(habitId);
+        expect(tags, hasLength(1));
+        expect(tags.single.id, 'label-two');
+      });
+
+      test('assigning the same Label twice keeps one row', () async {
+        final habitId = await createHabit();
+        await createTag('label-one', 'Deep work', 'label');
+
+        await db.habitDao.assignLabel(
+            habitId: habitId, userId: _userId, tagId: 'label-one');
+        await db.habitDao.assignLabel(
+            habitId: habitId, userId: _userId, tagId: 'label-one');
+
+        expect(await habitTagIds(habitId), ['label-one']);
+      });
+
+      test('an orphan habit_tags row is not returned', () async {
+        final habitId = await createHabit();
+        // A junction row whose tag is gone — the tag was deleted where the
+        // Habit could not see it.
+        await db.into(db.habitTags).insert(HabitTagsCompanion.insert(
+              id: habitTagIdFor(habitId, 'gone-tag'),
+              habitId: habitId,
+              tagId: 'gone-tag',
+              userId: _userId,
+            ));
+
+        expect(await db.habitDao.tagsFor(habitId), isEmpty);
+      });
+
+      test('authors no op — the habit tables are local', () async {
+        final habitId = await createHabit();
+        await createTag('area-one', 'Health', 'area');
+        await createTag('label-one', 'Deep work', 'label');
+
+        await db.habitDao.setArea(
+            habitId: habitId, userId: _userId, areaTagId: 'area-one');
+        await db.habitDao.assignLabel(
+            habitId: habitId, userId: _userId, tagId: 'label-one');
+        await db.habitDao.unassignLabel(
+            habitId: habitId, userId: _userId, tagId: 'label-one');
+
+        expect(capture.recorded, isEmpty);
+      });
+    });
+
     group('watchHabits', () {
       test('gives the Habits with their state on the day, oldest first',
           () async {

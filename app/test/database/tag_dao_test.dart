@@ -2,8 +2,10 @@ import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:jeeves/database/daos/habit_dao.dart' show HabitCommitmentDraft;
 import 'package:jeeves/database/daos/tag_dao.dart' show todoTagIdFor;
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/habit_commitment.dart' show HabitRepeatKind;
 import '../test_helpers.dart';
 
 GtdDatabase _openInMemory() => GtdDatabase(NativeDatabase.memory());
@@ -344,6 +346,76 @@ void main() {
         (await db.select(db.tags).get()).map((row) => row.id).toSet(),
         {'dup1', 'dup2'},
       );
+    });
+  });
+
+  // A Habit holds its Area and its Labels in `habit_tags`, a junction the
+  // Tag DAO did not know about until the Habit data model arrived (#401).
+  // Foreign keys are not enforced (#637), so a junction the Tag DAO ignores
+  // keeps a deleted Tag alive as an invisible orphan, and a merge that does
+  // not move the row loses the Label.
+  group('Tag cleanup for Habits', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() => db.close());
+
+    Future<String> createHabit() => db.habitDao.createHabit(
+          userId: _userId,
+          title: 'Read a book',
+          today: '2026-11-18',
+          now: DateTime.utc(2026, 11, 18, 9, 30),
+          firstCommitment:
+              const HabitCommitmentDraft(repeatKind: HabitRepeatKind.everyDay),
+        );
+
+    Future<String> createLabel(String id, String name) async {
+      await db.tagDao.upsertTag(TagsCompanion(
+        id: Value(id),
+        name: Value(name),
+        type: const Value('label'),
+        userId: const Value(_userId),
+      ));
+      return id;
+    }
+
+    Future<int> habitTagRowCount(String habitId) async =>
+        (await (db.select(db.habitTags)
+                  ..where((ht) => ht.habitId.equals(habitId)))
+                .get())
+            .length;
+
+    test('deleting a Label removes it from the Habit', () async {
+      final habitId = await createHabit();
+      await createLabel('label-one', 'Deep work');
+      await db.habitDao
+          .assignLabel(habitId: habitId, userId: _userId, tagId: 'label-one');
+      expect(await db.habitDao.tagsFor(habitId), hasLength(1));
+
+      await db.tagDao.deleteTag('label-one');
+
+      expect(await db.habitDao.tagsFor(habitId), isEmpty);
+      expect(await habitTagRowCount(habitId), 0,
+          reason: 'the junction row must go too, or it is an orphan');
+    });
+
+    test('merging two Labels leaves the Habit with the target Label once',
+        () async {
+      final habitId = await createHabit();
+      await createLabel('label-one', 'Deep work');
+      await createLabel('label-two', 'Focus');
+      await db.habitDao
+          .assignLabel(habitId: habitId, userId: _userId, tagId: 'label-one');
+      await db.habitDao
+          .assignLabel(habitId: habitId, userId: _userId, tagId: 'label-two');
+
+      await db.tagDao.merge('label-one', 'label-two');
+
+      final tags = await db.habitDao.tagsFor(habitId);
+      expect(tags, hasLength(1));
+      expect(tags.single.id, 'label-two');
+      expect(await habitTagRowCount(habitId), 1,
+          reason: 'the two Labels must collapse onto one row, not two');
     });
   });
 
