@@ -3621,25 +3621,29 @@ class SyncClient {
   /// undecided, and an undecided row keeps the alarm standing: the User asked
   /// for the server's version, and the server's version could not be read.
   Future<void> _takeUpstream(IntegrityAlarmRow alarm) async {
-    final author = alarm.authorMemberId;
-    final held = await (_db.select(_db.quarantinedOps)
-          ..where((row) =>
-              row.workspaceId.equals(workspaceId) &
-              row.releasedAt.isNull() &
-              row.resolution.isNull() &
-              row.reason.equals(SyncRejectionReason.authorChainGap.code) &
-              (author == null
-                  ? row.authorMemberId.isNull()
-                  : row.authorMemberId.equals(author)))
-          ..orderBy([
-            (row) => OrderingTerm(expression: row.authorSeq),
-            (row) => OrderingTerm(expression: row.id),
-          ]))
-        .get();
     final affected = <AffectedEntity>{};
-    final decided = <int>{};
     final now = _now();
     await _db.transaction(() async {
+      // The accusation must still be the one the User answered: a refusal that
+      // arrived while they were answering is a new question, not this one.
+      final current = await _alarmRow(alarm.id);
+      if (current == null || current.occurrenceCount != alarm.occurrenceCount) {
+        return;
+      }
+      // The snapshot is taken inside the transaction, so the rows it stamps and
+      // the rows the settlement asks about are the same rows.
+      final held = await (_db.select(_db.quarantinedOps)
+            ..where((t) => _coveredRows(
+                  t,
+                  kind: IntegrityAlarmKind.authorChainGap,
+                  authorMemberId: current.authorMemberId,
+                ))
+            ..orderBy([
+              (row) => OrderingTerm(expression: row.authorSeq),
+              (row) => OrderingTerm(expression: row.id),
+            ]))
+          .get();
+      final decided = <int>{};
       for (final row in held) {
         final touched = await _applyHeldChange(row);
         if (touched.isEmpty) continue;
@@ -3654,32 +3658,33 @@ class SyncClient {
       if (decided.length == held.length) {
         // Nothing is left to decide about this author, so the accusation is
         // settled — and so is the fork the gap was holding open.
-        await (_db.update(_db.integrityAlarms)
-              ..where((row) =>
-                  row.workspaceId.equals(workspaceId) &
-                  row.kind.equals(IntegrityAlarmKind.authorChainGap.code) &
-                  (author == null
-                      ? row.authorMemberId.isNull()
-                      : row.authorMemberId.equals(author)) &
-                  row.resolvedAt.isNull()))
-            .write(IntegrityAlarmsCompanion(
-          resolution: Value(AlarmResolution.tookUpstream.code),
-          resolutionDecidedAt: Value(now),
-          resolvedAt: Value(now),
-        ));
-        await (_db.update(_db.integrityAlarms)
-              ..where((row) =>
-                  row.workspaceId.equals(workspaceId) &
-                  row.kind.equals(IntegrityAlarmKind.authorChainFork.code) &
-                  (author == null
-                      ? row.authorMemberId.isNull()
-                      : row.authorMemberId.equals(author)) &
-                  row.resolvedAt.isNull()))
-            .write(IntegrityAlarmsCompanion(
-          resolution: Value(AlarmResolution.tookUpstream.code),
-          resolutionDecidedAt: Value(now),
-          resolvedAt: Value(now),
-        ));
+        final gap = await _standingAlarm(
+          IntegrityAlarmKind.authorChainGap,
+          current.authorMemberId,
+        );
+        if (gap != null) {
+          await _settleWhenNothingUndecided(
+            alarm: gap,
+            kind: IntegrityAlarmKind.authorChainGap,
+            resolution: AlarmResolution.tookUpstream,
+            now: now,
+          );
+        }
+        final fork = await _standingAlarm(
+          IntegrityAlarmKind.authorChainFork,
+          current.authorMemberId,
+        );
+        if (fork != null) {
+          await _settleWhenNothingUndecided(
+            alarm: fork,
+            kind: IntegrityAlarmKind.authorChainFork,
+            resolution: AlarmResolution.tookUpstream,
+            now: now,
+            forkHeadSeq: current.authorMemberId == null
+                ? null
+                : await effectiveChainHeadSeq(current.authorMemberId!),
+          );
+        }
       }
     });
     // The projection is the tail of the receive order, as it is at the end of a
@@ -3796,8 +3801,16 @@ class SyncClient {
         break;
     }
     final now = _now();
-    final covered = await _rowsCoveredByAlarm(alarm, kind);
     await _db.transaction(() async {
+      // The accusation must still be the one the User answered: a refusal that
+      // arrived while they were answering is a new question, not this one.
+      final current = await _alarmRow(alarm.id);
+      if (current == null || current.occurrenceCount != alarm.occurrenceCount) {
+        return;
+      }
+      // The snapshot is taken inside the transaction, so the rows it stamps and
+      // the rows the settlement asks about are the same rows.
+      final covered = await _rowsCoveredByAlarm(current, kind);
       for (final row in covered) {
         await (_db.update(_db.quarantinedOps)
               ..where((r) => r.id.equals(row.id)))
@@ -3806,15 +3819,18 @@ class SyncClient {
           resolutionDecidedAt: Value(now),
         ));
       }
-      await (_db.update(_db.integrityAlarms)
-            ..where((row) => row.id.equals(alarm.id)))
-          .write(IntegrityAlarmsCompanion(
-        resolution: Value(resolution.code),
-        resolutionDecidedAt: Value(now),
-        resolvedAt: Value(now),
-      ));
+      await _settleWhenNothingUndecided(
+        alarm: current,
+        kind: kind,
+        resolution: resolution,
+        now: now,
+        forkHeadSeq: kind == IntegrityAlarmKind.authorChainFork &&
+                current.authorMemberId != null
+            ? await effectiveChainHeadSeq(current.authorMemberId!)
+            : null,
+      );
       if (kind == IntegrityAlarmKind.authorChainFork) {
-        await _settleGapAlarmOf(alarm, resolution, now);
+        await _settleGapAlarmOf(current, resolution, now);
       }
     });
   }
@@ -3874,42 +3890,147 @@ class SyncClient {
     IntegrityAlarmRow alarm,
     IntegrityAlarmKind kind,
   ) async {
-    final author = alarm.authorMemberId;
-    final candidates = await (_db.select(_db.quarantinedOps)
-          ..where((row) =>
-              row.workspaceId.equals(workspaceId) &
-              row.releasedAt.isNull() &
-              row.resolution.isNull() &
-              (author == null
-                  ? row.authorMemberId.isNull()
-                  : row.authorMemberId.equals(author))))
+    final forkHeadSeq = kind == IntegrityAlarmKind.authorChainFork &&
+            alarm.authorMemberId != null
+        ? await effectiveChainHeadSeq(alarm.authorMemberId!)
+        : null;
+    return (_db.select(_db.quarantinedOps)
+          ..where((t) => _coveredRows(
+                t,
+                kind: kind,
+                authorMemberId: alarm.authorMemberId,
+                forkHeadSeq: forkHeadSeq,
+              ))
+          ..orderBy([(row) => OrderingTerm(expression: row.id)]))
         .get();
-    if (kind == IntegrityAlarmKind.authorChainFork) {
-      if (author == null) return const [];
-      final headSeq = await effectiveChainHeadSeq(author);
-      return [
-        for (final row in candidates)
-          if (row.reason == SyncRejectionReason.authorChainGap.code &&
-              row.authorSeq != null &&
-              row.authorSeq! <= headSeq)
-            row,
-      ];
-    }
-    return [
-      for (final row in candidates)
-        if (_escalatesTo(row.reason, kind)) row,
-    ];
   }
 
-  /// Whether a refusal reason escalates to this kind of accusation.
+  /// The refused changes an accusation covers, as one predicate.
+  ///
+  /// **Same Workspace, same author, unreleased, undecided, and refusing for
+  /// this kind of reason** — the escalation the accusation was raised for. A
+  /// row the user has already answered is not covered again, and a released row
+  /// is out of it entirely: it was re-admitted, so there is nothing left to
+  /// decide about it.
+  ///
+  /// A fork is the one kind with no reason of its own. Its rows are the
+  /// author's gap rows at or below the effective chain head — the continuations
+  /// that lost their position — because a fork is not a refusal but the choice
+  /// between two of them.
+  ///
+  /// **One definition, two questions.** The snapshot asks it for the rows to
+  /// stamp; the settlement asks it for the rows still undecided. Both must
+  /// mean the same thing, or the settlement can close an accusation over a
+  /// refusal it never covered.
+  Expression<bool> _coveredRows(
+    $QuarantinedOpsTable table, {
+    required IntegrityAlarmKind kind,
+    required String? authorMemberId,
+    int? forkHeadSeq,
+  }) {
+    final sameAuthor = authorMemberId == null
+        ? table.authorMemberId.isNull()
+        : table.authorMemberId.equals(authorMemberId);
+    final unanswered = table.releasedAt.isNull() & table.resolution.isNull();
+    if (kind == IntegrityAlarmKind.authorChainFork) {
+      // A fork is not a refusal but the choice between two continuations: the
+      // author's gap rows at or below the effective chain head.
+      if (forkHeadSeq == null) return const Constant(false);
+      return table.workspaceId.equals(workspaceId) &
+          unanswered &
+          sameAuthor &
+          table.reason.equals(SyncRejectionReason.authorChainGap.code) &
+          table.authorSeq.isSmallerOrEqualValue(forkHeadSeq);
+    }
+    final reasons = _reasonCodesEscalatingTo(kind);
+    if (reasons.isEmpty) return const Constant(false);
+    return table.workspaceId.equals(workspaceId) &
+        unanswered &
+        sameAuthor &
+        table.reason.isIn(reasons);
+  }
+
+  /// The refusal reasons that escalate to this kind of accusation.
   ///
   /// An unknown reason code escalates to nothing: it cannot name a kind, and a
   /// store written by a newer build must not make a decision cover a row this
   /// build cannot classify.
-  static bool _escalatesTo(String reasonCode, IntegrityAlarmKind kind) {
-    final reason = syncRejectionReasonByCodeOrNull(reasonCode);
-    return reason != null && alarmForRejection(reason) == kind;
+  static List<String> _reasonCodesEscalatingTo(IntegrityAlarmKind kind) => [
+        for (final reason in SyncRejectionReason.values)
+          if (alarmForRejection(reason) == kind) reason.code,
+      ];
+
+  /// No refused change the accusation covers is still undecided.
+  Expression<bool> _noUndecidedCoveredRow({
+    required IntegrityAlarmKind kind,
+    required String? authorMemberId,
+    int? forkHeadSeq,
+  }) =>
+      notExistsQuery(
+        _db.select(_db.quarantinedOps)
+          ..where((t) => _coveredRows(
+                t,
+                kind: kind,
+                authorMemberId: authorMemberId,
+                forkHeadSeq: forkHeadSeq,
+              )),
+      );
+
+  /// Settle an accusation, if it is still the accusation that was answered and
+  /// nothing it covers is left undecided.
+  ///
+  /// **The check and the write are one statement.** A refusal that arrives
+  /// while the answer is being recorded is not covered by that answer: the
+  /// check sees it and the accusation stands, or the refusal's own re-raise
+  /// re-opens it. Either way the accusation is not closed over something the
+  /// User was never shown.
+  ///
+  /// The occurrence count is the other half of the same guard: a re-raise
+  /// behind the answer's back means the accusation has grown since the User
+  /// was asked, and their answer was about the smaller one.
+  Future<void> _settleWhenNothingUndecided({
+    required IntegrityAlarmRow alarm,
+    required IntegrityAlarmKind kind,
+    required AlarmResolution resolution,
+    required DateTime now,
+    int? forkHeadSeq,
+  }) async {
+    await (_db.update(_db.integrityAlarms)
+          ..where((row) =>
+              row.id.equals(alarm.id) &
+              row.resolvedAt.isNull() &
+              row.occurrenceCount.equals(alarm.occurrenceCount) &
+              _noUndecidedCoveredRow(
+                kind: kind,
+                authorMemberId: alarm.authorMemberId,
+                forkHeadSeq: forkHeadSeq,
+              )))
+        .write(IntegrityAlarmsCompanion(
+      resolution: Value(resolution.code),
+      resolutionDecidedAt: Value(now),
+      resolvedAt: Value(now),
+    ));
   }
+
+  /// The accusation with this row id, if it is still there.
+  Future<IntegrityAlarmRow?> _alarmRow(int id) =>
+      (_db.select(_db.integrityAlarms)..where((row) => row.id.equals(id)))
+          .getSingleOrNull();
+
+  /// The standing accusation of this kind against this author, if there is one.
+  Future<IntegrityAlarmRow?> _standingAlarm(
+    IntegrityAlarmKind kind,
+    String? authorMemberId,
+  ) =>
+      (_db.select(_db.integrityAlarms)
+            ..where((row) =>
+                row.workspaceId.equals(workspaceId) &
+                row.kind.equals(kind.code) &
+                row.resolvedAt.isNull() &
+                (authorMemberId == null
+                    ? row.authorMemberId.isNull()
+                    : row.authorMemberId.equals(authorMemberId))))
+          .getSingleOrNull();
 
   /// Settle the author's gap alarm with a fork's decision, once no unreleased,
   /// undecided gap row is left for that author.
@@ -3929,26 +4050,14 @@ class SyncClient {
   ) async {
     final author = fork.authorMemberId;
     if (author == null) return;
-    final standing = await (_db.select(_db.quarantinedOps)
-          ..where((row) =>
-              row.workspaceId.equals(workspaceId) &
-              row.authorMemberId.equals(author) &
-              row.releasedAt.isNull() &
-              row.resolution.isNull() &
-              row.reason.equals(SyncRejectionReason.authorChainGap.code)))
-        .get();
-    if (standing.isNotEmpty) return;
-    await (_db.update(_db.integrityAlarms)
-          ..where((row) =>
-              row.workspaceId.equals(workspaceId) &
-              row.kind.equals(IntegrityAlarmKind.authorChainGap.code) &
-              row.authorMemberId.equals(author) &
-              row.resolvedAt.isNull()))
-        .write(IntegrityAlarmsCompanion(
-      resolution: Value(resolution.code),
-      resolutionDecidedAt: Value(now),
-      resolvedAt: Value(now),
-    ));
+    final gap = await _standingAlarm(IntegrityAlarmKind.authorChainGap, author);
+    if (gap == null) return;
+    await _settleWhenNothingUndecided(
+      alarm: gap,
+      kind: IntegrityAlarmKind.authorChainGap,
+      resolution: resolution,
+      now: now,
+    );
   }
 
   Future<int> _cursor() async {

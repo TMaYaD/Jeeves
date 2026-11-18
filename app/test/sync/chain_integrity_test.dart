@@ -75,6 +75,44 @@ extension _Alarms on SimDevice {
   }
 }
 
+/// Runs a refusal's arrival in the middle of the next write to the accusation
+/// table.
+///
+/// A receive that lands while an answer is being recorded cannot be scheduled
+/// from outside the client: the statements it makes are the ones the client
+/// itself would make, in the same transaction, and the client's receive path
+/// cannot be interleaved with its own transaction from a test. So the arrival
+/// is injected at the statement level — at the settlement, which is the first
+/// write to the accusation table — and it runs inside that transaction, which
+/// is what "arriving during the resolution" means for the client.
+class _ArrivalDuringResolution extends QueryInterceptor {
+  /// The arrival to run, or null when there is none armed.
+  Future<void> Function(QueryExecutor executor)? arrival;
+
+  bool _fired = false;
+
+  @override
+  Future<int> runUpdate(
+    QueryExecutor executor,
+    String statement,
+    List<Object?> args,
+  ) async {
+    final run = arrival;
+    if (run != null && !_fired && _writesToAccusations(statement)) {
+      _fired = true;
+      arrival = null;
+      await run(executor);
+    }
+    return super.runUpdate(executor, statement, args);
+  }
+
+  /// Whether this statement writes to the accusation table.
+  bool _writesToAccusations(String statement) {
+    final text = statement.toLowerCase();
+    return text.startsWith('update') && text.contains('integrity_alarms');
+  }
+}
+
 /// One content op from [author], carrying `{field: value}` on a shared entity.
 Future<Uint8List> _op(
   SimWorkspace workspace,
@@ -126,9 +164,13 @@ void main() {
   late SimDevice a;
   late AuthorFixture peer;
   late SyncTransport peerSession;
+  late _ArrivalDuringResolution arrival;
 
   setUp(() async {
-    workspace = await SimWorkspace.create();
+    // Installed disarmed: only the case that needs an arrival mid-resolution
+    // arms it, and it arms it for one statement.
+    arrival = _ArrivalDuringResolution();
+    workspace = await SimWorkspace.create(aSyncStoreInterceptor: arrival);
     a = workspace.a;
     peer = await AuthorFixture.create(
       seed: Uint8List.fromList(List<int>.generate(32, (index) => index + 91)),
@@ -964,6 +1006,75 @@ void main() {
         1,
       );
       expect(rows.where((row) => row.resolution == null).length, 1);
+    });
+
+    test('a refusal that arrives while the answer is recorded does not close '
+        'the accusation', () async {
+      final planted = await plantTamperedEnvelope();
+      final alarm = planted.alarm;
+
+      // Another forgery arrives while the answer is being recorded: a new
+      // refusal, and the accusation stands again.
+      final second = Uint8List.fromList(planted.authored.last);
+      second[headerLengthBytes + 8] ^= 0x02;
+      arrival.arrival = (executor) async {
+        final store = SyncDatabase(executor);
+        await store.into(store.quarantinedOps).insert(
+              QuarantinedOpsCompanion.insert(
+                workspaceId: workspace.workspaceId,
+                reason: SyncRejectionReason.badSignature.code,
+                detail: 'another forgery, arriving while the answer is recorded',
+                envelope: second,
+                detectedAt: DateTime.utc(2026, 1, 1),
+                authorMemberId: Value(alarm.authorMemberId),
+              ),
+            );
+        // The re-raise a receive would have made: the accusation grows, and
+        // the answer the User gave was about the smaller one.
+        await (store.update(store.integrityAlarms)
+              ..where((row) => row.id.equals(alarm.id)))
+            .write(IntegrityAlarmsCompanion(
+          occurrenceCount: Value(alarm.occurrenceCount + 1),
+          resolvedAt: const Value(null),
+          resolution: const Value(null),
+          resolutionDecidedAt: const Value(null),
+        ));
+      };
+
+      await a.client.resolveAlarm(
+        alarm.id,
+        AlarmResolution.rejectedPermanently,
+      );
+
+      // The accusation stands: the refusal that arrived was never shown to
+      // the User, so their answer cannot close it.
+      final after =
+          (await a.alarmsByKind())[IntegrityAlarmKind.signatureInvalid.code]!;
+      expect(after.resolvedAt, isNull);
+      expect(after.resolution, isNull);
+      expect(after.resolutionDecidedAt, isNull);
+      expect(after.occurrenceCount, alarm.occurrenceCount + 1);
+      final health = await a.client.health();
+      expect(
+        health.unresolvedAlarmCount,
+        1,
+        reason: 'the accusation still stands',
+      );
+      expect(
+        health.reportableQuarantineCount,
+        1,
+        reason: 'the refusal that arrived is still to be answered',
+      );
+
+      // The refusal that arrived is the open question; the one the User
+      // answered keeps the answer.
+      final rows = await a.client.quarantined();
+      expect(rows.length, 2);
+      expect(
+        rows.where((row) => row.resolution == null).length,
+        1,
+        reason: 'the refusal that arrived is undecided',
+      );
     });
 
     test('rejecting a fork for good settles it and the gap it held open',
