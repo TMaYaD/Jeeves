@@ -37,6 +37,7 @@ import 'package:jeeves/providers/sync_status_provider.dart';
 import 'package:jeeves/screens/app_shell.dart';
 import 'package:jeeves/screens/sync_health/sync_health_copy.dart';
 import 'package:jeeves/screens/sync_health/sync_health_screen.dart';
+import 'package:jeeves/sync/alarm_resolution.dart';
 import 'package:jeeves/sync/chain_verifier.dart';
 import 'package:jeeves/sync/enrolment_state.dart';
 import 'package:jeeves/sync/envelope.dart';
@@ -112,14 +113,88 @@ class _SignedInAs extends CurrentUserIdNotifier {
   String build() => userId;
 }
 
+/// A resolver that must never be called.
+///
+/// The screen offers buttons, so a test that does not tap one must not reach
+/// the store — and saying so loudly beats a button that quietly does nothing.
+Future<void> _noResolver(
+  SyncHealthCondition condition,
+  AlarmResolution resolution,
+) async {
+  throw StateError('this test settles nothing');
+}
+
 /// The screen, over one device's real report.
-Widget _screenOver(DeviceReport report, {required String userId}) => ProviderScope(
+///
+/// The resolver is overridden with the **real** client, so a tap settles the
+/// row behind the condition in the store the fault was staged in — the screen's
+/// own seam is the only thing being replaced.
+///
+/// The key keeps this scope apart from the indicator's: Riverpod refuses a
+/// scope whose number of overrides changes, and a test that looks at the screen
+/// and then at the drawer is two different sets of overrides.
+Widget _screenOver(
+  DeviceReport report, {
+  required String userId,
+  SyncAlarmResolver? resolver,
+}) =>
+    ProviderScope(
+      key: const ValueKey('sync-health-screen'),
       overrides: [
         currentUserIdProvider.overrideWith(() => _SignedInAs(userId)),
         syncHealthDetailProvider.overrideWith((_) => Stream.value(report.conditions)),
+        syncAlarmResolverProvider.overrideWithValue(resolver ?? _noResolver),
       ],
       child: const MaterialApp(home: SyncHealthScreen()),
     );
+
+/// The screen, over a hand-built set of conditions.
+///
+/// For the claims that are about the screen's own behaviour — what a row
+/// offers, what a row refuses to offer — rather than about the store.
+Widget _screenOverConditions(
+  List<SyncHealthCondition> conditions, {
+  required String userId,
+}) =>
+    ProviderScope(
+      key: const ValueKey('sync-health-screen'),
+      overrides: [
+        currentUserIdProvider.overrideWith(() => _SignedInAs(userId)),
+        syncHealthDetailProvider.overrideWith((_) => Stream.value(conditions)),
+        syncAlarmResolverProvider.overrideWithValue(_noResolver),
+      ],
+      child: const MaterialApp(home: SyncHealthScreen()),
+    );
+
+/// Record the user's decision on the row behind a condition, on a real device.
+///
+/// The same two calls the app makes, on the client that holds the row.
+Future<void> _resolveOnDevice(
+  SimDevice device,
+  SyncHealthCondition condition,
+  AlarmResolution resolution,
+) async {
+  switch (condition.source) {
+    case SyncConditionSource.standingCondition:
+      await device.client.resolveAlarm(condition.rowId, resolution);
+    case SyncConditionSource.refusedItem:
+      await device.client.resolveRefusedItem(condition.rowId, resolution);
+  }
+}
+
+/// Tap something that reaches the real store.
+///
+/// A widget-test body runs under `FakeAsync`, which owns the clock and the
+/// microtask queue but cannot advance a real `NativeDatabase` round trip — so
+/// the tap and the store work it starts are done in a real zone, and the real
+/// event queue is drained before the row is read back.
+Future<void> _tapForReal(WidgetTester tester, Finder finder) async {
+  await tester.runAsync(() async {
+    await tester.tap(finder);
+    await pumpEventQueue();
+  });
+  await tester.pump();
+}
 
 /// **The shipped `SyncIndicator`**, in the slot the shell puts it in: inside the
 /// drawer, over a router that has somewhere for a tap to go.
@@ -153,6 +228,7 @@ Widget _indicatorOver(DeviceReport report) {
     ],
   );
   return ProviderScope(
+    key: const ValueKey('sync-indicator'),
     overrides: [
       syncStatusProvider.overrideWith((_) => Stream.value(report.indication)),
     ],
@@ -268,17 +344,53 @@ void main() {
       expect(find.text(IntegrityAlarmKind.signatureInvalid.code), findsNothing);
     });
 
-    testWidgets('nothing on the screen is pressable, and nothing is dismissed',
+    testWidgets('only the offered resolutions are pressable, and nothing is dismissed',
         (tester) async {
       await tester.pumpWidget(_screenOver(report, userId: workspace.userId));
       await tester.pumpAndSettle();
 
       expect(find.byType(ElevatedButton), findsNothing);
-      expect(find.byType(TextButton), findsNothing);
       expect(find.byType(OutlinedButton), findsNothing);
       expect(find.byType(FilledButton), findsNothing);
+      expect(
+        find.byType(TextButton),
+        findsOneWidget,
+        reason: 'the refused change is settled by refusing it for good, and by '
+            'nothing else',
+      );
+      expect(find.text('Never apply these changes'), findsOneWidget);
       expect(find.textContaining('Dismiss'), findsNothing);
       expect(find.textContaining('Retry'), findsNothing);
+    });
+
+    testWidgets('the refused change can be refused for good, and the device goes quiet',
+        (tester) async {
+      await tester.pumpWidget(_screenOver(
+        report,
+        userId: workspace.userId,
+        resolver: (condition, resolution) =>
+            _resolveOnDevice(workspace.a, condition, resolution),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Never apply these changes'), findsOneWidget);
+
+      await _tapForReal(tester, find.text('Never apply these changes'));
+
+      final after = (await tester.runAsync(() => _reportFor(workspace.a)))!;
+      expect(after.indication.status, SyncStatus.synced);
+      expect(
+        after.conditions,
+        isEmpty,
+        reason: 'a settled condition is not a condition any more',
+      );
+
+      await _openDrawerOver(tester, after);
+      expect(
+        _inIndicator(find.byType(InkWell)),
+        findsNothing,
+        reason: 'a device with nothing to report offers no way in',
+      );
     });
 
     testWidgets('visiting the screen changes nothing in the store', (tester) async {
@@ -347,6 +459,92 @@ void main() {
         findsNothing,
         reason: 'something does need the user, so the all-clear must not show',
       );
+    });
+
+    testWidgets('the gap offers the changes that arrived, and taking them clears it',
+        (tester) async {
+      await tester.pumpWidget(_screenOver(
+        report,
+        userId: workspace.userId,
+        resolver: (condition, resolution) =>
+            _resolveOnDevice(workspace.a, condition, resolution),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.text(syncHealthNeedsAttentionHeading), findsOneWidget);
+      expect(find.text('Use the changes that arrived'), findsOneWidget);
+
+      await _tapForReal(tester, find.text('Use the changes that arrived'));
+
+      final after = (await tester.runAsync(() => _reportFor(workspace.a)))!;
+      expect(
+        after.conditions
+            .where((c) => c.code == IntegrityAlarmKind.authorChainGap.code),
+        isEmpty,
+        reason: 'the gap is settled by the decision, not by hiding the row',
+      );
+      expect(
+        after.indication.status,
+        isNot(SyncStatus.error),
+        reason: "the user's changes are no longer stuck behind the hole",
+      );
+    });
+  });
+
+  group('a row offers only what its kind can be settled by', () {
+    // Hand-built rows, because the claim is about the screen and not about the
+    // store: what a row offers is a property of its kind, and the kinds that
+    // offer nothing are the ones the store would refuse a decision for.
+    SyncHealthCondition conditionFor(
+      IntegrityAlarmKind kind, {
+      List<AlarmResolution> resolutions = const [],
+      bool resolutionInFlight = false,
+    }) =>
+        SyncHealthCondition(
+          workspaceId: 'w1',
+          source: SyncConditionSource.standingCondition,
+          code: kind.code,
+          firstSeenAt: DateTime.utc(2026, 7, 1),
+          lastSeenAt: DateTime.utc(2026, 7, 1),
+          occurrenceCount: 1,
+          reAdmitted: false,
+          rowId: 1,
+          resolutions: resolutions,
+          resolutionInFlight: resolutionInFlight,
+        );
+
+    testWidgets('a kind with no decision offers no button', (tester) async {
+      await tester.pumpWidget(_screenOverConditions(
+        [conditionFor(IntegrityAlarmKind.authorStreamReordered)],
+        userId: 'sim-user',
+      ));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byType(TextButton),
+        findsNothing,
+        reason: 'a control the store would refuse is worse than no control',
+      );
+    });
+
+    testWidgets('a decision on its way shows the progress bar and no button',
+        (tester) async {
+      await tester.pumpWidget(_screenOverConditions(
+        [
+          conditionFor(
+            IntegrityAlarmKind.ownWritesRollback,
+            resolutionInFlight: true,
+          ),
+        ],
+        userId: 'sim-user',
+      ));
+      // The bar is an indeterminate animation, so the frame is pumped rather
+      // than settled: it never stops moving.
+      await tester.pump();
+
+      expect(find.byType(LinearProgressIndicator), findsOneWidget);
+      expect(find.byType(TextButton), findsNothing);
+      expect(find.text(syncHealthResolutionInFlightSentence), findsOneWidget);
     });
   });
 

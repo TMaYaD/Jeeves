@@ -32,6 +32,7 @@
 /// widget.
 library;
 
+import '../../sync/alarm_resolution.dart';
 import '../../sync/chain_verifier.dart';
 import '../../sync/ids.dart';
 import '../../sync/sync_condition_class.dart';
@@ -140,6 +141,61 @@ String sentenceForRefusalCode(String code) {
 
 const String syncHealthUnreadableRefusalSentence =
     "Some changes couldn't be read by this app, so they weren't applied.";
+
+/// The words on the button that settles a condition.
+///
+/// **A button says what will happen, in the user's terms, and nothing else.**
+/// The three decisions say three different things, so the kind decides the
+/// wording: keeping this device's copy of a *divergence* is a refusal of the
+/// other copy and nothing is re-sent, while keeping this device's copy of a
+/// *rollback* is a re-send and says so.
+///
+/// The wording is the plan's draft and is on the author's sign-off list; the
+/// test holds it to the same three rules as the sentences.
+const String syncHealthTakeUpstreamLabel = 'Use the changes that arrived';
+const String syncHealthKeepOursRollbackLabel = "Send this device's changes again";
+const String syncHealthKeepOursDivergenceLabel = 'Never use the other copy';
+const String syncHealthRejectPermanentlyLabel = 'Never apply these changes';
+
+/// The button on a refused change that stands on its own.
+///
+/// The same decision as [syncHealthRejectPermanentlyLabel], said the same way:
+/// a refused change that raises no accusation of its own is settled on the
+/// change, and the user is owed the same words for it.
+const String syncHealthRejectRefusedItemLabel = syncHealthRejectPermanentlyLabel;
+
+/// What the row says while a decision is still on its way.
+///
+/// The one case is *keep ours* on a rollback: the accusation is answered and
+/// the changes are going back out. It is a transient state, and it is said
+/// here rather than coloured — the indicator is the blue Syncing one, and amber
+/// is spent on the calm state (docs/DESIGN.md § Sync health).
+const String syncHealthResolutionInFlightSentence =
+    "Sending this device's changes again.";
+
+/// The words on the button that settles an alarm of this kind.
+///
+/// **Exhaustive over the decision, never a `default`**, like the sentences
+/// beside it: a fourth decision without a wording is a compile error rather
+/// than a button that says nothing.
+///
+/// The kind only matters where the wording does — keeping ours re-sends the
+/// changes on a rollback and refuses the other copy on a divergence, and a
+/// user who cannot tell those two apart has been given the wrong button.
+String resolutionLabelForAlarmCode(String code, AlarmResolution resolution) {
+  final kind = integrityAlarmKindByCodeOrNull(code);
+  return switch (resolution) {
+    AlarmResolution.tookUpstream => syncHealthTakeUpstreamLabel,
+    AlarmResolution.keptOurs => switch (kind) {
+        IntegrityAlarmKind.ownWritesDivergence =>
+          syncHealthKeepOursDivergenceLabel,
+        // Every other kind that offers "keep ours" is a rollback: the changes
+        // have to be sent again, which is what the button says.
+        _ => syncHealthKeepOursRollbackLabel,
+      },
+    AlarmResolution.rejectedPermanently => syncHealthRejectPermanentlyLabel,
+  };
+}
 
 /// What to call one of the device's two Workspaces, in the user's own terms.
 ///

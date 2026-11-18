@@ -10,6 +10,7 @@ library;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/screens/sync_health/sync_health_copy.dart';
+import 'package:jeeves/sync/alarm_resolution.dart';
 import 'package:jeeves/sync/chain_verifier.dart';
 import 'package:jeeves/sync/envelope.dart';
 import 'package:jeeves/sync/sync_condition_class.dart';
@@ -23,8 +24,16 @@ List<({String where, String text})> _everySentence() => [
       (where: 'worthKnowing tooltip', text: syncHealthWorthKnowingTooltip),
       (where: 'unknown condition', text: syncHealthUnknownConditionSentence),
       (where: 'unreadable refusal', text: syncHealthUnreadableRefusalSentence),
+      (where: 'refused item reject', text: syncHealthRejectRefusedItemLabel),
+      (where: 'resolution in flight', text: syncHealthResolutionInFlightSentence),
       for (final kind in IntegrityAlarmKind.values)
         (where: kind.code, text: sentenceForAlarmCode(kind.code)),
+      for (final kind in IntegrityAlarmKind.values)
+        for (final resolution in resolutionsForAlarm(kind))
+          (
+            where: '${kind.code}/${resolution.code}',
+            text: resolutionLabelForAlarmCode(kind.code, resolution),
+          ),
       for (final reason in SyncRejectionReason.values)
         if (syncConditionClassOfRefusal(reason) != SyncConditionClass.transient)
           (where: reason.code, text: sentenceForRefusalCode(reason.code)),
@@ -108,6 +117,59 @@ void main() {
           reason: '${reason.code} is a code we know and should describe',
         );
       }
+    });
+  });
+
+  group('a decision says what it will do', () {
+    test('every offered decision has a label', () {
+      for (final kind in IntegrityAlarmKind.values) {
+        for (final resolution in resolutionsForAlarm(kind)) {
+          expect(
+            resolutionLabelForAlarmCode(kind.code, resolution),
+            isNotEmpty,
+            reason: '${kind.code} offers ${resolution.code} with no wording',
+          );
+        }
+      }
+    });
+
+    test('no wording offers a dismiss', () {
+      // Silence is not an outcome. A condition is settled by a decision, and a
+      // button that made it go away without saying what was decided would be
+      // the exact thing this screen exists to replace.
+      for (final kind in IntegrityAlarmKind.values) {
+        for (final resolution in resolutionsForAlarm(kind)) {
+          expect(
+            resolutionLabelForAlarmCode(kind.code, resolution).toLowerCase(),
+            isNot(contains('dismiss')),
+            reason: '${kind.code} offers a dismiss',
+          );
+        }
+      }
+      for (final text in [
+        syncHealthRejectRefusedItemLabel,
+        syncHealthResolutionInFlightSentence,
+      ]) {
+        expect(text.toLowerCase(), isNot(contains('dismiss')));
+      }
+    });
+
+    test('the two "keep ours" decisions say different things', () {
+      // One re-sends this device's changes; the other refuses the other copy
+      // and sends nothing. A user who cannot tell them apart has been given
+      // the wrong button.
+      expect(
+        resolutionLabelForAlarmCode(
+          IntegrityAlarmKind.ownWritesRollback.code,
+          AlarmResolution.keptOurs,
+        ),
+        isNot(
+          resolutionLabelForAlarmCode(
+            IntegrityAlarmKind.ownWritesDivergence.code,
+            AlarmResolution.keptOurs,
+          ),
+        ),
+      );
     });
   });
 
