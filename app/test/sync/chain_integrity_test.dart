@@ -22,9 +22,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/providers/sync_status_provider.dart';
 import 'package:jeeves/sync/alarm_resolution.dart';
 import 'package:jeeves/sync/chain_verifier.dart';
+import 'package:jeeves/sync/collection_codecs.dart';
+import 'package:jeeves/sync/domain_projector.dart';
 import 'package:jeeves/sync/enrolment_state.dart';
 import 'package:jeeves/sync/envelope.dart';
 import 'package:jeeves/sync/hlc.dart';
+import 'package:jeeves/sync/host/merge_state.dart';
 import 'package:jeeves/sync/ids.dart';
 import 'package:jeeves/sync/sync_database.dart';
 import 'package:jeeves/sync/sync_transport.dart';
@@ -32,11 +35,28 @@ import 'package:sqlite3/common.dart' show SqliteException;
 import 'package:uuid/uuid.dart';
 
 import 'harness/author_fixture.dart';
+import 'harness/reduced_state.dart';
 import 'harness/sim_device.dart';
 import 'harness/sim_workspace.dart';
 
 const String _harnessCollection = 'harness_docs';
 const Uuid _uuid = Uuid();
+
+/// The `todos` entity ids the projection case uses.
+///
+/// `harness_docs` has no domain row — projection is collection-generic, and an
+/// op for a collection this build does not know reduces without becoming a
+/// row — so "the change never reached the domain store" is only visible over a
+/// collection that *does* have one.
+///
+/// An entity id travels as a canonical lowercase UUID, so these are minted
+/// rather than spelled.
+String _todoId(String name) =>
+    _uuid.v5(Namespace.url.value, 'jeeves://chain-integrity-todo/$name');
+
+/// The `user_id` the `todos` rows carry. The domain store has no `users` table
+/// and no foreign key on it, so this is a plain column.
+const String _todoUserId = 'sim-user';
 
 extension _Alarms on SimDevice {
   /// The device's alarms by kind. Every case here involves one author, so kind
@@ -113,6 +133,42 @@ class _ArrivalDuringResolution extends QueryInterceptor {
   }
 }
 
+/// A projector that fails the first time it is asked to project, and works
+/// afterwards.
+///
+/// The failure a real projection can have — a storage fault, a codec that
+/// cannot read — and the one an answer has to survive: the change is applied
+/// to the reduced state but never reaches the domain store, so the User never
+/// sees it.
+class _FailingOnceProjector extends DomainProjector {
+  _FailingOnceProjector(DomainProjector inner)
+      : _inner = inner,
+        super(
+          registry: inner.registry,
+          domain: inner.domain,
+          chunkEntityCount: inner.chunkEntityCount,
+        );
+
+  final DomainProjector _inner;
+
+  bool _failed = false;
+
+  @override
+  Future<Set<String>> project(
+    Iterable<AffectedEntity> affected, {
+    bool leaveEntitiesAwaitingMerge = false,
+  }) async {
+    if (!_failed) {
+      _failed = true;
+      throw StateError('the projection failed');
+    }
+    return _inner.project(
+      affected,
+      leaveEntitiesAwaitingMerge: leaveEntitiesAwaitingMerge,
+    );
+  }
+}
+
 /// One content op from [author], carrying `{field: value}` on a shared entity.
 Future<Uint8List> _op(
   SimWorkspace workspace,
@@ -140,6 +196,37 @@ Future<Uint8List> _op(
 
 String _docId(SimWorkspace workspace) =>
     preferenceEntityId(workspace.workspaceId, 'chain-integrity-doc');
+
+/// A `todos` op from [author], so what applies has a *domain row* and not only
+/// reduced state — which is what the projection case has to observe.
+Future<Uint8List> _todoOp(
+  SimWorkspace workspace,
+  AuthorFixture author,
+  String todoId,
+  String title,
+) async {
+  workspace.clock.advance(10);
+  return author.nextEnvelope(
+    workspace.workspaceId,
+    payloadJson: jsonEncode({
+      'collection': todosCollection,
+      'id': todoId,
+      'fields': {
+        'title': {'v': title},
+        'created_at': {'v': encodeInstant(workspace.clock.asDateTime)},
+        'user_id': {'v': _todoUserId},
+      },
+      'hlc': [workspace.clock.nowMs, 0, memberIdToHex(author.memberId)],
+    }),
+  );
+}
+
+/// The titles on this device's `todos` rows, in name order.
+Future<List<Object?>> _todoTitles(SimDevice device) async =>
+    (await domainRows(device.domain, 'todos'))
+        .map((row) => row['title'])
+        .toList()
+      ..sort();
 
 Future<Map<String, Object?>?> _doc(SimDevice device, SimWorkspace workspace) =>
     device.registry.register(_harnessCollection).readEntity(_docId(workspace));
@@ -1137,6 +1224,115 @@ void main() {
       );
     });
 
+    /// The fork-at-the-head recipe: the release scan proves a mismatch at
+    /// head + 1, and the head does not move.
+    ///
+    /// The peer's head is at 3. A claimant at 5 arrives before its predecessor
+    /// at 4, so it is held as a gap; the predecessor lands, the head moves to
+    /// 4, and the scan finds that the claimant does not chain to it — a fork
+    /// raised at head + 1, with the head left where it was.
+    ///
+    /// With [alsoHeld], a further claimant is held above the named one: a gap
+    /// of its own, which the fork's answer is not about.
+    Future<Uint8List> forkAtTheHead({bool alsoHeld = false}) async {
+      final first = await _op(workspace, peer, 'one');
+      await peerSession.postOps(workspace.workspaceId, [first]);
+      await a.sync();
+
+      // A claimant two positions above the head, chained to a hash that will
+      // never be the head's.
+      peer.nextAuthorSeq = firstPeerContentAuthorSeq + 2;
+      peer.lastEnvelopeHash =
+          Uint8List.fromList(List<int>.filled(prevAuthorHashBytes, 0x7f));
+      final claimant = await _op(workspace, peer, 'forged');
+      workspace.server.injectUnchecked(workspace.workspaceId, claimant);
+      await a.sync();
+
+      if (alsoHeld) {
+        peer.nextAuthorSeq = firstPeerContentAuthorSeq + 3;
+        peer.lastEnvelopeHash =
+            Uint8List.fromList(List<int>.filled(prevAuthorHashBytes, 0x7e));
+        final further = await _op(workspace, peer, 'also forged');
+        workspace.server.injectUnchecked(workspace.workspaceId, further);
+        await a.sync();
+      }
+
+      // The predecessor lands, chained to the head as it stands.
+      peer.nextAuthorSeq = firstPeerContentAuthorSeq + 1;
+      peer.lastEnvelopeHash = envelopeHash(first);
+      final predecessor = await _op(workspace, peer, 'two');
+      workspace.server.injectUnchecked(workspace.workspaceId, predecessor);
+      await a.sync();
+
+      return claimant;
+    }
+
+    test('a fork at the head names the claimant it could not release',
+        () async {
+      final claimant = await forkAtTheHead();
+
+      final fork =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainFork.code]!;
+      expect(fork.resolvedAt, isNull);
+      final row = (await a.client.quarantined())
+          .singleWhere((r) => sameBytes(r.envelope, claimant));
+      expect(
+        fork.quarantineOpRowId,
+        row.id,
+        reason: 'the accusation names the claimant it could not release',
+      );
+      expect(
+        row.authorSeq,
+        firstPeerContentAuthorSeq + 2,
+        reason: 'and the claimant is one position above the head',
+      );
+
+      await a.client.resolveAlarm(fork.id, AlarmResolution.rejectedPermanently);
+
+      // The claimant is answered, so the gap it held open is answered too.
+      final answered = (await a.client.quarantined())
+          .singleWhere((r) => sameBytes(r.envelope, claimant));
+      expect(answered.resolution, AlarmResolution.rejectedPermanently.code);
+      expect(answered.resolutionDecidedAt, isNotNull);
+
+      final alarms = await a.alarmsByKind();
+      final settledFork = alarms[IntegrityAlarmKind.authorChainFork.code]!;
+      expect(settledFork.resolution, AlarmResolution.rejectedPermanently.code);
+      expect(settledFork.resolvedAt, isNotNull);
+      final settledGap = alarms[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(settledGap.resolution, AlarmResolution.rejectedPermanently.code);
+      expect(settledGap.resolvedAt, isNotNull);
+      expect((await a.client.health()).clean, isTrue);
+    });
+
+    test('rejecting a fork leaves an unrelated future gap undecided', () async {
+      final claimant = await forkAtTheHead(alsoHeld: true);
+
+      final fork =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainFork.code]!;
+      await a.client.resolveAlarm(fork.id, AlarmResolution.rejectedPermanently);
+
+      // The claimant the accusation named is answered ...
+      final answered = (await a.client.quarantined())
+          .singleWhere((r) => sameBytes(r.envelope, claimant));
+      expect(answered.resolution, AlarmResolution.rejectedPermanently.code);
+
+      // ... and the gap above it is not: the answer was about the claimant,
+      // and the gap it holds open is a question of its own.
+      final further = (await a.client.quarantined())
+          .singleWhere((r) => r.authorSeq == firstPeerContentAuthorSeq + 3);
+      expect(further.resolution, isNull);
+      expect(further.releasedAt, isNull);
+
+      final alarms = await a.alarmsByKind();
+      expect(alarms[IntegrityAlarmKind.authorChainFork.code]!.resolvedAt,
+          isNotNull);
+      final gap = alarms[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(gap.resolvedAt, isNull);
+      expect(gap.resolution, isNull);
+      expect((await a.client.health()).actionableAlarmCount, 1);
+    });
+
     test('keeping ours on a divergence settles the other copy', () async {
       await a.authorLocal(workspace, 'mine');
       await a.sync();
@@ -1324,6 +1520,70 @@ void main() {
         logAfter.map((row) => row.seq).toList(),
         logBefore.map((row) => row.seq).toList(),
       );
+    });
+
+    test('a projection that fails leaves the accusation open for another answer',
+        () async {
+      // The same withheld change, over a collection with a domain row: the
+      // failure has to be visible where the User would see it.
+      final first = await _todoOp(workspace, peer, _todoId('one'), 'one');
+      final withheld = await _todoOp(workspace, peer, _todoId('two'), 'two');
+      final third = await _todoOp(workspace, peer, _todoId('three'), 'three');
+      final appended = await peerSession.postOps(
+        workspace.workspaceId,
+        [first, withheld, third],
+      );
+      workspace.server.omitSeqs.add(appended[1].seq);
+      await a.sync();
+
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(
+        await _todoTitles(a),
+        ['one'],
+        reason: 'the held change is not on screen yet',
+      );
+
+      // The projection fails: the change is reduced, but it never reaches the
+      // domain store, so the User never sees it.
+      final original = a.client.projector!;
+      a.client.projector = _FailingOnceProjector(original);
+      await expectLater(
+        a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream),
+        throwsA(isA<StateError>()),
+      );
+
+      // The change is not on screen.
+      expect(
+        await _todoTitles(a),
+        ['one'],
+        reason: 'the change never reached the domain store',
+      );
+
+      // The accusation stands: the answer is still on offer, and the work is
+      // still to be done.
+      final standing =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(standing.resolvedAt, isNull);
+      expect(standing.resolution, isNull);
+      expect(standing.resolutionDecidedAt, isNull);
+      expect((await a.client.health()).actionableAlarmCount, 1);
+
+      // The User answers again, and this time the projection works.
+      a.client.projector = original;
+      await a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+
+      expect(
+        await _todoTitles(a),
+        ['one', 'three'],
+        reason: 'the retry puts the change on screen',
+      );
+      final settled =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(settled.resolution, AlarmResolution.tookUpstream.code);
+      expect(settled.resolutionDecidedAt, isNotNull);
+      expect(settled.resolvedAt, isNotNull);
+      expect((await a.client.health()).clean, isTrue);
     });
 
     test('a change that arrives after the decision is released, and heals the log',
@@ -1554,6 +1814,44 @@ void main() {
       final settled =
           (await a.alarmsByKind())[IntegrityAlarmKind.ownWritesRollback.code]!;
       expect(settled.resolvedAt, isNotNull);
+    });
+
+    test('a re-raise behind the settlement does not close the new accusation',
+        () async {
+      final rollback = await rollTheServerBack();
+      final from = rollback.repostFromAuthorSeq!;
+
+      await a.client.resolveAlarm(rollback.id, AlarmResolution.keptOurs);
+
+      // The re-send goes out, and the settlement that follows it is the moment
+      // the accusation is closed. A refusal that arrives in that window is a
+      // new accusation — the server forgot this device's writes again, and
+      // further back — and the answer the User gave was about the smaller one.
+      arrival.arrival = (executor) async {
+        final store = SyncDatabase(executor);
+        await (store.update(store.integrityAlarms)
+              ..where((row) => row.id.equals(rollback.id)))
+            .write(IntegrityAlarmsCompanion(
+          occurrenceCount: Value(rollback.occurrenceCount + 1),
+          resolvedAt: const Value(null),
+          resolution: const Value(null),
+          resolutionDecidedAt: const Value(null),
+          repostFromAuthorSeq: Value(from - 1),
+        ));
+      };
+
+      await a.client.flushOutbox();
+
+      // The new accusation stands: it is a question, and the answer to the
+      // older one cannot close it.
+      final after =
+          (await a.alarmsByKind())[IntegrityAlarmKind.ownWritesRollback.code]!;
+      expect(after.resolvedAt, isNull);
+      expect(after.resolution, isNull);
+      expect(after.resolutionDecidedAt, isNull);
+      expect(after.occurrenceCount, rollback.occurrenceCount + 1);
+      expect(after.repostFromAuthorSeq, from - 1);
+      expect((await a.client.health()).actionableAlarmCount, 1);
     });
 
     test('a server holding a position this device never wrote offers no answer',

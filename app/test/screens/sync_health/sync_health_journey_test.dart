@@ -124,6 +124,30 @@ Future<void> _noResolver(
   throw StateError('this test settles nothing');
 }
 
+/// A resolver that keeps the Future it returned.
+///
+/// The button's callback is a `void` one, so the Future the decision returns is
+/// discarded by the framework and the test has no handle on it. The resolver is
+/// the seam the test owns, so it keeps what it handed back — and the helper
+/// that taps waits for it, instead of guessing how many turns the write takes.
+class _RecordingResolver {
+  _RecordingResolver(this._inner);
+
+  final SyncAlarmResolver _inner;
+
+  /// The decision's own future, while it is still running.
+  Future<void>? pending;
+
+  Future<void> call(
+    SyncHealthCondition condition,
+    AlarmResolution resolution,
+  ) {
+    final future = _inner(condition, resolution);
+    pending = future;
+    return future;
+  }
+}
+
 /// The screen, over one device's real report.
 ///
 /// The resolver is overridden with the **real** client, so a tap settles the
@@ -188,9 +212,21 @@ Future<void> _resolveOnDevice(
 /// microtask queue but cannot advance a real `NativeDatabase` round trip — so
 /// the tap and the store work it starts are done in a real zone, and the real
 /// event queue is drained before the row is read back.
-Future<void> _tapForReal(WidgetTester tester, Finder finder) async {
+///
+/// **The decision's own future is awaited, not guessed at.** The tap starts
+/// the write and drops its Future, and a fixed number of drained turns is not
+/// a promise that the write is done — so a read after the tap could read the
+/// store before the decision landed in it. [resolver] is the seam that knows
+/// what the decision returned, and the helper waits for it.
+Future<void> _tapForReal(
+  WidgetTester tester,
+  Finder finder, {
+  _RecordingResolver? resolver,
+}) async {
   await tester.runAsync(() async {
     await tester.tap(finder);
+    final decision = resolver?.pending;
+    if (decision != null) await decision;
     await pumpEventQueue();
   });
   await tester.pump();
@@ -365,17 +401,24 @@ void main() {
 
     testWidgets('the refused change can be refused for good, and the device goes quiet',
         (tester) async {
+      final resolver = _RecordingResolver(
+        (condition, resolution) =>
+            _resolveOnDevice(workspace.a, condition, resolution),
+      );
       await tester.pumpWidget(_screenOver(
         report,
         userId: workspace.userId,
-        resolver: (condition, resolution) =>
-            _resolveOnDevice(workspace.a, condition, resolution),
+        resolver: resolver.call,
       ));
       await tester.pumpAndSettle();
 
       expect(find.text('Never apply these changes'), findsOneWidget);
 
-      await _tapForReal(tester, find.text('Never apply these changes'));
+      await _tapForReal(
+        tester,
+        find.text('Never apply these changes'),
+        resolver: resolver,
+      );
 
       final after = (await tester.runAsync(() => _reportFor(workspace.a)))!;
       expect(after.indication.status, SyncStatus.synced);
@@ -463,18 +506,25 @@ void main() {
 
     testWidgets('the gap offers the changes that arrived, and taking them clears it',
         (tester) async {
+      final resolver = _RecordingResolver(
+        (condition, resolution) =>
+            _resolveOnDevice(workspace.a, condition, resolution),
+      );
       await tester.pumpWidget(_screenOver(
         report,
         userId: workspace.userId,
-        resolver: (condition, resolution) =>
-            _resolveOnDevice(workspace.a, condition, resolution),
+        resolver: resolver.call,
       ));
       await tester.pumpAndSettle();
 
       expect(find.text(syncHealthNeedsAttentionHeading), findsOneWidget);
       expect(find.text('Use the changes that arrived'), findsOneWidget);
 
-      await _tapForReal(tester, find.text('Use the changes that arrived'));
+      await _tapForReal(
+        tester,
+        find.text('Use the changes that arrived'),
+        resolver: resolver,
+      );
 
       final after = (await tester.runAsync(() => _reportFor(workspace.a)))!;
       expect(
@@ -487,6 +537,33 @@ void main() {
         after.indication.status,
         isNot(SyncStatus.error),
         reason: "the user's changes are no longer stuck behind the hole",
+      );
+    });
+
+    testWidgets('a decision that cannot be finished says so, and the button comes back',
+        (tester) async {
+      await tester.pumpWidget(_screenOver(
+        report,
+        userId: workspace.userId,
+        resolver: (condition, resolution) async {
+          throw StateError('the write failed');
+        },
+      ));
+      await tester.pumpAndSettle();
+
+      await _tapForReal(tester, find.text('Use the changes that arrived'));
+
+      expect(
+        find.text(syncHealthResolutionFailedSentence),
+        findsOneWidget,
+        reason: 'a user who tapped a button and saw nothing happen cannot tell '
+            'whether their answer was recorded',
+      );
+      expect(
+        tester.widget<TextButton>(find.byType(TextButton)).onPressed,
+        isNotNull,
+        reason: 'the condition is still standing, so the user is owed the '
+            'chance to try again',
       );
     });
   });

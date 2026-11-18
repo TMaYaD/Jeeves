@@ -173,6 +173,18 @@ const String syncHealthRejectRefusedItemLabel = syncHealthRejectPermanentlyLabel
 const String syncHealthResolutionInFlightSentence =
     "Sending this device's changes again.";
 
+/// What the row says when a decision could not be finished.
+///
+/// The app could not carry the user's answer out — the write failed, or the
+/// work the answer sets in motion could not be completed. **The condition is
+/// still standing and the button is back**, so the row says the plain truth:
+/// it did not happen, and trying again is what is left to do.
+///
+/// It says nothing about what failed and why: the reason belongs in the log,
+/// and a sentence the user cannot act on is noise on a page they came to read.
+const String syncHealthResolutionFailedSentence =
+    "That couldn't be finished. Please try again.";
+
 /// The words on the button that settles an alarm of this kind.
 ///
 /// **Exhaustive over the decision, never a `default`**, like the sentences

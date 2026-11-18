@@ -186,10 +186,28 @@ class _ConditionRowState extends ConsumerState<_ConditionRow> {
   /// left showing what it is doing rather than what it could do.
   AlarmResolution? _running;
 
+  /// The failure of the last decision, if it could not be finished.
+  ///
+  /// **A decision that fails is not a decision.** The button is re-enabled and
+  /// the row says so, because a user who tapped a button and saw nothing
+  /// happen cannot tell whether their answer was recorded — and the condition
+  /// is still standing, so there is something left for them to do.
+  String? _failure;
+
   Future<void> _resolve(AlarmResolution resolution) async {
-    setState(() => _running = resolution);
+    setState(() {
+      _running = resolution;
+      _failure = null;
+    });
     try {
       await ref.read(syncAlarmResolverProvider)(widget.condition, resolution);
+    } on Object catch (error) {
+      // The reason belongs in the log, not on the page: the user can act on
+      // "it did not happen" and on nothing else.
+      debugPrint('sync health: recording a decision failed — $error');
+      if (mounted) {
+        setState(() => _failure = syncHealthResolutionFailedSentence);
+      }
     } finally {
       // Re-enabled even when the call failed: the condition is still standing,
       // and the user is owed the chance to try again.
@@ -284,6 +302,17 @@ class _ConditionRowState extends ConsumerState<_ConditionRow> {
                     ),
                   ),
               ],
+            ),
+          ),
+        // Below the buttons, in the same plain voice as everything else on this
+        // screen: what the user needs to know is that their answer did not take
+        // effect, and that they can try again.
+        if (_failure != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: Text(
+              _failure!,
+              style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
             ),
           ),
       ],

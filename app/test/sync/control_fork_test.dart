@@ -34,6 +34,7 @@ import 'dart:typed_data';
 
 import 'package:drift/drift.dart' show BooleanExpressionOperators;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jeeves/sync/alarm_resolution.dart';
 import 'package:jeeves/sync/chain_verifier.dart';
 import 'package:jeeves/sync/collection_codecs.dart';
 import 'package:jeeves/sync/control_payload.dart';
@@ -560,6 +561,89 @@ void main() {
     expect(
       (await _todoRows(workspace.a)).map((row) => row['id']),
       isNot(contains(futureTodo)),
+    );
+  });
+
+  test('a change the User refused for good is not applied by a later rebuild',
+      () async {
+    // The Grant arrives after the change it authorizes, so the change is
+    // refused for want of a live Grant — and the User says no to it for good.
+    // The corrected view authorizes it all the same: the Grant was live at the
+    // change's own server seq, and the view now says so. **A rebuild is a
+    // replay, not a second chance at the User's decision.**
+    final grantAuthor = await chained(241);
+    final grantee = await chained(251);
+    final rivalAuthor = await chained(261);
+    final rivalGrantee = await chained(271);
+    await workspace.syncAll();
+
+    final head = workspace.controlChainHead();
+    final grant = await branch(
+      author: grantAuthor,
+      grantee: grantee,
+      prevControlHash: head,
+      certWallMs: simulationStartWallMs + 4000,
+    );
+    final rival = await branch(
+      author: rivalAuthor,
+      grantee: rivalGrantee,
+      prevControlHash: head,
+      certWallMs: simulationStartWallMs + 6000,
+    );
+
+    final todoId = preferenceEntityId(workspace.workspaceId, 'refused-for-good');
+    final content = (await grantee.session.postOps(workspace.workspaceId, [
+      await _todoOp(workspace, grantee.fixture, todoId, 'never applied'),
+    ])).single.seq;
+
+    // The change is served before the Grant that authorizes it, and the rival
+    // branch after both: the correction that follows is the fork the rival
+    // lost, and the view the change is judged against is the corrected one.
+    workspace.server.serveOrder = [content, grant.seq, rival.seq];
+    await workspace.a.sync();
+
+    expect(await _refusedReasonAt(workspace.a, content),
+        SyncRejectionReason.noLiveGrant.code);
+    expect((await _todos(workspace.a)).containsKey(todoId), isFalse);
+    expect(
+      (await workspace.a.client.grantsView()).grants.containsKey(grant.grantId),
+      isTrue,
+      reason: 'the Grant is applied, and it was live at the change\'s own seq',
+    );
+
+    // The User is asked about the refusal, and refuses it for good.
+    final refusal = (await workspace.a.client.integrityAlarms())
+        .singleWhere((row) => row.kind == IntegrityAlarmKind.noLiveGrant.code);
+    await workspace.a.client.resolveAlarm(
+      refusal.id,
+      AlarmResolution.rejectedPermanently,
+    );
+    expect(
+      (await workspace.a.client.quarantined())
+          .singleWhere((row) => row.seq == content)
+          .resolution,
+      AlarmResolution.rejectedPermanently.code,
+      reason: 'the decision is on the refused change, and it stays there',
+    );
+
+    // The rebuild re-asks the authorization question the first time could not
+    // answer.
+    await workspace.a.client.projector!
+        .project(await workspace.a.client.rebuildFromOpLog());
+
+    expect(
+      await _refusedReasonAt(workspace.a, content),
+      SyncRejectionReason.noLiveGrant.code,
+      reason: 'the User refused it for good, and a replay is not a second chance',
+    );
+    expect(
+      (await _todos(workspace.a)).containsKey(todoId),
+      isFalse,
+      reason: 'the refused change is not applied by the rebuild',
+    );
+    expect(
+      (await _todoRows(workspace.a)).map((row) => row['id']),
+      isNot(contains(todoId)),
     );
   });
 

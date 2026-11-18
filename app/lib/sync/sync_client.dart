@@ -971,6 +971,16 @@ class SyncClient {
             ..where((row) =>
                 row.id.equals(alarm.id) &
                 row.resolvedAt.isNull() &
+                // The decision and the position it was taken at, guarded with the
+                // rest of the statement: a flush that re-raised the accusation
+                // behind this settlement's back has cleared the decision and
+                // moved the agreed position, and the answer the User gave was
+                // about the smaller accusation. The occurrence count says the
+                // same thing the other way round — a re-raise means the
+                // accusation has grown since the User was asked.
+                row.resolution.equals(AlarmResolution.keptOurs.code) &
+                row.occurrenceCount.equals(alarm.occurrenceCount) &
+                row.repostFromAuthorSeq.equals(from) &
                 _noUnsentOutboxRowFrom(from)))
           .write(IntegrityAlarmsCompanion(resolvedAt: Value(now)));
     }
@@ -1367,6 +1377,13 @@ class SyncClient {
         // A reducer-guard refusal: honoured verbatim, never re-evaluated.
         continue;
       }
+      if (refused != null && await _refusedForGood(row)) {
+        // The User refused this change for good, and the log still carries the
+        // verdict that refused it. A replay is not a second chance at the
+        // User's decision: however the authorization question comes out this
+        // time, these bytes are not applied.
+        continue;
+      }
 
       final authorization = view.verdictFor(
         authorMemberId: header.authorMemberId,
@@ -1424,6 +1441,32 @@ class SyncClient {
     await (_db.update(_db.opLog)
           ..where((row) => row.workspaceId.equals(workspaceId) & row.seq.equals(seq)))
         .write(const OpLogCompanion(refusedReason: Value(null)));
+  }
+
+  /// Whether the User refused this exact change for good.
+  ///
+  /// The decision is recorded on the refused change, and the log keeps only the
+  /// verdict that refused it. A rebuild re-asks the authorization question for
+  /// a refusal whose verdict depended on the grants view — and the answer can
+  /// change: a corrected control branch can authorize a change that was
+  /// refused for want of a Grant, which is how an op ends up applied and
+  /// un-refused by a rebuild. **A change the User has already refused for good
+  /// is not one of those.**
+  ///
+  /// The bytes have to match. One position can carry different bytes, and only
+  /// the bytes that were refused were refused.
+  Future<bool> _refusedForGood(OpLogRow row) async {
+    final reason = row.refusedReason;
+    if (reason == null) return false;
+    final refused = await (_db.select(_db.quarantinedOps)
+          ..where((r) =>
+              r.workspaceId.equals(workspaceId) &
+              r.seq.equals(row.seq) &
+              r.reason.equals(reason) &
+              r.releasedAt.isNull() &
+              r.resolution.equals(AlarmResolution.rejectedPermanently.code)))
+        .get();
+    return refused.any((r) => sameBytes(r.envelope, row.envelope));
   }
 
   /// A served op at or below the `since` it was asked past: alarm, and refuse it
@@ -3620,9 +3663,19 @@ class SyncClient {
   /// cannot be applied — corrupt bytes, a revoked Grant — leaves its row
   /// undecided, and an undecided row keeps the alarm standing: the User asked
   /// for the server's version, and the server's version could not be read.
+  ///
+  /// **The accusation is settled after the change has reached the domain
+  /// store, not before.** The decision is the User's answer; it takes effect
+  /// when the app shows the change. A projection that fails, or an app that is
+  /// killed between the two moments, leaves the accusation standing and
+  /// unanswered — so the answer is still on offer and the work is done again
+  /// when the User gives it. Settling first would close the accusation over a
+  /// change the User never saw, with nothing left to retry.
   Future<void> _takeUpstream(IntegrityAlarmRow alarm) async {
     final affected = <AffectedEntity>{};
     final now = _now();
+    var complete = false;
+    String? author;
     await _db.transaction(() async {
       // The accusation must still be the one the User answered: a refusal that
       // arrived while they were answering is a new question, not this one.
@@ -3630,12 +3683,12 @@ class SyncClient {
       if (current == null || current.occurrenceCount != alarm.occurrenceCount) {
         return;
       }
+      author = current.authorMemberId;
       // The snapshot is taken inside the transaction, so the rows it stamps and
       // the rows the settlement asks about are the same rows.
       final held = await (_db.select(_db.quarantinedOps)
-            ..where((t) => _coveredRows(
+            ..where((t) => _takenUpstreamRows(
                   t,
-                  kind: IntegrityAlarmKind.authorChainGap,
                   authorMemberId: current.authorMemberId,
                 ))
             ..orderBy([
@@ -3649,49 +3702,64 @@ class SyncClient {
         if (touched.isEmpty) continue;
         affected.addAll(touched);
         decided.add(row.id);
+        // A row the decision was already recorded on is not stamped twice: it
+        // is the work of a take upstream whose projection did not finish, and
+        // it is done again so the projection sees it this time.
+        if (row.resolution != null) continue;
         await (_db.update(_db.quarantinedOps)..where((r) => r.id.equals(row.id)))
             .write(QuarantinedOpsCompanion(
           resolution: Value(AlarmResolution.tookUpstream.code),
           resolutionDecidedAt: Value(now),
         ));
       }
-      if (decided.length == held.length) {
-        // Nothing is left to decide about this author, so the accusation is
-        // settled — and so is the fork the gap was holding open.
-        final gap = await _standingAlarm(
-          IntegrityAlarmKind.authorChainGap,
-          current.authorMemberId,
-        );
-        if (gap != null) {
-          await _settleWhenNothingUndecided(
-            alarm: gap,
-            kind: IntegrityAlarmKind.authorChainGap,
-            resolution: AlarmResolution.tookUpstream,
-            now: now,
-          );
-        }
-        final fork = await _standingAlarm(
-          IntegrityAlarmKind.authorChainFork,
-          current.authorMemberId,
-        );
-        if (fork != null) {
-          await _settleWhenNothingUndecided(
-            alarm: fork,
-            kind: IntegrityAlarmKind.authorChainFork,
-            resolution: AlarmResolution.tookUpstream,
-            now: now,
-            forkHeadSeq: current.authorMemberId == null
-                ? null
-                : await effectiveChainHeadSeq(current.authorMemberId!),
-          );
-        }
-      }
+      complete = decided.length == held.length;
     });
     // The projection is the tail of the receive order, as it is at the end of a
     // pull: what the applied changes touched is projected once, and the
     // convergence passes run over what it changed.
+    //
+    // **A projection that fails leaves the accusation standing.** The error
+    // travels to the caller, the rows keep the decision that was recorded on
+    // them, and the alarm is still unanswered — so the User is asked again and
+    // the work is done again. The settlement below is not reached.
     final touched = await projector?.project(affected);
     if (touched != null) await _reconcileProjected(touched);
+    if (!complete) return;
+    // The change is in the domain store now, so the decision has taken effect
+    // and the accusation is settled: nothing is left to decide about this
+    // author — and so is the fork the gap was holding open.
+    await _db.transaction(() async {
+      // Read into a final: the author was written inside the transaction above,
+      // and a write-captured local is not promoted by a null check.
+      final settledAuthor = author;
+      final gap = await _standingAlarm(
+        IntegrityAlarmKind.authorChainGap,
+        settledAuthor,
+      );
+      if (gap != null) {
+        await _settleWhenNothingUndecided(
+          alarm: gap,
+          kind: IntegrityAlarmKind.authorChainGap,
+          resolution: AlarmResolution.tookUpstream,
+          now: now,
+        );
+      }
+      final fork = await _standingAlarm(
+        IntegrityAlarmKind.authorChainFork,
+        settledAuthor,
+      );
+      if (fork != null) {
+        await _settleWhenNothingUndecided(
+          alarm: fork,
+          kind: IntegrityAlarmKind.authorChainFork,
+          resolution: AlarmResolution.tookUpstream,
+          now: now,
+          forkHeadSeq: settledAuthor == null
+              ? null
+              : await effectiveChainHeadSeq(settledAuthor),
+        );
+      }
+    });
   }
 
   /// Keep this device's own writes: mark them unsent again, so the next flush
@@ -3900,6 +3968,7 @@ class SyncClient {
                 kind: kind,
                 authorMemberId: alarm.authorMemberId,
                 forkHeadSeq: forkHeadSeq,
+                namedRowId: alarm.quarantineOpRowId,
               ))
           ..orderBy([(row) => OrderingTerm(expression: row.id)]))
         .get();
@@ -3927,6 +3996,7 @@ class SyncClient {
     required IntegrityAlarmKind kind,
     required String? authorMemberId,
     int? forkHeadSeq,
+    int? namedRowId,
   }) {
     final sameAuthor = authorMemberId == null
         ? table.authorMemberId.isNull()
@@ -3936,11 +4006,21 @@ class SyncClient {
       // A fork is not a refusal but the choice between two continuations: the
       // author's gap rows at or below the effective chain head.
       if (forkHeadSeq == null) return const Constant(false);
+      // **And the claimant the accusation names.** The release scan proves a
+      // mismatch at head + 1 and does not advance the head, so the claimant it
+      // accused sits *above* the head — outside the range above. Leaving it
+      // out would let a rejection close the fork while the gap the fork holds
+      // open stays undecided, and the User would be asked about a gap they had
+      // already answered.
+      final withinHead = table.authorSeq.isSmallerOrEqualValue(forkHeadSeq);
+      final named = namedRowId == null
+          ? const Constant(false)
+          : table.id.equals(namedRowId);
       return table.workspaceId.equals(workspaceId) &
           unanswered &
           sameAuthor &
           table.reason.equals(SyncRejectionReason.authorChainGap.code) &
-          table.authorSeq.isSmallerOrEqualValue(forkHeadSeq);
+          (withinHead | named);
     }
     final reasons = _reasonCodesEscalatingTo(kind);
     if (reasons.isEmpty) return const Constant(false);
@@ -3948,6 +4028,30 @@ class SyncClient {
         unanswered &
         sameAuthor &
         table.reason.isIn(reasons);
+  }
+
+  /// The held changes a take upstream is about.
+  ///
+  /// The author's gap rows that are still unreleased, and either still
+  /// undecided or already decided as *taken upstream*. The second set is the
+  /// work of a take upstream whose projection did not finish: the decision was
+  /// recorded on those rows, and the change is done again so the projection
+  /// sees it — a take upstream that is answered twice must reach the domain
+  /// store both times.
+  Expression<bool> _takenUpstreamRows(
+    $QuarantinedOpsTable table, {
+    required String? authorMemberId,
+  }) {
+    final sameAuthor = authorMemberId == null
+        ? table.authorMemberId.isNull()
+        : table.authorMemberId.equals(authorMemberId);
+    final reasons = _reasonCodesEscalatingTo(IntegrityAlarmKind.authorChainGap);
+    return table.workspaceId.equals(workspaceId) &
+        table.releasedAt.isNull() &
+        sameAuthor &
+        table.reason.isIn(reasons) &
+        (table.resolution.isNull() |
+            table.resolution.equals(AlarmResolution.tookUpstream.code));
   }
 
   /// The refusal reasons that escalate to this kind of accusation.
@@ -3965,6 +4069,7 @@ class SyncClient {
     required IntegrityAlarmKind kind,
     required String? authorMemberId,
     int? forkHeadSeq,
+    int? namedRowId,
   }) =>
       notExistsQuery(
         _db.select(_db.quarantinedOps)
@@ -3973,6 +4078,7 @@ class SyncClient {
                 kind: kind,
                 authorMemberId: authorMemberId,
                 forkHeadSeq: forkHeadSeq,
+                namedRowId: namedRowId,
               )),
       );
 
@@ -4004,6 +4110,7 @@ class SyncClient {
                 kind: kind,
                 authorMemberId: alarm.authorMemberId,
                 forkHeadSeq: forkHeadSeq,
+                namedRowId: alarm.quarantineOpRowId,
               )))
         .write(IntegrityAlarmsCompanion(
       resolution: Value(resolution.code),

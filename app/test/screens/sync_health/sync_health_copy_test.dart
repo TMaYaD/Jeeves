@@ -26,6 +26,7 @@ List<({String where, String text})> _everySentence() => [
       (where: 'unreadable refusal', text: syncHealthUnreadableRefusalSentence),
       (where: 'refused item reject', text: syncHealthRejectRefusedItemLabel),
       (where: 'resolution in flight', text: syncHealthResolutionInFlightSentence),
+      (where: 'resolution failed', text: syncHealthResolutionFailedSentence),
       for (final kind in IntegrityAlarmKind.values)
         (where: kind.code, text: sentenceForAlarmCode(kind.code)),
       for (final kind in IntegrityAlarmKind.values)
