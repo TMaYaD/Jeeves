@@ -248,6 +248,14 @@ rsync -a --delete \
   <mac-jeeves-checkout>/ paperclipai@127.0.0.1:~/jeeves/
 ```
 
+**Check the sync landed by content, not by rsync's silence.** A dry run
+(`-n`) lists what would change only under `-v`/`-i`; without one it prints
+nothing whether the trees match or not, so an empty dry run reads as
+"identical" even when the guest still holds an older commit. A whole suite
+then passes against the guest's stale tree — the branch's own tests are
+absent from it and nothing fails. Compare a checksum of a file the commit
+touched, or grep the guest for a string only that commit adds.
+
 Then, on the guest, the same command `pr-apk.yml` runs:
 
 ```bash
