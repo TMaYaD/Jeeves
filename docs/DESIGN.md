@@ -119,7 +119,7 @@ Our color palette is designed for a **light** color mode, prioritizing clarity a
 *   **Tertiary Color**: `#4A5568` - A sophisticated gray-blue accent, providing depth for highlights or decorative elements.
 *   **Neutral Color**: `#4A5568` - This versatile neutral forms the foundation for backgrounds and general UI surfaces.
 
-**Amber (`#F59E0B`) means "worth your eye, not your action."** One meaning covering its uses: the capacity bar's approaching-a-limit segment (§ Capacity bar), the sync indicator's calm state (§ Sync health), and the start of the sprint ring's overtime blend, which runs from amber to red. Read narrowly as "warn", the later uses would look like drift; read as above, they are the same statement about the same kind of thing. **Amber is spent on those three.** Red means a limit has been passed: the capacity bar over capacity, and a Timeboxed Action's sprint dots started past the limit. It is not available for a transient or in-progress state — see § Sync health for why a future "working on it" indicator should not be a colour at all.
+**Amber (`#F59E0B`) means "worth your eye, not your action."** One meaning covering its uses: the capacity bar's approaching-a-limit segment (§ Capacity bar), the sync indicator's calm state (§ Sync health), and the start of the sprint ring's overtime blend, which runs from amber to red. Read narrowly as "warn", the later uses would look like drift; read as above, they are the same statement about the same kind of thing. **Amber is spent on those three.** Red means a limit has been passed: the capacity bar over capacity, and a Timeboxed Action's sprint dots started past the limit. It is not available for a transient or in-progress state — see § Sync health for why a "working on it" indicator should not be a colour at all.
 
 ### Typography
 Our brand font is **Manrope**, used consistently across every surface of the app. Manrope ships as an embedded variable font (`assets/fonts/Manrope-VariableFont_wght.ttf`) so the app works without internet access.
@@ -481,18 +481,15 @@ accessible difference** — amber against green can collapse under deuteranopia 
 20px, and the outlined-versus-filled shape reads with no colour at all. Tooltip:
 *A few things worth knowing*.
 
-Amber is **spent** here (§ Color Palette). When alarm resolutions land, "a
-resolution is in flight" must not be amber, and should probably not be a colour:
-in-flight is a transient state, and motion, a progress treatment or an inline
-row-level indicator all say "working on it" more honestly than a hue that has to
-be memorised.
+A resolution in flight is the blue Syncing indicator plus a row-level progress bar,
+never amber.
 
 The screen itself is a plain `ListView` under `AppTitleBar(title: 'Sync')`, white,
 2/4/6 radii, per-Workspace overline sections in the Settings `_sectionHeader`
 idiom. Two groups — **NEEDS ATTENTION** and **HANDLED** — and, whenever nothing
-needs attention, one sentence above them saying so. **No buttons of any kind**: no
-dismiss, no retry, no release. There are no resolutions yet, and a control that
-did nothing would be worse than none.
+needs attention, one sentence above them saying so. **A condition offers only the
+resolutions its kind has**, as text buttons under its sentence, and never a
+dismiss.
 
 Two copy rules, both asserted by test (`sync_health_copy_test.dart`):
 

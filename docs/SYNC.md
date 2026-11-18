@@ -188,6 +188,25 @@ The ceremony refuses before authoring anything rather than publishing a rotation
 that would strand the Service mid-stream. Revoking the Service is the way
 through.
 
+## Integrity alarms and their resolutions
+
+| Kind | Class | Resolution | What the decision does on the device |
+|---|---|---|---|
+| `author_chain_gap` | actionable | **Take upstream** (one-time) | Re-verifies each held change of that device (signature, decrypt, shape, grant at its own seq), merges it through the host's merge core, projects and reconciles. Rows are stamped and stay eligible for normal chain release, so if the missing change arrives later the log heals and the re-apply is a no-op. `op_log` is not touched. Also settles that device's `author_chain_fork`. |
+| `own_writes_rollback` (server lost writes it had acknowledged) | actionable | **Keep ours** | Marks this device's own outbox rows from the position the server expects as unsent, so the next flush re-sends the same signed bytes. Nothing is re-numbered or re-signed. The alarm is *decided* at once and *resolved* when the flush is acknowledged. |
+| `own_writes_rollback` (server holds a position this device never wrote) | actionable | none — #974 | Needs a new device key or re-enrolment. |
+| `own_writes_divergence` | reported | **Keep ours** (no upload) | Ours is already on the log. Records that the other copy is refused for good. |
+| `author_chain_fork` | reported | **Reject permanently** | Stamps the losing continuations. If no undecided held change of that device remains, the `author_chain_gap` alarm they were holding open resolves too. |
+| `signature_invalid`, `aead_failure`, `plaintext_at_encrypted_epoch`, `no_live_grant`, `prev_author_hash_mismatch`, `author_chain_rewrite`, `duplicate_op_id_divergence` | reported | **Reject permanently** | Stamps the refused bytes as final. No state changes; the bytes stay. |
+| Refused change with no alarm kind (codec and certificate reasons) | reported | **Reject permanently**, per row | Same, on that one row. |
+| `own_write_refused_permanently` | actionable | none — #647 | Needs the outbox to drain past an op that can never be posted. |
+| `epoch_key_set_unpublishable` | actionable | none — #661 | Needs an in-app way to rotate keys again. |
+| `author_stream_reordered`, `stale_prefix_served`, `control_chain_fork`, `author_chain_slot_collision` | reported | none — #656, #657, #658, #659 | The app already settled these; they should resolve themselves. |
+| `prune_attestation_divergence` | reported | none — #660 | No mechanism exists to contest a compactor's attestation. |
+| Unknown code, self-healing refusal | — | none | Listed (unknown) or hidden (self-healing), as the classification says. |
+
+A decision is recorded on every refused change it covers and on the alarm itself. Nothing is deleted: the refused bytes stay. Taking upstream merges a held change into local state without writing it to the op log; it settles that one conflict, and a standing form is tracked in #975.
+
 ## What is asserted, and where
 
 - **Merge semantics**: `app/test/sync/merge_strategy_test.dart`, `app/test/services/user_preferences_conflict_test.dart`, and the golden vectors in `spec/sync/reducer_v1_vectors.json` (shared with the server's Python reducer, so a divergence is caught cross-language).
