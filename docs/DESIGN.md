@@ -208,7 +208,7 @@ The body is a single Jeeves-speak sentence (§ Voice) with the time estimate
 rendered **inline** as a bold, larger, accent-coloured run — the scannable
 focal point sits inside the sentence, not stacked above it. The estimate is an
 approximation: 2 minutes per item to be walked, plus a flat 5 for Daily
-Planning's Energy/Time check-ins and selection (Weekly Review adds no flat),
+Planning's Energy/Time checks and selection (Weekly Review adds no flat),
 rounded up to the nearest 5 and floored at 5 so a zero-item ceremony reads
 "about 5m", never "0"; durations use the shared `h`/`m` form (`3h 30m`). At zero items the copy switches to a shared
 light-day pool. Copy is drawn once per performance from a seedable pool (the
