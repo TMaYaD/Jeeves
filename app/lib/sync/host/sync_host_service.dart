@@ -372,14 +372,21 @@ class SyncHostService implements SyncHost, OutboxDrainer {
         return byCollection != 0 ? byCollection : a.entityId.compareTo(b.entityId);
       });
     for (final entity in entities) {
-      yield await _readChange(entity.collection, entity.entityId);
+      yield await mergedEntity(entity.collection, entity.entityId);
     }
   }
 
   @override
-  Future<Change> mergedEntity(String collection, String entityId) =>
-      _readChange(collection, entityId);
+  Future<Change> mergedEntity(String collection, String entityId) async {
+    final state = await _readState(collection, entityId);
+    return _effectiveChange(collection, entityId, state);
+  }
 
+  /// The entity's merged state, with its **stored** tombstone.
+  ///
+  /// This is the entity's history, not its visibility: a tombstone stays on
+  /// record, and an entity a newer field revived still carries the tombstone
+  /// that deleted it. The op log reads the tombstone this way.
   Future<Change> _readChange(String collection, String entityId) async {
     final state = await _readState(collection, entityId);
     return Change(
@@ -387,6 +394,33 @@ class SyncHostService implements SyncHost, OutboxDrainer {
       entityId: entityId,
       fields: state.fields,
       tombstone: state.tombstone,
+    );
+  }
+
+  /// The entity's merged state, with the tombstone the host's own rule makes
+  /// **effective**.
+  ///
+  /// The rule is the merge core's, and the SQL in `merge_state.dart` reads it
+  /// the same way: a field whose clock is newer than the tombstone is live and
+  /// revives the entity. So an entity that was deleted and then written again
+  /// is live again, and its tombstone is history rather than visibility.
+  ///
+  /// The fields are every field the host holds, live or not: a deleted
+  /// entity's hidden values are what a plugin needs to preserve what the
+  /// entity held.
+  Change _effectiveChange(
+    String collection,
+    String entityId,
+    ({Map<String, ClockedValue> fields, Hlc? tombstone}) state,
+  ) {
+    final tombstone = state.tombstone;
+    final revived = tombstone != null &&
+        state.fields.values.any((field) => field.hlc > tombstone);
+    return Change(
+      collection: collection,
+      entityId: entityId,
+      fields: state.fields,
+      tombstone: revived ? null : tombstone,
     );
   }
 
