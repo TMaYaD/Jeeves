@@ -288,6 +288,41 @@ void main() {
         reason: 'the page was reported as one the host would not take');
   });
 
+  test('a date that is not a date is not taken as a cleared date', () async {
+    final device = HostDevice.open('a');
+    addTearDown(device.close);
+    final host = await device.startHost();
+    final directory = Directory('${root.path}/vault')..createSync(recursive: true);
+    final folder = DirectoryVaultFolder(directory);
+    final plugin = VaultPlugin(folder: folder, sync: device.sync);
+    await host.attach(plugin);
+
+    await device.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'Plan', userId: _userId);
+    await device.domain.todoDao
+        .updateFields(_outcomeId, dueDate: DateTime.utc(2026, 11, 20, 9));
+    await host.deliverAll();
+    await plugin.rescan();
+
+    final path = (await folder.listMarkdownFiles('Outcomes')).single;
+    final page = (await folder.read(path))!;
+    expect(page, contains('due: 2026-11-20T09:00:00.000Z'));
+
+    // The due date is replaced by something that is not a date. The key is
+    // there, so the field is not cleared: the value is one the app cannot
+    // hold, and the app keeps the date it has.
+    await folder.writeAtomically(
+      path,
+      page.replaceFirst('due: 2026-11-20T09:00:00.000Z', 'due: ["not a date"]'),
+    );
+    await plugin.rescan();
+
+    expect(await _dueDate(device), DateTime.utc(2026, 11, 20, 9),
+        reason: 'the app took a date that is not a date');
+    expect((await folder.read(path))!, contains('due: 2026-11-20T09:00:00.000Z'),
+        reason: 'the page was not put back');
+  });
+
   test('two Outcomes whose names read alike have a page each', () async {
     final device = HostDevice.open('a');
     addTearDown(device.close);
@@ -551,6 +586,10 @@ Future<String?> _notes(HostDevice device, [String id = _outcomeId]) async {
   ).get();
   return rows.isEmpty ? null : rows.single.read<String>('notes');
 }
+
+/// The Outcome's due date, as the app holds it.
+Future<DateTime?> _dueDate(HostDevice device, [String id = _outcomeId]) async =>
+    (await device.domain.todoDao.getTodo(id))?.dueDate;
 
 /// How many Actions the Outcome has.
 Future<int> _actionCount(HostDevice device) async {

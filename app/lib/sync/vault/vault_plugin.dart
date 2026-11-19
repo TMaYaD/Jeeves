@@ -879,9 +879,16 @@ bool _isTombstoned(
 
 /// A frontmatter value as the page shows it.
 ///
-/// A key that is absent is a cleared field, and a cleared field is null.
-Object? _shownValue(Object? raw) =>
-    raw is String && raw.isNotEmpty ? raw : null;
+/// A key that is absent is a cleared field, and a cleared field is null. A key
+/// that is present but holds something else is **not** a cleared field: it is a
+/// value the app cannot hold, and it is refused rather than carried as a
+/// clear — the app keeps the value it has, and the next write puts the page
+/// back.
+Object? _shownValue(Object? raw) {
+  if (raw == null) return null;
+  if (raw is String && raw.isEmpty) return null;
+  return raw;
+}
 
 /// A page the app cannot read: its block says nothing the app can use.
 ///
