@@ -9,7 +9,7 @@
 /// restart resumes from the record.
 ///
 /// Which Break is the long one is derived the same way — from the recorded
-/// Sprints and the synced settings, never stored ([isLongBreakAfterSprint]) —
+/// Sprints and the synced settings, never stored ([longBreakDecision]) —
 /// so every device reaches the same answer without anything new to sync.
 ///
 /// Restoring never writes: past its set length a Sprint reads as overtime — the
@@ -70,11 +70,14 @@ class SprintTimerState {
   /// True while the Break in progress is the long one (issue #911).
   final bool isLongBreak;
 
-  /// The number of Sprints before the long Break, as the user has it set.
+  /// The Sprints in the run the long Break came from.
   ///
-  /// Carried with the state so the copy that names a count — "four sprints" —
-  /// can tell whether that count is the one in force.
-  final int sprintsBeforeLongBreak;
+  /// The run holds the Sprints since the count last restarted, so it is not
+  /// the setting the user chose: a Sprint that ran over brings the long
+  /// Break after fewer Sprints than the setting names. Carried with the
+  /// state so the copy that names a count — "four sprints" — names the count
+  /// the user actually reached. Zero when no long Break is in progress.
+  final int longBreakSprintCount;
   // Timestamp of the most recent break completion (null if none this session).
   final DateTime? lastBreakEndedAt;
 
@@ -91,7 +94,7 @@ class SprintTimerState {
     this.sprintDurationMinutes = 20,
     this.currentBreakDurationMinutes = 3,
     this.isLongBreak = false,
-    this.sprintsBeforeLongBreak = kDefaultSprintsBeforeLongBreak,
+    this.longBreakSprintCount = 0,
     this.lastBreakEndedAt,
   });
 
@@ -140,7 +143,7 @@ class SprintTimerState {
     int? sprintDurationMinutes,
     int? currentBreakDurationMinutes,
     bool? isLongBreak,
-    int? sprintsBeforeLongBreak,
+    int? longBreakSprintCount,
     DateTime? lastBreakEndedAt,
   }) =>
       SprintTimerState(
@@ -158,8 +161,8 @@ class SprintTimerState {
         currentBreakDurationMinutes:
             currentBreakDurationMinutes ?? this.currentBreakDurationMinutes,
         isLongBreak: isLongBreak ?? this.isLongBreak,
-        sprintsBeforeLongBreak:
-            sprintsBeforeLongBreak ?? this.sprintsBeforeLongBreak,
+        longBreakSprintCount:
+            longBreakSprintCount ?? this.longBreakSprintCount,
         lastBreakEndedAt: lastBreakEndedAt ?? this.lastBreakEndedAt,
       );
 }
@@ -213,7 +216,6 @@ SprintTimerState deriveSprintTimerState({
     return SprintTimerState(
       sprintDurationMinutes: sprintMinutesSetting,
       currentBreakDurationMinutes: breakMinutesSetting,
-      sprintsBeforeLongBreak: sprintsBeforeLongBreakSetting,
       lastBreakEndedAt: lastBreakEndedAt,
     );
   }
@@ -240,15 +242,22 @@ SprintTimerState deriveSprintTimerState({
   // Which Break comes after the latest Sprint: the long one when the run of
   // Sprints has spent its budget, the short one otherwise (issue #911). A
   // running or suppressed Sprint has no Break after it yet, and reads short.
-  final isLongBreak = latestOnAction != null &&
-      isLongBreakAfterSprint(
-        sprints: sprints,
-        sprintId: latestOnAction.id,
-        sprintDurationMinutes: sprintMinutesSetting,
-        shortBreakDurationMinutes: breakMinutesSetting,
-        longBreakDurationMinutes: longBreakMinutesSetting,
-        sprintsBeforeLongBreak: sprintsBeforeLongBreakSetting,
-      );
+  // The run it came from says how many Sprints the user actually did, which
+  // is not the setting: a Sprint that ran over brings the long Break after
+  // fewer Sprints than the setting names.
+  final longBreak = latestOnAction == null
+      ? null
+      : longBreakDecision(
+          sprints: sprints,
+          sprintId: latestOnAction.id,
+          sprintDurationMinutes: sprintMinutesSetting,
+          shortBreakDurationMinutes: breakMinutesSetting,
+          longBreakDurationMinutes: longBreakMinutesSetting,
+          sprintsBeforeLongBreak: sprintsBeforeLongBreakSetting,
+        );
+  final isLongBreak = longBreak?.isLong ?? false;
+  final longBreakSprintCount =
+      longBreak != null && longBreak.isLong ? longBreak.sprintCount : 0;
   final breakMinutes =
       isLongBreak ? longBreakMinutesSetting : breakMinutesSetting;
 
@@ -274,7 +283,7 @@ SprintTimerState deriveSprintTimerState({
         sprintDurationMinutes: sprintMinutes,
         currentBreakDurationMinutes: breakMinutes,
         isLongBreak: isLongBreak,
-        sprintsBeforeLongBreak: sprintsBeforeLongBreakSetting,
+        longBreakSprintCount: longBreakSprintCount,
         lastBreakEndedAt: lastBreakEndedAt,
       );
 

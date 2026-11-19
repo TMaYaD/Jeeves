@@ -52,10 +52,10 @@ List<String> _bannerTexts(WidgetTester tester) => tester
     .whereType<String>()
     .toList();
 
-/// The lines on offer during a long Break at the default settings.
+/// The lines on offer during a long Break after a run of four Sprints.
 final List<String> _longBreakPool = ElapsedTimerWidget.longBreakLines(
   longBreakMinutes: 15,
-  sprintsBeforeLongBreak: 4,
+  sprintCount: 4,
 );
 
 SprintTimerState _longBreak() => SprintTimerState(
@@ -66,7 +66,7 @@ SprintTimerState _longBreak() => SprintTimerState(
       total: const Duration(minutes: 15),
       currentBreakDurationMinutes: 15,
       isLongBreak: true,
-      sprintsBeforeLongBreak: 4,
+      longBreakSprintCount: 4,
     );
 
 void main() {
@@ -110,6 +110,67 @@ void main() {
     expect(_hairline(tester), const Color(0xFF10B981));
     expect(
       _bannerTexts(tester).where(_longBreakPool.contains),
+      isNotEmpty,
+      reason: 'the banner speaks in the long Break\'s own lines',
+    );
+  });
+
+  test('the Sprints line names the Sprints the run actually holds', () {
+    final three = ElapsedTimerWidget.longBreakLines(
+      longBreakMinutes: 15,
+      sprintCount: 3,
+    );
+    expect(
+      three,
+      contains('A longer pause, sir. Three sprints is a respectable showing.'),
+    );
+    expect(
+      three.where((line) => line.contains('Four sprints')),
+      isEmpty,
+      reason: 'the long Break came after three Sprints, so no line may say four',
+    );
+  });
+
+  test('one Sprint in the run reads as one Sprint', () {
+    expect(
+      ElapsedTimerWidget.longBreakLines(longBreakMinutes: 15, sprintCount: 1),
+      contains('A longer pause, sir. One sprint is a respectable showing.'),
+    );
+  });
+
+  test('the Sprints line begins with a capital letter (Jeeves\'s standards)',
+      () {
+    for (final count in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12]) {
+      final line = ElapsedTimerWidget.jeevesSprintsLine(count);
+      expect(line, startsWith('A longer pause, sir. '));
+      final number = line.substring('A longer pause, sir. '.length);
+      expect(number[0], equals(number[0].toUpperCase()),
+          reason: 'the count in "$line" starts lowercase');
+    }
+  });
+
+  testWidgets('the banner never claims a Sprint count that did not happen',
+      (tester) async {
+    await mount(
+      tester,
+      _longBreak().copyWith(longBreakSprintCount: 3),
+    );
+
+    final spoken = _bannerTexts(tester);
+    expect(spoken, isNotEmpty);
+    expect(
+      spoken.where((line) => line.contains('Four sprints')),
+      isEmpty,
+      reason: 'the run held three Sprints, so the banner may not say four',
+    );
+    // Whatever line the banner picked, it is one of the lines on offer for a
+    // run of three Sprints.
+    final pool = ElapsedTimerWidget.longBreakLines(
+      longBreakMinutes: 15,
+      sprintCount: 3,
+    );
+    expect(
+      spoken.where((line) => pool.contains(line)),
       isNotEmpty,
       reason: 'the banner speaks in the long Break\'s own lines',
     );

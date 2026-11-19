@@ -1,4 +1,4 @@
-/// [isLongBreakAfterSprint]: which Break after a Sprint is the long one (issue #911).
+/// [longBreakDecision]: which Break after a Sprint is the long one (issue #911).
 ///
 /// The rule is wall time: the number of Sprints before a long Break becomes a
 /// time budget, and the Break that would end at or after the budget is the
@@ -34,6 +34,24 @@ SprintRecord _sprint(
 }
 
 /// The decision for the last Sprint of [sprints], at the default settings.
+LongBreakDecision _decision(
+  List<SprintRecord> sprints, {
+  String? sprintId,
+  int sprintMinutes = 20,
+  int shortBreakMinutes = 3,
+  int longBreakMinutes = 15,
+  int sprintsBeforeLongBreak = 4,
+}) =>
+    longBreakDecision(
+      sprints: sprints,
+      sprintId: sprintId ?? sprints.last.id,
+      sprintDurationMinutes: sprintMinutes,
+      shortBreakDurationMinutes: shortBreakMinutes,
+      longBreakDurationMinutes: longBreakMinutes,
+      sprintsBeforeLongBreak: sprintsBeforeLongBreak,
+    );
+
+/// Whether the Break after the last Sprint of [sprints] is the long one.
 bool _isLong(
   List<SprintRecord> sprints, {
   String? sprintId,
@@ -42,14 +60,14 @@ bool _isLong(
   int longBreakMinutes = 15,
   int sprintsBeforeLongBreak = 4,
 }) =>
-    isLongBreakAfterSprint(
-      sprints: sprints,
-      sprintId: sprintId ?? sprints.last.id,
-      sprintDurationMinutes: sprintMinutes,
-      shortBreakDurationMinutes: shortBreakMinutes,
-      longBreakDurationMinutes: longBreakMinutes,
+    _decision(
+      sprints,
+      sprintId: sprintId,
+      sprintMinutes: sprintMinutes,
+      shortBreakMinutes: shortBreakMinutes,
+      longBreakMinutes: longBreakMinutes,
       sprintsBeforeLongBreak: sprintsBeforeLongBreak,
-    );
+    ).isLong;
 
 /// Four Sprints in a row at the default timings: 0–20, 23–43, 46–66, 69–89.
 List<SprintRecord> _fourSprints() => [
@@ -122,6 +140,66 @@ void main() {
         ),
       ];
       expect(_isLong(sprints), isFalse);
+    });
+  });
+
+  group('the run the long Break comes from', () {
+    test('the run holds the Sprints since the count restarted', () {
+      expect(_decision(_fourSprints()).sprintCount, 4);
+    });
+
+    test('a Sprint that ran over leaves the run short of the setting', () {
+      // Three 30-minute Sprints: the long Break comes after the third, so
+      // the run holds three Sprints and not the four the setting names.
+      final sprints = [
+        _sprint('s1', Duration.zero, end: const Duration(minutes: 30)),
+        _sprint('s2', const Duration(minutes: 33), end: const Duration(minutes: 63)),
+        _sprint('s3', const Duration(minutes: 66), end: const Duration(minutes: 96)),
+      ];
+      final decision = _decision(sprints);
+      expect(decision.isLong, isTrue);
+      expect(decision.sprintCount, 3,
+          reason: 'the long Break came after three Sprints, not four');
+    });
+
+    test('a gap restarts the run', () {
+      // A 15-minute gap: the long Break, taken to its end.
+      final sprints = [
+        _sprint('s1', Duration.zero, end: const Duration(minutes: 20)),
+        _sprint('s2', const Duration(minutes: 23), end: const Duration(minutes: 43)),
+        _sprint('s3', const Duration(minutes: 46), end: const Duration(minutes: 66)),
+        _sprint('s4', const Duration(minutes: 81), end: const Duration(minutes: 101)),
+      ];
+      final decision = _decision(sprints, sprintId: 's4');
+      expect(decision.isLong, isFalse);
+      expect(decision.sprintCount, 1,
+          reason: 'the count restarted at the fourth Sprint');
+    });
+
+    test('a Sprint that has not ended has no run', () {
+      final decision = _decision([
+        ..._fourSprints(),
+        _sprint('s5', const Duration(minutes: 92)),
+      ]);
+      expect(decision.sprintCount, 0);
+    });
+
+    test('a long Break cut short leaves the run longer than the setting', () {
+      // Four Sprints, then a long Break cut short after five minutes: the
+      // gap is too short to restart the count, so the fifth Sprint joins the
+      // run and the long Break comes after five.
+      final sprints = [
+        _sprint('s1', Duration.zero, end: const Duration(minutes: 20)),
+        _sprint('s2', const Duration(minutes: 23), end: const Duration(minutes: 43)),
+        _sprint('s3', const Duration(minutes: 46), end: const Duration(minutes: 66)),
+        _sprint('s4', const Duration(minutes: 69), end: const Duration(minutes: 89)),
+        _sprint('s5', const Duration(minutes: 94), end: const Duration(minutes: 114)),
+      ];
+      final decision = _decision(sprints, sprintId: 's5');
+      expect(decision.isLong, isTrue,
+          reason: 'the count never restarted, so the long Break is offered again');
+      expect(decision.sprintCount, 5,
+          reason: 'the run holds five Sprints, so the banner may not say four');
     });
   });
 
