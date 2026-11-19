@@ -74,6 +74,11 @@ void showOutcomeContextTagEditor(BuildContext context, String todoId) {
 /// gate's "Raise the estimate…" opens it one step up. Saving writes that
 /// value; cancelling writes nothing.
 ///
+/// [actionEstimate] is the Action's own estimate, which is not always the
+/// value the reader sees: the Outcome's mirror can hold an estimate the
+/// Action does not carry. The switch needs the Action's own, so turning it
+/// on in that state writes the estimate the sheet shows with it.
+///
 /// Returns whether the sheet was saved.
 Future<bool> showOutcomeTimeEstimateSheet(
   BuildContext context,
@@ -83,6 +88,7 @@ Future<bool> showOutcomeTimeEstimateSheet(
   String? actionText,
   String? actionId,
   bool timeboxed = false,
+  int? actionEstimate,
 }) async {
   final saved = await showModalBottomSheet<bool>(
     context: context,
@@ -95,6 +101,7 @@ Future<bool> showOutcomeTimeEstimateSheet(
       actionText: actionText,
       actionId: actionId,
       timeboxed: timeboxed,
+      actionEstimate: actionEstimate,
     ),
   );
   return saved ?? false;
@@ -110,6 +117,7 @@ class _EstimateSheet extends StatefulWidget {
     this.initial,
     this.actionText,
     this.actionId,
+    this.actionEstimate,
   });
 
   final TaskDetailNotifier notifier;
@@ -123,6 +131,15 @@ class _EstimateSheet extends StatefulWidget {
   /// The Action the Timeboxed switch belongs to; null where there is none to
   /// write (an Outcome with no current Action).
   final String? actionId;
+
+  /// The Action's own estimate — the one the limit is measured against.
+  ///
+  /// [current] is the value the reader sees (the Action's estimate, or the
+  /// Outcome's mirror while the Action has none), so it can hold an estimate
+  /// that the Action itself does not carry. A limit needs the Action's own
+  /// estimate, so this is what says whether turning the switch on has an
+  /// estimate to limit.
+  final int? actionEstimate;
 
   /// The Action's title, for the sheet's heading.
   final String? actionText;
@@ -177,12 +194,19 @@ class _EstimateSheetState extends State<_EstimateSheet> {
     final notifier = widget.notifier;
     final estimateMoved = _stepped && _minutes != widget.current;
     final switchMoved = _hasEstimate && _timeboxed != widget.timeboxed;
-    if (estimateMoved || switchMoved) {
+    // Turning the switch on when the Action carries no estimate of its own
+    // would leave a limit with nothing to limit: the estimate the sheet shows
+    // is written with the switch, so the Action ends up with the estimate the
+    // limit is measured against.
+    final needsActionEstimate =
+        switchMoved && _timeboxed && widget.actionEstimate == null;
+    final writesEstimate = estimateMoved || needsActionEstimate;
+    if (writesEstimate || switchMoved) {
       // One write, so the estimate and the switch land together.
       await notifier.setEstimateAndTimeboxed(
         actionId: widget.actionId ?? '',
-        minutes: estimateMoved ? _minutes : null,
-        clearEstimate: estimateMoved && _minutes == null,
+        minutes: writesEstimate ? _minutes : null,
+        clearEstimate: writesEstimate && _minutes == null,
         timeboxed: switchMoved ? _timeboxed : null,
       );
     }

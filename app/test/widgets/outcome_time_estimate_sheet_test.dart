@@ -50,7 +50,7 @@ void main() {
   });
   tearDown(() async => db.close());
 
-  Widget harness({int? current, bool timeboxed = false}) {
+  Widget harness({int? current, bool timeboxed = false, int? actionEstimate = 30}) {
     return MaterialApp(
       home: Scaffold(
         body: Builder(
@@ -63,6 +63,7 @@ void main() {
                 actionText: 'Draft',
                 actionId: actionId,
                 timeboxed: timeboxed,
+                actionEstimate: actionEstimate,
               ),
               child: const Text('open'),
             ),
@@ -76,8 +77,13 @@ void main() {
     WidgetTester tester, {
     int? current,
     bool timeboxed = false,
+    int? actionEstimate = 30,
   }) async {
-    await tester.pumpWidget(harness(current: current, timeboxed: timeboxed));
+    await tester.pumpWidget(harness(
+      current: current,
+      timeboxed: timeboxed,
+      actionEstimate: actionEstimate,
+    ));
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
   }
@@ -185,5 +191,24 @@ void main() {
     await openSheet(tester, current: 30);
 
     expect(find.byType(TimeboxedGlyph), findsOneWidget);
+  });
+
+  testWidgets('turning the switch on when the Action has no estimate of its '
+      'own writes the estimate with it', (tester) async {
+    // The merge state: the Outcome's mirror holds the estimate and the
+    // Action's own copy is empty. The limit is the Action's estimate, so the
+    // switch needs that one — and the estimate the sheet shows is written
+    // with it.
+    await db.customStatement('UPDATE actions SET time_estimate = NULL');
+    await openSheet(tester, current: 30, actionEstimate: null);
+
+    await tester.tap(find.byKey(const Key('estimate_sheet_timeboxed')));
+    await tester.pump();
+    await save(tester);
+
+    final action =
+        await tester.runAsync(() => db.actionDao.getCurrentAction('t1'));
+    expect(action!.timeboxed, isTrue);
+    expect(action.timeEstimate, 30);
   });
 }

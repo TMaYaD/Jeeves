@@ -14,6 +14,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/estimate.dart';
 import '../models/timeboxed.dart';
+import '../providers/clock_provider.dart';
 import '../providers/database_provider.dart';
 import '../providers/task_detail_provider.dart';
 import '../providers/timeboxed_limit_provider.dart';
@@ -112,7 +113,7 @@ Future<void> guardSprintPastLimit(
     await start();
     return;
   }
-  var now = DateTime.now().toUtc();
+  var now = ref.read(clockProvider)().toUtc();
   if (!initial.hasPassedAt(now)) {
     await start();
     return;
@@ -139,7 +140,7 @@ Future<void> guardSprintPastLimit(
     // The clock is read again: the estimate sheet was open for a while, and
     // the limit may have passed while it was. The figures the sheet shows are
     // counted from the same instant.
-    now = DateTime.now().toUtc();
+    now = ref.read(clockProvider)().toUtc();
     if (saved) {
       // A raised estimate moves the limit with it. If the limit is no longer
       // passed, the Sprint starts after all; if it is still passed, the gate
@@ -196,6 +197,9 @@ Future<bool> _raiseTheEstimate(
       timeboxed: action.timeboxed,
       timeEstimate: action.timeEstimate,
     ),
+    // The sheet is opened on the Action's own estimate, so that is also the
+    // estimate the switch needs.
+    actionEstimate: action.timeEstimate,
   );
 }
 

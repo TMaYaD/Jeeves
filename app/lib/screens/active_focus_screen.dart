@@ -10,6 +10,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../database/gtd_database.dart' show Todo;
 import '../models/timeboxed.dart';
+import '../providers/clock_provider.dart';
 import '../providers/focus_session_planning_provider.dart'
     show
         SessionSettlement,
@@ -340,7 +341,7 @@ class _FocusBodyState extends ConsumerState<_FocusBody>
         isBreak ? const Color(0xFF10B981) : const Color(0xFF2563EB);
     // One clock for the whole frame: the strip says how far past the limit
     // the work is, and that must not disagree with whether it has passed.
-    final now = DateTime.now().toUtc();
+    final now = ref.read(clockProvider)().toUtc();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
