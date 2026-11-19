@@ -206,6 +206,21 @@ class DeviceLink implements SyncTransport, UserTransport {
   /// a poke exists to trigger.
   Object? pullFailure;
 
+  /// Fails the next [pullOps] for one Workspace, once.
+  ///
+  /// Workspace-scoped, because the ceremony pulls one Workspace at a time: this
+  /// is the switch that stops an enrolment *between* its two Workspaces, where
+  /// the first is registered and the second is not.
+  String? failNextPullForWorkspaceId;
+
+  /// Fails the next [postOps] for one Workspace, once, **before** the batch
+  /// reaches the server.
+  ///
+  /// The other half of [dropPostResponse]: that one is a POST the server took
+  /// and the device never heard about, and this one is a POST that never left
+  /// the device at all. The difference is the whole of the two resumptions.
+  String? failNextPostForWorkspaceId;
+
   /// Read once per signal socket, exactly as [HttpSyncTransport] reads its
   /// injected provider: reassigning it and reconnecting is how a test proves a
   /// refreshed token is picked up by construction.
@@ -292,6 +307,10 @@ class DeviceLink implements SyncTransport, UserTransport {
     List<Uint8List> envelopes,
   ) async {
     _requireOnline();
+    if (workspaceId == failNextPostForWorkspaceId) {
+      failNextPostForWorkspaceId = null;
+      throw const SyncTransportException.unreachable('post failed before it left the device');
+    }
     final results = await _member.postOps(workspaceId, envelopes);
     if (dropPostResponse) {
       dropPostResponse = false;
@@ -314,6 +333,10 @@ class DeviceLink implements SyncTransport, UserTransport {
     if (failure != null) {
       pullFailure = null;
       throw failure;
+    }
+    if (workspaceId == failNextPullForWorkspaceId) {
+      failNextPullForWorkspaceId = null;
+      throw const SyncTransportException.unreachable('pull failed before it left the device');
     }
     return _member.pullOps(
       workspaceId,

@@ -876,7 +876,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
         const SizedBox(height: 20),
 
         if (widget.tagSection == ClarifyTagSection.editablePickers) ...[
-          const ClarifyFieldLabel('TAGS'),
+          const ClarifyFieldLabel('LABELS'),
           const SizedBox(height: 8),
           // Project row — single-select; reuse ProjectPickerWidget so styling
           // matches task_detail_screen.dart. Its "No project" state doubles as

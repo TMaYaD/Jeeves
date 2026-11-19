@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/models/clarify_mode.dart';
 import 'package:jeeves/services/user_preferences_conflict.dart';
+import 'package:jeeves/sync/device_names.dart';
 
 PreferenceRow _row(dynamic value, String updatedAt) => PreferenceRow(
       value: value == null ? null : jsonEncode(value),
@@ -58,6 +59,15 @@ void main() {
         expect(strategyForKey(entry.key), entry.value,
             reason: '${entry.key} should resolve to its registered strategy');
       }
+    });
+
+    test('a device name key resolves to lww', () {
+      // The device name family is deliberately not registered: the default is
+      // already lww, and a client-only rule would have nothing to mirror on the
+      // server side. The pin is here so the strategy is a decision on the
+      // record rather than an accident of the default.
+      const nodeHex = '0123456789abcdef0123456789abcdef';
+      expect(strategyForKey(deviceNameKey(nodeHex)), ConflictStrategy.lww);
     });
   });
 

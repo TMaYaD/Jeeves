@@ -24,6 +24,8 @@
 ///                             owner self-grant
 ///        observed NON-EMPTY -> op 1 `member_register`, op 2 root-signed
 ///                             owner self-grant
+///        this device already registered here -> author nothing, flush what an
+///                             earlier attempt left queued, and move on
 /// 7. Drop Root
 /// ```
 ///
@@ -1193,6 +1195,42 @@ class EnrolmentService {
     // The pull is load-bearing, and it runs while this device holds a member
     // credential and no Grant: authoring first would emit a fork-lie chain link.
     await scoped.pull();
+
+    // A resumed ceremony finds the Workspaces it already registered in. The
+    // registration is this device's own op in the applied control log, so the
+    // log is where the answer comes from — the pull above is what put it there.
+    if (await scoped.ownRegistrationApplied()) {
+      // A registration and the owner Grant that carries it land in one POST, so
+      // a device registered here is an owner here. A revoked device is not: it
+      // holds no live Grant, and re-admitting one is not this ceremony's job.
+      final roles =
+          (await scoped.grantsView()).liveRoles(scoped.identity.memberId);
+      if (!roles.contains(roleOwner)) {
+        throw StateError(
+          'this device is registered in $workspaceId but holds no live owner '
+          'Grant there, which a registration and a Grant landing in one POST '
+          'cannot produce',
+        );
+      }
+      // The queue may still hold this device's first registration: the POST
+      // landed but its response was lost, and the device never heard. Flushing
+      // settles it — the re-post is a duplicate the server already holds, and a
+      // founding device's replayed genesis is refused as `genesis_not_first`,
+      // which drops the queued copies and rewinds the author chain to the head
+      // this pull just read. Either way the queue ends empty.
+      await scoped.flushOutbox();
+      // The flush's own verdict is not passed on. `genesisSuperseded` would
+      // send `_claimPlaceIn` round its race loop a second time, and there is no
+      // race here: this device is registered, so a second pass would look for
+      // a Workspace to found that has already been claimed.
+      return FlushOutcome.flushed;
+    }
+
+    // Ops an earlier attempt left queued that never reached the server: the
+    // log the pull just read does not hold them, so they are re-authored
+    // against the head it attests rather than posted behind it.
+    await scoped.discardUnsentControlOps();
+
     final observedHead = await scoped.appliedControlHead();
     final observedEmpty = sameBytes(observedHead, zeroPrevControlHash);
 

@@ -357,6 +357,48 @@ class SyncHostService implements SyncHost, OutboxDrainer {
   Future<List<Change>> changesStampedByDevice() async => changesStampedBy(
       _deviceNodeId ?? (await readClockIdentity(_domain)).deviceNodeId);
 
+  /// What the device wrote under its own node id after [afterWallMs] that is still
+  /// visible, per entity, for upload once an account is back.
+  ///
+  /// A tombstone qualifies when it names the device; a field qualifies when it
+  /// names the device **and** is live — no tombstone on the entity, or the field's
+  /// clock newer than it, whoever stamped that tombstone. A hidden field is left
+  /// out so an entity another device deleted is never revived by a stale
+  /// signed-out edit. Clocks at or before [afterWallMs] are left out: they predate
+  /// the account's upload, which deliberately left them off the log.
+  /// [excludedCollections] are skipped altogether.
+  Future<List<Change>> visibleChangesStampedByDeviceAfter(
+    int afterWallMs, {
+    Set<String> excludedCollections = const {},
+  }) async {
+    final node = _deviceNodeId ?? (await readClockIdentity(_domain)).deviceNodeId;
+    final changes = <Change>[];
+    for (final change in await changesStampedBy(node)) {
+      if (excludedCollections.contains(change.collection)) continue;
+      final deviceTombstone = change.tombstone;
+      final tombstone =
+          deviceTombstone != null && deviceTombstone.wallMs > afterWallMs
+              ? deviceTombstone
+              : null;
+      final winningTombstone =
+          (await _readChange(change.collection, change.entityId)).tombstone;
+      final fields = {
+        for (final field in change.fields.entries)
+          if (field.value.hlc.wallMs > afterWallMs &&
+              (winningTombstone == null || field.value.hlc > winningTombstone))
+            field.key: field.value,
+      };
+      if (tombstone == null && fields.isEmpty) continue;
+      changes.add(Change(
+        collection: change.collection,
+        entityId: change.entityId,
+        fields: fields,
+        tombstone: tombstone,
+      ));
+    }
+    return changes;
+  }
+
   /// A view of the device's one clock that stamps [memberIdHex] by default — what
   /// the op-log stack mints its own clocks (certificates, uploads, compaction) from.
   HlcClock clockForMember(String memberIdHex) => _clock.viewFor(memberIdHex);

@@ -231,7 +231,7 @@ void main() {
       );
       await _pumpFrames(tester, frames: 5);
 
-      expect(find.text('TAGS'), findsNothing);
+      expect(find.text('LABELS'), findsNothing);
       expect(find.byType(ProjectPickerWidget), findsNothing);
       expect(find.byType(ContextTagPickerWidget), findsNothing);
       // The rest of the card is untouched — this is a tag option, not a
@@ -296,7 +296,7 @@ void main() {
       ));
       await _pumpFrames(tester, frames: 5);
 
-      expect(find.text('TAGS'), findsOneWidget);
+      expect(find.text('LABELS'), findsOneWidget);
       expect(find.byType(ProjectPickerWidget), findsOneWidget);
       expect(find.byType(ContextTagPickerWidget), findsOneWidget);
     });

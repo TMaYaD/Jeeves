@@ -20,6 +20,7 @@ import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/sync/domain_reconciler.dart';
 import 'package:jeeves/sync/ids.dart' show jeevesWorkspaceNamespace;
 import 'package:uuid/uuid.dart';
@@ -705,6 +706,118 @@ void main() {
         [projectTwo],
       );
       await expectReducedStateAgrees([x, y, z]);
+    });
+  });
+
+  // #782: a removal the user makes on one device has to reach the other one.
+  // The four task-detail removal paths each dropped the link locally without
+  // describing it, so the other device kept the tag until a later pull
+  // restored it. The tombstone is what makes the removal travel.
+  group('a removal on one device is gone on the other', () {
+    late SimWorkspace workspace;
+    late SimDevice a;
+    late SimDevice b;
+    late String outcome;
+    late String otherOutcome;
+    late String contextTag;
+    late String personTag;
+    late String projectTag;
+
+    setUp(() async {
+      workspace = await SimWorkspace.create();
+      addTearDown(workspace.close);
+      a = workspace.a;
+      b = workspace.b;
+      outcome = await outcomeOn(a, 'removal-outcome');
+      // A second Outcome carrying the same three Tags. A removal has to pick
+      // out one pair — one Tag on one Outcome — so the fixture has to hold a
+      // link that looks the same but is not the one being removed.
+      otherOutcome = await outcomeOn(a, 'removal-other-outcome');
+      contextTag = _id('removal-context');
+      personTag = _id('removal-person');
+      projectTag = _id('removal-project');
+      await tagWithId(a, contextTag, name: 'Home', type: 'context');
+      await tagWithId(a, personTag, name: 'Alice', type: 'person');
+      await tagWithId(a, projectTag, name: 'Move house', type: 'project');
+      for (final id in [outcome, otherOutcome]) {
+        await a.domain.tagDao.assignTag(id, contextTag, _userId);
+        await a.domain.tagDao.assignTag(id, personTag, _userId);
+        await a.domain.tagDao.enforceSingleProject(id, _userId, projectTag);
+      }
+      await workspace.syncAll();
+      await settle([a, b]);
+    });
+
+    TaskDetailNotifier notifierOn(SimDevice device) =>
+        TaskDetailNotifier(db: device.domain, userId: _userId, todoId: outcome);
+
+    /// Every junction the fixture holds before a removal, as
+    /// `(Outcome, Tag)` pairs.
+    Set<(String, String)> everyLink() => {
+          for (final id in [outcome, otherOutcome]) ...[
+            (id, contextTag),
+            (id, personTag),
+            (id, projectTag),
+          ],
+        };
+
+    /// The link is gone on **both** devices: the one that removed it, and the
+    /// one that has to learn it did — and **only** that link is gone. A removal
+    /// that took every junction would satisfy "the tag is gone" just as well,
+    /// so the assertion pins the exact set of pairs that survives.
+    Future<void> expectLinkGone(
+      List<SimDevice> devices,
+      String tagId, {
+      required Set<(String, String)> expected,
+    }) async {
+      final links = await expectConverged(devices, 'todo_tags');
+      expect(
+        links.where(
+            (row) => row['todo_id'] == outcome && row['tag_id'] == tagId),
+        isEmpty,
+        reason: 'the removal reached every device',
+      );
+      expect(
+        {
+          for (final row in links) (row['todo_id']! as String, row['tag_id']! as String),
+        },
+        expected,
+        reason: 'the removal took exactly one junction and left every other '
+            'link alone, on this Outcome and on the other one',
+      );
+      await expectReducedStateAgrees(devices);
+    }
+
+    test('a removed context is gone on the other device', () async {
+      await notifierOn(a).removeContextTag(contextTag);
+      await settle([a, b]);
+
+      await expectLinkGone([a, b], contextTag,
+          expected: everyLink().difference({(outcome, contextTag)}));
+    });
+
+    test('a removed person is gone on the other device', () async {
+      await notifierOn(a).removePersonTag(personTag);
+      await settle([a, b]);
+
+      await expectLinkGone([a, b], personTag,
+          expected: everyLink().difference({(outcome, personTag)}));
+    });
+
+    test('cleared people are gone on the other device', () async {
+      await notifierOn(a).clearAllPersonTags();
+      await settle([a, b]);
+
+      await expectLinkGone([a, b], personTag,
+          expected: everyLink().difference({(outcome, personTag)}));
+    });
+
+    test('a cleared Project is gone on the other device', () async {
+      await notifierOn(a).clearProject();
+      await settle([a, b]);
+
+      await expectLinkGone([a, b], projectTag,
+          expected: everyLink().difference({(outcome, projectTag)}));
     });
   });
 

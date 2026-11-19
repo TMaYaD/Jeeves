@@ -54,14 +54,18 @@ void main() {
       expect(find.text('add-button'), findsOneWidget);
     });
 
-    testWidgets('selected tag shows checkmark prefix', (tester) async {
+    testWidgets('selected tag renders as a badge', (tester) async {
       final tag = _tag('t1', 'work');
       await tester.pumpWidget(_wrap(TagList(
         tags: [tag],
         selectedIds: {'t1'},
       )));
 
-      expect(find.textContaining('✓'), findsOneWidget);
+      expect(find.textContaining('✓'), findsNothing);
+      expect(
+        tester.widget<TagText>(find.byKey(const Key('tag_chip_t1'))).selected,
+        isTrue,
+      );
     });
 
     testWidgets('trailingCount suffix appears when count > 0', (tester) async {
