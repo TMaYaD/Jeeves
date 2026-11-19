@@ -18,6 +18,7 @@ import 'package:jeeves/sync/host/change.dart';
 import 'package:jeeves/sync/vault/page_codec.dart';
 import 'package:jeeves/sync/vault/vault_folder.dart';
 import 'package:jeeves/sync/vault/vault_folder_io.dart';
+import 'package:jeeves/sync/vault/vault_health.dart';
 import 'package:jeeves/sync/vault/vault_plugin.dart';
 
 import '../host/host_harness.dart';
@@ -36,12 +37,17 @@ class _RefusingFolder implements VaultFolder {
   final VaultFolder inner;
   bool failing = false;
 
+  /// Whether the folder refuses to be listed at all.
+  bool unlistable = false;
+
   /// The paths that cannot be read.
   final Set<String> unreadable = {};
 
   @override
-  Future<List<String>> listMarkdownFiles(String subfolder) =>
-      inner.listMarkdownFiles(subfolder);
+  Future<List<String>> listMarkdownFiles(String subfolder) {
+    if (unlistable) throw StateError('the folder cannot be listed');
+    return inner.listMarkdownFiles(subfolder);
+  }
 
   @override
   Future<String?> read(String relativePath) {
@@ -304,6 +310,61 @@ void main() {
     await plugin.rescan();
 
     expect(await _title(device, _otherOutcomeId), 'bbb edited');
+  });
+
+  test('a page that does not parse is left alone and reported in health',
+      () async {
+    final device = HostDevice.open('a');
+    addTearDown(device.close);
+    final host = await device.startHost();
+    final directory = Directory('${root.path}/vault')..createSync(recursive: true);
+    final folder = DirectoryVaultFolder(directory);
+    final plugin = VaultPlugin(folder: folder, sync: device.sync);
+    await host.attach(plugin);
+
+    await device.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'Plan', userId: _userId);
+    await host.deliverAll();
+    await plugin.rescan();
+
+    // A page a person has mangled: it does not parse, so the app cannot take
+    // it and must not write over it.
+    final broken = File('${directory.path}/Outcomes/mangled.md');
+    broken.parent.createSync(recursive: true);
+    broken.writeAsStringSync('---\nid: mangled\n---\nnot a page\n');
+
+    final health = <VaultHealth>[];
+    plugin.health.listen(health.add);
+    await plugin.rescan();
+    await pumpEventQueue();
+
+    expect(broken.readAsStringSync(), contains('not a page'),
+        reason: 'the page was written over');
+    expect(health, isNotEmpty, reason: 'the vault said nothing about itself');
+    expect(health.last.unreadablePageCount, 1,
+        reason: 'the page it could not read was not reported');
+  });
+
+  test('a folder that cannot be listed is reported in health', () async {
+    final device = HostDevice.open('a');
+    addTearDown(device.close);
+    final host = await device.startHost();
+    final directory = Directory('${root.path}/vault')..createSync(recursive: true);
+    final folder = _RefusingFolder(DirectoryVaultFolder(directory));
+    folder.unlistable = true;
+    final plugin = VaultPlugin(folder: folder, sync: device.sync);
+
+    final health = <VaultHealth>[];
+    plugin.health.listen(health.add);
+
+    // The folder cannot be reached. The vault still attaches: it reports the
+    // folder, and the app keeps working.
+    await host.attach(plugin);
+    await pumpEventQueue();
+
+    expect(health, isNotEmpty, reason: 'the vault said nothing about itself');
+    expect(health.last.folderReachable, isFalse,
+        reason: 'the unreachable folder was not reported');
   });
 }
 

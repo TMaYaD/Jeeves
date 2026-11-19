@@ -27,6 +27,7 @@ import 'page_codec.dart';
 import 'page_layout.dart';
 import 'page_tags.dart';
 import 'vault_folder.dart';
+import 'vault_health.dart';
 
 class VaultPlugin implements SyncPlugin {
   VaultPlugin({required VaultFolder folder, required SyncDatabase sync})
@@ -38,7 +39,13 @@ class VaultPlugin implements SyncPlugin {
   final VaultFolder _folder;
   final SyncDatabase _sync;
   late SyncHost _host;
-  final StreamController<PluginHealth> _health = StreamController.broadcast();
+  final StreamController<VaultHealth> _health = StreamController.broadcast();
+
+  /// Pages in the folder the app could not read or parse, and left alone.
+  int _unreadablePageCount = 0;
+
+  /// Whether the folder could be reached in the last pass.
+  bool _folderReachable = true;
 
   /// Entities on each page: `collection/entityId`. Built from the host's
   /// snapshot at start and grown by every delivery and every page read.
@@ -50,7 +57,7 @@ class VaultPlugin implements SyncPlugin {
   String get id => pluginId;
 
   @override
-  Stream<PluginHealth> get health => _health.stream;
+  Stream<VaultHealth> get health => _health.stream;
 
   @override
   Future<void> start(SyncHost host) async {
@@ -107,8 +114,11 @@ class VaultPlugin implements SyncPlugin {
     return run;
   }
 
-  void _reportSynced() =>
-      _health.add(PluginHealth(lastSyncedAt: DateTime.now().toUtc()));
+  void _reportSynced() => _health.add(VaultHealth(
+        lastSyncedAt: DateTime.now().toUtc(),
+        unreadablePageCount: _unreadablePageCount,
+        folderReachable: _folderReachable,
+      ));
 
   // --- full pass -------------------------------------------------------------
 
@@ -142,15 +152,28 @@ class VaultPlugin implements SyncPlugin {
   /// Read every page, apply what is news, and return the pages touched.
   Future<Set<VaultPageKey>> _scanAll() async {
     final touched = <VaultPageKey>{};
+    _unreadablePageCount = 0;
+    _folderReachable = true;
     for (final kind in VaultPageKind.values) {
       final byId = <String, List<({String path, String text, PageModel page})>>{};
-      for (final path in await _folder.listMarkdownFiles(kind.folder)) {
+      final List<String> paths;
+      try {
+        paths = await _folder.listMarkdownFiles(kind.folder);
+      } on Object catch (error) {
+        // A folder that cannot be listed is reported and left alone: the other
+        // folders are still read, and nothing is written over.
+        _folderReachable = false;
+        debugPrint('vault: ${kind.folder} not listed: $error');
+        continue;
+      }
+      for (final path in paths) {
         final String? text;
         try {
           text = await _folder.read(path);
         } on Object catch (error) {
           // A file that cannot be read is left alone: the rest of the folder
-          // is still read.
+          // is still read. It is counted, so the failure is reported.
+          _unreadablePageCount++;
           debugPrint('vault: $path not read: $error');
           continue;
         }
@@ -159,6 +182,9 @@ class VaultPlugin implements SyncPlugin {
         try {
           page = parsePage(text);
         } on PageParseException catch (error) {
+          // A page that does not parse is never written over. It is counted,
+          // so a page the app cannot read is reported rather than silent.
+          _unreadablePageCount++;
           debugPrint('vault: $path left alone: ${error.message}');
           continue;
         }

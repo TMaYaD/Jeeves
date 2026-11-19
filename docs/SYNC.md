@@ -166,7 +166,7 @@ The vault is the first plugin behind the host ([sync-plugins](proposals/sync-plu
 
 **What the vault does not carry:** preferences, and Tags no page names — an Area with no Outcomes has no page. They stay on the device.
 
-**Where it fails.** A folder that cannot be read or written is reported through the plugin's `PluginHealth` and the log. The drawer indicator does not read it yet (#916).
+**Where it fails.** A page that cannot be read or parsed is left alone and counted, and a folder that cannot be listed is reported; both come through the plugin's health (`VaultHealth`, which extends `PluginHealth`) and the log. A page that cannot be written fails the delivery, so the change is taken again. The drawer indicator does not read any of it yet (#916).
 
 **How the folder is reached.** One port (`VaultFolder`): list, read, write-and-rename, remove. A plain directory reaches it over `dart:io`; Android reaches it over the shared `jeeves/folder` document-tree channel, with the two operations the vault needs added to that channel. The document tree has no atomic replace, so a page is written through a temporary document and a rename.
 
