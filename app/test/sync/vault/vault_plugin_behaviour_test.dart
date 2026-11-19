@@ -471,6 +471,58 @@ void main() {
     expect(health.last.folderReachable, isFalse,
         reason: 'the unreachable folder was not reported');
   });
+
+  test('a hand edit is stamped after the clocks the page carries', () async {
+    final a = HostDevice.open('a');
+    addTearDown(a.close);
+    final aHost = await a.startHost();
+    final aDirectory = Directory('${root.path}/vault-a')
+      ..createSync(recursive: true);
+    final aFolder = DirectoryVaultFolder(aDirectory);
+    final aPlugin = VaultPlugin(folder: aFolder, sync: a.sync);
+    await aHost.attach(aPlugin);
+
+    await a.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'Plan', userId: _userId);
+    await a.domain.actionDao.addPlannedAction(
+      _outcomeId,
+      'first',
+      now: DateTime.utc(2026, 11, 17, 8),
+    );
+    await aHost.deliverAll();
+    await aPlugin.rescan();
+
+    final path = (await aFolder.listMarkdownFiles('Outcomes')).single;
+    final page = (await aFolder.read(path))!;
+    expect(page, contains('- [ ] first'));
+
+    // A person takes the line off the page.
+    final edited = page.replaceFirst('- [ ] first\n', '');
+
+    // A device whose own clock is behind reads the page.
+    final b = HostDevice.open('b', wall: WallClock(1600000000000));
+    addTearDown(b.close);
+    final bHost = await b.startHost();
+    final bDirectory = Directory('${root.path}/vault-b')
+      ..createSync(recursive: true);
+    final bFolder = DirectoryVaultFolder(bDirectory);
+    final bPlugin = VaultPlugin(folder: bFolder, sync: b.sync);
+    await bHost.attach(bPlugin);
+
+    // The syncer brings the page.
+    await bFolder.writeAtomically(path, edited);
+
+    await bPlugin.rescan();
+
+    // The Action is gone. The tombstone the hand edit was stamped with is
+    // later than the clock the page carried for the Action, so the Action's
+    // own fields are not left live.
+    final actions = await b.domain.customSelect(
+      'SELECT COUNT(*) AS c FROM actions WHERE outcome_id = ?',
+      variables: [Variable<String>(_outcomeId)],
+    ).getSingle();
+    expect(actions.read<int>('c'), 0, reason: 'the Action was not deleted');
+  });
 }
 
 /// The Outcome's title, as the app holds it.

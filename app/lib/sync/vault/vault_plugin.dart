@@ -261,89 +261,150 @@ class VaultPlugin implements SyncPlugin {
         baseModel = null;
       }
     }
-    final changes = _changesFromPage(key, page, baseModel);
-    if (changes.isNotEmpty) {
+    final List<Change> carried;
+    try {
+      carried = _carriedChanges(key, page, baseModel);
+    } on _UnreadablePage catch (error) {
+      // A page the app cannot read is left alone: the other pages are still
+      // read, and this one is read again on the next pass.
+      debugPrint('vault: $path not read: ${error.reason}');
+      return false;
+    }
+    if (carried.isNotEmpty) {
       try {
-        await _host.applyRemote(id, changes);
+        await _host.applyRemote(id, carried);
       } on Object catch (error) {
         // A page the app cannot take must not stop the vault: the other pages
         // are still read, and this one is left for the next pass.
         debugPrint('vault: $path not taken: $error');
         return false;
       }
-      final members = _members.putIfAbsent(key, () => <String>{});
-      for (final change in changes) {
-        members.add('${change.collection}/${change.entityId}');
-        final tagId = linkedTagId(change);
-        if (tagId != null) members.add('$tagsCollection/$tagId');
+      _rememberMembers(key, carried);
+    }
+    // The hand edits are read after the carried changes have reached the host:
+    // the host has then observed the page's own clocks, and the clock a hand
+    // edit is stamped with is later than every clock the page carries.
+    final List<Change> handEdits;
+    try {
+      handEdits = _handEditChanges(key, page, baseModel);
+    } on _UnreadablePage catch (error) {
+      debugPrint('vault: $path not read: ${error.reason}');
+      return false;
+    }
+    if (handEdits.isNotEmpty) {
+      try {
+        await _host.applyRemote(id, handEdits);
+      } on Object catch (error) {
+        debugPrint('vault: $path not taken: $error');
+        return false;
       }
+      _rememberMembers(key, handEdits);
     }
     await _saveBase(path, text);
     return true;
   }
 
-  /// What a page says, as changes. Block entries pass through with their own
-  /// clocks; a value that no longer matches its digest, or a checklist line that
-  /// no longer matches an Action, is a hand edit and gets a fresh clock.
-  List<Change> _changesFromPage(
+  /// The entities a page's changes touch, so the page knows what is on it.
+  void _rememberMembers(VaultPageKey key, List<Change> changes) {
+    final members = _members.putIfAbsent(key, () => <String>{});
+    for (final change in changes) {
+      members.add('${change.collection}/${change.entityId}');
+      final tagId = linkedTagId(change);
+      if (tagId != null) members.add('$tagsCollection/$tagId');
+    }
+  }
+
+  /// What a page carries, with the clocks it carries.
+  ///
+  /// The block's own entries, and the values the page shows that still match
+  /// the digest the block holds: what a device wrote at that clock. No clock
+  /// is minted here — every clock is the one the page carries.
+  List<Change> _carriedChanges(
       VaultPageKey key, PageModel page, PageModel? base) {
+    final block = _usableBlock(page, base);
     final fields = <String, Map<String, ClockedValue>>{};
     final tombstones = <String, Hlc>{};
-    final refs = <String, ({String collection, String entityId})>{};
 
-    void touch(String collection, String entityId) =>
-        refs['$collection/$entityId'] = (collection: collection, entityId: entityId);
-
-    void addField(String collection, String entityId, String field,
-        Object? value, Hlc hlc) {
-      touch(collection, entityId);
-      // No clock is compared here. The host's merge settles every field, and
-      // the page read below is the last word on what the page says: it knows
-      // whether a value is what a device wrote (its digest says so) or a hand
-      // edit, and a hand edit gets a clock of its own.
-      final map = fields.putIfAbsent('$collection/$entityId', () => {});
-      map[field] = ClockedValue(value, hlc);
+    void carry(String collection, String entityId, String field, Object? value,
+        Hlc hlc) {
+      fields
+          .putIfAbsent('$collection/$entityId', () => <String, ClockedValue>{})
+          [field] = ClockedValue(value, hlc);
     }
-
-    void addTombstone(String collection, String entityId, Hlc hlc) {
-      touch(collection, entityId);
-      tombstones['$collection/$entityId'] = hlc;
-    }
-
-    final block = page.block ?? base?.block;
-    if (block == null) return const [];
 
     for (final entry in block) {
       if (entry.isTombstone) {
-        addTombstone(entry.collection, entry.entityId, entry.hlc);
+        tombstones['${entry.collection}/${entry.entityId}'] = entry.hlc;
       } else if (entry.hasCarriedValue) {
-        addField(entry.collection, entry.entityId, entry.field,
-            entry.carriedValue, entry.hlc);
+        carry(entry.collection, entry.entityId, entry.field, entry.carriedValue,
+            entry.hlc);
       }
     }
 
+    // The values the page shows that the block's clock stamped.
     if (key.kind == VaultPageKind.outcome) {
-      final rootTombstoned = block.any((entry) =>
-          entry.isTombstone &&
-          entry.collection == todosCollection &&
-          entry.entityId == key.entityId);
-      if (!rootTombstoned) {
+      for (final field in _shownOutcomeFields(page).entries) {
+        final entry =
+            _entryFor(block, todosCollection, key.entityId, field.key);
+        if (entry == null || !_matchesDigest(field.value, entry)) continue;
+        // An empty field is still a field: its clock must reach the host, or a
+        // device that only sees the page would lack it and write other bytes.
+        carry(todosCollection, key.entityId, field.key,
+            field.value ?? (entry.digest == digestOf('') ? '' : null),
+            entry.hlc);
+      }
+    }
+    if (key.kind == VaultPageKind.capture) {
+      final value = _shownValue(page.frontmatter['clarified_at']);
+      final entry =
+          _entryFor(block, capturesCollection, key.entityId, 'clarified_at');
+      if (entry != null && _matchesDigest(value, entry)) {
+        carry(capturesCollection, key.entityId, 'clarified_at', value,
+            entry.hlc);
+      }
+    }
+
+    return _changesOf(fields, tombstones);
+  }
+
+  /// What a page says that no device wrote: a hand edit, and it gets a clock
+  /// of its own.
+  ///
+  /// No clock is compared here. The host's merge settles every field, and the
+  /// page read is the last word on what the page says: it knows whether a
+  /// value is what a device wrote (its digest says so) or a hand edit, and a
+  /// hand edit gets a clock of its own.
+  List<Change> _handEditChanges(
+      VaultPageKey key, PageModel page, PageModel? base) {
+    final block = _usableBlock(page, base);
+    final fields = <String, Map<String, ClockedValue>>{};
+    final tombstones = <String, Hlc>{};
+
+    void edit(String collection, String entityId, String field, Object? value,
+        Hlc hlc) {
+      fields
+          .putIfAbsent('$collection/$entityId', () => <String, ClockedValue>{})
+          [field] = ClockedValue(value, hlc);
+    }
+
+    void remove(String collection, String entityId, Hlc hlc) {
+      tombstones['$collection/$entityId'] = hlc;
+    }
+
+    if (key.kind == VaultPageKind.outcome) {
+      if (!_isTombstoned(block, todosCollection, key.entityId)) {
         if (page.frontmatter['deleted'] != null) {
-          addTombstone(todosCollection, key.entityId, _host.mintClock());
+          remove(todosCollection, key.entityId, _host.mintClock());
         } else {
-          _readOutcomeFields(key, page, block, addField);
-          _readChecklist(key, page, block, addField, addTombstone);
+          _handEditedOutcomeFields(key, page, block, edit);
+          _readChecklist(key, page, block, edit, remove);
         }
       }
     }
 
     if (key.kind == VaultPageKind.capture) {
-      final rootTombstoned = block.any((entry) =>
-          entry.isTombstone &&
-          entry.collection == capturesCollection &&
-          entry.entityId == key.entityId);
-      if (!rootTombstoned) {
-        _readCaptureFields(key, page, block, addField);
+      if (!_isTombstoned(block, capturesCollection, key.entityId)) {
+        _handEditedCaptureField(key, page, block, edit);
       }
     }
 
@@ -355,73 +416,68 @@ class VaultPlugin implements SyncPlugin {
       mintClock: _host.mintClock,
     )) {
       for (final entry in change.fields.entries) {
-        addField(change.collection, change.entityId, entry.key,
-            entry.value.value, entry.value.hlc);
+        edit(change.collection, change.entityId, entry.key, entry.value.value,
+            entry.value.hlc);
       }
       final tombstone = change.tombstone;
       if (tombstone != null) {
-        addTombstone(change.collection, change.entityId, tombstone);
+        remove(change.collection, change.entityId, tombstone);
       }
     }
 
+    return _changesOf(fields, tombstones);
+  }
+
+  /// The changes of the entities a page's read touched.
+  List<Change> _changesOf(Map<String, Map<String, ClockedValue>> fields,
+      Map<String, Hlc> tombstones) {
+    final entities = {...fields.keys, ...tombstones.keys}.toList()..sort();
     return [
-      for (final ref in refs.entries)
+      for (final ref in entities)
         Change(
-          collection: ref.value.collection,
-          entityId: ref.value.entityId,
-          fields: fields[ref.key] ?? const {},
-          tombstone: tombstones[ref.key],
+          collection: ref.substring(0, ref.indexOf('/')),
+          entityId: ref.substring(ref.indexOf('/') + 1),
+          fields: fields[ref] ?? const {},
+          tombstone: tombstones[ref],
         ),
     ];
   }
 
-  void _readOutcomeFields(
-    VaultPageKey key,
-    PageModel page,
-    List<BlockEntry> block,
-    void Function(String, String, String, Object?, Hlc) addField,
-  ) {
-    String? text(Object? raw) => raw is String && raw.isNotEmpty ? raw : null;
+  /// The values an Outcome page shows, as the page says them.
+  Map<String, Object?> _shownOutcomeFields(PageModel page) {
     final notes = page.notes.endsWith('\n')
         ? page.notes.substring(0, page.notes.length - 1)
         : page.notes;
-    final onPage = <String, String?>{
-      'title': text(page.frontmatter['title']),
-      'intent': text(page.frontmatter['intent']),
-      'due_date': text(page.frontmatter['due']),
-      'notes': text(notes),
+    return {
+      'title': _shownValue(page.frontmatter['title']),
+      'intent': _shownValue(page.frontmatter['intent']),
+      'due_date': _shownValue(page.frontmatter['due']),
+      'notes': notes.isEmpty ? null : notes,
     };
-    for (final field in onPage.entries) {
+  }
+
+  /// The values the page shows that no device wrote: a hand edit, and one the
+  /// app can hold.
+  void _handEditedOutcomeFields(
+    VaultPageKey key,
+    PageModel page,
+    List<BlockEntry> block,
+    void Function(String, String, String, Object?, Hlc) edit,
+  ) {
+    for (final field in _shownOutcomeFields(page).entries) {
       final value = field.value;
-      BlockEntry? entry;
-      for (final candidate in block) {
-        if (candidate.collection == todosCollection &&
-            candidate.entityId == key.entityId &&
-            candidate.field == field.key) {
-          entry = candidate;
-        }
-      }
-      if (entry == null) {
-        // Nothing said about it before: what the page shows is news.
-        if (value != null && _canCarry(todosCollection, field.key, value)) {
-          addField(todosCollection, key.entityId, field.key, value,
-              _host.mintClock());
-        }
+      final entry =
+          _entryFor(block, todosCollection, key.entityId, field.key);
+      if (entry != null && _matchesDigest(value, entry)) {
+        // What a device wrote at that clock: it has already passed through.
         continue;
       }
-      final matches = digestOf(value) == entry.digest ||
-          (value == null &&
-              (entry.digest == digestOf(null) || entry.digest == digestOf('')));
-      if (matches) {
-        // An empty field is still a field: its clock must reach the host, or a
-        // device that only sees the page would lack it and write other bytes.
-        final carried =
-            value ?? (entry.digest == digestOf('') ? '' : null);
-        addField(
-            todosCollection, key.entityId, field.key, carried, entry.hlc);
-      } else if (_canCarry(todosCollection, field.key, value)) {
-        // A hand edit, and one the app can hold.
-        addField(todosCollection, key.entityId, field.key, value,
+      if (entry == null && value == null) {
+        // Nothing said about it before, and nothing shown: no news.
+        continue;
+      }
+      if (_canCarry(todosCollection, field.key, value)) {
+        edit(todosCollection, key.entityId, field.key, value,
             _host.mintClock());
       } else {
         // A hand edit the app cannot hold. It is not carried, so the app keeps
@@ -431,39 +487,26 @@ class VaultPlugin implements SyncPlugin {
     }
   }
 
-  void _readCaptureFields(
+  /// The Capture's clarification, when no device wrote it.
+  void _handEditedCaptureField(
     VaultPageKey key,
     PageModel page,
     List<BlockEntry> block,
-    void Function(String, String, String, Object?, Hlc) addField,
+    void Function(String, String, String, Object?, Hlc) edit,
   ) {
-    final raw = page.frontmatter['clarified_at'];
-    final value = raw is String && raw.isNotEmpty ? raw : null;
-    BlockEntry? entry;
-    for (final candidate in block) {
-      if (candidate.collection == capturesCollection &&
-          candidate.entityId == key.entityId &&
-          candidate.field == 'clarified_at') {
-        entry = candidate;
-      }
-    }
-    if (entry == null) {
-      // Nothing said about it before: what the page shows is news.
-      if (value != null &&
-          _canCarry(capturesCollection, 'clarified_at', value)) {
-        addField(capturesCollection, key.entityId, 'clarified_at', value,
-            _host.mintClock());
-      }
+    final value = _shownValue(page.frontmatter['clarified_at']);
+    final entry =
+        _entryFor(block, capturesCollection, key.entityId, 'clarified_at');
+    if (entry != null && _matchesDigest(value, entry)) {
+      // What a device wrote at that clock: it has already passed through.
       return;
     }
-    if (digestOf(value) == entry.digest) {
-      // What a device wrote at that clock. Its clock still has to reach the
-      // host, or a device that only sees the page would lack it.
-      addField(capturesCollection, key.entityId, 'clarified_at', value,
-          entry.hlc);
-    } else if (_canCarry(capturesCollection, 'clarified_at', value)) {
-      // A hand edit.
-      addField(capturesCollection, key.entityId, 'clarified_at', value,
+    if (entry == null && value == null) {
+      // Nothing said about it before, and nothing shown: no news.
+      return;
+    }
+    if (_canCarry(capturesCollection, 'clarified_at', value)) {
+      edit(capturesCollection, key.entityId, 'clarified_at', value,
           _host.mintClock());
     } else {
       // A hand edit the app cannot hold: it is not carried, and the next
@@ -782,6 +825,75 @@ class VaultPlugin implements SyncPlugin {
 
   Future<void> _dropBase(String path) => _sync.customStatement(
       'DELETE FROM vault_page_bases WHERE page_path = ?', [path]);
+}
+
+/// The block a page is read with: its own, or the base copy's when the page's
+/// is missing or mangled.
+///
+/// Throws [_UnreadablePage] when neither can be used: there is nothing to read
+/// the page with, and nothing that says what it holds.
+List<BlockEntry> _usableBlock(PageModel page, PageModel? base) {
+  final block = page.block ?? base?.block;
+  if (block == null) {
+    throw _UnreadablePage('the page holds no block that can be read');
+  }
+  return block;
+}
+
+/// The block's entry for one field of one entity, or null when the block says
+/// nothing about it.
+BlockEntry? _entryFor(
+    List<BlockEntry> block, String collection, String entityId, String field) {
+  BlockEntry? found;
+  for (final entry in block) {
+    if (entry.collection == collection &&
+        entry.entityId == entityId &&
+        entry.field == field) {
+      found = entry;
+    }
+  }
+  return found;
+}
+
+/// Whether the value a page shows is the one the block's clock stamped.
+///
+/// A value that matches its digest is what a device wrote at that clock; one
+/// that does not is a hand edit.
+bool _matchesDigest(Object? value, BlockEntry entry) =>
+    digestOf(value) == entry.digest ||
+    (value == null &&
+        (entry.digest == digestOf(null) || entry.digest == digestOf('')));
+
+/// Whether the block says the entity is gone.
+bool _isTombstoned(
+    List<BlockEntry> block, String collection, String entityId) {
+  for (final entry in block) {
+    if (entry.isTombstone &&
+        entry.collection == collection &&
+        entry.entityId == entityId) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// A frontmatter value as the page shows it.
+///
+/// A key that is absent is a cleared field, and a cleared field is null.
+Object? _shownValue(Object? raw) =>
+    raw is String && raw.isNotEmpty ? raw : null;
+
+/// A page the app cannot read: its block says nothing the app can use.
+///
+/// The page is left alone — never removed, never written over — and counted,
+/// so the failure is reported rather than silent.
+class _UnreadablePage implements Exception {
+  _UnreadablePage(this.reason);
+
+  final String reason;
+
+  @override
+  String toString() => 'UnreadablePage: $reason';
 }
 
 /// Whether the app can hold [value] as [field] of [collection].
