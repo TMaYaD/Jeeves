@@ -23,6 +23,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../auth/session_gate.dart';
 import '../sync/host/sync_host_service.dart';
 import '../sync/vault/android_vault_folder.dart';
 import '../sync/vault/vault_folder_factory.dart';
@@ -129,13 +130,59 @@ Future<String?> pickVaultFolder() async {
   return pickAndroidVaultFolder();
 }
 
+/// This device's session, as a provider.
+///
+/// The gate is a [ValueNotifier] because the router needs it outside a
+/// `ProviderScope`. This mirror lets a provider watch it: the notifier's state
+/// is the gate, and it changes when the gate does.
+final sessionGateProvider =
+    NotifierProvider<SessionGateNotifier, SessionGate>(SessionGateNotifier.new);
+
+/// The session gate, watched.
+///
+/// **One listener, whatever happens.** The notifier is kept across rebuilds, so
+/// the listener one build registers is taken away before the next one puts its
+/// own in its place.
+class SessionGateNotifier extends Notifier<SessionGate> {
+  void Function()? _listener;
+
+  @override
+  SessionGate build() {
+    _removeListener();
+    void listener() {
+      if (!ref.mounted) return;
+      state = sessionGateNotifier.value;
+    }
+    _listener = listener;
+    sessionGateNotifier.addListener(listener);
+    ref.onDispose(_removeListener);
+    return sessionGateNotifier.value;
+  }
+
+  void _removeListener() {
+    final listener = _listener;
+    if (listener == null) return;
+    _listener = null;
+    sessionGateNotifier.removeListener(listener);
+  }
+}
+
 /// The vault plugin, attached while this device has a vault folder set.
 ///
 /// **Watching this provider is what runs the vault.** It attaches the plugin to
 /// the host and reads the folder again while the app is open; when the folder
 /// is taken away it detaches the plugin, forgets its cursor and clears this
 /// device's base copies.
+///
+/// **One plugin at a time** (#914): the vault runs where the op log does not.
+/// The session gate says which mode this device is in, and while the gate is
+/// still being restored the answer is not known — so the vault waits for it
+/// rather than run beside an op log that is about to start.
 final vaultPluginProvider = FutureProvider<VaultPlugin?>((ref) async {
+  final gate = ref.watch(sessionGateProvider);
+  if (gate == SessionGate.checking) return null;
+  if (gate == SessionGate.ready) return null; // the op log runs; the vault does not.
+
   final reference = await ref.watch(vaultFolderProvider.future);
   if (reference == null) return null;
 
