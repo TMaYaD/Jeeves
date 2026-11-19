@@ -74,6 +74,88 @@ class _RefusingFolder implements VaultFolder {
   Future<void> remove(String relativePath) => inner.remove(relativePath);
 }
 
+/// A folder where a path is replaced the second time it is read, as a syncer
+/// that writes while the vault works would.
+class _SwappingFolder implements VaultFolder {
+  _SwappingFolder(this.inner);
+
+  final VaultFolder inner;
+
+  /// What a path holds after it is swapped.
+  final Map<String, String> replacements = {};
+
+  /// How many times each path has been read.
+  final Map<String, int> reads = {};
+
+  @override
+  Future<List<String>> listMarkdownFiles(String subfolder) =>
+      inner.listMarkdownFiles(subfolder);
+
+  @override
+  Future<String?> read(String relativePath) async {
+    final count = (reads[relativePath] ?? 0) + 1;
+    reads[relativePath] = count;
+    if (count == 2 && replacements.containsKey(relativePath)) {
+      await inner.writeAtomically(
+          relativePath, replacements[relativePath]!);
+    }
+    return inner.read(relativePath);
+  }
+
+  @override
+  Future<void> writeAtomically(String relativePath, String text) =>
+      inner.writeAtomically(relativePath, text);
+
+  @override
+  Future<void> remove(String relativePath) => inner.remove(relativePath);
+}
+
+/// A folder whose page is replaced every time it is read, as a syncer that
+/// keeps writing would.
+class _RacingFolder implements VaultFolder {
+  _RacingFolder(this.inner);
+
+  final VaultFolder inner;
+
+  /// The paths that keep changing.
+  final Set<String> racing = {};
+
+  /// The pages the plugin wrote.
+  final List<String> pluginWrites = [];
+
+  /// How many revisions have been written.
+  int revisions = 0;
+
+  @override
+  Future<List<String>> listMarkdownFiles(String subfolder) =>
+      inner.listMarkdownFiles(subfolder);
+
+  @override
+  Future<String?> read(String relativePath) async {
+    if (racing.contains(relativePath)) {
+      revisions++;
+      final current = await inner.read(relativePath);
+      if (current != null) {
+        await inner.writeAtomically(
+          relativePath,
+          current.replaceFirst(
+              RegExp(r'^title: .*$', multiLine: true), 'title: Plan $revisions'),
+        );
+      }
+    }
+    return inner.read(relativePath);
+  }
+
+  @override
+  Future<void> writeAtomically(String relativePath, String text) {
+    pluginWrites.add(relativePath);
+    return inner.writeAtomically(relativePath, text);
+  }
+
+  @override
+  Future<void> remove(String relativePath) => inner.remove(relativePath);
+}
+
 void main() {
   late Directory root;
   setUp(() => root = Directory.systemTemp.createTempSync('vault-behaviour'));
@@ -694,6 +776,77 @@ void main() {
 
     expect(await folder.listMarkdownFiles('Outcomes'), hasLength(1),
         reason: 'the page was not written once the folder could be listed');
+  });
+
+  test('a duplicate that changed while it was read is not removed', () async {
+    final device = HostDevice.open('a');
+    addTearDown(device.close);
+    final host = await device.startHost();
+    final directory = Directory('${root.path}/vault')..createSync(recursive: true);
+    final folder = _SwappingFolder(DirectoryVaultFolder(directory));
+    final plugin = VaultPlugin(folder: folder, sync: device.sync);
+    await host.attach(plugin);
+
+    await device.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'Plan', userId: _userId);
+    await host.deliverAll();
+    await plugin.rescan();
+
+    final path = (await folder.listMarkdownFiles('Outcomes')).single;
+    final page = (await folder.read(path))!;
+
+    // A person edits the page, and a syncer brings a second copy of it.
+    final edited = page.replaceFirst('title: Plan', 'title: Plan edited');
+    await folder.writeAtomically(path, edited);
+    const copy = 'Outcomes/zz-copy.md';
+    await folder.writeAtomically(copy, edited);
+
+    // The syncer replaces the copy while the vault is reading it.
+    folder.replacements[copy] =
+        edited.replaceFirst('title: Plan edited', 'title: Later');
+
+    await plugin.rescan();
+
+    final copyPage = await folder.read(copy);
+    expect(copyPage, isNotNull,
+        reason: 'the copy the syncer replaced was removed');
+    expect(copyPage, contains('title: Later'),
+        reason: 'the copy does not hold the revision the syncer wrote');
+  });
+
+  test('a page that keeps changing is not written over', () async {
+    final device = HostDevice.open('a');
+    addTearDown(device.close);
+    final host = await device.startHost();
+    final directory = Directory('${root.path}/vault')..createSync(recursive: true);
+    final inner = DirectoryVaultFolder(directory);
+    final folder = _RacingFolder(inner);
+    final plugin = VaultPlugin(folder: folder, sync: device.sync);
+    await host.attach(plugin);
+
+    await device.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'Plan', userId: _userId);
+    await host.deliverAll();
+    await plugin.rescan();
+
+    final path = (await inner.listMarkdownFiles('Outcomes')).single;
+    expect(await inner.read(path), contains('title: Plan'));
+
+    // The syncer keeps replacing the page: every read finds a new revision.
+    folder.racing.add(path);
+    folder.pluginWrites.clear();
+
+    await plugin.rescan();
+
+    expect(folder.pluginWrites, isEmpty,
+        reason: 'the page was written over a revision that was not read');
+
+    // The syncer stops: the page is written, with what the app holds.
+    folder.racing.clear();
+    await plugin.rescan();
+
+    expect(folder.pluginWrites, isNotEmpty,
+        reason: 'the page was never written');
   });
 
   test('two Outcomes whose names read alike have a page each', () async {

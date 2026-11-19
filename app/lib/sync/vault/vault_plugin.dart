@@ -304,6 +304,20 @@ class VaultPlugin implements SyncPlugin {
             // holds says the same thing. It stays.
             continue;
           }
+          // The copy is removed only if it still holds what was read: a
+          // syncer that replaced it while the vault was reading put a
+          // revision there that nobody has read.
+          final String? current;
+          try {
+            current = await _folder.read(extra.path);
+          } on Object catch (error) {
+            debugPrint('vault: ${extra.path} not read: $error');
+            continue;
+          }
+          if (current != extra.text) {
+            debugPrint('vault: ${extra.path} changed: not removed');
+            continue;
+          }
           try {
             await _folder.remove(extra.path);
           } on Object catch (error) {
