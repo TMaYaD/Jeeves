@@ -18,6 +18,7 @@ import 'providers/sync_stack_provider.dart';
 import 'router.dart';
 import 'services/due_date_notifications.dart';
 import 'services/follow_up_notifications.dart';
+import 'services/legacy_sprint_prefs_cleanup.dart';
 import 'services/notification_service.dart';
 import 'services/nudge_notification_scheduler.dart';
 import 'services/ritual_notification_response_handler.dart';
@@ -27,6 +28,7 @@ Future<void> main() async {
 
   // Seed onboarding dismissal state before the first frame.
   await initOnboardingCompletion();
+  await removeLegacySprintPrefs();
 
   // flutter_local_notifications uses platform channels unavailable on web.
   // Skip the entire notification stack on web; push notifications are a

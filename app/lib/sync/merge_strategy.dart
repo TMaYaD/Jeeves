@@ -6,7 +6,7 @@
 /// order-independent in both directions, and #555's compaction leans on the
 /// same property. ADR-0030 records the requirement.
 ///
-/// Three strategies exist:
+/// Four strategies exist:
 ///
 /// * [lww] — the default, byte-for-byte today's behaviour: a field applies iff
 ///   its HLC is strictly greater than the stored one.
@@ -21,7 +21,8 @@ import 'dart:convert';
 
 import '../services/user_preferences_conflict.dart'
     show ConflictStrategy, strategyForKey;
-import 'collection_codecs.dart' show userPreferencesCollection;
+import 'collection_codecs.dart'
+    show sprintsCollection, userPreferencesCollection;
 import 'hlc.dart';
 
 /// What a strategy decides for one field.
@@ -144,6 +145,58 @@ class MaxTimestampValueMergeStrategy implements FieldMergeStrategy {
   }
 }
 
+/// The Sprint end: the mirror of [MaxTimestampValueMergeStrategy]. The value join
+/// is a total order on the value alone, so the **earliest end stands**.
+///
+/// Sort key `(parseable?, -instant, canonical value bytes)`, winner = max: any
+/// parseable instant beats null (a still-open Sprint) or an unparseable value;
+/// among instants the **earlier** wins; remaining ties fall to the greater
+/// canonical JSON encoding. The clock joins independently as `max`. Consequence,
+/// owned: an end can only move earlier and can never be cleared — Sprints do not
+/// reopen.
+class MinTimestampValueMergeStrategy implements FieldMergeStrategy {
+  const MinTimestampValueMergeStrategy();
+
+  @override
+  MergeDecision merge({
+    required Object? incomingValue,
+    required Hlc incomingClock,
+    required Object? storedValue,
+    required Hlc? storedClock,
+  }) {
+    if (storedClock == null) {
+      return MergeDecision.apply(incomingValue, incomingClock);
+    }
+    final clock = incomingClock > storedClock ? incomingClock : storedClock;
+    final value = _compareValues(incomingValue, storedValue) >= 0
+        ? incomingValue
+        : storedValue;
+    final unchanged =
+        clock == storedClock && jsonEncode(value) == jsonEncode(storedValue);
+    if (unchanged) return const MergeDecision.skip();
+    return MergeDecision.apply(value, clock);
+  }
+
+  static int _compareValues(Object? a, Object? b) {
+    final instantA = _parse(a);
+    final instantB = _parse(b);
+    if ((instantA == null) != (instantB == null)) {
+      return instantA == null ? -1 : 1;
+    }
+    if (instantA != null && instantB != null) {
+      // Earlier instant is the greater element of the order.
+      final byInstant = instantB.compareTo(instantA);
+      if (byInstant != 0) return byInstant;
+    }
+    return jsonEncode(a).compareTo(jsonEncode(b));
+  }
+
+  static int? _parse(Object? value) {
+    if (value is! String) return null;
+    return DateTime.tryParse(value)?.toUtc().microsecondsSinceEpoch;
+  }
+}
+
 /// Sorted-unique union of two JSON arrays; clock `max`.
 ///
 /// The sort is by canonical JSON encoding, which is what makes the merged value
@@ -242,7 +295,11 @@ class SetMergeStrategy implements FieldMergeStrategy {
 
 const FieldMergeStrategy lww = LwwMergeStrategy();
 const FieldMergeStrategy maxTimestampValue = MaxTimestampValueMergeStrategy();
+const FieldMergeStrategy minTimestampValue = MinTimestampValueMergeStrategy();
 const FieldMergeStrategy setMerge = SetMergeStrategy();
+
+/// The `sprints` field the earliest-end strategy arbitrates.
+const String sprintEndedAtField = 'ended_at';
 
 /// The `user_preferences` field the registry arbitrates. Every other field of
 /// the collection — `key`, `user_id`, `updated_at` — stays plain LWW.
@@ -289,6 +346,9 @@ class MergeStrategyRegistry {
     required String field,
     String? preferenceKey,
   }) {
+    if (collection == sprintsCollection && field == sprintEndedAtField) {
+      return minTimestampValue;
+    }
     if (collection != userPreferencesCollection) return lww;
     if (field != preferenceValueField) return lww;
     if (preferenceKey == null) return lww;

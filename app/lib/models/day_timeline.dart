@@ -7,6 +7,7 @@
 /// `pinned_start_at`).
 library;
 
+import '../database/daos/sprint_dao.dart' show SprintOutcomeRecord;
 import '../database/gtd_database.dart' show Todo;
 import 'autoflow.dart';
 import 'time_context.dart';
@@ -96,6 +97,82 @@ List<DayTimelineEntry> dayTimelineEntriesFor({
         );
       }(),
   ];
+}
+
+/// One recorded Sprint as the day timeline draws it.
+///
+/// The Sprint is a fact about the Outcome it ran on: when it ran and for how
+/// long. The timeline draws it in the lane at the tile's right edge, at its
+/// real time, and counts it in the tile.
+class TileSprintMark {
+  const TileSprintMark({
+    required this.id,
+    required this.outcomeId,
+    required this.startedAt,
+    required this.endedAt,
+  });
+
+  /// The Sprint's id, so one mark can be named.
+  final String id;
+
+  /// The Outcome the Sprint ran on.
+  final String outcomeId;
+
+  /// When the Sprint started, in local time.
+  final DateTime startedAt;
+
+  /// When it ended, in local time; null while it still runs.
+  final DateTime? endedAt;
+
+  /// The minutes the Sprint has taken: its end minus its start, or the time
+  /// since it started while it runs.
+  int durationMinutesAt(DateTime now) {
+    final end = endedAt ?? now;
+    final minutes = end.difference(startedAt).inMinutes;
+    return minutes < 0 ? 0 : minutes;
+  }
+}
+
+/// The recorded Sprints as the day timeline draws them: local instants, one
+/// mark per Sprint, each naming the Outcome it ran on.
+List<TileSprintMark> tileSprintMarks(List<SprintOutcomeRecord> records) => [
+      for (final record in records)
+        TileSprintMark(
+          id: record.record.id,
+          outcomeId: record.outcomeId,
+          startedAt: record.record.startedAtUtc.toLocal(),
+          endedAt: record.record.endedAtUtc?.toLocal(),
+        ),
+    ];
+
+/// The Sprints of [marks] grouped by the Outcome they ran on, each group in
+/// the order the Sprints ran.
+Map<String, List<TileSprintMark>> tileSprintMarksByOutcome(
+    List<TileSprintMark> marks) {
+  final byOutcome = <String, List<TileSprintMark>>{};
+  for (final mark in marks) {
+    (byOutcome[mark.outcomeId] ??= []).add(mark);
+  }
+  return byOutcome;
+}
+
+/// The Sprints of [marks] that ran on the day of [day], grouped by the Outcome
+/// they ran on.
+///
+/// The day timeline is one day's record: a Sprint from another day is not part
+/// of it, and a Sprint on an Outcome with no tile is not drawn either.
+Map<String, List<TileSprintMark>> tileSprintMarksOfDay(
+  List<TileSprintMark> marks,
+  DateTime day,
+) {
+  final startOfDay = DateTime(day.year, day.month, day.day);
+  final endOfDay = startOfDay.add(const Duration(days: 1));
+  final ofDay = [
+    for (final mark in marks)
+      if (!mark.startedAt.isBefore(startOfDay) && mark.startedAt.isBefore(endOfDay))
+        mark,
+  ];
+  return tileSprintMarksByOutcome(ofDay);
 }
 
 /// The next multiple of five minutes at or after [instant], seconds dropped.

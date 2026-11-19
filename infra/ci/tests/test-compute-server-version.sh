@@ -329,4 +329,29 @@ commit_backend 'fix(backend): unaffected by app tags'
 compute
 assert_version_bump 0.1.0.1 patch
 
+start_case "backend change then a non-backend tip still deploys (the missed-push shape)"
+new_repo
+tag_here 0.1.0
+commit_backend 'chore(backend): bump the base image'
+commit_app 'feat(app): app-only tip'
+compute
+assert_version_bump 0.1.0.1 patch
+assert_eq true "$(field deploy)" "deploy"
+
+start_case "only non-backend commits since the tag: no version, no deploy"
+new_repo
+tag_here 0.1.0
+commit_app 'feat(app): app-only'
+compute
+assert_version_bump 0.1.0 none
+assert_eq false "$(field deploy)" "deploy"
+
+start_case "tag at HEAD (re-run of the run that cut it): no bump, deploy"
+new_repo
+commit_backend 'fix(backend): shipped'
+tag_here 0.1.0
+compute
+assert_version_bump 0.1.0 none
+assert_eq true "$(field deploy)" "deploy"
+
 report

@@ -95,6 +95,7 @@ const List<String> initialUploadCollectionOrder = [
   actionsCollection,
   focusSessionsCollection,
   timeLogsCollection,
+  sprintsCollection,
   todoTagsCollection,
   captureOutcomesCollection,
   captureTagsCollection,

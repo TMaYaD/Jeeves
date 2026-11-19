@@ -1,10 +1,11 @@
 /// Journey: editing an Outcome's context tags from the detail screen (#880).
 ///
 /// The real [TaskDetailScreen] over a real in-memory database. The tag section
-/// shows only applied tags and a dotted `+`; the `+` opens the searchable tag
-/// cloud, where a name no tag has can be created and applied in one step. Live
-/// Drift watches are running, so the test pumps fixed durations rather than
-/// `pumpAndSettle` (TESTING.md).
+/// shows only applied tags and a dotted `+`; the `+` opens the Edit Context
+/// Tags sheet, which is the searchable tag cloud alone — no applied row and no
+/// dotted `+` — where a name no tag has can be created and applied in one
+/// step. Live Drift watches are running, so the test pumps fixed durations
+/// rather than `pumpAndSettle` (TESTING.md).
 library;
 
 import 'package:drift/drift.dart' hide isNull, isNotNull;
@@ -17,6 +18,7 @@ import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/screens/task_detail/task_detail_screen.dart';
 import 'package:jeeves/widgets/dotted_add_button.dart';
+import 'package:jeeves/widgets/tag_text.dart';
 
 import '../test_helpers.dart';
 
@@ -45,6 +47,17 @@ Future<void> _pumpFor(WidgetTester tester, [int steps = 4]) async {
   }
 }
 
+/// The names of the tag chips in the cloud, in the order they are rendered.
+/// The applied row above the cloud holds chips of its own, so the finder is
+/// scoped to the cloud.
+List<String> _cloudNames(WidgetTester tester) => tester
+    .widgetList<TagText>(find.descendant(
+      of: find.byKey(const Key('context_tag_picker_cloud'), skipOffstage: false),
+      matching: find.byType(TagText, skipOffstage: false),
+    ))
+    .map((t) => t.tag.name)
+    .toList();
+
 void main() {
   setUpAll(configureSqliteForTests);
 
@@ -59,8 +72,15 @@ void main() {
       await _insertContext(db, name);
       await db.tagDao.assignTag(i <= 2 ? 'o1' : 'o2', name, 'local');
     }
+    // Two more applied to o1, so the applied tags sit at both ends of the
+    // alphabetical order.
+    await db.tagDao.assignTag('o1', 'a09', 'local');
+    await db.tagDao.assignTag('o1', 'a14', 'local');
     // A tag no Outcome carries.
     await _insertContext(db, 'zz-unused');
+    // Another one no Outcome carries, between the numbered ones and
+    // zz-unused by name.
+    await _insertContext(db, 'Bravo');
   });
   tearDown(() async => db.close());
 
@@ -81,19 +101,41 @@ void main() {
     expect(find.byKey(const Key('tag_chip_a03')), findsNothing);
     expect(find.byType(DottedAddButton), findsOneWidget);
 
-    // The + opens the organised cloud: applied tags pinned, capped at 12 with
-    // show-more, and a Find field.
+    // The + opens the organised cloud: every tag shown in name order, and a
+    // Find field.
     await tester.tap(find.byType(DottedAddButton));
     await _pumpFor(tester);
-    final cloud = find.byKey(const Key('context_tag_picker_cloud'));
-    Finder chipInCloud(String id) =>
-        find.descendant(of: cloud, matching: find.byKey(Key('tag_chip_$id')));
-    expect(find.textContaining('✓ @a01'), findsOneWidget);
-    expect(chipInCloud('a03'), findsOneWidget);
-    expect(chipInCloud('a12'), findsOneWidget);
-    expect(chipInCloud('a13'), findsNothing);
-    expect(find.byKey(const Key('tag_cloud_show_more')), findsOneWidget);
-    expect(find.text('Show 3 more'), findsOneWidget);
+
+    // The sheet is the cloud alone: no dotted `+` of its own, and the applied
+    // tags live in the cloud rather than in a row above it. The only dotted
+    // `+` left is the main page's, under the sheet.
+    expect(find.byKey(const Key('context_tag_picker_add')), findsNothing);
+    expect(find.byType(DottedAddButton), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(BottomSheet),
+        matching: find.byKey(const Key('tag_chip_a01')),
+      ),
+      findsOneWidget,
+    );
+
+    final cloud =
+        find.byKey(const Key('context_tag_picker_cloud'), skipOffstage: false);
+    Finder chipInCloud(String id) => find.descendant(
+        of: cloud,
+        matching: find.byKey(Key('tag_chip_$id'), skipOffstage: false));
+    expect(_cloudNames(tester), [
+      for (var i = 1; i <= 14; i++) 'a${i.toString().padLeft(2, '0')}',
+      'Bravo',
+      'zz-unused',
+    ]);
+    // An applied tag is a badge in the cloud; an unapplied one is plain text.
+    expect(tester.widget<TagText>(chipInCloud('a01')).selected, isTrue);
+    expect(tester.widget<TagText>(chipInCloud('a03')).selected, isFalse);
+    expect(find.textContaining('✓'), findsNothing);
+    expect(chipInCloud('a13'), findsOneWidget);
+    expect(chipInCloud('a14'), findsOneWidget);
+    expect(find.byKey(const Key('tag_cloud_show_more')), findsNothing);
     expect(find.byKey(const Key('tag_cloud_find_field')), findsOneWidget);
 
     // Search ignores case and a leading @; a tag nobody uses is findable and
@@ -117,11 +159,20 @@ void main() {
           ..where((t) => t.name.equals('Errands') & t.type.equals('context')))
         .get());
     expect(created, hasLength(1));
+    final createdTag = created!.single;
     final linked = await tester.runAsync(() => (db.select(db.todoTags)
           ..where((t) => t.todoId.equals('o1')))
         .get());
-    expect(linked!.map((r) => r.tagId), contains(created!.single.id));
-    expect(find.textContaining('✓ @Errands'), findsWidgets);
+    expect(linked!.map((r) => r.tagId), contains(createdTag.id));
+    expect(
+        tester.widget<TagText>(chipInCloud(createdTag.id)).selected, isTrue);
+    // The new tag joins the cloud in its alphabetical place.
+    expect(_cloudNames(tester), [
+      for (var i = 1; i <= 14; i++) 'a${i.toString().padLeft(2, '0')}',
+      'Bravo',
+      'Errands',
+      'zz-unused',
+    ]);
 
     // Tapping an unapplied tag applies it; tapping an applied one removes it.
     await tester.enterText(find.byKey(const Key('tag_cloud_find_field')), 'a05');
@@ -133,6 +184,7 @@ void main() {
             .get()))!
         .map((r) => r.tagId);
     expect(ids, contains('a05'));
+    expect(tester.widget<TagText>(chipInCloud('a05')).selected, isTrue);
     await tester.tap(chipInCloud('a05'));
     await _pumpFor(tester);
     ids = (await tester.runAsync(() => (db.select(db.todoTags)
@@ -140,6 +192,7 @@ void main() {
             .get()))!
         .map((r) => r.tagId);
     expect(ids, isNot(contains('a05')));
+    expect(tester.widget<TagText>(chipInCloud('a05')).selected, isFalse);
 
     // Long-press opens the colour picker.
     await tester.longPress(chipInCloud('a05'));

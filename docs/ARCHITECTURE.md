@@ -192,6 +192,7 @@ The places designed to be extended, and the contract each one carries.
 | Auth provider | `app/lib/auth/` | An abstract interface with compile-time mode selection; adding one means implementing the interface, not editing callers |
 | Collection | `app/lib/sync/collection_codecs.dart` | A synced table names its columns and value encoding in one place |
 | Merge strategy | `app/lib/sync/merge_strategy.dart` | A per-key registry; every non-LWW entry must be a join-semilattice |
+| Calendar reader | `app/lib/services/calendar/` | A read-only `CalendarSource`: `CalendarPlugin.kt` on Android, nothing on web, in-memory in the harness. Events are never stored, synced or logged |
 | Device key store | `app/lib/sync/` | Keychain/Keystore in production, in-memory in the harness — the same closures run in both |
 
 The platform-adapter rule is the one most easily broken by accident: three files

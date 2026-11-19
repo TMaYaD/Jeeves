@@ -15,6 +15,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart'
     show FlutterLocalNotificationsPlatform;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
@@ -73,6 +74,24 @@ class IdleSprintTimerNotifier extends SprintTimerNotifier {
   Future<void> stopSprint() async {}
 }
 
+/// Sprint timer pinned to [fixedState] — the screen sees one fixed phase, with
+/// no record, no ticker and no side effects. For tests that need a particular
+/// Sprint number rather than a real record.
+class FixedSprintTimerNotifier extends SprintTimerNotifier {
+  FixedSprintTimerNotifier(this.fixedState);
+
+  final SprintTimerState fixedState;
+
+  @override
+  SprintTimerState build() => fixedState;
+
+  @override
+  Future<void> startSprint(Todo task) async {}
+
+  @override
+  Future<void> stopSprint() async {}
+}
+
 Future<Todo> insertFocusTodo(
   GtdDatabase db, {
   required String id,
@@ -103,6 +122,9 @@ Widget focusHarness(
   // controller here, exactly as a live Drift watch would emit, without leaving
   // a pending timer behind on dispose.
   Stream<Todo?>? todoStream,
+  // Extra overrides, e.g. a fixed `focusSettingsProvider` for tests that run the
+  // real sprint timer and must not open the synced-preferences watch.
+  List<Override> overrides = const [],
 }) {
   final router = GoRouter(
     initialLocation: '/active',
@@ -132,6 +154,7 @@ Widget focusHarness(
       activeSessionSettlementsProvider.overrideWith(
         (_) => Stream.value(const <String, SessionSettlement>{}),
       ),
+      ...overrides,
     ],
     child: MaterialApp.router(routerConfig: router),
   );

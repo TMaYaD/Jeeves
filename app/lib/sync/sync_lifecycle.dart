@@ -47,7 +47,9 @@
 ///    could not.
 /// 5. **Initial upload, if the marker is unset.** On a completed pass the marker
 ///    is set with the report. A transport failure mid-walk propagates, the marker
-///    stays unset, and the next activation resumes through the diff skip.
+///    stays unset, and the next activation resumes through the diff skip. With the
+///    marker set, the signed-out upload authors what the device wrote under its own
+///    node id since that pass completed — creates, edits and deletes.
 /// 6. **Start the signal listeners and the debounced outbox flusher.** Without
 ///    step 6 a DAO-authored op would sit in the outbox until the next cold start,
 ///    and "sync starts at enrolment" would name a one-shot upload rather than
@@ -75,6 +77,8 @@ import 'initial_upload.dart';
 import 'initial_upload_plan.dart';
 import 'reducer.dart';
 import 'signal_listener.dart';
+import 'signed_out_upload.dart';
+import 'collection_codecs.dart' show userPreferencesCollection;
 import 'sync_client.dart';
 import 'sync_database.dart';
 import 'sync_stack.dart';
@@ -170,6 +174,7 @@ class SyncLifecycle {
     Future<void> Function(Duration)? listenerDelay,
     Duration flushDebounce = outboxFlushDebounce,
     String Function() mintTagId = initialUploadRandomTagId,
+    Future<void> Function()? onActivationFinished,
   })  : _stack = stack,
         _domain = domain,
         _capture = capture,
@@ -179,6 +184,7 @@ class SyncLifecycle {
         _listenerDelay = listenerDelay,
         _flushDebounce = flushDebounce,
         _mintTagId = mintTagId,
+        _onActivationFinished = onActivationFinished,
         _markers = InitialUploadMarkerStore(stack.database),
         _registry = CollectionRegistry(stack.database);
 
@@ -199,6 +205,14 @@ class SyncLifecycle {
   final Future<void> Function(Duration)? _listenerDelay;
   final Duration _flushDebounce;
   final String Function() _mintTagId;
+
+  /// What the caller wants done once an activation has finished.
+  ///
+  /// The lifecycle knows nothing about *what* it is: it runs the closure and
+  /// forgets it. That keeps the ordering rule — "after the activation" — here,
+  /// where the activation is, and leaves the meaning to the caller.
+  final Future<void> Function()? _onActivationFinished;
+
   final InitialUploadMarkerStore _markers;
   final CollectionRegistry _registry;
 
@@ -237,9 +251,48 @@ class SyncLifecycle {
   Future<SyncActivation> activate() {
     final running = _inFlight;
     if (running != null) return running;
-    final started = _activate();
+    final started = _activateAndFinish();
     _inFlight = started;
     return started.whenComplete(() => _inFlight = null);
+  }
+
+  /// The sequence, then the caller's after-activation work.
+  ///
+  /// The hook runs for every outcome but [SyncActivation.deactivated]: an
+  /// abandoned activation belongs to an account nobody is signed into any more,
+  /// and the hook would write into it. Every other outcome — including a
+  /// failed sync and an incomplete upload — is a state the *device* is in, and
+  /// the hook is about the device rather than about the sync.
+  ///
+  /// The activation result is the caller's answer and is not affected by it:
+  /// a device that could not do its after-activation work is still a device
+  /// that activated.
+  Future<SyncActivation> _activateAndFinish() async {
+    final result = await _activate();
+    if (result == SyncActivation.deactivated) return result;
+    await _runActivationFinished();
+    return result;
+  }
+
+  /// The caller's after-activation work, logged and swallowed.
+  ///
+  /// Swallowed on purpose: the activation has already happened, and a failure
+  /// here must not turn a started sync into a failed one. Logged rather than
+  /// ignored, so a device that repeatedly cannot finish is diagnosable.
+  Future<void> _runActivationFinished() async {
+    final hook = _onActivationFinished;
+    if (hook == null) return;
+    try {
+      await hook();
+    } on Object catch (error, stackTrace) {
+      developer.log(
+        'the after-activation work failed',
+        name: 'jeeves.sync.lifecycle',
+        level: 900, // WARNING
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
   }
 
   Future<SyncActivation> _activate() async {
@@ -350,7 +403,7 @@ class SyncLifecycle {
 
     var uploaded = true;
     try {
-      await _uploadIfMarkerUnset(
+      await _uploadWhatTheLogLacks(
         gtdClient: gtdClient,
         preferencesClient: preferencesClient,
       );
@@ -431,11 +484,18 @@ class SyncLifecycle {
 
   // --- step 5 ---------------------------------------------------------------
 
-  Future<void> _uploadIfMarkerUnset({
+  Future<void> _uploadWhatTheLogLacks({
     required SyncClient gtdClient,
     required SyncClient preferencesClient,
   }) async {
-    if (await _markers.isComplete(_stack.userId)) return;
+    final marker = await _markers.read(_stack.userId);
+    if (marker != null) {
+      await _uploadSignedOutChanges(
+        gtdClient: gtdClient,
+        completedAtUtcMs: marker.completedAtUtcMs,
+      );
+      return;
+    }
 
     Future<Map<String, Map<String, Object?>>> readReduced(String collection) =>
         _registry.register(collection).readAll();
@@ -459,6 +519,27 @@ class SyncLifecycle {
       completedAtUtcMs: _stack.nowMs(),
       report: report,
     );
+  }
+
+  /// What the device wrote while nobody was signed in, after this account's
+  /// initial upload. Preferences are left out: a signed-out preference lives under
+  /// the local profile and is not what the account shows after sign-in.
+  Future<void> _uploadSignedOutChanges({
+    required SyncClient gtdClient,
+    required int completedAtUtcMs,
+  }) async {
+    final host = _host;
+    if (host == null) return;
+    final report = await runSignedOutUpload(
+      readChanges: () => host.visibleChangesStampedByDeviceAfter(
+        completedAtUtcMs,
+        excludedCollections: {userPreferencesCollection},
+      ),
+      mintClock: host.clockForMember(_stack.identity.memberIdHex).send,
+      gtdClient: gtdClient,
+      userId: _stack.userId,
+    );
+    if (report.authoredOpCount > 0) _scheduleOutboxFlush();
   }
 
   /// Unfiltered on purpose (#582's rule): a row stranded at `user_id = 'local'`,

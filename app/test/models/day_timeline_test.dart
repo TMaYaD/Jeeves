@@ -1,4 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jeeves/database/daos/sprint_dao.dart'
+    show SprintOutcomeRecord, SprintRecord;
 import 'package:jeeves/database/gtd_database.dart' show Todo;
 import 'package:jeeves/models/autoflow.dart';
 import 'package:jeeves/models/day_timeline.dart';
@@ -35,6 +37,26 @@ DayLayout _flow(LastDayLayout last, List<DayTimelineEntry> entries,
       availableMinutes: 240,
       chunkUnitMinutes: 23,
       entries: entries,
+    );
+
+/// A recorded Sprint on [outcomeId], at [startedAt] local time.
+SprintOutcomeRecord _sprint(
+  String id,
+  String outcomeId, {
+  DateTime? startedAt,
+  DateTime? endedAt,
+}) =>
+    SprintOutcomeRecord(
+      record: SprintRecord(
+        id: id,
+        userId: 'local',
+        actionId: 'action-$outcomeId',
+        startedAtUtc: (startedAt ?? _at(9, 10)).toUtc(),
+        endedAtUtc: endedAt?.toUtc(),
+        storedEndedAtUtc: endedAt?.toUtc(),
+        plannedDurationMinutes: 23,
+      ),
+      outcomeId: outcomeId,
     );
 
 void main() {
@@ -176,6 +198,61 @@ void main() {
       expect(layout.entries.map((e) => e.outcomeId), ['a', 'b']);
       expect(layout.entryFor('b').status, PlacementStatus.unplaced);
       expect(layout.entryFor('b').unplacedMinutes, 30);
+    });
+  });
+
+  group('sprint marks', () {
+    test('a recorded Sprint becomes a mark naming its Outcome', () {
+      final marks = tileSprintMarks([_sprint('s1', 'a')]);
+
+      expect(marks, hasLength(1));
+      expect(marks.single.id, 's1');
+      expect(marks.single.outcomeId, 'a');
+      expect(marks.single.startedAt, _at(9, 10));
+      expect(marks.single.endedAt, isNull);
+    });
+
+    test('a Sprint takes the minutes between its start and its end', () {
+      final mark = tileSprintMarks([
+        _sprint('s1', 'a', startedAt: _at(9, 10), endedAt: _at(9, 33)),
+      ]).single;
+
+      expect(mark.durationMinutesAt(_at(12)), 23);
+    });
+
+    test('a running Sprint takes the time since it started', () {
+      final mark = tileSprintMarks([
+        _sprint('s1', 'a', startedAt: _at(9, 10)),
+      ]).single;
+
+      expect(mark.durationMinutesAt(_at(9, 40)), 30);
+      expect(mark.durationMinutesAt(_at(9)), 0,
+          reason: 'a Sprint that has not started yet is never negative');
+    });
+
+    test('the marks of a day are grouped by their Outcome', () {
+      final marks = tileSprintMarks([
+        _sprint('s1', 'a', startedAt: _at(9, 10)),
+        _sprint('s2', 'b', startedAt: _at(9, 20)),
+        _sprint('s3', 'a', startedAt: _at(10)),
+      ]);
+
+      final ofDay = tileSprintMarksOfDay(marks, _at(9));
+
+      expect(ofDay.keys, ['a', 'b']);
+      expect(ofDay['a']!.map((mark) => mark.id), ['s1', 's3']);
+      expect(ofDay['b']!.map((mark) => mark.id), ['s2']);
+    });
+
+    test('a Sprint from another day is not part of this day', () {
+      final marks = tileSprintMarks([
+        _sprint('yesterday', 'a', startedAt: DateTime(2030, 3, 14, 9, 10)),
+        _sprint('today', 'a', startedAt: _at(9, 10)),
+      ]);
+
+      final ofDay = tileSprintMarksOfDay(marks, _at(9));
+
+      expect(ofDay['a']!.map((mark) => mark.id), ['today']);
     });
   });
 }

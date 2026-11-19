@@ -132,7 +132,7 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
     final todoId = todo.id;
     _notificationTimer?.cancel();
     NotificationService.instance.cancelFocusNotification();
-    // Await the stop: stopSprint() persists sprint history (via _clearPrefs)
+    // Await the stop: stopSprint() ends the recorded Sprint
     // before returning, so discarding the future would swallow storage errors
     // and race the cleanup against completeCurrentAction. The first context use
     // below (the re-clarify sheet) is already guarded by `if (!mounted)`, and
@@ -852,13 +852,30 @@ class _SprintRingState extends State<_SprintRing>
           clockwise: widget.timer.isOvertime != widget.timer.isBreak,
         ),
         child: Padding(
-          // align column bounds to the inner edge of the ring stroke
-          padding: const EdgeInsets.symmetric(vertical: 24),
+          // Keep the column's bounds inside the ring's stroke, with room for
+          // the Sprint number above the countdown — the ring shrinks to 160px
+          // on a small screen, and the column has to hold both.
+          padding: const EdgeInsets.symmetric(vertical: 20),
           child: Column(
             mainAxisSize: MainAxisSize.max,
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               const Spacer(),
+              // The number of the Sprint being worked, and nothing else: no
+              // total to match it against, so the count never reads as a
+              // target. A Break is not a Sprint, so it carries no number.
+              if (widget.timer.isFocus) ...[
+                Text(
+                  'Sprint ${widget.timer.sprintNumber}',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    height: 1.15,
+                    fontWeight: FontWeight.w500,
+                    color: Color(0xFF6B7280),
+                  ),
+                ),
+                const SizedBox(height: 2),
+              ],
               Text(
                 '$minutes:$seconds',
                 style: TextStyle(
