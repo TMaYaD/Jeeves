@@ -23,8 +23,8 @@
 /// that does not was edited by hand. The encoding is base64 so no value can ever
 /// close the comment (it holds no `--`).
 ///
-/// A checklist line holds one line of text: a newline in it is written `\n`,
-/// so the text survives the page whole.
+/// A checklist line holds one line of text: a line end in it is written `\n` or
+/// `\r`, so the text survives the page whole.
 ////// A page is a pure function of its model: fixed field order, sorted entries,
 /// `\n` line ends, nothing read from the device. Two devices in the same state
 /// write the same bytes.
@@ -270,7 +270,12 @@ Map<String, Object> _parseFrontmatter(String body) {
   return result;
 }
 
-final RegExp _checklistLine = RegExp(r'^- \[([ xX])\] ?(.*)$');
+/// A checklist line holds one line of text.
+///
+/// The pattern takes a retained carriage return as part of the text: `.` does
+/// not match a line terminator by default, and a line that ended in one would
+/// be refused whole — which reads back as a line that was never there.
+final RegExp _checklistLine = RegExp(r'^- \[([ xX])\] ?(.*)$', dotAll: true);
 
 List<ChecklistLine> _parseChecklist(String text) {
   final lines = <ChecklistLine>[];
@@ -287,11 +292,15 @@ List<ChecklistLine> _parseChecklist(String text) {
 
 /// A checklist line holds one line of text.
 ///
-/// A text that spans lines is written with its newlines spelled out (`\n`),
-/// so the line stays one line and the text survives the page: a line that was
-/// cut short would read back as a different Action.
-String _escapeChecklistText(String text) =>
-    text.replaceAll('\\', '\\\\').replaceAll('\n', '\\n');
+/// A text that spans lines is written with its line ends spelled out (`\n` for
+/// a line feed, `\r` for a carriage return), so the line stays one line and
+/// the text survives the page: a line that was cut short would read back as a
+/// different Action. The spelling is reversible, so the text that goes in
+/// comes back out unchanged.
+String _escapeChecklistText(String text) => text
+    .replaceAll('\\', '\\\\')
+    .replaceAll('\r', '\\r')
+    .replaceAll('\n', '\\n');
 
 /// The inverse of [_escapeChecklistText].
 String _unescapeChecklistText(String text) {
@@ -305,6 +314,9 @@ String _unescapeChecklistText(String text) {
     final next = text[i + 1];
     if (next == 'n') {
       out.write('\n');
+      i++;
+    } else if (next == 'r') {
+      out.write('\r');
       i++;
     } else if (next == '\\') {
       out.write('\\');

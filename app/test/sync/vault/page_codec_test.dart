@@ -121,4 +121,34 @@ void main() {
     final parsed = parsePage(text);
     expect(parsed.checklist, page.checklist);
   });
+
+  test('a checklist text that carries a carriage return survives the page', () {
+    // A line end that is not spelled out is a line end the pattern refuses: the
+    // checklist line is lost whole, and a lost line reads back as a removed
+    // Action. So the carriage return is spelled out too, reversibly.
+    final page = PageModel(
+      frontmatter: const {'id': 'a1b2', 'title': 'Plan'},
+      notes: 'Some notes.\n',
+      checklist: const [
+        ChecklistLine(done: false, text: 'first line\r\nsecond line'),
+        ChecklistLine(done: true, text: 'a carriage return\rhere'),
+      ],
+      block: const [],
+    );
+
+    final text = renderPage(page);
+    expect(text, contains(r'- [ ] first line\r\nsecond line'));
+    expect(text, contains(r'- [x] a carriage return\rhere'));
+
+    final parsed = parsePage(text);
+    expect(parsed.checklist, page.checklist);
+  });
+
+  test('a checklist line that kept a carriage return is not lost', () {
+    // A page a hand wrote with a carriage return inside the line: the pattern
+    // takes it as part of the text rather than refusing the line.
+    final text =
+        renderPage(_page()).replaceAll('- [ ] first\n', '- [ ] fir\rst\n');
+    expect(parsePage(text).checklist.first.text, 'fir\rst');
+  });
 }
