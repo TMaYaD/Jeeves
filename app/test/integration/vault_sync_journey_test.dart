@@ -13,7 +13,9 @@
 /// are opened outside the test's fake clock, the notification plugin is
 /// stubbed, the time-boundary tick is pinned, and the work is settled by
 /// bounded rounds rather than by waiting for the screen to go quiet (see
-/// `docs/TESTING.md`).
+/// `docs/TESTING.md`). The Next list is a live Drift watch, and a live watch
+/// keeps `pumpAndSettle` spinning to its timeout, so the frames are pumped
+/// one at a time — the way the other list journeys do it.
 @TestOn('!browser')
 library;
 
@@ -40,7 +42,6 @@ import 'package:jeeves/sync/sync_database.dart';
 import 'package:jeeves/sync/vault/page_codec.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../helpers/settle.dart';
 import '../test_helpers.dart';
 
 const String _outcomeId = '3f2d1c4e-5a6b-4c8d-9e0f-1a2b3c4d5e6f';
@@ -251,8 +252,16 @@ String _pagePath(Directory vault) {
 /// Let the real work happen: real time for the file and database I/O, and the
 /// test's clock pumped so the continuations that started in the test's own zone
 /// run too.
+///
+/// The frames are pumped one at a time, never through `pumpAndSettle`: the
+/// Next list is a live Drift watch, and a live watch keeps the settle from
+/// ever going quiet. This is the shape the other list journeys use
+/// (`outcome_row_journey_test.dart`).
 Future<void> _settle(WidgetTester tester) async {
-  await settleWithRealAsync(tester, rounds: 3);
+  for (var i = 0; i < 6; i++) {
+    await tester.runAsync(() => pumpEventQueue());
+    await tester.pump(const Duration(milliseconds: 150));
+  }
 }
 
 /// The same, until [done] says the work is done.
@@ -261,7 +270,10 @@ Future<void> _settle(WidgetTester tester) async {
 /// see without touching the store: the widget tree, or the folder on disk.
 Future<void> _settleUntil(WidgetTester tester, bool Function() done) async {
   for (var round = 0; round < 40; round++) {
-    await settleWithRealAsync(tester, rounds: 1);
+    for (var i = 0; i < 2; i++) {
+      await tester.runAsync(() => pumpEventQueue());
+      await tester.pump(const Duration(milliseconds: 150));
+    }
     if (done()) return;
   }
   fail('the vault did not settle in time');
