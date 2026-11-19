@@ -15,7 +15,10 @@ import 'package:jeeves/widgets/outcome_row.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:drift/native.dart';
+import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/focus_settings.dart';
+import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/day_timeline_provider.dart';
 import 'package:jeeves/widgets/day_timeline/day_timeline.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
@@ -83,6 +86,8 @@ Widget _buildScreen({
   List<Todo>? reviewSurface,
   Stream<List<Todo>>? reviewSurfaceStream,
   Map<String, bool> timeboxed = const {},
+  // The domain store the screen reads, when a test drives a path that writes.
+  GtdDatabase? db,
 }) {
   final router = GoRouter(
     initialLocation: '/focus',
@@ -95,11 +100,17 @@ Widget _buildScreen({
         path: '/focus-session-planning',
         builder: (_, _) => const Scaffold(body: Text('planning')),
       ),
+      // Where a started Sprint lands (issue #923's gate opens in front of it).
+      GoRoute(
+        path: '/focus/active',
+        builder: (_, _) => const Scaffold(body: Text('focus-active')),
+      ),
     ],
   );
 
   return ProviderScope(
     overrides: [
+      if (db != null) databaseProvider.overrideWithValue(db),
       activeSessionTasksProvider.overrideWith(
         (_) => Stream.value(tasks),
       ),
@@ -622,6 +633,121 @@ void main() {
       final row = tester.getTopLeft(find.byType(OutcomeRow));
       final timeline = tester.getTopLeft(find.byType(DayTimeline));
       expect(timeline.dy, lessThan(row.dy));
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // The Timeboxed gate in front of a Sprint started from this list
+  // ---------------------------------------------------------------------------
+
+  group('the Timeboxed gate on the Focus list', () {
+    /// A Timeboxed Action whose limit has been passed: 30 minutes estimated,
+    /// 50 logged.
+    Future<GtdDatabase> seedPastLimit() async {
+      final db = GtdDatabase(NativeDatabase.memory());
+      final now = DateTime.now().toUtc();
+      await db.todoDao.insertOutcome(
+        id: 't1',
+        title: 'Bounded work',
+        userId: 'local',
+        now: now,
+      );
+      await db.actionDao.setCurrentAction(
+        't1',
+        'Draft the work',
+        timeEstimate: 30,
+        now: now,
+      );
+      await db.todoDao.updateFields('t1', timeboxed: true, now: now);
+      // Work already done: the limit is behind the user.
+      await db.timeLogDao.openLog(
+        taskId: 't1',
+        userId: 'local',
+        now: now.subtract(const Duration(minutes: 50)),
+      );
+      await db.timeLogDao.closeLog(taskId: 't1', now: now);
+      return db;
+    }
+
+    /// The TimeLogs still running.
+    Future<int> openLogCount(GtdDatabase db) async {
+      final rows = await db.customSelect(
+        'SELECT COUNT(*) AS c FROM time_logs WHERE ended_at IS NULL',
+      ).get();
+      return rows.first.read<int>('c');
+    }
+
+    /// Lets the gate's real database reads and writes finish, then settles the
+    /// sheet's animation.
+    Future<void> settle(WidgetTester tester) async {
+      await tester.pump();
+      await tester.runAsync(() => pumpEventQueue());
+      await tester.pumpAndSettle();
+      await tester.pump();
+    }
+
+    Future<void> pumpPastLimit(WidgetTester tester, GtdDatabase db) async {
+      await tester.pumpWidget(_buildScreen(
+        db: db,
+        activeSession: _openSession(),
+        tasks: [Todo(
+          id: 't1', title: 'Bounded work', userId: 'test-user',
+          createdAt: DateTime(2030), intent: 'next', timeEstimate: 30,
+        )],
+      ));
+      await tester.pump();
+      await tester.pump();
+    }
+
+    Finder startButton() => find.descendant(
+          of: find.byType(OutcomeRow),
+          matching: find.text('Start'),
+        );
+
+    testWidgets('a Sprint past the limit asks before the list starts it', (
+      tester,
+    ) async {
+      final db = await seedPastLimit();
+      addTearDown(db.close);
+      await pumpPastLimit(tester, db);
+
+      await tester.tap(startButton());
+      await settle(tester);
+
+      // Jeeves advises before the Sprint starts, and nothing has started.
+      expect(find.byKey(const Key('timeboxed_gate_stop')), findsOneWidget);
+      expect(await openLogCount(db), 0);
+    });
+
+    testWidgets('"Right ho" starts nothing', (tester) async {
+      final db = await seedPastLimit();
+      addTearDown(db.close);
+      await pumpPastLimit(tester, db);
+
+      await tester.tap(startButton());
+      await settle(tester);
+      await tester.tap(find.byKey(const Key('timeboxed_gate_stop')));
+      await settle(tester);
+
+      // The sheet closes and no Sprint was started: no TimeLog was opened.
+      expect(find.byKey(const Key('timeboxed_gate_stop')), findsNothing);
+      expect(await openLogCount(db), 0);
+    });
+
+    testWidgets('confirming starts the Sprint', (tester) async {
+      final db = await seedPastLimit();
+      addTearDown(db.close);
+      await pumpPastLimit(tester, db);
+
+      await tester.tap(startButton());
+      await settle(tester);
+      await tester.tap(find.byKey(const Key('timeboxed_gate_regardless')));
+      await settle(tester);
+      await tester.tap(find.byKey(const Key('timeboxed_gate_confirm')));
+      await settle(tester);
+
+      // The Sprint runs: the engagement opened its TimeLog.
+      expect(await openLogCount(db), 1);
     });
   });
 }
