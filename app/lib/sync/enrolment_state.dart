@@ -45,7 +45,7 @@ class EnrolmentCeremonyStatus {
   const EnrolmentCeremonyStatus({
     required this.state,
     required this.workspaceIds,
-    required this.foundedWorkspaceIds,
+    required this.registeredWorkspaceIds,
     this.memberId,
     this.rootPkFingerprint,
     this.escrowVersion,
@@ -58,7 +58,7 @@ class EnrolmentCeremonyStatus {
 
   /// Those where this device's own registration (a genesis or a member
   /// registration it authored) is in the applied control log.
-  final List<String> foundedWorkspaceIds;
+  final List<String> registeredWorkspaceIds;
 
   /// This device's Member id, once its keys are stored. Null in the pre-keys
   /// crash window — the ceremony minted an identity that nothing recorded.
@@ -77,12 +77,12 @@ class EnrolmentCeremonyStatus {
 /// asserted directly rather than through four staged ceremony failures.
 EnrolmentCeremonyStatus deriveEnrolmentCeremonyStatus({
   required List<String> workspaceIds,
-  required List<String> foundedWorkspaceIds,
+  required List<String> registeredWorkspaceIds,
   required String? storedMemberId,
   required Uint8List? pinnedRootPk,
   required int highestEscrowVersionSeen,
 }) {
-  final founded = foundedWorkspaceIds.toSet();
+  final registered = registeredWorkspaceIds.toSet();
   final EnrolmentState state;
   if (storedMemberId == null) {
     // Keys are ceremony step 3 of 7, so their absence alone says nothing about
@@ -92,16 +92,16 @@ EnrolmentCeremonyStatus deriveEnrolmentCeremonyStatus({
         ? EnrolmentState.notEnrolled
         : EnrolmentState.foundingIncomplete;
   } else {
-    state = workspaceIds.every(founded.contains)
+    state = workspaceIds.every(registered.contains)
         ? EnrolmentState.enrolled
         : EnrolmentState.foundingIncomplete;
   }
   return EnrolmentCeremonyStatus(
     state: state,
     workspaceIds: workspaceIds,
-    foundedWorkspaceIds: [
+    registeredWorkspaceIds: [
       for (final workspaceId in workspaceIds)
-        if (founded.contains(workspaceId)) workspaceId,
+        if (registered.contains(workspaceId)) workspaceId,
     ],
     memberId: storedMemberId,
     rootPkFingerprint: pinnedRootPk == null ? null : _fingerprint(pinnedRootPk),

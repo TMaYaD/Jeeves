@@ -294,14 +294,14 @@ class SyncStack {
   /// Grant as soon as it pulls, so a non-empty control log says the Workspace
   /// exists — not that this device may claim it.
   Future<EnrolmentCeremonyStatus> readEnrolmentStatus() async {
-    final founded = <String>[];
+    final registered = <String>[];
     for (final workspaceId in workspaceIds) {
       final client = await workspaceClientFactory(workspaceId);
-      if (await client.ownRegistrationApplied()) founded.add(workspaceId);
+      if (await client.ownRegistrationApplied()) registered.add(workspaceId);
     }
     return deriveEnrolmentCeremonyStatus(
       workspaceIds: workspaceIds,
-      foundedWorkspaceIds: founded,
+      registeredWorkspaceIds: registered,
       storedMemberId: (await keyStore.read(defaultClient.workspaceId))?.memberId,
       pinnedRootPk: await defaultClient.pinnedRootPk(),
       highestEscrowVersionSeen: await defaultClient.highestEscrowVersionSeen(),
