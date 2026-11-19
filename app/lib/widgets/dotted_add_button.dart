@@ -6,7 +6,7 @@ class DottedAddButton extends StatelessWidget {
   const DottedAddButton({
     super.key,
     required this.onTap,
-    this.semanticLabel = 'Add context tag',
+    this.semanticLabel = 'Add label',
   });
 
   final VoidCallback onTap;

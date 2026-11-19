@@ -28,7 +28,7 @@ class TagList extends StatelessWidget {
 
   final List<Tag> tags;
 
-  /// IDs of tags to render in selected state (✓ prefix + bold).
+  /// IDs of tags to render as a badge.
   final Set<String> selectedIds;
 
   /// Optional per-tag count displayed as ` (n)` suffix when > 0.

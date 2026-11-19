@@ -4,16 +4,16 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../database/gtd_database.dart' show Tag;
 import '../../providers/tags_provider.dart';
 
-/// The user-facing noun for a tag row of [type]: `context` rows are "tags",
+/// The user-facing noun for a tag row of [type]: `context` rows are "labels",
 /// `project` rows "projects" and `person` rows "people" (singular "person").
 String tagKindNoun(String type) => switch (type) {
       'project' => 'project',
       'person' => 'person',
-      _ => 'tag',
+      _ => 'label',
     };
 
-/// A bottom sheet with rename, recolour (tags only), merge and delete actions
-/// for a [tag] — which may be a tag, a project or a person.
+/// A bottom sheet with rename, recolour (labels only), merge and delete
+/// actions for a [tag] — which may be a label, a project or a person.
 class TagManagementSheet extends ConsumerWidget {
   const TagManagementSheet({super.key, required this.tag});
 
@@ -224,7 +224,7 @@ class TagManagementSheet extends ConsumerWidget {
                 // "Clear colour" swatch
                 return Semantics(
                   button: true,
-                  label: 'Clear tag colour',
+                  label: 'Clear label colour',
                   child: GestureDetector(
                     onTap: () async {
                       try {
@@ -236,7 +236,7 @@ class TagManagementSheet extends ConsumerWidget {
                         if (!ctx.mounted) return;
                         ScaffoldMessenger.of(ctx).showSnackBar(
                           const SnackBar(
-                            content: Text('Could not update tag colour'),
+                            content: Text('Could not update label colour'),
                           ),
                         );
                       }
@@ -257,7 +257,7 @@ class TagManagementSheet extends ConsumerWidget {
               final isCurrent = tag.color == hex;
               return Semantics(
                 button: true,
-                label: 'Set tag colour $hex',
+                label: 'Set label colour $hex',
                 selected: isCurrent,
                 child: GestureDetector(
                   onTap: () async {
@@ -270,7 +270,7 @@ class TagManagementSheet extends ConsumerWidget {
                       if (!ctx.mounted) return;
                       ScaffoldMessenger.of(ctx).showSnackBar(
                         const SnackBar(
-                          content: Text('Could not update tag colour'),
+                          content: Text('Could not update label colour'),
                         ),
                       );
                     }
@@ -370,10 +370,8 @@ class _MergeTargetSheet extends ConsumerWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              noun == 'tag'
-                  ? 'All tasks tagged "${source.name}" will be re-tagged.'
-                  : 'Everything linked to "${source.name}" moves to the '
-                      '$noun you pick.',
+              'Everything linked to "${source.name}" moves to the '
+              '$noun you pick.',
               style:
                   const TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
             ),
