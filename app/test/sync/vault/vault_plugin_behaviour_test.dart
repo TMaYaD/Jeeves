@@ -230,10 +230,15 @@ void main() {
     // cannot hold: taking them would put a row the store refuses into the
     // sync store, and the Outcome would vanish from the app.
     final longTitle = 'x' * 501;
-    await folder.writeAtomically(
-      path,
-      page.replaceFirst('title: Plan', 'title: $longTitle\nintent: Next'),
-    );
+    // The word the app cannot hold replaces the one the page holds: a second
+    // `intent:` line would be read as the last one, and the test would pass on
+    // a page the app never refused.
+    final edited = page
+        .replaceFirst('title: Plan', 'title: $longTitle')
+        .replaceFirst('intent: next', 'intent: Next');
+    expect(parsePage(edited).frontmatter['intent'], 'Next',
+        reason: 'the fixture does not hold the word the app cannot hold');
+    await folder.writeAtomically(path, edited);
     await plugin.rescan();
 
     expect(await _title(device), 'Plan',
