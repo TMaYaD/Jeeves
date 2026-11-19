@@ -64,6 +64,17 @@ void main() {
 
   Future<void> flush(StackPhone phone) => phone.stack.defaultClient.flushOutbox();
 
+  /// The changes the sync store still records as needing an op.
+  Future<int> unauthoredRows(StackPhone phone) async =>
+      (await phone.syncStore
+          .customSelect('SELECT 1 FROM unauthored_changes')
+          .get())
+          .length;
+
+  /// The ops this device has authored — one outbox row each.
+  Future<int> outboxRows(StackPhone phone) async =>
+      (await phone.syncStore.customSelect('SELECT 1 FROM outbox').get()).length;
+
   Future<List<Map<String, Object?>>> todosOf(StackPhone phone) async => [
         for (final row in await phone.domain
             .customSelect('SELECT id, title, user_id FROM todos ORDER BY id')
@@ -124,6 +135,16 @@ void main() {
 
     expect(await phone.activate(), SyncActivation.active);
     await flush(phone);
+
+    expect(await unauthoredRows(phone), 0,
+        reason: 'the change has been authored, so nothing is left to hand');
+
+    // A further launch has nothing to hand the bridge, so it authors nothing.
+    final authored = await outboxRows(phone);
+    await phone.relaunchAfterKill();
+    expect(await phone.activate(), SyncActivation.active);
+    expect(await outboxRows(phone), authored,
+        reason: 'no record was left, so no op was authored');
 
     final witness = await phoneNamed('B');
     await witness.enrolWithPassphrase(_passphrase);

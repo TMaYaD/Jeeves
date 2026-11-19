@@ -185,8 +185,11 @@ void main() {
         merged.firstWhere((c) => c.entityId == _outcomeA).fields['title']!.hlc;
     final b =
         merged.firstWhere((c) => c.entityId == _outcomeB).fields['title']!.hlc;
+    // The third write is the device's own, so no op will ever carry it: it is
+    // not recorded, and the bridge is not handed it. Its clock is read from
+    // merge state, where it lives.
     final c =
-        merged.firstWhere((c) => c.entityId == _outcomeC).fields['title']!.hlc;
+        (await fieldClockOf(device, todosCollection, _outcomeC, 'title'))!;
     expect(c.memberIdHex, host.deviceNodeId,
         reason: 'a write with no member id on the row is the device\'s own');
 

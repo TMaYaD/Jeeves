@@ -15,6 +15,11 @@
 /// `unauthored_changes`: the record and the merge commit together, so no clock
 /// can name a member without either an op or a record. A row leaves that table
 /// when the op-log bridge has authored the change or handed it back.
+///
+/// **The bridge is handed the record, not the merge.** A change that still
+/// needs an op is exactly a change in that table, so the record is what the
+/// bridge is given — at the start of the process, for whatever a killed process
+/// left behind, and after every drain, for what it has just merged.
 library;
 
 import 'dart:async';
@@ -80,11 +85,49 @@ class SyncHostService implements SyncHost, OutboxDrainer {
   final Map<String, SyncPlugin> _plugins = <String, SyncPlugin>{};
   final Map<String, Future<void>> _deliveryTails = <String, Future<void>>{};
 
-  /// Load the device identity and replay whatever the outbox still holds — the
-  /// crash replay.
+  /// The highest `unauthored_changes` id this process has already handed to the
+  /// bridge.
+  ///
+  /// A high-water mark, not a cursor: a record stays in the table until the
+  /// bridge settles it, so the id is what says "already handed", and the bridge
+  /// is never handed the same change twice in one process.
+  int _lastHandedUnauthoredId = 0;
+
+  /// Load the device identity, hand the bridge whatever a killed process left
+  /// behind, and replay whatever the outbox still holds — the crash replay.
   Future<void> start() async {
     _deviceNodeId = (await readClockIdentity(_domain)).deviceNodeId;
+    await _handUnauthoredToBridge();
     await drain();
+  }
+
+  /// Hand the bridge every recorded change it has not been handed in this
+  /// process, oldest first. At start that is whatever a killed process left.
+  ///
+  /// The record is the right thing to hand: a change the device made under a
+  /// member id still needs an op, and a change it made under its own node id
+  /// never will. A failure is the bridge's to contain — the record stays where
+  /// it is, and the next launch hands it over again.
+  Future<void> _handUnauthoredToBridge() async {
+    final listener = localChangeListener;
+    if (listener == null) return;
+    final rows = await _sync.customSelect(
+      'SELECT id, change_json FROM unauthored_changes WHERE id > ? ORDER BY id',
+      variables: [Variable<int>(_lastHandedUnauthoredId)],
+    ).get();
+    if (rows.isEmpty) return;
+    _lastHandedUnauthoredId = rows.last.read<int>('id');
+    try {
+      await listener([
+        for (final row in rows)
+          Change.fromJson(
+            (jsonDecode(row.read<String>('change_json')) as Map)
+                .cast<String, Object?>(),
+          ),
+      ]);
+    } on Object catch (error) {
+      debugPrint('sync host: op-log bridge failed — $error');
+    }
   }
 
   // --- Seeding ---------------------------------------------------------------
@@ -115,7 +158,8 @@ class SyncHostService implements SyncHost, OutboxDrainer {
   // --- Local writes ----------------------------------------------------------
 
   /// Merge every outbox row into merge state, in row order, then project the
-  /// touched entities, notify the bridge and trigger delivery. Serialised.
+  /// touched entities, hand the bridge the changes it still owes and trigger
+  /// delivery. Serialised.
   @override
   Future<void> drain() {
     final run = _drainTail.then((_) => _drainOnce());
@@ -185,14 +229,10 @@ class SyncHostService implements SyncHost, OutboxDrainer {
         storageError ??= error;
       }
     }
-    final listener = localChangeListener;
-    if (listener != null && merged.isNotEmpty) {
-      try {
-        await listener(merged);
-      } on Object catch (error) {
-        debugPrint('sync host: op-log bridge failed — $error');
-      }
-    }
+    // The bridge is handed the recorded changes, not the merged ones: a change
+    // the device made under its own node id never needs an op, so it is not
+    // recorded and not handed over.
+    await _handUnauthoredToBridge();
     if (merged.isNotEmpty) _deliverInBackground();
     if (storageError != null) throw storageError;
   }

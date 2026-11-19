@@ -8,6 +8,11 @@
 /// The sync store therefore records the change in the transaction that merges
 /// it, and the record leaves when the bridge has authored the change or handed
 /// it back.
+///
+/// The bridge is handed the record, not the merge: a change that still needs an
+/// op is exactly a change in that table. The host hands it over at the start of
+/// the process — for whatever a killed process left behind — and after every
+/// drain.
 @TestOn('!browser')
 library;
 
@@ -24,6 +29,7 @@ import 'host_harness.dart';
 const String _userId = 'unauthored-user';
 const String _outcomeA = '8a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
 const String _outcomeB = '9b2c3d4e-5f60-4b7c-8d9e-0f1a2b3c4d5e';
+const String _outcomeC = 'ac3d4e5f-6f71-4c8d-9e0f-1a2b3c4d5e6f';
 
 /// A member id no op on this device ever carries — the one a session that is
 /// never restored leaves behind.
@@ -240,5 +246,83 @@ void main() {
 
     expect(await recordsOf(device), isEmpty,
         reason: 'the change is the device\'s own now, so it needs no op');
+  });
+
+  group('the bridge is handed the record', () {
+    test('a record left by a previous host is handed at start, before a change '
+        'still in the outbox', () async {
+      final device = HostDevice.open('unauthored');
+      addTearDown(device.close);
+      await device.domain.ensureDeviceClockIdentity();
+      await device.domain.customStatement(
+        'UPDATE device_clock_identity SET enrolled_member_id_hex = ?',
+        [_memberIdHex],
+      );
+      // The previous host: it merges the write, so the change is recorded, and
+      // it has no bridge to hand it to.
+      await device.startHost();
+      await device.domain.todoDao
+          .insertOutcome(id: _outcomeA, title: 'First', userId: _userId);
+      expect((await recordsOf(device)).length, 1,
+          reason: 'the merge recorded the change');
+
+      // The process is killed: the next write never reaches a drain.
+      device.capture.detach();
+      await device.domain.todoDao
+          .insertOutcome(id: _outcomeB, title: 'Second', userId: _userId);
+      expect(
+          await device.domain.customSelect('SELECT 1 FROM pending_changes').get(),
+          hasLength(1),
+          reason: 'the write is still in the outbox');
+
+      // The next launch: a fresh host over the same stores, with a bridge.
+      final handed = <Change>[];
+      final fresh = SyncHostService(
+          sync: device.sync, domain: device.domain, clock: device.clock)
+        ..localChangeListener = (changes) async => handed.addAll(changes);
+      await fresh.start();
+
+      expect(handed.map((c) => c.entityId), orderedEquals([_outcomeA, _outcomeB]),
+          reason: 'the record is handed first, then the change still in the '
+              'outbox');
+    });
+
+    test('a record is handed once per host: a second drain does not hand it '
+        'again', () async {
+      final device = await openDeviceSignedInAs(_memberIdHex);
+      final handed = <Change>[];
+      device.host!.localChangeListener = (changes) async => handed.addAll(changes);
+
+      await device.domain.todoDao
+          .insertOutcome(id: _outcomeA, title: 'First', userId: _userId);
+      expect(handed.map((c) => c.entityId), orderedEquals([_outcomeA]));
+
+      await device.domain.todoDao
+          .insertOutcome(id: _outcomeB, title: 'Second', userId: _userId);
+      expect(handed.map((c) => c.entityId), orderedEquals([_outcomeA, _outcomeB]));
+
+      // A third write waits in the outbox, so the next drain has work to do.
+      device.capture.detach();
+      await device.domain.todoDao
+          .insertOutcome(id: _outcomeC, title: 'Third', userId: _userId);
+      device.capture.attach(device.host!);
+      await device.host!.drain();
+
+      expect(handed.map((c) => c.entityId),
+          orderedEquals([_outcomeA, _outcomeB, _outcomeC]),
+          reason: 'the records already handed are not handed again');
+    });
+
+    test('a listener that throws leaves the record in place', () async {
+      final device = await openDeviceSignedInAs(_memberIdHex);
+      device.host!.localChangeListener = (changes) async =>
+          throw StateError('the bridge is gone');
+
+      await device.domain.todoDao
+          .insertOutcome(id: _outcomeA, title: 'First', userId: _userId);
+
+      expect(await recordsOf(device), hasLength(1),
+          reason: 'a bridge that failed did not settle the change');
+    });
   });
 }

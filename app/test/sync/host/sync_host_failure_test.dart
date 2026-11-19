@@ -21,11 +21,22 @@ import 'host_harness.dart';
 const String _outcomeA = '3f2d1c4e-5a6b-4c8d-9e0f-1a2b3c4d5e6f';
 const String _outcomeB = '4a3e2d5f-6b7c-4d9e-8f01-2b3c4d5e6f70';
 
+/// A member id no op on this device ever carries — the one a session that is
+/// never restored leaves behind.
+const String _memberIdHex = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
+
 void main() {
-  test('a delete failing after an earlier row merged still notifies the bridge',
-      () async {
+  test('a delete failing after an earlier row merged still hands the bridge '
+      'both changes that merged', () async {
     final device = HostDevice.open('a');
     addTearDown(device.close);
+    // A member id, so the writes are changes that still need an op: the bridge
+    // is handed the record of such a change, not the merge itself.
+    await device.domain.ensureDeviceClockIdentity();
+    await device.domain.customStatement(
+      'UPDATE device_clock_identity SET enrolled_member_id_hex = ?',
+      [_memberIdHex],
+    );
     // No host attached yet: both writes wait in the outbox.
     await device.domain.todoDao
         .insertOutcome(id: _outcomeA, title: 'First', userId: 'u');
@@ -48,13 +59,16 @@ void main() {
       ..localChangeListener = (changes) async => notified.addAll(changes);
     await expectLater(host.start(), throwsA(anything));
 
-    expect(notified.map((c) => c.entityId), contains(_outcomeA));
-    expect(notified.map((c) => c.entityId), isNot(contains(_outcomeB)));
+    // Both changes merged before the delete failed, so both were recorded and
+    // both were handed over.
+    expect(notified.map((c) => c.entityId),
+        orderedEquals([_outcomeA, _outcomeB]));
 
-    // The row that could not be deleted replays and is notified on the next drain.
+    // The row that could not be deleted replays on the next drain.
     await device.domain.customStatement('DROP TRIGGER fail_second_delete');
     await host.drain();
-    expect(notified.map((c) => c.entityId), contains(_outcomeB));
+    expect(notified.where((c) => c.entityId == _outcomeB), hasLength(1),
+        reason: 'the replay is the same change, so it is handed once');
     expect(
         await device.domain.customSelect('SELECT 1 FROM pending_changes').get(),
         isEmpty);

@@ -131,6 +131,9 @@ class StackPhone {
       // A change the bridge will never author is handed back to the host, so
       // its clock can be taken back under the device node id.
       capture.onChangesLeftUnauthored = host.restampUnauthoredClocksAsDevice;
+      // A change the bridge has authored, or had refused for good, is settled:
+      // the host forgets that it still needs an op.
+      capture.onChangeAuthoredOrRefused = host.forgetUnauthored;
       await host.start();
       hostedCapture!.attach(host);
     }
@@ -359,6 +362,7 @@ class StackPhone {
     host!.localChangeListener = capture.onLocalChanges;
     // The fresh bridge reports to the same host the dead process left behind.
     capture.onChangesLeftUnauthored = host!.restampUnauthoredClocksAsDevice;
+    capture.onChangeAuthoredOrRefused = host!.forgetUnauthored;
     await host!.setEnrolledMember(memberIdHex);
   }
 
@@ -381,6 +385,7 @@ class StackPhone {
     final fresh = SyncHostService(sync: syncStore, domain: domain, clock: deviceClock!)
       ..localChangeListener = capture.onLocalChanges;
     capture.onChangesLeftUnauthored = fresh.restampUnauthoredClocksAsDevice;
+    capture.onChangeAuthoredOrRefused = fresh.forgetUnauthored;
     await fresh.setEnrolledMember(memberIdHex); // `deactivate()` cleared it
     await fresh.start();
     hostedCapture!.attach(fresh);
