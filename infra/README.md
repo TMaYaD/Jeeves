@@ -303,7 +303,7 @@ guest builds Android, not web.
 
 ## Backend CD
 
-`.github/workflows/backend-cd.yml` runs after every Backend CI on `main`,
+`.github/workflows/backend-cd.yml` runs after every push-triggered Backend CI on `main`,
 whatever its conclusion:
 
 1. Target resolution (`ci/backend-cd-target.sh`) — the run ignores the commit

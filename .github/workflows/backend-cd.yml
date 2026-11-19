@@ -6,10 +6,6 @@ on:
     types: [completed]
     branches: [main]
 
-concurrency:
-  group: backend-cd
-  cancel-in-progress: false
-
 jobs:
   deploy:
     name: Deploy to Dokku
@@ -22,6 +18,16 @@ jobs:
     if: >-
       ${{ github.event.workflow_run.event == 'push'
       && github.event.workflow_run.head_repository.full_name == github.repository }}
+    # Job-level, not workflow-level, on purpose: a job skipped by its `if:` is
+    # never queued, so it cannot take the group's slot or cancel the pending
+    # run (GitHub docs, "Using concurrency": concurrency on a job applies when
+    # the job is queued; skipped jobs do not run).  A workflow-level group
+    # would let a skipped fork-PR run cancel the pending push run, which is
+    # the lost-deploy failure this workflow exists to prevent.  GitHub keeps
+    # one pending job per group; the last to arrive evaluates main.
+    concurrency:
+      group: backend-cd
+      cancel-in-progress: false
     permissions:
       # write, not read: the release step below cuts the server/v* tag.
       contents: write
