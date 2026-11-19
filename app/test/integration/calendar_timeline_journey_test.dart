@@ -19,7 +19,7 @@ import '../test_helpers.dart';
 /// The device calendar on the day timeline, end to end, over an in-memory
 /// calendar source (the adapter's test implementation): events drawn, the Plan
 /// laid out around them, the calendar states, a calendar change re-flowing only
-/// what is not set, the notice and Undo, and the Time check-in deriving the
+/// what is not set, the notice and Undo, and the Time check deriving the
 /// day's free time. Harness shape follows `day_timeline_journey_test.dart`.
 const _userId = 'local';
 
@@ -279,7 +279,7 @@ void main() {
     }
   });
 
-  testWidgets('the Time check-in lists the events and derives the free time '
+  testWidgets('the Time check lists the events and derives the free time '
       'to the Evening Shutdown time', (tester) async {
     await setUpApp(prefs: {kShowCalendarOnTimelineKey: true}, events: [
       _event('standup', 'Standup', _at(9), _at(10)),
@@ -301,7 +301,7 @@ void main() {
     }
   });
 
-  testWidgets('with no calendar the Time check-in still asks for the time',
+  testWidgets('with no calendar the Time check still asks for the time',
       (tester) async {
     await setUpApp(prefs: {});
     try {

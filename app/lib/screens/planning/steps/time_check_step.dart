@@ -145,7 +145,7 @@ class _TimeCheckStepState extends ConsumerState<TimeCheckStep> {
         calendar.status == CalendarTimelineStatus.permissionRefused ||
             calendar.status == CalendarTimelineStatus.unavailable;
     return Container(
-      key: const Key('day_checkin_agenda'),
+      key: const Key('time_check_agenda'),
       width: double.infinity,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -169,7 +169,7 @@ class _TimeCheckStepState extends ConsumerState<TimeCheckStep> {
             Text(message, style: const TextStyle(color: Colors.grey)),
           if (canRetry)
             TextButton(
-              key: const Key('day_checkin_calendar_try_again'),
+              key: const Key('time_check_calendar_try_again'),
               onPressed: () =>
                   ref.read(calendarTimelineProvider.notifier).refresh(),
               child: const Text('Try again'),
@@ -204,7 +204,7 @@ class _TimeCheckStepState extends ConsumerState<TimeCheckStep> {
           hours == 0
               ? '${rest}m available today'
               : '${hours}h ${rest}m available today',
-          key: const Key('day_checkin_derived_available_time'),
+          key: const Key('time_check_derived_available_time'),
           style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
         ),
       ],
