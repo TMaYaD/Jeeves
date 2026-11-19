@@ -50,7 +50,7 @@ SEED_TAG="${TAG_PREFIX}0.0.9"
 cd "$(git rev-parse --show-toplevel)"
 
 # Highest tag, not nearest ancestor: server tags are only ever cut by Backend
-# CD, at main's tip, behind its freshness check and concurrency group — so they
+# CD, at the deploy target resolved from main's tip, one run at a time — so they
 # are totally ordered along main's first-parent history and the highest is
 # always the most recent ancestor.  `sort -V` is what orders a mixed set of
 # three- and four-segment versions correctly (0.1.0 < 0.1.0.1 < 0.1.1).

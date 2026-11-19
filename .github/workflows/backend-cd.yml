@@ -14,47 +14,62 @@ jobs:
   deploy:
     name: Deploy to Dokku
     runs-on: ubuntu-latest
-    # Only a real push to this repository's main may deploy.  The `branches:`
-    # filter above matches the head branch *name*, so a fork's pull request from
-    # a branch called "main" would otherwise reach this job — and the scripts
-    # below run from the checked-out head_sha, which for a fork is its own code.
+    # Any conclusion enters: the run deploys main's state, not its trigger's
+    # (see the target step), so a failed or cancelled trigger is harmless.
+    # Still only a real push to this repository's main counts: the `branches:`
+    # filter above matches the head branch *name*, so a pull request from a
+    # branch called "main" would otherwise start a run.
     if: >-
-      ${{ github.event.workflow_run.conclusion == 'success'
-      && github.event.workflow_run.event == 'push'
+      ${{ github.event.workflow_run.event == 'push'
       && github.event.workflow_run.head_repository.full_name == github.repository }}
     permissions:
       # write, not read: the release step below cuts the server/v* tag.
       contents: write
+      # Reads Backend CI's run for the deploy target (an explicit permissions
+      # block leaves everything unlisted at none).
+      actions: read
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: main
           fetch-depth: 0
           # Deploy pushes to Dokku over SSH (ssh-agent); the GITHUB_TOKEN is
           # never used, so don't persist it into .git/config.
           persist-credentials: false
 
-      # Backend CI runs per push and two of them finish in whatever order their
-      # test jobs happen to take, so a *successful* run is not necessarily the
-      # *latest* one.  Deploying a superseded run force-pushes older backend
-      # code over newer, on top of migrations that have already run.  But a
-      # newer tip only deploys this change if it gets its own CD run, and it
-      # does not when it touches nothing Backend CI triggers on.  The script
-      # therefore skips this run only when a later commit will trigger one, and
-      # otherwise lets it deploy its own commit — whose backend/ is identical to
-      # the tip's.  The concurrency group above serialises runs but says nothing
-      # about their order, so compare commits rather than assume.
-      - name: Check this run is not superseded by a later Backend CD run
-        id: freshness
+      # This run deploys main's state, never its trigger's commit: GitHub keeps
+      # one pending run per concurrency group and cancels it when a newer run
+      # arrives, so "a later run will deploy this" is not a promise a run can
+      # rely on.  The target is the newest first-parent commit touching a
+      # Backend CI trigger path; its backend tree equals the tip's.  The last
+      # run to arrive is never cancelled and resolves the same target.  See
+      # "Backend CD" in infra/README.md.
+      - name: Resolve the deploy target from main's tip
+        id: target
+        run: |
+          set -euo pipefail
+          TIP=$(git rev-parse HEAD)
+          ./infra/ci/backend-cd-target.sh "${TIP}" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Check Backend CI passed for the deploy target
+        id: ci-status
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          TARGET: ${{ steps.target.outputs.target }}
         run: |
           set -euo pipefail
-          TIP=$(gh api "repos/${REPO}/commits/main" --jq .sha)
-          ./infra/ci/backend-cd-freshness.sh "${RUN_SHA}" "${TIP}" | tee -a "$GITHUB_OUTPUT"
+          RESULT=$(gh api "repos/${REPO}/actions/workflows/backend-ci.yml/runs?head_sha=${TARGET}&event=push&branch=main&per_page=1" \
+            --jq '.workflow_runs[0] // {} | "\(.status // "") \(.conclusion // "")"')
+          read -r STATUS CONCLUSION <<< "${RESULT}"
+          ./infra/ci/backend-cd-target.sh --gate "${STATUS:-}" "${CONCLUSION:-}" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Check out the deploy target
+        if: steps.ci-status.outputs.deployable == 'true'
+        env:
+          TARGET: ${{ steps.target.outputs.target }}
+        run: git checkout --detach "${TARGET}"
 
       # The version is computed from the commits since the last server/v* tag
       # that touch backend/.  The same walk decides the tag and whether to push
@@ -66,7 +81,7 @@ jobs:
       # pipeline instead of silently mislabelling a deploy.
       - name: Compute server version
         id: server-version
-        if: steps.freshness.outputs.current == 'true'
+        if: steps.ci-status.outputs.deployable == 'true'
         run: |
           set -euo pipefail
           ./infra/ci/compute-server-version.sh | tee -a "$GITHUB_OUTPUT"
@@ -84,14 +99,14 @@ jobs:
       # so computes bump=none, and the existence check below covers the window
       # where the tag has not yet propagated to the fresh checkout.
       - name: Tag and release the server version
-        if: steps.freshness.outputs.current == 'true' && steps.server-version.outputs.bump != 'none'
+        if: steps.ci-status.outputs.deployable == 'true' && steps.server-version.outputs.bump != 'none'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ steps.server-version.outputs.tag }}
           VERSION: ${{ steps.server-version.outputs.version }}
           NOTES: ${{ steps.server-version.outputs.notes }}
-          TARGET_SHA: ${{ github.event.workflow_run.head_sha }}
+          TARGET_SHA: ${{ steps.target.outputs.target }}
         run: |
           set -euo pipefail
           if gh release view "${TAG}" >/dev/null 2>&1; then
@@ -104,7 +119,7 @@ jobs:
             --notes "${NOTES}"
 
       - name: Set up SSH
-        if: steps.freshness.outputs.current == 'true' && steps.server-version.outputs.deploy == 'true'
+        if: steps.ci-status.outputs.deployable == 'true' && steps.server-version.outputs.deploy == 'true'
         uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555 # v0.10.0
         with:
           ssh-private-key: ${{ secrets.DOKKU_SSH_PRIVATE_KEY }}
@@ -125,7 +140,7 @@ jobs:
       # Rotating the host or its key means updating DOKKU_HOST_KEY.  See
       # "Deploy host trust" in docs/BACKEND_GUIDELINES.md.
       - name: Pin the Dokku host key
-        if: steps.freshness.outputs.current == 'true' && steps.server-version.outputs.deploy == 'true'
+        if: steps.ci-status.outputs.deployable == 'true' && steps.server-version.outputs.deploy == 'true'
         env:
           DOKKU_HOST: ${{ vars.DOKKU_HOST }}
           DOKKU_HOST_KEY: ${{ vars.DOKKU_HOST_KEY }}
@@ -156,7 +171,7 @@ jobs:
       # --no-restart because the push below rebuilds and restarts with the new
       # env anyway.
       - name: Inject the server version into Dokku
-        if: steps.freshness.outputs.current == 'true' && steps.server-version.outputs.deploy == 'true'
+        if: steps.ci-status.outputs.deployable == 'true' && steps.server-version.outputs.deploy == 'true'
         env:
           VERSION: ${{ steps.server-version.outputs.version }}
           DOKKU_HOST: ${{ vars.DOKKU_HOST }}
@@ -173,7 +188,7 @@ jobs:
             config:set --no-restart jeeves "SERVER_VERSION=${VERSION}"
 
       - name: Deploy to Dokku
-        if: steps.freshness.outputs.current == 'true' && steps.server-version.outputs.deploy == 'true'
+        if: steps.ci-status.outputs.deployable == 'true' && steps.server-version.outputs.deploy == 'true'
         env:
           DOKKU_HOST: ${{ vars.DOKKU_HOST }}
           # Same pinning as the step above, applied to the transport git uses.

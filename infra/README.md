@@ -303,14 +303,15 @@ guest builds Android, not web.
 
 ## Backend CD
 
-`.github/workflows/backend-cd.yml` runs on every successful Backend CI on
-`main`:
+`.github/workflows/backend-cd.yml` runs after every Backend CI on `main`,
+whatever its conclusion:
 
-1. A freshness check (`ci/backend-cd-freshness.sh`) — skip when a later
-   commit on `main` touches a Backend CI trigger path, because that commit gets
-   its own CD run. Deploying a superseded run would force-push older code over
-   migrations that have already run. When later commits trigger no Backend CI
-   (app-only), no later run will come, so this run deploys its own commit.
+1. Target resolution (`ci/backend-cd-target.sh`) — the run ignores the commit
+   that triggered it and deploys the newest first-parent commit on `main`'s tip
+   that touches a Backend CI trigger path, when Backend CI for that commit
+   succeeded (still running: skip, its completion queues another run; red: skip
+   with a warning). GitHub cancels queued runs, so a run cannot leave its change
+   to a later one; the last run to arrive resolves the same target.
 2. `git push` to the Dokku remote, only when `ci/compute-server-version.sh`
    reports `deploy=true`: backend commits since the last `server/` tag, or a
    re-run at the commit the last tag names. A tag and its push therefore come
@@ -326,5 +327,5 @@ backend code (ADR-0026), so schema and sync behaviour move in the same push.
 `SERVER_VERSION`, from the conventional commits since the last `server/` tag
 A `!` commit or `BREAKING CHANGE:` footer bumps the inner major.
 Its test harnesses are `ci/tests/test-compute-server-version.sh` and
-`ci/tests/test-backend-cd-freshness.sh`, run by Backend
+`ci/tests/test-backend-cd-target.sh`, run by Backend
 CI's `infra-shell` job alongside `shellcheck`.
