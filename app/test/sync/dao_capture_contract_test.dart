@@ -661,6 +661,37 @@ void main() {
       expect(await db.select(db.todoTags).get(), isEmpty);
     });
 
+    // A removal of a link this device never held describes no effect. A
+    // tombstone for it would travel to the peers, and under last-writer-wins
+    // it would drop an assignment a peer had just made — the removal would
+    // take a link it never had. Every other removal path in the DAO
+    // tombstones only the links it found; this one has to match them.
+    test('removing a link the Outcome does not hold authors no op', () async {
+      final id = await seedOutcome();
+      final context = await db.tagDao.findOrCreateTag('home', 'context', _userId);
+      final notifier = notifierFor(id);
+      capture.clear();
+
+      expect(await notifier.removeContextTag(context), isTrue);
+
+      expect(capture.forCollection(todoTagsCollection), isEmpty,
+          reason: 'there was no link to remove, so there is nothing to describe');
+      expect(await db.select(db.todoTags).get(), isEmpty);
+    });
+
+    test('removing a person the Outcome does not hold authors no junction op',
+        () async {
+      final id = await seedOutcome();
+      final person = await db.tagDao.createPersonTag('Alice', _userId);
+      final notifier = notifierFor(id);
+      capture.clear();
+
+      expect(await notifier.removePersonTag(person), isTrue);
+
+      expect(capture.forCollection(todoTagsCollection), isEmpty,
+          reason: 'there was no link to remove, so there is nothing to describe');
+    });
+
     // The removal and its tombstone are one transaction, so a rolled-back
     // removal leaves the link in place and authors nothing: there is no
     // halfway state in which the peer has dropped the tag and this device has

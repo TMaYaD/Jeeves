@@ -171,7 +171,9 @@ should reach it has to be updated by hand; nothing will fail loudly if it is not
 **A removal is a tombstone.** The log has no row-level delete either, so a
 junction row that is simply absent is a row only this device dropped: the peer
 keeps it, and the next pull puts it back. Every path that removes a link
-authors that junction's tombstone, in the same transaction as the deletion.
+authors that junction's tombstone, in the same transaction as the deletion — and
+only for the links it actually held. A removal of a link this device never had
+authors nothing: its tombstone would drop an assignment a peer had just made.
 
 `SyncHealth.clean` is a derived getter over queue depth, unresolved alarms and
 quarantine count — never a stored status, so a wedged device cannot report itself

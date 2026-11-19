@@ -237,11 +237,18 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
 
   /// Removes the Outcome↔tag link and authors the tombstone a peer needs to
   /// drop it too. The Tag row stays. Runs in the caller's [capturing] scope.
+  ///
+  /// A link this device never held describes no effect, so the tombstone is
+  /// gated on the delete having removed a row: a repeated or stale removal
+  /// must not tombstone a pair a peer may have just assigned. Every other
+  /// removal path in this DAO — [removeProjectFromTodo], [removeTagFromOutcomes]
+  /// and the bulk Person set in `TodoDao.setPersonTagsForTodo` — tombstones
+  /// only the links it found.
   Future<void> unassignTag(String todoId, String tagId) async {
-    await (delete(todoTags)
+    final removed = await (delete(todoTags)
           ..where((jt) => jt.todoId.equals(todoId) & jt.tagId.equals(tagId)))
         .go();
-    _tombstoneTodoTag(todoId, tagId);
+    if (removed > 0) _tombstoneTodoTag(todoId, tagId);
   }
 
   void _captureCaptureTag(String captureId, String tagId, String userId) {
