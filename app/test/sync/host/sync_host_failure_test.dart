@@ -14,7 +14,7 @@ import 'package:jeeves/sync/host/sync_host_service.dart';
 import 'package:jeeves/sync/merge_strategy.dart';
 import 'package:jeeves/sync/sync_database.dart';
 
-import '../harness/v12_columns.dart';
+import '../harness/resolution_columns.dart';
 import 'host_harness.dart';
 
 const String _outcomeA = '3f2d1c4e-5a6b-4c8d-9e0f-1a2b3c4d5e6f';
@@ -95,9 +95,9 @@ void main() {
     await seed.customStatement('DROP TABLE change_sequence');
     await seed.customStatement('DROP TABLE plugin_cursors');
     // A v9 store predates the decision columns, and opening it at the current
-    // schema runs every later step: v12 adds columns, so the fixture has to
-    // take them away too.
-    await dropV12Columns(seed);
+    // schema runs every later step: v12 and v13 add columns, so the fixture
+    // has to take them away too.
+    await dropColumnsAddedAfter(seed, 9);
     await seed.customStatement(
         "INSERT INTO reduced_fields (collection, entity_id, field, value_json) "
         "VALUES ('todos', 't1', 'title', '\"Ship it\"')");

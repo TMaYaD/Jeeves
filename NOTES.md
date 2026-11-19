@@ -125,3 +125,6 @@ Format: `- <date>: Instinct: X. Here: Y — <why>.`
 
 ## 2026-11-18 (#980 — the member directory after a relaunch)
 - 2026-11-18: Instinct: state a pull fills in order needs no rebuild, because the pull fills it again. Here: the pull cursor is stored and the state was not, so a relaunch never re-pulled the registrations and every peer's key was gone (#980) — anything learned only from pulled ops needs a restore from the stored log at assembly.
+
+## 2026-11-19 (#575 — a schema version is also a fixture's business)
+- 2026-11-19: Instinct: adding a schema version means adding a migration step. Here: a migration fixture rewinds a store by *removing* what a later version brought, so a new column has to come off with the rest — otherwise the fixture still holds the column the migration is about to add and the upgrade fails on a duplicate column instead of on the thing it was meant to test. The columns live in `app/test/sync/harness/resolution_columns.dart`, keyed by the version that added them.

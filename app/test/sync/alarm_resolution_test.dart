@@ -17,7 +17,7 @@ import 'package:jeeves/sync/chain_verifier.dart';
 import 'package:jeeves/sync/sync_database.dart';
 import 'package:jeeves/sync/sync_rejection.dart';
 
-import 'harness/v12_columns.dart';
+import 'harness/resolution_columns.dart';
 
 /// Every alarm kind, and the decisions it may be given.
 ///
@@ -197,15 +197,16 @@ void main() {
   });
 
   group('the store', () {
-    test('a v11 sync store upgrades to v12 and keeps every row', () async {
+    test('a v11 sync store upgrades through v12 and keeps every row',
+        () async {
       final directory = Directory.systemTemp.createTempSync('sync-v11-');
       addTearDown(() => directory.deleteSync(recursive: true));
       final file = File('${directory.path}/sync.sqlite');
 
       final seed = SyncDatabase(NativeDatabase(file));
-      // Take the five new columns back out, so the file on disk is what a v11
-      // store held.
-      await dropV12Columns(seed);
+      // Take the columns v12 and v13 brought back out, so the file on disk is
+      // what a v11 store held.
+      await dropColumnsAddedAfter(seed, 11);
       await seed.customStatement(
         'INSERT INTO integrity_alarms (workspace_id, kind, detail, '
         'occurrence_count, first_detected_at, last_detected_at) '
@@ -222,7 +223,7 @@ void main() {
 
       final upgraded = SyncDatabase(NativeDatabase(file));
       addTearDown(upgraded.close);
-      expect(upgraded.schemaVersion, 12);
+      expect(upgraded.schemaVersion, 13);
 
       final alarm = await upgraded.select(upgraded.integrityAlarms).getSingle();
       expect(alarm.kind, IntegrityAlarmKind.ownWritesRollback.code);
@@ -241,6 +242,44 @@ void main() {
       expect(quarantine.detail, 'forged');
       expect(quarantine.resolution, isNull);
       expect(quarantine.resolutionDecidedAt, isNull);
+      expect(quarantine.resolutionProjectedAt, isNull);
+    });
+
+    test('a v12 sync store upgrades to v13 and keeps every row', () async {
+      final directory = Directory.systemTemp.createTempSync('sync-v12-');
+      addTearDown(() => directory.deleteSync(recursive: true));
+      final file = File('${directory.path}/sync.sqlite');
+
+      final seed = SyncDatabase(NativeDatabase(file));
+      // A v12 store had the decision columns but not the projection marker.
+      await dropColumnsAddedAfter(seed, 12);
+      await seed.customStatement(
+        'INSERT INTO quarantined_ops (workspace_id, reason, detail, envelope, '
+        "detected_at, resolution, resolution_decided_at) VALUES "
+        "('workspace-1', 'bad_signature', 'forged', X'', "
+        "'2026-08-01T00:00:00.000Z', 'took_upstream', "
+        "'2026-08-01T00:00:00.000Z')",
+      );
+      await seed.customStatement('PRAGMA user_version = 12');
+      await seed.close();
+
+      final upgraded = SyncDatabase(NativeDatabase(file));
+      addTearDown(upgraded.close);
+      expect(upgraded.schemaVersion, 13);
+
+      final quarantine = await upgraded.select(upgraded.quarantinedOps).getSingle();
+      expect(quarantine.reason, SyncRejectionReason.badSignature.code);
+      expect(
+        quarantine.resolution,
+        AlarmResolution.tookUpstream.code,
+        reason: 'the decision was made before the projection marker existed',
+      );
+      expect(quarantine.resolutionDecidedAt, isNotNull);
+      expect(
+        quarantine.resolutionProjectedAt,
+        isNull,
+        reason: 'nothing has been projected, so nothing has been stamped',
+      );
     });
   });
 }
