@@ -28,7 +28,7 @@ EnrolmentCeremonyStatus _derive({
 }) =>
     deriveEnrolmentCeremonyStatus(
       workspaceIds: _workspaces,
-      foundedWorkspaceIds: founded,
+      registeredWorkspaceIds: founded,
       storedMemberId: memberId,
       pinnedRootPk: pinnedRootPk,
       highestEscrowVersionSeen: escrowVersion,
@@ -43,7 +43,7 @@ void main() {
       expect(status.rootPkFingerprint, isNull);
       expect(status.escrowVersion, isNull,
           reason: 'version 0 is "never accepted one", not a version');
-      expect(status.foundedWorkspaceIds, isEmpty);
+      expect(status.registeredWorkspaceIds, isEmpty);
     });
 
     test('a pinned Root with no keys is half-founded, not un-enrolled', () {
@@ -74,7 +74,7 @@ void main() {
         escrowVersion: 1,
       );
       expect(status.state, EnrolmentState.foundingIncomplete);
-      expect(status.foundedWorkspaceIds, ['default-workspace']);
+      expect(status.registeredWorkspaceIds, ['default-workspace']);
     });
 
     test('keys plus every Workspace founded is enrolled', () {
@@ -88,7 +88,7 @@ void main() {
       expect(status.memberId, 'member-1');
       expect(status.escrowVersion, 2);
       // Reported in ceremony order regardless of the order they were observed in.
-      expect(status.foundedWorkspaceIds, _workspaces);
+      expect(status.registeredWorkspaceIds, _workspaces);
     });
   });
 
