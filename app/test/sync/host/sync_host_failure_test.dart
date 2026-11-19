@@ -1,9 +1,11 @@
 /// Failures partway through a drain or a remote batch must not lose what
-/// already merged, and a v9 sync store must upgrade without losing merge state.
+/// already merged, and an older sync store must upgrade without losing merge
+/// state.
 @TestOn('!browser')
 library;
 
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -112,6 +114,79 @@ void main() {
             .get())
         .map((r) => r.read<String>('name'));
     expect(tables, containsAll(['change_sequence', 'plugin_cursors']));
+    final field = await upgraded
+        .customSelect('SELECT value_json FROM reduced_fields').getSingle();
+    expect(field.read<String>('value_json'), '"Ship it"');
+    expect(await upgraded.customSelect('SELECT 1 FROM field_clocks').get(),
+        hasLength(1));
+    expect(await upgraded.customSelect('SELECT 1 FROM row_tombstones').get(),
+        hasLength(1));
+  });
+
+  test('a v11 sync store upgrades to v12 and keeps every row', () async {
+    final directory = Directory.systemTemp.createTempSync('sync-v11-');
+    addTearDown(() => directory.deleteSync(recursive: true));
+    final file = File('${directory.path}/sync.sqlite');
+
+    final seed = SyncDatabase(NativeDatabase(file));
+    await seed.customStatement('DROP TABLE unauthored_changes');
+    await seed.into(seed.opLog).insert(
+          OpLogCompanion.insert(
+            seq: 1,
+            workspaceId: 'w1',
+            envelope: Uint8List.fromList([1, 2, 3]),
+            opId: 'op-1',
+            authorMemberId: 'a' * 32,
+            authorSeq: 1,
+            receivedAt: DateTime.utc(2026, 1, 2),
+          ),
+        );
+    await seed.into(seed.outbox).insert(
+          OutboxCompanion.insert(
+            workspaceId: 'w1',
+            opId: 'op-1',
+            authorSeq: 1,
+            envelope: Uint8List.fromList([1, 2, 3]),
+            capturedAt: DateTime.utc(2026, 1, 2),
+          ),
+        );
+    await seed.customStatement(
+        "INSERT INTO reduced_fields (collection, entity_id, field, value_json) "
+        "VALUES ('todos', 't1', 'title', '\"Ship it\"')");
+    await seed.customStatement(
+        "INSERT INTO field_clocks (collection, entity_id, field, wall_ms, counter, member_id_hex) "
+        "VALUES ('todos', 't1', 'title', 5, 0, '${'a' * 32}')");
+    await seed.customStatement(
+        "INSERT INTO row_tombstones (collection, entity_id, wall_ms, counter, member_id_hex) "
+        "VALUES ('todos', 't2', 6, 1, '${'a' * 32}')");
+    // What the store read back before the upgrade is what it must read back
+    // after it: the same library, the same rows, unchanged.
+    final loggedBefore = await seed.select(seed.opLog).getSingle();
+    final outboxedBefore = await seed.select(seed.outbox).getSingle();
+    await seed.customStatement('PRAGMA user_version = 11');
+    await seed.close();
+
+    final upgraded = SyncDatabase(NativeDatabase(file));
+    addTearDown(upgraded.close);
+    final tables = (await upgraded
+            .customSelect("SELECT name FROM sqlite_master WHERE type = 'table'")
+            .get())
+        .map((r) => r.read<String>('name'));
+    expect(tables, contains('unauthored_changes'));
+    expect(
+        await upgraded.customSelect('SELECT 1 FROM unauthored_changes').get(),
+        isEmpty,
+        reason: 'a device that predates the table had nothing recorded');
+
+    final logged = await upgraded.select(upgraded.opLog).getSingle();
+    expect(logged.seq, loggedBefore.seq);
+    expect(logged.opId, loggedBefore.opId);
+    expect(logged.envelope, loggedBefore.envelope);
+    expect(logged.receivedAt, loggedBefore.receivedAt);
+    final outboxed = await upgraded.select(upgraded.outbox).getSingle();
+    expect(outboxed.opId, outboxedBefore.opId);
+    expect(outboxed.envelope, outboxedBefore.envelope);
+    expect(outboxed.capturedAt, outboxedBefore.capturedAt);
     final field = await upgraded
         .customSelect('SELECT value_json FROM reduced_fields').getSingle();
     expect(field.read<String>('value_json'), '"Ship it"');

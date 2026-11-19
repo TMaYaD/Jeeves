@@ -10,6 +10,11 @@
 /// after that commit is the row deleted. A crash between the two commits replays
 /// the row: the merge is idempotent and `change_id` is a unique key on the
 /// sequence, so the replay leaves one entry.
+///
+/// That same transaction records a change merged under a member id in
+/// `unauthored_changes`: the record and the merge commit together, so no clock
+/// can name a member without either an op or a record. A row leaves that table
+/// when the op-log bridge has authored the change or handed it back.
 library;
 
 import 'dart:async';
@@ -215,8 +220,48 @@ class SyncHostService implements SyncHost, OutboxDrainer {
             [changeId, source, jsonEncode(change.toJson())],
           );
         }
+        await _recordUnauthored(change, changeId, source);
         return affected;
       });
+
+  /// Record a merged change that still needs an op.
+  ///
+  /// A local write made while the device was signed in carries the member id of
+  /// that session. The op-log bridge authors it into the log, and until it has,
+  /// the change lives only in merge state — so a process killed in that window
+  /// loses it, and the next launch finds no trace of a change that still needs
+  /// an op. The record is written in the merge's own transaction, so the two
+  /// commit together: no clock can name a member without either an op or a
+  /// record.
+  ///
+  /// A change this device made under its own node id is left out: no op will
+  /// ever carry it, and every path that reads such a change looks for the
+  /// device node id.
+  Future<void> _recordUnauthored(
+    Change change,
+    String changeId,
+    String source,
+  ) async {
+    if (source != 'local') return;
+    final clock = change.highestClock;
+    if (clock == null) return;
+    final node = _deviceNodeId ?? (await readClockIdentity(_domain)).deviceNodeId;
+    if (clock.memberIdHex == node) return;
+    await _sync.customStatement(
+      'INSERT OR IGNORE INTO unauthored_changes '
+      '(change_id, collection, entity_id, member_id_hex, wall_ms, counter, change_json) '
+      'VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [
+        changeId,
+        change.collection,
+        change.entityId,
+        clock.memberIdHex,
+        clock.wallMs,
+        clock.counter,
+        jsonEncode(change.toJson()),
+      ],
+    );
+  }
 
   Future<bool> _hasCursors() async =>
       (await _sync.customSelect('SELECT 1 FROM plugin_cursors LIMIT 1').get())
@@ -357,6 +402,26 @@ class SyncHostService implements SyncHost, OutboxDrainer {
   Future<List<Change>> changesStampedByDevice() async => changesStampedBy(
       _deviceNodeId ?? (await readClockIdentity(_domain)).deviceNodeId);
 
+  /// Forget a change the op-log bridge has settled.
+  ///
+  /// The change has been authored into the op log, or refused for good, so the
+  /// record that said it still needed an op has nothing left to say. The match
+  /// is on the **exact** clock — wall time, counter and member id — so a
+  /// change written again since keeps its own record.
+  Future<void> forgetUnauthored(UnauthoredClock settled) async {
+    await _sync.customStatement(
+      'DELETE FROM unauthored_changes WHERE collection = ? AND entity_id = ? '
+      'AND wall_ms = ? AND counter = ? AND member_id_hex = ?',
+      [
+        settled.collection,
+        settled.entityId,
+        settled.clock.wallMs,
+        settled.clock.counter,
+        settled.clock.memberIdHex,
+      ],
+    );
+  }
+
   /// Re-stamp [unauthored] clocks under this device's own node id.
   ///
   /// A change the op-log bridge will never author — the write made before the
@@ -390,6 +455,15 @@ class SyncHostService implements SyncHost, OutboxDrainer {
                 entry.clock.counter, entry.clock.memberIdHex],
           );
         }
+        // The change is the device's own now, so it no longer needs an op to be
+        // authored: its record leaves with the re-stamp, in the same
+        // transaction.
+        await _sync.customStatement(
+          'DELETE FROM unauthored_changes WHERE collection = ? AND entity_id = ? '
+          'AND wall_ms = ? AND counter = ? AND member_id_hex = ?',
+          [entry.collection, entry.entityId, entry.clock.wallMs,
+              entry.clock.counter, entry.clock.memberIdHex],
+        );
       }
     });
   }
