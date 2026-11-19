@@ -44,4 +44,51 @@ void main() {
     await folder.remove('Outcomes/a.md');
     expect(await folder.read('Outcomes/a.md'), isNull);
   });
+
+  test('two writers of one page do not share a temporary file', () async {
+    // Two plugin instances write the same page at once — the old vault's
+    // writer and the new one's. Each write needs a temporary file of its own,
+    // or the first rename consumes the second one's file.
+    final other = DirectoryVaultFolder(root);
+    await Future.wait([
+      folder.writeAtomically('Outcomes/a.md', 'one'),
+      other.writeAtomically('Outcomes/a.md', 'two'),
+    ]);
+    expect(await folder.read('Outcomes/a.md'), anyOf('one', 'two'));
+    expect(root.listSync(recursive: true).whereType<File>().length, 1);
+  });
+
+  test('a temporary file left behind is not a page', () async {
+    await folder.writeAtomically('Outcomes/a.md', 'a');
+    File('${root.path}/Outcomes/a.md.jeeves-tmp').writeAsStringSync('old');
+    expect(await folder.listMarkdownFiles('Outcomes'), ['Outcomes/a.md']);
+    await folder.writeAtomically('Outcomes/a.md', 'b');
+    expect(await folder.read('Outcomes/a.md'), 'b');
+  });
+
+  test('a folder that is a link out of the vault is refused', () async {
+    // A file syncer, or anything else with access to the folder, can leave a
+    // link behind. Dart's file operations follow one, so a link out of the
+    // vault would take the read or the write outside it.
+    final outside = await Directory.systemTemp.createTemp('vault_outside');
+    addTearDown(() => outside.delete(recursive: true));
+    Link('${root.path}/Outcomes').createSync(outside.path);
+
+    await expectLater(
+        folder.read('Outcomes/a.md'), throwsArgumentError);
+    await expectLater(
+        folder.writeAtomically('Outcomes/a.md', 'a'), throwsArgumentError);
+    expect(outside.listSync().whereType<File>(), isEmpty);
+  });
+
+  test('a file that is a link out of the vault is refused', () async {
+    final outside = await Directory.systemTemp.createTemp('vault_outside');
+    addTearDown(() => outside.delete(recursive: true));
+    final secret = File('${outside.path}/secret.txt')
+      ..writeAsStringSync('not a page');
+    Directory('${root.path}/Outcomes').createSync();
+    Link('${root.path}/Outcomes/a.md').createSync(secret.path);
+
+    await expectLater(folder.read('Outcomes/a.md'), throwsArgumentError);
+  });
 }
