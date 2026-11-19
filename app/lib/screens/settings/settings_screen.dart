@@ -14,6 +14,7 @@ import '../../providers/auth_provider.dart';
 import '../../providers/build_version_provider.dart';
 import '../../providers/calendar_timeline_provider.dart';
 import '../../providers/clarify_mode_provider.dart';
+import '../../providers/device_names_provider.dart';
 import '../../providers/dev_options_provider.dart';
 import '../../providers/focus_session_planning_settings_provider.dart';
 import '../../providers/focus_settings_provider.dart';
@@ -23,6 +24,7 @@ import '../../providers/periodic_review_settings_provider.dart';
 import '../../providers/shutdown_settings_provider.dart';
 import '../../providers/bypassed_outcomes_provider.dart';
 import '../../services/export_service.dart';
+import '../../sync/device_names.dart';
 import '../../widgets/app_title_bar/app_title_bar.dart';
 import '../enrolment/enrolment_ceremony_screen.dart';
 import '../tag_management/tag_management_screen.dart';
@@ -93,6 +95,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           ),
           const Divider(height: 1, color: Color(0xFFF3F4F6)),
           _sectionHeader('SYNC'),
+          // The name this device goes by on the user's other devices. It is
+          // ordinary synced data, so it travels with the account; the row is
+          // here in every state because a device can be named before it is
+          // signed in, and a name set while signed out carries into the
+          // account later.
+          _deviceNameTile(context, ref),
           if (!isAuthenticated) ...[
             ListTile(
               key: const Key('sign_in_to_sync_tile'),
@@ -366,6 +374,56 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
+  /// The row that shows the name this device goes by, and the way to change
+  /// it.
+  ///
+  /// The name is stored as an ordinary synced preference, so it follows the
+  /// account and the user's other devices can show it. **Only this device is
+  /// named here**: naming another device is a different thing, and this screen
+  /// has no list of devices to name.
+  ///
+  /// The subtitle is the name, or "Not named yet" when there is none. A device
+  /// that has never been named is a normal state, not an error.
+  Widget _deviceNameTile(BuildContext context, WidgetRef ref) {
+    final name = ref.watch(thisDeviceNameProvider).asData?.value;
+    return ListTile(
+      key: const Key('device_name_tile'),
+      leading: const Icon(Icons.devices_outlined, color: Color(0xFF9CA3AF)),
+      title: const Text(
+        'This device',
+        style: TextStyle(fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+      ),
+      subtitle: Text(
+        name ?? 'Not named yet',
+        style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+      ),
+      onTap: () => _renameThisDevice(context, ref),
+    );
+  }
+
+  /// Asks for a name and stores it under every id this device has.
+  ///
+  /// The name is normalised by the store, so what the user typed is not what
+  /// is stored — an empty or all-space name is refused by the dialog before
+  /// it gets here.
+  Future<void> _renameThisDevice(BuildContext context, WidgetRef ref) async {
+    final current = ref.read(thisDeviceNameProvider).asData?.value ?? '';
+    final typed = await showDialog<String>(
+      context: context,
+      builder: (ctx) => _DeviceNameDialog(initialName: current),
+    );
+    if (typed == null) return;
+    try {
+      await ref
+          .read(deviceNamesProvider)
+          .renameThisDevice(ref.read(currentUserIdProvider), typed);
+    } on Object catch (error) {
+      // A name that could not be written is a device without a name, which is
+      // a state the screen already shows. It is not worth a crash.
+      debugPrint('settings: could not name this device — $error');
+    }
+  }
+
   Widget _sectionHeader(String title) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 4),
@@ -413,6 +471,69 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
 const String _kEqualRitualTimesMessage =
     "Daily Planning and Evening Shutdown can't be at the same time.";
+
+/// The dialog that names this device.
+///
+/// One field, pre-filled with the name the device already has, so the user
+/// edits a name rather than writes one from scratch. **Save is disabled while
+/// the field holds no name**: a name that is empty once trimmed is not a name,
+/// and the store would refuse it anyway.
+class _DeviceNameDialog extends StatefulWidget {
+  const _DeviceNameDialog({required this.initialName});
+
+  /// The name this device already has, or the empty string when it has none.
+  final String initialName;
+
+  @override
+  State<_DeviceNameDialog> createState() => _DeviceNameDialogState();
+}
+
+class _DeviceNameDialogState extends State<_DeviceNameDialog> {
+  late final TextEditingController _controller =
+      TextEditingController(text: widget.initialName);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final canSave = normaliseDeviceName(_controller.text) != null;
+    return AlertDialog(
+      title: const Text('Name this device'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            key: const Key('device_name_field'),
+            controller: _controller,
+            maxLength: maxDeviceNameLength,
+            autofocus: true,
+            onChanged: (_) => setState(() {}),
+          ),
+          const SizedBox(height: 8),
+          const Text('Your other devices show this name.'),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          key: const Key('device_name_save'),
+          onPressed: canSave
+              ? () => Navigator.pop(context, _controller.text)
+              : null,
+          child: const Text('Save'),
+        ),
+      ],
+    );
+  }
+}
 
 /// Daily Planning and Evening Shutdown must not share a time. True when
 /// [picked] equals [other]; the caller then saves nothing and this has told the

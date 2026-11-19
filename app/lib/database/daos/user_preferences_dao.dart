@@ -121,6 +121,31 @@ class UserPreferencesDao {
     return {for (final r in rows) r.read<String>('key'): r.read<String>('value')};
   }
 
+  /// Every key that has a row for [userId], tombstones included. [getAll] hides
+  /// tombstones, so "has this user ever written this key" needs its own read.
+  Future<Set<String>> getRowKeys(String userId) async {
+    final rows = await _db.customSelect(
+      'SELECT "key" FROM user_preferences WHERE user_id = ?',
+      variables: [Variable(userId)],
+      readsFrom: {_db.userPreferences},
+    ).get();
+    return {for (final r in rows) r.read<String>('key')};
+  }
+
+  /// Upserts only the entries whose key has no row at all (value or tombstone)
+  /// for [userId]; the existence check and the writes share one transaction so a
+  /// pulled row can never be overwritten by a stale local value.
+  Future<void> setAllIfAbsent(String userId, Map<String, String> entries) async {
+    if (entries.isEmpty) return;
+    await _db.capturing(() async {
+      final present = await getRowKeys(userId);
+      for (final entry in entries.entries) {
+        if (present.contains(entry.key)) continue;
+        await set(userId, entry.key, entry.value);
+      }
+    });
+  }
+
   /// Stream of ALL rows (including tombstones) for [userId]. Used by
   /// SyncedPreferencesNotifier to detect deletions and rebuild its map.
   Stream<List<UserPreference>> watchAll(String userId) {

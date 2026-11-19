@@ -762,7 +762,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('TAGS'), findsOneWidget);
+      expect(find.text('LABELS'), findsOneWidget);
       // Project picker's optional-state affordance.
       expect(find.text('No project'), findsOneWidget);
       // Context picker's "add a tag" placeholder chip.

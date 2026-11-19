@@ -54,7 +54,7 @@ class TagNotifier {
       throw ArgumentError.value(
         name,
         'name',
-        'Tag name must be between 1 and 100 characters.',
+        'Name must be between 1 and 100 characters.',
       );
     }
 
@@ -73,7 +73,7 @@ class TagNotifier {
       throw ArgumentError.value(
         newName,
         'newName',
-        'Tag name must be between 1 and 100 characters.',
+        'Name must be between 1 and 100 characters.',
       );
     }
     final db = _ref.read(databaseProvider);
@@ -89,7 +89,7 @@ class TagNotifier {
       throw ArgumentError.value(
         newName,
         'newName',
-        'Tag name must be between 1 and 100 characters.',
+        'Name must be between 1 and 100 characters.',
       );
     }
     final db = _ref.read(databaseProvider);

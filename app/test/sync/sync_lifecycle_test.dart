@@ -24,16 +24,21 @@ import 'dart:typed_data';
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:jeeves/sync/control_payload.dart' show memberKindDevice;
 import 'package:jeeves/sync/enrolment_state.dart';
 import 'package:jeeves/sync/envelope.dart' show opClassContent;
+import 'package:jeeves/sync/ids.dart' show defaultWorkspaceId;
 import 'package:jeeves/sync/initial_upload.dart' show InitialUploadReport;
 import 'package:jeeves/sync/initial_upload_plan.dart' show uploadRefused;
 import 'package:jeeves/sync/key_wraps.dart' show MemberKeyWrap;
 import 'package:jeeves/sync/sync_lifecycle.dart';
+import 'package:jeeves/sync/sync_rejection.dart' show SyncRejectionReason;
 import 'package:jeeves/sync/sync_transport.dart';
 
 import '../test_helpers.dart';
+import 'harness/author_fixture.dart';
 import 'harness/fake_sync_server.dart';
+import 'harness/reduced_state.dart' show domainRows;
 import 'harness/sim_device.dart' show DeviceLink, FakeClock;
 import 'harness/sim_workspace.dart' show simulationStartWallMs;
 import 'harness/stack_phone.dart';
@@ -187,11 +192,12 @@ void main() {
   });
 
   Future<StackPhone> phone({
+    String label = 'A',
     bool fileBacked = false,
     UserTransport Function(DeviceLink)? userTransport,
   }) async {
     final built = await StackPhone.create(
-      label: 'A',
+      label: label,
       userId: _userId,
       server: server,
       clock: clock,
@@ -308,6 +314,135 @@ void main() {
     expect(report['authored_op_count'], 0);
     expect(report['skipped_entity_count'], report['planned_entity_count']);
     expect(_contentOpCount(server), report['planned_entity_count']);
+  });
+
+  /// Two enrolled devices of one account, both active.
+  ///
+  /// A founds the Workspace and B joins it with the passphrase A was handed, so
+  /// the two have learned each other's keys the way two real devices do: A's key
+  /// in B's directory comes from the Workspace genesis, B's key in A's from the
+  /// `member_register` B authored on joining.
+  Future<(StackPhone, StackPhone)> enrolledPair({
+    bool aFileBacked = false,
+    bool bFileBacked = false,
+  }) async {
+    final a = await phone(fileBacked: aFileBacked);
+    final outcome = await a.enrolAsFirstDevice();
+    expect(await a.activate(), SyncActivation.active);
+    final b = await phone(label: 'B', fileBacked: bFileBacked);
+    await b.enrolWithPassphrase(outcome.passphrase);
+    expect(await b.activate(), SyncActivation.active);
+    return (a, b);
+  }
+
+  test('a relaunched second device applies a change the first device writes '
+      'afterwards', () async {
+    final (a, b) = await enrolledPair(bFileBacked: true);
+    final aMemberId = a.stack.identity.memberId;
+
+    // B learned A's key from the Workspace genesis. Asserted *before* the
+    // relaunch, so the assertion after it cannot pass for the wrong reason —
+    // an empty test here would prove nothing at all.
+    expect(b.stack.defaultClient.directory.isChained(aMemberId), isTrue);
+
+    // Process death: a fresh stack, and with it a fresh directory. The log, the
+    // pull cursor and the key store all survive; the in-memory state does not.
+    await b.relaunch();
+    expect(await b.activate(), SyncActivation.active);
+
+    // A writes *after* the relaunch, so the change reaches B over the wire.
+    const outcomeId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    await seedOneOutcome(a, id: outcomeId);
+    await a.lifecycle!.flushOutboxNow();
+    await b.stack.defaultClient.sync();
+
+    expect(
+      (await b.stack.defaultClient.quarantined(includeReleased: false))
+          .where((row) => row.authorMemberId == aMemberId),
+      isEmpty,
+      reason: 'a relaunch must not make the peer\'s change untrustworthy',
+    );
+    expect(
+      (await domainRows(b.domain, 'todos')).map((row) => row['id']),
+      contains(outcomeId),
+      reason: 'the change must be applied, not merely refused',
+    );
+  });
+
+  test('a relaunched first device applies a change a later-enrolled device '
+      'writes afterwards', () async {
+    final (a, b) = await enrolledPair(aFileBacked: true);
+    final bMemberId = b.stack.identity.memberId;
+
+    // A must learn B's registration **before** the relaunch. Otherwise the pull
+    // after it would simply learn it again and the test would pass for the
+    // wrong reason — the same pull that proves the fix would have hidden it.
+    await a.stack.defaultClient.sync();
+    await (await a.preferencesClient).sync();
+    expect(a.stack.defaultClient.directory.isChained(bMemberId), isTrue);
+
+    await a.relaunch();
+
+    // The directory survives the process death: the registration is in the
+    // applied control log, so it can be restored from there.
+    expect(a.stack.defaultClient.directory.isChained(bMemberId), isTrue);
+    expect(a.stack.defaultClient.directory.keyExchangeFor(bMemberId), isNotNull);
+    expect(a.stack.defaultClient.directory.kindOf(bMemberId), memberKindDevice);
+
+    expect(await a.activate(), SyncActivation.active);
+
+    const outcomeId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    await seedOneOutcome(b, id: outcomeId);
+    await b.lifecycle!.flushOutboxNow();
+    await a.stack.defaultClient.sync();
+
+    expect(
+      (await a.stack.defaultClient.quarantined(includeReleased: false))
+          .where((row) => row.authorMemberId == bMemberId),
+      isEmpty,
+    );
+    expect(
+      (await domainRows(a.domain, 'todos')).map((row) => row['id']),
+      contains(outcomeId),
+    );
+  });
+
+  test('a relaunched device still refuses a change from a key that is not '
+      'chained to Root', () async {
+    final (_, b) = await enrolledPair(bFileBacked: true);
+
+    await b.relaunch();
+    expect(await b.activate(), SyncActivation.active);
+
+    // A key Root never vouched for. The device has no registration for it, and
+    // the restore must not invent one: restoring what was verified is not the
+    // same thing as trusting anything.
+    final stranger = await AuthorFixture.create(
+      seed: Uint8List.fromList(List<int>.generate(32, (index) => index + 11)),
+    );
+    final workspaceId = defaultWorkspaceId(_userId);
+    server.injectUnchecked(
+      workspaceId,
+      await stranger.nextEnvelope(workspaceId),
+    );
+
+    await b.stack.defaultClient.sync();
+
+    // The claim is the refusal, not a row count: injecting pokes the signal
+    // listener, so the listener's pull and this one can race and file the same
+    // refused op twice. Every row the stranger produced must carry the same
+    // reason, and there must be at least one — an op that were trusted would
+    // produce none.
+    final strangerRows = (await b.stack.defaultClient.quarantined(
+      includeReleased: false,
+    ))
+        .where((row) => row.authorMemberId == stranger.memberId);
+    expect(strangerRows, isNotEmpty,
+        reason: 'the stranger\'s change must be refused, not applied');
+    expect(
+      strangerRows.map((row) => row.reason).toSet(),
+      {SyncRejectionReason.memberNotChainedToRoot.code},
+    );
   });
 
   test('a refused entity is recorded and does not hold the marker open',

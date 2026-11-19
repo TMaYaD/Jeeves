@@ -45,7 +45,9 @@
 /// and seq ordering guarantees it is pulled before any of that author's content
 /// ops, so the pull itself hydrates the directory in order. A directory refresh
 /// racing a pull is not a hazard this client manages; it is a hazard this
-/// client cannot have.
+/// client cannot have. After a relaunch the directory is restored from the
+/// applied control log at assembly, because the pull cursor outlives the
+/// process and the registrations would never be served again.
 library;
 
 import 'dart:async' show Completer, unawaited;
@@ -911,7 +913,7 @@ class SyncClient {
   /// log, and exactly one genesis may exist. Retaining the queue here would wedge
   /// it for ever — our genesis can never become acceptable — so the staged ops go
   /// and the author chain rewinds to what the log actually acknowledges. See
-  /// [_dropSupersededGenesis].
+  /// [_dropUnacceptedOps].
   /// The queue is posted in [maxOpsPerBatch] chunks, in `author_seq` order, each
   /// acknowledged before the next goes out. Unchunked, a device that authored
   /// more than the server's cap while offline would re-POST the same oversized
@@ -944,7 +946,7 @@ class SyncClient {
         if (refusal.code != genesisNotFirstCode) rethrow;
         // Genesis sits at the head of the queue, so everything still unsent is
         // queued behind it and goes with it — not just this chunk.
-        await _dropSupersededGenesis(pending.sublist(start));
+        await _dropUnacceptedOps(pending.sublist(start));
         return FlushOutcome.genesisSuperseded;
       }
       await _markSent(chunk);
@@ -1028,7 +1030,14 @@ class SyncClient {
             ..where((row) => row.id.isIn([for (final row in acknowledged) row.id])))
           .write(OutboxCompanion(sentAt: Value(_now())));
 
-  /// Discard a genesis the race is already lost, and everything queued behind it.
+  /// Drop this Workspace's unsent control ops, and rewind the author chain to
+  /// the head the log attests.
+  ///
+  /// **The caller's rows are the only ones dropped.** Two callers, one routine:
+  /// a genesis the race is already lost (the flush's case) and an enrolment that
+  /// was interrupted before its registration reached the server
+  /// ([discardUnsentControlOps]'s case). Both are the same fact: the batch was
+  /// never accepted, so the positions its rows claim are unspent.
   ///
   /// **This is not the outbox being edited as evidence.** The outbox is authored
   /// truth about what the *server holds* — that is what the own-writes comparison
@@ -1043,7 +1052,7 @@ class SyncClient {
   /// a device that has just lost a founding race is nothing at all.
   ///
   /// No alarm. A lost race is two honest devices doing the same correct thing.
-  Future<void> _dropSupersededGenesis(List<OutboxRow> superseded) async {
+  Future<void> _dropUnacceptedOps(List<OutboxRow> superseded) async {
     // Read the re-derived head *before* the transaction, so clearing `authorState`
     // and rewriting it are one atomic step. The head derives from `op_log`, which
     // this transaction does not touch, so reading it first is safe — whereas a
@@ -1077,6 +1086,38 @@ class SyncClient {
             );
       }
     });
+  }
+
+  /// Drop this Workspace's unsent **control** ops, and rewind the author chain
+  /// to the head the log attests.
+  ///
+  /// The case is an enrolment that was interrupted before its registration
+  /// reached the server: the queue still holds the registration the server has
+  /// never seen, and re-authoring one behind it would claim an author position
+  /// the log says is free while the queue says otherwise. Dropping the queued
+  /// rows and re-authoring against the freshly pulled head is what keeps the
+  /// chain honest — and the head is the log's, not a remembered number.
+  ///
+  /// **Only control ops are ever dropped.** A queued content op is the user's
+  /// own work, and discarding it is not this call's business: every unsent row
+  /// is read first, and the call refuses rather than deleting anything if one
+  /// of them is not a control op.
+  Future<void> discardUnsentControlOps() async {
+    final pending = await (_db.select(_db.outbox)
+          ..where((row) => row.workspaceId.equals(workspaceId) & row.sentAt.isNull())
+          ..orderBy([(row) => OrderingTerm(expression: row.authorSeq)]))
+        .get();
+    if (pending.isEmpty) return;
+    for (final row in pending) {
+      final header = OpHeader.parse(row.envelope);
+      if (header.opClass != opClassControl) {
+        throw StateError(
+          'refusing to discard unsent op ${header.opId}: it is a content op, '
+          'and only control ops may be dropped',
+        );
+      }
+    }
+    await _dropUnacceptedOps(pending);
   }
 
   /// The own-writes verdict on one refused POST.
@@ -2823,6 +2864,55 @@ class SyncClient {
             ..orderBy([(row) => OrderingTerm(expression: row.seq)]))
           .get();
 
+  /// Whether the chained-member directory has been refilled from the applied
+  /// control log yet.
+  bool _chainedMembersRestored = false;
+
+  /// Refill [directory] from the registrations this device already verified and
+  /// applied.
+  ///
+  /// The directory of other devices' keys lives only in memory, and the only
+  /// thing that ever fills it is a *pulled* registration. The pull cursor is
+  /// stored and outlives the process, so after a relaunch the server never
+  /// serves those registrations again: the directory comes back empty and every
+  /// change from another device is refused as `member_not_chained_to_root`.
+  ///
+  /// The registrations are not stored a second time — they are already in the
+  /// applied control log, byte for byte, and this reads them from there. A row
+  /// exists in that table only after the full verification in `_verifyControlOp`
+  /// and the chain check in `_applyControlOp`, so restoring one restores a fact
+  /// this device already established rather than trusting something new: a key
+  /// Root never vouched for has no row and is still refused.
+  ///
+  /// The Root signature is not re-checked here. The rows were verified before
+  /// they were written, the grants view already trusts them unverified, and
+  /// anyone able to rewrite this database could rewrite the pinned Root too, so a
+  /// second check would protect nothing.
+  ///
+  /// Rows on a losing control-fork branch are left out, which is the same row
+  /// set the grants view reads. A running session keeps such a key until it
+  /// exits, so for that one case a restarted device reports
+  /// `member_not_chained_to_root` where a running one reports `no_live_grant`.
+  /// Both refuse the change; the restart is the stricter of the two.
+  Future<void> restoreChainedMembersFromAppliedControlLog() async {
+    if (_chainedMembersRestored) return;
+    for (final row in await _appliedControlLog()) {
+      switch (row.controlType) {
+        case controlTypeWorkspaceGenesis:
+          directory.rememberChained(
+            ControlPayload.decode(row.payloadBytes)
+                .genesisCertificate()
+                .asRegistration(),
+          );
+        case controlTypeMemberRegister:
+          directory.rememberChained(
+            ControlPayload.decode(row.payloadBytes).certificate(),
+          );
+      }
+    }
+    _chainedMembersRestored = true;
+  }
+
   /// The grants view, derived from the applied control log.
   ///
   /// Nothing about the view is *stored*: [_grantsViewCache] lives only in memory
@@ -2991,6 +3081,29 @@ class SyncClient {
   /// The chain link a control op this device authors next must name.
   Future<Uint8List> appliedControlHead() async =>
       (await _controlChain())?.lastControlPayloadHash ?? zeroPrevControlHash;
+
+  /// Whether this Workspace's applied control log already holds **this device's**
+  /// own registration.
+  ///
+  /// A registration is a `workspace_genesis` — the device founded the Workspace —
+  /// or a `member_register` — it joined one. The *author* is what makes it this
+  /// device's: the control log is shared by every Member of the Workspace, and
+  /// a peer's registration says nothing about whether this device may claim one.
+  ///
+  /// Read from the applied log and not from the member directory, because the
+  /// directory is shared by the Workspaces of one User: it would report this
+  /// device as registered in a Workspace it has never claimed.
+  Future<bool> ownRegistrationApplied() async {
+    final memberId = identity.memberId;
+    for (final row in await _appliedControlLog()) {
+      if (row.authorMemberId != memberId) continue;
+      if (row.controlType == controlTypeMemberRegister ||
+          row.controlType == controlTypeWorkspaceGenesis) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   // --- Control fork resolution (F14e) ----------------------------------------
 

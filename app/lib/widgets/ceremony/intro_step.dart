@@ -10,7 +10,7 @@
 ///
 /// The estimate is an approximation by design: 2 minutes per item to be
 /// walked, plus (Daily Planning only) a flat 5 minutes for the Energy/Time
-/// check-ins and task selection. It is rounded up to the nearest 5 and floored
+/// checks and task selection. It is rounded up to the nearest 5 and floored
 /// at 5, so the intro always shows a scannable time — a zero-item Weekly
 /// Review reads "about 5m", never "0". The counts recompute run-to-run
 /// from the current lists.

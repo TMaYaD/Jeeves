@@ -174,6 +174,7 @@ class SyncLifecycle {
     Future<void> Function(Duration)? listenerDelay,
     Duration flushDebounce = outboxFlushDebounce,
     String Function() mintTagId = initialUploadRandomTagId,
+    Future<void> Function()? onActivationFinished,
   })  : _stack = stack,
         _domain = domain,
         _capture = capture,
@@ -183,6 +184,7 @@ class SyncLifecycle {
         _listenerDelay = listenerDelay,
         _flushDebounce = flushDebounce,
         _mintTagId = mintTagId,
+        _onActivationFinished = onActivationFinished,
         _markers = InitialUploadMarkerStore(stack.database),
         _registry = CollectionRegistry(stack.database);
 
@@ -203,6 +205,14 @@ class SyncLifecycle {
   final Future<void> Function(Duration)? _listenerDelay;
   final Duration _flushDebounce;
   final String Function() _mintTagId;
+
+  /// What the caller wants done once an activation has finished.
+  ///
+  /// The lifecycle knows nothing about *what* it is: it runs the closure and
+  /// forgets it. That keeps the ordering rule — "after the activation" — here,
+  /// where the activation is, and leaves the meaning to the caller.
+  final Future<void> Function()? _onActivationFinished;
+
   final InitialUploadMarkerStore _markers;
   final CollectionRegistry _registry;
 
@@ -241,9 +251,48 @@ class SyncLifecycle {
   Future<SyncActivation> activate() {
     final running = _inFlight;
     if (running != null) return running;
-    final started = _activate();
+    final started = _activateAndFinish();
     _inFlight = started;
     return started.whenComplete(() => _inFlight = null);
+  }
+
+  /// The sequence, then the caller's after-activation work.
+  ///
+  /// The hook runs for every outcome but [SyncActivation.deactivated]: an
+  /// abandoned activation belongs to an account nobody is signed into any more,
+  /// and the hook would write into it. Every other outcome — including a
+  /// failed sync and an incomplete upload — is a state the *device* is in, and
+  /// the hook is about the device rather than about the sync.
+  ///
+  /// The activation result is the caller's answer and is not affected by it:
+  /// a device that could not do its after-activation work is still a device
+  /// that activated.
+  Future<SyncActivation> _activateAndFinish() async {
+    final result = await _activate();
+    if (result == SyncActivation.deactivated) return result;
+    await _runActivationFinished();
+    return result;
+  }
+
+  /// The caller's after-activation work, logged and swallowed.
+  ///
+  /// Swallowed on purpose: the activation has already happened, and a failure
+  /// here must not turn a started sync into a failed one. Logged rather than
+  /// ignored, so a device that repeatedly cannot finish is diagnosable.
+  Future<void> _runActivationFinished() async {
+    final hook = _onActivationFinished;
+    if (hook == null) return;
+    try {
+      await hook();
+    } on Object catch (error, stackTrace) {
+      developer.log(
+        'the after-activation work failed',
+        name: 'jeeves.sync.lifecycle',
+        level: 900, // WARNING
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
   }
 
   Future<SyncActivation> _activate() async {

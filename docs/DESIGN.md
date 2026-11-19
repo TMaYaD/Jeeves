@@ -208,7 +208,7 @@ The body is a single Jeeves-speak sentence (§ Voice) with the time estimate
 rendered **inline** as a bold, larger, accent-coloured run — the scannable
 focal point sits inside the sentence, not stacked above it. The estimate is an
 approximation: 2 minutes per item to be walked, plus a flat 5 for Daily
-Planning's Energy/Time check-ins and selection (Weekly Review adds no flat),
+Planning's Energy/Time checks and selection (Weekly Review adds no flat),
 rounded up to the nearest 5 and floored at 5 so a zero-item ceremony reads
 "about 5m", never "0"; durations use the shared `h`/`m` form (`3h 30m`). At zero items the copy switches to a shared
 light-day pool. Copy is drawn once per performance from a seedable pool (the
@@ -526,7 +526,7 @@ their reasons so that a new surface can reuse the same contract.
 | Representation | Fields and layout | Interaction contract |
 |---|---|---|
 | `OutcomeMetaLine` | Read-only chips, ordered energy · estimate · time logged · due. Unset attributes omitted; the caller supplies the attributes it shows. | No gestures; the containing surface owns the tap target. |
-| [`AddedDuringTheDayTag`](../app/lib/widgets/added_during_the_day_tag.dart) | Text tag `Added during the day`, marking an Outcome added to the Plan during Execution rather than chosen in Planning. Last item in the row's meta line. 12sp medium `#4B5563` on `#F3F4F6`, no icon; the text carries the state, not colour. Shown on the Now screen's Plan list and on the Evening Shutdown unfinished-Outcome card and Settled rows. | No gestures; the containing surface owns the tap target. |
+| [`AddedDuringTheDayTag`](../app/lib/widgets/added_during_the_day_tag.dart) | Text tag `Added during the day`, marking an Outcome added to the Plan during Execution rather than chosen in Planning. Last item in the row's meta line. 12sp medium `#4B5563` on `#F3F4F6`, 4px radius, no icon; the text carries the state, not colour. Shown on the Now screen's Plan list and on the Evening Shutdown unfinished-Outcome card and Settled rows. | No gestures; the containing surface owns the tap target. |
 | [`OutcomeRow`](../app/lib/widgets/outcome_row.dart) | Optional leading slot, title (normal, muted or struck), secondary line, metadata (default `OutcomeMetaLine`), optional trailing slot. Flat or framed with r12 border and h16/v12 padding. | Whole-row tap and long-press callbacks. No ink or chevron when no tap callback exists. |
 | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Banner (icon, text, tone), people chips, title, current Action, notes, optional metadata and actions. Absent Action and notes are omitted. | Injected `ProcessToHandlers` or resolution buttons. |
 | Outcome detail / [`OutcomeAttributeStrip`](../app/lib/widgets/outcome_attribute_strip.dart) | Title → editable attribute strip → contexts → people → Plan → notes. Strip uses the metadata order with shared attribute editors. | Each editable chip has an ancestor tap target; logged time stays read-only. |

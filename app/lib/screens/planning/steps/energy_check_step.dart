@@ -5,8 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../providers/focus_session_planning_provider.dart';
 
-class DayCheckinEnergyStep extends ConsumerWidget {
-  const DayCheckinEnergyStep({super.key});
+class EnergyCheckStep extends ConsumerWidget {
+  const EnergyCheckStep({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {

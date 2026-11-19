@@ -65,3 +65,7 @@ class SearchQuery {
         includeDone: includeDone ?? this.includeDone,
       );
 }
+
+/// Synced-preferences key for the recent-searches list (an ordered, capped JSON
+/// list of strings, most recent first).
+const kRecentSearchesPrefKey = 'jeeves_recent_searches';
