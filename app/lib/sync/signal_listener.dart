@@ -255,11 +255,13 @@ class SignalListener {
   /// that author's op 1, and `seq` ordering guarantees the register is pulled
   /// before any of that author's content. The pull hydrates the directory in
   /// order by itself, which is why `SyncClient` has no `refreshMemberDirectory`
-  /// for this to call. Ops from a Member whose registration has not been
-  /// verified still quarantine as `member_not_chained_to_root`, and terminally:
-  /// the release scan re-admits chain-gap refusals only, so an unchained author's
-  /// content stays refused until #549 opens membership up. A refresh here could
-  /// not have prevented it either way.
+  /// for this to call. (After a relaunch the directory is restored from the
+  /// applied control log at assembly, before any of this runs.) Ops from a
+  /// Member whose registration has not been verified still quarantine as
+  /// `member_not_chained_to_root`, and terminally: the release scan re-admits
+  /// chain-gap refusals only, so an unchained author's content stays refused
+  /// until #549 opens membership up. A refresh here could not have prevented it
+  /// either way.
   Future<void> _runSync() async {
     _syncRunCount++;
     await _client.pull();

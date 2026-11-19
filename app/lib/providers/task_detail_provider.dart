@@ -143,9 +143,11 @@ class TaskDetailNotifier {
 
   /// Runs [write] only if the Outcome is still in local storage, checked inside
   /// the write's own transaction. Returns whether it landed. Every write below
-  /// goes through here, so a surface that outlives its Outcome (a focus-loss
-  /// save, a dispose flush, a sheet opened before the delete) cannot write to
-  /// it (#447). Callers that do not care may ignore the result.
+  /// goes through here — except the two Person-set writes, whose DAO method
+  /// makes the same check inside the same transaction — so a surface that
+  /// outlives its Outcome (a focus-loss save, a dispose flush, a sheet opened
+  /// before the delete) cannot write to it (#447). Callers that do not care may
+  /// ignore the result.
   Future<bool> _ifOutcomePresent(Future<void> Function() write) =>
       _db.todoDao.writeIfOutcomePresent(_todoId, write);
 
@@ -277,34 +279,26 @@ class TaskDetailNotifier {
       _ifOutcomePresent(
           () => _db.tagDao.enforceSingleProject(_todoId, _userId, tagId));
 
+  /// Clears this Outcome's Project link, leaving the Project Tag itself.
+  ///
+  /// The link and the tombstone a peer needs to drop it too are written in one
+  /// transaction, so the removal reaches the sync host instead of living on
+  /// this device until the next pull restores the Project.
   Future<bool> clearProject() =>
-      _ifOutcomePresent(() async {
-      final projectTagIds = await (_db.select(_db.tags)
-            ..where((t) => t.type.equals('project')))
-          .map((t) => t.id)
-          .get();
-      if (projectTagIds.isEmpty) return;
-      await (_db.delete(_db.todoTags)
-            ..where(
-              (jt) =>
-                  jt.todoId.equals(_todoId) & jt.tagId.isIn(projectTagIds),
-            ))
-          .go();
-      });
+      _ifOutcomePresent(() => _db.tagDao.removeProjectFromTodo(_todoId));
 
   Future<bool> assignContextTag(String tagId) =>
       _ifOutcomePresent(() async {
       await _db.tagDao.assignTag(_todoId, tagId, _userId);
       });
 
+  /// Removes a context-typed tag from this Outcome.
+  ///
+  /// The link and its tombstone share one transaction: unassignment is a
+  /// tombstone op, never row absence, or a replayed assignment would
+  /// re-attach the tag on the peer.
   Future<bool> removeContextTag(String tagId) =>
-      _ifOutcomePresent(() async {
-      await (_db.delete(_db.todoTags)
-            ..where(
-              (jt) => jt.todoId.equals(_todoId) & jt.tagId.equals(tagId),
-            ))
-          .go();
-      });
+      _ifOutcomePresent(() => _db.tagDao.unassignTag(_todoId, tagId));
 
   /// Assigns a person-typed tag to this todo and stamps last_clarified_at.
   Future<bool> assignPersonTag(String tagId) =>
@@ -314,13 +308,13 @@ class TaskDetailNotifier {
       });
 
   /// Removes a person-typed tag from this todo and stamps last_clarified_at.
+  ///
+  /// The link, its tombstone and the stamp share one transaction, so the
+  /// removal reaches the peer and the Outcome's clarification moment agrees
+  /// with the delegate set the peer ends up with.
   Future<bool> removePersonTag(String tagId) =>
       _ifOutcomePresent(() async {
-      await (_db.delete(_db.todoTags)
-            ..where(
-              (jt) => jt.todoId.equals(_todoId) & jt.tagId.equals(tagId),
-            ))
-          .go();
+      await _db.tagDao.unassignTag(_todoId, tagId);
       await _db.todoDao.stampLastClarifiedAt(_todoId);
       });
 
@@ -334,21 +328,13 @@ class TaskDetailNotifier {
       _db.todoDao.setPersonTagsAndStamp(_todoId, tagIds, _userId);
 
   /// Removes all person-typed tags from this todo and stamps last_clarified_at.
+  ///
+  /// An empty target set is the whole delegate set, so this reuses the same
+  /// path the Person picker uses: every link it drops is tombstoned in the
+  /// same transaction as the stamp, and the peer ends up with no delegates
+  /// rather than with the ones this device still had.
   Future<bool> clearAllPersonTags() =>
-      _ifOutcomePresent(() async {
-      final personTagIds = await (_db.select(_db.tags)
-            ..where((t) => t.type.equals('person')))
-          .map((t) => t.id)
-          .get();
-      if (personTagIds.isEmpty) return;
-      await (_db.delete(_db.todoTags)
-            ..where(
-              (jt) =>
-                  jt.todoId.equals(_todoId) & jt.tagId.isIn(personTagIds),
-            ))
-          .go();
-      await _db.todoDao.stampLastClarifiedAt(_todoId);
-      });
+      _db.todoDao.setPersonTagsAndStamp(_todoId, const <String>{}, _userId);
 
   // --- Planned queue (ADR-0004 story 5, issue #475) ---
 

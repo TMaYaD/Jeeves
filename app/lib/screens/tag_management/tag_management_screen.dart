@@ -7,14 +7,14 @@ import '../../widgets/capture/capture_action.dart';
 import '../common/tag_management_sheet.dart';
 
 /// The three kinds of entry the user can manage from Settings. Each maps to a
-/// `tags.type` value: Tags are `context` rows, Projects `project`, People
+/// `tags.type` value: Labels are `context` rows, Projects `project`, People
 /// `person`.
 enum TagManagementKind {
   tags(
     type: 'context',
     routePath: '/manage/tags',
-    title: 'Tags',
-    emptyText: 'No tags yet.',
+    title: 'Labels',
+    emptyText: 'No labels yet.',
   ),
   projects(
     type: 'project',

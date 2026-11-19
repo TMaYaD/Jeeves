@@ -12,11 +12,11 @@ export '../../widgets/tag_cloud_view.dart'
         cleanTagCloudQuery,
         organiseTagCloud,
         TagCloudLayout,
-        tagCloudCollapsedCap;
+        tagCloudFindFieldThreshold;
 
 /// Bumped by the shell each time the drawer closes. The drawer keeps its
 /// child mounted while closed, so [TagCloud] listens to this to drop its find
-/// query and expansion instead of relying on disposal.
+/// query instead of relying on disposal.
 final tagCloudDrawerClosedCountProvider =
     NotifierProvider<TagCloudDrawerClosedCount, int>(
         TagCloudDrawerClosedCount.new);
@@ -46,7 +46,7 @@ class _TagCloudState extends ConsumerState<TagCloud> {
   @override
   Widget build(BuildContext context) {
     // The drawer keeps its child mounted while closed; a new key on each close
-    // drops the view's find query and expansion.
+    // drops the view's find query.
     ref.listen<int>(tagCloudDrawerClosedCountProvider,
         (_, _) => setState(() => _viewGeneration++));
     final tagsAsync = ref.watch(contextTagsWithCountProvider);

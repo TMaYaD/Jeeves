@@ -70,7 +70,7 @@ The outbound half already exists: `DomainOpCapture` emits one coalesced `(collec
 
 ## Candidate plugins
 
-**Op-log server.** Today's backend, re-seated behind the interface. Envelopes, signatures, per-author chains, encryption, enrolment, key wraps and the control plane stay inside it, unchanged. It is the only candidate that serves several Users and a Service holding a Workspace grant.
+**Op-log server.** Today's backend, re-seated behind the interface, and targeting **roundelay**: the op-log core extracted into its own service, which replaces `backend/app/sync/` ([#744](https://github.com/TMaYaD/Jeeves/issues/744)). Envelopes, signatures, per-author chains, encryption, enrolment, key wraps and the control plane stay inside the plugin; it speaks roundelay's wire format, so adopting roundelay starts a fresh log rather than carrying the current one across. It is the only candidate that serves several Users and a Service holding a Workspace grant.
 
 **Op-log folder.** The same signed op log, written to a folder instead of posted to a server. Each device appends to its own segment files — `ops/{member_id}/000001.log`, rolled at a size or age bound, sealed once rolled — and reads every other member's. Every file has exactly one writer, so a file syncer never sees a conflict; the per-author hash chains still detect a truncated or rolled-back file; the cursor is `(member, segment, byte offset)` per author. Records are length-prefixed and checksummed so a partially-transferred tail is ignored rather than misread. Needs no server, keeps every integrity property of the op log, and is opaque to the user.
 
@@ -82,8 +82,6 @@ The outbound half already exists: `DomainOpCapture` emits one coalesced `(collec
 
 Pages are readable, greppable and editable by any tool; an edit made outside the app is observed, diffed field by field and applied as a change. Each device keeps a private, unsynced copy of the last version of each page it has seen. When the medium surfaces a concurrent version, the plugin has base, local and remote, and merges three-way per field; only the same field changed on both sides is a real conflict, and the host's strategy settles it. Deletion is a tombstone in the page, never a missing file, because a missing file is indistinguishable from one that has not arrived. The vault carries no signatures and no encryption; its trust model is whoever can read the folder.
 
-**Roundelay.** A plugin for the external roundelay sync service. What the interface owes it is the same as for any other: changes in, changes out, health. Its protocol, identity model and conflict semantics are not documented in this repository and are an open question below.
-
 ## Consequences
 
 - **The domain store is no longer disposable on its own.** [ADR-0040](../adr/0040-local-durability-is-independent-of-sync.md) rests on the op log being able to reproject it. With a vault as the only plugin there is no op log; the host's merge state becomes the device's durable record, and the domain store remains a projection of it.
@@ -93,8 +91,7 @@ Pages are readable, greppable and editable by any tool; an edit made outside the
 
 ## Open questions
 
-1. **Roundelay.** Its protocol, how it identifies devices and Users, whether it carries field clocks or whole records, and whether it merges server-side.
-2. **Vault field clocks.** Where a page keeps the clocks that order its fields — a frontmatter key, or a sidecar under a hidden folder — and how much of that a person editing the page is expected to see.
-3. **Workspace.** Whether partitioning ([ADR-0027](../adr/0027-workspace-as-partition-unit.md)) stays a host concept every plugin respects, or becomes the op-log plugin's concern alone.
-4. **Health.** How several plugins' health folds into the single drawer indicator and the sync-health screen.
-5. **Device identity.** What the host uses as the HLC tie-breaker before, or without, enrolment.
+1. **Vault field clocks.** Where a page keeps the clocks that order its fields — a frontmatter key, or a sidecar under a hidden folder — and how much of that a person editing the page is expected to see.
+2. **Workspace.** Whether partitioning ([ADR-0027](../adr/0027-workspace-as-partition-unit.md)) stays a host concept every plugin respects, or becomes the op-log plugin's concern alone.
+3. **Health.** How several plugins' health folds into the single drawer indicator and the sync-health screen.
+4. **Device identity.** What the host uses as the HLC tie-breaker before, or without, enrolment.

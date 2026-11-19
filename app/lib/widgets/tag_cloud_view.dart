@@ -4,20 +4,18 @@ import '../database/gtd_database.dart' show Tag;
 import '../database/daos/tag_dao.dart' show TagWithCount;
 import 'tag_list.dart';
 
-/// Number of tags the collapsed cloud shows (selected tags are never hidden).
-const int tagCloudCollapsedCap = 12;
+/// `Find…` is offered once more tags than this are eligible.
+const int tagCloudFindFieldThreshold = 12;
 
 /// What [organiseTagCloud] decided to render.
 class TagCloudLayout {
   const TagCloudLayout({
     required this.visibleTags,
-    required this.hiddenTagCount,
     required this.offerFindField,
     required this.fontSizes,
   });
 
   final List<TagWithCount> visibleTags;
-  final int hiddenTagCount;
   final bool offerFindField;
   final Map<String, double> fontSizes;
 }
@@ -33,17 +31,17 @@ String typedTagName(String query) =>
 
 /// Orders, filters and sizes a tag cloud.
 ///
-/// Selected tags come first, then the rest by active count (highest first),
-/// ties by name ignoring case. A non-empty [query] (case-insensitive, leading
-/// `@` ignored) lifts the cap. Font size steps 15 / 13 / 12 sp by count
-/// relative to the busiest visible tag. Tags with no active count are dropped
-/// unless selected, or unless [includeUnusedTags] is set.
+/// Tags are ordered by name, ignoring case; two names that differ only by
+/// case keep a fixed order by tag id. Selection and active count do not
+/// affect the order. A non-empty [query] (case-insensitive, leading `@`
+/// ignored) filters the cloud to the matching tags. Font size steps
+/// 15 / 13 / 12 sp by count relative to the busiest visible tag. Tags with no
+/// active count are dropped unless selected, or unless [includeUnusedTags] is
+/// set.
 TagCloudLayout organiseTagCloud({
   required List<TagWithCount> tags,
   required Set<String> selectedIds,
   required String query,
-  required bool expanded,
-  int cap = tagCloudCollapsedCap,
   bool includeUnusedTags = false,
 }) {
   final eligible = tags
@@ -51,12 +49,10 @@ TagCloudLayout organiseTagCloud({
           includeUnusedTags || t.count > 0 || selectedIds.contains(t.tag.id))
       .toList()
     ..sort((a, b) {
-      final aSelected = selectedIds.contains(a.tag.id);
-      final bSelected = selectedIds.contains(b.tag.id);
-      if (aSelected != bSelected) return aSelected ? -1 : 1;
-      final byCount = b.count.compareTo(a.count);
-      if (byCount != 0) return byCount;
-      return a.tag.name.toLowerCase().compareTo(b.tag.name.toLowerCase());
+      final byName =
+          a.tag.name.toLowerCase().compareTo(b.tag.name.toLowerCase());
+      if (byName != 0) return byName;
+      return a.tag.id.compareTo(b.tag.id);
     });
 
   final needle = cleanTagCloudQuery(query);
@@ -67,15 +63,9 @@ TagCloudLayout organiseTagCloud({
           .toList()
       : eligible;
 
-  final selectedCount =
-      eligible.where((t) => selectedIds.contains(t.tag.id)).length;
-  final limit = searching || expanded
-      ? matching.length
-      : (selectedCount > cap ? selectedCount : cap);
-  final visible = matching.take(limit).toList();
+  final visible = matching;
 
-  final maxCount =
-      visible.fold<int>(0, (m, t) => t.count > m ? t.count : m);
+  final maxCount = visible.fold<int>(0, (m, t) => t.count > m ? t.count : m);
   double sizeFor(int count) {
     if (maxCount == 0 || count == 0) return 12;
     final ratio = count / maxCount;
@@ -86,15 +76,14 @@ TagCloudLayout organiseTagCloud({
 
   return TagCloudLayout(
     visibleTags: visible,
-    hiddenTagCount: matching.length - visible.length,
-    offerFindField: eligible.length > cap,
+    offerFindField: eligible.length > tagCloudFindFieldThreshold,
     fontSizes: {for (final t in visible) t.tag.id: sizeFor(t.count)},
   );
 }
 
 /// Presentational tag cloud shared by the navigation drawer and the Outcome
-/// context-tag editor. Owns the find query and the show-more state; takes its
-/// data and callbacks from the host and reads no providers.
+/// context-tag editor. Owns the find query; takes its data and callbacks from
+/// the host and reads no providers.
 class TagCloudView extends StatefulWidget {
   const TagCloudView({
     super.key,
@@ -116,7 +105,7 @@ class TagCloudView extends StatefulWidget {
   /// filter does not).
   final bool includeUnusedTags;
 
-  /// Show `Find…` even when the cloud fits under the cap.
+  /// Show `Find…` even when few tags are eligible.
   final bool alwaysOfferFindField;
 
   /// When set, a search naming no existing tag offers `Add "<name>"`, which
@@ -129,7 +118,6 @@ class TagCloudView extends StatefulWidget {
 
 class _TagCloudViewState extends State<TagCloudView> {
   final _queryController = TextEditingController();
-  bool _expanded = false;
   bool _creating = false;
 
   @override
@@ -145,7 +133,6 @@ class _TagCloudViewState extends State<TagCloudView> {
       tags: widget.tags,
       selectedIds: widget.selectedIds,
       query: query,
-      expanded: _expanded,
       includeUnusedTags: widget.includeUnusedTags,
     );
     final visible = layout.visibleTags;
@@ -203,22 +190,6 @@ class _TagCloudViewState extends State<TagCloudView> {
               key: Key('tag_cloud_no_matches'),
               style: mutedStyle,
             ),
-          )
-        else if (!searching &&
-            (layout.hiddenTagCount > 0 || _expanded) &&
-            offerFind)
-          TextButton(
-            key: const Key('tag_cloud_show_more'),
-            style: TextButton.styleFrom(
-              padding: EdgeInsets.zero,
-              minimumSize: Size.zero,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
-            onPressed: () => setState(() => _expanded = !_expanded),
-            child: Text(
-              _expanded ? 'Show fewer' : 'Show ${layout.hiddenTagCount} more',
-              style: mutedStyle,
-            ),
           ),
         if (canAdd)
           TextButton.icon(
@@ -242,7 +213,7 @@ class _TagCloudViewState extends State<TagCloudView> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-              content: Text('Failed to create tag. Please try again.')),
+              content: Text('Failed to create label. Please try again.')),
         );
       }
     } finally {

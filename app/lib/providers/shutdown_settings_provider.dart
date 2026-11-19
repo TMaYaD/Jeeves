@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/shutdown_settings.dart';
+import 'synced_preferences_provider.dart';
 
 const _kShutdownTimeHour = 'shutdown_settings_time_hour';
 const _kShutdownTimeMinute = 'shutdown_settings_time_minute';
@@ -17,41 +17,40 @@ final shutdownSettingsProvider =
 class ShutdownSettingsNotifier extends Notifier<ShutdownSettings> {
   @override
   ShutdownSettings build() {
-    _loadFromPrefs();
-    return const ShutdownSettings();
+    // Re-derive state when synced preferences change (includes cross-device sync).
+    ref.listen(syncedPreferencesProvider, (_, next) {
+      if (next is AsyncData<SyncedPreferences>) {
+        state = _fromPrefs(next.value);
+      }
+    });
+    final current = ref.read(syncedPreferencesProvider).asData?.value;
+    return current != null ? _fromPrefs(current) : const ShutdownSettings();
   }
 
-  Future<void> _loadFromPrefs() async {
-    final prefs = await SharedPreferences.getInstance();
-    final hour = prefs.getInt(_kShutdownTimeHour) ?? 18;
-    final minute = prefs.getInt(_kShutdownTimeMinute) ?? 0;
-    final notificationEnabled =
-        prefs.getBool(_kShutdownNotificationEnabled) ?? true;
-    final bannerEnabled = prefs.getBool(_kShutdownBannerEnabled) ?? true;
-
-    state = ShutdownSettings(
-      shutdownTime: TimeOfDay(hour: hour, minute: minute),
-      notificationEnabled: notificationEnabled,
-      bannerEnabled: bannerEnabled,
+  ShutdownSettings _fromPrefs(SyncedPreferences prefs) {
+    return ShutdownSettings(
+      shutdownTime: TimeOfDay(
+        hour: prefs.get<int>(_kShutdownTimeHour) ?? 18,
+        minute: prefs.get<int>(_kShutdownTimeMinute) ?? 0,
+      ),
+      notificationEnabled:
+          prefs.get<bool>(_kShutdownNotificationEnabled) ?? true,
+      bannerEnabled: prefs.get<bool>(_kShutdownBannerEnabled) ?? true,
     );
   }
 
   Future<void> setShutdownTime(TimeOfDay time) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(_kShutdownTimeHour, time.hour);
-    await prefs.setInt(_kShutdownTimeMinute, time.minute);
-    state = state.copyWith(shutdownTime: time);
+    await syncedPrefs(ref).setMany({
+      _kShutdownTimeHour: time.hour,
+      _kShutdownTimeMinute: time.minute,
+    });
   }
 
   Future<void> setNotificationEnabled(bool enabled) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_kShutdownNotificationEnabled, enabled);
-    state = state.copyWith(notificationEnabled: enabled);
+    await syncedPrefs(ref).set(_kShutdownNotificationEnabled, enabled);
   }
 
   Future<void> setBannerEnabled(bool enabled) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_kShutdownBannerEnabled, enabled);
-    state = state.copyWith(bannerEnabled: enabled);
+    await syncedPrefs(ref).set(_kShutdownBannerEnabled, enabled);
   }
 }

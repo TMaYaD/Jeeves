@@ -251,11 +251,11 @@ void main() {
         reason: 'the user advances by clicking Next',
       );
 
-      // Clicking Next from the empty state reaches the Energy Check-in.
+      // Clicking Next from the empty state reaches the Energy Check.
       await tester.tap(find.byKey(_nextKey));
       await _settle(tester);
       expect(_stateOf(tester).currentStep, 3);
-      expect(find.text('Energy Check-in'), findsOneWidget);
+      expect(find.text('Energy Check'), findsOneWidget);
 
       await _dispose(tester);
     });
