@@ -26,6 +26,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../auth/session_gate.dart';
 import '../sync/host/sync_host_service.dart';
 import '../sync/vault/android_vault_folder.dart';
+import '../sync/vault/vault_folder.dart';
 import '../sync/vault/vault_folder_factory.dart';
 import '../sync/vault/vault_plugin.dart';
 import 'sync_stack_provider.dart';
@@ -130,6 +131,13 @@ Future<String?> pickVaultFolder() async {
   return pickAndroidVaultFolder();
 }
 
+/// The folder a vault setting names.
+///
+/// Overridden in tests: a test needs a folder it can make slow, or make fail,
+/// and the real folder is reached through the platform.
+final vaultFolderFactoryProvider =
+    Provider<VaultFolder Function(String reference)>((ref) => openVaultFolder);
+
 /// This device's session, as a provider.
 ///
 /// The gate is a [ValueNotifier] because the router needs it outside a
@@ -183,28 +191,194 @@ final vaultPluginProvider = FutureProvider<VaultPlugin?>((ref) async {
   if (gate == SessionGate.checking) return null;
   if (gate == SessionGate.ready) return null; // the op log runs; the vault does not.
 
+  // The provider is disposed when the vault is turned off, or when the folder
+  // changes; the flag tells a build that is still waiting that it no longer
+  // owns the vault.
+  var stopped = false;
+  ref.onDispose(() => stopped = true);
+
   final reference = await ref.watch(vaultFolderProvider.future);
-  if (reference == null) return null;
+  if (stopped) return null;
 
   final host = await ref.watch(syncHostProvider.future);
+  if (stopped) return null;
+
   final sync = await ref.watch(syncDatabaseProvider.future);
-  final plugin = VaultPlugin(folder: openVaultFolder(reference), sync: sync);
-  await host.attach(plugin);
+  if (stopped) return null;
 
-  final timer = Timer.periodic(_vaultScanInterval, (_) {
-    unawaited(plugin.rescan());
-  });
-  final observer = _VaultResumeObserver(() => unawaited(plugin.rescan()));
-  WidgetsBinding.instance.addObserver(observer);
+  final folder = ref.watch(vaultFolderFactoryProvider)(reference);
+  final plugin = VaultPlugin(folder: folder, sync: sync);
+  final attachment = _VaultAttachment(host: host, plugin: plugin);
+  // Registered before the attach is awaited: a vault that is turned off while
+  // its first scan is running still takes its plugin back off the host, and a
+  // first scan that fails does not leave the host holding a plugin nobody
+  // reads.
+  ref.onDispose(attachment.stop);
 
-  ref.onDispose(() {
-    timer.cancel();
-    WidgetsBinding.instance.removeObserver(observer);
-    unawaited(_forgetTheVault(host, plugin));
-  });
-
+  try {
+    await attachment.attach();
+  } on Object {
+    await attachment.rollBack();
+    rethrow;
+  }
+  if (stopped) return null;
   return plugin;
 });
+
+/// One vault's attachment to the host.
+///
+/// Owns the plugin, the timer that reads the folder again and the observer
+/// that reads it when the app comes forward.
+///
+/// **The cleanup is registered before the attach is awaited.** A vault that is
+/// turned off while its first scan is running must still take its plugin back
+/// off the host, and a first scan that fails must not leave the host holding a
+/// plugin nobody reads.
+class _VaultAttachment {
+  _VaultAttachment({required this.host, required this.plugin});
+
+  final SyncHostService host;
+  final VaultPlugin plugin;
+
+  _VaultScanSchedule? _scans;
+  Timer? _scanTimer;
+  _VaultResumeObserver? _resumeObserver;
+  bool _stopped = false;
+
+  /// Attach to the host and start reading the folder.
+  Future<void> attach() async {
+    final scans = _VaultScanSchedule(plugin: plugin, host: host);
+    _scans = scans;
+    await _vaultLifecycle(() => host.attach(plugin));
+    if (_stopped) return;
+    _scanTimer = Timer.periodic(_vaultScanInterval, (_) => scans.request());
+    final observer = _VaultResumeObserver(() => scans.request());
+    _resumeObserver = observer;
+    WidgetsBinding.instance.addObserver(observer);
+  }
+
+  /// Stop reading the folder and take the plugin off the host.
+  void stop() {
+    if (_stopped) return;
+    _stopped = true;
+    _scanTimer?.cancel();
+    _scanTimer = null;
+    final observer = _resumeObserver;
+    _resumeObserver = null;
+    if (observer != null) WidgetsBinding.instance.removeObserver(observer);
+    _scans?.forgetWaiting();
+    unawaited(_detach());
+  }
+
+  /// Take the plugin off the host and drop this device's base copies.
+  ///
+  /// The cursor goes with it: otherwise the change sequence grows with nobody
+  /// reading it. The base copies go with it: they are copies, and the next
+  /// start reads the folder again. The folder itself is left as it is.
+  ///
+  /// The store can already be closed when the app is shutting down — the vault
+  /// is still off, and the next start reads the folder again — so a closed
+  /// store is logged, not thrown.
+  Future<void> _detach() async {
+    await _vaultLifecycle(() async {
+      try {
+        await host.detach(plugin.id, forgetCursor: true);
+        await plugin.clearBases();
+      } on Object catch (error) {
+        debugPrint('vault: detaching failed — $error');
+      }
+    });
+  }
+
+  /// Take the plugin off the host after a failed attach.
+  ///
+  /// The cursor is kept: the vault never started, so there is nothing to
+  /// forget, and the next start resumes where it left off.
+  Future<void> rollBack() async {
+    await _vaultLifecycle(() async {
+      try {
+        await host.detach(plugin.id);
+      } on Object catch (error) {
+        debugPrint('vault: the failed attachment was not taken off — $error');
+      }
+    });
+  }
+}
+
+/// The vault's reads of the folder.
+///
+/// **One read at a time, and at most one waiting.** A folder that takes longer
+/// to read than the tick has to wait must not queue a read behind every tick:
+/// the queue would grow without bound, the host's own writes would wait behind
+/// it, and stopping the vault would wait for all of it.
+///
+/// A read that fails is the folder's problem, not the app's: it is logged, and
+/// the next tick reads the folder again.
+class _VaultScanSchedule {
+  _VaultScanSchedule({required this.plugin, required this.host});
+
+  final VaultPlugin plugin;
+  final SyncHostService host;
+
+  bool _reading = false;
+  bool _waiting = false;
+
+  /// Read the folder again.
+  void request() {
+    if (_reading) {
+      _waiting = true;
+      return;
+    }
+    _reading = true;
+    unawaited(_run());
+  }
+
+  /// Forget the waiting read: the vault is stopping.
+  void forgetWaiting() => _waiting = false;
+
+  Future<void> _run() async {
+    try {
+      do {
+        _waiting = false;
+        await _readOnce();
+      } while (_waiting);
+    } finally {
+      _reading = false;
+    }
+  }
+
+  Future<void> _readOnce() async {
+    try {
+      await plugin.rescan();
+    } on Object catch (error) {
+      debugPrint('vault: the folder was not read — $error');
+    }
+    // What the host still owes this device: a page whose write failed is
+    // delivered again once the folder is writable again. The delivery is asked
+    // for here, outside the plugin's own queue, because the delivery needs
+    // that queue.
+    try {
+      await host.deliverAll();
+    } on Object catch (error) {
+      debugPrint('vault: the host could not deliver — $error');
+    }
+  }
+}
+
+/// The vault's attachments, one at a time.
+///
+/// The host keys its plugins by id, and the vault's id does not change when the
+/// folder does: the old vault's cleanup and the new vault's attachment must not
+/// overlap, or the old one's cleanup takes the new one's cursor away and the
+/// new vault is left with nothing to receive.
+Future<void> _vaultLifecycleTail = Future<void>.value();
+
+/// Run [action] after every vault action already queued.
+Future<T> _vaultLifecycle<T>(Future<T> Function() action) {
+  final run = _vaultLifecycleTail.then((_) => action());
+  _vaultLifecycleTail = run.then<void>((_) {}, onError: (Object _) {});
+  return run;
+}
 
 /// What a turn of the vault did.
 enum VaultTurnOutcome {
@@ -291,24 +465,6 @@ class VaultController {
 
 final vaultControllerProvider =
     Provider<VaultController>((ref) => VaultController(ref));
-
-/// Detach the plugin and drop this device's base copies.
-///
-/// Forget the cursor: otherwise the change sequence grows with nobody reading
-/// it. Clear this device's base copies: they are copies, and the next start
-/// reads the folder again. The folder itself is left as it is.
-///
-/// The store can already be closed when the app is shutting down — the vault
-/// is still on, and the next start picks the cursor up where it left off — so a
-/// closed store is logged, not thrown.
-Future<void> _forgetTheVault(SyncHostService host, VaultPlugin plugin) async {
-  try {
-    await host.detach(plugin.id, forgetCursor: true);
-    await plugin.clearBases();
-  } on Object catch (error) {
-    debugPrint('vault: detaching at shutdown failed — $error');
-  }
-}
 
 class _VaultResumeObserver with WidgetsBindingObserver {
   _VaultResumeObserver(this._onResumed);
