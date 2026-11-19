@@ -1,9 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/search_query.dart';
 import '../models/search_result.dart';
 import 'database_provider.dart';
+import 'synced_preferences_provider.dart';
 
 // ---------------------------------------------------------------------------
 // Query state
@@ -65,58 +67,85 @@ final hiddenDoneMatchCountProvider =
 // Recent searches
 // ---------------------------------------------------------------------------
 
-/// Persisted list of the last 10 search queries (most recent first).
+/// Synced list of the last 10 search queries (most recent first). The latest
+/// whole list wins across devices.
 final recentSearchesProvider =
     NotifierProvider<RecentSearchesNotifier, List<String>>(
   RecentSearchesNotifier.new,
 );
 
 class RecentSearchesNotifier extends Notifier<List<String>> {
-  static const _key = 'jeeves_recent_searches';
   static const _maxCount = 10;
 
-  // Set to true as soon as a local mutation (add/remove/clearAll) writes to
-  // state. This prevents the async [_load] started in [build] from clobbering
-  // newer in-memory changes if SharedPreferences resolves after the user has
-  // already interacted.
-  bool _hasLocalMutation = false;
+  /// Serialises the local read-modify-write, so two overlapping calls cannot
+  /// each read the same list and overwrite one another. The next caller waits
+  /// for the one before it.
+  Future<void> _pendingMutation = Future<void>.value();
 
   @override
   List<String> build() {
-    _load();
-    return const [];
+    ref.listen(syncedPreferencesProvider, (_, next) {
+      if (next is AsyncData<SyncedPreferences>) state = _fromPrefs(next.value);
+    });
+    final current = ref.read(syncedPreferencesProvider).asData?.value;
+    return current != null ? _fromPrefs(current) : const [];
   }
 
-  Future<void> _load() async {
-    final prefs = await SharedPreferences.getInstance();
-    if (_hasLocalMutation) return;
-    state = prefs.getStringList(_key) ?? [];
+  List<String> _fromPrefs(SyncedPreferences prefs) =>
+      prefs.get<List<dynamic>>(kRecentSearchesPrefKey)?.whereType<String>().toList() ??
+      const [];
+
+  /// Waits for the loaded snapshot so an early write cannot replace the stored
+  /// list with a one-entry list.
+  Future<List<String>> _loaded() async =>
+      _fromPrefs(await ref.read(syncedPreferencesProvider.future));
+
+  /// Runs [mutation] after every earlier local mutation has finished.
+  ///
+  /// Each mutation replaces the whole list, so two of them that read the same
+  /// snapshot would each drop the other's new entry. Serialising them keeps a
+  /// local lost update out of the list; the cross-device last-write-wins
+  /// behaviour is unchanged.
+  Future<void> _mutate(Future<void> Function() mutation) async {
+    final previous = _pendingMutation;
+    final done = Completer<void>();
+    _pendingMutation = done.future;
+    try {
+      await previous;
+      await mutation();
+    } finally {
+      // Always release the queue, so a failed mutation cannot wedge it.
+      done.complete();
+    }
   }
 
   Future<void> add(String query) async {
     final trimmed = query.trim();
     if (trimmed.isEmpty) return;
-    final updated = [trimmed, ...state.where((s) => s != trimmed)]
-        .take(_maxCount)
-        .toList();
-    _hasLocalMutation = true;
-    state = updated;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(_key, updated);
+    await _mutate(() async {
+      final current = await _loaded();
+      final updated = [trimmed, ...current.where((s) => s != trimmed)]
+          .take(_maxCount)
+          .toList();
+      state = updated;
+      await syncedPrefs(ref).set(kRecentSearchesPrefKey, updated);
+    });
   }
 
   Future<void> remove(String query) async {
-    final updated = state.where((s) => s != query).toList();
-    _hasLocalMutation = true;
-    state = updated;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(_key, updated);
+    await _mutate(() async {
+      final current = await _loaded();
+      final updated = current.where((s) => s != query).toList();
+      state = updated;
+      await syncedPrefs(ref).set(kRecentSearchesPrefKey, updated);
+    });
   }
 
   Future<void> clearAll() async {
-    _hasLocalMutation = true;
-    state = const [];
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_key);
+    await _mutate(() async {
+      await ref.read(syncedPreferencesProvider.future);
+      state = const [];
+      await syncedPrefs(ref).remove(kRecentSearchesPrefKey);
+    });
   }
 }

@@ -20,8 +20,9 @@
 ///
 /// The registry keeps these exceptions in one auditable place and makes the
 /// default — `lww`, which is non-destructive — apply to every current and
-/// future key that is not explicitly registered otherwise. New list/set keys
-/// **must** be registered as [ConflictStrategy.setMerge] before use.
+/// future key that is not explicitly registered otherwise. New *set* keys
+/// **must** be registered as [ConflictStrategy.setMerge] before use; an ordered,
+/// capped list (recent searches) is the explicit [ConflictStrategy.lww] case.
 ///
 /// A key may also register [ConflictStrategy.lww] *explicitly* in
 /// [preferenceConflictRegistry]. That is redundant at runtime — it is what the
@@ -48,6 +49,7 @@ import '../models/focus_settings.dart'
     show
         kFocusLongBreakDurationMinutesPrefKey,
         kFocusSprintsBeforeLongBreakPrefKey;
+import '../models/search_query.dart' show kRecentSearchesPrefKey;
 
 /// How two conflicting rows for the same `user_preferences` key are reconciled.
 enum ConflictStrategy {
@@ -118,6 +120,10 @@ const preferenceConflictRegistry = <String, ConflictStrategy>{
   // to one never drops the other's.
   kFocusLongBreakDurationMinutesPrefKey: ConflictStrategy.lww,
   kFocusSprintsBeforeLongBreakPrefKey: ConflictStrategy.lww,
+  // An ordered, capped list with removals: a union would sort it alphabetically,
+  // grow it past the cap and bring removed entries back. The latest whole list
+  // wins; the cost is that two simultaneous searches on two devices keep one.
+  kRecentSearchesPrefKey: ConflictStrategy.lww,
 };
 
 /// Returns the [ConflictStrategy] for [key].

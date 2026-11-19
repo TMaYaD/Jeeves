@@ -166,7 +166,7 @@ void main() {
       await tester.pumpWidget(widget);
       await _settle(tester);
 
-      // Energy Check-in (step 3) — a later step with no per-item cursor.
+      // Energy Check (step 3) — a later step with no per-item cursor.
       container.read(focusSessionPlanningProvider.notifier).goToStep(3);
       await tester.pumpAndSettle();
 
