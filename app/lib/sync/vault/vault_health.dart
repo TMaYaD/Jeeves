@@ -1,10 +1,11 @@
 /// What the vault reports about itself.
 ///
 /// The shared plugin health, plus the things only the vault knows: how many
-/// pages in the folder the app could not use, how many it could not take, and
-/// whether the folder could be reached at all. Nothing reads these yet — the
-/// drawer indicator folds plugin health in later — so a broken vault is
-/// reported and logged, and stays quiet on screen.
+/// pages in the folder the app could not use, how many it could not take, how
+/// many it owes a write, and whether the folder could be reached at all.
+/// Nothing reads these yet — the drawer indicator folds plugin health in
+/// later — so a broken vault is reported and logged, and stays quiet on
+/// screen.
 library;
 
 import '../host/change.dart';
@@ -15,6 +16,7 @@ class VaultHealth extends PluginHealth {
     super.lastSyncedAt,
     this.unreadablePageCount = 0,
     this.untakenPageCount = 0,
+    this.owedWriteBackCount = 0,
     this.folderReachable = true,
   });
 
@@ -34,4 +36,10 @@ class VaultHealth extends PluginHealth {
   /// listed, so nothing in it could be carried either way. The other folders
   /// were still read.
   final bool folderReachable;
+
+  /// Pages the app holds and the folder does not have yet, because a write
+  /// failed or was not allowed. They are owed a write-back and are written on
+  /// a later pass, so the count says the folder is behind the app rather than
+  /// leaving the app quietly ahead of it.
+  final int owedWriteBackCount;
 }

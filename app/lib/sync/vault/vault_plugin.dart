@@ -153,6 +153,7 @@ class VaultPlugin implements SyncPlugin {
         lastSyncedAt: DateTime.now().toUtc(),
         unreadablePageCount: _unreadablePageCount,
         untakenPageCount: _untakenPageCount,
+        owedWriteBackCount: _pendingWriteBacks.length,
         folderReachable: _folderReachable,
       ));
 

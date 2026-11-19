@@ -1093,6 +1093,45 @@ void main() {
         reason: 'the page it could not read was not reported');
   });
 
+  test('a page that cannot be written is owed, and counted in health',
+      () async {
+    final device = HostDevice.open('a');
+    addTearDown(device.close);
+    final host = await device.startHost();
+    final directory = Directory('${root.path}/vault')..createSync(recursive: true);
+    final folder = _RefusingFolder(DirectoryVaultFolder(directory));
+    folder.failing = true;
+    final plugin = VaultPlugin(folder: folder, sync: device.sync);
+    await host.attach(plugin);
+
+    await device.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'Plan', userId: _userId);
+
+    // The folder refuses to write. The delivery fails, so the change is taken
+    // again, and the page is owed a write.
+    final health = <VaultHealth>[];
+    plugin.health.listen(health.add);
+    await host.deliverAll();
+    await plugin.rescan();
+    await pumpEventQueue();
+
+    expect(await folder.listMarkdownFiles('Outcomes'), isEmpty,
+        reason: 'the page was written to a folder that refuses it');
+    expect(health, isNotEmpty, reason: 'the vault said nothing about itself');
+    expect(health.last.owedWriteBackCount, 1,
+        reason: 'the page that owes a write was not reported');
+
+    // The folder works again. The next pass writes the page that was owed.
+    folder.failing = false;
+    await plugin.rescan();
+    await pumpEventQueue();
+
+    expect(await folder.listMarkdownFiles('Outcomes'), hasLength(1),
+        reason: 'the owed page was not written');
+    expect(health.last.owedWriteBackCount, 0,
+        reason: 'the page was still owed after it was written');
+  });
+
   test('a folder that cannot be listed is reported in health', () async {
     final device = HostDevice.open('a');
     addTearDown(device.close);

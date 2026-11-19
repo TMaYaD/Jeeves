@@ -135,7 +135,7 @@ void main() {
         reason: 'the old vault finished cleaning up before the new one attached');
   });
 
-  test('a first scan that fails leaves the host without the vault', () async {
+  test('a first scan that cannot write leaves the vault on the host', () async {
     // An Outcome in the store: the first pass has a page to write.
     await db.todoDao.insertOutcome(
       id: 'outcome-1',
@@ -145,25 +145,27 @@ void main() {
     await settle();
     folder.failWrites = true;
 
-    await expectLater(
-      container.read(vaultPluginProvider.future),
-      throwsA(anything),
-      reason: 'the first scan failed',
-    );
+    // The folder cannot be written to. The vault still attaches: a folder that
+    // cannot be written now is not a folder that is gone, and the page is owed
+    // a write rather than lost. The same is true of a folder that cannot be
+    // listed at all.
+    final plugin = await container.read(vaultPluginProvider.future);
+    expect(plugin, isNotNull);
+    final host = await container.read(syncHostProvider.future);
+    expect(await host.cursorOf('vault'), isNotNull,
+        reason: 'the vault is attached to the host');
+    expect(folder.pages, isEmpty, reason: 'the page could not be written');
 
-    // The folder is writable again, and a new Outcome reaches the store: the
-    // vault is not on the host, so nothing is delivered to it.
+    // The folder is writable again. The next pass writes the page that was
+    // owed, without a restart and without another change.
     folder.failWrites = false;
-    await db.todoDao.insertOutcome(
-      id: 'outcome-2',
-      title: 'New title',
-      userId: _userId,
-    );
-    await settle();
-    await settle();
+    await plugin!.rescan();
 
-    expect(folder.pages, isEmpty,
-        reason: 'the failed attachment was taken off the host');
+    expect(
+      folder.pages.keys.where((path) => path.startsWith('Outcomes/')),
+      isNotEmpty,
+      reason: 'the owed page was written once the folder came back',
+    );
   });
 
   testWidgets('the folder is read again once, however many times it is asked',
