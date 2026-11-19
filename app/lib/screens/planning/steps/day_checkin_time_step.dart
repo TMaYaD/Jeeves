@@ -4,7 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../models/calendar_day.dart';
+import '../../../models/day_timeline.dart';
+import '../../../providers/calendar_timeline_provider.dart';
+import '../../../providers/clock_provider.dart';
 import '../../../providers/focus_session_planning_provider.dart';
+import '../../../providers/shutdown_settings_provider.dart';
+import '../../../services/calendar/calendar_types.dart';
 
 class DayCheckinTimeStep extends ConsumerStatefulWidget {
   const DayCheckinTimeStep({super.key});
@@ -23,6 +29,7 @@ class _DayCheckinTimeStepState extends ConsumerState<DayCheckinTimeStep> {
     final available = ref.read(focusSessionPlanningProvider).availableMinutes;
     _hoursCtrl = TextEditingController(text: (available ~/ 60).toString());
     _minutesCtrl = TextEditingController(text: (available % 60).toString());
+    ref.read(calendarTimelineProvider.notifier).refresh();
   }
 
   @override
@@ -61,11 +68,33 @@ class _DayCheckinTimeStepState extends ConsumerState<DayCheckinTimeStep> {
       focusSessionPlanningProvider.select((s) => s.availableMinutes),
       (_, available) => _syncControllers(available),
     );
+    final calendar = ref.watch(calendarTimelineProvider);
+    final flowOrigin = roundUpToFiveMinutes(ref.read(clockProvider)());
+    final dayEnd = calendar.status == CalendarTimelineStatus.ready
+        ? calendarDayEnd(
+            flowOrigin: flowOrigin,
+            shutdownTime: ref.watch(shutdownSettingsProvider).shutdownTime)
+        : null;
+    final derivedMinutes = dayEnd == null
+        ? null
+        : freeMinutesBetween(flowOrigin, dayEnd,
+            busyIntervalsWithin(calendar.events, flowOrigin, dayEnd));
+    if (derivedMinutes != null) {
+      // The Plan's capacity reads the planning draft's available time, so the
+      // figure derived from the calendar is the draft's too.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final notifier = ref.read(focusSessionPlanningProvider.notifier);
+        if (ref.read(focusSessionPlanningProvider).availableMinutes !=
+            derivedMinutes) {
+          notifier.setAvailableTime(derivedMinutes.clamp(1, 1440));
+        }
+      });
+    }
     return ListView(
       physics: const ClampingScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(16, 24, 16, 32),
       children: [
-        // --- Today's Calendar Agenda Placeholder ---
         const Text(
           "Today's Agenda",
           style: TextStyle(
@@ -75,25 +104,114 @@ class _DayCheckinTimeStepState extends ConsumerState<DayCheckinTimeStep> {
           ),
         ),
         const SizedBox(height: 16),
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.grey[50],
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.grey[200]!),
-          ),
-           child: const Center(
-            child: Text(
-               "Calendar events placeholder",
-              style: TextStyle(color: Colors.grey),
-            ),
-          ),
-        ),
+        _agenda(calendar, flowOrigin, dayEnd),
         const SizedBox(height: 36),
         const Divider(height: 1, color: Color(0xFFF3F4F6)),
         const SizedBox(height: 36),
+        if (derivedMinutes != null)
+          _derivedAvailableTime(derivedMinutes, dayEnd!)
+        else
+          ..._typedAvailableTime(),
+      ],
+    );
+  }
 
-        // --- Available time ---
+  String _clock(DateTime time) => MaterialLocalizations.of(context)
+      .formatTimeOfDay(TimeOfDay.fromDateTime(time));
+
+  Widget _agenda(
+      CalendarTimelineState calendar, DateTime flowOrigin, DateTime? dayEnd) {
+    final events = dayEnd == null
+        ? const <CalendarEvent>[]
+        : timedEventsWithin(calendar.events, flowOrigin, dayEnd);
+    final message = switch (calendar.status) {
+      CalendarTimelineStatus.notConnected =>
+        'No calendar connected. You can show it in Settings, or tell me '
+            'below how much time you have.',
+      CalendarTimelineStatus.loading => 'Reading your calendar…',
+      CalendarTimelineStatus.permissionRefused =>
+        'Jeeves was not allowed to read your calendar. You can allow it in '
+            "your phone's settings.",
+      CalendarTimelineStatus.unavailable =>
+        'Your calendar could not be read just now.',
+      CalendarTimelineStatus.ready => dayEnd == null
+          ? 'The day is already over by your Evening Shutdown time, so tell '
+              'me below how much time you have.'
+          : events.isEmpty
+              ? 'Nothing in your calendar for the rest of the day.'
+              : null,
+    };
+    final canRetry =
+        calendar.status == CalendarTimelineStatus.permissionRefused ||
+            calendar.status == CalendarTimelineStatus.unavailable;
+    return Container(
+      key: const Key('day_checkin_agenda'),
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.grey[50],
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey[200]!),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final event in events)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Text(
+                '${_clock(event.start)} – ${_clock(event.end)}  '
+                '${event.title.isEmpty ? 'Busy' : event.title}',
+                style: const TextStyle(fontSize: 14),
+              ),
+            ),
+          if (message != null)
+            Text(message, style: const TextStyle(color: Colors.grey)),
+          if (canRetry)
+            TextButton(
+              key: const Key('day_checkin_calendar_try_again'),
+              onPressed: () =>
+                  ref.read(calendarTimelineProvider.notifier).refresh(),
+              child: const Text('Try again'),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _derivedAvailableTime(int minutes, DateTime dayEnd) {
+    final hours = minutes ~/ 60;
+    final rest = minutes % 60;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Time you have today',
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.w700,
+            color: Color(0xFF1A1A2E),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'From your calendar, up to ${_clock(dayEnd)}. We\'ll warn you if '
+          'your plan exceeds this.',
+          style: TextStyle(fontSize: 13, color: Colors.grey[500]),
+        ),
+        const SizedBox(height: 16),
+        Text(
+          hours == 0
+              ? '${rest}m available today'
+              : '${hours}h ${rest}m available today',
+          key: const Key('day_checkin_derived_available_time'),
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        ),
+      ],
+    );
+  }
+
+  List<Widget> _typedAvailableTime() => [
         const Text(
           'How much time do you have today?',
           style: TextStyle(
@@ -113,9 +231,7 @@ class _DayCheckinTimeStepState extends ConsumerState<DayCheckinTimeStep> {
           minutesCtrl: _minutesCtrl,
           onChanged: _onTimeChanged,
         ),
-      ],
-    );
-  }
+      ];
 }
 
 class _TimeInputRow extends StatelessWidget {
