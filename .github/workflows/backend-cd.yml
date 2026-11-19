@@ -14,7 +14,14 @@ jobs:
   deploy:
     name: Deploy to Dokku
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    # Only a real push to this repository's main may deploy.  The `branches:`
+    # filter above matches the head branch *name*, so a fork's pull request from
+    # a branch called "main" would otherwise reach this job — and the scripts
+    # below run from the checked-out head_sha, which for a fork is its own code.
+    if: >-
+      ${{ github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.event == 'push'
+      && github.event.workflow_run.head_repository.full_name == github.repository }}
     permissions:
       # write, not read: the release step below cuts the server/v* tag.
       contents: write
