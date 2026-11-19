@@ -644,6 +644,7 @@ class _NowTimeline extends ConsumerWidget {
       flowOrigin: flowOrigin,
       availableMinutes: extras.availableMinutes,
       chunkUnitMinutes: extras.settings.chunkUnitMinutes,
+      sprintMarks: extras.sprintMarks,
       onSetPinnedStart: (outcomeId, startAt) => ref
           .read(databaseProvider)
           .focusSessionDao

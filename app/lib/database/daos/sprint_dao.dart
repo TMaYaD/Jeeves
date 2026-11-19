@@ -51,6 +51,23 @@ class SprintRecord {
   bool get isRunning => endedAtUtc == null;
 }
 
+/// A recorded Sprint with the Outcome it ran on.
+///
+/// A Sprint lives on an Action; an Action belongs to an Outcome. The Outcome is
+/// what the day timeline draws a tile for, so this is the shape the timeline
+/// reads the record in.
+class SprintOutcomeRecord {
+  const SprintOutcomeRecord({
+    required this.record,
+    required this.outcomeId,
+  });
+
+  final SprintRecord record;
+
+  /// The Outcome the Sprint's Action belongs to.
+  final String outcomeId;
+}
+
 /// Parses a stored instant; null when it does not read as one.
 DateTime? _parseStoredInstant(String? value) =>
     value == null ? null : DateTime.tryParse(value)?.toUtc();
@@ -283,4 +300,57 @@ class SprintDao extends DatabaseAccessor<GtdDatabase> with _$SprintDaoMixin {
   /// Every recorded Sprint with its effective end, ordered by start.
   Future<List<SprintRecord>> getAllRecords() async =>
       sprintRecordsWithEffectiveEnds(await select(sprints).get());
+
+  /// Every recorded Sprint with its effective end and the Outcome it ran on,
+  /// read once.
+  ///
+  /// A Sprint whose Action was deleted has no Outcome: its Sprints detach and
+  /// are never deleted, and a detached Sprint belongs to no Outcome's tile.
+  Future<List<SprintOutcomeRecord>> getRecordsByOutcome() async =>
+      _recordsWithOutcome(await _sprintsWithTheirActions().get());
+
+  /// The same, live: a Sprint projected in by a peer (the sync host writes the
+  /// row and notifies) reaches the reader without a restart.
+  ///
+  /// The watch covers the Actions as well as the Sprints. Sync may deliver a
+  /// Sprint before the Action it ran on — the two are separate collections and
+  /// either may arrive first — and a Sprint reaches the reader only once its
+  /// Action is there. A watch on the Sprints alone would leave that Sprint
+  /// missing until the next Sprint write or a restart.
+  Stream<List<SprintOutcomeRecord>> watchRecordsByOutcome() {
+    // The join is what makes the watch cover both tables: a joined watch is
+    // refreshed when either side changes. The projector announces the Actions
+    // through `notifyActionsViewWrite` and the Sprints through
+    // `notifySprintsViewWrite`, because a projected row is written outside
+    // Drift's own bookkeeping and the notify is all there is.
+    return _sprintsWithTheirActions().watch().map(_recordsWithOutcome);
+  }
+
+  /// The recorded Sprints joined to the Action each ran on.
+  ///
+  /// A left join: a Sprint whose Action is not here yet — it has not arrived
+  /// from a peer — is still a Sprint, and joins to nothing.
+  JoinedSelectStatement _sprintsWithTheirActions() => select(sprints).join([
+        leftOuterJoin(actions, actions.id.equalsExp(sprints.actionId)),
+      ]);
+
+  /// The recorded Sprints of [rows], each with the Outcome its Action belongs
+  /// to. A Sprint whose Action is gone has no Outcome and is left out.
+  List<SprintOutcomeRecord> _recordsWithOutcome(List<TypedResult> rows) {
+    final sprintRows = <Sprint>[];
+    final outcomeIdBySprintId = <String, String?>{};
+    for (final row in rows) {
+      final sprint = row.readTable(sprints);
+      sprintRows.add(sprint);
+      outcomeIdBySprintId[sprint.id] = row.readTableOrNull(actions)?.outcomeId;
+    }
+    final records = sprintRecordsWithEffectiveEnds(sprintRows);
+    final withOutcome = <SprintOutcomeRecord>[];
+    for (final record in records) {
+      final outcomeId = outcomeIdBySprintId[record.id];
+      if (outcomeId == null) continue;
+      withOutcome.add(SprintOutcomeRecord(record: record, outcomeId: outcomeId));
+    }
+    return withOutcome;
+  }
 }
