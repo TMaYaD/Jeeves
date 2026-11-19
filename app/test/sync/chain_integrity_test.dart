@@ -1679,13 +1679,15 @@ void main() {
       // prune is put into the server's log without the server's own admission
       // checks — the pairing compaction op is not what this case is about.
       final held = (await a.client.quarantined()).single;
+      expect(held.authorSeq, firstPeerContentAuthorSeq + 2,
+          reason: 'the held change is the peer\'s third one');
       await workspace.b.client.capturePrune(PrunePayload(
         compactionOpId: const Uuid().v4(),
         targets: [
           PruneTarget(
             seq: appended[2].seq,
             authorMemberId: peer.memberId,
-            authorSeq: held.authorSeq,
+            authorSeq: firstPeerContentAuthorSeq + 2,
             envelopeHash: envelopeHash(held.envelope),
           ),
         ],
