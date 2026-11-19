@@ -169,42 +169,51 @@ class UserPreferencesDao {
   /// for the key is written, and only when the source is strictly newer than
   /// it. Two copies carrying the same timestamp are left alone, and a
   /// timestamp that cannot be parsed counts as the oldest.
+  ///
+  /// **The read, the decision and the write happen under one writer.** The
+  /// whole body runs inside a single capturing transaction, so a change that
+  /// lands while the carry is in flight — a row the projector writes from a
+  /// pull, say — cannot slip between the read and the write and be undone by
+  /// a decision taken before it. A capturing scope holds the store's write
+  /// lock for its whole life, so such a write waits for the carry to commit
+  /// and lands after it; the nested `set` calls are savepoints inside the one
+  /// transaction.
   Future<void> carryNewestPreferencesInto(String userId) async {
-    final rows = await _db.customSelect(
-      'SELECT user_id, "key", value, updated_at FROM user_preferences',
-      readsFrom: {_db.userPreferences},
-    ).get();
-    if (rows.isEmpty) return;
-
-    // The newest row per key among the rows stored under another user id, and
-    // the current user's own row for the same key.
-    final newestOther = <String, QueryRow>{};
-    final current = <String, QueryRow>{};
-    for (final row in rows) {
-      final key = row.read<String>('key');
-      if (row.read<String>('user_id') == userId) {
-        current[key] = row;
-        continue;
-      }
-      final held = newestOther[key];
-      if (held == null || _isNewerThan(row, held)) {
-        newestOther[key] = row;
-      }
-    }
-    if (newestOther.isEmpty) return;
-
-    final carries = <MapEntry<String, QueryRow>>[];
-    for (final entry in newestOther.entries) {
-      final mine = current[entry.key];
-      if (mine != null && !_isNewerThan(entry.value, mine)) {
-        // The current user's copy is newer, or equally new: leave it alone.
-        continue;
-      }
-      carries.add(entry);
-    }
-    if (carries.isEmpty) return;
-
     await _db.capturing(() async {
+      final rows = await _db.customSelect(
+        'SELECT user_id, "key", value, updated_at FROM user_preferences',
+        readsFrom: {_db.userPreferences},
+      ).get();
+      if (rows.isEmpty) return;
+
+      // The newest row per key among the rows stored under another user id,
+      // and the current user's own row for the same key.
+      final newestOther = <String, QueryRow>{};
+      final current = <String, QueryRow>{};
+      for (final row in rows) {
+        final key = row.read<String>('key');
+        if (row.read<String>('user_id') == userId) {
+          current[key] = row;
+          continue;
+        }
+        final held = newestOther[key];
+        if (held == null || _isNewerThan(row, held)) {
+          newestOther[key] = row;
+        }
+      }
+      if (newestOther.isEmpty) return;
+
+      final carries = <MapEntry<String, QueryRow>>[];
+      for (final entry in newestOther.entries) {
+        final mine = current[entry.key];
+        if (mine != null && !_isNewerThan(entry.value, mine)) {
+          // The current user's copy is newer, or equally new: leave it alone.
+          continue;
+        }
+        carries.add(entry);
+      }
+      if (carries.isEmpty) return;
+
       for (final carry in carries) {
         final source = carry.value;
         await set(

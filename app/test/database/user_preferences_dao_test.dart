@@ -7,6 +7,12 @@ import '../test_helpers.dart';
 
 const _userId = 'test-user';
 
+/// The user id the device holds while signed out.
+const _signedOutUserId = 'local';
+
+/// The account id the device holds while signed in.
+const _accountId = 'account-a';
+
 GtdDatabase _openDb() => GtdDatabase(NativeDatabase.memory());
 
 void main() {
@@ -116,6 +122,40 @@ void main() {
       expect(await db.userPreferencesDao.get('alice', 'k'), '"a"');
       expect(await db.userPreferencesDao.get('bob', 'k'), '"b"');
       expect((await db.userPreferencesDao.getAll('alice')).length, 1);
+    });
+  });
+
+  group('UserPreferencesDao.carryNewestPreferencesInto', () {
+    late GtdDatabase db;
+
+    setUp(() {
+      db = _openDb();
+    });
+    tearDown(() => db.close());
+
+    test('a change that lands while a setting is carried in is not undone',
+        () async {
+      final dao = db.userPreferencesDao;
+
+      // The account's own copy of a setting, and the copy the device kept
+      // while it was signed out. The device's is the newer one, so the carry
+      // would move it into the account's row.
+      await dao.set(_accountId, 'k', '"account"',
+          updatedAt: '2026-01-01T00:00:00.000Z');
+      await dao.set(_signedOutUserId, 'k', '"device"',
+          updatedAt: '2026-01-02T00:00:00.000Z');
+
+      // A change pulled from another device, landing while the carry runs.
+      // The carry must not undo it: a decision taken from a read taken before
+      // it landed is a decision about a state that no longer exists.
+      final carry = dao.carryNewestPreferencesInto(_accountId);
+      final pulled = dao.set(_accountId, 'k', '"pulled"',
+          updatedAt: '2026-01-03T00:00:00.000Z');
+      await Future.wait([carry, pulled]);
+
+      expect(await dao.get(_accountId, 'k'), '"pulled"');
+      // The source row is never touched.
+      expect(await dao.get(_signedOutUserId, 'k'), '"device"');
     });
   });
 }
