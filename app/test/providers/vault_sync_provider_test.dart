@@ -25,7 +25,6 @@ import 'package:jeeves/providers/vault_sync_provider.dart';
 import 'package:jeeves/sync/sync_database.dart';
 import 'package:jeeves/sync/vault/vault_folder.dart';
 
-import '../helpers/settle.dart';
 import '../test_helpers.dart';
 
 const String _userId = 'vault-user';
@@ -226,8 +225,16 @@ void main() {
 /// Let the real work happen: real time for the file and database I/O, and the
 /// test's clock pumped so the continuations that started in the test's own zone
 /// run too.
+///
+/// The frames are pumped one at a time, never through `pumpAndSettle`: the
+/// vault holds a periodic read of its own, and a pending timer keeps the settle
+/// from ever going quiet, so it would spin to its ten-minute timeout
+/// (`docs/TESTING.md`).
 Future<void> _settle(WidgetTester tester) async {
-  await settleWithRealAsync(tester, rounds: 3);
+  for (var i = 0; i < 6; i++) {
+    await tester.runAsync(() => pumpEventQueue());
+    await tester.pump(const Duration(milliseconds: 150));
+  }
 }
 
 /// The vault's folder setting, in a test's hands.
