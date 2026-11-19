@@ -21,6 +21,7 @@ import 'package:jeeves/sync/sync_database.dart';
 
 import '../harness/reduced_state.dart';
 import '../harness/v12_columns.dart';
+import '../harness/v13_tables.dart';
 import 'host_harness.dart';
 import 'pre_host_rows.dart';
 
@@ -492,6 +493,9 @@ void main() {
     // schema runs every later step: v12 adds columns, so the fixture has to
     // take them away too.
     await dropV12Columns(seed);
+    // And the v13 table: a store that predates the accepted hole has no such
+    // table, and opening it at the current schema runs every later step.
+    await dropV13Tables(seed);
     await seed.customStatement(
         "INSERT INTO reduced_fields (collection, entity_id, field, value_json) "
         "VALUES ('todos', 't1', 'title', '\"Ship it\"')");

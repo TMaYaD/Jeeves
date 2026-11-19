@@ -695,6 +695,29 @@ class SyncClient {
             ..orderBy([(row) => OrderingTerm(expression: row.authorSeq)]))
           .get();
 
+  /// The ranges of a chain the User accepted as missing, by author (#975).
+  ///
+  /// Shaped like [prunedAttestations] and read by the same floor walk: a prune
+  /// attests a position the log does not hold because a signed op said what was
+  /// there, while an accepted hole is a range the log will never hold because
+  /// the User agreed that it never arrived. Both let the chain floor reach past
+  /// the log; only the hole is a decision.
+  ///
+  /// Ordered by the first missing position, so a reader can walk the ranges in
+  /// the order the chain reaches them.
+  Future<List<AcceptedChainHoleRow>> acceptedChainHoles({
+    String? authorMemberId,
+  }) =>
+      (_db.select(_db.acceptedChainHoles)
+            ..where((row) => authorMemberId == null
+                ? row.workspaceId.equals(workspaceId)
+                : row.workspaceId.equals(workspaceId) &
+                    row.authorMemberId.equals(authorMemberId))
+            ..orderBy([
+              (row) => OrderingTerm(expression: row.firstMissingAuthorSeq),
+            ]))
+          .get();
+
   /// Tail of the authoring queue: every `_authorAndQueue` waits on it.
   ///
   /// The chain head is *read* by [_authorChain], the envelope is *signed*
@@ -1917,10 +1940,16 @@ class SyncClient {
   /// covers (`putIfAbsent`). `floor` is the end of the contiguous run of attested
   /// positions starting just above the derived head, or null when nothing bridges.
   ///
-  /// Contiguity is the whole safety argument for the floor: it never skips a
-  /// position, so every step above the real head is individually attested and
-  /// hash-linked. The walk needs no `op_log` lookups because the derived head *is*
-  /// the highest logged position, so nothing above it is in the log by definition.
+  /// The walk is contiguous **except across a hole the User accepted** (#975).
+  /// Every step above the real head is either individually attested by a prune —
+  /// a signed op said what sat there and named its hash — or lies in a hole the
+  /// User accepted, and a hole bridges as a whole: only the *last* position of
+  /// the range has a known hash, and it comes from the signed header of the
+  /// change after the hole. The positions inside the range are gone, and so are
+  /// their hashes: that is what the User gave up when they accepted the hole.
+  ///
+  /// The walk needs no `op_log` lookups because the derived head *is* the highest
+  /// logged position, so nothing above it is in the log by definition.
   ///
   /// Both a verdict's floor and its stored-attestation-at-a-position answer come
   /// out of the one map, so `_chainVerdictFor` reads the table once per op rather
@@ -1940,18 +1969,44 @@ class SyncClient {
       // own evidence, and a provisional one has not.
       attested.putIfAbsent(target.authorSeq, () => target.envelopeHash);
     }
-    if (attested.isEmpty) return (floor: null, attested: attested);
+    // One small read per verdict. The table is empty on almost every device, and
+    // a hole that is there is the User's own decision (#975).
+    final holes = await acceptedChainHoles(authorMemberId: authorMemberId);
 
     var seq = head?.authorSeq ?? 0;
     Uint8List? hash;
-    while (attested.containsKey(seq + 1)) {
-      seq += 1;
-      hash = attested[seq];
+    while (true) {
+      if (attested.containsKey(seq + 1)) {
+        seq += 1;
+        hash = attested[seq];
+        continue;
+      }
+      final hole = _holeCovering(holes, seq + 1);
+      if (hole == null) break;
+      // The hole bridges as a whole: the walk lands on its last position, whose
+      // hash the change after the hole named.
+      seq = hole.lastMissingAuthorSeq;
+      hash = hole.lastMissingEnvelopeHash;
     }
     return (
       floor: hash == null ? null : (seq: seq, envelopeHash: hash),
       attested: attested,
     );
+  }
+
+  /// The accepted hole that covers [authorSeq], or null when none does.
+  ///
+  /// The holes are ordered by their first missing position, and the ranges they
+  /// name do not overlap: one range of missing positions is one decision.
+  AcceptedChainHoleRow? _holeCovering(
+    List<AcceptedChainHoleRow> holes,
+    int authorSeq,
+  ) {
+    for (final hole in holes) {
+      if (hole.firstMissingAuthorSeq > authorSeq) return null;
+      if (hole.lastMissingAuthorSeq >= authorSeq) return hole;
+    }
+    return null;
   }
 
   /// The verified chain floor for one author — the floor half of

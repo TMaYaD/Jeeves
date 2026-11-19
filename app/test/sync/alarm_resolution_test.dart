@@ -18,6 +18,7 @@ import 'package:jeeves/sync/sync_database.dart';
 import 'package:jeeves/sync/sync_rejection.dart';
 
 import 'harness/v12_columns.dart';
+import 'harness/v13_tables.dart';
 
 /// Every alarm kind, and the decisions it may be given.
 ///
@@ -197,7 +198,7 @@ void main() {
   });
 
   group('the store', () {
-    test('a v11 sync store upgrades to v12 and keeps every row', () async {
+    test('a v11 sync store upgrades to v13 and keeps every row', () async {
       final directory = Directory.systemTemp.createTempSync('sync-v11-');
       addTearDown(() => directory.deleteSync(recursive: true));
       final file = File('${directory.path}/sync.sqlite');
@@ -206,6 +207,9 @@ void main() {
       // Take the five new columns back out, so the file on disk is what a v11
       // store held.
       await dropV12Columns(seed);
+      // And the v13 table: a store that predates the accepted hole has no such
+      // table, and opening it at the current schema runs every later step.
+      await dropV13Tables(seed);
       await seed.customStatement(
         'INSERT INTO integrity_alarms (workspace_id, kind, detail, '
         'occurrence_count, first_detected_at, last_detected_at) '
@@ -222,7 +226,7 @@ void main() {
 
       final upgraded = SyncDatabase(NativeDatabase(file));
       addTearDown(upgraded.close);
-      expect(upgraded.schemaVersion, 12);
+      expect(upgraded.schemaVersion, 13);
 
       final alarm = await upgraded.select(upgraded.integrityAlarms).getSingle();
       expect(alarm.kind, IntegrityAlarmKind.ownWritesRollback.code);

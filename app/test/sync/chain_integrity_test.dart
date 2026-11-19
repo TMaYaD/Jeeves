@@ -14,10 +14,12 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:drift/drift.dart'
     show OrderingTerm, QueryExecutor, QueryInterceptor, Value;
+import 'package:drift/native.dart' show NativeDatabase;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/providers/sync_status_provider.dart';
 import 'package:jeeves/sync/alarm_resolution.dart';
@@ -38,6 +40,7 @@ import 'harness/author_fixture.dart';
 import 'harness/reduced_state.dart';
 import 'harness/sim_device.dart';
 import 'harness/sim_workspace.dart';
+import 'harness/v13_tables.dart';
 
 const String _harnessCollection = 'harness_docs';
 const Uuid _uuid = Uuid();
@@ -1906,6 +1909,191 @@ void main() {
       expect(after.resolutionDecidedAt, isNull);
       expect(after.resolvedAt, isNull);
       expect((await a.client.health()).actionableAlarmCount, 1);
+    });
+  });
+
+  // --- An accepted hole: the chain floor bridges what the user accepted -------
+
+  group('an accepted hole', () {
+    /// The peer's three content changes, with the server holding the second and
+    /// the third back.
+    ///
+    /// The peer's content positions are 3, 4 and 5 — the enrolment spent the
+    /// first two on the register and the grant — so only the first arrives, the
+    /// logged head is 3, and the change that never came is at 4.
+    Future<({Uint8List withheld, Uint8List third, int thirdTransportSeq})>
+        withholdTwoChanges() async {
+      final first = await _op(workspace, peer, 'one');
+      final withheld = await _op(workspace, peer, 'two');
+      final third = await _op(workspace, peer, 'three');
+      final appended = await peerSession.postOps(
+        workspace.workspaceId,
+        [first, withheld, third],
+      );
+      workspace.server.omitSeqs.add(appended[1].seq);
+      workspace.server.omitSeqs.add(appended[2].seq);
+      await a.sync();
+      return (
+        withheld: withheld,
+        third: third,
+        thirdTransportSeq: appended[2].seq,
+      );
+    }
+
+    /// The hole the user accepted: the range of the chain that never arrived,
+    /// and the hash of the change just past it.
+    Future<void> acceptHole({
+      required int firstMissingAuthorSeq,
+      required int lastMissingAuthorSeq,
+      required Uint8List lastMissingEnvelopeHash,
+    }) async {
+      await a.database.into(a.database.acceptedChainHoles).insert(
+            AcceptedChainHolesCompanion.insert(
+              workspaceId: a.client.workspaceId,
+              authorMemberId: peer.memberId,
+              firstMissingAuthorSeq: firstMissingAuthorSeq,
+              lastMissingAuthorSeq: lastMissingAuthorSeq,
+              lastMissingEnvelopeHash: lastMissingEnvelopeHash,
+              // Nothing held this hole down yet: the user accepted it before
+              // anything was quarantined for it.
+              definingQuarantineOpRowId: 0,
+              decidedAt: DateTime.utc(2026, 11, 19),
+            ),
+          );
+    }
+
+    test('a v12 sync store opens at 13 and keeps every row', () async {
+      final directory = Directory.systemTemp.createTempSync('sync-v12-');
+      addTearDown(() => directory.deleteSync(recursive: true));
+      final file = File('${directory.path}/sync.sqlite');
+
+      final seed = SyncDatabase(NativeDatabase(file));
+      await seed.customStatement(
+        'INSERT INTO integrity_alarms (workspace_id, kind, detail, '
+        'occurrence_count, first_detected_at, last_detected_at) '
+        "VALUES ('workspace-1', 'own_writes_rollback', 'the server lost a write', "
+        "1, '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z')",
+      );
+      await seed.customStatement(
+        'INSERT INTO quarantined_ops (workspace_id, reason, detail, envelope, '
+        "detected_at) VALUES ('workspace-1', 'bad_signature', 'forged', X'', "
+        "'2026-08-01T00:00:00.000Z')",
+      );
+      // A v12 store has no accepted-hole table: take the one the current schema
+      // made away, so the file on disk is what a v12 store held.
+      await dropV13Tables(seed);
+      await seed.customStatement('PRAGMA user_version = 12');
+      await seed.close();
+
+      final upgraded = SyncDatabase(NativeDatabase(file));
+      addTearDown(upgraded.close);
+      expect(upgraded.schemaVersion, 13);
+
+      final alarm = await upgraded.select(upgraded.integrityAlarms).getSingle();
+      expect(alarm.kind, IntegrityAlarmKind.ownWritesRollback.code);
+      expect(alarm.detail, 'the server lost a write');
+      expect(alarm.occurrenceCount, 1);
+
+      final quarantine =
+          await upgraded.select(upgraded.quarantinedOps).getSingle();
+      expect(quarantine.reason, SyncRejectionReason.badSignature.code);
+      expect(quarantine.detail, 'forged');
+
+      final holes = await upgraded.select(upgraded.acceptedChainHoles).get();
+      expect(
+        holes,
+        isEmpty,
+        reason: 'no hole was accepted before the table existed',
+      );
+    });
+
+    test('the floor bridges a hole the user accepted', () async {
+      final withheld = await withholdTwoChanges();
+
+      // Only the first change arrived, and nothing is accused: the server
+      // withheld the rest, so there is nothing to accuse it of yet.
+      expect(await _doc(a, workspace), {'step': 'one'});
+      expect(await a.alarmsByKind(), isEmpty);
+      expect(
+        await a.client.effectiveChainHeadSeq(peer.memberId),
+        firstPeerContentAuthorSeq,
+        reason: 'the logged head is where the chain stops',
+      );
+
+      await acceptHole(
+        firstMissingAuthorSeq: firstPeerContentAuthorSeq + 1,
+        lastMissingAuthorSeq: firstPeerContentAuthorSeq + 1,
+        lastMissingEnvelopeHash: envelopeHash(withheld.withheld),
+      );
+
+      // The floor now reaches the end of the hole.
+      expect(
+        await a.client.effectiveChainHeadSeq(peer.memberId),
+        firstPeerContentAuthorSeq + 1,
+      );
+      final holes = await a.client.acceptedChainHoles(
+        authorMemberId: peer.memberId,
+      );
+      expect(holes.single.firstMissingAuthorSeq, firstPeerContentAuthorSeq + 1);
+      expect(holes.single.lastMissingAuthorSeq, firstPeerContentAuthorSeq + 1);
+
+      // The change after the hole turns up. It names the hash the hole carries,
+      // so it verifies and applies like any other.
+      workspace.server.omitSeqs.remove(withheld.thirdTransportSeq);
+      await a.sync();
+
+      expect(await _doc(a, workspace), {'step': 'three'});
+      final logged = await a.loggedOps();
+      final third = logged.firstWhere(
+        (row) => row.authorSeq == firstPeerContentAuthorSeq + 2,
+      );
+      expect(third.appliedAt, isNotNull);
+      expect(third.refusedReason, isNull);
+      expect(await a.alarmsByKind(), isEmpty);
+      expect(await a.client.quarantined(), isEmpty);
+    });
+
+    test('a hole with the wrong hash refuses the change after it', () async {
+      final withheld = await withholdTwoChanges();
+
+      await acceptHole(
+        firstMissingAuthorSeq: firstPeerContentAuthorSeq + 1,
+        lastMissingAuthorSeq: firstPeerContentAuthorSeq + 1,
+        // A hash no change ever signed for.
+        lastMissingEnvelopeHash:
+            Uint8List.fromList(List<int>.filled(prevAuthorHashBytes, 0x7f)),
+      );
+
+      workspace.server.omitSeqs.remove(withheld.thirdTransportSeq);
+      await a.sync();
+
+      // The change after the hole does not name the hash the hole claims, so it
+      // is refused under its own name and nothing is applied.
+      final refused = await a.client.quarantined();
+      expect(refused.single.reason, SyncRejectionReason.prevAuthorHashMismatch.code);
+      expect(
+        (await a.alarmsByKind())[IntegrityAlarmKind.prevAuthorHashMismatch.code],
+        isNotNull,
+      );
+      expect(await _doc(a, workspace), {'step': 'one'});
+    });
+
+    test('a hole that does not start at the head bridges nothing', () async {
+      final withheld = await withholdTwoChanges();
+
+      // The hole starts one position later than the head's next position, so
+      // the walk from the head never reaches it.
+      await acceptHole(
+        firstMissingAuthorSeq: firstPeerContentAuthorSeq + 2,
+        lastMissingAuthorSeq: firstPeerContentAuthorSeq + 2,
+        lastMissingEnvelopeHash: envelopeHash(withheld.third),
+      );
+
+      expect(
+        await a.client.effectiveChainHeadSeq(peer.memberId),
+        firstPeerContentAuthorSeq,
+        reason: 'a hole that does not start at the head is not a bridge',
+      );
     });
   });
 

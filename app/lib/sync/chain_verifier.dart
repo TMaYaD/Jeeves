@@ -193,10 +193,15 @@ typedef AuthorChainHead = ({int authorSeq, Uint8List envelopeHash});
 /// holes *inside* an author's chain rather than truncating a prefix, so a device may
 /// hold positions 1-2 and need to verify position 53 across attested holes; a rule
 /// that always preferred the derived head could never bridge them. It is sound
-/// because the caller only ever supplies a floor walked contiguously forward from
-/// the real head, filling each step from the log or from a per-position, hash-linked
-/// attestation — there is no gap in it to hide anything in. Below the head the floor
-/// is ignored, because there the log is the better evidence.
+/// because the caller only ever supplies a floor walked forward from the real head,
+/// filling each step from the log, from a per-position, hash-linked attestation, or
+/// from a hole the User accepted (#975) — in which case only the *last* position of
+/// the range has a known hash, and it comes from the signed header of the change
+/// after the hole. A hole is the one place the walk is not contiguous, and what it
+/// gives up is the content of the missing range and the hash link across it; the
+/// change after the hole is admitted on its author's signed statement of what came
+/// before it. Below the head the floor is ignored, because there the log is the
+/// better evidence.
 typedef VerifiedChainFloor = ({int seq, Uint8List envelopeHash});
 
 /// One op's stored twin, as the caller read it out of `op_log`.
@@ -309,9 +314,10 @@ ChainVerdict chainVerdict({
   }
 
   // The **effective** head: the floor when it reaches higher than the log does,
-  // and the derived head otherwise. A supplied floor is walked contiguously
-  // forward from the real head, so above the head it accounts for every skipped
-  // position individually and hash-linked — see [VerifiedChainFloor]. Absent both,
+  // and the derived head otherwise. A supplied floor is walked forward from the
+  // real head, so above the head it accounts for every position it steps over —
+  // individually and hash-linked, except across a hole the User accepted, where
+  // only the last position's hash is known — see [VerifiedChainFloor]. Absent both,
   // seq 0 with the zero hash is what "this author's chain starts here" means.
   final floor = verifiedFloor;
   final derivedHeadSeq = head?.authorSeq ?? 0;
