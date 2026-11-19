@@ -58,6 +58,15 @@ class VaultPlugin implements SyncPlugin {
   /// either.
   final Set<VaultPageKey> _unreadable = {};
 
+  /// The pages that owe a write-back: the app holds something the folder does
+  /// not say yet.
+  ///
+  /// Kept apart from the base copies, which say what the folder last held: an
+  /// import the vault made is not owed a delivery back to the vault, so
+  /// nothing else would ask for the page again. A key is cleared when the page
+  /// matches the merged state, or when the write succeeds.
+  final Set<VaultPageKey> _pendingWriteBacks = {};
+
   /// Whether the folder could be reached in the last pass.
   bool _folderReachable = true;
 
@@ -88,9 +97,7 @@ class VaultPlugin implements SyncPlugin {
   /// person typed. Called when the app comes to the foreground and on a timer.
   Future<void> rescan() => _exclusive(() async {
         final keys = await _scanAll();
-        for (final key in keys) {
-          await _writePage(key);
-        }
+        await _writeAll(keys);
         _reportSynced();
       });
 
@@ -115,10 +122,20 @@ class VaultPlugin implements SyncPlugin {
             }
           }
         }
+        Object? failure;
         for (final key in dirty) {
-          await _writePage(key);
+          try {
+            await _writePage(key);
+          } on Object catch (error) {
+            // The page was not written, so the change stays owed: the delivery
+            // fails and the host takes it again.
+            debugPrint('vault: $key not written: $error');
+            _pendingWriteBacks.add(key);
+            failure ??= error;
+          }
         }
         _reportSynced();
+        if (failure != null) throw failure;
         return changes.isEmpty ? 0 : changes.last.sequence;
       });
 
@@ -146,10 +163,27 @@ class VaultPlugin implements SyncPlugin {
       final key = _register(change);
       if (key != null) keys.add(key);
     }
-    for (final key in keys) {
-      await _writePage(key);
-    }
+    await _writeAll(keys);
     _reportSynced();
+  }
+
+  /// Write every page that is missing or differs from the merged state, and
+  /// every page that owes a write-back.
+  ///
+  /// A page that cannot be written is remembered, and written on a later pass:
+  /// an import the vault made is not owed a delivery back to the vault, so
+  /// nothing else would ask for the page again.
+  Future<void> _writeAll(Set<VaultPageKey> keys) async {
+    final wanted = {...keys, ..._pendingWriteBacks};
+    for (final key in wanted) {
+      try {
+        await _writePage(key);
+      } on Object catch (error) {
+        // One page that cannot be written does not stop the others.
+        debugPrint('vault: $key not written: $error');
+        _pendingWriteBacks.add(key);
+      }
+    }
   }
 
   VaultPageKey? _register(Change change) {
@@ -745,21 +779,29 @@ class VaultPlugin implements SyncPlugin {
     var attempts = 0;
     while (true) {
       final text = await _render(key);
-      if (text == null) return;
+      if (text == null) {
+        // There is nothing to write, so nothing is owed.
+        _pendingWriteBacks.remove(key);
+        return;
+      }
       var path = _pathFor(key, text);
       final String? existing;
       try {
         existing = await _folder.read(path);
       } on Object catch (error) {
         // A file that cannot be read is left alone: the other pages are still
-        // written.
+        // written. The page is owed a write-back, and the change that asked
+        // for it is not acknowledged.
         debugPrint('vault: $path not read: $error');
-        return;
+        _pendingWriteBacks.add(key);
+        rethrow;
       }
       final base = await _baseOf(path);
       if (existing == text) {
+        // The page already says what the app holds.
         if (base != text) await _saveBase(path, text);
         _paths[key] = path;
+        _pendingWriteBacks.remove(key);
         return;
       }
       if (existing != null) {
@@ -807,10 +849,25 @@ class VaultPlugin implements SyncPlugin {
           attempts++;
           continue;
         }
+        if (existing != base) {
+          // The file keeps changing: the revision in it has not been read, so
+          // it is not written over. The write is owed, and a later pass
+          // finishes it once the file stops changing.
+          debugPrint('vault: $path keeps changing: not written over');
+          _pendingWriteBacks.add(key);
+          return;
+        }
       }
-      await _folder.writeAtomically(path, text);
+      try {
+        await _folder.writeAtomically(path, text);
+      } on Object {
+        // The page was not written: it is owed a write-back.
+        _pendingWriteBacks.add(key);
+        rethrow;
+      }
       await _saveBase(path, text);
       _paths[key] = path;
+      _pendingWriteBacks.remove(key);
       return;
     }
   }

@@ -586,6 +586,82 @@ void main() {
     expect(bases.read<int>('c'), 0, reason: 'the base copy was saved');
   });
 
+  test('a delivery the folder could not read is taken again', () async {
+    final device = HostDevice.open('a');
+    addTearDown(device.close);
+    final host = await device.startHost();
+    final directory = Directory('${root.path}/vault')..createSync(recursive: true);
+    final folder = _RefusingFolder(DirectoryVaultFolder(directory));
+    final plugin = VaultPlugin(folder: folder, sync: device.sync);
+    await host.attach(plugin);
+
+    await device.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'Plan', userId: _userId);
+    await host.deliverAll();
+    await plugin.rescan();
+
+    final path = (await folder.listMarkdownFiles('Outcomes')).single;
+    expect(await folder.read(path), contains('title: Plan'));
+    final cursor = await host.cursorOf(VaultPlugin.pluginId) ?? 0;
+
+    // The page cannot be read when the Outcome is renamed, so it cannot be
+    // written either: the change stays owed.
+    folder.unreadable.add(path);
+    await device.domain.todoDao.updateFields(_outcomeId, title: 'New plan');
+    await host.deliverAll();
+
+    expect(await host.cursorOf(VaultPlugin.pluginId), cursor,
+        reason: 'the delivery was acknowledged although the page was not written');
+
+    // The read recovers: the page is written, and the change is taken.
+    folder.unreadable.clear();
+    await host.deliverAll();
+
+    expect(await folder.read(path), contains('title: New plan'));
+    expect(await host.cursorOf(VaultPlugin.pluginId) ?? 0, greaterThan(cursor),
+        reason: 'the change was not taken after the read recovered');
+  });
+
+  test('a write-back owed after an import is not forgotten', () async {
+    final device = HostDevice.open('a');
+    addTearDown(device.close);
+    final host = await device.startHost();
+    final directory = Directory('${root.path}/vault')..createSync(recursive: true);
+    final folder = _RefusingFolder(DirectoryVaultFolder(directory));
+    final plugin = VaultPlugin(folder: folder, sync: device.sync);
+    await host.attach(plugin);
+
+    await device.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'Plan', userId: _userId);
+    await host.deliverAll();
+    await plugin.rescan();
+
+    final path = (await folder.listMarkdownFiles('Outcomes')).single;
+    final page = (await folder.read(path))!;
+
+    // The intent is a word the app cannot hold, so the page the app holds and
+    // the page in the folder differ: the folder has to be written back.
+    await folder.writeAtomically(
+      path,
+      page.replaceFirst('intent: next', 'intent: Next'),
+    );
+
+    // The folder refuses the write.
+    folder.failing = true;
+    await plugin.rescan();
+
+    expect(await folder.read(path), contains('intent: Next'),
+        reason: 'the page was written over');
+
+    // The folder works again. The page the app holds is written back, even
+    // though the page in the folder now matches its base copy.
+    folder.failing = false;
+    await plugin.rescan();
+
+    expect(await folder.read(path), contains('intent: next'),
+        reason: 'the page was not put back');
+  });
+
   test('two Outcomes whose names read alike have a page each', () async {
     final device = HostDevice.open('a');
     addTearDown(device.close);
