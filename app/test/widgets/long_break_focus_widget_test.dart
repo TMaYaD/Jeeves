@@ -18,15 +18,6 @@ import 'package:timezone/data/latest_all.dart' as tz_data;
 import '../helpers/active_focus_harness.dart';
 import '../test_helpers.dart';
 
-/// A timer pinned to one state, so the screen is read at a fixed phase.
-class _FixedSprintTimer extends SprintTimerNotifier {
-  _FixedSprintTimer(this.fixedState);
-  final SprintTimerState fixedState;
-
-  @override
-  SprintTimerState build() => fixedState;
-}
-
 /// The colour of the hairline outside the ring, or null when it carries none.
 ///
 /// The ring's painter is private to the screen, so its public field is read
@@ -97,7 +88,7 @@ void main() {
     await tester.pumpWidget(focusHarness(
       db,
       todo: todo!,
-      sprintTimer: () => _FixedSprintTimer(state),
+      sprintTimer: () => FixedSprintTimerNotifier(state),
     ));
     await pumpFocusFrames(tester, 10);
   }
