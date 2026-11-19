@@ -14,7 +14,8 @@ import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.PluginRegistry
-import java.io.FileInputStream
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.util.concurrent.Executors
 
 /**
@@ -226,23 +227,49 @@ class FolderStoragePlugin :
         resolver.query(document, arrayOf(DocumentsContract.Document.COLUMN_SIZE), null, null, null)
             ?.use { cursor -> if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0) else null }
 
+    /**
+     * The bytes of the document at [path], from [offset] and at most [maxBytes].
+     *
+     * The descriptor behind a document need not be seekable: Android lets a
+     * provider hand back a pipe, and a pipe has no size and no position. So the
+     * bytes are read in sequence and the offset is skipped, rather than sought
+     * to, which reads the same bytes from a file and from a pipe.
+     */
     private fun read(tree: Uri, path: String, offset: Long, maxBytes: Int): ByteArray {
         val document = resolve(tree, path) ?: return ByteArray(0)
-        resolver.openFileDescriptor(document, "r")?.use { descriptor ->
-            FileInputStream(descriptor.fileDescriptor).use { stream ->
-                val channel = stream.channel
-                val size = channel.size()
-                if (offset >= size) return ByteArray(0)
-                val wanted = minOf(maxBytes.toLong(), size - offset).toInt()
-                val buffer = java.nio.ByteBuffer.allocate(wanted)
-                channel.position(offset)
-                while (buffer.hasRemaining()) {
-                    if (channel.read(buffer) < 0) break
-                }
-                return buffer.array().copyOf(buffer.position())
-            }
+        if (maxBytes <= 0) return ByteArray(0)
+        val stream = resolver.openInputStream(document) ?: return ByteArray(0)
+        return stream.use {
+            skip(it, offset)
+            readUpTo(it, maxBytes.toLong())
         }
-        return ByteArray(0)
+    }
+
+    /** Read up to [limit] bytes from [stream], to the end of it. */
+    private fun readUpTo(stream: InputStream, limit: Long): ByteArray {
+        val out = ByteArrayOutputStream()
+        val chunk = ByteArray(8192)
+        var remaining = limit
+        while (remaining > 0) {
+            val wanted = minOf(chunk.size.toLong(), remaining).toInt()
+            val read = stream.read(chunk, 0, wanted)
+            if (read < 0) break
+            out.write(chunk, 0, read)
+            remaining -= read
+        }
+        return out.toByteArray()
+    }
+
+    /** Skip [count] bytes of [stream], reading them if it cannot seek. */
+    private fun skip(stream: InputStream, count: Long) {
+        var remaining = count
+        val scratch = ByteArray(8192)
+        while (remaining > 0) {
+            val wanted = minOf(scratch.size.toLong(), remaining).toInt()
+            val read = stream.read(scratch, 0, wanted)
+            if (read < 0) return
+            remaining -= read
+        }
     }
 
     /** The directory document for [path], creating each missing level. */
