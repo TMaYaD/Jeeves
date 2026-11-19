@@ -804,6 +804,7 @@ class VaultPlugin implements SyncPlugin {
       return;
     }
     var attempts = 0;
+    var fallbacks = 0;
     while (true) {
       final text = await _render(key);
       if (text == null) {
@@ -849,14 +850,13 @@ class VaultPlugin implements SyncPlugin {
           // The path holds another entity's page. This entity needs a path of
           // its own — one every device derives the same way — and the other
           // entity's page is left alone.
-          final own = _ownPath(key, path);
-          if (own == path) {
+          if (fallbacks >= 3) {
             debugPrint('vault: $path left alone: another entity holds it');
             return;
           }
-          path = own;
+          path = _ownPath(key, path);
           _paths[key] = path;
-          attempts++;
+          fallbacks++;
           continue;
         }
         if (existing != base && attempts < 3) {
@@ -960,12 +960,13 @@ class VaultPlugin implements SyncPlugin {
   /// entity's page.
   ///
   /// Derived from the entity's id, so every device that meets the same
-  /// collision derives the same path.
+  /// collision derives the same path. The id is added to the name the entity
+  /// wanted, and added again when the name already ends in it: a name that
+  /// ends in another entity's id is a name another entity may hold.
   String _ownPath(VaultPageKey key, String path) {
     final suffix = '-${key.entityId}';
     final stem =
         path.endsWith('.md') ? path.substring(0, path.length - 3) : path;
-    if (stem.endsWith(suffix)) return path;
     return '$stem$suffix.md';
   }
 

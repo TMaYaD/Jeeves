@@ -896,6 +896,41 @@ void main() {
         reason: 'the revision the syncer wrote was replaced');
   });
 
+  test('two Outcomes whose names end in an id have a page each', () async {
+    final device = HostDevice.open('a');
+    addTearDown(device.close);
+    final host = await device.startHost();
+    final directory = Directory('${root.path}/vault')..createSync(recursive: true);
+    final folder = DirectoryVaultFolder(directory);
+    final plugin = VaultPlugin(folder: folder, sync: device.sync);
+    await host.attach(plugin);
+
+    // Both Outcomes are named after the second one's id, so both want the
+    // same page — and the name one of them wants already ends in an id.
+    await device.domain.todoDao.insertOutcome(
+      id: _outcomeId,
+      title: 'Plan-$_otherOutcomeId',
+      userId: _userId,
+    );
+    await device.domain.todoDao.insertOutcome(
+      id: _otherOutcomeId,
+      title: 'Plan-$_otherOutcomeId',
+      userId: _userId,
+    );
+    await host.deliverAll();
+    await plugin.rescan();
+
+    final paths = await folder.listMarkdownFiles('Outcomes');
+    expect(paths, hasLength(2), reason: 'the two Outcomes share a page');
+
+    final ids = <String>{};
+    for (final path in paths) {
+      final page = parsePage((await folder.read(path))!);
+      ids.add(page.frontmatter['id']! as String);
+    }
+    expect(ids, {_outcomeId, _otherOutcomeId});
+  });
+
   test('two Outcomes whose names read alike have a page each', () async {
     final device = HostDevice.open('a');
     addTearDown(device.close);
