@@ -2037,9 +2037,10 @@ class SyncClient {
         header.authorSeq,
       ),
       storedUnderOpId: await _storedUnderOpId(header.authorMemberId, header.opId),
-      // The seam #551 left dormant, now live: a verified prune is the only thing
-      // that can supply a floor, and the floor wins above the derived head so a
-      // mid-chain hole is bridgeable rather than a permanent gap.
+      // The seam #551 left dormant, now live: a verified prune — or a hole the
+      // User accepted (#975) — is what can supply a floor, and the floor wins
+      // above the derived head so a mid-chain hole is bridgeable rather than a
+      // permanent gap.
       verifiedFloor: positions.floor,
       storedAttestation: positions.attested.containsKey(header.authorSeq)
           ? (

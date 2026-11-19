@@ -1968,16 +1968,19 @@ void main() {
       final file = File('${directory.path}/sync.sqlite');
 
       final seed = SyncDatabase(NativeDatabase(file));
+      // Seeded the way drift reads dates back: this store keeps them as
+      // ISO-8601 text (see `build.yaml`).
+      const detectedAt = '2026-08-01T00:00:00.000Z';
       await seed.customStatement(
         'INSERT INTO integrity_alarms (workspace_id, kind, detail, '
         'occurrence_count, first_detected_at, last_detected_at) '
         "VALUES ('workspace-1', 'own_writes_rollback', 'the server lost a write', "
-        "1, '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z')",
+        "1, '$detectedAt', '$detectedAt')",
       );
       await seed.customStatement(
         'INSERT INTO quarantined_ops (workspace_id, reason, detail, envelope, '
         "detected_at) VALUES ('workspace-1', 'bad_signature', 'forged', X'', "
-        "'2026-08-01T00:00:00.000Z')",
+        "'$detectedAt')",
       );
       // A v12 store has no accepted-hole table: take the one the current schema
       // made away, so the file on disk is what a v12 store held.
@@ -1989,15 +1992,25 @@ void main() {
       addTearDown(upgraded.close);
       expect(upgraded.schemaVersion, 13);
 
+      // The table the v13 migration owes the store is there.
+      final tables = (await upgraded
+              .customSelect("SELECT name FROM sqlite_master WHERE type = 'table'")
+              .get())
+          .map((row) => row.read<String>('name'));
+      expect(tables, contains('accepted_chain_holes'));
+
       final alarm = await upgraded.select(upgraded.integrityAlarms).getSingle();
       expect(alarm.kind, IntegrityAlarmKind.ownWritesRollback.code);
       expect(alarm.detail, 'the server lost a write');
       expect(alarm.occurrenceCount, 1);
+      // The date survived the rewind and the upgrade.
+      expect(alarm.firstDetectedAt, DateTime.utc(2026, 8, 1));
 
       final quarantine =
           await upgraded.select(upgraded.quarantinedOps).getSingle();
       expect(quarantine.reason, SyncRejectionReason.badSignature.code);
       expect(quarantine.detail, 'forged');
+      expect(quarantine.detectedAt, DateTime.utc(2026, 8, 1));
 
       final holes = await upgraded.select(upgraded.acceptedChainHoles).get();
       expect(
