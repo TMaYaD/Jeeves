@@ -138,3 +138,59 @@ jobs:
       - name: prepare-commit-msg hook tests
         run: ./.githooks/tests/test-prepare-commit-msg-hook.sh
 
+  # Dokku builds backend/Dockerfile on deploy.  This job builds and starts the
+  # same image so a build that cannot finish, or an image that cannot serve,
+  # fails here and stops Backend CD before it tags or deploys.  It lives in this
+  # workflow because CD is gated on this workflow's conclusion.  It runs on
+  # every Backend CI run: the Dockerfile ends in `COPY . .`, so any backend
+  # change changes the image.
+  image:
+    name: Production image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # The platform the Dokku host builds.  Change it only if that host does.
+      IMAGE_PLATFORM: linux/amd64
+      IMAGE_TAG: jeeves-backend:ci
+      CONTAINER_NAME: jeeves-backend-ci
+      SERVER_VERSION: 1.2.3-image
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build backend/Dockerfile
+        run: docker build --platform "$IMAGE_PLATFORM" --progress=plain --tag "$IMAGE_TAG" backend
+      - name: Check the built image is the pinned platform
+        run: |
+          set -euo pipefail
+          built_platform=$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$IMAGE_TAG")
+          if [ "$built_platform" != "$IMAGE_PLATFORM" ]; then
+            echo "::error::Built ${built_platform}, expected ${IMAGE_PLATFORM}."
+            exit 1
+          fi
+      - name: Start the image and check GET /health
+        run: |
+          set -euo pipefail
+          docker run --detach --name "$CONTAINER_NAME" --platform "$IMAGE_PLATFORM" \
+            --publish 127.0.0.1:8000:8000 \
+            --env APP_ENV=production \
+            --env SECRET_KEY=ci-image-check-not-for-production \
+            --env SERVER_VERSION \
+            "$IMAGE_TAG"
+          health_response=""
+          for _ in $(seq 1 30); do
+            if health_response=$(curl --silent --fail http://127.0.0.1:8000/health); then
+              break
+            fi
+            if [ "$(docker inspect --format '{{.State.Running}}' "$CONTAINER_NAME")" != "true" ]; then
+              echo "::error::The container exited before /health answered."
+              exit 1
+            fi
+            sleep 1
+          done
+          echo "GET /health -> ${health_response}"
+          jq --exit-status --arg version "$SERVER_VERSION" \
+            '.status == "ok" and .version == $version' <<<"$health_response"
+      - name: Container log
+        if: always()
+        run: docker logs "$CONTAINER_NAME" || true
