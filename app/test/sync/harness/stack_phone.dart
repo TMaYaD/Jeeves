@@ -127,6 +127,9 @@ class StackPhone {
           ..localChangeListener = capture.onLocalChanges)
         : null;
     if (host != null) {
+      // A change the bridge will never author is handed back to the host, so
+      // its clock can be taken back under the device node id.
+      capture.onChangesLeftUnauthored = host.restampUnauthoredClocksAsDevice;
       await host.start();
       hostedCapture!.attach(host);
     }
@@ -196,7 +199,11 @@ class StackPhone {
 
   final String label;
   final GtdDatabase domain;
-  final WorkspaceRoutingOpCapture capture;
+
+  /// The op-log bridge. Replaced by [relaunchAfterKillWhileSignedIn], because a
+  /// process that starts over builds a fresh one — bound to nothing, and
+  /// undecided until the app decides.
+  WorkspaceRoutingOpCapture capture;
 
   /// The sync host and the capture binding that feeds it, when built `hosted`.
   final SyncHostService? host;
@@ -327,6 +334,19 @@ class StackPhone {
       clock: clock,
       host: host,
     );
+  }
+
+  /// What a process killed while signed in leaves for its next launch: no
+  /// lifecycle, a fresh undecided bridge, and the member id still stored.
+  Future<void> relaunchAfterKillWhileSignedIn() async {
+    final memberIdHex = stack.identity.memberIdHex;
+    await lifecycle?.deactivate(); // stops the sockets a dead process would not hold
+    lifecycle = null;
+    capture = WorkspaceRoutingOpCapture();
+    host!.localChangeListener = capture.onLocalChanges;
+    // The fresh bridge reports to the same host the dead process left behind.
+    capture.onChangesLeftUnauthored = host!.restampUnauthoredClocksAsDevice;
+    await host!.setEnrolledMember(memberIdHex);
   }
 
   void goOffline() {

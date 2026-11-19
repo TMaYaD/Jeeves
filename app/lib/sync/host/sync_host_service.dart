@@ -357,6 +357,43 @@ class SyncHostService implements SyncHost, OutboxDrainer {
   Future<List<Change>> changesStampedByDevice() async => changesStampedBy(
       _deviceNodeId ?? (await readClockIdentity(_domain)).deviceNodeId);
 
+  /// Re-stamp [unauthored] clocks under this device's own node id.
+  ///
+  /// A change the op-log bridge will never author — the write made before the
+  /// session restore answered "signed out" — is left in merge state with a clock
+  /// that names a member no op carried. The bridge hands that clock back here,
+  /// and it becomes the device's own: the rebuild from the op log, the
+  /// signed-out upload and the enrolment upload all look for the device node id.
+  ///
+  /// The match is on the **exact** clock — wall time, counter and member id —
+  /// so a field written again since, or a change an account has already claimed,
+  /// is left alone. The value, the wall time and the counter do not change, so
+  /// nothing is projected.
+  ///
+  /// Called from inside a drain: it opens its own sync-store transaction and
+  /// never goes through [drain].
+  Future<void> restampUnauthoredClocksAsDevice(
+      List<UnauthoredClock> unauthored) async {
+    final node = _deviceNodeId ?? (await readClockIdentity(_domain)).deviceNodeId;
+    final foreign = [
+      for (final entry in unauthored)
+        if (entry.clock.memberIdHex != node) entry,
+    ];
+    if (foreign.isEmpty) return;
+    await _sync.transaction(() async {
+      for (final entry in foreign) {
+        for (final table in const ['field_clocks', 'row_tombstones']) {
+          await _sync.customStatement(
+            'UPDATE $table SET member_id_hex = ? WHERE collection = ? AND entity_id = ? '
+            'AND wall_ms = ? AND counter = ? AND member_id_hex = ?',
+            [node, entry.collection, entry.entityId, entry.clock.wallMs,
+                entry.clock.counter, entry.clock.memberIdHex],
+          );
+        }
+      }
+    });
+  }
+
   /// What the device wrote under its own node id after [afterWallMs] that is still
   /// visible, per entity, for upload once an account is back.
   ///

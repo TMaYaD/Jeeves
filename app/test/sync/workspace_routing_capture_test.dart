@@ -18,6 +18,7 @@ import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/sync/collection_codecs.dart';
 import 'package:jeeves/sync/domain_op_capture.dart';
 import 'package:jeeves/sync/hlc.dart';
+import 'package:jeeves/sync/host/change.dart';
 import 'package:jeeves/sync/ids.dart';
 import 'package:jeeves/sync/member_identity.dart';
 import 'package:jeeves/sync/reducer.dart';
@@ -33,6 +34,10 @@ const int _nowMs = 1770000000000;
 /// author's own call site (#573).
 const String _outcomeId = '55555555-5555-4555-8555-555555555555';
 
+/// A member id that is nobody's: the clock of a change made before this device
+/// enrolled, and the one the bridge declines to author.
+const String _otherMemberIdHex = 'ffffffffffffffffffffffffffffffff';
+
 void main() {
   setUpAll(configureSqliteForTests);
 
@@ -40,12 +45,16 @@ void main() {
   late SyncClient gtdClient;
   late SyncClient preferencesClient;
   late WorkspaceRoutingOpCapture capture;
+  late MemberIdentity identity;
+
+  /// The changes the bridge reported as ones it will never author.
+  late List<UnauthoredClock> reported;
 
   setUp(() async {
     driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
     database = SyncDatabase(NativeDatabase.memory());
     addTearDown(database.close);
-    final identity = await MemberIdentity.generate();
+    identity = await MemberIdentity.generate();
     final clock = HlcClock(memberIdHex: identity.memberIdHex, nowMs: () => _nowMs);
     SyncClient clientFor(String workspaceId) => SyncClient(
           workspaceId: workspaceId,
@@ -59,6 +68,10 @@ void main() {
     gtdClient = clientFor(defaultWorkspaceId(_userId));
     preferencesClient = clientFor(userPreferencesWorkspaceId(_userId));
     capture = WorkspaceRoutingOpCapture();
+    reported = <UnauthoredClock>[];
+    capture.onChangesLeftUnauthored = (unauthored) async {
+      reported.addAll(unauthored);
+    };
   });
 
   Future<List<String>> queuedWorkspaceIds() async {
@@ -100,6 +113,25 @@ void main() {
           'user_id': _userId,
         },
       );
+
+  /// A change the sync host merged and handed to the bridge: field-grain, with
+  /// the clock it stamped.
+  ///
+  /// The clock names the bound member by default, so the op is that member's to
+  /// author. A different member id is the "made before this device enrolled"
+  /// case — the one the wire refuses and the bridge declines.
+  Change hostChange({String? clockMemberIdHex}) {
+    final clock = Hlc(_nowMs, 0, clockMemberIdHex ?? identity.memberIdHex);
+    return Change(
+      collection: todosCollection,
+      entityId: _outcomeId,
+      fields: {
+        'title': ClockedValue('Write the thing', clock),
+        'created_at': ClockedValue('2026-02-01T09:00:00.000Z', clock),
+        'user_id': ClockedValue(_userId, clock),
+      },
+    );
+  }
 
   test('undecided, ops are held — nothing authored until a decision', () async {
     await capturing(() {
@@ -284,5 +316,88 @@ void main() {
     expect(await queuedWorkspaceIds(), [defaultWorkspaceId(_userId)],
         reason: "the committed row's op must be queued, not discarded with the "
             "overlapping scope's buffer");
+  });
+
+  group('the changes the bridge will never author', () {
+    test('unbind from undecided reports the host-clocked ops it discards',
+        () async {
+      await capture.onLocalChanges([hostChange()]);
+      expect(reported, isEmpty,
+          reason: 'nothing is left unauthored while the decision is undecided');
+
+      capture.unbind();
+      await capture.unauthoredHandedBack;
+
+      expect(reported, hasLength(1));
+      expect(reported.single.collection, todosCollection);
+      expect(reported.single.entityId, _outcomeId);
+      expect(reported.single.clock.memberIdHex, identity.memberIdHex);
+    });
+
+    test('an op arriving after the silent decision is reported', () async {
+      capture.unbind();
+      await capture.unauthoredHandedBack;
+      expect(reported, isEmpty, reason: 'there was nothing to discard');
+
+      await capture.onLocalChanges([hostChange()]);
+      await capture.unauthoredHandedBack;
+
+      expect(reported, hasLength(1));
+      expect(reported.single.entityId, _outcomeId);
+      expect(await queuedWorkspaceIds(), isEmpty,
+          reason: 'a silent op is never authored');
+    });
+
+    test('an op clocked for a member other than the bound one is reported',
+        () async {
+      await capture.bind(
+          gtdClient: gtdClient, preferencesClient: preferencesClient);
+
+      await capture
+          .onLocalChanges([hostChange(clockMemberIdHex: _otherMemberIdHex)]);
+      await capture.unauthoredHandedBack;
+
+      expect(reported, hasLength(1));
+      expect(reported.single.clock.memberIdHex, _otherMemberIdHex);
+      expect(await queuedWorkspaceIds(), isEmpty,
+          reason: 'the wire refuses an op whose clock does not name its author');
+    });
+
+    test('an op authored on bind is not reported, and one outbox row exists',
+        () async {
+      await capture.onLocalChanges([hostChange()]);
+      await capture.bind(
+          gtdClient: gtdClient, preferencesClient: preferencesClient);
+      await capture.unauthoredHandedBack;
+
+      expect(reported, isEmpty,
+          reason: 'the op was authored, not left unauthored');
+      expect(await queuedWorkspaceIds(), [defaultWorkspaceId(_userId)]);
+    });
+
+    test('an op with no host clock is not reported', () async {
+      // Described straight through the seam: no host stamped it, so there is
+      // nothing in merge state to take back.
+      await capturing(writeOutcome);
+
+      capture.unbind();
+      await capture.unauthoredHandedBack;
+
+      expect(reported, isEmpty,
+          reason: 'an op with no clock left no clock behind');
+    });
+
+    test('a sink that throws does not stop unbind, and the hand-back still '
+        'completes', () async {
+      capture.onChangesLeftUnauthored = (_) async {
+        throw StateError('the host is gone');
+      };
+      await capture.onLocalChanges([hostChange()]);
+
+      capture.unbind();
+      await capture.unauthoredHandedBack;
+
+      expect(capture.isBound, isFalse);
+    });
   });
 }

@@ -132,7 +132,7 @@ clocks and merges its own writes, under a random device node id; once enrolled, 
 member id takes over as the tie-break so the wire is unchanged. Clocks stamped under
 the device node id are never ops, so the enrolment upload does not skip them, a
 rebuild from the log carries them across, and an account's later sign-in authors
-those made since its upload completed — creates, edits and deletes, not preferences. See [sync-plugins](proposals/sync-plugins.md).
+those made since its upload completed — creates, edits and deletes, not preferences. A change stamped under a member id that is then never authored — a write made before session restore answered "signed out" — has its clock handed back to the device node id, so the same three paths cover it. See [sync-plugins](proposals/sync-plugins.md).
 
 Rows that predate the host are seeded into merge state once per device, before any
 plugin can attach, so `snapshot()` holds the whole local dataset. Seeding inserts
