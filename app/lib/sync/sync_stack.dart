@@ -24,13 +24,11 @@ library;
 import 'dart:math';
 
 import '../database/gtd_database.dart';
-import 'control_payload.dart' show zeroPrevControlHash;
 import 'device_key_store.dart';
 import 'enrolment.dart';
 import 'domain_projector.dart';
 import 'domain_reconciler.dart';
 import 'enrolment_state.dart';
-import 'envelope.dart' show sameBytes;
 import 'hlc.dart';
 import 'host/sync_host_service.dart';
 import 'ids.dart';
@@ -290,12 +288,16 @@ class SyncStack {
   /// controls to show. The reads and the
   /// derivation are here because two copies of either would be free to disagree,
   /// and the lifecycle's answer has to be the one the screen shows.
+  ///
+  /// A Workspace counts only when **this device's own registration** is in its
+  /// applied control log. A joining device applies the founder's genesis and
+  /// Grant as soon as it pulls, so a non-empty control log says the Workspace
+  /// exists — not that this device may claim it.
   Future<EnrolmentCeremonyStatus> readEnrolmentStatus() async {
     final founded = <String>[];
     for (final workspaceId in workspaceIds) {
       final client = await workspaceClientFactory(workspaceId);
-      final head = await client.appliedControlHead();
-      if (!sameBytes(head, zeroPrevControlHash)) founded.add(workspaceId);
+      if (await client.ownRegistrationApplied()) founded.add(workspaceId);
     }
     return deriveEnrolmentCeremonyStatus(
       workspaceIds: workspaceIds,

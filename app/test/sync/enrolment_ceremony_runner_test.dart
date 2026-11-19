@@ -583,4 +583,73 @@ void main() {
 
     await expectEnrolledAndClean(device);
   });
+
+  test('a joining device stopped before its last registration left the device '
+      'reads as unfinished, and resumes', () async {
+    final founder = await phone();
+    final passphrase = await founder.runner.generatePassphrase();
+    await founder.runner.found(passphrase);
+
+    final second = await phone();
+    // The preferences Workspace is the last one the ceremony claims, so this
+    // stops the joining device after it pulled it and before its registration
+    // there reached the server.
+    final prefs = userPreferencesWorkspaceId(_userId);
+    second.link.failNextPostForWorkspaceId = prefs;
+
+    await expectLater(
+      second.runner.resume(passphrase),
+      throwsA(isA<SyncTransportException>()
+          .having((error) => error.isUnreachable, 'isUnreachable', isTrue)),
+    );
+
+    // The server never saw this device in the last Workspace.
+    expect(
+      controlTypesAuthoredBy(prefs, second.stack.identity.memberId),
+      isEmpty,
+    );
+
+    // The device reads as unfinished, and names the one Workspace it is in.
+    final interrupted = await second.runner.status();
+    expect(interrupted.state, EnrolmentState.foundingIncomplete);
+    expect(interrupted.foundedWorkspaceIds, [defaultWorkspaceId(_userId)]);
+
+    await second.runner.resume(passphrase);
+
+    await expectEnrolledAndClean(second);
+  });
+
+  test('a joining device whose last registration the server took unheard '
+      'reads as unfinished, and resumes', () async {
+    final founder = await phone();
+    final passphrase = await founder.runner.generatePassphrase();
+    await founder.runner.found(passphrase);
+
+    final second = await phone();
+    final prefs = userPreferencesWorkspaceId(_userId);
+    second.link.dropNextPostResponseForWorkspaceId = prefs;
+
+    await expectLater(
+      second.runner.resume(passphrase),
+      throwsA(isA<SyncTransportException>()
+          .having((error) => error.isUnreachable, 'isUnreachable', isTrue)),
+    );
+
+    // The server took the registration; the device never heard it say so.
+    expect(
+      controlTypesAuthoredBy(prefs, second.stack.identity.memberId)
+          .where((type) => type == controlTypeMemberRegister),
+      hasLength(1),
+    );
+
+    // The device still reads as unfinished: it never applied the registration
+    // it posted, so its applied control log does not hold it.
+    final interrupted = await second.runner.status();
+    expect(interrupted.state, EnrolmentState.foundingIncomplete);
+    expect(interrupted.foundedWorkspaceIds, [defaultWorkspaceId(_userId)]);
+
+    await second.runner.resume(passphrase);
+
+    await expectEnrolledAndClean(second);
+  });
 }

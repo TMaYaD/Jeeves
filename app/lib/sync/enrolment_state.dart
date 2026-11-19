@@ -26,8 +26,8 @@ enum EnrolmentState {
   /// The ceremony started and did not finish. Two shapes reach here, and both
   /// are recovered the same way — re-enter with the passphrase:
   ///
-  /// - **Keys present, a Workspace still un-founded.** The escrow and the pin
-  ///   landed, the log did not.
+  /// - **Keys present, and a Workspace this device has not registered in.** The
+  ///   escrow and the pin landed, the log did not.
   /// - **A pinned Root with no keys.** `enrolFirstDevice` writes the escrow and
   ///   pins Root *before* it stores the keypairs, so dying in that window leaves
   ///   the account's escrow claimed by a device that cannot prove it. Founding
@@ -35,7 +35,8 @@ enum EnrolmentState {
   ///   this is not [notEnrolled].
   foundingIncomplete,
 
-  /// Keys stored and every derivable Workspace's control log non-empty.
+  /// Keys stored and this device's own registration applied in every derivable
+  /// Workspace.
   enrolled,
 }
 
@@ -55,7 +56,8 @@ class EnrolmentCeremonyStatus {
   /// Every Workspace this User's devices are enrolled into, in ceremony order.
   final List<String> workspaceIds;
 
-  /// Those whose control log this device has applied something into.
+  /// Those where this device's own registration (a genesis or a member
+  /// registration it authored) is in the applied control log.
   final List<String> foundedWorkspaceIds;
 
   /// This device's Member id, once its keys are stored. Null in the pre-keys
