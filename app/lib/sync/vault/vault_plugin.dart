@@ -44,6 +44,15 @@ class VaultPlugin implements SyncPlugin {
   /// Pages in the folder the app could not read or parse, and left alone.
   int _unreadablePageCount = 0;
 
+  /// Pages the last read pass could not take into the host, and left alone.
+  /// Their content is in the folder and nowhere else: the host refused it.
+  int _untakenPageCount = 0;
+
+  /// The pages the last read pass could not take. A page is here while a copy
+  /// of it still holds an edit the app does not have, so it is not written
+  /// over: the folder keeps that edit until the host takes it.
+  final Set<VaultPageKey> _untaken = {};
+
   /// Whether the folder could be reached in the last pass.
   bool _folderReachable = true;
 
@@ -117,6 +126,7 @@ class VaultPlugin implements SyncPlugin {
   void _reportSynced() => _health.add(VaultHealth(
         lastSyncedAt: DateTime.now().toUtc(),
         unreadablePageCount: _unreadablePageCount,
+        untakenPageCount: _untakenPageCount,
         folderReachable: _folderReachable,
       ));
 
@@ -153,6 +163,8 @@ class VaultPlugin implements SyncPlugin {
   Future<Set<VaultPageKey>> _scanAll() async {
     final touched = <VaultPageKey>{};
     _unreadablePageCount = 0;
+    _untakenPageCount = 0;
+    _untaken.clear();
     _folderReachable = true;
     for (final kind in VaultPageKind.values) {
       final byId = <String, List<({String path, String text, PageModel page})>>{};
@@ -195,16 +207,33 @@ class VaultPlugin implements SyncPlugin {
       for (final entry in byId.entries) {
         final copies = entry.value..sort((a, b) => a.path.compareTo(b.path));
         final key = VaultPageKey(kind, entry.key);
+        // A copy the host would not take is kept: its content is in the folder
+        // and nowhere else, and the app does not have it.
+        final untaken = <String>{};
         for (final copy in copies) {
           if (copy.text != await _baseOf(copy.path)) {
-            await _ingest(key, copy.path, copy.text, copy.page);
-            touched.add(key);
+            if (await _ingest(key, copy.path, copy.text, copy.page)) {
+              touched.add(key);
+            } else {
+              untaken.add(copy.path);
+            }
           }
+        }
+        if (untaken.isNotEmpty) {
+          // The page still holds an edit the app does not have, so it is not
+          // written over either: the folder keeps it until the host takes it.
+          _untakenPageCount++;
+          _untaken.add(key);
         }
         _paths[key] = copies.first.path;
         _members.putIfAbsent(key, () => <String>{});
         // Concurrent versions of one page were all read; keep one.
         for (final extra in copies.skip(1)) {
+          if (untaken.contains(extra.path)) {
+            // The host did not take this copy, so it still holds an edit the
+            // app does not have. It stays until the host takes it.
+            continue;
+          }
           try {
             await _folder.remove(extra.path);
           } on Object catch (error) {
@@ -600,6 +629,12 @@ class VaultPlugin implements SyncPlugin {
   // --- writing a page --------------------------------------------------------
 
   Future<void> _writePage(VaultPageKey key) async {
+    if (_untaken.contains(key)) {
+      // The host did not take what this page says, so a copy of it still holds
+      // an edit the app does not have. Writing the merged state over it would
+      // lose that edit: the page is left alone until the host takes it.
+      return;
+    }
     var attempts = 0;
     while (true) {
       final text = await _render(key);
@@ -651,7 +686,12 @@ class VaultPlugin implements SyncPlugin {
         if (existing != base && attempts < 3) {
           // Someone changed the file since this device last saw it: read it
           // before it is overwritten.
-          if (!await _ingest(key, path, existing, page)) return;
+          if (!await _ingest(key, path, existing, page)) {
+            // The host would not take it, so the file still holds an edit the
+            // app does not have. It is not written over.
+            _untaken.add(key);
+            return;
+          }
           attempts++;
           continue;
         }

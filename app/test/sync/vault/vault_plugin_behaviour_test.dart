@@ -312,6 +312,69 @@ void main() {
     expect(await _title(device, _otherOutcomeId), 'bbb edited');
   });
 
+  test('a copy the host will not take is kept, and taken after a retry',
+      () async {
+    final device = HostDevice.open('a');
+    addTearDown(device.close);
+    final host = await device.startHost();
+    final directory = Directory('${root.path}/vault')..createSync(recursive: true);
+    final folder = DirectoryVaultFolder(directory);
+    final plugin = VaultPlugin(folder: folder, sync: device.sync);
+    await host.attach(plugin);
+
+    await device.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'Plan', userId: _userId);
+    await device.domain.todoDao.updateFields(_outcomeId, notes: 'the body');
+    await host.deliverAll();
+    await plugin.rescan();
+
+    final path = (await folder.listMarkdownFiles('Outcomes')).single;
+    final page = (await folder.read(path))!;
+    expect(page, contains('title: Plan'));
+
+    // A person edited the page, and a syncer brought a second copy of it: two
+    // versions of one page, each holding an edit the other does not.
+    final copy = 'Outcomes/zz-plan-copy.md';
+    await folder.writeAtomically(
+        path, page.replaceFirst('title: Plan', 'title: Plan edited'));
+    await folder.writeAtomically(
+        copy, page.replaceFirst('the body', 'a body written by hand'));
+
+    // The store that holds the merge state cannot be written, so the host
+    // cannot take what the pages say.
+    await device.sync.customStatement(
+      'CREATE TRIGGER fail_merge BEFORE INSERT ON reduced_fields '
+      "BEGIN SELECT RAISE(ABORT, 'the store cannot hold it'); END",
+    );
+
+    final health = <VaultHealth>[];
+    plugin.health.listen(health.add);
+    await plugin.rescan();
+    await pumpEventQueue();
+
+    // Each edit is in one file and nowhere else. Neither file is removed and
+    // neither is written over, and the app has taken nothing.
+    expect(await folder.read(path), contains('title: Plan edited'),
+        reason: 'the page was written over');
+    expect(await folder.read(copy), contains('a body written by hand'),
+        reason: 'the copy was removed');
+    expect(await _title(device), 'Plan',
+        reason: 'the app took what the host refused');
+    expect(await _notes(device), 'the body');
+    expect(health.last.untakenPageCount, 1,
+        reason: 'the page the host would not take was not reported');
+
+    // The store works again. The next read takes both edits and folds the
+    // copy in.
+    await device.sync.customStatement('DROP TRIGGER fail_merge');
+    await plugin.rescan();
+
+    expect(await _title(device), 'Plan edited', reason: 'the edit was not taken');
+    expect(await _notes(device), 'a body written by hand');
+    expect(await folder.listMarkdownFiles('Outcomes'), hasLength(1),
+        reason: 'the copy was not folded in');
+  });
+
   test('a page that does not parse is left alone and reported in health',
       () async {
     final device = HostDevice.open('a');
@@ -384,6 +447,15 @@ Future<String?> _intent(HostDevice device, [String id = _outcomeId]) async {
     variables: [Variable<String>(id)],
   ).get();
   return rows.isEmpty ? null : rows.single.read<String>('intent');
+}
+
+/// The Outcome's notes, as the app holds them.
+Future<String?> _notes(HostDevice device, [String id = _outcomeId]) async {
+  final rows = await device.domain.customSelect(
+    'SELECT notes FROM todos WHERE id = ?',
+    variables: [Variable<String>(id)],
+  ).get();
+  return rows.isEmpty ? null : rows.single.read<String>('notes');
 }
 
 /// How many Actions the Outcome has.
