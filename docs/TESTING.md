@@ -316,11 +316,12 @@ Automated coverage:
 
 - `app/test/sync/enrolment_ceremony_runner_test.dart` — the real runner over the real
   `SyncStack`, against `FakeSyncServer`: founding, the refusal of a second founding
-  (asserting the server saw no write), an offline run leaving the device un-enrolled, both
-  crash windows and their passphrase resumes, the escrow conflict, a second phone enrolling
-  on the passphrase alone, and `escrowExists` distinguishing a fresh account from a founded
-  one (including that it *throws* offline rather than answering `false`, which would send a
-  second device into a founding the account cannot accept). **Deliberately not a
+  (asserting the server saw no write), an offline run leaving the device un-enrolled,
+  every crash window and its passphrase resume, the escrow conflict, a second phone
+  enrolling on the passphrase alone, and `escrowExists` distinguishing a fresh account
+  from a founded one (including that it *throws* offline rather than answering `false`,
+  which would send a second device into a founding the account cannot accept).
+  **Deliberately not a
   `SimDevice` test:** a `SimDevice` hands every client the same omnipresent `DeviceLink` at
   construction, so it cannot notice a stack that fails to propagate the member transport to
   the preferences Workspace's client — the one place production diverges from the harness.
