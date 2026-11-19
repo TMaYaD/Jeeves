@@ -12,17 +12,18 @@ TagWithCount _twc(String id, String name, int count) => TagWithCount(
 List<String> _ids(TagCloudLayout l) =>
     l.visibleTags.map((t) => t.tag.id).toList();
 
+List<String> _names(TagCloudLayout l) =>
+    l.visibleTags.map((t) => t.tag.name).toList();
+
 TagCloudLayout _organise(
   List<TagWithCount> tags, {
   Set<String> selected = const {},
   String query = '',
-  bool expanded = false,
 }) =>
     organiseTagCloud(
       tags: tags,
       selectedIds: selected,
       query: query,
-      expanded: expanded,
     );
 
 List<TagWithCount> _many(int n) =>
@@ -30,21 +31,22 @@ List<TagWithCount> _many(int n) =>
 
 void main() {
   group('organiseTagCloud', () {
-    test('orders by count descending, ties by name ignoring case', () {
+    test('orders by name ignoring case, whatever the counts or selection',
+        () {
       final layout = _organise([
-        _twc('a', 'Zebra', 2),
-        _twc('b', 'apple', 2),
-        _twc('c', 'mid', 5),
-      ]);
-      expect(_ids(layout), ['c', 'b', 'a']);
+        _twc('z', 'Zebra', 2),
+        _twc('a', 'apple', 9),
+        _twc('m', 'Mid', 5),
+      ], selected: {'z'});
+      expect(_names(layout), ['apple', 'Mid', 'Zebra']);
     });
 
-    test('pins selected tags first even with a low count', () {
+    test('names equal but for case keep a fixed order by id', () {
       final layout = _organise([
-        _twc('a', 'busy', 9),
-        _twc('b', 'quiet', 1),
-      ], selected: {'b'});
-      expect(_ids(layout), ['b', 'a']);
+        _twc('b', 'Home', 1),
+        _twc('a', 'home', 1),
+      ]);
+      expect(_ids(layout), ['a', 'b']);
     });
 
     test('hides tags with no active tasks unless selected', () {
@@ -53,41 +55,24 @@ void main() {
         _twc('b', 'idle', 0),
         _twc('c', 'idle-selected', 0),
       ], selected: {'c'});
-      expect(_ids(layout), ['c', 'a']);
+      expect(_ids(layout), ['a', 'c']);
     });
 
-    test('collapsed view caps at 12 and counts the hidden remainder', () {
-      final layout = _organise(_many(20));
-      expect(layout.visibleTags, hasLength(12));
-      expect(layout.hiddenTagCount, 8);
-      expect(layout.offerFindField, isTrue);
+    test('every eligible tag is visible', () {
+      expect(_organise(_many(20)).visibleTags, hasLength(20));
+      expect(_organise(_many(60)).visibleTags, hasLength(60));
     });
 
-    test('expanded view shows every tag', () {
-      final layout = _organise(_many(20), expanded: true);
-      expect(layout.visibleTags, hasLength(20));
-      expect(layout.hiddenTagCount, 0);
+    test('offerFindField is false at twelve eligible tags, true at thirteen',
+        () {
+      expect(_organise(_many(12)).offerFindField, isFalse);
+      expect(_organise(_many(13)).offerFindField, isTrue);
     });
 
-    test('selected tags beyond the cap are all visible', () {
-      final tags = _many(20);
-      final selected = {for (final t in tags.take(15)) t.tag.id};
-      final layout = _organise(tags, selected: selected);
-      expect(layout.visibleTags, hasLength(15));
-      expect(layout.hiddenTagCount, 5);
-    });
-
-    test('no find field at or under the cap', () {
-      final layout = _organise(_many(12));
-      expect(layout.offerFindField, isFalse);
-      expect(layout.hiddenTagCount, 0);
-    });
-
-    test('query matches case-insensitively, ignores leading @, lifts cap', () {
+    test('query matches case-insensitively and ignores a leading @', () {
       final tags = [..._many(20), _twc('x', 'Errands', 1)];
       final layout = _organise(tags, query: '@errAND');
       expect(_ids(layout), ['x']);
-      expect(layout.hiddenTagCount, 0);
       expect(layout.offerFindField, isTrue);
     });
 
@@ -120,15 +105,14 @@ void main() {
       expect(_ids(layout), ['a']);
     });
 
-    test('keeps unused tags, ordered last, when asked', () {
+    test('keeps unused tags, in name order, when asked', () {
       final layout = organiseTagCloud(
         tags: [_twc('b', 'idle', 0), _twc('a', 'used', 1)],
         selectedIds: const {},
         query: '',
-        expanded: false,
         includeUnusedTags: true,
       );
-      expect(_ids(layout), ['a', 'b']);
+      expect(_ids(layout), ['b', 'a']);
     });
   });
 

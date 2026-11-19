@@ -34,7 +34,7 @@ void showOutcomeContextTagEditor(BuildContext context, String todoId) {
               final contextTags =
                   tags.where((t) => t.type == 'context').toList();
               return ContextTagPickerWidget(
-                cloudInitiallyOpen: true,
+                cloudOnly: true,
                 assignedTags: contextTags,
                 onAssign: (tag) =>
                     ref
