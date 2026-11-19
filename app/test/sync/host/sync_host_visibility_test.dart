@@ -23,8 +23,8 @@ void main() {
     final device = HostDevice.open('a');
     addTearDown(device.close);
     final host = await device.startHost();
-    final fieldClock = await host.mintClock();
-    final tombstone = await host.mintClock();
+    final fieldClock = host.mintClock();
+    final tombstone = host.mintClock();
 
     await host.applyRemote('peer', [
       Change(
@@ -52,9 +52,9 @@ void main() {
     final device = HostDevice.open('a');
     addTearDown(device.close);
     final host = await device.startHost();
-    final fieldClock = await host.mintClock();
-    final tombstone = await host.mintClock();
-    final revival = await host.mintClock();
+    final fieldClock = host.mintClock();
+    final tombstone = host.mintClock();
+    final revival = host.mintClock();
 
     await host.applyRemote('peer', [
       Change(
@@ -89,9 +89,9 @@ void main() {
     final device = HostDevice.open('a');
     addTearDown(device.close);
     final host = await device.startHost();
-    final fieldClock = await host.mintClock();
-    final tombstone = await host.mintClock();
-    final revival = await host.mintClock();
+    final fieldClock = host.mintClock();
+    final tombstone = host.mintClock();
+    final revival = host.mintClock();
 
     await host.applyRemote('peer', [
       Change(

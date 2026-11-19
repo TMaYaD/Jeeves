@@ -31,7 +31,7 @@ void main() {
       fields: {
         'value': ClockedValue(
           '"2026-03-01T00:00:00.000Z"',
-          await host.mintClock(),
+          host.mintClock(),
         ),
       },
     );
@@ -39,7 +39,7 @@ void main() {
       collection: _probeCollection,
       entityId: 'probe-1',
       fields: {
-        'title': ClockedValue('Ship it', await host.mintClock()),
+        'title': ClockedValue('Ship it', host.mintClock()),
       },
     );
 
@@ -66,7 +66,7 @@ void main() {
         collection: _probeCollection,
         entityId: 'probe-1',
         fields: {
-          'title': ClockedValue('Ship it', await host.mintClock()),
+          'title': ClockedValue('Ship it', host.mintClock()),
         },
       ),
     ]);

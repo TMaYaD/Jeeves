@@ -198,6 +198,7 @@ final vaultPluginProvider = FutureProvider<VaultPlugin?>((ref) async {
   ref.onDispose(() => stopped = true);
 
   final reference = await ref.watch(vaultFolderProvider.future);
+  if (reference == null) return null; // no folder: the vault is off
   if (stopped) return null;
 
   final host = await ref.watch(syncHostProvider.future);

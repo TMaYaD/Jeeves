@@ -71,7 +71,8 @@ void main() {
   /// the real work runs on.
   Future<void> settle() async {
     await container.pump();
-    await pumpEventQueue(duration: const Duration(milliseconds: 20), times: 5);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    await pumpEventQueue(times: 5);
   }
 
   group('the vault runs where the op log does not', () {
