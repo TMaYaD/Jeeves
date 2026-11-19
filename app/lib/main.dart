@@ -111,6 +111,8 @@ class JeevesApp extends ConsumerWidget {
     // Keeps the Ritual notifications equal to the projection of the Nudge
     // queue over the coming week. Nothing else reads it.
     ref.watch(nudgeNotificationSchedulerProvider);
+    // Keeps the first-launch card dismissal in step across devices.
+    ref.watch(onboardingSyncProvider);
     return MaterialApp.router(
       title: 'Jeeves',
       theme: ThemeData(
