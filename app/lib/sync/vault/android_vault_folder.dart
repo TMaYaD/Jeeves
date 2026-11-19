@@ -8,8 +8,8 @@
 /// **The channel is the op-log folder plugin's** (`jeeves/folder`, the one
 /// #917's in-app Kotlin document-tree channel provides). This file adds no
 /// second channel and no second picker: it is a second *client* of the one
-/// channel, over the same operations plus the two the vault needs and the op
-/// log does not — write-and-rename and remove.
+/// channel, over the same operations plus the three the vault needs and the op
+/// log does not — read-a-page-whole, write-and-rename and remove.
 ///
 /// Nothing in CI runs this half — there is no on-device tier — so it is kept to a
 /// thin pass-through; the same contract is exercised over `dart:io` instead.
@@ -73,14 +73,14 @@ class AndroidVaultFolder implements VaultFolder {
 
   @override
   Future<String?> read(String relativePath) async {
-    final length =
-        await _channel.invokeMethod<num>('length', _args(relativePath));
-    if (length == null) return null;
-    final bytes = await _channel.invokeMethod<Uint8List>(
-      'read',
-      _args(relativePath, {'offset': 0, 'maxBytes': length.toInt()}),
-    );
-    return utf8.decode(bytes ?? Uint8List(0));
+    // The page is read whole, and the channel answers null only when the
+    // document is not there. The size is not asked for: a provider may answer
+    // a question about a document's size with nothing, and a page of an
+    // unknown size is a page, not a missing one.
+    final bytes =
+        await _channel.invokeMethod<Uint8List>('readAll', _args(relativePath));
+    if (bytes == null) return null;
+    return utf8.decode(bytes);
   }
 
   @override

@@ -15,6 +15,7 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.PluginRegistry
 import java.io.ByteArrayOutputStream
+import java.io.FileNotFoundException
 import java.io.InputStream
 import java.util.concurrent.Executors
 
@@ -29,12 +30,16 @@ import java.util.concurrent.Executors
  *   listFiles({tree, path}) -> List<String>
  *   length({tree, path}) -> Long?                   null if it does not exist
  *   read({tree, path, offset, maxBytes}) -> ByteArray
+ *   readAll({tree, path}) -> ByteArray?             null if it does not exist
  *   append({tree, path, bytes}) -> null             creates the file if needed
  *   createIfAbsent({tree, path, bytes}) -> Boolean
  *   writeAtomically({tree, path, bytes}) -> null    replaces the file
  *   remove({tree, path}) -> null                    deletes the file, if it is there
  *
- * The last two are the vault's: it rewrites a whole page and must not leave a
+ * The vault's own are `readAll`, `writeAtomically` and `remove`. It reads a page
+ * whole, because a provider may answer a question about a document's size with
+ * nothing — so the size is not asked for, and only the absence of the document
+ * answers "there is no page here". It rewrites a whole page and must not leave a
  * half-written one behind, and it removes a page file that has no page in it
  * any more.
  *
@@ -157,6 +162,7 @@ class FolderStoragePlugin :
             (call.argument<Number>("offset") ?: 0).toLong(),
             (call.argument<Number>("maxBytes") ?: 0).toInt(),
         )
+        "readAll" -> readAll(tree, path)
         "append" -> {
             append(tree, path, call.argument<ByteArray>("bytes") ?: ByteArray(0))
             null
@@ -243,6 +249,25 @@ class FolderStoragePlugin :
             skip(it, offset)
             readUpTo(it, maxBytes.toLong())
         }
+    }
+
+    /**
+     * The whole document at [path], or null when there is no document there.
+     *
+     * A document that is there and a document whose size is unknown are
+     * different things, so the size is not consulted at all: the bytes are read
+     * to the end, and only a document that is not there answers null.
+     */
+    private fun readAll(tree: Uri, path: String): ByteArray? {
+        val document = resolve(tree, path) ?: return null
+        val stream = try {
+            resolver.openInputStream(document)
+        } catch (error: FileNotFoundException) {
+            // It was there a moment ago and is not now: it is gone.
+            return null
+        }
+        if (stream == null) throw java.io.IOException("could not open $path")
+        return stream.use { readUpTo(it, Long.MAX_VALUE) }
     }
 
     /** Read up to [limit] bytes from [stream], to the end of it. */
