@@ -45,7 +45,9 @@
 /// and seq ordering guarantees it is pulled before any of that author's content
 /// ops, so the pull itself hydrates the directory in order. A directory refresh
 /// racing a pull is not a hazard this client manages; it is a hazard this
-/// client cannot have.
+/// client cannot have. After a relaunch the directory is restored from the
+/// applied control log at assembly, because the pull cursor outlives the
+/// process and the registrations would never be served again.
 library;
 
 import 'dart:async' show Completer, unawaited;
@@ -2700,6 +2702,55 @@ class SyncClient {
                 : row.workspaceId.equals(workspaceId) & row.quarantinedAt.isNull())
             ..orderBy([(row) => OrderingTerm(expression: row.seq)]))
           .get();
+
+  /// Whether the chained-member directory has been refilled from the applied
+  /// control log yet.
+  bool _chainedMembersRestored = false;
+
+  /// Refill [directory] from the registrations this device already verified and
+  /// applied.
+  ///
+  /// The directory of other devices' keys lives only in memory, and the only
+  /// thing that ever fills it is a *pulled* registration. The pull cursor is
+  /// stored and outlives the process, so after a relaunch the server never
+  /// serves those registrations again: the directory comes back empty and every
+  /// change from another device is refused as `member_not_chained_to_root`.
+  ///
+  /// The registrations are not stored a second time — they are already in the
+  /// applied control log, byte for byte, and this reads them from there. A row
+  /// exists in that table only after the full verification in `_verifyControlOp`
+  /// and the chain check in `_applyControlOp`, so restoring one restores a fact
+  /// this device already established rather than trusting something new: a key
+  /// Root never vouched for has no row and is still refused.
+  ///
+  /// The Root signature is not re-checked here. The rows were verified before
+  /// they were written, the grants view already trusts them unverified, and
+  /// anyone able to rewrite this database could rewrite the pinned Root too, so a
+  /// second check would protect nothing.
+  ///
+  /// Rows on a losing control-fork branch are left out, which is the same row
+  /// set the grants view reads. A running session keeps such a key until it
+  /// exits, so for that one case a restarted device reports
+  /// `member_not_chained_to_root` where a running one reports `no_live_grant`.
+  /// Both refuse the change; the restart is the stricter of the two.
+  Future<void> restoreChainedMembersFromAppliedControlLog() async {
+    if (_chainedMembersRestored) return;
+    for (final row in await _appliedControlLog()) {
+      switch (row.controlType) {
+        case controlTypeWorkspaceGenesis:
+          directory.rememberChained(
+            ControlPayload.decode(row.payloadBytes)
+                .genesisCertificate()
+                .asRegistration(),
+          );
+        case controlTypeMemberRegister:
+          directory.rememberChained(
+            ControlPayload.decode(row.payloadBytes).certificate(),
+          );
+      }
+    }
+    _chainedMembersRestored = true;
+  }
 
   /// The grants view, derived from the applied control log.
   ///

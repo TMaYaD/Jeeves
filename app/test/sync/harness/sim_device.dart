@@ -756,9 +756,12 @@ class SimDevice {
   ///
   /// [attachTransport] wires this device's live transport onto the reopened
   /// client so a crash-recovery test can *re-pull* the op it was killed applying,
-  /// not merely inspect the wreckage. The directory is fresh (only this device's
-  /// own keys, via [SyncClient]'s constructor), so a re-pulled op it must verify
-  /// has to be one this device itself authored — which every #618 crash case is.
+  /// not merely inspect the wreckage. The directory is restored from the applied
+  /// control log, the way a real relaunch restores it: the registrations this
+  /// device already verified are in that log, which outlives the process, and
+  /// the pull cursor outlives it too — so without the restore a reopened client
+  /// would never be served those registrations again, and a peer-authored op
+  /// would be refused as `member_not_chained_to_root` instead of recovered.
   ///
   /// The reopened client gets its own [DomainProjector] and [DomainReconciler],
   /// over a fresh [CollectionRegistry] bound to `reopened` rather than the
@@ -777,7 +780,7 @@ class SimDevice {
     final reopened = SyncDatabase(NativeDatabase(File('${directory.path}/sync.sqlite')));
     _syncStore = reopened;
     final freshRegistry = CollectionRegistry(reopened);
-    return SyncClient(
+    final reopenedClient = SyncClient(
       workspaceId: client.workspaceId,
       userId: userId,
       identity: identity,
@@ -790,6 +793,8 @@ class SimDevice {
     )
       ..projector = DomainProjector(registry: freshRegistry, domain: domain)
       ..reconciler = DomainReconciler(registry: freshRegistry, domain: domain);
+    await reopenedClient.restoreChainedMembersFromAppliedControlLog();
+    return reopenedClient;
   }
 
   /// The subscription lifecycle, on this device's deterministic hooks: the
