@@ -131,8 +131,8 @@ jobs:
           shellcheck --shell=sh .githooks/prepare-commit-msg
       - name: compute-server-version.sh tests
         run: ./infra/ci/tests/test-compute-server-version.sh
-      - name: backend-cd-freshness.sh tests
-        run: ./infra/ci/tests/test-backend-cd-freshness.sh
+      - name: backend-cd-target.sh tests
+        run: ./infra/ci/tests/test-backend-cd-target.sh
       - name: pre-commit hook tests
         run: ./.githooks/tests/test-pre-commit-hook.sh
       - name: prepare-commit-msg hook tests
