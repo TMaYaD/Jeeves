@@ -339,5 +339,44 @@ void main() {
       expect(await db.select(db.sprints).get(), hasLength(1),
           reason: 'the Sprint row is kept, only detached');
     });
+
+    test('the live read reaches a Sprint whose Action arrives after it',
+        () async {
+      // Sync may deliver a Sprint before the Action it ran on: the two are
+      // separate collections and either may arrive first. Until the Action is
+      // here the Sprint belongs to no Outcome, and the reader must not lose
+      // it when the Action lands.
+      final outcome = await seedOutcome();
+      await db.into(db.sprints).insert(SprintsCompanion.insert(
+          id: 'sprint-1',
+          userId: _userId,
+          actionId: const Value('action-later'),
+          startedAt: encodeInstant(_t0)!,
+          plannedDurationMinutes: 25));
+
+      final emissions = <List<SprintOutcomeRecord>>[];
+      final sub = db.sprintDao.watchRecordsByOutcome().listen(emissions.add);
+      addTearDown(sub.cancel);
+      await pumpEventQueue();
+
+      expect(emissions, hasLength(1));
+      expect(emissions.single, isEmpty,
+          reason: 'the Action it ran on is not here yet');
+
+      // The Action arrives.
+      await db.into(db.actions).insert(ActionsCompanion.insert(
+          id: const Value('action-later'),
+          outcomeId: outcome,
+          userId: _userId,
+          actionText: 'Write',
+          role: 'current',
+          createdAt: _t0));
+      await pumpEventQueue();
+
+      expect(emissions, hasLength(2));
+      expect(emissions.last, hasLength(1));
+      expect(emissions.last.single.record.id, 'sprint-1');
+      expect(emissions.last.single.outcomeId, outcome);
+    });
   });
 }

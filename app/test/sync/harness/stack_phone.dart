@@ -250,10 +250,14 @@ class StackPhone {
   /// The signal listeners run over the harness's timer wheel so no test waits on
   /// a real backoff. [signalTransport] replaces [link] as the socket side only —
   /// what a test wraps to make subscribing itself fail.
+  /// [onActivationFinished] is the production lifecycle's after-activation hook:
+  /// what production does once an activation has finished, run here so a test
+  /// can prove it.
   Future<SyncActivation> activate({
     Duration flushDebounce = const Duration(seconds: 3),
     String Function()? mintTagId,
     SyncTransport? signalTransport,
+    Future<void> Function()? onActivationFinished,
   }) {
     final existing = lifecycle ??= SyncLifecycle(
       stack: stack,
@@ -265,6 +269,7 @@ class StackPhone {
       listenerDelay: link.timers.delay,
       flushDebounce: flushDebounce,
       mintTagId: mintTagId ?? initialUploadTagIdSequence(label),
+      onActivationFinished: onActivationFinished,
     );
     return existing.activate();
   }

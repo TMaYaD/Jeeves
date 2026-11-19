@@ -21,6 +21,7 @@ import '../sync/host/hosted_capture.dart' show clearEnrolledMemberId;
 import '../sync/sync_lifecycle.dart';
 import 'auth_provider.dart';
 import 'database_provider.dart';
+import 'device_names_provider.dart';
 import 'sync_stack_provider.dart';
 import 'user_constants.dart';
 
@@ -60,6 +61,12 @@ final syncLifecycleProvider = FutureProvider<SyncLifecycle?>((ref) async {
       // Not worth an error state: two status providers await this one.
       debugPrint('sync lifecycle: clearing the member id failed — $error');
     }
+    // A signed-out device still has a name of its own, and it is written under
+    // the local profile so that a later sign-in carries it into the account.
+    // Not awaited: nothing waits on a name, and this provider's job here is to
+    // have no lifecycle at all. Issued before the wait below, so the name is
+    // written even if the hand-back never settles.
+    unawaited(ref.read(deviceNamesProvider).ensureOwnNames(kLocalUserId));
     // The bridge reported the changes it will never author; wait for the host
     // to take their clocks back, so a caller that reads the merge state after
     // this sees them under the device node id.
@@ -67,11 +74,16 @@ final syncLifecycleProvider = FutureProvider<SyncLifecycle?>((ref) async {
     return null;
   }
 
+  final deviceNames = ref.watch(deviceNamesProvider);
   final lifecycle = SyncLifecycle(
     stack: await ref.watch(syncStackProvider.future),
     domain: ref.watch(databaseProvider),
     capture: ref.watch(domainOpCaptureProvider),
     host: await ref.watch(syncHostProvider.future),
+    // The device names itself once the activation has finished, never before:
+    // the name is written to the preferences Workspace, and the activation is
+    // what binds the capture that authors it.
+    onActivationFinished: () => deviceNames.ensureOwnNames(userId),
   );
   ref.onDispose(() => unawaited(lifecycle.deactivate()));
 
