@@ -323,6 +323,47 @@ void main() {
         reason: 'the page was not put back');
   });
 
+  test('a page whose block a newer version wrote is kept, and reported',
+      () async {
+    final device = HostDevice.open('a');
+    addTearDown(device.close);
+    final host = await device.startHost();
+    final directory = Directory('${root.path}/vault')..createSync(recursive: true);
+    final folder = DirectoryVaultFolder(directory);
+    final plugin = VaultPlugin(folder: folder, sync: device.sync);
+    await host.attach(plugin);
+
+    await device.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'Plan', userId: _userId);
+    await host.deliverAll();
+    await plugin.rescan();
+
+    final path = (await folder.listMarkdownFiles('Outcomes')).single;
+    final page = (await folder.read(path))!;
+
+    // A second copy of the page, written by a version of Jeeves whose block
+    // this one cannot read. The app has never seen it, so there is no base
+    // copy to read it with either.
+    const newer = 'Outcomes/aa-newer.md';
+    final newerPage =
+        page.replaceFirst('<!-- jeeves-sync 1', '<!-- jeeves-sync 2');
+    expect(parsePage(newerPage).block, isNull,
+        reason: 'the block of the newer page can be read');
+    await folder.writeAtomically(newer, newerPage);
+
+    final health = <VaultHealth>[];
+    plugin.health.listen(health.add);
+    await plugin.rescan();
+    await pumpEventQueue();
+
+    expect(await folder.read(newer), newerPage,
+        reason: 'the page the app cannot read was written over');
+    expect(await folder.read(path), isNotNull,
+        reason: 'the page the app could read was removed');
+    expect(health.last.unreadablePageCount, 1,
+        reason: 'the page the app could not read was not reported');
+  });
+
   test('two Outcomes whose names read alike have a page each', () async {
     final device = HostDevice.open('a');
     addTearDown(device.close);

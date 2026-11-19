@@ -53,6 +53,11 @@ class VaultPlugin implements SyncPlugin {
   /// over: the folder keeps that edit until the host takes it.
   final Set<VaultPageKey> _untaken = {};
 
+  /// The pages the last read pass could not read at all. A copy of such a
+  /// page holds content the app cannot reach, so it is not written over
+  /// either.
+  final Set<VaultPageKey> _unreadable = {};
+
   /// Whether the folder could be reached in the last pass.
   bool _folderReachable = true;
 
@@ -165,6 +170,7 @@ class VaultPlugin implements SyncPlugin {
     _unreadablePageCount = 0;
     _untakenPageCount = 0;
     _untaken.clear();
+    _unreadable.clear();
     _folderReachable = true;
     for (final kind in VaultPageKind.values) {
       final byId = <String, List<({String path, String text, PageModel page})>>{};
@@ -208,16 +214,34 @@ class VaultPlugin implements SyncPlugin {
         final copies = entry.value..sort((a, b) => a.path.compareTo(b.path));
         final key = VaultPageKey(kind, entry.key);
         // A copy the host would not take is kept: its content is in the folder
-        // and nowhere else, and the app does not have it.
+        // and nowhere else, and the app does not have it. So is a copy the app
+        // cannot read at all.
         final untaken = <String>{};
+        final unreadable = <String>{};
+        // The copy the app holds: the first one it took, or the one it already
+        // had. A copy the app could not take is never the page it writes to.
+        String? held;
         for (final copy in copies) {
-          if (copy.text != await _baseOf(copy.path)) {
-            if (await _ingest(key, copy.path, copy.text, copy.page)) {
-              touched.add(key);
-            } else {
-              untaken.add(copy.path);
-            }
+          if (copy.text == await _baseOf(copy.path)) {
+            held ??= copy.path;
+            continue;
           }
+          final outcome = await _ingest(key, copy.path, copy.text, copy.page);
+          switch (outcome) {
+            case _Ingest.taken:
+              touched.add(key);
+              held ??= copy.path;
+            case _Ingest.refused:
+              untaken.add(copy.path);
+            case _Ingest.unreadable:
+              unreadable.add(copy.path);
+          }
+        }
+        if (unreadable.isNotEmpty) {
+          // A copy the app cannot read holds content the app cannot reach, so
+          // it is left alone: never removed, never written over.
+          _unreadablePageCount++;
+          _unreadable.add(key);
         }
         if (untaken.isNotEmpty) {
           // The page still holds an edit the app does not have, so it is not
@@ -225,13 +249,19 @@ class VaultPlugin implements SyncPlugin {
           _untakenPageCount++;
           _untaken.add(key);
         }
-        _paths[key] = copies.first.path;
+        _paths[key] = held ?? copies.first.path;
         _members.putIfAbsent(key, () => <String>{});
         // Concurrent versions of one page were all read; keep one.
-        for (final extra in copies.skip(1)) {
+        for (final extra in copies) {
+          if (extra.path == held) continue;
           if (untaken.contains(extra.path)) {
             // The host did not take this copy, so it still holds an edit the
             // app does not have. It stays until the host takes it.
+            continue;
+          }
+          if (unreadable.contains(extra.path)) {
+            // The app cannot read this copy, so it cannot say that the copy it
+            // holds says the same thing. It stays.
             continue;
           }
           try {
@@ -248,9 +278,9 @@ class VaultPlugin implements SyncPlugin {
     return touched;
   }
 
-  /// Take what a page says. Returns false when the page could not be taken:
-  /// it is left alone, and the next pass reads it again.
-  Future<bool> _ingest(
+  /// Take what a page says. Returns what the read ended in: the page is left
+  /// alone unless the host took all of it.
+  Future<_Ingest> _ingest(
       VaultPageKey key, String path, String text, PageModel page) async {
     final base = await _baseOf(path);
     PageModel? baseModel;
@@ -268,7 +298,7 @@ class VaultPlugin implements SyncPlugin {
       // A page the app cannot read is left alone: the other pages are still
       // read, and this one is read again on the next pass.
       debugPrint('vault: $path not read: ${error.reason}');
-      return false;
+      return _Ingest.unreadable;
     }
     if (carried.isNotEmpty) {
       try {
@@ -277,7 +307,7 @@ class VaultPlugin implements SyncPlugin {
         // A page the app cannot take must not stop the vault: the other pages
         // are still read, and this one is left for the next pass.
         debugPrint('vault: $path not taken: $error');
-        return false;
+        return _Ingest.refused;
       }
       _rememberMembers(key, carried);
     }
@@ -289,19 +319,19 @@ class VaultPlugin implements SyncPlugin {
       handEdits = _handEditChanges(key, page, baseModel);
     } on _UnreadablePage catch (error) {
       debugPrint('vault: $path not read: ${error.reason}');
-      return false;
+      return _Ingest.unreadable;
     }
     if (handEdits.isNotEmpty) {
       try {
         await _host.applyRemote(id, handEdits);
       } on Object catch (error) {
         debugPrint('vault: $path not taken: $error');
-        return false;
+        return _Ingest.refused;
       }
       _rememberMembers(key, handEdits);
     }
     await _saveBase(path, text);
-    return true;
+    return _Ingest.taken;
   }
 
   /// The entities a page's changes touch, so the page knows what is on it.
@@ -672,10 +702,11 @@ class VaultPlugin implements SyncPlugin {
   // --- writing a page --------------------------------------------------------
 
   Future<void> _writePage(VaultPageKey key) async {
-    if (_untaken.contains(key)) {
+    if (_untaken.contains(key) || _unreadable.contains(key)) {
       // The host did not take what this page says, so a copy of it still holds
       // an edit the app does not have. Writing the merged state over it would
-      // lose that edit: the page is left alone until the host takes it.
+      // lose that edit: the page is left alone until the host takes it. A page
+      // the app cannot read is left alone for the same reason.
       return;
     }
     var attempts = 0;
@@ -729,10 +760,15 @@ class VaultPlugin implements SyncPlugin {
         if (existing != base && attempts < 3) {
           // Someone changed the file since this device last saw it: read it
           // before it is overwritten.
-          if (!await _ingest(key, path, existing, page)) {
+          final outcome = await _ingest(key, path, existing, page);
+          if (outcome != _Ingest.taken) {
             // The host would not take it, so the file still holds an edit the
             // app does not have. It is not written over.
-            _untaken.add(key);
+            if (outcome == _Ingest.refused) {
+              _untaken.add(key);
+            } else {
+              _unreadable.add(key);
+            }
             return;
           }
           attempts++;
@@ -825,6 +861,22 @@ class VaultPlugin implements SyncPlugin {
 
   Future<void> _dropBase(String path) => _sync.customStatement(
       'DELETE FROM vault_page_bases WHERE page_path = ?', [path]);
+}
+
+/// What a page's read ended in.
+enum _Ingest {
+  /// The host took everything the page said. The page's base copy is saved,
+  /// and the page may be written over.
+  taken,
+
+  /// The host refused a change. The page still holds something the app does
+  /// not have, so it is kept and read again on the next pass.
+  refused,
+
+  /// The app cannot read the page: there is no usable block, and nothing to
+  /// read it with. The page holds content the app cannot reach, so it is kept
+  /// and read again on the next pass.
+  unreadable,
 }
 
 /// The block a page is read with: its own, or the base copy's when the page's
