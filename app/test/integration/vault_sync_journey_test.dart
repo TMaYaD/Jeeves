@@ -35,7 +35,9 @@ import 'package:jeeves/providers/vault_sync_provider.dart';
 import 'package:jeeves/screens/common/gtd_list_screen.dart';
 import 'package:jeeves/screens/settings/settings_screen.dart';
 import 'package:jeeves/services/notification_service.dart';
+import 'package:jeeves/sync/collection_codecs.dart';
 import 'package:jeeves/sync/sync_database.dart';
+import 'package:jeeves/sync/vault/page_codec.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../helpers/settle.dart';
@@ -168,6 +170,14 @@ void main() {
       final page = File(path).readAsStringSync();
       expect(page, contains('title: Old title'));
 
+      // The block says what the app wrote: the title's digest, at the clock
+      // that write stamped.
+      final writtenTitle = _titleEntry(page);
+      expect(writtenTitle, isNotNull,
+          reason: 'the page carries the title in its block');
+      final writtenEntry = writtenTitle!;
+      expect(writtenEntry.digest, digestOf('Old title'));
+
       // The app is on the list, showing the Outcome.
       router.go('/');
       await _settle(tester);
@@ -191,8 +201,21 @@ void main() {
       expect(find.text('New title'), findsOneWidget);
       expect(find.text('Old title'), findsNothing);
 
-      // And the page says so too.
-      expect(File(path).readAsStringSync(), contains('title: New title'));
+      // And the host wrote the merged page back: the block carries the new
+      // title's digest, at a clock of its own. The page's frontmatter alone
+      // would not say so — the hand edit put that there.
+      await _settleUntil(tester, () {
+        final entry = _titleEntry(File(path).readAsStringSync());
+        return entry != null && entry.digest == digestOf('New title');
+      });
+      final rewritten = _titleEntry(File(path).readAsStringSync());
+      expect(rewritten, isNotNull,
+          reason: 'the page still carries the title in its block');
+      final rewrittenEntry = rewritten!;
+      expect(rewrittenEntry.digest, digestOf('New title'),
+          reason: 'the host wrote the merged page back');
+      expect(rewrittenEntry.hlc, isNot(writtenEntry.hlc),
+          reason: 'the hand edit carries a clock of its own');
     } finally {
       // The tree comes down first, so the watchers let go of the store, and the
       // container goes in the real zone, where the vault's own teardown can
@@ -242,4 +265,19 @@ Future<void> _settleUntil(WidgetTester tester, bool Function() done) async {
     if (done()) return;
   }
   fail('the vault did not settle in time');
+}
+
+/// The block's entry for the Outcome's title, or null when the page carries
+/// no block, or no title in it.
+BlockEntry? _titleEntry(String page) {
+  final block = parsePage(page).block;
+  if (block == null) return null;
+  for (final entry in block) {
+    if (entry.collection == todosCollection &&
+        entry.entityId == _outcomeId &&
+        entry.field == 'title') {
+      return entry;
+    }
+  }
+  return null;
 }
