@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -60,6 +59,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   static const int _tapsToUnlock = 7;
   int _jeevesTaps = 0;
 
+  /// Whether the folder picker is open.
+  ///
+  /// The picker is a system dialog: while it is open the action that opened
+  /// it is off, so a second tap cannot reach the picker behind it.
+  bool _vaultPickerPending = false;
+
   @override
   Widget build(BuildContext context) {
     final devUnlocked = ref.watch(devOptionsUnlockedProvider);
@@ -78,8 +83,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           final isAuthenticated = gate == SessionGate.signedInNotEnrolled ||
               gate == SessionGate.ready;
           // The vault's whole setting is the folder it points at: a folder set
-          // means the vault is on, and no folder means it is off.
-          final vaultOn = ref.watch(vaultFolderProvider).asData?.value != null;
+          // means the vault is on, and no folder means it is off. While the
+          // string is still being read the answer is not known, and the screen
+          // says so rather than claiming the vault is off.
+          final vaultSetting = ref.watch(vaultFolderProvider);
+          final vaultOn = vaultSetting.asData?.value != null;
+          final vaultKnown = vaultSetting.asData != null;
           return ListView(
         children: [
           const SystemTrustSection(),
@@ -108,34 +117,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           _deviceNameTile(context, ref),
           // The vault: one plugin at a time (#914). It is offered where the op
           // log's own door is not — a device that has not enrolled for the op
-          // log — and it is not offered on the web, which has no folder to sync
-          // through.
-          if (!kIsWeb &&
-              (gate == SessionGate.signedOut ||
-                  gate == SessionGate.signedInNotEnrolled)) ...[
-            ListTile(
-              key: const Key('vault_folder_tile'),
-              leading: const Icon(Icons.folder_outlined, color: Color(0xFF2563EB)),
-              title: Text(
-                vaultOn
-                    ? 'Stop syncing through this folder'
-                    : 'Sync through a folder of pages',
-                style: const TextStyle(
-                  fontWeight: FontWeight.w500,
-                  color: Color(0xFF2563EB),
-                ),
-              ),
-              subtitle: Text(
-                vaultOn
-                    ? 'Your Outcomes, sessions and captures stay as Markdown '
-                        'pages in a folder you chose.'
-                    : 'Keep your Outcomes, sessions and captures as Markdown '
-                        'pages in a folder you choose.',
-                style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
-              ),
-              onTap: () => _toggleVault(ref, vaultOn),
-            ),
-          ],
+          // log — and it is not offered where there is no folder to pick.
+          ..._vaultRows(
+            context,
+            ref,
+            gate,
+            vaultSetting,
+          ),
           if (!isAuthenticated) ...[
             ListTile(
               key: const Key('sign_in_to_sync_tile'),
@@ -161,7 +149,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             //
             // Hidden while the vault is on: one plugin at a time (#914), and the
             // op log is not yet behind the plugin interface.
-            if (gate == SessionGate.signedInNotEnrolled && !vaultOn)
+            //
+            // Hidden while the vault's own setting is still being read: the
+            // ceremony changes what this device syncs through, and it may not
+            // be offered before the answer is known.
+            if (gate == SessionGate.signedInNotEnrolled && vaultKnown && !vaultOn)
               ListTile(
                 key: const Key('enrolment_ceremony_tile'),
                 leading: const Icon(Icons.cloud_sync_outlined,
@@ -477,18 +469,150 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
   }
 
+  /// The vault's rows in the SYNC section.
+  ///
+  /// **One setting, three states.** The vault's whole setting is one string:
+  /// this device's reference to the folder.
+  ///
+  /// - The setting is still being read, or could not be read: the row says so
+  ///   and offers nothing. The enrolment ceremony and the folder picker both
+  ///   change what this device syncs through, and neither may be offered
+  ///   before the answer is known.
+  /// - The setting names no folder: the vault is off, and the row offers the
+  ///   picker — but only where the op log's own door is not (a device that has
+  ///   not enrolled for the op log) and only where a folder can be picked.
+  /// - The setting names a folder: the row offers to forget it, whatever the
+  ///   gate says. The op log's arrival may have stopped the vault, but the
+  ///   folder is still this device's to forget.
+  List<Widget> _vaultRows(
+    BuildContext context,
+    WidgetRef ref,
+    SessionGate gate,
+    AsyncValue<String?> vaultSetting,
+  ) {
+    final vaultOn = vaultSetting.asData?.value != null;
+    final vaultKnown = vaultSetting.asData != null;
+    if (!vaultKnown) {
+      return [
+        ListTile(
+          key: const Key('vault_folder_loading_tile'),
+          leading: const Icon(Icons.folder_outlined, color: Color(0xFF9CA3AF)),
+          title: const Text(
+            'Sync through a folder of pages',
+            style: TextStyle(
+                fontWeight: FontWeight.w500, color: Color(0xFF9CA3AF)),
+          ),
+          subtitle: Text(
+            vaultSetting.hasError
+                ? 'This device\'s folder setting could not be read.'
+                : 'Reading this device\'s folder setting…',
+            style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+          ),
+          trailing: vaultSetting.hasError
+              ? TextButton(
+                  key: const Key('vault_folder_retry_button'),
+                  onPressed: () => ref.invalidate(vaultFolderProvider),
+                  child: const Text('Try again'),
+                )
+              : null,
+        ),
+      ];
+    }
+    if (vaultOn) {
+      return [
+        ListTile(
+          key: const Key('vault_folder_tile'),
+          leading: const Icon(Icons.folder_outlined, color: Color(0xFF2563EB)),
+          title: const Text(
+            'Stop syncing through this folder',
+            style: TextStyle(
+              fontWeight: FontWeight.w500,
+              color: Color(0xFF2563EB),
+            ),
+          ),
+          subtitle: const Text(
+            'Your Outcomes, sessions and captures stay as Markdown pages in a '
+            'folder you chose.',
+            style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+          ),
+          onTap: () => _toggleVault(context, ref, vaultOn: true),
+        ),
+      ];
+    }
+    // No folder: the vault is off. It is offered where the op log's own door
+    // is not — a device that has not enrolled for the op log — and only where
+    // a folder can be picked at all.
+    if (gate != SessionGate.signedOut &&
+        gate != SessionGate.signedInNotEnrolled) {
+      return const [];
+    }
+    if (!ref.watch(vaultFolderPickerAvailableProvider)) return const [];
+    return [
+      ListTile(
+        key: const Key('vault_folder_tile'),
+        leading: const Icon(Icons.folder_outlined, color: Color(0xFF2563EB)),
+        title: const Text(
+          'Sync through a folder of pages',
+          style: TextStyle(
+            fontWeight: FontWeight.w500,
+            color: Color(0xFF2563EB),
+          ),
+        ),
+        subtitle: const Text(
+          'Keep your Outcomes, sessions and captures as Markdown pages in a '
+          'folder you choose.',
+          style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+        ),
+        // The picker is a system dialog: while it is open the action that
+        // opened it is off, so a second tap cannot reach the picker behind it.
+        onTap: _vaultPickerPending
+            ? null
+            : () => _toggleVault(context, ref, vaultOn: false),
+      ),
+    ];
+  }
+
   /// Turn the vault on, or off.
   ///
   /// Turning it on asks the person for a folder (the system picker on Android);
   /// turning it off only stops this device syncing through it — the folder and
   /// everything in it are left exactly where they are.
-  Future<void> _toggleVault(WidgetRef ref, bool vaultOn) async {
+  Future<void> _toggleVault(
+    BuildContext context,
+    WidgetRef ref, {
+    required bool vaultOn,
+  }) async {
+    final messenger = ScaffoldMessenger.of(context);
     final controller = ref.read(vaultControllerProvider);
     if (vaultOn) {
-      await controller.turnOff();
+      _reportVaultOutcome(messenger, await controller.turnOff());
       return;
     }
-    await controller.turnOn();
+    setState(() => _vaultPickerPending = true);
+    VaultTurnOutcome outcome = VaultTurnOutcome.cancelled;
+    try {
+      outcome = await controller.turnOn();
+    } finally {
+      if (mounted) setState(() => _vaultPickerPending = false);
+    }
+    _reportVaultOutcome(messenger, outcome);
+  }
+
+  /// Say what the turn did, when it did not do what was asked.
+  void _reportVaultOutcome(
+    ScaffoldMessengerState messenger,
+    VaultTurnOutcome outcome,
+  ) {
+    final message = switch (outcome) {
+      VaultTurnOutcome.changed => null,
+      VaultTurnOutcome.cancelled => null,
+      VaultTurnOutcome.pickerFailed =>
+        'The folder picker could not be opened. Try again.',
+      VaultTurnOutcome.notPersisted =>
+        'The folder setting could not be saved. Try again.',
+    };
+    if (message == null) return;
+    messenger.showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _confirmLogout(BuildContext context) async {

@@ -39,12 +39,62 @@ const String _kVaultFolderKey = 'vault_folder_reference';
 /// read again on a timer and whenever the app comes back to the foreground.
 const Duration _vaultScanInterval = Duration(seconds: 30);
 
+/// The vault's setting: this device's reference to the folder.
+///
+/// One string in the device's preferences. **The preferences API changes its
+/// cache before it asks the platform**, so a write the platform refuses leaves
+/// the cache and the platform disagreeing: the cache says the folder changed
+/// and the platform says it did not. The setting is behind a seam so that
+/// disagreement can be exercised rather than assumed away.
+abstract class VaultFolderSetting {
+  /// This device's reference to the folder, or null when the vault is off.
+  Future<String?> read();
+
+  /// Keep [reference] as this device's reference to the folder.
+  ///
+  /// False when the platform refused the write.
+  Future<bool> save(String reference);
+
+  /// Forget this device's reference to the folder.
+  ///
+  /// False when the platform refused.
+  Future<bool> clear();
+}
+
+/// The vault's setting, in the device's shared preferences.
+class PrefsVaultFolderSetting implements VaultFolderSetting {
+  const PrefsVaultFolderSetting();
+
+  @override
+  Future<String?> read() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_kVaultFolderKey);
+  }
+
+  @override
+  Future<bool> save(String reference) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.setString(_kVaultFolderKey, reference);
+  }
+
+  @override
+  Future<bool> clear() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.remove(_kVaultFolderKey);
+  }
+}
+
+/// The vault's setting, on this device.
+final vaultFolderSettingProvider = Provider<VaultFolderSetting>(
+  (ref) => const PrefsVaultFolderSetting(),
+);
+
 /// The vault's folder on this device, or null when the vault is off.
 ///
 /// Null means off: there is no second switch that could disagree with it.
 final vaultFolderProvider = FutureProvider<String?>((ref) async {
-  final prefs = await SharedPreferences.getInstance();
-  return prefs.getString(_kVaultFolderKey);
+  final setting = ref.watch(vaultFolderSettingProvider);
+  return setting.read();
 });
 
 /// How the vault's folder is chosen.
@@ -54,17 +104,29 @@ final vaultFolderProvider = FutureProvider<String?>((ref) async {
 final vaultFolderPickerProvider =
     Provider<Future<String?> Function()>((ref) => pickVaultFolder);
 
+/// Whether this platform has a folder picker for the vault.
+///
+/// Android has the system document-tree picker. The web has no folder at all,
+/// and no other platform has a system picker that names one: the vault's setup
+/// is not offered there, and a folder that is already configured can still be
+/// forgotten.
+bool vaultFolderPickerAvailable() {
+  if (kIsWeb) return false;
+  return defaultTargetPlatform == TargetPlatform.android;
+}
+
+/// Whether this platform has a folder picker for the vault.
+final vaultFolderPickerAvailableProvider =
+    Provider<bool>((ref) => vaultFolderPickerAvailable());
+
 /// The system folder picker, on the platforms that have one.
 ///
 /// Android, over the document-tree channel the op-log folder plugin already
 /// provides — one channel, one picker, no broad storage permission. Elsewhere
 /// there is no folder to pick, and the vault's tile is not shown.
 Future<String?> pickVaultFolder() async {
-  if (kIsWeb) return null;
-  if (defaultTargetPlatform == TargetPlatform.android) {
-    return pickAndroidVaultFolder();
-  }
-  return null;
+  if (!vaultFolderPickerAvailable()) return null;
+  return pickAndroidVaultFolder();
 }
 
 /// The vault plugin, attached while this device has a vault folder set.
@@ -97,6 +159,21 @@ final vaultPluginProvider = FutureProvider<VaultPlugin?>((ref) async {
   return plugin;
 });
 
+/// What a turn of the vault did.
+enum VaultTurnOutcome {
+  /// The setting changed, and the change reached storage.
+  changed,
+
+  /// The picker was cancelled: nothing was decided, and nothing changed.
+  cancelled,
+
+  /// The picker failed: no folder was chosen.
+  pickerFailed,
+
+  /// The setting did not reach storage: the vault is as it was.
+  notPersisted,
+}
+
 /// Turns the vault on and off.
 class VaultController {
   VaultController(this._ref);
@@ -107,22 +184,61 @@ class VaultController {
   ///
   /// Does nothing when the person cancels the picker: a cancelled picker is not
   /// a decision to stop syncing.
-  Future<void> turnOn() async {
-    final reference = await _ref.read(vaultFolderPickerProvider)();
-    if (reference == null) return;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_kVaultFolderKey, reference);
-    _ref.invalidate(vaultFolderProvider);
+  Future<VaultTurnOutcome> turnOn() async {
+    final String? reference;
+    try {
+      reference = await _ref.read(vaultFolderPickerProvider)();
+    } on Object catch (error) {
+      // The picker is the platform's: a failure there is the person's to see,
+      // and the vault is left as it was.
+      debugPrint('vault: the folder picker failed — $error');
+      return VaultTurnOutcome.pickerFailed;
+    }
+    if (reference == null) return VaultTurnOutcome.cancelled;
+    return _save(reference);
   }
 
   /// Turn the vault off.
   ///
   /// The folder is left where it is; only this device's syncing through it
   /// stops.
-  Future<void> turnOff() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_kVaultFolderKey);
+  Future<VaultTurnOutcome> turnOff() => _clear();
+
+  Future<VaultTurnOutcome> _save(String reference) async {
+    final setting = _ref.read(vaultFolderSettingProvider);
+    final bool saved;
+    try {
+      saved = await setting.save(reference);
+    } on Object catch (error) {
+      debugPrint('vault: the folder reference did not reach storage — $error');
+      return VaultTurnOutcome.notPersisted;
+    }
+    if (!saved) {
+      // The preferences API changes its cache before it asks the platform: a
+      // refused write leaves the two disagreeing, and the change is not
+      // presented as a successful toggle.
+      debugPrint('vault: the platform refused the folder reference');
+      return VaultTurnOutcome.notPersisted;
+    }
     _ref.invalidate(vaultFolderProvider);
+    return VaultTurnOutcome.changed;
+  }
+
+  Future<VaultTurnOutcome> _clear() async {
+    final setting = _ref.read(vaultFolderSettingProvider);
+    final bool cleared;
+    try {
+      cleared = await setting.clear();
+    } on Object catch (error) {
+      debugPrint('vault: the folder reference did not reach storage — $error');
+      return VaultTurnOutcome.notPersisted;
+    }
+    if (!cleared) {
+      debugPrint('vault: the platform refused to forget the folder reference');
+      return VaultTurnOutcome.notPersisted;
+    }
+    _ref.invalidate(vaultFolderProvider);
+    return VaultTurnOutcome.changed;
   }
 }
 
