@@ -352,6 +352,7 @@ class VaultPlugin implements SyncPlugin {
   List<Change> _carriedChanges(
       VaultPageKey key, PageModel page, PageModel? base) {
     final block = _usableBlock(page, base);
+    _validateCarriedPositions(block);
     final fields = <String, Map<String, ClockedValue>>{};
     final tombstones = <String, Hlc>{};
 
@@ -947,6 +948,23 @@ bool _isTombstoned(
     }
   }
   return false;
+}
+
+/// The Action positions the block carries, checked before they are read.
+///
+/// A position that is not a number is a page the app cannot hold: the queue
+/// is numbered, and a position the app cannot read is not a position. The
+/// page is left alone rather than half-read.
+void _validateCarriedPositions(List<BlockEntry> block) {
+  for (final entry in block) {
+    if (entry.collection != actionsCollection) continue;
+    if (entry.field != 'position' || !entry.hasCarriedValue) continue;
+    final value = entry.carriedValue;
+    if (value != null && value is! int) {
+      throw _UnreadablePage(
+          'an Action carries a position that is not a number');
+    }
+  }
 }
 
 /// A frontmatter value as the page shows it.

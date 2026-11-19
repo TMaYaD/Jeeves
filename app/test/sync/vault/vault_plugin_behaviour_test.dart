@@ -457,6 +457,75 @@ void main() {
         reason: 'a Tag was created from a deleted page');
   });
 
+  test('an Action whose position is not a number is left alone, and reported',
+      () async {
+    final device = HostDevice.open('a');
+    addTearDown(device.close);
+    final host = await device.startHost();
+    final directory = Directory('${root.path}/vault')..createSync(recursive: true);
+    final folder = DirectoryVaultFolder(directory);
+    final plugin = VaultPlugin(folder: folder, sync: device.sync);
+    await host.attach(plugin);
+
+    await device.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'aaa', userId: _userId);
+    await device.domain.actionDao.addPlannedAction(
+      _outcomeId,
+      'first',
+      now: DateTime.utc(2026, 11, 17, 8),
+    );
+    await device.domain.todoDao
+        .insertOutcome(id: _otherOutcomeId, title: 'bbb', userId: _userId);
+    await host.deliverAll();
+    await plugin.rescan();
+
+    final paths = await folder.listMarkdownFiles('Outcomes');
+    expect(paths, hasLength(2));
+
+    // The first page's block carries a position that is not a number.
+    final first = paths.firstWhere((path) => path.contains('aaa'));
+    final second = paths.firstWhere((path) => path.contains('bbb'));
+    final parsed = parsePage((await folder.read(first))!);
+    final tampered = renderPage(PageModel(
+      frontmatter: parsed.frontmatter,
+      notes: parsed.notes,
+      checklist: parsed.checklist,
+      block: [
+        for (final entry in parsed.block!)
+          if (entry.collection == 'actions' && entry.field == 'position')
+            BlockEntry(
+              collection: entry.collection,
+              entityId: entry.entityId,
+              field: entry.field,
+              hlc: entry.hlc,
+              digest: entry.digest,
+              hasCarriedValue: true,
+              carriedValue: '1',
+            )
+          else
+            entry,
+      ],
+    ));
+    await folder.writeAtomically(first, tampered);
+
+    // The second page holds a hand edit, which lands.
+    final edited = (await folder.read(second))!
+        .replaceFirst('title: bbb', 'title: bbb edited');
+    await folder.writeAtomically(second, edited);
+
+    final health = <VaultHealth>[];
+    plugin.health.listen(health.add);
+    await plugin.rescan();
+    await pumpEventQueue();
+
+    expect(await folder.read(first), tampered,
+        reason: 'the page the app cannot read was written over');
+    expect(health.last.unreadablePageCount, 1,
+        reason: 'the page the app could not read was not reported');
+    expect(await _title(device, _otherOutcomeId), 'bbb edited',
+        reason: 'the page after the one the app cannot read was not read');
+  });
+
   test('two Outcomes whose names read alike have a page each', () async {
     final device = HostDevice.open('a');
     addTearDown(device.close);
