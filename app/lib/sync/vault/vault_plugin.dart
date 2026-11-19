@@ -438,24 +438,44 @@ class VaultPlugin implements SyncPlugin {
       }
     }
 
-    // The Labels and the Area the page shows.
-    for (final change in tagLinkChanges(
-      key: key,
-      page: page,
-      block: block,
-      mintClock: _host.mintClock,
-    )) {
-      for (final entry in change.fields.entries) {
-        edit(change.collection, change.entityId, entry.key, entry.value.value,
-            entry.value.hlc);
-      }
-      final tombstone = change.tombstone;
-      if (tombstone != null) {
-        remove(change.collection, change.entityId, tombstone);
+    // The Labels and the Area the page shows. A frozen page is not reconciled:
+    // a hand edit to a deleted page creates no Tag and no link.
+    if (!_frozen(key, page, block)) {
+      for (final change in tagLinkChanges(
+        key: key,
+        page: page,
+        block: block,
+        mintClock: _host.mintClock,
+      )) {
+        for (final entry in change.fields.entries) {
+          edit(change.collection, change.entityId, entry.key, entry.value.value,
+              entry.value.hlc);
+        }
+        final tombstone = change.tombstone;
+        if (tombstone != null) {
+          remove(change.collection, change.entityId, tombstone);
+        }
       }
     }
 
     return _changesOf(fields, tombstones);
+  }
+
+  /// Whether the page is frozen: its entity is deleted.
+  ///
+  /// A deleted page keeps its last content and gains a deletion date. Nothing
+  /// a person types into it is taken: the page is not read, only what the
+  /// block carries.
+  bool _frozen(VaultPageKey key, PageModel page, List<BlockEntry> block) {
+    switch (key.kind) {
+      case VaultPageKind.outcome:
+        return _isTombstoned(block, todosCollection, key.entityId) ||
+            page.frontmatter['deleted'] != null;
+      case VaultPageKind.capture:
+        return _isTombstoned(block, capturesCollection, key.entityId);
+      case VaultPageKind.session:
+        return false;
+    }
   }
 
   /// The changes of the entities a page's read touched.

@@ -364,6 +364,99 @@ void main() {
         reason: 'the page the app could not read was not reported');
   });
 
+  test('a deleted page keeps its content on a device that never saw it',
+      () async {
+    final a = HostDevice.open('a');
+    addTearDown(a.close);
+    final aHost = await a.startHost();
+    final aDirectory = Directory('${root.path}/vault-a')
+      ..createSync(recursive: true);
+    final aFolder = DirectoryVaultFolder(aDirectory);
+    final aPlugin = VaultPlugin(folder: aFolder, sync: a.sync);
+    await aHost.attach(aPlugin);
+
+    await a.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'Plan', userId: _userId);
+    await a.domain.todoDao.updateFields(_outcomeId, notes: 'the body');
+    await aHost.deliverAll();
+    await aPlugin.rescan();
+
+    a.wall.advance(5000);
+    await a.domain.todoDao.deleteOutcome(_outcomeId);
+    await aHost.deliverAll();
+    await aPlugin.rescan();
+
+    final path = (await aFolder.listMarkdownFiles('Outcomes')).single;
+    final deleted = (await aFolder.read(path))!;
+    expect(deleted, contains('deleted:'));
+    expect(deleted, contains('title: Plan'));
+    expect(deleted, contains('the body'));
+
+    // A device that has never seen the Outcome reads the page.
+    final b = HostDevice.open('b');
+    addTearDown(b.close);
+    final bHost = await b.startHost();
+    final bDirectory = Directory('${root.path}/vault-b')
+      ..createSync(recursive: true);
+    final bFolder = DirectoryVaultFolder(bDirectory);
+    final bPlugin = VaultPlugin(folder: bFolder, sync: b.sync);
+    await bHost.attach(bPlugin);
+    await bFolder.writeAtomically(path, deleted);
+
+    await bPlugin.rescan();
+
+    // The page keeps what it says: its title and its notes travel with the
+    // clocks the block carries, not with a hand edit's.
+    final read = (await bFolder.read(path))!;
+    expect(read, contains('title: Plan'), reason: 'the title was lost');
+    expect(read, contains('the body'), reason: 'the notes were lost');
+    expect(read, contains('deleted:'), reason: 'the deletion was lost');
+
+    // And the Outcome stays deleted: the content it carried is older than the
+    // deletion, so the app does not hold the Outcome.
+    expect(await b.domain.todoDao.getTodo(_outcomeId), isNull,
+        reason: 'the deleted Outcome came back');
+  });
+
+  test('a Label typed into a deleted page creates no Tag', () async {
+    final device = HostDevice.open('a');
+    addTearDown(device.close);
+    final host = await device.startHost();
+    final directory = Directory('${root.path}/vault')..createSync(recursive: true);
+    final folder = DirectoryVaultFolder(directory);
+    final plugin = VaultPlugin(folder: folder, sync: device.sync);
+    await host.attach(plugin);
+
+    await device.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'Plan', userId: _userId);
+    await host.deliverAll();
+    await plugin.rescan();
+
+    device.wall.advance(5000);
+    await device.domain.todoDao.deleteOutcome(_outcomeId);
+    await host.deliverAll();
+    await plugin.rescan();
+
+    final path = (await folder.listMarkdownFiles('Outcomes')).single;
+    final deleted = (await folder.read(path))!;
+    expect(deleted, contains('deleted:'));
+
+    // A person types a Label into the deleted page. The page is frozen, so
+    // nothing is created from it.
+    await folder.writeAtomically(
+      path,
+      deleted.replaceFirst('---\n', '---\nlabels: ["Home"]\n'),
+    );
+    await plugin.rescan();
+
+    final tags = await device.domain.customSelect(
+      'SELECT COUNT(*) AS c FROM tags WHERE name = ?',
+      variables: [Variable<String>('Home')],
+    ).getSingle();
+    expect(tags.read<int>('c'), 0,
+        reason: 'a Tag was created from a deleted page');
+  });
+
   test('two Outcomes whose names read alike have a page each', () async {
     final device = HostDevice.open('a');
     addTearDown(device.close);
