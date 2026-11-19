@@ -772,7 +772,8 @@ void main() {
     addTearDown(device.close);
     final host = await device.startHost();
     final directory = Directory('${root.path}/vault')..createSync(recursive: true);
-    final folder = _RefusingFolder(DirectoryVaultFolder(directory));
+    final honest = DirectoryVaultFolder(directory);
+    final folder = _RefusingFolder(honest);
     folder.unlistableFolders.add('Outcomes');
     final plugin = VaultPlugin(folder: folder, sync: device.sync);
     await host.attach(plugin);
@@ -784,14 +785,14 @@ void main() {
 
     // The scan left the folder alone, so nothing is written into it: a page
     // written there is a page the scan never saw.
-    expect(await folder.listMarkdownFiles('Outcomes'), isEmpty,
+    expect(await honest.listMarkdownFiles('Outcomes'), isEmpty,
         reason: 'a page was written into a folder the scan left alone');
 
     // A later pass lists the folder: the page is written.
     folder.unlistableFolders.clear();
     await plugin.rescan();
 
-    expect(await folder.listMarkdownFiles('Outcomes'), hasLength(1),
+    expect(await honest.listMarkdownFiles('Outcomes'), hasLength(1),
         reason: 'the page was not written once the folder could be listed');
   });
 
