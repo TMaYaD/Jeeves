@@ -22,7 +22,15 @@
 #   version=<the next version, or the current one when bump=none>
 #   bump=major|minor|patch|none
 #   tag=server/v<version>              (omitted when bump=none)
+#   deploy=true|false                  (should this run push to Dokku)
 #   notes<<DELIM ... DELIM             (markdown release-notes fragment)
+#
+# deploy is the push decision, taken from the same commit walk as the tag so the
+# two cannot disagree: a tag is only ever cut together with a push, so "backend
+# commits since the last tag" means "backend commits not yet deployed".  It is
+# true when the version moves (bump != none), and when HEAD is the commit the
+# last tag already names — a re-run of the run that cut it, for example after a
+# failed push.  Otherwise nothing backend is undeployed and it is false.
 #
 # Usage: infra/ci/compute-server-version.sh
 set -euo pipefail
@@ -150,8 +158,17 @@ emit_group() {
   printf '\n'
 }
 
+if [ "${BUMP}" != 'none' ]; then
+  DEPLOY='true'
+elif [ "$(git rev-parse "${LAST_TAG}^{commit}")" = "$(git rev-parse HEAD)" ]; then
+  DEPLOY='true'
+else
+  DEPLOY='false'
+fi
+
 echo "version=${VERSION}"
 echo "bump=${BUMP}"
+echo "deploy=${DEPLOY}"
 if [ "${BUMP}" != 'none' ]; then
   echo "tag=${TAG_PREFIX}${VERSION}"
 fi

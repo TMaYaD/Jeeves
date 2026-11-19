@@ -306,14 +306,17 @@ guest builds Android, not web.
 `.github/workflows/backend-cd.yml` runs on every successful Backend CI on
 `main`:
 
-1. A freshness check — skip when `workflow_run.head_sha` is no longer `main`'s
-   tip. Two Backend CI runs finish in whatever order their test jobs take, so a
-   *successful* run need not be the *latest*; deploying a superseded one would
-   force-push older code over migrations that have already run. The run for the
-   newer commit deploys it.
-2. `git push` to the Dokku remote, only when the commit touched `backend/`.
-   Dokku's release phase runs `python -m app.migrate` (Alembic) before the new
-   container takes traffic, and the push blocks until that finishes.
+1. A freshness check (`ci/backend-cd-freshness.sh`) — skip when a later
+   commit on `main` touches a Backend CI trigger path, because that commit gets
+   its own CD run. Deploying a superseded run would force-push older code over
+   migrations that have already run. When later commits trigger no Backend CI
+   (app-only), no later run will come, so this run deploys its own commit.
+2. `git push` to the Dokku remote, only when `ci/compute-server-version.sh`
+   reports `deploy=true`: backend commits since the last `server/` tag, or a
+   re-run at the commit the last tag names. A tag and its push therefore come
+   from the same run. Dokku's release phase runs `python -m app.migrate`
+   (Alembic) before the new container takes traffic, and the push blocks until
+   that finishes.
 
 Migrations are therefore never hand-run, and a merge to `main` is a deploy.
 There is no separate sync-rules publish step: the op log ships as ordinary
@@ -322,5 +325,6 @@ backend code (ADR-0026), so schema and sync behaviour move in the same push.
 `ci/compute-server-version.sh` derives the version that push injects as
 `SERVER_VERSION`, from the conventional commits since the last `server/` tag
 A `!` commit or `BREAKING CHANGE:` footer bumps the inner major.
-Its test harness is `ci/tests/test-compute-server-version.sh`, run by Backend
+Its test harnesses are `ci/tests/test-compute-server-version.sh` and
+`ci/tests/test-backend-cd-freshness.sh`, run by Backend
 CI's `infra-shell` job alongside `shellcheck`.
