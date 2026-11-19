@@ -1234,7 +1234,10 @@ void main() {
     ///
     /// With [alsoHeld], a further claimant is held above the named one: a gap
     /// of its own, which the fork's answer is not about.
-    Future<Uint8List> forkAtTheHead({bool alsoHeld = false}) async {
+    Future<Uint8List> forkAtTheHead({
+      bool alsoHeld = false,
+      bool samePosition = false,
+    }) async {
       final first = await _op(workspace, peer, 'one');
       await peerSession.postOps(workspace.workspaceId, [first]);
       await a.sync();
@@ -1249,7 +1252,7 @@ void main() {
       await a.sync();
 
       if (alsoHeld) {
-        peer.nextAuthorSeq = firstPeerContentAuthorSeq + 3;
+        peer.nextAuthorSeq = firstPeerContentAuthorSeq + (samePosition ? 2 : 3);
         peer.lastEnvelopeHash =
             Uint8List.fromList(List<int>.filled(prevAuthorHashBytes, 0x7e));
         final further = await _op(workspace, peer, 'also forged');
@@ -1303,6 +1306,30 @@ void main() {
       expect(settledGap.resolution, AlarmResolution.rejectedPermanently.code);
       expect(settledGap.resolvedAt, isNotNull);
       expect((await a.client.health()).clean, isTrue);
+    });
+
+    test('rejecting a fork answers both mismatching claimants at the head',
+        () async {
+      await forkAtTheHead(alsoHeld: true, samePosition: true);
+      final fork =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainFork.code]!;
+      final claimants = (await a.client.quarantined())
+          .where((row) => row.authorSeq == firstPeerContentAuthorSeq + 2)
+          .toList();
+      expect(claimants, hasLength(2));
+      expect(fork.occurrenceCount, greaterThanOrEqualTo(2));
+
+      await a.client.resolveAlarm(fork.id, AlarmResolution.rejectedPermanently);
+
+      final answered = (await a.client.quarantined())
+          .where((row) => row.authorSeq == firstPeerContentAuthorSeq + 2);
+      expect(answered.every((row) =>
+          row.resolution == AlarmResolution.rejectedPermanently.code), isTrue,
+          reason: 'both claimants were proven incompatible with the head');
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(gap.resolvedAt, isNotNull);
+      expect((await a.client.health()).actionableAlarmCount, 0);
     });
 
     test('rejecting a fork leaves an unrelated future gap undecided', () async {
@@ -1586,6 +1613,42 @@ void main() {
       expect((await a.client.health()).clean, isTrue);
     });
 
+    test('chain release preserves recovery after take upstream projection fails',
+        () async {
+      final first = await _todoOp(workspace, peer, _todoId('one'), 'one');
+      final withheld = await _todoOp(workspace, peer, _todoId('two'), 'two');
+      final third = await _todoOp(workspace, peer, _todoId('three'), 'three');
+      final appended = await peerSession.postOps(
+        workspace.workspaceId,
+        [first, withheld, third],
+      );
+      workspace.server.omitSeqs.add(appended[1].seq);
+      await a.sync();
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      final original = a.client.projector!;
+      a.client.projector = _FailingOnceProjector(original);
+      await expectLater(
+        a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream),
+        throwsA(isA<StateError>()),
+      );
+      expect(await _todoTitles(a), ['one']);
+
+      // The predecessor now heals the chain, but projecting the released
+      // changes fails too. The next pull must retain work to put on screen.
+      workspace.server.omitSeqs.remove(appended[1].seq);
+      await a.client.resetCursorForReplay();
+      a.client.projector = _FailingOnceProjector(original);
+      await expectLater(a.sync(), throwsA(isA<StateError>()));
+      expect((await a.client.quarantined()).single.releasedAt, isNotNull);
+      expect(await _todoTitles(a), ['one']);
+
+      a.client.projector = original;
+      await a.sync();
+      expect(await _todoTitles(a), ['one', 'three', 'two'],
+          reason: 'chain release must not discard unprojected resolution work');
+    });
+
     test('a change that arrives after the decision is released, and heals the log',
         () async {
       final seqs = await withholdTheMiddleChange();
@@ -1851,6 +1914,52 @@ void main() {
       expect(after.resolutionDecidedAt, isNull);
       expect(after.occurrenceCount, rollback.occurrenceCount + 1);
       expect(after.repostFromAuthorSeq, from - 1);
+      expect((await a.client.health()).actionableAlarmCount, 1);
+    });
+
+    test('a re-raise before the answer is recorded leaves the new accusation '
+        'and the outbox alone', () async {
+      final rollback = await rollTheServerBack();
+      final from = rollback.repostFromAuthorSeq!;
+      final unsentBefore = await unsentAuthorSeqs();
+
+      // The server forgets this device's writes again while the User is
+      // answering: a new accusation, about a position further back, and the
+      // answer the User gave was about the smaller one. It lands on the first
+      // write to the accusation table — the moment the decision is stamped —
+      // which is inside the very transaction that records the answer.
+      arrival.arrival = (executor) async {
+        final store = SyncDatabase(executor);
+        await (store.update(store.integrityAlarms)
+              ..where((row) => row.id.equals(rollback.id)))
+            .write(IntegrityAlarmsCompanion(
+          occurrenceCount: Value(rollback.occurrenceCount + 1),
+          resolvedAt: const Value(null),
+          resolution: const Value(null),
+          resolutionDecidedAt: const Value(null),
+          repostFromAuthorSeq: Value(from - 1),
+        ));
+      };
+
+      await expectLater(
+        a.client.resolveAlarm(rollback.id, AlarmResolution.keptOurs),
+        throwsA(isA<StateError>()),
+        reason: 'the answer was about an accusation that no longer stands',
+      );
+
+      // The new accusation stands unanswered: it is a question, and the stale
+      // answer cannot close it.
+      final after =
+          (await a.alarmsByKind())[IntegrityAlarmKind.ownWritesRollback.code]!;
+      expect(after.resolvedAt, isNull);
+      expect(after.resolution, isNull);
+      expect(after.resolutionDecidedAt, isNull);
+      expect(after.occurrenceCount, rollback.occurrenceCount + 1);
+      expect(after.repostFromAuthorSeq, from - 1);
+
+      // And the outbox is untouched: a stale answer queues no range, so the
+      // writes the server expects are not re-sent on the old position.
+      expect(await unsentAuthorSeqs(), unsentBefore);
       expect((await a.client.health()).actionableAlarmCount, 1);
     });
 

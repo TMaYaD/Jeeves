@@ -163,6 +163,19 @@ class QuarantinedOps extends Table {
 
   /// When the user recorded [resolution].
   DateTimeColumn get resolutionDecidedAt => dateTime().nullable()();
+
+  /// When a *take upstream* decision reached the domain store.
+  ///
+  /// A take upstream is work, not a note: the held change is applied to the
+  /// reduced state and then projected into the domain store, and only the
+  /// second half puts it on the User's screen. A projection that fails leaves
+  /// the change reduced but unseen — the decision is recorded and the work is
+  /// still to be done.
+  ///
+  /// So this timestamp is null until the projection has succeeded, and a null
+  /// one on a taken-upstream row is what the recovery walks. It is null for
+  /// every other decision: nothing else has a projection to wait for.
+  DateTimeColumn get resolutionProjectedAt => dateTime().nullable()();
 }
 
 /// What the server or an author stands accused of — the per-event vocabulary,
@@ -550,9 +563,10 @@ class SyncDatabase extends _$SyncDatabase {
   /// marker (#620); v10 adds the sync host's durable change sequence and its
   /// per-plugin cursors; v11 adds the marker that the pre-existing domain rows were
   /// walked into merge state; v12 adds the columns that record the user's
-  /// decision on an integrity alarm or a refused op (#575).
+  /// decision on an integrity alarm or a refused op (#575); v13 adds the column
+  /// that records whether a take upstream reached the domain store (#575).
   @override
-  int get schemaVersion => 12;
+  int get schemaVersion => 13;
 
   /// Additive only. A device that already holds a log keeps every byte of it:
   /// each step is `CREATE TABLE`s, an `ADD COLUMN` or a `CREATE INDEX`, and no
@@ -702,6 +716,16 @@ CREATE TABLE integrity_alarms (
             await migrator.addColumn(
               quarantinedOps,
               quarantinedOps.resolutionDecidedAt,
+            );
+          }
+          if (from < 13) {
+            // One new nullable column, no backfill. A null reads as "no take
+            // upstream has been waiting for a projection", which is exactly
+            // right for a device that predates the decision: nothing has been
+            // decided yet, so nothing is waiting to reach the domain store.
+            await migrator.addColumn(
+              quarantinedOps,
+              quarantinedOps.resolutionProjectedAt,
             );
           }
         },

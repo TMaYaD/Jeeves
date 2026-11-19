@@ -1233,6 +1233,10 @@ class SyncClient {
     // tombstoned tag is rehomed. Outside any transaction, and never on the author
     // path — see [DomainReconciler.reconcile].
     if (touched != null) await _reconcileProjected(touched);
+    // A decision whose projection never reached the screen is still work to be
+    // done, and a pull that brings nothing new is enough to do it: the change
+    // is in the reduced state, and the recovery puts it back on the screen.
+    await _recoverUnprojectedResolutions();
     await _stampPullCompleted();
   }
 
@@ -2230,7 +2234,17 @@ class SyncClient {
         // The standing-gap rule: the gap alarm is only reclassified away once
         // nothing is still missing. While one refused row stands unreleased, the
         // reorder is recorded alongside the gap rather than instead of it.
-        if (!await _hasUnreleasedGap(authorMemberId)) {
+        //
+        // **And only once nothing is still waiting to be put on screen.** The
+        // User may have answered a gap with *take upstream* and the projection
+        // that puts the change on their screen may have failed. The chain
+        // release does not finish that work — it re-admits the row and writes
+        // the change into the log, and neither puts it on the screen — so the
+        // accusation stays standing until the recovery has projected it. Closing
+        // it here would leave the change reduced but unseen, with nothing left
+        // to ask about.
+        if (!await _hasUnreleasedGap(authorMemberId) &&
+            !await _hasUnprojectedTakeUpstream(authorMemberId)) {
           await _resolveAlarm(IntegrityAlarmKind.authorChainGap, authorMemberId);
         }
       }
@@ -2267,6 +2281,25 @@ class SyncClient {
               row.authorMemberId.equals(authorMemberId) &
               row.releasedAt.isNull() &
               row.reason.equals(SyncRejectionReason.authorChainGap.code))
+          ..limit(1))
+        .get();
+    return rows.isNotEmpty;
+  }
+
+  /// The author has a take upstream that has not reached the domain store yet.
+  ///
+  /// The decision was recorded and the change was applied to the reduced
+  /// state, but the projection that puts it on the User's screen has not
+  /// succeeded. That is work still to be done, and it stays work to be done
+  /// until the projection succeeds — a chain release re-admits the row and
+  /// writes the change into the log, and neither of those puts it on screen.
+  Future<bool> _hasUnprojectedTakeUpstream(String authorMemberId) async {
+    final rows = await (_db.select(_db.quarantinedOps)
+          ..where((row) =>
+              row.workspaceId.equals(workspaceId) &
+              row.authorMemberId.equals(authorMemberId) &
+              row.resolution.equals(AlarmResolution.tookUpstream.code) &
+              row.resolutionProjectedAt.isNull())
           ..limit(1))
         .get();
     return rows.isNotEmpty;
@@ -3676,6 +3709,7 @@ class SyncClient {
     final now = _now();
     var complete = false;
     String? author;
+    final decidedRowIds = <int>[];
     await _db.transaction(() async {
       // The accusation must still be the one the User answered: a refusal that
       // arrived while they were answering is a new question, not this one.
@@ -3697,11 +3731,22 @@ class SyncClient {
             ]))
           .get();
       final decided = <int>{};
+      // The decision is complete when every row **still held** has been
+      // applied. A row the chain release has re-admitted is no longer the
+      // decision's work: the release owns it now, and it went into the log
+      // through the verified path. It is still applied here — the projection
+      // may be the thing that never saw it — but it does not decide whether
+      // the decision is complete.
+      var heldCount = 0;
+      var appliedHeldCount = 0;
       for (final row in held) {
+        final stillHeld = row.releasedAt == null;
+        if (stillHeld) heldCount++;
         final touched = await _applyHeldChange(row);
         if (touched.isEmpty) continue;
         affected.addAll(touched);
         decided.add(row.id);
+        if (stillHeld) appliedHeldCount++;
         // A row the decision was already recorded on is not stamped twice: it
         // is the work of a take upstream whose projection did not finish, and
         // it is done again so the projection sees it this time.
@@ -3712,7 +3757,8 @@ class SyncClient {
           resolutionDecidedAt: Value(now),
         ));
       }
-      complete = decided.length == held.length;
+      complete = appliedHeldCount == heldCount;
+      decidedRowIds.addAll(decided);
     });
     // The projection is the tail of the receive order, as it is at the end of a
     // pull: what the applied changes touched is projected once, and the
@@ -3722,19 +3768,101 @@ class SyncClient {
     // travels to the caller, the rows keep the decision that was recorded on
     // them, and the alarm is still unanswered — so the User is asked again and
     // the work is done again. The settlement below is not reached.
-    final touched = await projector?.project(affected);
-    if (touched != null) await _reconcileProjected(touched);
+    final projector = this.projector;
+    if (projector != null) {
+      final touched = await projector.project(affected);
+      await _reconcileProjected(touched);
+      // The change is on the User's screen now, so the decision has taken
+      // effect. The stamp is what tells the recovery there is nothing left to
+      // put there — and it is only written once the projection has succeeded.
+      await _stampResolutionsProjected(decidedRowIds);
+    }
     if (!complete) return;
     // The change is in the domain store now, so the decision has taken effect
     // and the accusation is settled: nothing is left to decide about this
     // author — and so is the fork the gap was holding open.
+    await _settleAuthorAlarms(author, now);
+  }
+
+  /// Stamp the rows whose take upstream has reached the domain store.
+  Future<void> _stampResolutionsProjected(List<int> rowIds) async {
+    if (rowIds.isEmpty) return;
+    await (_db.update(_db.quarantinedOps)
+          ..where((row) => row.id.isIn(rowIds)))
+        .write(QuarantinedOpsCompanion(resolutionProjectedAt: Value(_now())));
+  }
+
+  /// Put on screen what a take upstream decided and never reached.
+  ///
+  /// A take upstream is work, not a note: the held change is applied to the
+  /// reduced state and then projected into the domain store, and only the
+  /// second half puts it on the User's screen. A projection that fails leaves
+  /// the change reduced but unseen — and the work does not end there. The
+  /// decision was recorded, so the accusation no longer offers the answer, and
+  /// the retry that would do the work again excludes the row once the chain
+  /// release has re-admitted it.
+  ///
+  /// So the work is retained until the projection succeeds: the row keeps its
+  /// decision and its *lack* of a projection, and every pull walks the rows
+  /// that are waiting. A pull that brings nothing new is enough — the recovery
+  /// does not need a change to arrive.
+  ///
+  /// **The recovery projects the whole reduced state, not only the entities
+  /// this decision named.** A failed projection takes the whole batch it was
+  /// carrying with it, and the batch is not recoverable from the decision
+  /// alone: those changes are in the reduced state and nowhere else. This is
+  /// the same walk a rebuild from the log takes — `rebuildDomainFromOpLog` —
+  /// and it leaves the entities with a local change still in the outbox alone,
+  /// because their domain rows are ahead of merge state.
+  Future<void> _recoverUnprojectedResolutions() async {
+    final projector = this.projector;
+    if (projector == null) return;
+    final pending = await (_db.select(_db.quarantinedOps)
+          ..where((row) =>
+              row.workspaceId.equals(workspaceId) &
+              row.resolution.equals(AlarmResolution.tookUpstream.code) &
+              row.resolutionProjectedAt.isNull())
+          ..orderBy([(row) => OrderingTerm(expression: row.id)]))
+        .get();
+    if (pending.isEmpty) return;
+    final affected = <AffectedEntity>{};
+    for (final row in pending) {
+      // The change is applied again, so the merge sees it and names its
+      // entities. A row whose bytes cannot be read applies nothing — and that
+      // is the answer the decision already has.
+      affected.addAll(await _applyHeldChange(row));
+    }
+    // The whole reduced state, so the changes that were in the batch the
+    // failed projection was carrying reach the screen too.
+    affected.addAll({
+      for (final entity in await _reducedEntities())
+        if (ownsCollection(entity.collection)) entity,
+    });
+    final touched = await projector.project(
+      affected,
+      leaveEntitiesAwaitingMerge: true,
+    );
+    await _reconcileProjected(touched);
+    // The changes are on the screen now, so the decision has taken effect and
+    // the recovery has nothing left to do.
+    await _stampResolutionsProjected([for (final row in pending) row.id]);
+    // And the accusation the decision answered can close: the work it was
+    // about is done, and nothing it covers is left undecided.
+    for (final author in {for (final row in pending) row.authorMemberId}) {
+      if (author == null) continue;
+      await _settleAuthorAlarms(author, _now());
+    }
+  }
+
+  /// Settle the accusations this author's take upstream answered.
+  ///
+  /// The gap alarm the decision was about, and the fork it was holding open.
+  /// Both are settled only when nothing they cover is left undecided.
+  Future<void> _settleAuthorAlarms(String? author, DateTime now) async {
     await _db.transaction(() async {
-      // Read into a final: the author was written inside the transaction above,
-      // and a write-captured local is not promoted by a null check.
-      final settledAuthor = author;
       final gap = await _standingAlarm(
         IntegrityAlarmKind.authorChainGap,
-        settledAuthor,
+        author,
       );
       if (gap != null) {
         await _settleWhenNothingUndecided(
@@ -3746,7 +3874,7 @@ class SyncClient {
       }
       final fork = await _standingAlarm(
         IntegrityAlarmKind.authorChainFork,
-        settledAuthor,
+        author,
       );
       if (fork != null) {
         await _settleWhenNothingUndecided(
@@ -3754,9 +3882,9 @@ class SyncClient {
           kind: IntegrityAlarmKind.authorChainFork,
           resolution: AlarmResolution.tookUpstream,
           now: now,
-          forkHeadSeq: settledAuthor == null
+          forkHeadSeq: author == null
               ? null
-              : await effectiveChainHeadSeq(settledAuthor),
+              : await effectiveChainHeadSeq(author),
         );
       }
     });
@@ -3778,6 +3906,16 @@ class SyncClient {
   /// the flush resolves it when the server acknowledges the re-send. That is
   /// the whole of "in progress" here — the bytes are queued, not the alarm
   /// quietly closed.
+  ///
+  /// **The answer is checked against the accusation inside the transaction,
+  /// and the decision is stamped before the range is queued.** A flush can
+  /// re-raise the accusation in the window between reading it and writing the
+  /// answer, and the re-raise is a new question: it clears the decision and
+  /// moves the agreed position. An answer about the older accusation must not
+  /// queue the old position's range, and must not stamp the new accusation as
+  /// decided. So the stamp is guarded by everything that makes this answer
+  /// about the accusation as it stands — and a stamp that matches nothing
+  /// leaves both the new accusation and the outbox exactly as they were.
   Future<void> _keepOurs(IntegrityAlarmRow alarm) async {
     final from = alarm.repostFromAuthorSeq;
     if (from == null) {
@@ -3786,19 +3924,51 @@ class SyncClient {
       );
     }
     final now = _now();
+    var stale = false;
     await _db.transaction(() async {
+      // The accusation must still be the one the User answered: a refusal that
+      // arrived while they were answering is a new question, not this one —
+      // and it may have moved the position the answer is about.
+      final current = await _alarmRow(alarm.id);
+      if (current == null ||
+          current.occurrenceCount != alarm.occurrenceCount ||
+          current.resolution != null ||
+          current.repostFromAuthorSeq != from) {
+        stale = true;
+        return;
+      }
+      // The decision is stamped first, and the stamp is guarded by the same
+      // facts: a re-raise that lands while this statement is being written
+      // clears the decision and moves the position, and then the guard matches
+      // nothing. Nothing is written, so the new accusation stands unanswered.
+      final stamped = await (_db.update(_db.integrityAlarms)
+            ..where((row) =>
+                row.id.equals(alarm.id) &
+                row.occurrenceCount.equals(alarm.occurrenceCount) &
+                row.resolution.isNull() &
+                row.repostFromAuthorSeq.equals(from)))
+          .write(IntegrityAlarmsCompanion(
+        resolution: Value(AlarmResolution.keptOurs.code),
+        resolutionDecidedAt: Value(now),
+      ));
+      if (stamped == 0) {
+        stale = true;
+        return;
+      }
+      // Only now is the range queued: the bytes are this device's own, and
+      // they go back out from the position the server and this device agreed
+      // on — the position the answer was about.
       await (_db.update(_db.outbox)
             ..where((row) =>
                 row.workspaceId.equals(workspaceId) &
                 row.authorSeq.isBiggerOrEqualValue(from)))
           .write(OutboxCompanion(sentAt: const Value<DateTime?>(null)));
-      await (_db.update(_db.integrityAlarms)
-            ..where((row) => row.id.equals(alarm.id)))
-          .write(IntegrityAlarmsCompanion(
-        resolution: Value(AlarmResolution.keptOurs.code),
-        resolutionDecidedAt: Value(now),
-      ));
     });
+    if (stale) {
+      throw StateError(
+        'the accusation changed while the answer was being recorded',
+      );
+    }
   }
 
   /// Record the user's decision on an integrity alarm.
@@ -3962,16 +4132,36 @@ class SyncClient {
             alarm.authorMemberId != null
         ? await effectiveChainHeadSeq(alarm.authorMemberId!)
         : null;
+    final forkClaimSeq = kind == IntegrityAlarmKind.authorChainFork
+        ? await _forkClaimSeq(alarm)
+        : null;
     return (_db.select(_db.quarantinedOps)
           ..where((t) => _coveredRows(
                 t,
                 kind: kind,
                 authorMemberId: alarm.authorMemberId,
                 forkHeadSeq: forkHeadSeq,
+                forkClaimSeq: forkClaimSeq,
                 namedRowId: alarm.quarantineOpRowId,
               ))
           ..orderBy([(row) => OrderingTerm(expression: row.id)]))
         .get();
+  }
+
+  /// The author's chain position the accused claimant holds.
+  ///
+  /// A fork is proven one position at a time: the release scan finds every
+  /// claimant at head + 1 and shows that none of them chains to the head. Two
+  /// envelopes can claim that one position, and both are then proven against
+  /// the same head — so the answer covers both, not only the one the
+  /// accusation happens to name.
+  Future<int?> _forkClaimSeq(IntegrityAlarmRow alarm) async {
+    final namedRowId = alarm.quarantineOpRowId;
+    if (namedRowId == null) return null;
+    final row = await (_db.select(_db.quarantinedOps)
+          ..where((row) => row.id.equals(namedRowId)))
+        .getSingleOrNull();
+    return row?.authorSeq;
   }
 
   /// The refused changes an accusation covers, as one predicate.
@@ -3996,6 +4186,7 @@ class SyncClient {
     required IntegrityAlarmKind kind,
     required String? authorMemberId,
     int? forkHeadSeq,
+    int? forkClaimSeq,
     int? namedRowId,
   }) {
     final sameAuthor = authorMemberId == null
@@ -4006,13 +4197,23 @@ class SyncClient {
       // A fork is not a refusal but the choice between two continuations: the
       // author's gap rows at or below the effective chain head.
       if (forkHeadSeq == null) return const Constant(false);
-      // **And the claimant the accusation names.** The release scan proves a
-      // mismatch at head + 1 and does not advance the head, so the claimant it
-      // accused sits *above* the head — outside the range above. Leaving it
-      // out would let a rejection close the fork while the gap the fork holds
-      // open stays undecided, and the User would be asked about a gap they had
-      // already answered.
+      // **And the position the accused claimant holds.** The release scan
+      // proves a mismatch at head + 1 and does not advance the head, so the
+      // claimant it accused sits *above* the head — outside the range above.
+      // Leaving it out would let a rejection close the fork while the gap the
+      // fork holds open stays undecided, and the User would be asked about a
+      // gap they had already answered.
       final withinHead = table.authorSeq.isSmallerOrEqualValue(forkHeadSeq);
+      // **Every claimant at that position**, not only the one the accusation
+      // names: the alarm is keyed by `(workspace, kind, author)` and keeps the
+      // first row it saw, so the row it names is one of several proven
+      // mismatches. Naming one of them and answering only that one would
+      // settle the fork over a mismatch that is still undecided, and leave the
+      // rest of the position a question nobody was asked. A gap at another
+      // position is a gap of its own, and stays out of it.
+      final atClaimedPosition = forkClaimSeq == null
+          ? const Constant(false)
+          : table.authorSeq.equals(forkClaimSeq);
       final named = namedRowId == null
           ? const Constant(false)
           : table.id.equals(namedRowId);
@@ -4020,7 +4221,7 @@ class SyncClient {
           unanswered &
           sameAuthor &
           table.reason.equals(SyncRejectionReason.authorChainGap.code) &
-          (withinHead | named);
+          (withinHead | atClaimedPosition | named);
     }
     final reasons = _reasonCodesEscalatingTo(kind);
     if (reasons.isEmpty) return const Constant(false);
@@ -4032,12 +4233,21 @@ class SyncClient {
 
   /// The held changes a take upstream is about.
   ///
-  /// The author's gap rows that are still unreleased, and either still
-  /// undecided or already decided as *taken upstream*. The second set is the
-  /// work of a take upstream whose projection did not finish: the decision was
-  /// recorded on those rows, and the change is done again so the projection
-  /// sees it — a take upstream that is answered twice must reach the domain
-  /// store both times.
+  /// Two sets, and the second one is the work a decision left behind:
+  ///
+  /// * the author's gap rows that are **still held and still undecided** — the
+  ///   work the decision is about; and
+  /// * the rows already decided as *taken upstream* whose **projection has not
+  ///   reached the domain store yet** — the work of a take upstream that did
+  ///   not finish. The decision was recorded on them, and the change is done
+  ///   again so the projection sees it: a take upstream that is answered twice
+  ///   must reach the domain store both times.
+  ///
+  /// The second set deliberately ignores [QuarantinedOps.releasedAt]. A chain
+  /// release re-admits the row and the change goes into the log, but it does
+  /// not put the change on the User's screen — so a released row whose
+  /// projection never succeeded is still work, and excluding it would let a
+  /// retry answer the accusation over work it never did.
   Expression<bool> _takenUpstreamRows(
     $QuarantinedOpsTable table, {
     required String? authorMemberId,
@@ -4047,11 +4257,11 @@ class SyncClient {
         : table.authorMemberId.equals(authorMemberId);
     final reasons = _reasonCodesEscalatingTo(IntegrityAlarmKind.authorChainGap);
     return table.workspaceId.equals(workspaceId) &
-        table.releasedAt.isNull() &
         sameAuthor &
         table.reason.isIn(reasons) &
-        (table.resolution.isNull() |
-            table.resolution.equals(AlarmResolution.tookUpstream.code));
+        ((table.releasedAt.isNull() & table.resolution.isNull()) |
+            (table.resolution.equals(AlarmResolution.tookUpstream.code) &
+                table.resolutionProjectedAt.isNull()));
   }
 
   /// The refusal reasons that escalate to this kind of accusation.
@@ -4069,6 +4279,7 @@ class SyncClient {
     required IntegrityAlarmKind kind,
     required String? authorMemberId,
     int? forkHeadSeq,
+    int? forkClaimSeq,
     int? namedRowId,
   }) =>
       notExistsQuery(
@@ -4078,6 +4289,7 @@ class SyncClient {
                 kind: kind,
                 authorMemberId: authorMemberId,
                 forkHeadSeq: forkHeadSeq,
+                forkClaimSeq: forkClaimSeq,
                 namedRowId: namedRowId,
               )),
       );
@@ -4101,6 +4313,12 @@ class SyncClient {
     required DateTime now,
     int? forkHeadSeq,
   }) async {
+    // The position the accused claimant holds, read here so the settlement
+    // asks about exactly the rows the snapshot stamped — one definition, two
+    // questions.
+    final forkClaimSeq = kind == IntegrityAlarmKind.authorChainFork
+        ? await _forkClaimSeq(alarm)
+        : null;
     await (_db.update(_db.integrityAlarms)
           ..where((row) =>
               row.id.equals(alarm.id) &
@@ -4110,6 +4328,7 @@ class SyncClient {
                 kind: kind,
                 authorMemberId: alarm.authorMemberId,
                 forkHeadSeq: forkHeadSeq,
+                forkClaimSeq: forkClaimSeq,
                 namedRowId: alarm.quarantineOpRowId,
               )))
         .write(IntegrityAlarmsCompanion(
