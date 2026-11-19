@@ -267,14 +267,13 @@ class VaultPlugin implements SyncPlugin {
             continue;
           }
           final outcome = await _ingest(key, copy.path, copy.text, copy.page);
-          switch (outcome) {
-            case _Ingest.taken:
-              touched.add(key);
-              held ??= copy.path;
-            case _Ingest.refused:
-              untaken.add(copy.path);
-            case _Ingest.unreadable:
-              unreadable.add(copy.path);
+          if (outcome == _Ingest.taken) {
+            touched.add(key);
+            held ??= copy.path;
+          } else if (outcome == _Ingest.refused) {
+            untaken.add(copy.path);
+          } else {
+            unreadable.add(copy.path);
           }
         }
         if (unreadable.isNotEmpty) {
@@ -547,7 +546,7 @@ class VaultPlugin implements SyncPlugin {
 
   /// The changes of the entities a page's read touched.
   List<Change> _changesOf(Map<String, Map<String, ClockedValue>> fields,
-      Map<String, Hlc> tombstones) {
+      _Tombstones tombstones) {
     final entities = {...fields.keys, ...tombstones.keys}.toList()..sort();
     return [
       for (final ref in entities)
@@ -904,8 +903,9 @@ class VaultPlugin implements SyncPlugin {
       }
       try {
         await _folder.writeAtomically(path, text);
-      } on Object {
+      } on Object catch (error) {
         // The page was not written: it is owed a write-back.
+        debugPrint('vault: $path not written: $error');
         _pendingWriteBacks.add(key);
         rethrow;
       }
@@ -997,6 +997,10 @@ class VaultPlugin implements SyncPlugin {
   Future<void> _dropBase(String path) => _sync.customStatement(
       'DELETE FROM vault_page_bases WHERE page_path = ?', [path]);
 }
+
+/// The tombstones of one page read: `collection/entityId` to the clock the
+/// entity was deleted at.
+typedef _Tombstones = Map<String, Hlc>;
 
 /// What a page's read ended in.
 enum _Ingest {
