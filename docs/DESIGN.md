@@ -551,7 +551,7 @@ Paths are under `app/lib/`; DPR means Daily Planning and ES means Evening Shutdo
 | ES settled — `screens/shutdown/steps/settled_review_step.dart` | Settlement icon, title, estimate vs actual, added-during-the-day tag | Framed `OutcomeRow` | None |
 | ES disposition — `screens/shutdown/steps/unfinished_tasks_step.dart` | Title, current Action, notes, estimate, logged, added-during-the-day tag | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Done (verdict sheet) / Roll over / Return to Next / Defer |
 | Weekly review — `screens/periodic_review/steps/list_review_step.dart` | Banner, people, title, current Action, notes | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Injected `ProcessToHandlers` |
-| Focus — `screens/focus_screen.dart` | Title, due, estimate, sprint count, added-during-the-day tag | Flat `OutcomeRow`, trailing Start/status | Open detail; Start/Resume |
+| Focus — `screens/focus_screen.dart` | Title, due, estimate, sprint hint, added-during-the-day tag | Flat `OutcomeRow`, trailing Start/status | Open detail; Start/Resume |
 | Focus carried-over — `screens/focus_screen.dart` | Muted title, estimate | Flat `OutcomeRow`, leading icon | None |
 | Search — `screens/search/widgets/search_result_tile.dart` | Title, snippet, match hint, status | Flat `OutcomeRow` | Capture → clarify; Outcome → detail |
 | GTD lists / Project — `screens/common/gtd_list_screen.dart` | Title, energy, estimate, due when set | Flat `OutcomeRow` | Open detail; long-press multi-selects |
@@ -568,7 +568,7 @@ Paths are under `app/lib/`; DPR means Daily Planning and ES means Evening Shutdo
 | Clarify due picker | Today through +365 days | A new deadline is not set in the past. |
 | Waiting For sheet follow-up | Optional `Follow up from <date>` row on the routing bar's sheet; same bounds as the Time context From picker; × clears | A wait can carry a date to come back on. |
 | Waiting For | Person appears in group header | Avoid repeating the person on every row. |
-| Focus | Sprint count beside estimate; settled title struck | Supports engagement and settlement. |
+| Focus | Sprint hint beside estimate; settled title struck | Supports engagement and settlement. |
 | Focus carried-over | Muted and read-only | Records yesterday rather than offering work to act on. |
 | Search | Match snippet, hint and status; also includes Captures | Explains why the item matched. |
 | DPR plan summary | Off-Up-Next reason, capacity bar, skipped tone, selection controls | Supports choosing today's Plan. |
