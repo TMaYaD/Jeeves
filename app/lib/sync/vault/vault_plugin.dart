@@ -797,9 +797,12 @@ class VaultPlugin implements SyncPlugin {
 bool _canCarry(String collection, String field, Object? value) {
   if (value == null) {
     // A field cleared by hand is a value the app can hold — unless the row
-    // cannot do without it. `todos.intent` is NOT NULL, and a null intent
-    // would put a row the store refuses into the sync store.
-    return !(collection == todosCollection && field == 'intent');
+    // cannot do without it. `todos.title` and `todos.intent` are NOT NULL, and
+    // a null value for either would put a row the store refuses into the sync
+    // store: the Outcome would vanish from the app, and every retry would
+    // carry the same invalid value again.
+    return !(collection == todosCollection &&
+        (field == 'title' || field == 'intent'));
   }
   final kind = collectionCodecs[collection]?.columns[field];
   final fits = switch (kind) {

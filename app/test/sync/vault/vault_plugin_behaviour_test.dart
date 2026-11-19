@@ -251,6 +251,43 @@ void main() {
         reason: 'the page kept a word the app cannot hold');
   });
 
+  test('a title cleared by hand is not taken, and the page is put back',
+      () async {
+    final device = HostDevice.open('a');
+    addTearDown(device.close);
+    final host = await device.startHost();
+    final directory = Directory('${root.path}/vault')..createSync(recursive: true);
+    final folder = DirectoryVaultFolder(directory);
+    final plugin = VaultPlugin(folder: folder, sync: device.sync);
+    await host.attach(plugin);
+
+    await device.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'Plan', userId: _userId);
+    await host.deliverAll();
+    await plugin.rescan();
+
+    final path = (await folder.listMarkdownFiles('Outcomes')).single;
+    final page = (await folder.read(path))!;
+    expect(page, contains('title: Plan'));
+
+    // The title line is gone. An Outcome has no title without one, and the
+    // store refuses a row without it: the value is not carried, the app keeps
+    // the title it has, and the next write puts the page back.
+    await folder.writeAtomically(path, page.replaceFirst('title: Plan\n', ''));
+
+    final health = <VaultHealth>[];
+    plugin.health.listen(health.add);
+    await plugin.rescan();
+    await pumpEventQueue();
+
+    expect(await _title(device), 'Plan',
+        reason: 'the app took a title it cannot hold');
+    expect((await folder.read(path))!, contains('title: Plan'),
+        reason: 'the page was not put back');
+    expect(health.last.untakenPageCount, 0,
+        reason: 'the page was reported as one the host would not take');
+  });
+
   test('two Outcomes whose names read alike have a page each', () async {
     final device = HostDevice.open('a');
     addTearDown(device.close);
