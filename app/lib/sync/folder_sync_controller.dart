@@ -109,8 +109,18 @@ class FolderSyncController {
 
   OpLogFolderPlugin? _plugin;
 
-  Future<void> _attach(String folderId, SegmentFolder folder) async {
-    _plugin = null;
+  /// Attaches are serialised: two of them at once (turning folder sync on while
+  /// the launch-time resume is still running) must not take each other's
+  /// registration away.
+  Future<void> _attachTail = Future<void>.value();
+
+  Future<void> _attach(String folderId, SegmentFolder folder) {
+    final run = _attachTail.then((_) => _attachNow(folderId, folder));
+    _attachTail = run.then((_) {}, onError: (Object _) {});
+    return run;
+  }
+
+  Future<void> _attachNow(String folderId, SegmentFolder folder) async {
     final plugin = OpLogFolderPlugin(
       database: database,
       folder: folder,
@@ -120,13 +130,13 @@ class FolderSyncController {
       nowMs: nowMs,
       scanInterval: folderScanInterval,
     );
-    try {
-      await host.attach(plugin);
-      _plugin = plugin;
-    } on Object {
-      await host.detach(opLogFolderPluginId, forgetCursor: true);
-      rethrow;
-    }
+    // Nothing is detached when the attach fails. The host keeps the cursor, so
+    // the changes made while the folder was unreachable are still owed to this
+    // plugin, and it puts back the registration it took, so a failed attach
+    // leaves a working one alone. Only turning folder sync off forgets the
+    // cursor.
+    await host.attach(plugin);
+    _plugin = plugin;
   }
 
   Future<FolderSyncSummary?> summary() async {

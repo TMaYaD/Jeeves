@@ -72,6 +72,10 @@ class OpLogFolderPlugin implements SyncPlugin {
   Timer? _timer;
   Future<void> _serial = Future<void>.value();
   DateTime? _lastScanAt;
+
+  /// Set when the attachment stops. A delivery the host was already reading
+  /// when sync was turned off must not write anything more.
+  bool _stopped = false;
   final StreamController<PluginHealth> _health = StreamController<PluginHealth>.broadcast();
 
   @override
@@ -101,6 +105,9 @@ class OpLogFolderPlugin implements SyncPlugin {
     _memberIdHex = memberIdToHex(_memberId);
     _signer = await EnvelopeSigner.fromSeed(keys.signSeed);
     await _locked(() async {
+      // The enrolment check again, before the first write: enrolling can finish
+      // while this device is starting, and a signed-in device writes nothing.
+      await _refuseIfEnrolled();
       await _enqueueSnapshotOnce();
       await _appendPending();
       await _scanPeers();
@@ -117,6 +124,7 @@ class OpLogFolderPlugin implements SyncPlugin {
 
   @override
   Future<void> stop() async {
+    _stopped = true;
     _timer?.cancel();
     _timer = null;
     await _serial;
@@ -124,6 +132,7 @@ class OpLogFolderPlugin implements SyncPlugin {
 
   /// Look for other devices' changes now: at start, on app resume and on a timer.
   Future<void> scan() => _locked(() async {
+        if (_stopped) return;
         await _refuseIfEnrolled();
         await _appendPending();
         await _scanPeers();
@@ -160,7 +169,11 @@ class OpLogFolderPlugin implements SyncPlugin {
   @override
   Future<int> deliver(List<SequencedChange> changes) async {
     if (changes.isEmpty) return 0;
+    var acknowledged = 0;
     await _locked(() async {
+      // Sync was turned off while the host was reading this batch: nothing is
+      // written, and nothing is acknowledged, so the changes stay owed.
+      if (_stopped) return;
       await _refuseIfEnrolled();
       await _enqueueDelivered(changes);
       try {
@@ -170,8 +183,9 @@ class OpLogFolderPlugin implements SyncPlugin {
         debugPrint('op-log folder: append failed — $error');
       }
       await _emitHealth();
+      acknowledged = changes.last.sequence;
     });
-    return changes.last.sequence;
+    return acknowledged;
   }
 
   Future<void> _enqueueDelivered(List<SequencedChange> changes) async {
@@ -266,58 +280,44 @@ class OpLogFolderPlugin implements SyncPlugin {
       if (pending == null) return;
       var binding = await _binding();
       final now = nowMs();
-      if (binding.segmentLengthBytes > 0 &&
-          (binding.segmentLengthBytes >= rollBytes ||
+      final record = Uint8List.fromList(pending.record);
+      var segmentNumber = binding.segmentNumber;
+      var path = '$opsDirectoryName/$_memberId/${segmentFileName(segmentNumber)}';
+      var recorded = binding.segmentLengthBytes;
+      var actual = await folder.length(path) ?? 0;
+
+      // The tail of the current segment is reconciled before anything else. A
+      // crash between the write and the transaction that records the length
+      // leaves bytes this device wrote but has not recorded; they belong to the
+      // record being appended, so that record is finished here. Rolling first
+      // would write the same record a second time, in the next segment.
+      var tail = await _reconcileTail(path, segmentNumber, recorded, actual, record);
+      if (tail == null) return;
+
+      // A segment is rolled only when it holds exactly what this device
+      // recorded: a segment with an unreconciled tail is finished first.
+      if (!tail.complete && actual == recorded && recorded > 0 &&
+          (recorded >= rollBytes ||
               (binding.segmentStartedAtMs != null &&
                   now - binding.segmentStartedAtMs! >= rollAge.inMilliseconds))) {
+        segmentNumber = binding.segmentNumber + 1;
+        path = '$opsDirectoryName/$_memberId/${segmentFileName(segmentNumber)}';
         await (database.update(database.folderSyncBindings)
               ..where((row) => row.folderId.equals(folderId)))
             .write(FolderSyncBindingsCompanion(
-          segmentNumber: Value(binding.segmentNumber + 1),
+          segmentNumber: Value(segmentNumber),
           segmentLengthBytes: const Value(0),
           segmentStartedAtMs: const Value(null),
         ));
         binding = await _binding();
+        recorded = binding.segmentLengthBytes;
+        actual = await folder.length(path) ?? 0;
+        tail = await _reconcileTail(path, segmentNumber, recorded, actual, record);
+        if (tail == null) return;
       }
-      final record = Uint8List.fromList(pending.record);
-      final path = '$opsDirectoryName/$_memberId/${segmentFileName(binding.segmentNumber)}';
-      final recorded = binding.segmentLengthBytes;
-      final actual = await folder.length(path) ?? 0;
-      if (actual < recorded) {
-        await _raiseAlarm(
-          IntegrityAlarmKind.segmentRolledBack,
-          authorMemberId: _memberId,
-          detail: 'This device wrote $recorded bytes to ${segmentFileName(binding.segmentNumber)} '
-              'but the file now holds $actual.',
-        );
-        return;
-      }
-      await _resolveAlarm(IntegrityAlarmKind.segmentRolledBack, _memberId);
-      var skipAppend = false;
-      var appendFrom = 0;
-      if (actual > recorded) {
-        // A torn write from a crash: whatever is past the recorded length must be
-        // the start (or all) of this very record.
-        final extra = actual - recorded;
-        final present = extra < record.length ? extra : record.length;
-        final onDisk = await folder.read(path, offset: recorded, maxBytes: present);
-        if (!sameBytes(onDisk, Uint8List.sublistView(record, 0, present))) {
-          await _raiseAlarm(
-            IntegrityAlarmKind.authorChainRewrite,
-            authorMemberId: _memberId,
-            detail: 'The file ${segmentFileName(binding.segmentNumber)} holds bytes this '
-                'device did not write.',
-          );
-          return;
-        }
-        if (extra >= record.length) {
-          skipAppend = true;
-        } else {
-          appendFrom = extra;
-        }
-      }
-      if (!skipAppend) {
-        await folder.append(path, Uint8List.sublistView(record, appendFrom));
+
+      if (!tail.complete) {
+        await folder.append(path, Uint8List.sublistView(record, tail.offset));
       }
       await database.transaction(() async {
         await (database.update(database.folderSyncBindings)
@@ -331,6 +331,47 @@ class OpLogFolderPlugin implements SyncPlugin {
             .go();
       });
     }
+  }
+
+  /// What the bytes past the recorded length say about the record being
+  /// appended.
+  ///
+  /// [offset] is where the record has to be written from; a record that is
+  /// already complete on disk has [complete] set and is not written again.
+  Future<_Tail?> _reconcileTail(
+    String path,
+    int segmentNumber,
+    int recorded,
+    int actual,
+    Uint8List record,
+  ) async {
+    if (actual < recorded) {
+      await _raiseAlarm(
+        IntegrityAlarmKind.segmentRolledBack,
+        authorMemberId: _memberId,
+        detail: 'This device wrote $recorded bytes to ${segmentFileName(segmentNumber)} '
+            'but the file now holds $actual.',
+      );
+      return null;
+    }
+    await _resolveAlarm(IntegrityAlarmKind.segmentRolledBack, _memberId);
+    if (actual == recorded) return const _Tail.appendAt(0);
+    // A torn write from a crash: whatever is past the recorded length must be
+    // the start (or all) of this very record.
+    final extra = actual - recorded;
+    final present = extra < record.length ? extra : record.length;
+    final onDisk = await folder.read(path, offset: recorded, maxBytes: present);
+    if (!sameBytes(onDisk, Uint8List.sublistView(record, 0, present))) {
+      await _raiseAlarm(
+        IntegrityAlarmKind.authorChainRewrite,
+        authorMemberId: _memberId,
+        detail: 'The file ${segmentFileName(segmentNumber)} holds bytes this '
+            'device did not write.',
+      );
+      return null;
+    }
+    if (extra >= record.length) return const _Tail.complete();
+    return _Tail.appendAt(extra);
   }
 
   // --- Reading ---------------------------------------------------------------
@@ -385,6 +426,7 @@ class OpLogFolderPlugin implements SyncPlugin {
     var readSegment = committedSegment;
     var readOffset = committedOffset;
     var halted = false;
+    var chained = 0;
     final accepted = <Change>[];
     final alarmsToRaise = <({IntegrityAlarmKind kind, String detail})>[];
 
@@ -428,6 +470,7 @@ class OpLogFolderPlugin implements SyncPlugin {
         }
         if (outcome.change != null) accepted.add(outcome.change!);
         if (outcome.accepted) {
+          chained += 1;
           headSeq = outcome.authorSeq!;
           headHash = envelopeHash(record.envelope);
         }
@@ -449,7 +492,11 @@ class OpLogFolderPlugin implements SyncPlugin {
     for (final alarm in alarmsToRaise) {
       await _raiseAlarm(alarm.kind, authorMemberId: memberId, detail: alarm.detail);
     }
-    if (!halted) await _resolveAlarm(IntegrityAlarmKind.authorChainGap, memberId);
+    // The gap alarm stands until a record that chains proves the gap filled: a
+    // scan that reads nothing new has not seen the missing record arrive.
+    if (!halted && chained > 0) {
+      await _resolveAlarm(IntegrityAlarmKind.authorChainGap, memberId);
+    }
   }
 
   /// With a rollback alarm standing, the file must again hold the record the
@@ -651,6 +698,19 @@ class OpLogFolderPlugin implements SyncPlugin {
       resolvedAt: Value(DateTime.fromMillisecondsSinceEpoch(nowMs(), isUtc: true)),
     ));
   }
+}
+
+/// What the bytes past the recorded length of a segment say about the record
+/// being appended to it.
+class _Tail {
+  const _Tail.appendAt(this.offset) : complete = false;
+
+  /// The record is already whole on disk: it is not written again.
+  const _Tail.complete() : offset = 0, complete = true;
+
+  /// Where the record has to be written from.
+  final int offset;
+  final bool complete;
 }
 
 class _Judgement {

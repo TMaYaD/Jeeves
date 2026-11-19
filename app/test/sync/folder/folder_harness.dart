@@ -124,4 +124,10 @@ List<Uint8List> envelopesOf(Directory root, String memberId) {
   ];
 }
 
+/// The segment files a member has, in order.
+List<String> segmentNames(Directory root, String memberId) => [
+      for (final file in Directory('${root.path}/$opsDirectoryName/$memberId').listSync())
+        if (file is File && file.path.endsWith('.log')) file.uri.pathSegments.last,
+    ]..sort();
+
 OpHeader headerOf(Uint8List envelope) => OpHeader.parse(envelope);

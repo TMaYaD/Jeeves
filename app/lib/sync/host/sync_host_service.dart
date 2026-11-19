@@ -467,15 +467,37 @@ class SyncHostService implements SyncHost, OutboxDrainer {
   /// Waits for the seeding pass first, so the [snapshot] a plugin reads holds the
   /// whole local dataset. If the pass fails, attaching fails and no cursor is
   /// recorded.
+  ///
+  /// A plugin that does not start is not attached: the registration it took is
+  /// given back, so a failed attach cannot take away a working one. The cursor
+  /// stays — only turning sync off forgets it — so the changes made while the
+  /// plugin was down are still owed to it when it comes back.
   Future<void> attach(SyncPlugin plugin) async {
     await ensureMergeStateSeeded();
+    final previous = _plugins[plugin.id];
     _plugins[plugin.id] = plugin;
-    await _sync.customStatement(
-      'INSERT OR IGNORE INTO plugin_cursors (plugin_id, acknowledged_sequence) '
-      'VALUES (?, COALESCE((SELECT MAX(sequence) FROM change_sequence), 0))',
-      [plugin.id],
-    );
-    await plugin.start(this);
+    try {
+      await _sync.customStatement(
+        'INSERT OR IGNORE INTO plugin_cursors (plugin_id, acknowledged_sequence) '
+        'VALUES (?, COALESCE((SELECT MAX(sequence) FROM change_sequence), 0))',
+        [plugin.id],
+      );
+      await plugin.start(this);
+    } on Object {
+      if (identical(_plugins[plugin.id], plugin)) {
+        if (previous == null) {
+          _plugins.remove(plugin.id);
+        } else {
+          _plugins[plugin.id] = previous;
+        }
+      }
+      try {
+        await plugin.stop();
+      } on Object catch (error) {
+        debugPrint('sync host: stopping a plugin that did not start failed — $error');
+      }
+      rethrow;
+    }
     _deliverInBackground();
   }
 
@@ -490,6 +512,9 @@ class SyncHostService implements SyncHost, OutboxDrainer {
       await _prune();
     }
   }
+
+  /// The plugin attached under [pluginId], or null when none is.
+  SyncPlugin? pluginOf(String pluginId) => _plugins[pluginId];
 
   /// The highest sequence number [pluginId] has acknowledged.
   Future<int?> cursorOf(String pluginId) async {

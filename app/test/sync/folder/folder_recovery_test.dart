@@ -119,6 +119,28 @@ void main() {
       expect(await _pendingCount(a), 0);
     });
 
+    test('a record that reached disk is not written again after the segment aged', () async {
+      final (:directory, :a, :b) = await _pair(rollAge: const Duration(hours: 1));
+      await _insert(a, 0);
+      await _insert(a, 1);
+      final crashed = await _crashBeforeRecordingLastRecord(directory, a);
+      // The segment has passed its age bound while the length update was lost.
+      a.device.wall.advance(const Duration(hours: 2).inMilliseconds);
+
+      await a.plugin!.scan();
+
+      expect(crashed.segment.readAsBytesSync(), crashed.whole,
+          reason: 'the record that reached disk is not written a second time');
+      expect(segmentNames(directory, a.memberId), ['000001.log'],
+          reason: 'the segment is finished before it is rolled');
+      expect((await _binding(a)).segmentLengthBytes, crashed.whole.length);
+      expect(await _pendingCount(a), 0);
+      expect(await _open(a), isEmpty);
+      await b.plugin!.scan();
+      expect(await b.device.domain.customSelect('SELECT id FROM todos').get(), hasLength(2));
+      expect(await _open(b), isEmpty, reason: 'the peer reads one copy of each op');
+    });
+
     test('bytes this device did not write raise author_chain_rewrite', () async {
       final (:directory, :a, b: _) = await _pair();
       await _insert(a, 0);
