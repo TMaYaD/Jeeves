@@ -60,6 +60,14 @@ class _MockFocusSettingsNotifier extends FocusSettingsNotifier {
 Finder _rowTitle(String title) => find.descendant(
     of: find.byType(OutcomeRow), matching: find.text(title));
 
+/// The limit edge drawn over a day timeline tile's bottom, or null when the
+/// tile has none.
+///
+/// A Timeboxed Outcome's tile draws the heavier edge (issue #923); every
+/// other tile keeps the ordinary one.
+bool _hasLimitEdge(WidgetTester tester, String outcomeId) =>
+    find.byKey(Key('day_timeline_limit_edge_${outcomeId}_1')).evaluate().isNotEmpty;
+
 FocusSession _openSession() => FocusSession(
       id: 'test-session',
       userId: 'test-user',
@@ -277,6 +285,40 @@ void main() {
     await tester.pump();
 
     expect(find.byType(TimeboxedGlyph), findsNothing);
+  });
+
+  testWidgets('a Timeboxed Outcome carries the limit edge on its day tile',
+      (tester) async {
+    // The Now timeline's tile of a Timeboxed Outcome draws the heavier
+    // bottom edge (issue #923). The state comes from the Action, so the
+    // screen has to hand it to the timeline: this is that wiring.
+    await tester.pumpWidget(_buildScreen(
+      activeSession: _openSession(),
+      tasks: [Todo(
+        id: 't1', title: 'Bounded work', userId: 'test-user',
+        createdAt: DateTime(2030), intent: 'next', timeEstimate: 30,
+      )],
+      timeboxed: {'t1': true},
+    ));
+    await tester.pump();
+    await tester.pump();
+
+    expect(_hasLimitEdge(tester, 't1'), isTrue);
+  });
+
+  testWidgets('a plain estimate carries the ordinary edge on its day tile',
+      (tester) async {
+    await tester.pumpWidget(_buildScreen(
+      activeSession: _openSession(),
+      tasks: [Todo(
+        id: 't1', title: 'Open work', userId: 'test-user',
+        createdAt: DateTime(2030), intent: 'next', timeEstimate: 30,
+      )],
+    ));
+    await tester.pump();
+    await tester.pump();
+
+    expect(_hasLimitEdge(tester, 't1'), isFalse);
   });
 
   testWidgets(

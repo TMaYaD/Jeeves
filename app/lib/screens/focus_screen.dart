@@ -655,6 +655,12 @@ class _NowTimeline extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final extras = ref.watch(nowTimelineExtrasProvider);
+    // Which Outcomes are Timeboxed (issue #923): their tile carries the
+    // heavier bottom edge. Absent from the map == not Timeboxed, and the map
+    // is empty until the first emission lands, so no tile shows the edge
+    // speculatively.
+    final timeboxedIds =
+        ref.watch(currentTimeboxedProvider).value ?? const <String, bool>{};
     final flowOrigin =
         roundUpToFiveMinutes(DateTime.parse(session.startedAt).toLocal());
     final entries = dayTimelineEntriesFor(
@@ -665,6 +671,10 @@ class _NowTimeline extends ConsumerWidget {
       pinnedStarts: extras.pinnedStarts,
       engagedTaskIds: extras.engagedTaskIds,
       runningTaskId: session.currentTaskId,
+      timeboxedTaskIds: {
+        for (final entry in timeboxedIds.entries)
+          if (entry.value) entry.key
+      },
     );
     return DayTimeline(
       scope: session.id,

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/providers/day_timeline_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
+import 'package:jeeves/providers/timeboxed_limit_provider.dart';
 import 'package:jeeves/screens/planning/steps/scheduled_review_step.dart';
 import 'package:jeeves/widgets/day_timeline/day_timeline.dart';
 import 'package:jeeves/widgets/outcome_row.dart';
@@ -12,6 +13,14 @@ class _PlanningWithNoDatabase extends FocusSessionPlanningNotifier {
   @override
   FocusSessionPlanningState build() => const FocusSessionPlanningState();
 }
+
+/// The limit edge drawn over a day timeline tile's bottom, or null when the
+/// tile has none.
+///
+/// A Timeboxed Outcome's tile draws the heavier edge (issue #923); every
+/// other tile keeps the ordinary one.
+bool _hasLimitEdge(WidgetTester tester, String outcomeId) =>
+    find.byKey(Key('day_timeline_limit_edge_${outcomeId}_1')).evaluate().isNotEmpty;
 
 void main() {
   testWidgets('scheduled Outcomes use read-only rows in due-date order', (
@@ -31,6 +40,10 @@ void main() {
         overrides: [
           planningTimeContextsProvider.overrideWith((_) async => const {}),
           planningSprintMarksProvider.overrideWith((_) async => const []),
+          // Which Outcomes are Timeboxed (issue #923). Stubbed: a live Drift
+          // watch would outlive the test.
+          currentTimeboxedProvider
+              .overrideWith((_) => Stream.value(const <String, bool>{})),
           dayTimelineSettingsProvider
               .overrideWithValue(const DayTimelineSettings()),
           focusSessionPlanningProvider
@@ -77,6 +90,10 @@ void main() {
         overrides: [
           planningTimeContextsProvider.overrideWith((_) async => const {}),
           planningSprintMarksProvider.overrideWith((_) async => const []),
+          // Which Outcomes are Timeboxed (issue #923). Stubbed: a live Drift
+          // watch would outlive the test.
+          currentTimeboxedProvider
+              .overrideWith((_) => Stream.value(const <String, bool>{})),
           dayTimelineSettingsProvider
               .overrideWithValue(const DayTimelineSettings()),
           focusSessionPlanningProvider
@@ -99,6 +116,46 @@ void main() {
     expect(rows.map((r) => r.title), ['second in Plan', 'first in Plan']);
   });
 
+  testWidgets('a Timeboxed Outcome carries the limit edge on its tile', (
+    tester,
+  ) async {
+    // The planning timeline's tile of a Timeboxed Outcome draws the heavier
+    // bottom edge (issue #923). The state comes from the Action, so the step
+    // has to hand it to the timeline: this is that wiring.
+    Todo todo(String id) => Todo(
+      id: id,
+      title: id,
+      userId: 'local',
+      createdAt: DateTime(2030),
+      intent: 'next',
+      timeEstimate: 30,
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          planningTimeContextsProvider.overrideWith((_) async => const {}),
+          planningSprintMarksProvider.overrideWith((_) async => const []),
+          currentTimeboxedProvider
+              .overrideWith((_) => Stream.value(const {'bounded': true})),
+          dayTimelineSettingsProvider
+              .overrideWithValue(const DayTimelineSettings()),
+          focusSessionPlanningProvider
+              .overrideWith(_PlanningWithNoDatabase.new),
+          focusSessionPlanningSelectedTasksProvider.overrideWith(
+            (_) => Stream.value([todo('bounded'), todo('open')]),
+          ),
+        ],
+        child: const MaterialApp(home: Scaffold(body: ScheduledReviewStep())),
+      ),
+    );
+    await tester.pump();
+
+    final timeline = tester.widget<DayTimeline>(find.byType(DayTimeline));
+    expect(timeline.entries.map((e) => e.isTimeboxed), [true, false]);
+    expect(_hasLimitEdge(tester, 'bounded'), isTrue);
+    expect(_hasLimitEdge(tester, 'open'), isFalse);
+  });
+
   group('wide layout', () {
     Future<void> pumpAtWidth(WidgetTester tester, double width) async {
       tester.view.physicalSize = Size(width, 1600);
@@ -109,6 +166,10 @@ void main() {
           overrides: [
             planningTimeContextsProvider.overrideWith((_) async => const {}),
             planningSprintMarksProvider.overrideWith((_) async => const []),
+            // Which Outcomes are Timeboxed (issue #923). Stubbed: a live Drift
+            // watch would outlive the test.
+            currentTimeboxedProvider
+                .overrideWith((_) => Stream.value(const <String, bool>{})),
             dayTimelineSettingsProvider
                 .overrideWithValue(const DayTimelineSettings()),
             focusSessionPlanningProvider
