@@ -22,6 +22,17 @@ class _PlanningWithNoDatabase extends FocusSessionPlanningNotifier {
 bool _hasLimitEdge(WidgetTester tester, String outcomeId) =>
     find.byKey(Key('day_timeline_limit_edge_${outcomeId}_1')).evaluate().isNotEmpty;
 
+/// Pumps until [done] holds, or gives up after ten frames.
+///
+/// Which Outcomes are Timeboxed reaches the step through a stream, so the
+/// state lands a frame or two after the first build. The test waits for the
+/// state rather than counting the frames it takes.
+Future<void> _pumpUntil(WidgetTester tester, bool Function() done) async {
+  for (var i = 0; i < 10 && !done(); i++) {
+    await tester.pump();
+  }
+}
+
 void main() {
   testWidgets('scheduled Outcomes use read-only rows in due-date order', (
     tester,
@@ -149,6 +160,7 @@ void main() {
       ),
     );
     await tester.pump();
+    await _pumpUntil(tester, () => _hasLimitEdge(tester, 'bounded'));
 
     final timeline = tester.widget<DayTimeline>(find.byType(DayTimeline));
     expect(timeline.entries.map((e) => e.isTimeboxed), [true, false]);
