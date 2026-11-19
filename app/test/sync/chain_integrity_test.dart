@@ -29,6 +29,7 @@ import 'package:jeeves/sync/envelope.dart';
 import 'package:jeeves/sync/hlc.dart';
 import 'package:jeeves/sync/host/merge_state.dart';
 import 'package:jeeves/sync/ids.dart';
+import 'package:jeeves/sync/prune_payload.dart';
 import 'package:jeeves/sync/sync_database.dart';
 import 'package:jeeves/sync/sync_transport.dart';
 import 'package:sqlite3/common.dart' show SqliteException;
@@ -1647,6 +1648,74 @@ void main() {
       await a.sync();
       expect(await _todoTitles(a), ['one', 'three', 'two'],
           reason: 'chain release must not discard unprojected resolution work');
+    });
+
+    test('a prune that settles the gap leaves the accusation standing while '
+        'the take upstream is unprojected', () async {
+      final first = await _todoOp(workspace, peer, _todoId('one'), 'one');
+      final withheld = await _todoOp(workspace, peer, _todoId('two'), 'two');
+      final third = await _todoOp(workspace, peer, _todoId('three'), 'three');
+      final appended = await peerSession.postOps(
+        workspace.workspaceId,
+        [first, withheld, third],
+      );
+      workspace.server.omitSeqs.add(appended[1].seq);
+      await a.sync();
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+
+      // The User answers with *take upstream*, and the projection fails: the
+      // change is reduced, but it never reaches the screen.
+      final original = a.client.projector!;
+      a.client.projector = _FailingOnceProjector(original);
+      await expectLater(
+        a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream),
+        throwsA(isA<StateError>()),
+      );
+      expect(await _todoTitles(a), ['one']);
+
+      // A prune from the compactor attests the held change's own bytes, which
+      // settles the claimant: the gap row is released by the attestation. The
+      // prune is put into the server's log without the server's own admission
+      // checks — the pairing compaction op is not what this case is about.
+      final held = (await a.client.quarantined()).single;
+      await workspace.b.client.capturePrune(PrunePayload(
+        compactionOpId: const Uuid().v4(),
+        targets: [
+          PruneTarget(
+            seq: appended[2].seq,
+            authorMemberId: peer.memberId,
+            authorSeq: held.authorSeq,
+            envelopeHash: envelopeHash(held.envelope),
+          ),
+        ],
+      ));
+      final authored = await workspace.b.client.authoredEnvelopes();
+      workspace.server.injectUnchecked(workspace.workspaceId, authored.last);
+
+      // The prune arrives, and the batch projection fails again, so the
+      // outstanding work is still outstanding when the prune is processed.
+      a.client.projector = _FailingOnceProjector(original);
+      await expectLater(a.sync(), throwsA(isA<StateError>()));
+
+      // The accusation stands: the settlement released the claimant, but the
+      // change is still not on the screen, so there is still work to be done
+      // and still something to ask about.
+      final standing =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(standing.resolvedAt, isNull,
+          reason: 'the take upstream has not reached the screen yet');
+      expect((await a.client.health()).actionableAlarmCount, 1);
+
+      // The next pull recovers the work the settlement did not finish.
+      a.client.projector = original;
+      await a.sync();
+      expect(await _todoTitles(a), ['one', 'three'],
+          reason: 'the recovery projects what the prune settled');
+      final settled =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(settled.resolvedAt, isNotNull);
+      expect((await a.client.health()).clean, isTrue);
     });
 
     test('a change that arrives after the decision is released, and heals the log',

@@ -1916,7 +1916,16 @@ class SyncClient {
       );
       // Re-asked even when the scan released nothing: a settlement in [_applyPrune]
       // can empty the unreleased set on its own, and the gap alarm has to notice.
-      if (!await _hasUnreleasedGap(author)) {
+      //
+      // **And only once nothing is still waiting to be put on screen.** The
+      // prune's attestation settles the claimant, but it does not put the change
+      // on the User's screen: a *take upstream* whose projection failed is still
+      // work to be done, and the accusation stays standing until it is done.
+      // The same rule the chain release follows applies here — closing the alarm
+      // would leave the change reduced but unseen, with nothing left to ask
+      // about.
+      if (!await _hasUnreleasedGap(author) &&
+          !await _hasUnprojectedTakeUpstream(author)) {
         await _resolveAlarm(IntegrityAlarmKind.authorChainGap, author);
       }
     }
