@@ -51,10 +51,14 @@ void main() {
 
   setUp(() async {
     directory = Directory.systemTemp.createTempSync('folder-screen-');
+    addTearDown(() => directory.deleteSync(recursive: true));
     deviceB = await FolderDevice.open('b-phone', directory);
+    addTearDown(() => deviceB.close());
     await deviceB.bind();
     deviceA = HostDevice.open('a');
+    addTearDown(() => deviceA.close());
     hostA = await deviceA.startHost();
+    addTearDown(() => hostA.stopPlugins());
     controller = FolderSyncController(
       host: hostA,
       database: deviceA.sync,
@@ -63,13 +67,6 @@ void main() {
       isEnrolled: () async => false,
       nowMs: () => deviceA.wall.nowMs,
     );
-  });
-
-  tearDown(() async {
-    await hostA.stopPlugins();
-    await deviceA.close();
-    await deviceB.close();
-    directory.deleteSync(recursive: true);
   });
 
   testWidgets('choose a folder, pair the other device, turn it off', (tester) async {

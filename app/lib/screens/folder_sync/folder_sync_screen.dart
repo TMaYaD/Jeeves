@@ -67,16 +67,20 @@ class _FolderSyncScreenState extends ConsumerState<FolderSyncScreen> {
       _busy = true;
       _message = null;
     });
+    // The container is taken before the await: the screen may be gone by the
+    // time the action returns, and `ref` cannot be used after that.
+    final container = ProviderScope.containerOf(context);
     try {
       await action();
     } on FolderSyncRefusal catch (refusal) {
       _message = refusal.message;
     } on Object catch (error) {
-      _message = 'Something went wrong: $error';
+      debugPrint('folder sync: $error');
+      _message = 'Something went wrong. Try again.';
     }
-    ref.invalidate(folderSyncSummaryProvider);
-    ref.invalidate(folderSyncRowsProvider);
-    ref.invalidate(folderSyncActiveProvider);
+    container.invalidate(folderSyncSummaryProvider);
+    container.invalidate(folderSyncRowsProvider);
+    container.invalidate(folderSyncActiveProvider);
     if (mounted) setState(() => _busy = false);
   }
 
