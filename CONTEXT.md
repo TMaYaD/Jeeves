@@ -265,7 +265,7 @@ Settled Outcomes group for the Review summary by a **presentation ladder** — C
 _Avoid_: Resolved / Resolution (spoken for — see Disposition's _Avoid_ and the ambiguity below), Handled, Closed
 
 **Sprint** / **Break**:
-Subdivisions of a TimeLog applying the Pomodoro discipline. A **Sprint** is a timed stretch of work; a **Break** is the rest between Sprints, short or **long** (after a run of Sprints, counted across Actions). The clock keeps running through both without breaking the TimeLog's continuity. Sprints are recorded and show on every Device, eventually right; of two ends the earlier stands, and an open one reads as ending just before the next. A Sprint is what was done, never a plan. Small Actions may run as one Sprint, with no Break between them. The "about N sprints" hint, `Action.time_estimate / Sprint length` rounded up, is presentational only.
+Subdivisions of a TimeLog applying the Pomodoro discipline. A **Sprint** is a timed stretch of work; a **Break** is the rest between Sprints, short or **long** (after a run of Sprints, counted across Actions). The clock keeps running through both without breaking the TimeLog's continuity. Sprints are recorded and show on every Device, eventually right; of two ends the earlier stands, and an open one reads as ending just before the next. A Sprint is what was done, never a plan. Small Actions may run as one Sprint, with no Break between them. The "about N sprints" hint, `Action.time_estimate / Sprint length` rounded up, is presentational only, never a target.
 _Avoid_: PomodoroPhase, FocusBlock, WorkBlock, "pomodoro" in UI copy
 
 **Disposition**:

@@ -11,6 +11,7 @@ class MainActivity : FlutterFragmentActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         flutterEngine.plugins.add(MwaPlugin())
+        flutterEngine.plugins.add(CalendarPlugin())
         // FLAG_SECURE, on request from lib/services/secure_screen.dart. Needed by
         // any surface that shows a secret once: without it the system's recents
         // thumbnail is a real capture of the recovery passphrase, taken with no

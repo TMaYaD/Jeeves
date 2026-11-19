@@ -48,6 +48,7 @@
 /// client cannot have.
 library;
 
+import 'dart:async' show Completer, unawaited;
 import 'dart:math' show Random, max, min;
 
 import 'package:drift/drift.dart';
@@ -266,6 +267,27 @@ class SyncClient {
   /// whole retained log, so doing it per-op inside a page would be quadratic in
   /// the page for no extra correctness.
   bool _rebuildRequired = false;
+
+  /// The pull in flight, and whether another pull was asked for while it ran.
+  ///
+  /// **One pull at a time** (#989). A pull reads the cursor, fetches a page and
+  /// moves the cursor; two pulls doing that at once read the same cursor and
+  /// fetch the same ops — the signal listener's poke-driven pull overlapping a
+  /// manual sync. The ops are then received twice, and a refused op is filed
+  /// twice.
+  ///
+  /// A caller that arrives while a pull is running does not start a second one:
+  /// it asks for one more pull after the current one and waits for that, so
+  /// nothing that arrived meanwhile is left unsynced. Waiting for the *next*
+  /// pull rather than the current one is what keeps a poke from being lost:
+  /// the op the poke announced may have landed after the running pull fetched
+  /// its page, and only a further pull would fetch it.
+  Future<void>? _pullInFlight;
+  bool _pullQueued = false;
+
+  /// The tail of the quarantine chain: completes when the last queued
+  /// quarantine has finished.
+  Future<void> _quarantineTail = Future<void>.value();
 
   /// The member-scoped transport, or a refusal if enrolment has not finished.
   ///
@@ -1051,7 +1073,52 @@ class SyncClient {
   /// A page that produces **no forward progress at all ends the pull** — without
   /// that rule a server ignoring `since` on a log longer than one page would keep
   /// `has_more` true against a pinned cursor forever.
-  Future<void> pull() async {
+  ///
+  /// **One pull at a time** — see [_pullInFlight]. A caller that arrives while a
+  /// pull is running waits for that pull and for one more after it, rather than
+  /// fetching the same ops a second time.
+  Future<void> pull() {
+    final inFlight = _pullInFlight;
+    if (inFlight != null) {
+      // A pull is already running. Ask for one more after it — the op this
+      // caller cares about may have landed after the running pull fetched its
+      // page — and wait for that one instead of racing this one.
+      _pullQueued = true;
+      return inFlight;
+    }
+    final completer = Completer<void>();
+    _pullInFlight = completer.future;
+    unawaited(_runPulls(completer));
+    return completer.future;
+  }
+
+  /// Run the pull until no further pull is asked for, and settle [completer].
+  ///
+  /// The loop is the same shape the signal listener's own single-flight uses:
+  /// a pull that arrives mid-run is not dropped but coalesced into one more
+  /// run, so a burst of pokes costs a bounded number of round-trips rather
+  /// than one per poke.
+  ///
+  /// The failure of a run is the failure of every caller waiting on it: a
+  /// transport error leaves the cursor where it was, and the next pull retries
+  /// from there.
+  Future<void> _runPulls(Completer<void> completer) async {
+    try {
+      do {
+        _pullQueued = false;
+        await _pullOnce();
+      } while (_pullQueued);
+    } catch (error, stackTrace) {
+      _pullInFlight = null;
+      completer.completeError(error, stackTrace);
+      return;
+    }
+    _pullInFlight = null;
+    completer.complete();
+  }
+
+  /// One pull, from the cursor to the end of the pages it fetched.
+  Future<void> _pullOnce() async {
     var cursor = await _cursor();
     var hasMore = true;
     final affected = <AffectedEntity>{};
@@ -3315,33 +3382,64 @@ class SyncClient {
   /// quarantine path: a server re-serving the same refused bytes on every sync
   /// raises the alarm's occurrence count instead of growing the table without
   /// bound. Returns the row the refusal is filed under.
+  ///
+  /// **The dedupe is one unit** (#989). The read and the insert below are a
+  /// single step under the quarantine lock, so two callers that refuse the
+  /// same op at the same time cannot both decide to insert and file one
+  /// refusal twice.
+  ///
+  /// The lock is the whole of the concurrency here, and deliberately so: the
+  /// store is per-device and this process is its only writer, so there is no
+  /// second writer to serialise against. A database constraint would be the
+  /// wrong tool — a unique index over `(workspace, seq, reason, envelope)`
+  /// cannot be added without a migration that fails on the very duplicate rows
+  /// this defect produced, and dropping those rows would lose the evidence
+  /// they are.
+  ///
+  /// What the dedupe means is unchanged: **the op**, not the slot. Two
+  /// different envelopes refused for the same reason at the same seq are two
+  /// refusals and both are filed.
   Future<int> _quarantine(
     PulledOp pulled,
     SyncRejection rejection,
     OpHeader? header,
-  ) async {
-    final existing = await (_db.select(_db.quarantinedOps)
-          ..where((row) =>
-              row.workspaceId.equals(workspaceId) &
-              row.seq.equals(pulled.seq) &
-              row.reason.equals(rejection.reason.code) &
-              row.releasedAt.isNull()))
-        .get();
-    for (final row in existing) {
-      if (sameBytes(row.envelope, pulled.envelope)) return row.id;
-    }
-    return _db.into(_db.quarantinedOps).insert(
-          QuarantinedOpsCompanion.insert(
-            workspaceId: workspaceId,
-            seq: Value(pulled.seq),
-            reason: rejection.reason.code,
-            detail: rejection.message,
-            envelope: pulled.envelope,
-            detectedAt: _now(),
-            authorMemberId: Value(header?.authorMemberId),
-            authorSeq: Value(header?.authorSeq),
-          ),
-        );
+  ) =>
+      _runQuarantineExclusive(() async {
+        final existing = await (_db.select(_db.quarantinedOps)
+              ..where((row) =>
+                  row.workspaceId.equals(workspaceId) &
+                  row.seq.equals(pulled.seq) &
+                  row.reason.equals(rejection.reason.code) &
+                  row.releasedAt.isNull()))
+            .get();
+        for (final row in existing) {
+          if (sameBytes(row.envelope, pulled.envelope)) return row.id;
+        }
+        return _db.into(_db.quarantinedOps).insert(
+              QuarantinedOpsCompanion.insert(
+                workspaceId: workspaceId,
+                seq: Value(pulled.seq),
+                reason: rejection.reason.code,
+                detail: rejection.message,
+                envelope: pulled.envelope,
+                detectedAt: _now(),
+                authorMemberId: Value(header?.authorMemberId),
+                authorSeq: Value(header?.authorSeq),
+              ),
+            );
+      });
+
+  /// Run [body] under the quarantine lock, **waiting** (FIFO) for any in-flight
+  /// quarantine to finish first.
+  ///
+  /// Built on the future-chain idiom `EnrolmentService` uses for its ceremony
+  /// lock, because there is no `Mutex`/`synchronized` package in this codebase
+  /// to lean on. The chain's tail swallows the body's error so a failed
+  /// quarantine does not poison the next one's chain; the caller still sees it.
+  Future<T> _runQuarantineExclusive<T>(Future<T> Function() body) {
+    final next = _quarantineTail.then((_) => body());
+    _quarantineTail = next.then<void>((_) {}, onError: (Object _) {});
+    return next;
   }
 
   // --- Integrity alarms --------------------------------------------------------

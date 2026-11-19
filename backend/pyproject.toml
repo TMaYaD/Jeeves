@@ -21,9 +21,10 @@ description = "Jeeves — FastAPI backend"
 # `pip install -e .` refuses an interpreter outside this band — a base-image
 # bump past the ceiling fails the build instead of shipping an untested
 # interpreter.  Dependabot walked the tag to 3.15.0rc1 and prod ran a release
-# candidate for three weeks precisely because nothing said no.  Widening this
-# to `<3.16` is how a Python minor upgrade is taken, deliberately, in one edit.
-requires-python = ">=3.14,<3.15"
+# candidate for three weeks precisely because nothing said no.  A Python minor
+# upgrade is taken by widening this band to the next minor and moving the
+# Dockerfile `FROM` with it, deliberately, in one edit.
+requires-python = ">=3.15,<3.16"
 
 dependencies = [
     "fastapi>=0.111.0",
@@ -69,7 +70,15 @@ packages = ["app"]
 # falls back to `[tool.uv] required-version` in this file), and uv enforces it
 # again at runtime: a mismatched uv refuses to run any subcommand rather than
 # proceeding quietly.  Bumping uv is therefore a deliberate edit here.
-required-version = "==0.12.0"
+#
+# It moves with the interpreter band above, because uv's catalogue of managed
+# Python builds is embedded in the uv binary: a uv released before a minor's
+# final release cannot offer it, and the band then resolves to that minor's
+# last beta instead.  The 0.12.x line stops at the 3.15 betas and release
+# candidates; 0.13.9 is the current release and its catalogue carries a final
+# 3.15.2 for linux, which is the interpreter CI then resolves — the same one
+# the Dockerfile ships.
+required-version = "==0.13.9"
 
 [tool.ruff]
 line-length = 100

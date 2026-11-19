@@ -12,11 +12,13 @@ import '../providers/sprint_timer_provider.dart'
 import '../models/day_timeline.dart';
 import '../providers/clock_provider.dart';
 import '../providers/day_timeline_provider.dart';
+import '../utils/sprint_hint.dart';
 import '../widgets/day_timeline/day_timeline.dart';
 import '../widgets/meta_chip.dart';
 import '../widgets/nudge_banner.dart'
     show InboxTooFullHead, NudgeEmptyState, RitualHead, nudgeSurfaceHeadProvider;
 import '../widgets/added_during_the_day_tag.dart';
+import '../widgets/day_timeline/plan_and_timeline_layout.dart';
 import '../widgets/outcome_row.dart';
 
 class FocusScreen extends ConsumerWidget {
@@ -107,81 +109,67 @@ class FocusScreen extends ConsumerWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          const Text(
-                            "Today's Schedule",
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w700,
-                              color: Color(0xFF1A1A2E),
-                            ),
+                          PlanAndTimelineLayout(
+                            timelineHeading: "Today's Schedule",
+                            timeline: planningDone && sortedTasks.isNotEmpty
+                                ? _NowTimeline(
+                                    session: activeSession,
+                                    // Plan order, not the due-date order of the
+                                    // rows: Autoflow places in Plan position
+                                    // order.
+                                    tasks: tasks,
+                                  )
+                                : Text(
+                                    'Nothing is planned for today yet.',
+                                    style: TextStyle(
+                                        fontSize: 14, color: Colors.grey[400]),
+                                  ),
+                            // Re-plan lives in the shared title bar's
+                            // page-action slot now (AppShell, #499), not in a
+                            // bespoke ⋮ here.
+                            planHeading: "Today's Tasks",
+                            planChildren: [
+                              // Batching suggestion banner.
+                              if (planningDone &&
+                                  sortedTasks.isNotEmpty &&
+                                  batchCandidates.isNotEmpty)
+                                _BatchSuggestionBanner(
+                                  candidates: batchCandidates,
+                                  sprintMinutes: sprintMinutes,
+                                ),
+                              if (planningDone && sortedTasks.isNotEmpty)
+                                ...sortedTasks.map(
+                                  (t) => _focusOutcomeRow(
+                                    context,
+                                    sprintMinutes: sprintMinutes,
+                                    todo: t,
+                                    currentTaskId: currentTaskId,
+                                    settlement: settlements[t.id],
+                                    addedDuringTheDay:
+                                        addedDuringTheDayIds.contains(t.id),
+                                  ),
+                                )
+                              else if (sortedTasks.isEmpty && nudgeHead != null)
+                                Padding(
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 16),
+                                  child: NudgeEmptyState(head: nudgeHead),
+                                )
+                              else if (sortedTasks.isEmpty)
+                                Padding(
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 16),
+                                  child: Text(
+                                    planningDone
+                                        ? 'All tasks cleared — have a great day!'
+                                        : 'No tasks selected — plan your day to add some!',
+                                    style: TextStyle(
+                                        fontSize: 14, color: Colors.grey[400]),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ),
+                            ],
                           ),
-                          const SizedBox(height: 16),
-                          if (planningDone && sortedTasks.isNotEmpty)
-                            _NowTimeline(
-                              session: activeSession,
-                              // Plan order, not the due-date order of the rows:
-                              // Autoflow places in Plan position order.
-                              tasks: tasks,
-                            )
-                          else
-                            Text(
-                              'Nothing is planned for today yet.',
-                              style: TextStyle(
-                                  fontSize: 14, color: Colors.grey[400]),
-                            ),
-                          const SizedBox(height: 36),
-                          const Divider(height: 1, color: Color(0xFFF3F4F6)),
-                          const SizedBox(height: 36),
-                          // Re-plan lives in the shared title bar's page-action
-                          // slot now (AppShell, #499), not in a bespoke ⋮ here.
-                          const Text(
-                            "Today's Tasks",
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w700,
-                              color: Color(0xFF1A1A2E),
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          // Batching suggestion banner.
-                          if (planningDone &&
-                              sortedTasks.isNotEmpty &&
-                              batchCandidates.isNotEmpty)
-                            _BatchSuggestionBanner(
-                              candidates: batchCandidates,
-                              sprintMinutes: sprintMinutes,
-                            ),
-                          if (planningDone && sortedTasks.isNotEmpty)
-                            ...sortedTasks.map(
-                              (t) => _focusOutcomeRow(
-                                context,
-                                sprintMinutes: sprintMinutes,
-                                todo: t,
-                                currentTaskId: currentTaskId,
-                                settlement: settlements[t.id],
-                                addedDuringTheDay:
-                                    addedDuringTheDayIds.contains(t.id),
-                              ),
-                            )
-                          else if (sortedTasks.isEmpty && nudgeHead != null)
-                            Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(vertical: 16),
-                              child: NudgeEmptyState(head: nudgeHead),
-                            )
-                          else if (sortedTasks.isEmpty)
-                            Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(vertical: 16),
-                              child: Text(
-                                planningDone
-                                    ? 'All tasks cleared — have a great day!'
-                                    : 'No tasks selected — plan your day to add some!',
-                                style: TextStyle(
-                                    fontSize: 14, color: Colors.grey[400]),
-                                textAlign: TextAlign.center,
-                              ),
-                            ),
                           const SizedBox(height: 48),
                           // showShutdownEntry now comes from an opaque provider
                           // bool, so it no longer promotes [activeSession] to
@@ -314,6 +302,12 @@ Widget _focusOutcomeRow(
   final estimate = todo.timeEstimate;
   final isDone = todo.doneAt != null;
   final isSettled = settlement != null;
+  // The Sprint count is a hint: it says roughly how many Sprints the work may
+  // take, and it never sets a target.
+  final sprintHint = sprintHintLabel(
+    timeEstimateMinutes: estimate,
+    sprintDurationMinutes: sprintMinutes,
+  );
   // Completion alone owns the filled glyph; every Settlement strikes the title
   // and removes Start because the Outcome is handled for this session.
   return OutcomeRow(
@@ -333,15 +327,14 @@ Widget _focusOutcomeRow(
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     OutcomeMetaLine(timeEstimateMinutes: estimate),
-                    if (estimate > sprintMinutes) ...[
+                    if (sprintHint != null)
                       Text(
-                        '· ${(estimate / sprintMinutes).ceil()} sprints',
+                        '· $sprintHint',
                         style: const TextStyle(
                           fontSize: 12,
                           color: Color(0xFF9CA3AF),
                         ),
                       ),
-                    ],
                   ],
                 ),
               if (todo.dueDate != null) OutcomeMetaLine(dueDate: todo.dueDate),
@@ -657,6 +650,7 @@ class _NowTimeline extends ConsumerWidget {
       flowOrigin: flowOrigin,
       availableMinutes: extras.availableMinutes,
       chunkUnitMinutes: extras.settings.chunkUnitMinutes,
+      sprintMarks: extras.sprintMarks,
       onSetPinnedStart: (outcomeId, startAt) => ref
           .read(databaseProvider)
           .focusSessionDao
