@@ -67,6 +67,7 @@ class StackPhone {
     required this.lifecycle,
     this.host,
     this.hostedCapture,
+    this.deviceClock,
   });
 
   /// Build the phone. Un-enrolled: no keys, no pinned Root, no member credential.
@@ -130,6 +131,9 @@ class StackPhone {
       // A change the bridge will never author is handed back to the host, so
       // its clock can be taken back under the device node id.
       capture.onChangesLeftUnauthored = host.restampUnauthoredClocksAsDevice;
+      // A change the bridge has authored, or had refused for good, is settled:
+      // the host forgets that it still needs an op.
+      capture.onChangeAuthoredOrRefused = host.forgetUnauthored;
       await host.start();
       hostedCapture!.attach(host);
     }
@@ -162,6 +166,7 @@ class StackPhone {
       storeDirectory: storeDirectory,
       clock: clock,
       lifecycle: null,
+      deviceClock: deviceClock,
     );
   }
 
@@ -200,14 +205,25 @@ class StackPhone {
   final String label;
   final GtdDatabase domain;
 
-  /// The op-log bridge. Replaced by [relaunchAfterKillWhileSignedIn], because a
-  /// process that starts over builds a fresh one — bound to nothing, and
-  /// undecided until the app decides.
+  /// The op-log bridge. Replaced by [relaunchAfterKillWhileSignedIn] and by
+  /// [relaunchAfterKill], because a process that starts over builds a fresh one
+  /// — bound to nothing, and undecided until the app decides.
   WorkspaceRoutingOpCapture capture;
 
   /// The sync host and the capture binding that feeds it, when built `hosted`.
-  final SyncHostService? host;
+  ///
+  /// Replaced by [relaunchAfterKill]: a process that starts over builds a fresh
+  /// host over the same stores.
+  SyncHostService? host;
   final HostedDomainOpCapture? hostedCapture;
+
+  /// The device's one clock, when built `hosted`: the HLC state the host, the
+  /// domain capture and the op-log client all mint from.
+  ///
+  /// Held by the phone so a relaunch can build a fresh host over the *same*
+  /// clock state — a new clock would restart the counter and mint a
+  /// `(wall_ms, counter)` a clock already issued.
+  final HlcClock? deviceClock;
   final DeviceLink link;
 
   /// The transport the stack is assembled over: [link] itself, or the decorator a
@@ -346,7 +362,45 @@ class StackPhone {
     host!.localChangeListener = capture.onLocalChanges;
     // The fresh bridge reports to the same host the dead process left behind.
     capture.onChangesLeftUnauthored = host!.restampUnauthoredClocksAsDevice;
+    capture.onChangeAuthoredOrRefused = host!.forgetUnauthored;
     await host!.setEnrolledMember(memberIdHex);
+  }
+
+  /// A process killed while signed in, then launched again: a fresh undecided
+  /// bridge and a fresh host over the same stores. The old bridge is dropped
+  /// without being drained, and the stored member id is left as it was.
+  ///
+  /// Not [relaunchAfterKillWhileSignedIn]: that one keeps the host the dead
+  /// process left behind, and this one replaces it — a process that starts over
+  /// builds its own host, over the same stores and the same clock state.
+  Future<void> relaunchAfterKill() async {
+    final memberIdHex = stack.identity.memberIdHex;
+    // A dead process hands nothing back: cut the old bridge off from the host
+    // before `deactivate()` unbinds it, or its buffer would be re-stamped.
+    capture.onChangesLeftUnauthored = null;
+    hostedCapture!.detach();
+    await lifecycle?.deactivate(); // stops the sockets a dead process would not hold
+    lifecycle = null;
+    capture = WorkspaceRoutingOpCapture();
+    final fresh = SyncHostService(sync: syncStore, domain: domain, clock: deviceClock!)
+      ..localChangeListener = capture.onLocalChanges;
+    capture.onChangesLeftUnauthored = fresh.restampUnauthoredClocksAsDevice;
+    capture.onChangeAuthoredOrRefused = fresh.forgetUnauthored;
+    await fresh.setEnrolledMember(memberIdHex); // `deactivate()` cleared it
+    await fresh.start();
+    hostedCapture!.attach(fresh);
+    host = fresh;
+    stack = await _assemble(
+      userId: stack.userId,
+      syncStore: syncStore,
+      keyStore: keyStore,
+      workspaceKeys: workspaceKeys,
+      pendingRotations: pendingRotations,
+      userTransport: userTransport,
+      domain: domain,
+      clock: clock,
+      host: fresh,
+    );
   }
 
   void goOffline() {

@@ -120,11 +120,11 @@ void main() {
   /// The clock names the bound member by default, so the op is that member's to
   /// author. A different member id is the "made before this device enrolled"
   /// case — the one the wire refuses and the bridge declines.
-  Change hostChange({String? clockMemberIdHex}) {
+  Change hostChange({String? clockMemberIdHex, String entityId = _outcomeId}) {
     final clock = Hlc(_nowMs, 0, clockMemberIdHex ?? identity.memberIdHex);
     return Change(
       collection: todosCollection,
-      entityId: _outcomeId,
+      entityId: entityId,
       fields: {
         'title': ClockedValue('Write the thing', clock),
         'created_at': ClockedValue('2026-02-01T09:00:00.000Z', clock),
@@ -398,6 +398,69 @@ void main() {
       await capture.unauthoredHandedBack;
 
       expect(capture.isBound, isFalse);
+    });
+  });
+
+  group('the changes the bridge has settled', () {
+    /// The changes the bridge reported as settled — authored, or refused.
+    late List<UnauthoredClock> settled;
+
+    setUp(() {
+      settled = <UnauthoredClock>[];
+      capture.onChangeAuthoredOrRefused = (clock) async => settled.add(clock);
+    });
+
+    test('an authored op reports its clock, and one outbox row exists',
+        () async {
+      await capture.bind(
+          gtdClient: gtdClient, preferencesClient: preferencesClient);
+
+      await capture.onLocalChanges([hostChange()]);
+
+      expect(settled, hasLength(1));
+      expect(settled.single.collection, todosCollection);
+      expect(settled.single.entityId, _outcomeId);
+      expect(settled.single.clock.memberIdHex, identity.memberIdHex);
+      expect(await queuedWorkspaceIds(), [defaultWorkspaceId(_userId)]);
+    });
+
+    test('an op the wire refuses is reported', () async {
+      await capture.bind(
+          gtdClient: gtdClient, preferencesClient: preferencesClient);
+
+      // A non-canonical entity id is refused at the author's own call site
+      // (#573): the op never reaches the outbox, and never will.
+      await capture.onLocalChanges([hostChange(entityId: 'NOT-A-UUID')]);
+
+      expect(settled, hasLength(1));
+      expect(settled.single.entityId, 'NOT-A-UUID');
+      expect(settled.single.clock.memberIdHex, identity.memberIdHex);
+      expect(await queuedWorkspaceIds(), isEmpty,
+          reason: 'a refused op never reaches the outbox');
+    });
+
+    test('an op buffered while undecided is reported only when bind authors '
+        'it', () async {
+      await capture.onLocalChanges([hostChange()]);
+      expect(settled, isEmpty, reason: 'a buffered op is not an authored one');
+
+      await capture.bind(
+          gtdClient: gtdClient, preferencesClient: preferencesClient);
+
+      expect(settled, hasLength(1));
+      expect(settled.single.entityId, _outcomeId);
+    });
+
+    test('an op with no host clock is not reported', () async {
+      await capture.bind(
+          gtdClient: gtdClient, preferencesClient: preferencesClient);
+
+      // Described straight through the seam: no host stamped it, so there is
+      // no record to forget.
+      await capturing(writeOutcome);
+
+      expect(settled, isEmpty,
+          reason: 'an op with no clock left no clock behind');
     });
   });
 }

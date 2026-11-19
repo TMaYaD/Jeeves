@@ -53,6 +53,12 @@ final FutureProvider<SyncHostService> syncHostProvider =
   // because that drain can deliver a change the bridge will drop.
   ref.read(domainOpCaptureProvider).onChangesLeftUnauthored =
       host.restampUnauthoredClocksAsDevice;
+  // A change the bridge has authored, or had refused for good, is settled: no
+  // op will ever carry it, so the host forgets that it still needs one. Wired
+  // before the start-up drain, because that drain hands the bridge what a
+  // killed process left behind.
+  ref.read(domainOpCaptureProvider).onChangeAuthoredOrRefused =
+      host.forgetUnauthored;
   final capture = ref.read(hostedDomainOpCaptureProvider);
   ref.onDispose(capture.detach);
   await host.start();

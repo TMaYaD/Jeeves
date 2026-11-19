@@ -44,6 +44,7 @@ import 'collection_codecs.dart' show userPreferencesCollection;
 import 'host/change.dart';
 import 'hlc.dart';
 import 'sync_client.dart';
+import 'sync_rejection.dart';
 
 /// One coalesced domain effect, ready to be authored as an op.
 class CapturedOp {
@@ -424,6 +425,12 @@ enum _CaptureDecision {
 ///   back to the sync host. A write landing mid-drain is appended behind the
 ///   pending tail, so authoring order always matches domain write order.
 ///
+/// * **A settled change is reported.** The sync host keeps a record of every
+///   change that still needs an op, and that record is noise once the op has
+///   been authored or refused for good. The bridge reports each settled change
+///   to [onChangeAuthoredOrRefused] — the authored one and the refused one
+///   alike, and nothing else — so the host can forget it.
+///
 /// It extends [BufferedDomainOpCapture] rather than reimplementing the buffer, so
 /// scope, coalescing and rollback semantics are the ones every other binding is
 /// tested under; only [emit] varies.
@@ -457,6 +464,18 @@ class WorkspaceRoutingOpCapture extends BufferedDomainOpCapture {
   /// member no op ever carried, and only the host can re-stamp it. Null until
   /// the host is wired up, which is a bridge that reports nothing.
   Future<void> Function(List<UnauthoredClock> unauthored)? onChangesLeftUnauthored;
+
+  /// Where a change this bridge has settled is reported, so the sync host can
+  /// forget that it still needs an op.
+  ///
+  /// A change is settled when the wire has taken it or refused it for good:
+  /// either way no op will ever carry it, so the host's record of it has
+  /// nothing left to say. A change the bridge merely *holds* — buffered while
+  /// the enrolment decision is unmade — is not settled, and neither is one
+  /// whose capture failed for a reason that is not a refusal.
+  ///
+  /// Null until the host is wired up, which is a bridge that reports nothing.
+  Future<void> Function(UnauthoredClock settled)? onChangeAuthoredOrRefused;
 
   /// The tail of the hand-back chain: every report made so far, in order.
   Future<void> _handBackTail = Future<void>.value();
@@ -568,19 +587,47 @@ class WorkspaceRoutingOpCapture extends BufferedDomainOpCapture {
       await _leaveUnauthored([op]);
       return;
     }
-    await client.capture(
-      collection: op.collection,
-      entityId: op.entityId,
-      fields: op.fields,
-      tombstone: op.tombstone,
-      clock: hostClock,
-    );
+    try {
+      await client.capture(
+        collection: op.collection,
+        entityId: op.entityId,
+        fields: op.fields,
+        tombstone: op.tombstone,
+        clock: hostClock,
+      );
+    } on SyncRejection {
+      // The wire refused the op for good, so no op will ever carry this
+      // change: it is settled, and the host's record of it has nothing left to
+      // say. The refusal itself still travels to the caller.
+      await _reportSettled(op);
+      rethrow;
+    }
+    await _reportSettled(op);
     onOpAuthored?.call();
   }
 
-  /// The sync host's hand-off: each change the host has merged, in order. A
-  /// refusal is contained per change — the domain write and the host's merge have
-  /// both committed, and sync is not a correctness dependency (ADR-0040).
+  /// Report [op] as settled, so the host can forget that it still needs an op.
+  ///
+  /// Only an op the host clocked: one described straight through the seam
+  /// carries no clock, so there is no record to forget. A sink that fails is
+  /// contained — the change is settled whatever the host does with the report,
+  /// and a failed report must not lose the op.
+  Future<void> _reportSettled(CapturedOp op) async {
+    final clock = op.clock;
+    if (clock == null) return;
+    final sink = onChangeAuthoredOrRefused;
+    if (sink == null) return;
+    try {
+      await sink((collection: op.collection, entityId: op.entityId, clock: clock));
+    } on Object catch (error) {
+      debugPrint('op-log bridge: reporting a settled change failed — $error');
+    }
+  }
+
+  /// The sync host's hand-off: each change the host still needs an op for, in
+  /// order. A refusal is contained per change — the domain write and the host's
+  /// merge have both committed, and sync is not a correctness dependency
+  /// (ADR-0040).
   Future<void> onLocalChanges(List<Change> changes) async {
     for (final change in changes) {
       final op = CapturedOp._(change.collection, change.entityId)
