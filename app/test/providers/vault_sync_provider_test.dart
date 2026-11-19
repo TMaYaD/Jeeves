@@ -34,6 +34,10 @@ void main() {
   setUpAll(configureSqliteForTests);
 
   late ProviderContainer container;
+  /// Whether the body has already disposed the container. A widget test has
+  /// to dispose it in the body, because the teardown runs too late for the
+  /// vault's timer (`docs/TESTING.md`).
+  var containerDisposed = false;
   late GtdDatabase db;
   late SyncDatabase syncDb;
   late _FakeSetting setting;
@@ -45,6 +49,7 @@ void main() {
     setting = _FakeSetting('folder-a');
     folder = _FakeFolder();
     syncDb = SyncDatabase(NativeDatabase.memory());
+    containerDisposed = false;
     container = ProviderContainer(overrides: [
       // The app's own store, with the app's own capture binding: a write
       // through the DAO is a change the host merges, exactly as in production.
@@ -61,7 +66,7 @@ void main() {
 
   tearDown(() async {
     sessionGateNotifier.value = SessionGate.checking;
-    container.dispose();
+    if (!containerDisposed) container.dispose();
     await db.close();
     await syncDb.close();
   });
@@ -72,6 +77,19 @@ void main() {
     await container.pump();
     await Future<void>.delayed(const Duration(milliseconds: 20));
     await pumpEventQueue(times: 5);
+  }
+
+  /// Turn the vault off before the widget test's body ends.
+  ///
+  /// The vault reads the folder on a timer, and a widget test fails while
+  /// one is pending, so the vault is disposed here rather than in the
+  /// teardown, which runs too late (`docs/TESTING.md`).
+  Future<void> turnTheVaultOff(WidgetTester tester) async {
+    await tester.runAsync(() async {
+      container.dispose();
+      containerDisposed = true;
+    });
+    await tester.pump();
   }
 
   group('the vault runs where the op log does not', () {
@@ -169,8 +187,18 @@ void main() {
 
   testWidgets('the folder is read again once, however many times it is asked',
       (tester) async {
-    await container.read(vaultPluginProvider.future);
-    await _settle(tester);
+    // The vault's own work needs the real event loop, so the provider is
+    // started rather than awaited, and the frames are pumped until it is on
+    // the host (see `docs/TESTING.md`).
+    var attached = false;
+    Object? failure;
+    unawaited(container.read(vaultPluginProvider.future).then((_) {
+      attached = true;
+    }, onError: (Object error) {
+      failure = error;
+    }));
+    await _settleUntil(tester, () => attached || failure != null);
+    if (failure != null) fail('the vault did not attach: $failure');
     expect(folder.outcomeListCalls, 1, reason: 'the first pass read it once');
 
     // The app comes forward, and the read is slow.
@@ -179,22 +207,29 @@ void main() {
     for (var i = 0; i < 5; i++) {
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     }
-    await _settle(tester);
+    await _settleUntil(tester, () => folder.outcomeListCalls >= 2);
     expect(folder.outcomeListCalls, 2,
         reason: 'one read is running, and the rest wait for it');
 
     blocked.complete();
-    await _settle(tester);
-    await _settle(tester);
-
+    await _settleUntil(tester, () => folder.outcomeListCalls >= 3);
     expect(folder.outcomeListCalls, 3,
         reason: 'the five asks were one running read and one waiting');
+
+    await turnTheVaultOff(tester);
   });
 
   testWidgets('a page whose write failed is delivered once the folder is '
       'writable again', (tester) async {
-    await container.read(vaultPluginProvider.future);
-    await _settle(tester);
+    var attached = false;
+    Object? failure;
+    unawaited(container.read(vaultPluginProvider.future).then((_) {
+      attached = true;
+    }, onError: (Object error) {
+      failure = error;
+    }));
+    await _settleUntil(tester, () => attached || failure != null);
+    if (failure != null) fail('the vault did not attach: $failure');
 
     // The folder cannot be written to: the host's delivery fails, and the
     // change stays owed.
@@ -211,14 +246,15 @@ void main() {
     // The folder is writable again, and the app comes forward.
     folder.failWrites = false;
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-    await _settle(tester);
-    await _settle(tester);
+    await _settleUntil(tester, () => folder.pages.isNotEmpty);
 
     expect(
       folder.pages.keys.where((path) => path.startsWith('Outcomes/')),
       isNotEmpty,
       reason: 'the owed change was delivered after the folder came back',
     );
+
+    await turnTheVaultOff(tester);
   });
 }
 
@@ -236,6 +272,22 @@ Future<void> _settle(WidgetTester tester) async {
     await tester.pump(const Duration(milliseconds: 150));
   }
 }
+
+/// The same, until [done] says the work is done.
+///
+/// The vault's own work finishes on the real event loop, and the test's own
+/// zone owns the clock: awaiting it there would never come back. So the
+/// frames are pumped until the condition holds, the way the vault journey
+/// does it (`docs/TESTING.md`).
+Future<void> _settleUntil(WidgetTester tester, bool Function() done) async {
+  for (var round = 0; round < 40; round++) {
+    await tester.runAsync(() => pumpEventQueue());
+    await tester.pump(const Duration(milliseconds: 150));
+    if (done()) return;
+  }
+  fail('the vault did not settle in time');
+}
+
 
 /// The vault's folder setting, in a test's hands.
 class _FakeSetting implements VaultFolderSetting {
