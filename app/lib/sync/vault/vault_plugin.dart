@@ -67,6 +67,10 @@ class VaultPlugin implements SyncPlugin {
   /// matches the merged state, or when the write succeeds.
   final Set<VaultPageKey> _pendingWriteBacks = {};
 
+  /// The kinds whose folder could not be listed in the last read pass. Their
+  /// pages are left alone until a later pass lists the folder.
+  final Set<VaultPageKind> _unlistableKinds = {};
+
   /// Whether the folder could be reached in the last pass.
   bool _folderReachable = true;
 
@@ -205,6 +209,7 @@ class VaultPlugin implements SyncPlugin {
     _untakenPageCount = 0;
     _untaken.clear();
     _unreadable.clear();
+    _unlistableKinds.clear();
     _folderReachable = true;
     for (final kind in VaultPageKind.values) {
       final byId = <String, List<({String path, String text, PageModel page})>>{};
@@ -215,6 +220,7 @@ class VaultPlugin implements SyncPlugin {
         // A folder that cannot be listed is reported and left alone: the other
         // folders are still read, and nothing is written over.
         _folderReachable = false;
+        _unlistableKinds.add(kind);
         debugPrint('vault: ${kind.folder} not listed: $error');
         continue;
       }
@@ -769,6 +775,13 @@ class VaultPlugin implements SyncPlugin {
   // --- writing a page --------------------------------------------------------
 
   Future<void> _writePage(VaultPageKey key) async {
+    if (_unlistableKinds.contains(key.kind)) {
+      // The folder was not listed in the last pass, so it is left alone: a
+      // page written into it would be a page the scan never saw. The write is
+      // owed, and it happens once a pass lists the folder.
+      _pendingWriteBacks.add(key);
+      return;
+    }
     if (_untaken.contains(key) || _unreadable.contains(key)) {
       // The host did not take what this page says, so a copy of it still holds
       // an edit the app does not have. Writing the merged state over it would

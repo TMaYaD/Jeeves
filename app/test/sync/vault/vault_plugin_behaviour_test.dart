@@ -41,12 +41,18 @@ class _RefusingFolder implements VaultFolder {
   /// Whether the folder refuses to be listed at all.
   bool unlistable = false;
 
+  /// The folders that cannot be listed, while the others can.
+  final Set<String> unlistableFolders = {};
+
   /// The paths that cannot be read.
   final Set<String> unreadable = {};
 
   @override
   Future<List<String>> listMarkdownFiles(String subfolder) {
     if (unlistable) throw StateError('the folder cannot be listed');
+    if (unlistableFolders.contains(subfolder)) {
+      throw StateError('the folder cannot be listed');
+    }
     return inner.listMarkdownFiles(subfolder);
   }
 
@@ -660,6 +666,34 @@ void main() {
 
     expect(await folder.read(path), contains('intent: next'),
         reason: 'the page was not put back');
+  });
+
+  test('a folder that cannot be listed is left alone', () async {
+    final device = HostDevice.open('a');
+    addTearDown(device.close);
+    final host = await device.startHost();
+    final directory = Directory('${root.path}/vault')..createSync(recursive: true);
+    final folder = _RefusingFolder(DirectoryVaultFolder(directory));
+    folder.unlistableFolders.add('Outcomes');
+    final plugin = VaultPlugin(folder: folder, sync: device.sync);
+    await host.attach(plugin);
+
+    await device.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'Plan', userId: _userId);
+    await host.deliverAll();
+    await plugin.rescan();
+
+    // The scan left the folder alone, so nothing is written into it: a page
+    // written there is a page the scan never saw.
+    expect(await folder.listMarkdownFiles('Outcomes'), isEmpty,
+        reason: 'a page was written into a folder the scan left alone');
+
+    // A later pass lists the folder: the page is written.
+    folder.unlistableFolders.clear();
+    await plugin.rescan();
+
+    expect(await folder.listMarkdownFiles('Outcomes'), hasLength(1),
+        reason: 'the page was not written once the folder could be listed');
   });
 
   test('two Outcomes whose names read alike have a page each', () async {
