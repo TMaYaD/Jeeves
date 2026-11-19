@@ -98,7 +98,7 @@ class _ImportScreenState extends ConsumerState<ImportScreen> {
             icon: Icons.table_chart_outlined,
             title: 'CSV Export',
             description: 'Export from Nirvana via Settings → Export → CSV. '
-                'Tasks, projects and tags are fully supported.',
+                'Tasks, projects and labels are fully supported.',
           ),
           const SizedBox(height: 12),
           _FormatInfoCard(

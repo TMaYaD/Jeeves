@@ -80,6 +80,10 @@ dependencies:
   # lib/sync/, and already in the graph under flutter, so declaring it adds no
   # resolution risk and only makes the import honest.
   collection: ^1.19.0
+  # The browser's user agent, for the web device name
+  # (lib/services/platform_device_name_web.dart). Already in the graph as a
+  # transitive dependency, so declaring it downloads nothing new.
+  web: ^1.1.1
   uuid: ^4.6.0
   intl: ^0.20.3
   flutter_markdown_plus: ^1.0.12

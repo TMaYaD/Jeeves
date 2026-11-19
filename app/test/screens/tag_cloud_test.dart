@@ -125,6 +125,13 @@ Future<void> _openDrawer(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
+/// The names of the tag chips in the drawer cloud, in the order they are
+/// rendered.
+List<String> _cloudNames(WidgetTester tester) => tester
+    .widgetList<TagText>(find.byType(TagText, skipOffstage: false))
+    .map((t) => t.tag.name)
+    .toList();
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -188,32 +195,7 @@ void main() {
             _twc(_tag('t$i', 'tag${i.toString().padLeft(2, '0')}'), 20 - i),
         ]..sort((a, b) => a.tag.name.compareTo(b.tag.name));
 
-    testWidgets('collapses to 12 with a toggle that expands and collapses',
-        (tester) async {
-      await tester.pumpWidget(_buildShell(contextTagsWithCount: twenty()));
-      await tester.pump();
-      await _openDrawer(tester);
-
-      expect(find.byType(TagText), findsNWidgets(12));
-      expect(find.text('Show 8 more'), findsOneWidget);
-      expect(find.byKey(const Key('tag_chip_t19')), findsNothing);
-
-      await tester.ensureVisible(find.byKey(const Key('tag_cloud_show_more')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('tag_cloud_show_more')));
-      await tester.pumpAndSettle();
-      expect(find.byType(TagText, skipOffstage: false), findsNWidgets(20));
-      expect(find.text('Show fewer'), findsOneWidget);
-
-      await tester.ensureVisible(find.byKey(const Key('tag_cloud_show_more')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('tag_cloud_show_more')));
-      await tester.pumpAndSettle();
-      expect(find.byType(TagText), findsNWidgets(12));
-    });
-
-    testWidgets('find field and toggle are absent at or under the cap',
-        (tester) async {
+    testWidgets('find field is absent at or under twelve tags', (tester) async {
       await tester.pumpWidget(_buildShell(
         contextTagsWithCount: twenty().take(12).toList(),
       ));
@@ -222,19 +204,25 @@ void main() {
 
       expect(find.byKey(const Key('tag_cloud_find_field')), findsNothing);
       expect(find.byKey(const Key('tag_cloud_show_more')), findsNothing);
+      expect(find.textContaining('Show '), findsNothing);
     });
 
     testWidgets(
-        'find journey: narrow, tap, pinned first, field survives few matches',
+        'find journey: narrow, tap, field survives few matches',
         (tester) async {
       await tester.pumpWidget(_buildShell(contextTagsWithCount: twenty()));
       await tester.pump();
       await _openDrawer(tester);
 
+      // Every tag is shown; the cloud no longer collapses.
+      expect(find.byType(TagText, skipOffstage: false), findsNWidgets(20));
+      expect(find.byKey(const Key('tag_cloud_show_more')), findsNothing);
+      expect(find.textContaining('Show '), findsNothing);
+
       await tester.enterText(
           find.byKey(const Key('tag_cloud_find_field')), '@TAG19');
       await tester.pumpAndSettle();
-      // One match (< 12) — the field must still be there.
+      // One match — the field must still be there.
       expect(find.byKey(const Key('tag_cloud_find_field')), findsOneWidget);
       expect(find.byType(TagText), findsOneWidget);
       expect(find.byKey(const Key('tag_chip_t19')), findsOneWidget);
@@ -245,11 +233,12 @@ void main() {
 
       await tester.tap(find.byKey(const Key('tag_cloud_find_clear')));
       await tester.pumpAndSettle();
-      // Selected low-count tag is now pinned among the 12 visible.
-      expect(find.byKey(const Key('tag_chip_t19')), findsOneWidget);
-      expect(find.byType(TagText), findsNWidgets(12));
+      // Selecting a tag does not move it: the cloud stays alphabetical.
+      expect(find.byKey(const Key('tag_chip_t19'), skipOffstage: false),
+          findsOneWidget);
+      expect(find.byType(TagText, skipOffstage: false), findsNWidgets(20));
       final firstChip = tester.widget<TagText>(find.byType(TagText).first);
-      expect(firstChip.tag.id, 't19');
+      expect(firstChip.tag.id, 't0');
 
       await tester.tap(find.byKey(const Key('tag_cloud_clear_filters')));
       await tester.pumpAndSettle();
@@ -260,6 +249,9 @@ void main() {
       await tester.pumpWidget(_buildShell(contextTagsWithCount: twenty()));
       await tester.pump();
       await _openDrawer(tester);
+
+      expect(find.byType(TagText, skipOffstage: false), findsNWidgets(20));
+      expect(find.byKey(const Key('tag_cloud_show_more')), findsNothing);
 
       await tester.enterText(
           find.byKey(const Key('tag_cloud_find_field')), 'zzz');
@@ -272,15 +264,14 @@ void main() {
       await tester.pump();
       await _openDrawer(tester);
 
-      TagText chip(String id) =>
-          tester.widget<TagText>(find.byKey(Key('tag_chip_$id')));
+      expect(find.byType(TagText, skipOffstage: false), findsNWidgets(20));
+      expect(find.byKey(const Key('tag_cloud_show_more')), findsNothing);
+      expect(find.textContaining('Show '), findsNothing);
+
+      TagText chip(String id) => tester.widget<TagText>(
+          find.byKey(Key('tag_chip_$id'), skipOffstage: false));
       expect(chip('t0').fontSize, 15);
       expect(chip('t11').fontSize, 13);
-
-      await tester.ensureVisible(find.byKey(const Key('tag_cloud_show_more')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('tag_cloud_show_more')));
-      await tester.pumpAndSettle();
       expect(chip('t19').fontSize, 12);
     });
 
@@ -292,6 +283,9 @@ void main() {
       ));
       await tester.pump();
       await _openDrawer(tester);
+
+      expect(find.byType(TagText, skipOffstage: false), findsNWidgets(20));
+      expect(find.byKey(const Key('tag_cloud_show_more')), findsNothing);
 
       await tester.longPress(find.byKey(const Key('tag_chip_t0')));
       await tester.pumpAndSettle();
@@ -305,36 +299,7 @@ void main() {
             _twc(_tag('t$i', 'tag${i.toString().padLeft(2, '0')}'), 20 - i),
         ];
 
-    testWidgets('closing and reopening the drawer resets query and expansion',
-        (tester) async {
-      await tester.pumpWidget(_buildShell(contextTagsWithCount: twenty()));
-      await tester.pump();
-      await _openDrawer(tester);
-
-      await tester.ensureVisible(find.byKey(const Key('tag_cloud_show_more')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('tag_cloud_show_more')));
-      await tester.pumpAndSettle();
-      expect(find.text('Show fewer'), findsOneWidget);
-      await tester.enterText(
-          find.byKey(const Key('tag_cloud_find_field')), 'tag1');
-      await tester.pumpAndSettle();
-      expect(find.byType(TagText), findsNWidgets(10));
-
-      // Close by tapping the scrim, then reopen.
-      await tester.tapAt(const Offset(780, 300));
-      await tester.pumpAndSettle();
-      await _openDrawer(tester);
-
-      final field = tester.widget<TextField>(
-          find.byKey(const Key('tag_cloud_find_field')));
-      expect(field.controller?.text, isEmpty);
-      expect(find.text('Show 8 more'), findsOneWidget);
-      expect(find.byType(TagText), findsNWidgets(12));
-    });
-
-    testWidgets('a query typed while collapsed is cleared on reopen',
-        (tester) async {
+    testWidgets('a find query is cleared on reopen', (tester) async {
       await tester.pumpWidget(_buildShell(contextTagsWithCount: twenty()));
       await tester.pump();
       await _openDrawer(tester);
@@ -342,7 +307,7 @@ void main() {
       await tester.enterText(
           find.byKey(const Key('tag_cloud_find_field')), 'tag19');
       await tester.pumpAndSettle();
-      expect(find.byType(TagText), findsNWidgets(1));
+      expect(find.byType(TagText), findsOneWidget);
 
       await tester.tapAt(const Offset(780, 300));
       await tester.pumpAndSettle();
@@ -351,7 +316,8 @@ void main() {
       final field = tester.widget<TextField>(
           find.byKey(const Key('tag_cloud_find_field')));
       expect(field.controller?.text, isEmpty);
-      expect(find.byType(TagText), findsNWidgets(12));
+      expect(find.byType(TagText, skipOffstage: false), findsNWidgets(20));
+      expect(find.byKey(const Key('tag_cloud_show_more')), findsNothing);
     });
   });
 
@@ -385,6 +351,17 @@ void main() {
           await db.tagDao.assignTag('todo$k', id, userId);
         }
       }
+      // One more context tag: capitalised and on every todo, so the
+      // alphabetical order has to be proved past the last padded name.
+      await db.tagDao.upsertTag(TagsCompanion(
+        id: const Value('zulu'),
+        name: const Value('Zulu'),
+        type: const Value('context'),
+        userId: const Value(userId),
+      ));
+      for (var k = 0; k < 20; k++) {
+        await db.tagDao.assignTag('todo$k', 'zulu', userId);
+      }
       // Staged here, outside FakeAsync: a live drift watch inside the widget
       // test would hang (docs/TESTING.md).
       counted = await db.tagDao.watchTagsWithActiveCount('context').first;
@@ -392,35 +369,53 @@ void main() {
 
     tearDown(() async => db.close());
 
-    testWidgets('cap, find, select, pin, clear', (tester) async {
+    testWidgets('all shown, alphabetical, find, select, clear',
+        (tester) async {
       await tester.pumpWidget(_buildShell(contextTagsWithCount: counted));
       await tester.pump();
       await _openDrawer(tester);
 
-      expect(find.byType(TagText), findsNWidgets(12));
-      expect(find.text('Show 8 more'), findsOneWidget);
-      expect(find.byKey(const Key('tag_chip_t19')), findsNothing);
+      expect(find.byType(TagText, skipOffstage: false), findsNWidgets(21));
+      expect(find.byKey(const Key('tag_cloud_show_more')), findsNothing);
+      expect(find.textContaining('Show '), findsNothing);
+      expect(
+          find.byKey(const Key('tag_chip_t19'), skipOffstage: false),
+          findsOneWidget);
+      final expectedOrder = [
+        for (var i = 0; i < 20; i++) 'tag${i.toString().padLeft(2, '0')}',
+        'Zulu',
+      ];
+      expect(_cloudNames(tester), expectedOrder);
 
       await tester.enterText(
           find.byKey(const Key('tag_cloud_find_field')), 'tag19');
       await tester.pumpAndSettle();
       expect(find.byType(TagText), findsOneWidget);
       expect(find.byKey(const Key('tag_chip_t19')), findsOneWidget);
+      expect(
+          tester.widget<TagText>(find.byKey(const Key('tag_chip_t19'))).selected,
+          isFalse);
 
       await tester.tap(find.byKey(const Key('tag_chip_t19')));
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('tag_cloud_clear_filters')), findsOneWidget);
+      // A selected tag is a badge.
+      expect(
+          tester.widget<TagText>(find.byKey(const Key('tag_chip_t19'))).selected,
+          isTrue);
 
       await tester.enterText(
           find.byKey(const Key('tag_cloud_find_field')), '');
       await tester.pumpAndSettle();
-      // Selected tag is pinned first although its count is the lowest.
-      final firstTag = tester.widget<TagText>(find.byType(TagText).first);
-      expect(firstTag.tag.name, 'tag19');
+      // Selecting a tag does not move it: the cloud stays alphabetical.
+      expect(_cloudNames(tester), expectedOrder);
 
       await tester.tap(find.byKey(const Key('tag_cloud_clear_filters')));
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('tag_cloud_clear_filters')), findsNothing);
+      expect(
+          tester.widget<TagText>(find.byKey(const Key('tag_chip_t19'))).selected,
+          isFalse);
     });
   });
 

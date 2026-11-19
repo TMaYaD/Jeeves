@@ -107,6 +107,7 @@ void main() {
   testWidgets('time step follows the previous session across restarts',
       (tester) async {
     await openTimeStep(tester);
+    expect(find.text('Time Check'), findsOneWidget);
     expect(fieldText(tester, 0), '8');
     expect(fieldText(tester, 1), '0');
 

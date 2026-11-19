@@ -102,7 +102,7 @@ def main():
         time.sleep(1.5)
 
     # Step 2-4: Energy, Time, Today's Plan — accept defaults / advance
-    if d(descriptionContains="Energy Check-in").exists:
+    if d(descriptionContains="Energy Check").exists:
         d(descriptionContains="Medium").click()
         time.sleep(0.5)
     # advance through remaining steps with the "Next" CTA

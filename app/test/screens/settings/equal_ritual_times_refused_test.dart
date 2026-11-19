@@ -78,8 +78,12 @@ void main() {
     expect(find.text(_refusal), findsOneWidget);
     expect(planningTimeOf(container), const TimeOfDay(hour: 8, minute: 0));
     expect(shutdownTimeOf(container), const TimeOfDay(hour: 8, minute: 30));
-    final prefs = await tester.runAsync(SharedPreferences.getInstance);
-    expect(prefs!.getInt('shutdown_settings_time_minute'), 30);
+    final stored = container
+        .read(syncedPreferencesProvider)
+        .asData!
+        .value
+        .get<int>('shutdown_settings_time_minute');
+    expect(stored, 30);
   });
 
   testWidgets('row 21: an Evening Shutdown time equal to the Daily Planning '

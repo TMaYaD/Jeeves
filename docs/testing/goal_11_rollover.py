@@ -69,13 +69,13 @@ def _drive_planning_to_plan_step(d):
             time.sleep(1)
         else:
             time.sleep(0.5)
-    # Step 3: Energy Check-in — pick Medium (centre tile).
-    if _wait_desc(d, "Energy Check-in", timeout=4):
+    # Step 3: Energy Check — pick Medium (centre tile).
+    if _wait_desc(d, "Energy Check", timeout=4):
         d.click(0.5, 0.583)  # ~ (540, 1400)
         time.sleep(0.5)
         _tap_desc(d, "Next")
-    # Step 4: Time Check-in — accept default 8h.
-    if _wait_desc(d, "Time Check-in", timeout=4):
+    # Step 4: Time Check — accept default 8h.
+    if _wait_desc(d, "Time Check", timeout=4):
         _tap_desc(d, "Next")
 
 

@@ -290,7 +290,7 @@ class _OutcomePeekSheetState extends ConsumerState<OutcomePeekSheet> {
                             onClearDue: () => unawaited(_notifier.clearDueDate()),
                           ),
                           const SizedBox(height: 16),
-                          const _FieldLabel('Contexts'),
+                          const _FieldLabel('Labels'),
                           const SizedBox(height: 6),
                           TagList(
                             tags: contextTags,

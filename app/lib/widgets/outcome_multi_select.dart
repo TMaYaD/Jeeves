@@ -116,7 +116,7 @@ class OutcomeSelectionBar extends ConsumerWidget {
                     borderRadius: BorderRadius.circular(8),
                     onTap: () => _showTagsSheet(context, selectedIds),
                     child: const _BarButton(
-                        icon: Icons.sell_outlined, label: 'Tags'),
+                        icon: Icons.sell_outlined, label: 'Labels'),
                   ),
                   InkWell(
                     borderRadius: BorderRadius.circular(8),
@@ -200,7 +200,7 @@ class _BulkTagsSheet extends ConsumerWidget {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Tags for ${ids.length} selected',
+        Text('Labels for ${ids.length} selected',
             style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
         const SizedBox(height: 16),
         ContextTagPickerWidget(

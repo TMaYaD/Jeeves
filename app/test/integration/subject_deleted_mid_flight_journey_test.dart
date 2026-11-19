@@ -238,7 +238,7 @@ void main() {
           await db.tagDao.findOrCreateTag('office', 'context', _userId);
         },
         open: _openContextTagEditor,
-        sheetMarker: find.text('Edit Context Tags'),
+        sheetMarker: find.text('Edit Labels'),
         closesSheet: false, // each tap is its own write; the editor has no confirm
         confirm: _tapFirstContextTag,
       ),
@@ -250,7 +250,7 @@ void main() {
           await db.tagDao.assignTag('o1', tagId, _userId);
         },
         open: _openContextTagEditor,
-        sheetMarker: find.text('Edit Context Tags'),
+        sheetMarker: find.text('Edit Labels'),
         closesSheet: false,
         confirm: _tapFirstContextTag,
       ),

@@ -232,7 +232,8 @@ void main() {
       home: Scaffold(body: SizedBox(width: 272, child: row)),
     )));
     expect(find.text('2h 5m'), findsOneWidget);
-    expect(find.textContaining('sprints'), findsOneWidget);
+    // 125 minutes of 20-minute Sprints rounds up to 7 — a hint, not a target.
+    expect(find.textContaining('about 7 sprints'), findsOneWidget);
     expect(find.text('Start'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });

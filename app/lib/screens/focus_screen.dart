@@ -15,6 +15,7 @@ import '../providers/sprint_timer_provider.dart'
 import '../models/day_timeline.dart';
 import '../providers/clock_provider.dart';
 import '../providers/day_timeline_provider.dart';
+import '../utils/sprint_hint.dart';
 import '../widgets/day_timeline/day_timeline.dart';
 import '../widgets/meta_chip.dart';
 import '../widgets/nudge_banner.dart'
@@ -312,6 +313,12 @@ Widget _focusOutcomeRow(
   final estimate = todo.timeEstimate;
   final isDone = todo.doneAt != null;
   final isSettled = settlement != null;
+  // The Sprint count is a hint: it says roughly how many Sprints the work may
+  // take, and it never sets a target.
+  final sprintHint = sprintHintLabel(
+    timeEstimateMinutes: estimate,
+    sprintDurationMinutes: sprintMinutes,
+  );
   // Completion alone owns the filled glyph; every Settlement strikes the title
   // and removes Start because the Outcome is handled for this session.
   return OutcomeRow(
@@ -332,15 +339,14 @@ Widget _focusOutcomeRow(
                   children: [
                     OutcomeMetaLine(
                         timeEstimateMinutes: estimate, timeboxed: timeboxed),
-                    if (estimate > sprintMinutes) ...[
+                    if (sprintHint != null)
                       Text(
-                        '· ${(estimate / sprintMinutes).ceil()} sprints',
+                        '· $sprintHint',
                         style: const TextStyle(
                           fontSize: 12,
                           color: Color(0xFF9CA3AF),
                         ),
                       ),
-                    ],
                   ],
                 ),
               if (todo.dueDate != null) OutcomeMetaLine(dueDate: todo.dueDate),
@@ -666,6 +672,7 @@ class _NowTimeline extends ConsumerWidget {
       flowOrigin: flowOrigin,
       availableMinutes: extras.availableMinutes,
       chunkUnitMinutes: extras.settings.chunkUnitMinutes,
+      sprintMarks: extras.sprintMarks,
       onSetPinnedStart: (outcomeId, startAt) => ref
           .read(databaseProvider)
           .focusSessionDao

@@ -206,6 +206,21 @@ class DeviceLink implements SyncTransport, UserTransport {
   /// a poke exists to trigger.
   Object? pullFailure;
 
+  /// Fails the next [pullOps] for one Workspace, once.
+  ///
+  /// Workspace-scoped, because the ceremony pulls one Workspace at a time: this
+  /// is the switch that stops an enrolment *between* its two Workspaces, where
+  /// the first is registered and the second is not.
+  String? failNextPullForWorkspaceId;
+
+  /// Fails the next [postOps] for one Workspace, once, **before** the batch
+  /// reaches the server.
+  ///
+  /// The other half of [dropPostResponse]: that one is a POST the server took
+  /// and the device never heard about, and this one is a POST that never left
+  /// the device at all. The difference is the whole of the two resumptions.
+  String? failNextPostForWorkspaceId;
+
   /// Read once per signal socket, exactly as [HttpSyncTransport] reads its
   /// injected provider: reassigning it and reconnecting is how a test proves a
   /// refreshed token is picked up by construction.
@@ -292,6 +307,10 @@ class DeviceLink implements SyncTransport, UserTransport {
     List<Uint8List> envelopes,
   ) async {
     _requireOnline();
+    if (workspaceId == failNextPostForWorkspaceId) {
+      failNextPostForWorkspaceId = null;
+      throw const SyncTransportException.unreachable('post failed before it left the device');
+    }
     final results = await _member.postOps(workspaceId, envelopes);
     if (dropPostResponse) {
       dropPostResponse = false;
@@ -314,6 +333,10 @@ class DeviceLink implements SyncTransport, UserTransport {
     if (failure != null) {
       pullFailure = null;
       throw failure;
+    }
+    if (workspaceId == failNextPullForWorkspaceId) {
+      failNextPullForWorkspaceId = null;
+      throw const SyncTransportException.unreachable('pull failed before it left the device');
     }
     return _member.pullOps(
       workspaceId,
@@ -733,9 +756,12 @@ class SimDevice {
   ///
   /// [attachTransport] wires this device's live transport onto the reopened
   /// client so a crash-recovery test can *re-pull* the op it was killed applying,
-  /// not merely inspect the wreckage. The directory is fresh (only this device's
-  /// own keys, via [SyncClient]'s constructor), so a re-pulled op it must verify
-  /// has to be one this device itself authored — which every #618 crash case is.
+  /// not merely inspect the wreckage. The directory is restored from the applied
+  /// control log, the way a real relaunch restores it: the registrations this
+  /// device already verified are in that log, which outlives the process, and
+  /// the pull cursor outlives it too — so without the restore a reopened client
+  /// would never be served those registrations again, and a peer-authored op
+  /// would be refused as `member_not_chained_to_root` instead of recovered.
   ///
   /// The reopened client gets its own [DomainProjector] and [DomainReconciler],
   /// over a fresh [CollectionRegistry] bound to `reopened` rather than the
@@ -754,7 +780,7 @@ class SimDevice {
     final reopened = SyncDatabase(NativeDatabase(File('${directory.path}/sync.sqlite')));
     _syncStore = reopened;
     final freshRegistry = CollectionRegistry(reopened);
-    return SyncClient(
+    final reopenedClient = SyncClient(
       workspaceId: client.workspaceId,
       userId: userId,
       identity: identity,
@@ -767,6 +793,8 @@ class SimDevice {
     )
       ..projector = DomainProjector(registry: freshRegistry, domain: domain)
       ..reconciler = DomainReconciler(registry: freshRegistry, domain: domain);
+    await reopenedClient.restoreChainedMembersFromAppliedControlLog();
+    return reopenedClient;
   }
 
   /// The subscription lifecycle, on this device's deterministic hooks: the
