@@ -41,7 +41,8 @@ void main() {
   });
   tearDown(() async => db.close());
 
-  Future<void> mount(WidgetTester tester, List<Tag> applied) async {
+  Future<void> mount(WidgetTester tester, List<Tag> applied,
+      {bool cloudOnly = false}) async {
     await tester.pumpWidget(ProviderScope(
       overrides: [databaseProvider.overrideWithValue(db)],
       child: MaterialApp(
@@ -51,6 +52,7 @@ void main() {
               assignedTags: applied,
               onAssign: assigned.add,
               onRemove: removed.add,
+              cloudOnly: cloudOnly,
             ),
           ),
         ),
@@ -75,6 +77,30 @@ void main() {
     expect(find.byKey(const Key('context_tag_picker_add')), findsOneWidget);
     expect(find.text('+ context'), findsNothing);
     expect(find.byKey(const Key('tag_cloud_find_field')), findsNothing);
+    await unmount(tester);
+  });
+
+  testWidgets('cloud only shows the cloud alone: no applied row, no +',
+      (tester) async {
+    final home = (await tester.runAsync(() => _insertContext(db, 'home')))!;
+    await tester.runAsync(() => _insertContext(db, 'work'));
+    await mount(tester, [home], cloudOnly: true);
+
+    // The find field is there from the start, and the cloud is all there is.
+    expect(find.byKey(const Key('tag_cloud_find_field')), findsOneWidget);
+    expect(find.byKey(const Key('context_tag_picker_add')), findsNothing);
+    expect(find.text('@home'), findsOneWidget);
+    expect(find.text('@work'), findsOneWidget);
+
+    // An applied tag is a badge in the cloud; tapping it removes it.
+    await tester.tap(find.text('@home'));
+    await _pump(tester);
+    expect(removed.map((t) => t.id), ['home']);
+
+    // Tapping an unapplied tag applies it.
+    await tester.tap(find.text('@work'));
+    await _pump(tester);
+    expect(assigned.map((t) => t.id), ['work']);
     await unmount(tester);
   });
 

@@ -215,3 +215,4 @@ What each decision *runs* is in `app/lib/sync/sync_client.dart`; this table says
 - **Sprints**: `app/test/sync/host/sprint_record_convergence_test.dart` (two devices through the relay plugin), the lattice cases in `merge_strategy_test.dart`, and `app/test/database/sprint_dao_test.dart` (derived end, TimeLog close sites).
 - **Convergence end to end**: `app/test/sync/convergence_test.dart` and `full_day_convergence_test.dart` run two simulated devices through enrol → write → sign → append → pull → verify → reduce and assert byte-identical reduced state.
 - **Projection**: `app/test/sync/projector_view_notify_test.dart` (a reduced-in row reaches the watching queries) and `domain_rebuild_test.dart` (a fresh domain store rebuilt from the log, tombstones included).
+- **One refusal, one row**: `app/test/sync/quarantine_once_test.dart` — two pulls that fetch the same refused op file it once, and two different ops refused at one seq stay two rows.
