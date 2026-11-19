@@ -301,12 +301,19 @@ class VaultPlugin implements SyncPlugin {
       return _Ingest.unreadable;
     }
     if (carried.isNotEmpty) {
+      final List<Change> refused;
       try {
-        await _host.applyRemote(id, carried);
+        refused = await _host.applyRemote(id, carried);
       } on Object catch (error) {
         // A page the app cannot take must not stop the vault: the other pages
         // are still read, and this one is left for the next pass.
         debugPrint('vault: $path not taken: $error');
+        return _Ingest.refused;
+      }
+      if (refused.isNotEmpty) {
+        // The host refused a change: the page still holds something the app
+        // does not have, so it is kept, and read again on the next pass.
+        debugPrint('vault: $path not taken: the host refused a change');
         return _Ingest.refused;
       }
       _rememberMembers(key, carried);
@@ -322,10 +329,15 @@ class VaultPlugin implements SyncPlugin {
       return _Ingest.unreadable;
     }
     if (handEdits.isNotEmpty) {
+      final List<Change> refused;
       try {
-        await _host.applyRemote(id, handEdits);
+        refused = await _host.applyRemote(id, handEdits);
       } on Object catch (error) {
         debugPrint('vault: $path not taken: $error');
+        return _Ingest.refused;
+      }
+      if (refused.isNotEmpty) {
+        debugPrint('vault: $path not taken: the host refused a change');
         return _Ingest.refused;
       }
       _rememberMembers(key, handEdits);

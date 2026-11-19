@@ -14,6 +14,7 @@ import 'dart:io';
 
 import 'package:drift/drift.dart' show Variable;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jeeves/sync/hlc.dart';
 import 'package:jeeves/sync/host/change.dart';
 import 'package:jeeves/sync/vault/page_codec.dart';
 import 'package:jeeves/sync/vault/vault_folder.dart';
@@ -524,6 +525,65 @@ void main() {
         reason: 'the page the app could not read was not reported');
     expect(await _title(device, _otherOutcomeId), 'bbb edited',
         reason: 'the page after the one the app cannot read was not read');
+  });
+
+  test('a page the host refuses is kept, and read again', () async {
+    final device = HostDevice.open('a');
+    addTearDown(device.close);
+    final host = await device.startHost();
+    final directory = Directory('${root.path}/vault')..createSync(recursive: true);
+    final folder = DirectoryVaultFolder(directory);
+    final plugin = VaultPlugin(folder: folder, sync: device.sync);
+    await host.attach(plugin);
+
+    await device.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'Plan', userId: _userId);
+    await host.deliverAll();
+    await plugin.rescan();
+
+    // A page whose block carries a preference value with no key: the merge
+    // core refuses that change, and the host says which change it refused.
+    const refused = 'Outcomes/refused.md';
+    await folder.writeAtomically(
+      refused,
+      renderPage(PageModel(
+        frontmatter: {'id': _outcomeId, 'title': 'Refused'},
+        notes: '',
+        checklist: const [],
+        block: [
+          BlockEntry(
+            collection: 'user_preferences',
+            entityId: 'a-preference',
+            field: 'value',
+            hlc: Hlc.forMember(
+                '00000000-0000-0000-0000-000000000000', 1700000000000),
+            digest: digestOf('a value'),
+            hasCarriedValue: true,
+            carriedValue: 'a value',
+          ),
+        ],
+      )),
+    );
+
+    final health = <VaultHealth>[];
+    plugin.health.listen(health.add);
+    await plugin.rescan();
+    await pumpEventQueue();
+
+    expect(await folder.read(refused), isNotNull,
+        reason: 'the page the host refused was removed');
+    expect(health.last.untakenPageCount, 1,
+        reason: 'the page the host refused was not reported');
+    expect(await _title(device), 'Plan',
+        reason: 'the app took what the host refused');
+
+    // The base copy was not saved: the page is read again on the next pass,
+    // and it is still there to be read.
+    final bases = await device.sync.customSelect(
+      'SELECT COUNT(*) AS c FROM vault_page_bases WHERE page_path = ?',
+      variables: [Variable<String>(refused)],
+    ).getSingle();
+    expect(bases.read<int>('c'), 0, reason: 'the base copy was saved');
   });
 
   test('two Outcomes whose names read alike have a page each', () async {
