@@ -43,11 +43,36 @@ final currentTimeContextsProvider =
   return ref.watch(databaseProvider).actionDao.watchCurrentTimeContexts();
 });
 
+/// The recorded Sprints, live, with the Outcome each ran on.
+///
+/// The Sprint record is the only source of truth for what was done (issue
+/// #910), so a Sprint that arrives by sync — projected into the domain store by
+/// the sync host — reaches the tile without a restart.
+final dayTimelineSprintsProvider =
+    StreamProvider<List<TileSprintMark>>((ref) {
+  return ref
+      .watch(databaseProvider)
+      .sprintDao
+      .watchRecordsByOutcome()
+      .map(tileSprintMarks);
+});
+
 /// The same, read once when the planning completion screen opens: a screen
 /// that is left within a minute needs no live query.
 final planningTimeContextsProvider =
     FutureProvider.autoDispose<Map<String, TimeContext>>((ref) {
   return ref.watch(databaseProvider).actionDao.getCurrentTimeContexts();
+});
+
+/// The recorded Sprints, read once when the planning completion screen opens,
+/// for the same reason as [planningTimeContextsProvider].
+final planningSprintMarksProvider =
+    FutureProvider.autoDispose<List<TileSprintMark>>((ref) {
+  return ref
+      .watch(databaseProvider)
+      .sprintDao
+      .getRecordsByOutcome()
+      .then(tileSprintMarks);
 });
 
 /// The two settings the timeline reads: what an Outcome with no estimate counts
@@ -79,6 +104,7 @@ class NowTimelineExtras {
     this.pinnedStarts = const {},
     this.engagedTaskIds = const {},
     this.timeContexts = const {},
+    this.sprintMarks = const [],
     this.availableMinutes = kFallbackAvailableMinutes,
     this.settings = const DayTimelineSettings(),
   });
@@ -86,6 +112,10 @@ class NowTimelineExtras {
   final Map<String, DateTime> pinnedStarts;
   final Set<String> engagedTaskIds;
   final Map<String, TimeContext> timeContexts;
+
+  /// The Sprints done, as the timeline draws them: a bar in the lane at the
+  /// time it ran, and a count on the tile it ran on.
+  final List<TileSprintMark> sprintMarks;
 
   /// The available time the open session was planned with; the preference that
   /// remembers it, or the fallback when none was recorded.
@@ -107,6 +137,8 @@ final nowTimelineExtrasProvider = Provider<NowTimelineExtras>((ref) {
             const {},
     timeContexts:
         ref.watch(currentTimeContextsProvider).asData?.value ?? const {},
+    sprintMarks:
+        ref.watch(dayTimelineSprintsProvider).asData?.value ?? const [],
     availableMinutes: remembered != null && remembered > 0
         ? remembered
         : kFallbackAvailableMinutes,

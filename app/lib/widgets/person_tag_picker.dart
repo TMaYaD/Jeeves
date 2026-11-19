@@ -360,7 +360,7 @@ class _PersonTagPickerSheetState extends ConsumerState<PersonTagPickerSheet> {
       debugPrint('Failed to create person tag: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Failed to create tag. Please try again.')),
+          const SnackBar(content: Text('Failed to add person. Please try again.')),
         );
       }
       return false;

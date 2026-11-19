@@ -74,6 +74,24 @@ class IdleSprintTimerNotifier extends SprintTimerNotifier {
   Future<void> stopSprint() async {}
 }
 
+/// Sprint timer pinned to [fixedState] — the screen sees one fixed phase, with
+/// no record, no ticker and no side effects. For tests that need a particular
+/// Sprint number rather than a real record.
+class FixedSprintTimerNotifier extends SprintTimerNotifier {
+  FixedSprintTimerNotifier(this.fixedState);
+
+  final SprintTimerState fixedState;
+
+  @override
+  SprintTimerState build() => fixedState;
+
+  @override
+  Future<void> startSprint(Todo task) async {}
+
+  @override
+  Future<void> stopSprint() async {}
+}
+
 Future<Todo> insertFocusTodo(
   GtdDatabase db, {
   required String id,

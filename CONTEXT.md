@@ -82,7 +82,7 @@ A domain of recurring responsibility — Allen's GTD horizon-2 concept. Examples
 _Avoid_: Category, Topic, Folder, Project (a named group, not a responsibility domain)
 
 **Label**:
-A user-defined granular grouping, and the system's only cross-cutting one: an Outcome carries any number of Labels, and a Label may span Areas ("urgent-this-week" across Health and Finance). Jeeves-specific extension, not GTD canon. Free-form; the user creates and retires Labels as needed. Where **Area** answers *where does this live*, Label answers *what else is this about* — which is why Area is exclusive and Label is not (ADR-0025).
+A user-defined granular grouping, and the system's only cross-cutting one: an Outcome carries any number of Labels, and a Label may span Areas ("urgent-this-week" across Health and Finance). Jeeves-specific extension, not GTD canon. Free-form; the user creates and retires Labels as needed. Where **Area** answers *where does this live*, Label answers *what else is this about* (ADR-0025). Legacy `@` `Tag(type='context')` rows show as Labels, never Tags.
 _Avoid_: Tag (Tag is the storage shape, not the concept), Bucket, Area (Area is the exclusive home; Label is the cross-cutting one)
 
 **Blocker**:
@@ -197,6 +197,7 @@ _Avoid_: health score, score, System Health
 - The proposal's four long-term states (`active / someday / done / trashed`) collapse two independent axes into one enum. The code's `intent` column is the Intent axis and `done_at` the Completion axis; the proposal's wording is the conceptual error.
 - A trivially-actionable Capture ("call John") could in principle skip Outcome creation and land directly as an Action. The model says no — every Capture clarifies through an Outcome.
 - **Project and Area exclusivity are not enforced in storage.** Both are typed Tags linked through `todo_tags`, which carries no `type`, so "at most one" is not expressible as a unique index — it needs a dedicated link or a check reaching into `tags`. Project's rule is held by the writers and the reconciler; Area's by the cutover. Also owed: the user's resolution pass over the Area conversions the initial upload reports.
+- **Label has two storage values.** `'context'` rows (shown as Labels) and cutover-minted `'label'` rows back one concept; folding them is a migration (TMaYaD/Jeeves#1001).
 
 ### Engagement
 
@@ -265,7 +266,7 @@ Settled Outcomes group for the Review summary by a **presentation ladder** — C
 _Avoid_: Resolved / Resolution (spoken for — see Disposition's _Avoid_ and the ambiguity below), Handled, Closed
 
 **Sprint** / **Break**:
-Subdivisions of a TimeLog applying the Pomodoro discipline. A **Sprint** is a timed stretch of work; a **Break** is the rest between Sprints, short or **long** (after a run of Sprints, counted across Actions). The clock keeps running through both without breaking the TimeLog's continuity. Sprints are recorded and show on every Device, eventually right; of two ends the earlier stands, and an open one reads as ending just before the next. A Sprint is what was done, never a plan. Small Actions may run as one Sprint, with no Break between them. The "about N sprints" hint, `Action.time_estimate / Sprint length` rounded up, is presentational only.
+Subdivisions of a TimeLog applying the Pomodoro discipline. A **Sprint** is a timed stretch of work; a **Break** is the rest between Sprints, short or **long** (after a run of Sprints, counted across Actions). The clock keeps running through both without breaking the TimeLog's continuity. Sprints are recorded and show on every Device, eventually right; of two ends the earlier stands, and an open one reads as ending just before the next. A Sprint is what was done, never a plan. Small Actions may run as one Sprint, with no Break between them. The "about N sprints" hint, `Action.time_estimate / Sprint length` rounded up, is presentational only, never a target.
 _Avoid_: PomodoroPhase, FocusBlock, WorkBlock, "pomodoro" in UI copy
 
 **Disposition**:
@@ -403,7 +404,7 @@ What a Device records when the log it was served cannot be reconciled with the c
 _Avoid_: Sync error (a transport failure of one attempt is not an accusation), Conflict (merge conflicts are resolved by the merge strategy and are not integrity events), Dead Letter (retired vocabulary, for an unrelated mechanism), Rejected op (a rejection is the server's answer to an append, not the receiver's record)
 
 **Tag** *(backs the GTD Core concepts Person, Project, Area, Label, and legacy Context)*:
-The shared storage row backing several conceptual entities, discriminated by a `Tag.type` field. Outcome ↔ Tag links are stored in a `TodoTags` join table; the join carries no role information of its own (its semantics depend entirely on the linked Tag's `type`). The user does not think in terms of Tags — they think in terms of the domain entities Tag backs. Physical-world equivalent: a folder, sticky note, or label-maker — a categorisation mechanism, not a domain concept. This entry exists so the code's `tags` table has a name here; the user never thinks in Tags.
+The shared storage row backing several conceptual entities, discriminated by a `Tag.type` field. Outcome ↔ Tag links are stored in a `TodoTags` join table; the join carries no role information of its own (its semantics depend entirely on the linked Tag's `type`). The user does not think in terms of Tags — they think in the domain entities Tag backs. Physical-world equivalent: a folder, sticky note, or label-maker — a categorisation mechanism, not a domain concept.
 
 **A Tag has two identities, and only one of them is the primary key.** `id` is the op-log identity, client-random; `(name, type)` is the *user-facing* one — two rows with the same pair are one Person, one Project, one Area, one Label or one Context. Two Devices each creating "Alice"/`person` while apart mint two entities for one pair; they fold onto one as the Devices converge — convergence, not corruption. Fold mechanics in [docs/SYNC.md](docs/SYNC.md).
 _Avoid_: (none — Tag is the canonical name for the storage)

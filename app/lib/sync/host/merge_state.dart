@@ -49,6 +49,16 @@ class CollectionView {
   final SyncDatabase _db;
   final String collection;
 
+  /// A field is live when its entity has no tombstone, or its clock is newer
+  /// than the tombstone. One predicate, spliced into both reads below, so a
+  /// whole-collection read and a one-entity read can never disagree.
+  static const String _liveFieldPredicate = '''
+t.entity_id IS NULL
+    OR c.wall_ms > t.wall_ms
+    OR (c.wall_ms = t.wall_ms AND c.counter > t.counter)
+    OR (c.wall_ms = t.wall_ms AND c.counter = t.counter
+        AND c.member_id_hex > t.member_id_hex)''';
+
   static const String _liveFieldsSql = '''
 SELECT f.entity_id AS entity_id, f.field AS field, f.value_json AS value_json
 FROM reduced_fields f
@@ -58,13 +68,26 @@ LEFT JOIN row_tombstones t
   ON t.collection = f.collection AND t.entity_id = f.entity_id
 WHERE f.collection = ?
   AND (
-    t.entity_id IS NULL
-    OR c.wall_ms > t.wall_ms
-    OR (c.wall_ms = t.wall_ms AND c.counter > t.counter)
-    OR (c.wall_ms = t.wall_ms AND c.counter = t.counter
-        AND c.member_id_hex > t.member_id_hex)
+    $_liveFieldPredicate
   )
 ORDER BY f.entity_id, f.field
+''';
+
+  /// [_liveFieldsSql] for one entity. Bound on `(collection, entity_id)`, the
+  /// leading columns of all three tables' primary keys, so it reads that
+  /// entity's rows and no others.
+  static const String _liveFieldsOfEntitySql = '''
+SELECT f.field AS field, f.value_json AS value_json
+FROM reduced_fields f
+JOIN field_clocks c
+  ON c.collection = f.collection AND c.entity_id = f.entity_id AND c.field = f.field
+LEFT JOIN row_tombstones t
+  ON t.collection = f.collection AND t.entity_id = f.entity_id
+WHERE f.collection = ? AND f.entity_id = ?
+  AND (
+    $_liveFieldPredicate
+  )
+ORDER BY f.field
 ''';
 
   Selectable<QueryRow> _liveFields() => _db.customSelect(
@@ -91,8 +114,24 @@ ORDER BY f.entity_id, f.field
   Stream<Map<String, Map<String, Object?>>> watchAll() =>
       _liveFields().watch().map(_group);
 
-  Future<Map<String, Object?>?> readEntity(String entityId) async =>
-      (await readAll())[entityId];
+  /// The live fields of [entityId], or null when it has none — the same answer
+  /// as `(await readAll())[entityId]`, at the cost of that entity's rows.
+  ///
+  /// The projector calls this once per entity it materialises, so it must not
+  /// read the collection: a local edit, an imported record and every entity of
+  /// a whole-store re-projection each pay for one call.
+  Future<Map<String, Object?>?> readEntity(String entityId) async {
+    final rows = await _db.customSelect(
+      _liveFieldsOfEntitySql,
+      variables: [Variable<String>(collection), Variable<String>(entityId)],
+      readsFrom: {_db.reducedFields, _db.fieldClocks, _db.rowTombstones},
+    ).get();
+    if (rows.isEmpty) return null;
+    return {
+      for (final row in rows)
+        row.read<String>('field'): jsonDecode(row.read<String>('value_json')),
+    };
+  }
 
   /// Every field ever reduced for [entityId], tombstone or not.
   ///

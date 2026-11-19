@@ -252,6 +252,112 @@ void main() {
     });
   });
 
+  // ---------------------------------------------------------------------------
+  // The Sprint number is a hint, not a target (issue #912).
+  //
+  // Focus Mode names the Sprint it is on — "Sprint 4" — and never a total to
+  // match it against. The dots beside the ring carry the count and continue
+  // past it; the label is the only thing in words, so the label is what these
+  // tests pin.
+  // ---------------------------------------------------------------------------
+  group('ActiveFocusScreen — the Sprint number (issue #912)', () {
+    late GtdDatabase db;
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+      FlutterLocalNotificationsPlatform.instance = _FakeNotificationsPlatform();
+      TestWidgetsFlutterBinding.ensureInitialized()
+          .defaultBinaryMessenger
+          .setMockMethodCallHandler(_notificationsChannel, (_) async => null);
+      db = _openInMemory();
+    });
+    tearDown(() async {
+      TestWidgetsFlutterBinding.ensureInitialized()
+          .defaultBinaryMessenger
+          .setMockMethodCallHandler(_notificationsChannel, null);
+      await db.close();
+    });
+
+    /// Any text that reads a Sprint number against a total — "Sprint 4 of 3".
+    Finder sprintOfText() => find.byWidgetPredicate(
+          (widget) =>
+              widget is Text &&
+              RegExp(r'Sprint \d+ of').hasMatch(widget.data ?? ''),
+        );
+
+    testWidgets('sprint 1 reads "Sprint 1"', (tester) async {
+      final todo = await _insertTodo(db, id: 'o1');
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        sprintTimer: () => FixedSprintTimerNotifier(const SprintTimerState(
+          phase: SprintPhase.focus,
+          sprintNumber: 1,
+          totalSprints: 3,
+        )),
+      ));
+      await _pumpFrames(tester);
+
+      expect(find.text('Sprint 1'), findsOneWidget);
+      expect(sprintOfText(), findsNothing);
+    });
+
+    testWidgets('sprint 4 of an estimated 3 reads "Sprint 4", with no "of"',
+        (tester) async {
+      final todo = await _insertTodo(db, id: 'o2');
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        sprintTimer: () => FixedSprintTimerNotifier(const SprintTimerState(
+          phase: SprintPhase.focus,
+          sprintNumber: 4,
+          totalSprints: 4,
+        )),
+      ));
+      await _pumpFrames(tester);
+
+      expect(find.text('Sprint 4'), findsOneWidget);
+      expect(sprintOfText(), findsNothing);
+    });
+
+    testWidgets('a Break hides the number', (tester) async {
+      final todo = await _insertTodo(db, id: 'o3');
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        sprintTimer: () => FixedSprintTimerNotifier(const SprintTimerState(
+          phase: SprintPhase.break_,
+          sprintNumber: 4,
+          totalSprints: 4,
+        )),
+      ));
+      await _pumpFrames(tester);
+
+      expect(find.text('Sprint 4'), findsNothing);
+    });
+
+    testWidgets('sprint 12 fits the smallest ring', (tester) async {
+      // 232 logical pixels wide: the ring clamps to its 160px minimum.
+      tester.view.physicalSize = const Size(696, 2400);
+      tester.view.devicePixelRatio = 3.0;
+      addTearDown(tester.view.reset);
+
+      final todo = await _insertTodo(db, id: 'o4');
+      await tester.pumpWidget(_harness(
+        db,
+        todo: todo,
+        sprintTimer: () => FixedSprintTimerNotifier(const SprintTimerState(
+          phase: SprintPhase.focus,
+          sprintNumber: 12,
+          totalSprints: 12,
+        )),
+      ));
+      await _pumpFrames(tester);
+
+      expect(find.text('Sprint 12'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  });
+
   group('focusNextTask — a Settled task is not offered as next up (#693 AC2)',
       () {
     const achievedAt = '2026-05-01T10:00:00.000Z';

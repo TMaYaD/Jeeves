@@ -15,7 +15,9 @@ class AddedDuringTheDayTag extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(
         color: const Color(0xFFF3F4F6),
-        borderRadius: BorderRadius.circular(999),
+        // Tags sit at 4px on the canonical 2/4/6 scale (DESIGN.md §Roundedness),
+        // the radius the MetaChip beside this tag on the meta line uses.
+        borderRadius: BorderRadius.circular(4),
       ),
       child: const Text(
         label,

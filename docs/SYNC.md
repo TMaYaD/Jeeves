@@ -85,6 +85,7 @@ Every current key, grouped by family:
 | `periodic_review_nudge_content_firing_edge` | datetime | `lww` | Latest firing edge wins |
 | `clarify_mode` | string enum (`oneToOne` / `nToM`) | `lww` *(registered explicitly)* | Scalar mode selection; both modes read the same many-to-many storage, so either winner leaves every Capture and link valid |
 | `bypass_threshold` | int | `lww` *(registered explicitly)* | Scalar setting; the latest choice on any device wins |
+| `device_name.<device id>` | string | `lww` | A Device's name; two renames resolve to the later one |
 | `planning_notification_snoozed_until`, `shutdown_notification_snoozed_until`, `periodic_review_notification_snoozed_until` | datetime | `maxTimestampValue` | Snooze floor must never regress; un-snooze is a tombstone |
 | *(none today)* | list/set | `setMerge` | Provisioned for future filter/pin selections |
 
@@ -109,6 +110,12 @@ Bypassed Outcomes add three collections, `focus_session_planning_bypasses`, `foc
 
 `focus_session_tasks.pinned_start_at` is the start time the user set on a Plan entry (an `instant`); it merges last-write-wins per field like `disposition`, and clearing it writes a null.
 
+### Device names
+
+A Device's name is ordinary synced data: one `user_preferences` key per device id, `device_name.<device id>`, holding the name as a JSON string. A Device writes it under its own device node id and, once enrolled, under its member id as well, so a peer can resolve whichever of the two ids it sees on a change.
+
+A name is shown only for this device, or for a Device whose Grant in the preferences Workspace has been applied — never for an id no applied Grant vouches for, and never as the raw id.
+
 ## Derived identity, and why merge does not need to care about it
 
 Two collections have a domain key that is not their `id` column: `focus_session_tasks` (the `(session, task)` pair) and `user_preferences` (the `(workspace, key)` pair). Their local DAO writes mint a row id of their own, so two devices creating the same logical row would otherwise fork into two entities that never merge.
@@ -123,8 +130,9 @@ field-grain write) under the strategy registry; the op-log reducer only checks t
 op-level guards and converts an op to a `Change`. A device with no enrolment still
 clocks and merges its own writes, under a random device node id; once enrolled, its
 member id takes over as the tie-break so the wire is unchanged. Clocks stamped under
-the device node id are never ops, so the enrolment upload does not skip them and a
-rebuild from the log carries them across. See [sync-plugins](proposals/sync-plugins.md).
+the device node id are never ops, so the enrolment upload does not skip them, a
+rebuild from the log carries them across, and an account's later sign-in authors
+those made since its upload completed — creates, edits and deletes, not preferences. See [sync-plugins](proposals/sync-plugins.md).
 
 Rows that predate the host are seeded into merge state once per device, before any
 plugin can attach, so `snapshot()` holds the whole local dataset. Seeding inserts
@@ -132,9 +140,16 @@ only fields merge state holds no value or clock for, each at the floor clock
 `Hlc(0, 0, <device node id>)`, so any real write from any time beats a seeded value.
 It writes no domain row, tombstone or change.
 
+Merge state reaches the domain store through the projector, which gives up the
+store's writer between batches — a whole-store re-projection (after a schema upgrade,
+or a rebuild from the log) never holds a user's edit back for its length. That walk,
+and only that walk, leaves alone an entity whose local change is still in the outbox.
+A remote change is always projected on arrival. `DomainProjector.project`
+(`sync/domain_projector.dart`) gives the reason for each.
+
 ## Protocol surface
 
-Three things are wire contract rather than implementation detail. Changing any of
+Five things are wire contract rather than implementation detail. Changing any of
 them changes what a peer sees, so each is pinned by a golden vector.
 
 **Value encodings.** A Drift `dateTime` column encodes as an ISO-8601 UTC instant
@@ -163,6 +178,13 @@ infers that deleting a parent removes its children. Every deletion enumerates it
 own cascade set at capture time. A new child table means every delete path that
 should reach it has to be updated by hand; nothing will fail loudly if it is not.
 
+**A removal is a tombstone.** The log has no row-level delete either, so a
+junction row that is simply absent is a row only this device dropped: the peer
+keeps it, and the next pull puts it back. Every path that removes a link
+authors that junction's tombstone, in the same transaction as the deletion — and
+only for the links it actually held. A removal of a link this device never had
+authors nothing: its tombstone would drop an assignment a peer had just made.
+
 `SyncHealth.clean` is a derived getter over queue depth, unresolved alarms and
 quarantine count — never a stored status, so a wedged device cannot report itself
 healthy by writing down that it is.
@@ -187,5 +209,8 @@ through.
 
 - **Merge semantics**: `app/test/sync/merge_strategy_test.dart`, `app/test/services/user_preferences_conflict_test.dart`, and the golden vectors in `spec/sync/reducer_v1_vectors.json` (shared with the server's Python reducer, so a divergence is caught cross-language).
 - **Sprints**: `app/test/sync/host/sprint_record_convergence_test.dart` (two devices through the relay plugin), the lattice cases in `merge_strategy_test.dart`, and `app/test/database/sprint_dao_test.dart` (derived end, TimeLog close sites).
+- **Device names**: `app/test/sync/device_names_test.dart` (the key, the normaliser, ensure and rename) and `app/test/sync/host/device_name_convergence_test.dart` (two devices through the relay plugin).
 - **Convergence end to end**: `app/test/sync/convergence_test.dart` and `full_day_convergence_test.dart` run two simulated devices through enrol → write → sign → append → pull → verify → reduce and assert byte-identical reduced state.
 - **Projection**: `app/test/sync/projector_view_notify_test.dart` (a reduced-in row reaches the watching queries) and `domain_rebuild_test.dart` (a fresh domain store rebuilt from the log, tombstones included).
+- **One refusal, one row**: `app/test/sync/quarantine_once_test.dart` — two pulls that fetch the same refused op file it once, and two different ops refused at one seq stay two rows.
+- **A removal reaches the peer**: `app/test/sync/dao_capture_contract_test.dart` (each of the task detail's four removal paths describes the drop it makes, in the deletion's own transaction) and `app/test/sync/tag_convergence_test.dart` (a context, a person, the delegate set and the Project removed on one device are each gone on the other after the sync).

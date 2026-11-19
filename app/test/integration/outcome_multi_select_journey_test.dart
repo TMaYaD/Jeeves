@@ -154,7 +154,7 @@ void main() {
     expect(find.text('2 selected'), findsOneWidget);
 
     // Add a Tag, then remove it.
-    await tester.tap(find.text('Tags'));
+    await tester.tap(find.text('Labels'));
     await _settle(tester);
     // The + opens the cloud; tapping a Tag there applies it to every selected
     // Outcome, and it then shows as an applied chip (tap removes it).
@@ -243,7 +243,7 @@ void main() {
     await _settle(tester);
     expect(tester.takeException(), isNull);
     expect(find.text('1 selected'), findsOneWidget);
-    for (final label in ['Project', 'Tags', 'Status', 'Select all']) {
+    for (final label in ['Project', 'Labels', 'Status', 'Select all']) {
       expect(find.text(label), findsOneWidget, reason: label);
     }
   });
