@@ -885,6 +885,23 @@ class VaultPlugin implements SyncPlugin {
           return;
         }
       }
+      // A revision that arrived after the read above is kept, not replaced.
+      // The folder cannot replace conditionally, so the page is read once more
+      // and the write is skipped when it changed: the syncer's revision is
+      // there, and the app takes it on the next pass.
+      final String? current;
+      try {
+        current = await _folder.read(path);
+      } on Object catch (error) {
+        debugPrint('vault: $path not read: $error');
+        _pendingWriteBacks.add(key);
+        rethrow;
+      }
+      if (current != existing) {
+        debugPrint('vault: $path changed: not written over');
+        _pendingWriteBacks.add(key);
+        return;
+      }
       try {
         await _folder.writeAtomically(path, text);
       } on Object {

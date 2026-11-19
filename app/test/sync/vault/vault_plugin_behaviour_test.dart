@@ -74,18 +74,32 @@ class _RefusingFolder implements VaultFolder {
   Future<void> remove(String relativePath) => inner.remove(relativePath);
 }
 
-/// A folder where a path is replaced the second time it is read, as a syncer
-/// that writes while the vault works would.
+/// A folder where a path is replaced while the vault works, as a syncer that
+/// writes while the vault reads would.
+///
+/// [arm] says what a path will hold, and the replacement happens on the
+/// second read after that: the read the vault made, and the one it makes
+/// before it writes.
 class _SwappingFolder implements VaultFolder {
   _SwappingFolder(this.inner);
 
   final VaultFolder inner;
 
-  /// What a path holds after it is swapped.
+  /// The paths that are waiting for their replacement.
+  final Set<String> armed = {};
+
+  /// What a path holds after it is replaced.
   final Map<String, String> replacements = {};
 
-  /// How many times each path has been read.
+  /// How many times each armed path has been read.
   final Map<String, int> reads = {};
+
+  /// Arm [relativePath]: it will hold [text] on the second read from now.
+  void arm(String relativePath, String text) {
+    armed.add(relativePath);
+    replacements[relativePath] = text;
+    reads[relativePath] = 0;
+  }
 
   @override
   Future<List<String>> listMarkdownFiles(String subfolder) =>
@@ -93,11 +107,14 @@ class _SwappingFolder implements VaultFolder {
 
   @override
   Future<String?> read(String relativePath) async {
-    final count = (reads[relativePath] ?? 0) + 1;
-    reads[relativePath] = count;
-    if (count == 2 && replacements.containsKey(relativePath)) {
-      await inner.writeAtomically(
-          relativePath, replacements[relativePath]!);
+    if (armed.contains(relativePath)) {
+      final count = (reads[relativePath] ?? 0) + 1;
+      reads[relativePath] = count;
+      if (count == 2) {
+        armed.remove(relativePath);
+        await inner.writeAtomically(
+            relativePath, replacements[relativePath]!);
+      }
     }
     return inner.read(relativePath);
   }
@@ -802,8 +819,7 @@ void main() {
     await folder.writeAtomically(copy, edited);
 
     // The syncer replaces the copy while the vault is reading it.
-    folder.replacements[copy] =
-        edited.replaceFirst('title: Plan edited', 'title: Later');
+    folder.arm(copy, edited.replaceFirst('title: Plan edited', 'title: Later'));
 
     await plugin.rescan();
 
@@ -847,6 +863,37 @@ void main() {
 
     expect(folder.pluginWrites, isNotEmpty,
         reason: 'the page was never written');
+  });
+
+  test('a revision that arrived after the read is not replaced', () async {
+    final device = HostDevice.open('a');
+    addTearDown(device.close);
+    final host = await device.startHost();
+    final directory = Directory('${root.path}/vault')..createSync(recursive: true);
+    final inner = DirectoryVaultFolder(directory);
+    final folder = _SwappingFolder(inner);
+    final plugin = VaultPlugin(folder: folder, sync: device.sync);
+    await host.attach(plugin);
+
+    await device.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'Plan', userId: _userId);
+    await host.deliverAll();
+    await plugin.rescan();
+
+    final path = (await inner.listMarkdownFiles('Outcomes')).single;
+    final page = (await inner.read(path))!;
+
+    // The Outcome is renamed, so the page has to be written. The syncer
+    // brings a revision of its own while the vault is reading.
+    await device.domain.todoDao
+        .updateFields(_outcomeId, title: 'New plan');
+    folder.arm(
+        path, page.replaceFirst('title: Plan', 'title: From the syncer'));
+    await host.deliverAll();
+
+    final after = (await inner.read(path))!;
+    expect(after, contains('title: From the syncer'),
+        reason: 'the revision the syncer wrote was replaced');
   });
 
   test('two Outcomes whose names read alike have a page each', () async {
