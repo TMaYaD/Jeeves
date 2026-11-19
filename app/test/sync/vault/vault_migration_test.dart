@@ -27,6 +27,16 @@ void main() {
     // must not touch: a cursor, a sequence entry, a reduced field with its
     // clock, and a tombstone.
     final current = SyncDatabase(NativeDatabase(file));
+    // The store is closed here, and again by the teardown if an assertion
+    // fails before that — but only once: the file is reopened below.
+    var currentClosed = false;
+    Future<void> closeCurrent() async {
+      if (currentClosed) return;
+      currentClosed = true;
+      await current.close();
+    }
+
+    addTearDown(closeCurrent);
     await current.customStatement(
       'INSERT INTO plugin_cursors (plugin_id, acknowledged_sequence) VALUES (?, ?)',
       ['vault', 7],
@@ -56,9 +66,17 @@ void main() {
     // opened, so the downgrade is never read as an upgrade in progress.
     await current.customStatement('DROP TABLE vault_page_bases');
     await current.customStatement('PRAGMA user_version = 11');
-    await current.close();
+    await closeCurrent();
 
     final upgraded = SyncDatabase(NativeDatabase(file));
+    var upgradedClosed = false;
+    Future<void> closeUpgraded() async {
+      if (upgradedClosed) return;
+      upgradedClosed = true;
+      await upgraded.close();
+    }
+
+    addTearDown(closeUpgraded);
     // The first query opens the store and runs the upgrade.
     await upgraded.customSelect('SELECT 1').get();
 
@@ -109,6 +127,6 @@ void main() {
     final version = await upgraded.customSelect('PRAGMA user_version').get();
     expect(version.single.read<int>('user_version'), 12);
 
-    await upgraded.close();
+    await closeUpgraded();
   });
 }
