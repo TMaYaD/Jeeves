@@ -437,22 +437,33 @@ void main() {
       expect(capture.forCollection(todosCollection), isEmpty);
     });
 
-    test('setTimeboxed captures timeboxed and updated_at, and stamps the '
-        'Outcome', () async {
+    test('the estimate sheet\'s write captures the estimate and the Timeboxed '
+        'switch on the actions op', () async {
       final id = await seedOutcome();
       await db.actionDao.setCurrentAction(id, 'Draft', now: _ts);
-      final actionId = only(actionsCollection).entityId;
       capture.clear();
-      await db.actionDao.setTimeboxed(actionId, true, now: _ts);
+      // The path the app takes: the estimate sheet writes the estimate and the
+      // switch together, in one row write with one timestamp.
+      await db.todoDao.updateFields(
+        id,
+        timeEstimate: 30,
+        timeboxed: true,
+        now: _ts,
+      );
       final op = only(actionsCollection);
       expect(op.fields['timeboxed'], isTrue);
+      expect(op.fields['time_estimate'], 30);
       expect(op.fields.containsKey('updated_at'), isTrue);
       // The switch is Action metadata, but turning it is a clarifying act, so
       // the Outcome's timestamp moves with it — unlike an organising tag,
       // which leaves the Outcome alone.
-      final outcomeOp = only(todosCollection);
-      expect(outcomeOp.entityId, id);
-      expect(outcomeOp.fields.containsKey('last_clarified_at'), isTrue);
+      final outcomeOps = capture.forCollection(todosCollection);
+      expect(
+        outcomeOps.any((op) => op.fields.containsKey('last_clarified_at')),
+        isTrue,
+        reason: 'the Outcome is stamped as a clarifying act',
+      );
+      expect(outcomeOps.every((op) => op.entityId == id), isTrue);
     });
 
     test('a seeded promote captures the drafted effort on the actions op, not '

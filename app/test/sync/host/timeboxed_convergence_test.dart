@@ -29,8 +29,8 @@ class _Pair {
   final Future<void> Function() sync;
 }
 
-/// Two devices, one Outcome with a current Action of 30 minutes.
-Future<_Pair> _pair() async {
+/// Two devices, one Outcome with a current Action of [timeEstimate] minutes.
+Future<_Pair> _pair({int? timeEstimate = 30}) async {
   final relay = <({String origin, Change change})>[];
   final a = HostDevice.open('a');
   final b = HostDevice.open('b');
@@ -59,7 +59,7 @@ Future<_Pair> _pair() async {
   await a.domain.actionDao.setCurrentAction(
     _outcomeId,
     'Renew the passport',
-    timeEstimate: 30,
+    timeEstimate: timeEstimate,
     now: _t0,
   );
   await sync();
@@ -71,16 +71,44 @@ Future<Action?> _action(HostDevice device) =>
     device.domain.actionDao.getCurrentAction(_outcomeId);
 
 void main() {
+  test('an estimate and the switch written together reach the other device',
+      () async {
+    final pair = await _pair(timeEstimate: null);
+    // The path the app takes: the estimate sheet writes the estimate and the
+    // switch together, in one row write with one timestamp.
+    await pair.a.domain.todoDao.updateFields(
+      _outcomeId,
+      timeEstimate: 30,
+      timeboxed: true,
+      now: _t0,
+    );
+    await pair.sync();
+
+    final onB = (await _action(pair.b))!;
+    expect(onB.timeboxed, isTrue);
+    expect(onB.timeEstimate, 30);
+    expect(
+      isTimeboxedAction(
+        timeboxed: onB.timeboxed,
+        timeEstimate: onB.timeEstimate,
+      ),
+      isTrue,
+    );
+  });
+
   test('the switch turned on at A reads on at B', () async {
     final pair = await _pair();
-    final action = (await _action(pair.a))!;
-    await pair.a.domain.actionDao.setTimeboxed(action.id, true, now: _t0);
+    await pair.a.domain.todoDao.updateFields(
+      _outcomeId,
+      timeboxed: true,
+      now: _t0,
+    );
     await pair.sync();
 
     final onB = (await _action(pair.b))!;
     expect(onB.timeboxed, isTrue);
     // The switch means nothing without the estimate beside it, and the
-    // estimate rode along with it.
+    // estimate is there.
     expect(
       isTimeboxedAction(
         timeboxed: onB.timeboxed,
@@ -93,12 +121,19 @@ void main() {
 
   test('the switch turned off at B reads off at A', () async {
     final pair = await _pair();
-    final action = (await _action(pair.a))!;
-    await pair.a.domain.actionDao.setTimeboxed(action.id, true, now: _t0);
+    await pair.a.domain.todoDao.updateFields(
+      _outcomeId,
+      timeboxed: true,
+      now: _t0,
+    );
     await pair.sync();
 
     pair.b.wall.advance();
-    await pair.b.domain.actionDao.setTimeboxed(action.id, false, now: _t0);
+    await pair.b.domain.todoDao.updateFields(
+      _outcomeId,
+      timeboxed: false,
+      now: _t0.add(const Duration(minutes: 1)),
+    );
     await pair.sync();
 
     expect((await _action(pair.a))!.timeboxed, isFalse);
@@ -108,16 +143,20 @@ void main() {
   test('an estimate cleared at A while B switches on reads as not Timeboxed '
       'on both devices', () async {
     final pair = await _pair();
-    final action = (await _action(pair.a))!;
 
     // A clears the estimate — the limit goes with it.
     await pair.a.domain.todoDao.updateFields(
       _outcomeId,
       clearTimeEstimate: true,
+      now: _t0,
     );
     // B turns the switch on, without knowing about A's clear.
     pair.b.wall.advance();
-    await pair.b.domain.actionDao.setTimeboxed(action.id, true, now: _t0);
+    await pair.b.domain.todoDao.updateFields(
+      _outcomeId,
+      timeboxed: true,
+      now: _t0.add(const Duration(minutes: 1)),
+    );
     await pair.sync();
 
     for (final device in [pair.a, pair.b]) {

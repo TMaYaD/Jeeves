@@ -1569,6 +1569,9 @@ AND (
   /// `clearTimeEstimate: true`). Passing `null` for the typed parameter is
   /// "no change" so callers don't accidentally null-out fields they're not
   /// editing.
+  ///
+  /// [now] is the instant the edit is stamped with; it defaults to the wall
+  /// clock and exists so a test can write a deterministic one.
   Future<void> updateFields(
     String todoId, {
     String? title,
@@ -1581,8 +1584,9 @@ AND (
     bool clearEnergyLevel = false,
     bool clearTimeEstimate = false,
     bool clearDueDate = false,
+    DateTime? now,
   }) async {
-    final ts = DateTime.now().toUtc();
+    final ts = (now ?? DateTime.now()).toUtc();
     // A no-op call (no field provided, no clear flag set) must not stamp —
     // stamping requires an actual mutation. Any provided field or clear flag
     // means the user is actively editing the Outcome and the stamp is owed.

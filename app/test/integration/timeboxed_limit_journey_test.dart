@@ -114,8 +114,7 @@ Future<void> _seed(
     now: now,
   );
   if (timeboxed) {
-    final action = (await db.actionDao.getCurrentAction(_outcomeId))!;
-    await db.actionDao.setTimeboxed(action.id, true, now: now);
+    await db.todoDao.updateFields(_outcomeId, timeboxed: true, now: now);
   }
 }
 

@@ -44,37 +44,38 @@ void main() {
 
   test('the switch is stored on the Action it was set on', () async {
     await db.actionDao.setCurrentAction('t1', 'Draft', now: _ts);
-    final id = await currentActionId('t1');
 
-    await db.actionDao.setTimeboxed(id, true, now: _ts);
+    await db.todoDao.updateFields('t1', timeboxed: true, now: _ts);
 
     expect((await db.actionDao.getCurrentAction('t1'))!.timeboxed, isTrue);
   });
 
   test('turning the switch off stores false, not an absence', () async {
     await db.actionDao.setCurrentAction('t1', 'Draft', now: _ts);
-    final id = await currentActionId('t1');
-    await db.actionDao.setTimeboxed(id, true, now: _ts);
+    await db.todoDao.updateFields('t1', timeboxed: true, now: _ts);
 
-    await db.actionDao.setTimeboxed(id, false, now: _ts);
+    await db.todoDao.updateFields('t1', timeboxed: false, now: _ts);
 
     expect((await db.actionDao.getCurrentAction('t1'))!.timeboxed, isFalse);
   });
 
   test('setting the same value again writes nothing', () async {
     await db.actionDao.setCurrentAction('t1', 'Draft', now: _ts);
-    final id = await currentActionId('t1');
-    await db.actionDao.setTimeboxed(id, true, now: _ts);
+    await db.todoDao.updateFields('t1', timeboxed: true, now: _ts);
+    final first = (await db.actionDao.getCurrentAction('t1'))!;
 
-    // A later turn of the same switch is not a change: the row keeps its
-    // stamp, so no needless op reaches the other device.
-    await db.actionDao.setTimeboxed(
-      id,
-      true,
+    // A later turn of the same switch is not a change: the Action row keeps
+    // its stamp, so no needless Action op reaches the other device.
+    await db.todoDao.updateFields(
+      't1',
+      timeboxed: true,
       now: _ts.add(const Duration(minutes: 5)),
     );
 
-    expect((await db.actionDao.getCurrentAction('t1'))!.updatedAt, _ts);
+    expect(
+      (await db.actionDao.getCurrentAction('t1'))!.updatedAt,
+      first.updatedAt,
+    );
   });
 
   test('clearing the estimate clears the switch with it', () async {
@@ -85,7 +86,7 @@ void main() {
       now: _ts,
     );
     final id = await currentActionId('t1');
-    await db.actionDao.setTimeboxed(id, true, now: _ts);
+    await db.todoDao.updateFields('t1', timeboxed: true, now: _ts);
 
     await db.actionDao.editAction(id, clearTimeEstimate: true, now: _ts);
 
@@ -102,7 +103,7 @@ void main() {
       now: _ts,
     );
     final id = await currentActionId('t1');
-    await db.actionDao.setTimeboxed(id, true, now: _ts);
+    await db.todoDao.updateFields('t1', timeboxed: true, now: _ts);
 
     await db.actionDao.supersedeCurrentAction(
       't1',
@@ -118,9 +119,8 @@ void main() {
   test('the switch belongs to one Outcome only', () async {
     await db.actionDao.setCurrentAction('t1', 'Draft', now: _ts);
     await db.actionDao.setCurrentAction('t2', 'Other', now: _ts);
-    final id = await currentActionId('t1');
 
-    await db.actionDao.setTimeboxed(id, true, now: _ts);
+    await db.todoDao.updateFields('t1', timeboxed: true, now: _ts);
 
     expect((await db.actionDao.getCurrentAction('t2'))!.timeboxed, isNull);
   });

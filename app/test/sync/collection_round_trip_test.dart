@@ -115,9 +115,11 @@ void main() {
     final id = await outcomeOnA();
     await a.domain.todoDao
         .setCurrentActionText(id, 'Draft the memo', now: a.clock.asDateTime);
-    final actionId = (await a.domain.actionDao.getCurrentAction(id))!.id;
-    await a.domain.actionDao
-        .setTimeboxed(actionId, true, now: a.clock.asDateTime);
+    await a.domain.todoDao.updateFields(
+      id,
+      timeboxed: true,
+      now: a.clock.asDateTime,
+    );
     await workspace.syncAll();
     expect((await b.domain.actionDao.getCurrentAction(id))!.timeboxed, isTrue);
     await expectTableConverges('actions');

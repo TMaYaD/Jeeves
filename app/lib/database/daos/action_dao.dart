@@ -250,52 +250,6 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     return true;
   }
 
-  /// Sets the Timeboxed switch of the Action [actionId] (issue #923): whether
-  /// its estimate is a limit rather than a guess.
-  ///
-  /// Stamps `last_clarified_at` like an estimate edit does: the switch is
-  /// Action metadata (ADR-0001), not an organising tag, so turning it is a
-  /// clarifying micro-act. No-op when the row is gone or already holds the
-  /// same value.
-  Future<void> setTimeboxed(
-    String actionId,
-    bool value, {
-    DateTime? now,
-  }) async {
-    final ts = (now ?? DateTime.now()).toUtc();
-    final changed = await attachedDatabase.capturing(
-      () => applySetTimeboxed(actionId, value, ts: ts),
-    );
-    if (changed) {
-      attachedDatabase.notifyActionsViewWrite();
-      attachedDatabase.notifyTodosViewWrite();
-    }
-  }
-
-  /// Transaction-body variant of [setTimeboxed]; returns whether it wrote.
-  Future<bool> applySetTimeboxed(
-    String actionId,
-    bool value, {
-    required DateTime ts,
-  }) async {
-    final row = await (select(actions)..where((a) => a.id.equals(actionId)))
-        .getSingleOrNull();
-    if (row == null) return false;
-    if ((row.timeboxed ?? false) == value) return false;
-    await (update(actions)..where((a) => a.id.equals(actionId))).write(
-      ActionsCompanion(
-        timeboxed: Value(value),
-        updatedAt: Value(ts),
-      ),
-    );
-    _captureAction(actionId, {
-      'timeboxed': value,
-      'updated_at': encodeInstant(ts),
-    });
-    await _stampOutcome(row.outcomeId, ts);
-    return true;
-  }
-
   /// The explicit-affordance primitive: flip the Outcome's current
   /// Action to `role='superseded'` (no linkage columns — the terminal time is
   /// `updated_at`), then, if [newActionText] is non-blank, mint a fresh

@@ -49,9 +49,6 @@ void main() {
     await db.close();
   });
 
-  Future<String> actionId() async =>
-      (await db.actionDao.getCurrentAction('t1'))!.id;
-
   /// The live status, read through the provider.
   ///
   /// The provider is autoDispose, so something must keep it alive while the
@@ -82,7 +79,7 @@ void main() {
   });
 
   test('the switch with an estimate is a limit', () async {
-    await db.actionDao.setTimeboxed(await actionId(), true, now: _ts);
+    await db.todoDao.updateFields('t1', timeboxed: true, now: _ts);
 
     final current = await status();
 
@@ -98,7 +95,7 @@ void main() {
   test(
     'the switch needs an estimate: a merged "estimate cleared" reads as off',
     () async {
-      await db.actionDao.setTimeboxed(await actionId(), true, now: _ts);
+      await db.todoDao.updateFields('t1', timeboxed: true, now: _ts);
       // Another device cleared the estimate; the switch survived the merge. A
       // limit of nothing is not a limit.
       await db.customStatement('UPDATE actions SET time_estimate = NULL');
@@ -108,7 +105,7 @@ void main() {
   );
 
   test('logged time past the estimate passes the limit', () async {
-    await db.actionDao.setTimeboxed(await actionId(), true, now: _ts);
+    await db.todoDao.updateFields('t1', timeboxed: true, now: _ts);
     await db.timeLogDao.openLog(taskId: 't1', userId: _userId, now: _ts);
     await db.timeLogDao.closeLog(
       taskId: 't1',
@@ -123,7 +120,7 @@ void main() {
   });
 
   test('Sprints are counted on the side of the limit they started', () async {
-    await db.actionDao.setTimeboxed(await actionId(), true, now: _ts);
+    await db.todoDao.updateFields('t1', timeboxed: true, now: _ts);
     await db.timeLogDao.openLog(taskId: 't1', userId: _userId, now: _ts);
     await db.timeLogDao.closeLog(
       taskId: 't1',
@@ -152,7 +149,7 @@ void main() {
   });
 
   test('a Sprint running when the limit passes is not interrupted', () async {
-    await db.actionDao.setTimeboxed(await actionId(), true, now: _ts);
+    await db.todoDao.updateFields('t1', timeboxed: true, now: _ts);
     // Work logged from before the instant, and still running: the stint
     // counts on, so the limit is reached inside it.
     await db.timeLogDao.openLog(
@@ -187,11 +184,10 @@ void main() {
   });
 
   test('turning the switch off leaves no status behind', () async {
-    final id = await actionId();
-    await db.actionDao.setTimeboxed(id, true, now: _ts);
+    await db.todoDao.updateFields('t1', timeboxed: true, now: _ts);
     expect(await status(), isNotNull);
 
-    await db.actionDao.setTimeboxed(id, false, now: _ts);
+    await db.todoDao.updateFields('t1', timeboxed: false, now: _ts);
 
     expect(await status(), isNull);
   });

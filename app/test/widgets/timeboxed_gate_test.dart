@@ -93,10 +93,9 @@ void main() {
 
   /// Turns the current Action Timeboxed.
   Future<void> makeTimeboxed() async {
-    final action = (await db.actionDao.getCurrentAction('t1'))!;
-    await db.actionDao.setTimeboxed(
-      action.id,
-      true,
+    await db.todoDao.updateFields(
+      't1',
+      timeboxed: true,
       now: DateTime.now().toUtc(),
     );
   }
