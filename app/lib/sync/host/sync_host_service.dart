@@ -310,7 +310,9 @@ class SyncHostService implements SyncHost, OutboxDrainer {
   // --- SyncHost --------------------------------------------------------------
 
   @override
-  Future<void> applyRemote(String sourcePluginId, List<Change> changes) async {
+  Future<List<Change>> applyRemote(
+      String sourcePluginId, List<Change> changes) async {
+    final refused = <Change>[];
     final touched = <AffectedEntity>{};
     Object? storageError;
     for (final change in changes) {
@@ -325,8 +327,10 @@ class SyncHostService implements SyncHost, OutboxDrainer {
         ));
       } on SyncRejection catch (rejection) {
         // One bad change must not stall the batch or leave what merged
-        // unprojected; a redelivery would refuse it again.
+        // unprojected; a redelivery would refuse it again. It is reported to
+        // the caller, so a plugin can tell that its content was not taken.
         debugPrint('sync host: refused remote change from $sourcePluginId — $rejection');
+        refused.add(change);
         continue;
       } on Object catch (error) {
         storageError = error;
@@ -345,6 +349,7 @@ class SyncHostService implements SyncHost, OutboxDrainer {
       _deliverInBackground();
     }
     if (storageError != null) throw storageError;
+    return refused;
   }
 
   /// Run the convergence passes over what a projection changed, containing any
