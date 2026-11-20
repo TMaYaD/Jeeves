@@ -4,7 +4,8 @@
 /// and writes the host's merged state back as a page. It never compares two
 /// clocks and never chooses between two values — every value read from a page
 /// goes to [SyncHost.applyRemote] and the host's merge decides. Its only
-/// authorship is a clock for a hand edit, from [SyncHost.mintClock].
+/// authorship is a clock for a hand edit, and the filename an Outcome's page
+/// was first written under, both from [SyncHost.mintClock].
 ///
 /// Page text is `page_codec.dart`; which entity sits on which page is
 /// `page_layout.dart`; the folder is a [VaultFolder].
@@ -78,6 +79,9 @@ class VaultPlugin implements SyncPlugin {
   /// snapshot at start and grown by every delivery and every page read.
   final Map<VaultPageKey, Set<String>> _members = {};
   final Map<VaultPageKey, String> _paths = {};
+
+  /// Outcome pages whose name record was minted in the pass under way.
+  final Set<VaultPageKey> _namedPages = {};
   Future<void> _tail = Future<void>.value();
 
   @override
@@ -119,15 +123,17 @@ class VaultPlugin implements SyncPlugin {
               await _host.mergedEntity(change.collection, change.entityId);
           final key = _register(merged);
           if (key != null) dirty.add(key);
-          if (change.collection == tagsCollection) {
-            final ref = '${change.collection}/${change.entityId}';
-            for (final entry in _members.entries) {
-              if (entry.value.contains(ref)) dirty.add(entry.key);
-            }
+          if (change.collection == tagsCollection ||
+              change.collection == vaultOutcomePageNamesCollection) {
+            dirty.addAll(_pagesHolding('${change.collection}/${change.entityId}'));
           }
         }
         Object? failure;
-        for (final key in dirty) {
+        final queue = dirty.toList();
+        final written = <VaultPageKey>{};
+        for (var i = 0; i < queue.length; i++) {
+          final key = queue[i];
+          if (!written.add(key)) continue;
           try {
             await _writePage(key);
           } on Object catch (error) {
@@ -137,11 +143,18 @@ class VaultPlugin implements SyncPlugin {
             _pendingWriteBacks.add(key);
             failure ??= error;
           }
+          queue.addAll(_sheetsOfNamedPages(written));
         }
         _reportSynced();
         if (failure != null) throw failure;
         return changes.isEmpty ? 0 : changes.last.sequence;
       });
+
+  /// Every page that holds the entity `collection/entityId` as a member.
+  Iterable<VaultPageKey> _pagesHolding(String ref) => [
+        for (final entry in _members.entries)
+          if (entry.value.contains(ref)) entry.key,
+      ];
 
   Future<T> _exclusive<T>(Future<T> Function() action) {
     final run = _tail.then((_) => action());
@@ -179,8 +192,15 @@ class VaultPlugin implements SyncPlugin {
   /// an import the vault made is not owed a delivery back to the vault, so
   /// nothing else would ask for the page again.
   Future<void> _writeAll(Set<VaultPageKey> keys) async {
-    final wanted = {...keys, ..._pendingWriteBacks};
-    for (final key in wanted) {
+    final wanted = {...keys, ..._pendingWriteBacks}.toList()
+      // Outcome pages first: writing one may name its page, and every sheet
+      // that plans it is then written with its link.
+      ..sort((a, b) => (a.kind == VaultPageKind.outcome ? 0 : 1)
+          .compareTo(b.kind == VaultPageKind.outcome ? 0 : 1));
+    final written = <VaultPageKey>{};
+    for (var i = 0; i < wanted.length; i++) {
+      final key = wanted[i];
+      if (!written.add(key)) continue;
       try {
         await _writePage(key);
       } on Object catch (error) {
@@ -188,7 +208,22 @@ class VaultPlugin implements SyncPlugin {
         debugPrint('vault: $key not written: $error');
         _pendingWriteBacks.add(key);
       }
+      wanted.addAll(_sheetsOfNamedPages(written));
     }
+  }
+
+  /// The pages that hold the name record of an Outcome page named since the
+  /// last call, and are not written yet: they are owed a rewrite with the link.
+  List<VaultPageKey> _sheetsOfNamedPages(Set<VaultPageKey> written) {
+    final owed = <VaultPageKey>[];
+    for (final named in _namedPages.toList()) {
+      _namedPages.remove(named);
+      for (final holder in _pagesHolding(
+          '$vaultOutcomePageNamesCollection/${named.entityId}')) {
+        if (!written.contains(holder)) owed.add(holder);
+      }
+    }
+    return owed;
   }
 
   VaultPageKey? _register(Change change) {
@@ -196,8 +231,7 @@ class VaultPlugin implements SyncPlugin {
     if (key == null) return null;
     final members = _members.putIfAbsent(key, () => <String>{});
     members.add('${change.collection}/${change.entityId}');
-    final tagId = linkedTagId(change);
-    if (tagId != null) members.add('$tagsCollection/$tagId');
+    members.addAll(linkedEntityRefs(change));
     return key;
   }
 
@@ -288,6 +322,16 @@ class VaultPlugin implements SyncPlugin {
           // written over either: the folder keeps it until the host takes it.
           _untakenPageCount++;
           _untaken.add(key);
+        }
+        if (kind == VaultPageKind.outcome) {
+          final named = await _mergedPageStem(key.entityId);
+          final namedPath = named == null ? null : '${kind.folder}/$named.md';
+          if (namedPath != null &&
+              copies.any((copy) => copy.path == namedPath) &&
+              !untaken.contains(namedPath) &&
+              !unreadable.contains(namedPath)) {
+            held = namedPath;
+          }
         }
         _paths[key] = held ?? copies.first.path;
         _members.putIfAbsent(key, () => <String>{});
@@ -405,8 +449,7 @@ class VaultPlugin implements SyncPlugin {
     final members = _members.putIfAbsent(key, () => <String>{});
     for (final change in changes) {
       members.add('${change.collection}/${change.entityId}');
-      final tagId = linkedTagId(change);
-      if (tagId != null) members.add('$tagsCollection/$tagId');
+      members.addAll(linkedEntityRefs(change));
     }
   }
 
@@ -810,6 +853,8 @@ class VaultPlugin implements SyncPlugin {
     }
     var attempts = 0;
     var fallbacks = 0;
+    final previousPath = _paths[key];
+    await _ensureOutcomePageName(key);
     while (true) {
       final text = await _render(key);
       if (text == null) {
@@ -817,7 +862,7 @@ class VaultPlugin implements SyncPlugin {
         _pendingWriteBacks.remove(key);
         return;
       }
-      var path = _pathFor(key, text);
+      var path = await _pathFor(key, text);
       final String? existing;
       try {
         existing = await _folder.read(path);
@@ -835,6 +880,7 @@ class VaultPlugin implements SyncPlugin {
         if (base != text) await _saveBase(path, text);
         _paths[key] = path;
         _pendingWriteBacks.remove(key);
+        await _retireOldPath(previousPath, path);
         return;
       }
       if (existing != null) {
@@ -864,6 +910,10 @@ class VaultPlugin implements SyncPlugin {
           }
           path = _ownPath(key, path);
           _paths[key] = path;
+          // The record names the file actually written.
+          if (key.kind == VaultPageKind.outcome) {
+            await _mintPageName(key, _stemOf(path));
+          }
           fallbacks++;
           continue;
         }
@@ -921,13 +971,97 @@ class VaultPlugin implements SyncPlugin {
       await _saveBase(path, text);
       _paths[key] = path;
       _pendingWriteBacks.remove(key);
+      await _retireOldPath(previousPath, path);
       return;
+    }
+  }
+
+  // --- Outcome page names ----------------------------------------------------
+
+  /// The filename stem every device agreed on for an Outcome's page, or null
+  /// when merged state has no usable one.
+  Future<String?> _mergedPageStem(String outcomeId) async {
+    final record =
+        await _host.mergedEntity(vaultOutcomePageNamesCollection, outcomeId);
+    if (record.tombstone != null) return null;
+    final stem = record.fields['file_stem']?.value;
+    return isUsableOutcomePageStem(stem) ? stem! as String : null;
+  }
+
+  String _stemOf(String path) {
+    final name = path.substring(path.lastIndexOf('/') + 1);
+    return name.endsWith('.md') ? name.substring(0, name.length - 3) : name;
+  }
+
+  /// Record the filename an Outcome's page is first written under, once, so a
+  /// session sheet can link to it. Nothing re-mints while a usable record
+  /// exists, so a retitle never changes it.
+  Future<void> _ensureOutcomePageName(VaultPageKey key) async {
+    if (key.kind != VaultPageKind.outcome) return;
+    final outcome = await _host.mergedEntity(todosCollection, key.entityId);
+    if (outcome.fields.isEmpty && outcome.tombstone == null) return;
+    if (await _mergedPageStem(key.entityId) != null) return;
+    var path = _paths[key] ??
+        '${key.kind.folder}/${_slug(outcome.fields['title']?.value)}.md';
+    try {
+      final held = await _folder.read(path);
+      if (held != null) {
+        final id = parsePage(held).frontmatter['id'];
+        if (id is! String) return;
+        if (id != key.entityId) path = _ownPath(key, path);
+      }
+    } on Object {
+      // A path that cannot be read or parsed is left to the write below.
+      return;
+    }
+    final stem = _stemOf(path);
+    // A hand-named legacy file is not a name a link can use: the page keeps
+    // its path and the sheet names the Outcome without a link.
+    if (!isUsableOutcomePageStem(stem)) return;
+    await _mintPageName(key, stem);
+  }
+
+  Future<void> _mintPageName(VaultPageKey key, String stem) async {
+    if (!isUsableOutcomePageStem(stem)) return;
+    final refused = await _host.applyRemote(id, [
+      Change(
+        collection: vaultOutcomePageNamesCollection,
+        entityId: key.entityId,
+        fields: {'file_stem': ClockedValue(stem, _host.mintClock())},
+      ),
+    ]);
+    if (refused.isNotEmpty) {
+      debugPrint('vault: $key page name not taken: the host refused it');
+      return;
+    }
+    _register(await _host.mergedEntity(
+        vaultOutcomePageNamesCollection, key.entityId));
+    _namedPages.add(key);
+  }
+
+  /// A page that moved to the name every device agreed on leaves its old file
+  /// behind only if that file holds something this device has not read.
+  Future<void> _retireOldPath(String? oldPath, String newPath) async {
+    if (oldPath == null || oldPath == newPath) return;
+    try {
+      final current = await _folder.read(oldPath);
+      if (current == null || current != await _baseOf(oldPath)) return;
+      await _folder.remove(oldPath);
+      await _dropBase(oldPath);
+    } on Object catch (error) {
+      debugPrint('vault: $oldPath not removed: $error');
     }
   }
 
   Future<String?> _render(VaultPageKey key) async {
     final members = _members[key];
     if (members == null || members.isEmpty) return null;
+    if (key.kind == VaultPageKind.outcome) {
+      // A page-name record learnt from a session sheet is not an Outcome: no
+      // page is written until the Outcome itself is known.
+      final outcome = await _host.mergedEntity(todosCollection, key.entityId);
+      if (outcome.fields.isEmpty && outcome.tombstone == null) return null;
+    }
     final changes = <Change>[];
     for (final ref in members.toList()..sort()) {
       final slash = ref.indexOf('/');
@@ -945,7 +1079,11 @@ class VaultPlugin implements SyncPlugin {
   /// The name is a reading of the entity, never its identity — the frontmatter
   /// id is. Two entities can want the same name, and the one that finds the
   /// name taken moves to a path of its own ([_ownPath]).
-  String _pathFor(VaultPageKey key, String text) {
+  Future<String> _pathFor(VaultPageKey key, String text) async {
+    if (key.kind == VaultPageKind.outcome) {
+      final named = await _mergedPageStem(key.entityId);
+      if (named != null) return '${key.kind.folder}/$named.md';
+    }
     final known = _paths[key];
     if (known != null) return known;
     final page = parsePage(text);

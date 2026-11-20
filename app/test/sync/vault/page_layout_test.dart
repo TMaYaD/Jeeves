@@ -73,4 +73,43 @@ void main() {
         const VaultPageKey(VaultPageKind.session, 's1'));
     expect(pageOwning(_change('time_logs', 'x', {'task_id': 'o1'})), key);
   });
+
+  group('a session sheet links to the Outcome page by its recorded name', () {
+    const sessionKey = VaultPageKey(VaultPageKind.session, 's1');
+    final session = _change('focus_sessions', 's1', {'started_at': '2026-11-17T09:00:00.000Z'});
+    final row = _change('focus_session_tasks', 'r1',
+        {'focus_session_id': 's1', 'task_id': 'o1', 'position': 0});
+    Change record(Object? stem) =>
+        _change('vault_outcome_page_names', 'o1', {'file_stem': stem});
+    List<String> lines(List<Change> entities) => [
+          for (final l in layOutPage(sessionKey, entities).checklist) l.text
+        ];
+
+    test('the line is a link to the recorded filename', () {
+      expect(lines([session, row, record('call-sam')]), ['[[Outcomes/call-sam]]']);
+    });
+
+    test('without a record the line is the plain id', () {
+      expect(lines([session, row]), ['o1']);
+    });
+
+    test('an unusable stem gives the plain id too', () {
+      for (final stem in ['../x', 'a|b', '', '.hidden', 'a]b', 7]) {
+        expect(lines([session, row, record(stem)]), ['o1'], reason: '$stem');
+      }
+    });
+
+    test('entity order does not change the bytes', () {
+      final a = renderPage(layOutPage(sessionKey, [session, row, record('call-sam')]));
+      final b = renderPage(layOutPage(sessionKey, [record('call-sam'), row, session]));
+      expect(a, b);
+    });
+
+    test('the record belongs on the Outcome page and is linked from the sheet', () {
+      expect(pageOwning(record('call-sam')), key);
+      expect(linkedEntityRefs(row), ['vault_outcome_page_names/o1']);
+      expect(linkedEntityRefs(link), ['tags/t1']);
+      expect(linkedEntityRefs(outcome), isEmpty);
+    });
+  });
 }

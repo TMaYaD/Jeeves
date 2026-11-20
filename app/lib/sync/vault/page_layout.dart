@@ -54,6 +54,7 @@ VaultPageKey? pageOwning(Change change) {
 
   switch (change.collection) {
     case todosCollection:
+    case vaultOutcomePageNamesCollection:
       return VaultPageKey(VaultPageKind.outcome, change.entityId);
     case actionsCollection:
       final outcome = field('outcome_id');
@@ -96,6 +97,30 @@ String? linkedTagId(Change change) {
   final value = change.fields['tag_id']?.value;
   return value is String ? value : null;
 }
+
+/// The entities a [change] links to, as `collection/entityId` refs: the Tag a
+/// junction names, and the page-name record of an Outcome a session plans. Each
+/// is carried by the page holding the change, though it has no page position
+/// there.
+List<String> linkedEntityRefs(Change change) {
+  final tagId = linkedTagId(change);
+  if (tagId != null) return ['$tagsCollection/$tagId'];
+  if (change.collection == focusSessionTasksCollection) {
+    final taskId = change.fields['task_id']?.value;
+    if (taskId is String) return ['$vaultOutcomePageNamesCollection/$taskId'];
+  }
+  return const [];
+}
+
+/// Whether [stem] can be a page's filename (without folder and `.md`) and sit
+/// inside a `[[...]]` link. A stem comes from a page's block, so it is checked
+/// before it becomes a path.
+bool isUsableOutcomePageStem(Object? stem) =>
+    stem is String &&
+    stem.isNotEmpty &&
+    stem.length <= 200 &&
+    !stem.startsWith('.') &&
+    !RegExp(r'[/\\\[\]|#^\x00-\x1f\x7f]').hasMatch(stem);
 
 /// Fields whose value the page shows, so a hand edit can be told from a copy by
 /// its digest. Every other field of every entity travels in the block.
@@ -189,11 +214,21 @@ PageModel layOutPage(VaultPageKey key, List<Change> entities) {
               .compareTo((b.fields['position']?.value as int?) ?? 0);
           return byPosition != 0 ? byPosition : a.entityId.compareTo(b.entityId);
         });
+      final stemByOutcome = {
+        for (final change in sorted)
+          if (change.collection == vaultOutcomePageNamesCollection &&
+              change.tombstone == null &&
+              isUsableOutcomePageStem(change.fields['file_stem']?.value))
+            change.entityId: change.fields['file_stem']!.value! as String,
+      };
       for (final row in plan) {
         final taskId = row.fields['task_id']?.value;
-        if (taskId is String) {
-          checklist.add(ChecklistLine(done: false, text: '[[Outcomes/$taskId]]'));
-        }
+        if (taskId is! String) continue;
+        // Without a usable record the Outcome is named, not linked: a link to
+        // a page that may not exist would dangle.
+        final stem = stemByOutcome[taskId];
+        checklist.add(ChecklistLine(
+            done: false, text: stem == null ? taskId : '[[Outcomes/$stem]]'));
       }
     case VaultPageKind.capture:
       final title = rootValue('title');

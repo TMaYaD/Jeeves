@@ -788,4 +788,165 @@ Future<int> _linkCount(_VaultDevice device, String outcomeId) async {
     variables: [Variable<String>(outcomeId)],
   ).getSingle();
   return row.read<int>('c');
+
+  group('a session sheet links to its Outcome pages', () {
+    Future<String> openPlanningSession(_VaultDevice device) async {
+      final session = await device.device.domain.focusSessionDao.openSession(
+        userId: _userId,
+        taskIds: [_outcomeId],
+        now: DateTime.utc(2026, 11, 17, 9),
+      );
+      await device.device.domain.focusSessionDao.closeSession(
+          sessionId: session, now: DateTime.utc(2026, 11, 17, 10));
+      return session;
+    }
+
+    /// Every `Plan` link on the sheet must open the planned Outcome's page.
+    Future<void> expectLinkOpensOutcome(_VaultDevice device, String sheet) async {
+      final lines = parsePage(sheet).checklist.map((line) => line.text).toList();
+      expect(lines, hasLength(1));
+      final match = RegExp(r'^\[\[(Outcomes/[^\]]+)\]\]$').firstMatch(lines.single);
+      expect(match, isNotNull, reason: 'the line is a link: ${lines.single}');
+      final target = await device.folder.read('${match!.group(1)}.md');
+      expect(target, isNotNull, reason: 'the link names a page that exists');
+      expect(parsePage(target!).frontmatter['id'], _outcomeId);
+    }
+
+    Future<String> onlySheet(_VaultDevice device) async =>
+        (await device.folder
+            .read((await device.folder.listMarkdownFiles('Sessions')).single))!;
+
+    Future<int> unauthoredNameRows(_VaultDevice device) async =>
+        (await device.device.sync.customSelect(
+                'SELECT COUNT(*) AS c FROM unauthored_changes WHERE collection = ?',
+                variables: [Variable<String>('vault_outcome_page_names')])
+            .getSingle())
+            .read<int>('c');
+
+    test('the link opens the Outcome page, and the record never reaches the op log',
+        () async {
+      final a = await _open('a', root);
+      await a.device.domain.todoDao
+          .insertOutcome(id: _outcomeId, title: 'Call Sam', userId: _userId);
+      await openPlanningSession(a);
+      await a.device.host!.deliverAll();
+      await a.plugin.rescan();
+
+      final sheet = await onlySheet(a);
+      expect(parsePage(sheet).checklist.single.text, '[[Outcomes/call-sam]]');
+      await expectLinkOpensOutcome(a, sheet);
+      expect(await unauthoredNameRows(a), 0,
+          reason: 'the page name is vault-only and is never authored');
+    });
+
+    test('retitling the Outcome keeps the link and the sheet bytes', () async {
+      final a = await _open('a', root);
+      await a.device.domain.todoDao
+          .insertOutcome(id: _outcomeId, title: 'Call Sam', userId: _userId);
+      await openPlanningSession(a);
+      await a.device.host!.deliverAll();
+      await a.plugin.rescan();
+      final before = await onlySheet(a);
+
+      a.device.wall.advance();
+      await a.device.domain.todoDao.updateFields(_outcomeId, title: 'Ring Sam');
+      await a.device.host!.deliverAll();
+      await a.plugin.rescan();
+
+      expect(await a.folder.listMarkdownFiles('Outcomes'),
+          ['Outcomes/call-sam.md']);
+      expect(parsePage((await a.outcomePage())).frontmatter['title'], 'Ring Sam');
+      expect(await onlySheet(a), before);
+      await expectLinkOpensOutcome(a, await onlySheet(a));
+    });
+
+    test('a device that holds only the sheet writes the same sheet', () async {
+      final a = await _open('a', root);
+      final b = await _open('b', root);
+      await a.device.domain.todoDao
+          .insertOutcome(id: _outcomeId, title: 'Call Sam', userId: _userId);
+      await openPlanningSession(a);
+      await a.device.host!.deliverAll();
+      await a.plugin.rescan();
+
+      final path = (await a.folder.listMarkdownFiles('Sessions')).single;
+      final sheet = (await a.folder.read(path))!;
+      await b.folder.writeAtomically(path, sheet);
+      await b.plugin.rescan();
+
+      expect(await b.folder.read(path), sheet);
+      expect(await b.folder.listMarkdownFiles('Outcomes'), isEmpty,
+          reason: 'B has not seen the Outcome, so it writes no page for it');
+    });
+
+    test('an existing vault keeps its filenames', () async {
+      final a = await _open('a', root);
+      await a.device.domain.todoDao
+          .insertOutcome(id: _outcomeId, title: 'Call Sam', userId: _userId);
+      await openPlanningSession(a);
+      await a.device.host!.deliverAll();
+      await a.plugin.rescan();
+
+      // The vault as an earlier build left it: no page-name record anywhere.
+      String withoutRecord(String text) {
+        final page = parsePage(text);
+        return renderPage(PageModel(
+          frontmatter: page.frontmatter,
+          notes: page.notes,
+          checklist: page.checklist,
+          block: [
+            for (final e in page.block!)
+              if (e.collection != 'vault_outcome_page_names') e,
+          ],
+        ));
+      }
+
+      final legacy = Directory('${root.path}/legacy')..createSync(recursive: true);
+      final legacyFolder = DirectoryVaultFolder(legacy);
+      await legacyFolder.writeAtomically(
+          'Outcomes/old-name.md', withoutRecord(await a.outcomePage()));
+      final sheetPath = (await a.folder.listMarkdownFiles('Sessions')).single;
+      await legacyFolder.writeAtomically(
+          sheetPath, withoutRecord((await a.folder.read(sheetPath))!));
+
+      final c = await _open('legacy', root);
+      await c.plugin.rescan();
+
+      expect(await c.folder.listMarkdownFiles('Outcomes'),
+          ['Outcomes/old-name.md']);
+      expect(parsePage(await onlySheet(c)).checklist.single.text,
+          '[[Outcomes/old-name]]');
+    });
+
+    test('two devices that first named a page differently agree on one file',
+        () async {
+      final a = await _open('a', root);
+      final b = await _open('b', root);
+      await a.device.domain.todoDao
+          .insertOutcome(id: _outcomeId, title: 'Call Sam', userId: _userId);
+      await a.device.host!.deliverAll();
+      await a.plugin.rescan();
+      // B receives the Outcome through the op log, not through a page, and
+      // retitles it before its first vault pass writes a page: A names the
+      // page call-sam, B names it ring-sam.
+      await b.device.host!.applyRemote(
+          'test', [await a.device.host!.mergedEntity('todos', _outcomeId)]);
+      b.device.wall.advance();
+      await b.device.domain.todoDao.updateFields(_outcomeId, title: 'Ring Sam');
+      await b.device.host!.deliverAll();
+      expect(await b.folder.listMarkdownFiles('Outcomes'),
+          ['Outcomes/ring-sam.md']);
+      await openPlanningSession(a);
+      await _settle(a, b);
+
+      for (final device in [a, b]) {
+        final pages = await device.folder.listMarkdownFiles('Outcomes');
+        expect(pages, hasLength(1), reason: device.device.label);
+        await expectLinkOpensOutcome(device, await onlySheet(device));
+      }
+      expect(await a.folder.listMarkdownFiles('Outcomes'),
+          await b.folder.listMarkdownFiles('Outcomes'));
+      expect(await onlySheet(a), await onlySheet(b));
+    });
+  });
 }

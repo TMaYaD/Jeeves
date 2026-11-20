@@ -64,6 +64,11 @@ const String focusSessionReschedulesCollection = 'focus_session_reschedules';
 const String outcomeBypassDecisionsCollection = 'outcome_bypass_decisions';
 const String userPreferencesCollection = 'user_preferences';
 
+/// The filename each Outcome page was first written under (field `file_stem`),
+/// so a session sheet can link to it. Vault-only: it lives in merge state, has
+/// no codec (the projector skips it) and is never authored into the op log.
+const String vaultOutcomePageNamesCollection = 'vault_outcome_page_names';
+
 /// How a column's SQL value maps to and from its JSON field value.
 enum FieldKind {
   /// Pass-through string — including the TEXT timestamp columns.
