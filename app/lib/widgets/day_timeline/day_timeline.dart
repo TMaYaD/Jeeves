@@ -767,14 +767,10 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
       decoration: BoxDecoration(
         color: background,
         borderRadius: BorderRadius.circular(6),
-        border: Border(
-          top: BorderSide(color: border),
-          left: BorderSide(color: border),
-          right: BorderSide(color: border),
-          bottom: BorderSide(
-              color: entry.isTimeboxed ? foreground : border,
-              width: entry.isTimeboxed ? 4 : 1),
-        ),
+        // One colour all round: a rounded box border paints only when every
+        // side is the same, and the limit edge of a Timeboxed Action is the
+        // one side that changes. It is drawn over the tile instead.
+        border: Border.all(color: border),
       ),
       child: ClipRect(
         child: height < 48
@@ -814,6 +810,25 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
       ),
     );
 
+    // The limit edge of a Timeboxed Action: a heavier bottom edge on its tile
+    // (issue #923). It is drawn over the tile, not as part of the tile's own
+    // border, because a rounded box border paints only when all four sides
+    // are the same colour.
+    final tile = entry.isTimeboxed
+        ? Stack(
+            fit: StackFit.expand,
+            children: [
+              body,
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: _limitEdge(piece, foreground),
+              ),
+            ],
+          )
+        : body;
+
     return Positioned(
       top: piece.start.difference(_windowStart).inMinutes * _pixelsPerMinute,
       left: _gutterWidth,
@@ -830,11 +845,31 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
             child: Text(entry.title, maxLines: 1, overflow: TextOverflow.ellipsis),
           ),
         ),
-        childWhenDragging: Opacity(opacity: 0.3, child: body),
+        childWhenDragging: Opacity(opacity: 0.3, child: tile),
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: () => _openSheet(entry),
-          child: body,
+          child: tile,
+        ),
+      ),
+    );
+  }
+
+  /// The limit edge of a Timeboxed Action's tile: a heavier bottom edge
+  /// (issue #923, docs/DESIGN.md § Day timeline).
+  ///
+  /// The tile's own border stays one colour all round — a rounded box border
+  /// paints only when every side matches — so the edge is drawn over the
+  /// tile's bottom, in the tile's own foreground colour.
+  Widget _limitEdge(PlacedPiece piece, Color color) {
+    return Container(
+      key: Key('day_timeline_limit_edge_${piece.outcomeId}_${piece.part}'),
+      height: 4,
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: const BorderRadius.only(
+          bottomLeft: Radius.circular(6),
+          bottomRight: Radius.circular(6),
         ),
       ),
     );

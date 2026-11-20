@@ -82,17 +82,16 @@ void main() {
   setUpAll(configureSqliteForTests);
 
   group('schema version', () {
-    test('is 12 — eleven onUpgrade steps behind the fresh baseline',
-        () async {
+    test('is 13 — twelve onUpgrade steps behind the fresh baseline', () async {
       final db = _openInMemory();
       addTearDown(db.close);
-      expect(db.schemaVersion, 12);
+      expect(db.schemaVersion, 13);
       // A fresh file runs onCreate at the current version, not the ladder.
       expect(
         await db.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        12,
+        13,
       );
     });
   });
@@ -303,7 +302,7 @@ void main() {
       await seed.customStatement('PRAGMA user_version = 1');
       await seed.close();
 
-      // Open 2: Drift sees user_version=1 and schemaVersion=12, so it runs the
+      // Open 2: Drift sees user_version=1 and schemaVersion=13, so it runs the
       // whole ladder — the v2 drop asserted here, and the v3 `tags` recreate the
       // group below owns.
       final upgraded = GtdDatabase(
@@ -315,7 +314,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        12,
+        13,
       );
       expect(await _columnNames(upgraded, 'todos'),
           isNot(contains('time_spent_minutes')),
@@ -442,7 +441,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        12,
+        13,
       );
       expect(await _uniqueConstraintIndexes(upgraded, 'tags'), isEmpty,
           reason: 'v3 drops UNIQUE (name, type)');
@@ -502,7 +501,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        12,
+        13,
       );
       expect(await _objects(upgraded, 'table'), contains('capture_attachments'));
       expect(await _rows(upgraded, 'captures'), hasLength(1));
@@ -607,7 +606,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        12,
+        13,
       );
       expect(await _columnNames(upgraded, 'todos'), isNot(contains('clarified')),
           reason: 'v5 drops the dead flag');
@@ -708,7 +707,7 @@ void main() {
           await upgraded.customSelect('PRAGMA user_version').getSingle().then(
                 (r) => r.read<int>('user_version'),
               ),
-          12,
+          13,
         );
         expect(await _rows(upgraded, 'todos'), todosBefore);
         expect(await _rows(upgraded, 'captures'), capturesBefore);
@@ -725,7 +724,7 @@ void main() {
         for (final table in freshTables) {
           expect(await _columnNames(upgraded, table),
               await _columnNames(fresh, table),
-              reason: 'columns of $table match a fresh store');
+              reason: 'columns of $table match a fresh v6 store');
         }
       });
     }
@@ -1091,7 +1090,83 @@ void main() {
     });
   });
 
-  group('v12 onUpgrade adds the Habit tables', () {
+  group('v12 onUpgrade adds actions.timeboxed', () {
+    test('adds a nullable column and keeps every existing Action row',
+        () async {
+      final raw = sqlite3.openInMemory();
+      addTearDown(raw.close);
+
+      final seed = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      var seedClosed = false;
+      Future<void> closeSeed() async {
+        if (seedClosed) return;
+        seedClosed = true;
+        await seed.close();
+      }
+
+      addTearDown(closeSeed);
+
+      // A v11 `actions` table: the current declaration with the v12 column cut
+      // out of the CREATE statement Drift itself emitted. The cut takes the
+      // column's CHECK constraint with it — the constraint names the column, so
+      // leaving it behind would leave a v11 table that mentions `timeboxed`.
+      final createSql = (await seed
+              .customSelect("SELECT sql FROM sqlite_master "
+                  "WHERE type = 'table' AND name = 'actions'")
+              .getSingle())
+          .read<String>('sql');
+      final v11Sql = createSql.replaceFirst(
+        RegExp(r',\s*"timeboxed"\s+INTEGER.*?(?=,\s*"created_at")'),
+        '',
+      );
+      expect(v11Sql, isNot(contains('timeboxed')),
+          reason: 'the fixture is only a v11 store without the column');
+      await seed.customStatement('DROP TABLE actions');
+      await seed.customStatement(v11Sql);
+
+      // The store spells an instant as ISO-8601 UTC text (`storeDateTimeAsText`
+      // on the schema), so the fixture writes one: an epoch integer would be
+      // read back as text and fail to parse.
+      final createdAt = '2026-11-16T09:00:00.000Z';
+      await seed.customStatement(
+        'INSERT INTO todos (id, title, user_id, created_at, intent) '
+        "VALUES ('t1', 'Ship it', 'u1', ?, 'next')",
+        [createdAt],
+      );
+      await seed.customStatement(
+        'INSERT INTO actions (id, outcome_id, user_id, text, role, created_at) '
+        "VALUES ('a1', 't1', 'u1', 'Call Bob', 'current', ?)",
+        [createdAt],
+      );
+      await seed.customStatement('PRAGMA user_version = 11');
+      await closeSeed();
+
+      final upgraded = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      addTearDown(upgraded.close);
+      final fresh = GtdDatabase(NativeDatabase.memory());
+      addTearDown(fresh.close);
+
+      expect(await _columnNames(upgraded, 'actions'), contains('timeboxed'));
+      expect(await _columnNames(upgraded, 'actions'),
+          await _columnNames(fresh, 'actions'),
+          reason: 'the upgraded store matches a fresh one');
+
+      // The Action row from before the column existed is still there, and
+      // reads NULL: not Timeboxed.
+      final actions = await upgraded.select(upgraded.actions).get();
+      expect(actions, hasLength(1));
+      expect(actions.single.id, 'a1');
+      expect(actions.single.actionText, 'Call Bob');
+      expect(actions.single.role, 'current');
+      expect(actions.single.timeboxed, isNull);
+    });
+  });
+
+  group('v13 onUpgrade adds the Habit tables', () {
     /// The five tables the Habit data model adds, with their exact column
     /// sets. Written out rather than derived from the declarations: the point
     /// of the assertion is that the *stored* shape is the agreed one, and a
@@ -1167,7 +1242,7 @@ void main() {
 
       addTearDown(closeSeed);
 
-      // A v11 store: the Habit tables did not exist. Dropped children first,
+      // A v12 store: the Habit tables did not exist. Dropped children first,
       // so the fixture stays a faithful v11 store whatever a reader assumes
       // about foreign keys.
       for (final table in const [
@@ -1190,7 +1265,7 @@ void main() {
         'INSERT INTO time_logs (id, user_id, task_id, started_at) '
         "VALUES ('tl1', 'u1', 't1', '2026-11-18T09:30:00.000Z')",
       );
-      await seed.customStatement('PRAGMA user_version = 11');
+      await seed.customStatement('PRAGMA user_version = 12');
       await closeSeed();
 
       final upgraded = GtdDatabase(
@@ -1202,7 +1277,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        12,
+        13,
       );
 
       for (final entry in habitTables.entries) {

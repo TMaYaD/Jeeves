@@ -20,6 +20,15 @@ final contextTagsProvider = StreamProvider<List<Tag>>((ref) {
   return db.tagDao.watchByType('context');
 });
 
+/// Stream of the tags of one [type] (`area`, `context`, `project`, …).
+///
+/// The single-choice tag picker reads the rows of the type it was given.
+final tagsByTypeProvider =
+    StreamProvider.family<List<Tag>, String>((ref, type) {
+  final db = ref.watch(databaseProvider);
+  return db.tagDao.watchByType(type);
+});
+
 /// Stream of all person tags.
 final personTagsProvider = StreamProvider<List<Tag>>((ref) {
   final db = ref.watch(databaseProvider);

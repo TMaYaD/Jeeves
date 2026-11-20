@@ -195,7 +195,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final UserPreferencesDao userPreferencesDao = UserPreferencesDao(this);
 
   @override
-  int get schemaVersion => 12;
+  int get schemaVersion => 13;
 
   /// Completes with the [OpeningDetails] of this store's one open.
   ///
@@ -370,7 +370,19 @@ class GtdDatabase extends _$GtdDatabase {
               await m.createTable(sprints);
             }
           }
-          // v12 (issue #401): the Habit data model. Purely additive — five new
+          // v12 (issue #923): `actions.timeboxed`, whether the estimate is a
+          // limit rather than a guess. A nullable `ADD COLUMN` — no table
+          // rebuild, every existing row reads NULL ("not Timeboxed"), nothing
+          // is lost. Guarded on the column's absence like v7.
+          if (from < 12) {
+            final existing = await m.database
+                .customSelect('PRAGMA table_info(actions)')
+                .get();
+            if (!existing.any((row) => row.read<String>('name') == 'timeboxed')) {
+              await m.addColumn(actions, actions.timeboxed);
+            }
+          }
+          // v13 (issue #401): the Habit data model. Purely additive — five new
           // tables and one index, no existing row or column touched, nothing
           // backfilled (there were no Habits before this build, so there is
           // nothing to backfill *from*).
@@ -378,7 +390,7 @@ class GtdDatabase extends _$GtdDatabase {
           // Each table is created only when it is missing, as v11 does for
           // `sprints`: a store that already carries one (a rebuilt fixture, a
           // half-applied earlier attempt) must not fail the ladder on it.
-          if (from < 12) {
+          if (from < 13) {
             final tables = await m.database
                 .customSelect(
                     "SELECT name FROM sqlite_master WHERE type='table'")

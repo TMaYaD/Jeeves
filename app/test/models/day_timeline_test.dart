@@ -115,6 +115,27 @@ void main() {
       );
       expect(entries.map((e) => e.isEngaged), [true, true, true, false]);
     });
+
+    test('marks the Outcomes whose Action is Timeboxed', () {
+      // The tile of a Timeboxed Outcome carries the heavier bottom edge
+      // (issue #923); every other tile keeps the ordinary one.
+      final entries = dayTimelineEntriesFor(
+        tasks: [_todo('bounded', estimate: 30), _todo('open', estimate: 30)],
+        defaultEstimateMinutes: 10,
+        now: _at(9),
+        timeboxedTaskIds: {'bounded'},
+      );
+      expect(entries.map((e) => e.isTimeboxed), [true, false]);
+    });
+
+    test('an Outcome with no Timeboxed state is not Timeboxed', () {
+      final entries = dayTimelineEntriesFor(
+        tasks: [_todo('a', estimate: 30)],
+        defaultEstimateMinutes: 10,
+        now: _at(9),
+      );
+      expect(entries.single.isTimeboxed, isFalse);
+    });
   });
 
   group('flowDay', () {

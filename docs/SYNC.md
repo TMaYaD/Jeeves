@@ -2,7 +2,7 @@
 
 <!-- This document describes the current state of the system. Rewrite sections when they become inaccurate. Do not append change logs. -->
 
-Jeeves is offline-first. Local writes go to the embedded SQLite store immediately, and are replicated between devices by the **op log** — signed ops over the minimal sync server — as soon as the device is enrolled and reachable ([ADR-0026](./adr/0026-minimal-sync-server.md), [ADR-0034](./adr/0034-sync-starts-at-enrolment.md)). This is the only client sync path; there is no replication engine on the device (#595). Habit data stays in the device store: those tables have no codec, so they are absent from the wire and the export.
+Jeeves is offline-first. Local writes go to the embedded SQLite store immediately, and are replicated between devices by the **op log** — signed ops over the minimal sync server — as soon as the device is enrolled and reachable ([ADR-0026](./adr/0026-minimal-sync-server.md), [ADR-0034](./adr/0034-sync-starts-at-enrolment.md)). Replication runs through the **sync host**, which owns the merge state; the op log and the **vault** are plugins behind it, and one plugin runs at a time (#914). There is one replication engine on the device, and no second (#595). Habit data stays in the device store: those tables have no codec, so they are absent from the wire and the export.
 
 This document is about **merge**: how two devices that wrote concurrently end up agreeing, with the focus on the `user_preferences` synced key-value store, whose keys are the ones where blanket last-write-wins is sometimes the wrong answer.
 
@@ -146,6 +146,31 @@ or a rebuild from the log) never holds a user's edit back for its length. That w
 and only that walk, leaves alone an entity whose local change is still in the outbox.
 A remote change is always projected on arrival. `DomainProjector.project`
 (`sync/domain_projector.dart`) gives the reason for each.
+## The vault: a folder of Markdown pages
+
+The vault is the first plugin behind the host ([sync-plugins](proposals/sync-plugins.md)). It carries the device's merged state to a folder of pages a person can read, grep and edit, and brings back what they changed. It needs no account and no server: a file syncer of the person's choosing carries the folder between devices.
+
+**It is a carrier, like any plugin.** It turns a page into changes and writes the host's merged state back as a page. It never chooses between two values and never writes a value the host did not give it; the one thing it authors is a clock for a hand edit, minted with `SyncHost.mintClock()`. It reads merged state through `SyncHost.mergedEntity` rather than comparing clocks itself.
+
+**What is on a page.** One page per Outcome (`Outcomes/`), one sheet per FocusSession (`Sessions/`), one page per Capture (`Inbox/`). A sheet's name carries the session's UTC date and its id, so two sittings on one day never collide. A page's identity is the `id` in its frontmatter, never its path. **What a person can edit is what a page shows**: an Outcome's title, intent, due date and notes, its Actions as a checklist, a Capture's clarification stamp, and the Labels and Area the page shows. The rest of a page is the app's to write.
+
+**A page is a pure function of merged state**: the same state always renders the same bytes, in the same order and in UTC, so two devices in the same state write the same file and a file syncer never sees a conflict between them. The readable part is frontmatter, notes, and a final `## Actions` heading that is always written; everything between the frontmatter and that heading is the notes, byte for byte.
+
+**The clocks live in one machine-written block at the end of the page**, inside an HTML comment ([ADR-0051](./adr/0051-vault-pages-keep-field-clocks-in-one-end-block.md)). It carries each field's clock and a digest of the value it stamped; a carried value that no longer matches its digest is not taken. A person who deletes or mangles it loses nothing the device has already seen: the plugin falls back to the base copy's block, so the hand edit is still seen. A device with no base copy of that page (a fresh install) keeps the file but cannot import the edit.
+
+**Reading a page** compares it with this device's **base copy** — the last version of that page it saw, private to the device and never synced (`app/lib/sync/vault/vault_plugin.dart`). A value that matches its digest is what some device wrote at that clock and passes through with it; a value that does not match is a hand edit and gets a fresh clock. A stale copy carries old clocks, so the host ignores it. A page is read in two batches — the values that carry a clock reach the host first, so a hand edit's clock is later than every clock the page carries.
+
+**Deletion is a tombstone in the page, never a missing file** — a missing file may simply not have arrived. A deleted Outcome keeps its page and gains a `deleted` date in its frontmatter; a deleted Action's line disappears and its tombstone stays in the block. A deleted page is frozen: removing the `deleted` line does not bring the Outcome back.
+
+**Hand edits bypass the app's own write rules.** A hand edit writes the fields the page shows and no more; it does not run the DAOs, so it stamps no `last_clarified_at` and the app's re-clarification offers still apply. An entity a hand edit creates gets an id derived from what was typed, so two devices that read the same edit create one entity (`app/lib/sync/ids.dart`).
+
+**What the vault does not carry:** preferences, and Tags no page names — an Area with no Outcomes has no page. They stay on the device.
+
+**Where it fails.** A page that cannot be read or parsed is left alone and counted; a folder that cannot be listed is reported, and the other folders are still read. A page the host will not take is left alone and counted too: its content is in the folder and nowhere else, so it is kept — never removed, never written over — and the next pass takes it again. A page the folder will not write is owed a write-back that the next pass makes, and the pages that owe one are counted in the health. A delivery the folder could not read is not acknowledged, so the host sends it again. All of it shows in `VaultHealth` and the log, not yet in the drawer indicator (#916).
+
+**How the folder is reached.** One port (`VaultFolder`, `app/lib/sync/vault/vault_folder.dart`): a plain directory over `dart:io`, Android over the shared `jeeves/folder` document-tree channel, which carries the three operations the vault needs (`readAll`, `writeAtomically`, `remove`). The document tree has no atomic replace, so a page is written through a temporary document and a rename, with the old page moved aside until the new one is in place. Over a plain directory a page that would leave the folder — through a symbolic link — is refused.
+
+**Session sheets are read only.** A hand edit to a sheet is not applied, and the next write restores it: what editing a Plan, a TimeLog or a Disposition by hand should mean is not settled.
 
 ## Protocol surface
 
@@ -213,4 +238,6 @@ through.
 - **Convergence end to end**: `app/test/sync/convergence_test.dart` and `full_day_convergence_test.dart` run two simulated devices through enrol → write → sign → append → pull → verify → reduce and assert byte-identical reduced state.
 - **Projection**: `app/test/sync/projector_view_notify_test.dart` (a reduced-in row reaches the watching queries) and `domain_rebuild_test.dart` (a fresh domain store rebuilt from the log, tombstones included).
 - **One refusal, one row**: `app/test/sync/quarantine_once_test.dart` — two pulls that fetch the same refused op file it once, and two different ops refused at one seq stay two rows.
+- **Unknown-key refusals heal**: `app/test/sync/unchained_refusal_release_test.dart` — a change refused as `member_not_chained_to_root` is re-received once this device knows the author's key, and a key Root never vouched for stays refused.
 - **A removal reaches the peer**: `app/test/sync/dao_capture_contract_test.dart` (each of the task detail's four removal paths describes the drop it makes, in the deletion's own transaction) and `app/test/sync/tag_convergence_test.dart` (a context, a person, the delegate set and the Project removed on one device are each gone on the other after the sync).
+- **The vault**: `app/test/sync/vault/` — two devices sharing a folder (`vault_plugin_journey_test.dart`), the plugin's own behaviour (`vault_plugin_behaviour_test.dart`), the page codec (`page_codec_test.dart`) and the store's upgrade path (`vault_migration_test.dart`); the journey through the app's own route is `app/test/integration/vault_sync_journey_test.dart`. The derived ids a hand edit relies on are pinned in `app/test/sync/ids_vectors_test.dart`.

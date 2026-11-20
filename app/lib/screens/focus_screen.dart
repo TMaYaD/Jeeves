@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -7,6 +9,7 @@ import '../providers/database_provider.dart';
 import '../providers/focus_session_planning_provider.dart';
 import '../providers/focus_session_provider.dart';
 import '../providers/focus_settings_provider.dart';
+import '../providers/timeboxed_limit_provider.dart';
 import '../providers/sprint_timer_provider.dart'
     show findBatchingCandidates, sprintTimerProvider;
 import '../models/day_timeline.dart';
@@ -20,6 +23,7 @@ import '../widgets/nudge_banner.dart'
 import '../widgets/added_during_the_day_tag.dart';
 import '../widgets/day_timeline/plan_and_timeline_layout.dart';
 import '../widgets/outcome_row.dart';
+import '../widgets/timeboxed_gate.dart';
 
 class FocusScreen extends ConsumerWidget {
   const FocusScreen({super.key});
@@ -45,6 +49,11 @@ class FocusScreen extends ConsumerWidget {
     final addedDuringTheDayIds =
         ref.watch(activeSessionAddedDuringExecutionTaskIdsProvider).value ??
             const <String>{};
+    // Which Outcomes are Timeboxed (issue #923). The mark rides the estimate
+    // on the row; absent from the map == not Timeboxed, and the map is empty
+    // until the first emission lands, so no row shows a mark speculatively.
+    final timeboxedIds = ref.watch(currentTimeboxedProvider).value ??
+        const <String, bool>{};
 
     return Scaffold(
       body: SafeArea(
@@ -147,6 +156,7 @@ class FocusScreen extends ConsumerWidget {
                                     settlement: settlements[t.id],
                                     addedDuringTheDay:
                                         addedDuringTheDayIds.contains(t.id),
+                                    timeboxed: timeboxedIds[t.id] ?? false,
                                   ),
                                 )
                               else if (sortedTasks.isEmpty && nudgeHead != null)
@@ -298,6 +308,7 @@ Widget _focusOutcomeRow(
   required SessionSettlement? settlement,
   required int sprintMinutes,
   bool addedDuringTheDay = false,
+  bool timeboxed = false,
 }) {
   final estimate = todo.timeEstimate;
   final isDone = todo.doneAt != null;
@@ -326,7 +337,8 @@ Widget _focusOutcomeRow(
                   spacing: 6,
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    OutcomeMetaLine(timeEstimateMinutes: estimate),
+                    OutcomeMetaLine(
+                        timeEstimateMinutes: estimate, timeboxed: timeboxed),
                     if (sprintHint != null)
                       Text(
                         '· $sprintHint',
@@ -477,10 +489,20 @@ class _StartButton extends ConsumerWidget {
           }
         }
 
-        await ref.read(focusModeProvider.notifier).startFocus(todoId);
-        if (context.mounted) {
-          context.push('/focus/active');
-        }
+        // A Sprint that would start past a Timeboxed limit goes past the gate
+        // first, before the engagement opens a TimeLog (issue #923).
+        if (!context.mounted) return;
+        unawaited(guardSprintPastLimit(
+          context,
+          ref,
+          outcomeId: todoId,
+          start: () async {
+            await ref.read(focusModeProvider.notifier).startFocus(todoId);
+            if (context.mounted) {
+              context.push('/focus/active');
+            }
+          },
+        ));
       },
       style: FilledButton.styleFrom(
         backgroundColor: const Color(0xFF2667B7),
@@ -633,6 +655,12 @@ class _NowTimeline extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final extras = ref.watch(nowTimelineExtrasProvider);
+    // Which Outcomes are Timeboxed (issue #923): their tile carries the
+    // heavier bottom edge. Absent from the map == not Timeboxed, and the map
+    // is empty until the first emission lands, so no tile shows the edge
+    // speculatively.
+    final timeboxedIds =
+        ref.watch(currentTimeboxedProvider).value ?? const <String, bool>{};
     final flowOrigin =
         roundUpToFiveMinutes(DateTime.parse(session.startedAt).toLocal());
     final entries = dayTimelineEntriesFor(
@@ -643,6 +671,10 @@ class _NowTimeline extends ConsumerWidget {
       pinnedStarts: extras.pinnedStarts,
       engagedTaskIds: extras.engagedTaskIds,
       runningTaskId: session.currentTaskId,
+      timeboxedTaskIds: {
+        for (final entry in timeboxedIds.entries)
+          if (entry.value) entry.key
+      },
     );
     return DayTimeline(
       scope: session.id,
