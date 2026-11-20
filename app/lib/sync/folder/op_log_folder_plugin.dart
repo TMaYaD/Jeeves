@@ -370,7 +370,16 @@ class OpLogFolderPlugin implements SyncPlugin {
       );
       return null;
     }
-    if (extra >= record.length) return const _Tail.complete();
+    if (extra > record.length) {
+      await _raiseAlarm(
+        IntegrityAlarmKind.authorChainRewrite,
+        authorMemberId: _memberId,
+        detail: 'The file ${segmentFileName(segmentNumber)} holds bytes after '
+            'the last record this device wrote.',
+      );
+      return null;
+    }
+    if (extra == record.length) return const _Tail.complete();
     return _Tail.appendAt(extra);
   }
 

@@ -78,6 +78,7 @@ void main() {
     a = HostDevice.open('a');
     addTearDown(a.close);
     host = await a.startHost();
+    addTearDown(host.stopPlugins);
     folder = _FlakyFolder(DartIoSegmentFolder(directory));
     keyStore = InMemoryDeviceKeyStore();
     controller = FolderSyncController(

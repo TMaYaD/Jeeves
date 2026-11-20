@@ -158,6 +158,21 @@ void main() {
       expect(await _pendingCount(a), 1);
     });
 
+    test('bytes after the pending record raise author_chain_rewrite', () async {
+      final (:directory, :a, b: _) = await _pair();
+      await _insert(a, 0);
+      await _insert(a, 1);
+      final crashed = await _crashBeforeRecordingLastRecord(directory, a);
+      final withTrailing = Uint8List.fromList([...crashed.whole, 1, 2, 3, 4, 5]);
+      crashed.segment.writeAsBytesSync(withTrailing);
+
+      await a.plugin!.scan();
+
+      expect((await _open(a)).map((row) => row.kind), ['author_chain_rewrite']);
+      expect(crashed.segment.readAsBytesSync(), withTrailing, reason: 'nothing was appended');
+      expect(await _pendingCount(a), 1);
+    });
+
     test('a rolled-back own segment raises an alarm and stops writing', () async {
       final (:directory, :a, b: _) = await _pair();
       await _insert(a, 0);
