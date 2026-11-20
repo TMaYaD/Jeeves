@@ -81,47 +81,49 @@ class FolderSyncController {
       throw const FolderSyncRefusal(
           'Confirm that you understand the folder is not encrypted first.');
     }
-    final folder = openFolder(location);
-    final folderId = await _setupFor(folder).bind(
-      folderLocation: location,
-      deviceNodeIdHex: host.deviceNodeId,
-      deviceLabel: deviceLabel ?? 'Device ${host.deviceNodeId.substring(0, 4)}',
-    );
-    await _attach(folderId, folder);
+    await _inLifecycle(() async {
+      final folder = openFolder(location);
+      final folderId = await _setupFor(folder).bind(
+        folderLocation: location,
+        deviceNodeIdHex: host.deviceNodeId,
+        deviceLabel: deviceLabel ?? 'Device ${host.deviceNodeId.substring(0, 4)}',
+      );
+      await _attach(folderId, folder);
+    });
   }
 
   /// Attach the plugin for the binding that is still turned on, at launch. A
   /// device that has since been signed in or enrolled leaves it detached.
-  Future<void> resume() async {
-    final binding = await activeBinding();
-    if (binding == null) return;
-    try {
-      await _attach(binding.folderId, openFolder(binding.folderLocation));
-    } on FolderSyncRefusal {
-      // Signed in or enrolled since: the binding no longer stands.
-      if (!await isEnrolled()) rethrow;
-      await host.detach(opLogFolderPluginId, forgetCursor: true);
-      await _setupFor(openFolder(binding.folderLocation)).unbind(binding.folderId);
-    }
-  }
+  Future<void> resume() => _inLifecycle(() async {
+        final binding = await activeBinding();
+        if (binding == null) return;
+        try {
+          await _attach(binding.folderId, openFolder(binding.folderLocation));
+        } on FolderSyncRefusal {
+          // Signed in or enrolled since: the binding no longer stands.
+          if (!await isEnrolled()) rethrow;
+          await host.detach(opLogFolderPluginId, forgetCursor: true);
+          await _setupFor(openFolder(binding.folderLocation)).unbind(binding.folderId);
+        }
+      });
 
   /// Look for other devices' changes now, as the app returns to the foreground.
   Future<void> scanNow() async => _plugin?.scan();
 
   OpLogFolderPlugin? _plugin;
 
-  /// Attaches are serialised: two of them at once (turning folder sync on while
-  /// the launch-time resume is still running) must not take each other's
-  /// registration away.
-  Future<void> _attachTail = Future<void>.value();
+  /// Turn on, resume and turn off run one at a time. Two attaches at once must not
+  /// take each other's registration away, and a turn-off must not slip between a
+  /// resume reading the binding and its attach recording a cursor.
+  Future<void> _lifecycleTail = Future<void>.value();
 
-  Future<void> _attach(String folderId, SegmentFolder folder) {
-    final run = _attachTail.then((_) => _attachNow(folderId, folder));
-    _attachTail = run.then((_) {}, onError: (Object _) {});
+  Future<T> _inLifecycle<T>(Future<T> Function() operation) {
+    final run = _lifecycleTail.then((_) => operation());
+    _lifecycleTail = run.then((_) {}, onError: (Object _) {});
     return run;
   }
 
-  Future<void> _attachNow(String folderId, SegmentFolder folder) async {
+  Future<void> _attach(String folderId, SegmentFolder folder) async {
     final plugin = OpLogFolderPlugin(
       database: database,
       folder: folder,
@@ -162,14 +164,16 @@ class FolderSyncController {
       memberId,
       expectedSignPublicKey: expectedSignPublicKey,
     );
+    // Pinning succeeded; read what the member has already written.
+    await scanNow();
   }
 
   /// Turn folder sync off. Files already in the folder stay there.
-  Future<void> turnOff() async {
-    final binding = await activeBinding();
-    if (binding == null) return;
-    _plugin = null;
-    await host.detach(opLogFolderPluginId, forgetCursor: true);
-    await _setupFor(openFolder(binding.folderLocation)).unbind(binding.folderId);
-  }
+  Future<void> turnOff() => _inLifecycle(() async {
+        final binding = await activeBinding();
+        if (binding == null) return;
+        _plugin = null;
+        await host.detach(opLogFolderPluginId, forgetCursor: true);
+        await _setupFor(openFolder(binding.folderLocation)).unbind(binding.folderId);
+      });
 }

@@ -543,6 +543,11 @@ class FolderPeers extends Table {
   IntColumn get headAuthorSeq => integer()();
   BlobColumn get headEnvelopeHash => blob().nullable()();
 
+  /// The hash of the frame that ends at the byte cursor. It differs from the chain
+  /// head when the last frame was refused and skipped, and it is what a restored
+  /// file must hold again to clear a rollback alarm. Null until a frame is read.
+  BlobColumn get cursorFrameHash => blob().nullable()();
+
   @override
   Set<Column<Object>> get primaryKey => {folderId, memberId};
 }

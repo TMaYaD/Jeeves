@@ -647,6 +647,8 @@ class SyncHostService implements SyncHost, OutboxDrainer {
       } on Object catch (error) {
         debugPrint('sync host: stopping a plugin that did not start failed — $error');
       }
+      // Changes made during the attempt are owed to the restored plugin.
+      _deliverInBackground();
       rethrow;
     }
     _deliverInBackground();

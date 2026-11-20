@@ -88,9 +88,29 @@ void main() {
     for (final table in ['folder_sync_bindings', 'folder_pending_appends', 'folder_peers']) {
       expect(await upgraded.customSelect('SELECT 1 FROM $table').get(), isEmpty);
     }
-    expect(await upgraded.customSelect('SELECT 1 FROM reduced_fields').get(), hasLength(1));
-    expect(await upgraded.customSelect('SELECT 1 FROM field_clocks').get(), hasLength(1));
-    expect(await upgraded.customSelect('SELECT 1 FROM change_sequence').get(), hasLength(1));
-    expect(await upgraded.customSelect('SELECT 1 FROM plugin_cursors').get(), hasLength(1));
+    final field = await upgraded
+        .customSelect('SELECT collection, entity_id, field, value_json FROM reduced_fields')
+        .get();
+    expect(field, hasLength(1));
+    expect(field.single.read<String>('entity_id'), 't1');
+    expect(field.single.read<String>('value_json'), '"Ship it"');
+    final clock = await upgraded
+        .customSelect('SELECT wall_ms, counter, member_id_hex FROM field_clocks')
+        .get();
+    expect(clock, hasLength(1));
+    expect(clock.single.read<int>('wall_ms'), 5);
+    expect(clock.single.read<int>('counter'), 0);
+    expect(clock.single.read<String>('member_id_hex'), 'a' * 32);
+    final change =
+        await upgraded.customSelect('SELECT change_id, source, change_json FROM change_sequence').get();
+    expect(change, hasLength(1));
+    expect(change.single.read<String>('change_id'), 'c1');
+    expect(change.single.read<String>('source'), 'local');
+    final cursor = await upgraded
+        .customSelect('SELECT plugin_id, acknowledged_sequence FROM plugin_cursors')
+        .get();
+    expect(cursor, hasLength(1));
+    expect(cursor.single.read<String>('plugin_id'), 'p');
+    expect(cursor.single.read<int>('acknowledged_sequence'), 0);
   });
 }

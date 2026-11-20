@@ -71,6 +71,7 @@ void main() {
   var enrolled = false;
 
   setUp(() async {
+    enrolled = false;
     directory = Directory.systemTemp.createTempSync('folder-attach-');
     addTearDown(() => directory.deleteSync(recursive: true));
     b = await FolderDevice.open('b', directory);

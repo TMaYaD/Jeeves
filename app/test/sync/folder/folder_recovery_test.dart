@@ -11,6 +11,8 @@ import 'package:drift/drift.dart' show Value;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/sync/envelope.dart';
 import 'package:jeeves/sync/folder/segment_format.dart';
+import 'package:jeeves/sync/hlc.dart';
+import 'package:jeeves/sync/op_payload.dart';
 import 'package:jeeves/sync/sync_database.dart';
 
 import 'folder_harness.dart';
@@ -223,6 +225,70 @@ void main() {
       await b.plugin!.scan();
       expect(await _open(b), isEmpty);
       expect(await b.device.domain.customSelect('SELECT id FROM todos').get(), hasLength(3));
+    });
+
+    test('a later segment arriving before the next one raises author_chain_gap', () async {
+      final (:directory, :a, :b) = await _pair(rollBytes: 1);
+      await _insert(a, 0);
+      await b.plugin!.scan();
+      await _insert(a, 1);
+      await _insert(a, 2);
+      final second = File('${directory.path}/ops/${a.memberId}/000002.log');
+      final whole = second.readAsBytesSync();
+      second.deleteSync();
+      expect(File('${directory.path}/ops/${a.memberId}/000003.log').existsSync(), isTrue);
+
+      await b.plugin!.scan();
+      expect((await _open(b)).map((row) => row.kind), ['author_chain_gap']);
+      expect(await b.device.domain.customSelect('SELECT id FROM todos').get(), hasLength(1));
+
+      second.writeAsBytesSync(whole);
+      await b.plugin!.scan();
+      expect(await _open(b), isEmpty);
+      expect(await b.device.domain.customSelect('SELECT id FROM todos').get(), hasLength(3));
+    });
+  });
+
+  group('a chain-valid record the reader refuses', () {
+    test('a field clock beyond the skew bound is quarantined', () async {
+      final (:directory, :a, :b) = await _pair();
+      await _insert(a, 0);
+      await b.plugin!.scan();
+      final binding = await _binding(a);
+      final keys = (await a.keyStore.read(a.folderId))!;
+      final signer = await EnvelopeSigner.fromSeed(keys.signSeed);
+      final now = b.device.wall.nowMs;
+      final memberHex = memberIdToHex(a.memberId);
+      final payload = OpPayload(
+        collection: 'todos',
+        entityId: '66666666-7777-4888-9999-bbbbbbbbbbbb',
+        hlc: Hlc(now, 0, memberHex),
+        fields: {
+          'title': FieldWrite('x', hlc: Hlc(now + const Duration(days: 365).inMilliseconds, 0, memberHex)),
+        },
+      );
+      final envelope = await signer.buildEnvelope(
+        OpHeader(
+          workspaceId: a.folderId,
+          opId: '66666666-7777-4888-9999-aaaaaaaaaaab',
+          authorMemberId: a.memberId,
+          authorKeyId: signer.keyId,
+          authorSeq: binding.nextAuthorSeq,
+          prevAuthorHash: binding.lastEnvelopeHash == null
+              ? null
+              : Uint8List.fromList(binding.lastEnvelopeHash!),
+          opClass: opClassCompaction,
+        ),
+        frameBody(payload.encode()),
+      );
+      File('${directory.path}/ops/${a.memberId}/000001.log')
+          .writeAsBytesSync(encodeRecord(envelope), mode: FileMode.append);
+
+      await b.plugin!.scan();
+      final rows = await b.device.sync.select(b.device.sync.quarantinedOps).get();
+      expect(rows, hasLength(1));
+      expect(rows.single.detail, contains('skew bound'));
+      expect(await _open(b), isEmpty);
     });
   });
 

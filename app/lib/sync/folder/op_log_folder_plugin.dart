@@ -389,14 +389,20 @@ class OpLogFolderPlugin implements SyncPlugin {
     final peers = await (database.select(database.folderPeers)
           ..where((row) => row.folderId.equals(folderId)))
         .get();
+    var everyPeerRead = true;
     for (final peer in peers) {
       try {
         await _scanPeer(peer);
       } on Object catch (error) {
+        everyPeerRead = false;
         debugPrint('op-log folder: reading ${peer.memberId} failed — $error');
       }
     }
-    _lastScanAt = DateTime.fromMillisecondsSinceEpoch(nowMs(), isUtc: true);
+    // A scan that could not read a peer is not a success: the last-synced time
+    // stays where it was, so a folder that stops delivering shows as stale.
+    if (everyPeerRead) {
+      _lastScanAt = DateTime.fromMillisecondsSinceEpoch(nowMs(), isUtc: true);
+    }
     await _emitHealth();
   }
 
@@ -409,6 +415,9 @@ class OpLogFolderPlugin implements SyncPlugin {
     var headHash = peer.headEnvelopeHash == null
         ? null
         : Uint8List.fromList(peer.headEnvelopeHash!);
+    var frameHash = peer.cursorFrameHash == null
+        ? null
+        : Uint8List.fromList(peer.cursorFrameHash!);
 
     final segmentLength = await folder.length(
         '$opsDirectoryName/$memberId/${segmentFileName(committedSegment)}');
@@ -421,7 +430,7 @@ class OpLogFolderPlugin implements SyncPlugin {
       );
       return;
     }
-    if (committedOffset > 0 && !await _headStillHolds(peer, headHash)) {
+    if (committedOffset > 0 && !await _headStillHolds(peer, frameHash ?? headHash)) {
       await _raiseAlarm(
         IntegrityAlarmKind.segmentRolledBack,
         authorMemberId: memberId,
@@ -468,6 +477,16 @@ class OpLogFolderPlugin implements SyncPlugin {
           readOffset = 0;
           continue;
         }
+        // The next segment is absent. If a later one has arrived, the file
+        // syncer delivered out of order: say so, and stay on the verified prefix.
+        if (await _laterSegmentExists(memberId, readSegment)) {
+          alarmsToRaise.add((
+            kind: IntegrityAlarmKind.authorChainGap,
+            detail: '${peer.deviceLabel}\'s ${segmentFileName(next)} has not arrived, '
+                'but a later segment has.',
+          ));
+          halted = true;
+        }
         break;
       }
       for (final record in records) {
@@ -483,6 +502,7 @@ class OpLogFolderPlugin implements SyncPlugin {
           headSeq = outcome.authorSeq!;
           headHash = envelopeHash(record.envelope);
         }
+        frameHash = envelopeHash(record.envelope);
         committedSegment = readSegment;
         committedOffset = record.endOffset;
         readOffset = record.endOffset;
@@ -497,6 +517,7 @@ class OpLogFolderPlugin implements SyncPlugin {
       cursorOffsetBytes: Value(committedOffset),
       headAuthorSeq: Value(headSeq),
       headEnvelopeHash: Value(headHash),
+      cursorFrameHash: Value(frameHash),
     ));
     for (final alarm in alarmsToRaise) {
       await _raiseAlarm(alarm.kind, authorMemberId: memberId, detail: alarm.detail);
@@ -508,10 +529,19 @@ class OpLogFolderPlugin implements SyncPlugin {
     }
   }
 
+  Future<bool> _laterSegmentExists(String memberId, int segment) async {
+    final names = await folder.listFiles('$opsDirectoryName/$memberId');
+    for (final name in names) {
+      final match = RegExp(r'^(\d{6})\.log$').firstMatch(name);
+      if (match != null && int.parse(match.group(1)!) > segment + 1) return true;
+    }
+    return false;
+  }
+
   /// With a rollback alarm standing, the file must again hold the record the
   /// cursor ended on before the reader trusts it. Without one, a cheap length check
   /// has already been done and this reads nothing.
-  Future<bool> _headStillHolds(FolderPeerRow peer, Uint8List? headHash) async {
+  Future<bool> _headStillHolds(FolderPeerRow peer, Uint8List? frameHash) async {
     final standing = await (database.select(database.integrityAlarms)
           ..where((row) =>
               row.workspaceId.equals(folderId) &
@@ -524,7 +554,7 @@ class OpLogFolderPlugin implements SyncPlugin {
     final bytes = await folder.read(path, offset: 0, maxBytes: peer.cursorOffsetBytes);
     for (final record in readRecords(bytes)) {
       if (record.endOffset == peer.cursorOffsetBytes) {
-        return headHash != null && sameBytes(envelopeHash(record.envelope), headHash);
+        return frameHash != null && sameBytes(envelopeHash(record.envelope), frameHash);
       }
     }
     return false;
@@ -625,6 +655,21 @@ class OpLogFolderPlugin implements SyncPlugin {
         SyncRejectionReason.hlcInTheFuture,
         'op wall_ms ${payload.hlc.wallMs} is beyond the skew bound',
       );
+    }
+    // Every clock the merge uses is bounded, not only the op's own: a field or
+    // tombstone clock far ahead would win last-writer-wins until wall time caught up.
+    final mergeClocks = [
+      for (final write in payload.fields.values)
+        if (write.hlc != null) write.hlc!,
+      if (payload.tombstoneHlc != null) payload.tombstoneHlc!,
+    ];
+    for (final clock in mergeClocks) {
+      if (clock.wallMs > nowMs() + folderFutureSkewBoundMs) {
+        throw SyncRejection(
+          SyncRejectionReason.hlcInTheFuture,
+          'clock wall_ms ${clock.wallMs} is beyond the skew bound',
+        );
+      }
     }
     return payload.toChange();
   }
