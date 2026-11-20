@@ -113,5 +113,33 @@ void main() {
 
       expect(passed, isNull);
     });
+
+    test('two stints that start together are read in the same order, '
+        'whatever order they arrive in', () {
+      final short = TimeLogInterval(
+        startedAt: _at(9, 0).toIso8601String(),
+        endedAt: _at(9, 10).toIso8601String(),
+      );
+      final long = TimeLogInterval(
+        startedAt: _at(9, 0).toIso8601String(),
+        endedAt: _at(9, 20).toIso8601String(),
+      );
+
+      // 10 minutes are logged by the stint that ends first, so the limit fell
+      // 5 minutes into the other one.
+      expect(limitPassedAt(15, [short, long]), _at(9, 5).toUtc());
+      expect(limitPassedAt(15, [long, short]), _at(9, 5).toUtc());
+    });
+
+    test('an open stint that starts with a closed one is read last', () {
+      final closed = TimeLogInterval(
+        startedAt: _at(9, 0).toIso8601String(),
+        endedAt: _at(9, 10).toIso8601String(),
+      );
+      final open = TimeLogInterval(startedAt: _at(9, 0).toIso8601String());
+
+      expect(limitPassedAt(15, [closed, open]), _at(9, 5).toUtc());
+      expect(limitPassedAt(15, [open, closed]), _at(9, 5).toUtc());
+    });
   });
 }

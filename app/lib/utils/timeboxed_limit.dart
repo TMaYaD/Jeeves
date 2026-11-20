@@ -36,21 +36,41 @@ class TimeLogInterval {
 /// start order here. A stint that ends before it starts (clock skew) counts
 /// for nothing. An open stint counts as running on, so the answer can be an
 /// instant in the future.
+///
+/// Two stints that start together are read in a fixed order — the one that
+/// ends first, and a stint that is still open last — so the answer does not
+/// depend on the order the stints arrive in. Dart's sort does not promise to
+/// keep equal elements where they were, and two devices that read the same
+/// stints in different orders would disagree about the instant the limit
+/// passed.
 DateTime? limitPassedAt(int limitMinutes, List<TimeLogInterval> intervals) {
   if (intervals.isEmpty) return null;
   final limit = Duration(minutes: limitMinutes);
-  final ordered = <({TimeLogInterval interval, DateTime startedAt})>[];
+  final ordered = <({DateTime startedAt, DateTime? endedAt})>[];
   for (final interval in intervals) {
     final startedAt = _parseInstant(interval.startedAt);
     if (startedAt == null) continue;
-    ordered.add((interval: interval, startedAt: startedAt));
+    ordered.add((
+      startedAt: startedAt,
+      endedAt: _parseInstant(interval.endedAt),
+    ));
   }
-  ordered.sort((a, b) => a.startedAt.compareTo(b.startedAt));
+  ordered.sort((a, b) {
+    final byStart = a.startedAt.compareTo(b.startedAt);
+    if (byStart != 0) return byStart;
+    // The same start: the stint that ends first is read first, and a stint
+    // that is still open — it runs on — is read last.
+    final aEnd = a.endedAt;
+    final bEnd = b.endedAt;
+    if (aEnd == null) return bEnd == null ? 0 : 1;
+    if (bEnd == null) return -1;
+    return aEnd.compareTo(bEnd);
+  });
 
   var logged = Duration.zero;
   for (final entry in ordered) {
     final startedAt = entry.startedAt;
-    final endedAt = _parseInstant(entry.interval.endedAt);
+    final endedAt = entry.endedAt;
     if (endedAt == null) {
       // Still open: it runs on, so the limit is reached inside it — which may
       // be an instant that has not arrived yet.
