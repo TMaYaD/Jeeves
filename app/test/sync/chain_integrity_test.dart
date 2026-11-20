@@ -1463,7 +1463,7 @@ void main() {
 
     test('a refusal that escalates to an alarm is answered on the alarm, not '
         'on the row', () async {
-      final planted = await plantTamperedEnvelope();
+      await plantTamperedEnvelope();
       final row = (await a.client.quarantined()).single;
 
       // The decision is one the row could otherwise take: only the alarm guard
