@@ -45,7 +45,8 @@ final syncLifecycleProvider = FutureProvider<SyncLifecycle?>((ref) async {
     final restorePending =
         ref.watch(authTokenProvider.select((token) => token.isLoading));
     if (restorePending) return null;
-    ref.watch(domainOpCaptureProvider).unbind();
+    final capture = ref.watch(domainOpCaptureProvider);
+    capture.unbind();
     // A lifecycle would also have settled the stored member id, and none exists
     // here. A process killed while signed in never ran `deactivate()`, so the
     // previous account's member id can still be on the row — and every write made
@@ -63,8 +64,13 @@ final syncLifecycleProvider = FutureProvider<SyncLifecycle?>((ref) async {
     // A signed-out device still has a name of its own, and it is written under
     // the local profile so that a later sign-in carries it into the account.
     // Not awaited: nothing waits on a name, and this provider's job here is to
-    // have no lifecycle at all.
+    // have no lifecycle at all. Issued before the wait below, so the name is
+    // written even if the hand-back never settles.
     unawaited(ref.read(deviceNamesProvider).ensureOwnNames(kLocalUserId));
+    // The bridge reported the changes it will never author; wait for the host
+    // to take their clocks back, so a caller that reads the merge state after
+    // this sees them under the device node id.
+    await capture.unauthoredHandedBack;
     return null;
   }
 

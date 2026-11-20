@@ -46,7 +46,8 @@ class DayTimelineEntry {
   /// the entry is never re-flowed.
   final bool isEngaged;
 
-  /// Heavier bottom edge on the tile. False until the Timeboxed field exists.
+  /// Heavier bottom edge on the tile: the Outcome's current Action is
+  /// Timeboxed, so its estimate is a limit (issue #923).
   final bool isTimeboxed;
 
   /// A comparable summary of everything the layout depends on, so the widget
@@ -65,6 +66,10 @@ class DayTimelineEntry {
 /// An Outcome with no estimate counts at [defaultEstimateMinutes]. A pin dated
 /// before the day started is ignored: a time set on an earlier day means
 /// nothing today.
+///
+/// [timeboxedTaskIds] names the Outcomes whose current Action is Timeboxed:
+/// their tiles carry the heavier bottom edge (issue #923). An Outcome absent
+/// from the set is not Timeboxed, so its tile keeps the ordinary edge.
 List<DayTimelineEntry> dayTimelineEntriesFor({
   required List<Todo> tasks,
   required int defaultEstimateMinutes,
@@ -73,6 +78,7 @@ List<DayTimelineEntry> dayTimelineEntriesFor({
   Map<String, DateTime> pinnedStarts = const {},
   Set<String> engagedTaskIds = const {},
   String? runningTaskId,
+  Set<String> timeboxedTaskIds = const {},
 }) {
   final startOfToday = DateTime(now.year, now.month, now.day);
   return [
@@ -94,6 +100,7 @@ List<DayTimelineEntry> dayTimelineEntriesFor({
           isDone: isDone,
           isRunning: isRunning,
           isEngaged: isDone || isRunning || engagedTaskIds.contains(task.id),
+          isTimeboxed: timeboxedTaskIds.contains(task.id),
         );
       }(),
   ];

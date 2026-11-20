@@ -356,7 +356,18 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('outcome_peek_time')));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('10m'));
+      // The estimate sheet is a stepper, not a list of options (issue #923):
+      // it opens on the 30 minutes the Outcome carries, and two steps down
+      // the ladder is 10 minutes.
+      await tester.tap(find.byKey(const Key('estimate_sheet_less')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('estimate_sheet_less')));
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<Text>(find.byKey(const Key('estimate_sheet_value'))).data,
+        '10m',
+      );
+      await tester.tap(find.byKey(const Key('estimate_sheet_save')));
       await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('Close'));
       await tester.pumpAndSettle();

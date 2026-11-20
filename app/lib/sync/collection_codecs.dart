@@ -263,6 +263,7 @@ const Map<String, CollectionCodec> collectionCodecs = {
       'energy_level': FieldKind.text,
       'time_estimate': FieldKind.integer,
       'time_context': FieldKind.text,
+      'timeboxed': FieldKind.boolean,
       'created_at': FieldKind.instant,
       'updated_at': FieldKind.instant,
       'done_at': FieldKind.instant,
