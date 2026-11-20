@@ -242,7 +242,9 @@ enum SyncRejectionReason {
   unsupportedControlType('unsupported_control_type'),
 
   /// The control chain skipped or restarted under our feet — including the
-  /// genesis-only zero-link rule in both directions.
+  /// genesis-only zero-link rule in both directions. A positional break is
+  /// re-examined once the named predecessor is applied; a shape break is
+  /// permanent.
   controlChainBreak('control_chain_break'),
 
   /// Two control ops name the same predecessor. The tie-break picks a winner and
