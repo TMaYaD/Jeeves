@@ -30,6 +30,7 @@ import 'package:drift/drift.dart';
 import 'package:uuid/enums.dart' show Namespace;
 
 import '../../models/habit_commitment.dart';
+import '../../models/habit_progress.dart' show HabitHistory;
 import '../../sync/collection_codecs.dart' show encodeInstant;
 import '../../utils/uuid.dart';
 import '../gtd_database.dart';
@@ -841,6 +842,54 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
             (c) => OrderingTerm.asc(c.id),
           ]))
         .get();
+  }
+
+  /// The paused and archived periods of a Habit, oldest first.
+  Future<List<HabitInactivePeriod>> inactivePeriodsFor(String habitId) async =>
+      (select(habitInactivePeriods)
+            ..where((p) => p.habitId.equals(habitId))
+            ..orderBy([
+              (p) => OrderingTerm.asc(p.startsOn),
+              (p) => OrderingTerm.asc(p.id),
+            ]))
+          .get();
+
+  /// Everything the streak engine needs to know about one Habit, or null when
+  /// there is no such Habit. A one-shot read.
+  Future<HabitHistory?> habitHistory(String habitId) async {
+    final habit = await habitById(habitId);
+    if (habit == null) return null;
+    return HabitHistory(
+      habit: habit,
+      commitments: await commitmentsFor(habitId),
+      inactivePeriods: await inactivePeriodsFor(habitId),
+      checkIns: await (select(habitCheckIns)
+            ..where((c) => c.habitId.equals(habitId))
+            ..orderBy([
+              (c) => OrderingTerm.asc(c.countsForDay),
+              (c) => OrderingTerm.asc(c.checkedInAt),
+              (c) => OrderingTerm.asc(c.id),
+            ]))
+          .get(),
+    );
+  }
+
+  /// Every Habit with its full history, oldest Habit first.
+  ///
+  /// Re-emits after a write to any of the four Habit tables: the Habits, their
+  /// commitments, their Check-ins and their inactive periods.
+  Stream<List<HabitHistory>> watchHabitHistories() {
+    return customSelect(
+      'SELECT id FROM habits ORDER BY created_at, id',
+      readsFrom: {habits, habitCommitments, habitCheckIns, habitInactivePeriods},
+    ).watch().asyncMap((rows) async {
+      final histories = <HabitHistory>[];
+      for (final row in rows) {
+        final history = await habitHistory(row.read<String>('id'));
+        if (history != null) histories.add(history);
+      }
+      return histories;
+    });
   }
 
   /// The state of a Habit on [day].
