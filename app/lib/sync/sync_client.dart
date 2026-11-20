@@ -1686,10 +1686,13 @@ class SyncClient {
       // ordinary path. `_refuse` (quarantine row, alarm) and the chain-successor
       // scan stay **after** the commit, as in the control branch; `_stampRefused`
       // is part of the receipt and commits with the log row.
+      // `header` is reassigned above, so a closure sees it as nullable; bind the
+      // parsed, non-null value once.
+      final contentHeader = header;
       SyncRejection? refused;
       var affected = const <AffectedEntity>{};
       final logged = await _db.transaction(() async {
-        if (!await _logReceived(pulled, header)) return false;
+        if (!await _logReceived(pulled, contentHeader)) return false;
 
         // The authorization stage, between the chain verdict and the reducer
         // guards. Evaluated at the op's *own* server seq, never against current
@@ -1697,8 +1700,8 @@ class SyncClient {
         // logged-but-refused class: the row above is already written and advances
         // per-author accounting, so an honest successor is never falsely gapped.
         final authorization = (await grantsView()).verdictFor(
-          authorMemberId: header.authorMemberId,
-          opClass: header.opClass,
+          authorMemberId: contentHeader.authorMemberId,
+          opClass: contentHeader.opClass,
           seq: pulled.seq,
         );
         if (authorization != null) {
@@ -1710,7 +1713,7 @@ class SyncClient {
         try {
           affected = await _reducer.apply(
             payload,
-            authorMemberIdHex: memberIdToHex(header.authorMemberId),
+            authorMemberIdHex: memberIdToHex(contentHeader.authorMemberId),
           );
           await _stampApplied(pulled.seq);
           // Recorded with the reduction, so a pull that fails before its
@@ -1726,7 +1729,7 @@ class SyncClient {
       });
       if (!logged) return const {};
       if (refused != null) {
-        await _refuse(pulled, refused!, header);
+        await _refuse(pulled, refused!, contentHeader);
       } else {
         // After the commit, so a rolled-back apply never advances the clock.
         _clock.receive(payload.hlc);
@@ -1734,7 +1737,7 @@ class SyncClient {
       // The head advanced either way, so a quarantined successor may now be valid.
       return {
         ...affected,
-        ...await _releaseChainSuccessors(header.authorMemberId),
+        ...await _releaseChainSuccessors(contentHeader.authorMemberId),
       };
     } on SyncRejection catch (rejection) {
       await _refuse(pulled, rejection, header);
