@@ -480,7 +480,7 @@ void main() {
     });
   });
 
-  test('a v10 sync store upgrades to v11 and keeps every merge-state row',
+  test('a v10 sync store upgrades through v11 and keeps every merge-state row',
       () async {
     final directory = Directory.systemTemp.createTempSync('sync-v10-');
     addTearDown(() => directory.deleteSync(recursive: true));

@@ -102,7 +102,8 @@ void main() {
     expect(merged.map((r) => r.read<String>('entity_id')), ['p1', 'p3']);
   });
 
-  test('a v9 sync store upgrades to v10 and keeps every merge-state row', () async {
+  test('a v9 sync store upgrades through v10 and keeps every merge-state row',
+      () async {
     final directory = Directory.systemTemp.createTempSync('sync-v9-');
     addTearDown(() => directory.deleteSync(recursive: true));
     final file = File('${directory.path}/sync.sqlite');
@@ -142,7 +143,7 @@ void main() {
         hasLength(1));
   });
 
-  test('a v11 sync store upgrades to v12 and keeps every row', () async {
+  test('a v11 sync store upgrades through v12 and keeps every row', () async {
     final directory = Directory.systemTemp.createTempSync('sync-v11-');
     addTearDown(() => directory.deleteSync(recursive: true));
     final file = File('${directory.path}/sync.sqlite');
