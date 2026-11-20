@@ -125,5 +125,63 @@ void main() {
         isEmpty,
       );
     });
+
+    test('rows with no real predecessor stay refused and untouched', () async {
+      final workspace =
+          await SimWorkspace.create(deviceCount: 3, fileBacked: true);
+      addTearDown(workspace.close);
+      final b = workspace.b;
+      await workspace.a.enrolment.turnOnEncryption(
+        passphrase: workspace.passphrase,
+      );
+      await workspace.syncAll();
+
+      final root = await workspace.recoverRoot();
+      final zeroLinked = await AuthorFixture.create(
+        seed: Uint8List.fromList(List<int>.filled(32, 0x71)),
+      );
+      final randomLinked = await AuthorFixture.create(
+        seed: Uint8List.fromList(List<int>.filled(32, 0x72)),
+      );
+      for (final entry in [
+        (zeroLinked, zeroPrevControlHash),
+        (randomLinked, Uint8List.fromList(List<int>.filled(32, 0x99))),
+      ]) {
+        workspace.server.injectUnchecked(
+          workspace.workspaceId,
+          await memberRegisterEnvelope(
+            device: entry.$1,
+            workspaceId: workspace.workspaceId,
+            root: root,
+            prevControlHash: entry.$2,
+            wallMs: workspace.clock.nowMs,
+          ),
+        );
+      }
+      root.drop();
+      await b.sync();
+      final before = (await _breakRows(b.client))
+          .map((row) => row.id)
+          .toList()
+        ..sort();
+      expect(before, hasLength(2));
+
+      // Move the head, then relaunch: neither row may be touched.
+      await workspace.a.enrolment.revokeAndRotate(
+        passphrase: workspace.passphrase,
+        memberId: workspace.devices[2].identity.memberId,
+      );
+      await workspace.a.sync();
+      await b.sync();
+      final reopened = await b.reopenSyncStore(attachTransport: true);
+      await reopened.pull();
+      await reopened.pull();
+
+      final after = await _breakRows(reopened);
+      expect(after.map((row) => row.id).toList()..sort(), before);
+      expect(after.every((row) => row.releasedAt == null), isTrue);
+      expect(reopened.directory.isChained(zeroLinked.memberId), isFalse);
+      expect(reopened.directory.isChained(randomLinked.memberId), isFalse);
+    });
   });
 }
