@@ -363,7 +363,7 @@ void main() {
               dailyTargetAmount: 20),
         );
         await db.habitDao.addCheckIn(
-            habitId: habitId, userId: _userId, countsForDay: '2026-11-16',
+            habitId: habitId, userId: _userId, countsForDay: '2026-11-18',
             now: _now, measuredAmount: 10);
         await expectLater(
           db.habitDao.setCommitment(
