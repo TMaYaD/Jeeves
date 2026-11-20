@@ -260,9 +260,17 @@ class _OutcomePeekSheetState extends ConsumerState<OutcomePeekSheet> {
                             timeContextChip:
                                 TimeContextChip(outcomeId: widget.todo.id),
                             onEnergyTap: () => showOutcomeEnergyLevelSheet(
-                                context, _notifier, energyLevel),
+                              context,
+                              onSet: (level) => _notifier.setEnergyLevel(level).ignore(),
+                              onClear: () => _notifier.clearEnergyLevel().ignore(),
+                              current: energyLevel,
+                            ),
                             onEstimateTap: () => showOutcomeTimeEstimateSheet(
-                                context, _notifier, timeEstimate),
+                              context,
+                              onSet: (minutes) => _notifier.setTimeEstimate(minutes).ignore(),
+                              onClear: () => _notifier.clearTimeEstimate().ignore(),
+                              current: timeEstimate,
+                            ),
                             onDueTap: () async {
                               final picked = await pickOutcomeDueDate(context, dueDate);
                               if (picked != null) {

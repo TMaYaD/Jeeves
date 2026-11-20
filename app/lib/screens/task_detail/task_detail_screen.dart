@@ -259,7 +259,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                     children: [
                       // Project Picker Custom UI
                       ProjectPickerWidget(
-                        currentProjectTag: projectTag,
+                        currentTag: projectTag,
                         onAssign: (tag) => _notifier.assignProject(tag.id).ignore(),
                         onClear: () => _notifier.clearProject().ignore(),
                         customChild: Padding(
@@ -312,10 +312,26 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                         dueDate: todo.dueDate,
                         timeContextChip:
                             TimeContextChip(outcomeId: widget.todoId),
-                        onEnergyTap: () => showOutcomeEnergyLevelSheet(
-                            context, _notifier, todo.energyLevel),
-                        onEstimateTap: () => showOutcomeTimeEstimateSheet(
-                            context, _notifier, todo.timeEstimate),
+                        onEnergyTap: () {
+                          // Captured now so the open sheet keeps writing to
+                          // the task it displays.
+                          final notifier = _notifier;
+                          showOutcomeEnergyLevelSheet(
+                            context,
+                            onSet: (level) => notifier.setEnergyLevel(level).ignore(),
+                            onClear: () => notifier.clearEnergyLevel().ignore(),
+                            current: todo.energyLevel,
+                          );
+                        },
+                        onEstimateTap: () {
+                          final notifier = _notifier;
+                          showOutcomeTimeEstimateSheet(
+                            context,
+                            onSet: (minutes) => notifier.setTimeEstimate(minutes).ignore(),
+                            onClear: () => notifier.clearTimeEstimate().ignore(),
+                            current: todo.timeEstimate,
+                          );
+                        },
                         onDueTap: () async {
                           final picked = await pickOutcomeDueDate(context, todo.dueDate);
                           if (picked != null) {

@@ -104,7 +104,7 @@ class OutcomeSelectionBar extends ConsumerWidget {
                 alignment: WrapAlignment.spaceEvenly,
                 children: [
                   ProjectPickerWidget(
-                    currentProjectTag: null,
+                    currentTag: null,
                     onClear: () {},
                     onAssign: (tag) => database.tagDao
                         .setProjectForOutcomes(selectedIds, tag.id, userId)

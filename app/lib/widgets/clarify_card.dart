@@ -882,7 +882,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
           // matches task_detail_screen.dart. Its "No project" state doubles as
           // the optional-tag hint.
           ProjectPickerWidget(
-            currentProjectTag: projectTag,
+            currentTag: projectTag,
             onAssign: (t) {
               _draftReplaceOfType(t, projectTags);
               unawaited(_saveAssignProject(t.id));
