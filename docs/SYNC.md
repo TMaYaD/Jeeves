@@ -44,7 +44,7 @@ ResolvedPreference resolveWithStrategy(...);          // strategy-explicit varia
 - **`lww` (default, non-destructive).** The later write wins, ordered by **HLC** — not by `updated_at`, which is an ordinary replicated field a device could write out of order. Correct for scalars where the latest intent on any device should win. Ties break on member id, deterministically, so two devices never disagree about a tie.
 - **`maxTimestampValue`.** For snooze "until" floors. Among two live writes the later *value* (parsed as a timestamp) wins, so a stale write can never regress an active snooze and re-fire a notification the user silenced. A **tombstone (clear/un-snooze) is arbitrated against a live value by LWW** — a clear silences the snooze, but a later re-snooze survives a stale clear, and a stale clear does not undo a fresher re-snooze. Any key ending in `snoozed_until` is classified here automatically.
 - **`minTimestampValue`.** For the Sprint end (`sprints.ended_at`), the mirror of `maxTimestampValue`: any end beats a still-open Sprint, and of two ends the **earlier** wins, whichever device wrote last. An end can only move earlier and is never cleared. Chosen from the change's collection and field, never from stored state.
-- **`setMerge`.** Union of the two JSON-list values so concurrent additions on two devices both survive. **No production key uses this today**; it is provisioned so a new list/set-shaped key (filter selections, pinned items) cannot ship under naive LWW that would drop concurrent additions. New list/set keys **must** be registered as `setMerge` before use.
+- **`setMerge`.** Union of the two JSON-list values so concurrent additions on two devices both survive. **No production key uses this today**; it is provisioned so a new list/set-shaped key (filter selections, pinned items) cannot ship under naive LWW that would drop concurrent additions. New set keys **must** be registered as `setMerge` before use; an ordered, capped list (recent searches) is the explicit `lww` case, because a union would sort it, grow it past the cap and resurrect removed entries.
 
 Every strategy owes ADR-0030's obligations: merge must be commutative, associative and idempotent. A strategy that is not is a divergence bug, not a preference.
 
@@ -83,6 +83,9 @@ Every current key, grouped by family:
 | `periodic_review_banner_dismissed_date`, `periodic_review_banner_enabled`, `periodic_review_notification_enabled`, `periodic_review_notification_hour`, `periodic_review_notification_minute`, `periodic_review_notification_skipped_date` | date / bool / int | `lww` | Scalar settings / suppression |
 | `periodic_review_nudge_content_firing_edge` | datetime | `lww` | Latest firing edge wins |
 | `clarify_mode` | string enum (`oneToOne` / `nToM`) | `lww` *(registered explicitly)* | Scalar mode selection; both modes read the same many-to-many storage, so either winner leaves every Capture and link valid |
+| `shutdown_settings_time_hour`, `shutdown_settings_time_minute`, `shutdown_settings_notification_enabled`, `shutdown_settings_banner_enabled` | int / bool | `lww` | Scalar Evening Shutdown settings |
+| `jeeves_recent_searches` | JSON list of strings | `lww` *(registered explicitly)* | Ordered, capped list with removals; the latest whole list wins |
+| `onboarding_seen` | bool | `lww` | Only ever written as `true`; also kept on the device for the cold-start read |
 | `bypass_threshold` | int | `lww` *(registered explicitly)* | Scalar setting; the latest choice on any device wins |
 | `device_name.<device id>` | string | `lww` | A Device's name; two renames resolve to the later one |
 | `planning_notification_snoozed_until`, `shutdown_notification_snoozed_until`, `periodic_review_notification_snoozed_until` | datetime | `maxTimestampValue` | Snooze floor must never regress; un-snooze is a tombstone |
@@ -129,7 +132,7 @@ clocks and merges its own writes, under a random device node id; once enrolled, 
 member id takes over as the tie-break so the wire is unchanged. Clocks stamped under
 the device node id are never ops, so the enrolment upload does not skip them, a
 rebuild from the log carries them across, and an account's later sign-in authors
-those made since its upload completed — creates, edits and deletes, not preferences. See [sync-plugins](proposals/sync-plugins.md).
+those made since its upload completed — creates, edits and deletes, not preferences. A change stamped under a member id that is then never authored — a write made before session restore answered "signed out" — has its clock handed back to the device node id, so the same three paths cover it. A change merged under a member id is kept in the sync store until the op-log bridge has authored it or handed it back, so a process killed in between authors it on the next launch. See [sync-plugins](proposals/sync-plugins.md).
 
 Rows that predate the host are seeded into merge state once per device, before any
 plugin can attach, so `snapshot()` holds the whole local dataset. Seeding inserts

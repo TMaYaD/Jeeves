@@ -21,6 +21,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../database/daos/user_preferences_dao.dart';
+import '../models/search_query.dart' show kRecentSearchesPrefKey;
 import 'auth_provider.dart';
 import 'database_provider.dart';
 
@@ -40,6 +41,19 @@ const _settingsKeys = <String>[
   'focus_session_planning_settings_notification_enabled',
   'focus_session_planning_settings_banner_enabled',
   'focus_session_planning_settings_default_snooze_duration',
+];
+
+/// Values that lived only in [SharedPreferences] before they synced. They are
+/// read as a fallback wherever the current user has no row for the key, and
+/// copied into synced preferences once per signed-in account. Never removed from
+/// the device. The first-launch card dismissal (`onboarding_seen`) is handled by
+/// its own provider.
+const _legacyDeviceKeys = <String>[
+  'shutdown_settings_time_hour',
+  'shutdown_settings_time_minute',
+  'shutdown_settings_notification_enabled',
+  'shutdown_settings_banner_enabled',
+  kRecentSearchesPrefKey,
 ];
 
 const _ceremonyKeys = <String>[
@@ -85,6 +99,8 @@ class SyncedPreferences {
 // Provider
 // ---------------------------------------------------------------------------
 
+const _signedOutUserId = 'local';
+
 final syncedPreferencesProvider =
     AsyncNotifierProvider<SyncedPreferencesNotifier, SyncedPreferences>(
   SyncedPreferencesNotifier.new,
@@ -102,21 +118,40 @@ class SyncedPreferencesNotifier
     await _migrateSharedPreferencesIfNeeded(dao, userId);
     if (!ref.mounted) return const SyncedPreferences({});
 
+    // Copy values that predate sync into this account, once. Skipped for the
+    // signed-out placeholder: at cold start the id is `'local'` until session
+    // restore answers, and a copy under it would leave the account with defaults.
+    if (userId != _signedOutUserId) {
+      await _copyLegacyDeviceValuesOnce(dao, userId);
+      if (!ref.mounted) return const SyncedPreferences({});
+    }
+
     // Load initial snapshot.
     final initial = await dao.getAll(userId);
+    final initialRowKeys = await dao.getRowKeys(userId);
     if (!ref.mounted) return const SyncedPreferences({});
-    final decoded = _decode(initial);
+    final decoded = {
+      ...await _legacyFallback(initialRowKeys),
+      ..._decode(initial),
+    };
+    if (!ref.mounted) return const SyncedPreferences({});
 
     // Subscribe to future changes, including another device's write reduced in
     // by a pull.
-    final sub = dao.watchAll(userId).listen((rows) {
+    final sub = dao.watchAll(userId).listen((rows) async {
+      if (!ref.mounted) return;
+      final fallback = await _legacyFallback({for (final r in rows) r.key});
       if (!ref.mounted) return;
       final tombstonedKeys = {
         for (final r in rows.where((r) => r.value == null)) r.key
       };
-      final liveMap = _decode({
-        for (final r in rows.where((r) => r.value != null)) r.key: r.value!,
-      });
+      final liveMap = {
+        ...fallback,
+        ..._decode({
+          for (final r in rows.where((r) => r.value != null))
+            r.key: r.value!,
+        }),
+      };
       // Merge: preserve in-memory keys that aren't tombstoned in this snapshot
       // and aren't in liveMap — these are optimistic writes not yet in the DB
       // snapshot (can happen when the stream fires between rapid sequential
@@ -230,6 +265,46 @@ class SyncedPreferencesNotifier
     }
 
     await prefs.setBool(migratedKey, true);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Device values that predate sync
+  // ---------------------------------------------------------------------------
+
+  /// Decoded device values for legacy keys that [rowKeys] (every key with a
+  /// row, tombstones included) does not cover.
+  Future<Map<String, dynamic>> _legacyFallback(Set<String> rowKeys) async {
+    final prefs = await SharedPreferences.getInstance();
+    final result = <String, dynamic>{};
+    for (final key in _legacyDeviceKeys) {
+      if (rowKeys.contains(key)) continue;
+      final value = _legacyDeviceValue(prefs, key);
+      if (value != null) result[key] = value;
+    }
+    return result;
+  }
+
+  Object? _legacyDeviceValue(SharedPreferences prefs, String key) {
+    final raw = prefs.get(key);
+    if (raw is List) return raw.whereType<String>().toList();
+    return raw;
+  }
+
+  Future<void> _copyLegacyDeviceValuesOnce(
+    UserPreferencesDao dao,
+    String userId,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    final markerKey = '_legacy_device_values_copied_v1_$userId';
+    if (prefs.getBool(markerKey) == true) return;
+    final entries = <String, String>{};
+    for (final key in _legacyDeviceKeys) {
+      final value = _legacyDeviceValue(prefs, key);
+      if (value == null) continue;
+      entries[key] = jsonEncode(value);
+    }
+    await dao.setAllIfAbsent(userId, entries);
+    await prefs.setBool(markerKey, true);
   }
 
   // ---------------------------------------------------------------------------

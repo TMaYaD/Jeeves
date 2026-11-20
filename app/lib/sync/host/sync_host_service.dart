@@ -10,6 +10,16 @@
 /// after that commit is the row deleted. A crash between the two commits replays
 /// the row: the merge is idempotent and `change_id` is a unique key on the
 /// sequence, so the replay leaves one entry.
+///
+/// That same transaction records a change merged under a member id in
+/// `unauthored_changes`: the record and the merge commit together, so no clock
+/// can name a member without either an op or a record. A row leaves that table
+/// when the op-log bridge has authored the change or handed it back.
+///
+/// **The bridge is handed the record, not the merge.** A change that still
+/// needs an op is exactly a change in that table, so the record is what the
+/// bridge is given — at the start of the process, for whatever a killed process
+/// left behind, and after every drain, for what it has just merged.
 library;
 
 import 'dart:async';
@@ -75,11 +85,49 @@ class SyncHostService implements SyncHost, OutboxDrainer {
   final Map<String, SyncPlugin> _plugins = <String, SyncPlugin>{};
   final Map<String, Future<void>> _deliveryTails = <String, Future<void>>{};
 
-  /// Load the device identity and replay whatever the outbox still holds — the
-  /// crash replay.
+  /// The highest `unauthored_changes` id this process has already handed to the
+  /// bridge.
+  ///
+  /// A high-water mark, not a cursor: a record stays in the table until the
+  /// bridge settles it, so the id is what says "already handed", and the bridge
+  /// is never handed the same change twice in one process.
+  int _lastHandedUnauthoredId = 0;
+
+  /// Load the device identity, hand the bridge whatever a killed process left
+  /// behind, and replay whatever the outbox still holds — the crash replay.
   Future<void> start() async {
     _deviceNodeId = (await readClockIdentity(_domain)).deviceNodeId;
+    await _handUnauthoredToBridge();
     await drain();
+  }
+
+  /// Hand the bridge every recorded change it has not been handed in this
+  /// process, oldest first. At start that is whatever a killed process left.
+  ///
+  /// The record is the right thing to hand: a change the device made under a
+  /// member id still needs an op, and a change it made under its own node id
+  /// never will. A failure is the bridge's to contain — the record stays where
+  /// it is, and the next launch hands it over again.
+  Future<void> _handUnauthoredToBridge() async {
+    final listener = localChangeListener;
+    if (listener == null) return;
+    final rows = await _sync.customSelect(
+      'SELECT id, change_json FROM unauthored_changes WHERE id > ? ORDER BY id',
+      variables: [Variable<int>(_lastHandedUnauthoredId)],
+    ).get();
+    if (rows.isEmpty) return;
+    _lastHandedUnauthoredId = rows.last.read<int>('id');
+    try {
+      await listener([
+        for (final row in rows)
+          Change.fromJson(
+            (jsonDecode(row.read<String>('change_json')) as Map)
+                .cast<String, Object?>(),
+          ),
+      ]);
+    } on Object catch (error) {
+      debugPrint('sync host: op-log bridge failed — $error');
+    }
   }
 
   // --- Seeding ---------------------------------------------------------------
@@ -110,7 +158,8 @@ class SyncHostService implements SyncHost, OutboxDrainer {
   // --- Local writes ----------------------------------------------------------
 
   /// Merge every outbox row into merge state, in row order, then project the
-  /// touched entities, notify the bridge and trigger delivery. Serialised.
+  /// touched entities, hand the bridge the changes it still owes and trigger
+  /// delivery. Serialised.
   @override
   Future<void> drain() {
     final run = _drainTail.then((_) => _drainOnce());
@@ -180,14 +229,10 @@ class SyncHostService implements SyncHost, OutboxDrainer {
         storageError ??= error;
       }
     }
-    final listener = localChangeListener;
-    if (listener != null && merged.isNotEmpty) {
-      try {
-        await listener(merged);
-      } on Object catch (error) {
-        debugPrint('sync host: op-log bridge failed — $error');
-      }
-    }
+    // The bridge is handed the recorded changes, not the merged ones: a change
+    // the device made under its own node id never needs an op, so it is not
+    // recorded and not handed over.
+    await _handUnauthoredToBridge();
     if (merged.isNotEmpty) _deliverInBackground();
     if (storageError != null) throw storageError;
   }
@@ -215,8 +260,48 @@ class SyncHostService implements SyncHost, OutboxDrainer {
             [changeId, source, jsonEncode(change.toJson())],
           );
         }
+        await _recordUnauthored(change, changeId, source);
         return affected;
       });
+
+  /// Record a merged change that still needs an op.
+  ///
+  /// A local write made while the device was signed in carries the member id of
+  /// that session. The op-log bridge authors it into the log, and until it has,
+  /// the change lives only in merge state — so a process killed in that window
+  /// loses it, and the next launch finds no trace of a change that still needs
+  /// an op. The record is written in the merge's own transaction, so the two
+  /// commit together: no clock can name a member without either an op or a
+  /// record.
+  ///
+  /// A change this device made under its own node id is left out: no op will
+  /// ever carry it, and every path that reads such a change looks for the
+  /// device node id.
+  Future<void> _recordUnauthored(
+    Change change,
+    String changeId,
+    String source,
+  ) async {
+    if (source != 'local') return;
+    final clock = change.highestClock;
+    if (clock == null) return;
+    final node = _deviceNodeId ?? (await readClockIdentity(_domain)).deviceNodeId;
+    if (clock.memberIdHex == node) return;
+    await _sync.customStatement(
+      'INSERT OR IGNORE INTO unauthored_changes '
+      '(change_id, collection, entity_id, member_id_hex, wall_ms, counter, change_json) '
+      'VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [
+        changeId,
+        change.collection,
+        change.entityId,
+        clock.memberIdHex,
+        clock.wallMs,
+        clock.counter,
+        jsonEncode(change.toJson()),
+      ],
+    );
+  }
 
   Future<bool> _hasCursors() async =>
       (await _sync.customSelect('SELECT 1 FROM plugin_cursors LIMIT 1').get())
@@ -356,6 +441,72 @@ class SyncHostService implements SyncHost, OutboxDrainer {
   /// [changesStampedBy] for this device's own node id.
   Future<List<Change>> changesStampedByDevice() async => changesStampedBy(
       _deviceNodeId ?? (await readClockIdentity(_domain)).deviceNodeId);
+
+  /// Forget a change the op-log bridge has settled.
+  ///
+  /// The change has been authored into the op log, or refused for good, so the
+  /// record that said it still needed an op has nothing left to say. The match
+  /// is on the **exact** clock — wall time, counter and member id — so a
+  /// change written again since keeps its own record.
+  Future<void> forgetUnauthored(UnauthoredClock settled) async {
+    await _sync.customStatement(
+      'DELETE FROM unauthored_changes WHERE collection = ? AND entity_id = ? '
+      'AND wall_ms = ? AND counter = ? AND member_id_hex = ?',
+      [
+        settled.collection,
+        settled.entityId,
+        settled.clock.wallMs,
+        settled.clock.counter,
+        settled.clock.memberIdHex,
+      ],
+    );
+  }
+
+  /// Re-stamp [unauthored] clocks under this device's own node id.
+  ///
+  /// A change the op-log bridge will never author — the write made before the
+  /// session restore answered "signed out" — is left in merge state with a clock
+  /// that names a member no op carried. The bridge hands that clock back here,
+  /// and it becomes the device's own: the rebuild from the op log, the
+  /// signed-out upload and the enrolment upload all look for the device node id.
+  ///
+  /// The match is on the **exact** clock — wall time, counter and member id —
+  /// so a field written again since, or a change an account has already claimed,
+  /// is left alone. The value, the wall time and the counter do not change, so
+  /// nothing is projected.
+  ///
+  /// Called from inside a drain: it opens its own sync-store transaction and
+  /// never goes through [drain].
+  Future<void> restampUnauthoredClocksAsDevice(
+      List<UnauthoredClock> unauthored) async {
+    final node = _deviceNodeId ?? (await readClockIdentity(_domain)).deviceNodeId;
+    final foreign = [
+      for (final entry in unauthored)
+        if (entry.clock.memberIdHex != node) entry,
+    ];
+    if (foreign.isEmpty) return;
+    await _sync.transaction(() async {
+      for (final entry in foreign) {
+        for (final table in const ['field_clocks', 'row_tombstones']) {
+          await _sync.customStatement(
+            'UPDATE $table SET member_id_hex = ? WHERE collection = ? AND entity_id = ? '
+            'AND wall_ms = ? AND counter = ? AND member_id_hex = ?',
+            [node, entry.collection, entry.entityId, entry.clock.wallMs,
+                entry.clock.counter, entry.clock.memberIdHex],
+          );
+        }
+        // The change is the device's own now, so it no longer needs an op to be
+        // authored: its record leaves with the re-stamp, in the same
+        // transaction.
+        await _sync.customStatement(
+          'DELETE FROM unauthored_changes WHERE collection = ? AND entity_id = ? '
+          'AND wall_ms = ? AND counter = ? AND member_id_hex = ?',
+          [entry.collection, entry.entityId, entry.clock.wallMs,
+              entry.clock.counter, entry.clock.memberIdHex],
+        );
+      }
+    });
+  }
 
   /// What the device wrote under its own node id after [afterWallMs] that is still
   /// visible, per entity, for upload once an account is back.

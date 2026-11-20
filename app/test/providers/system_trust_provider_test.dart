@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/focus_session_planning_settings.dart';
+import 'package:jeeves/models/shutdown_settings.dart';
 import 'package:jeeves/providers/clock_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_settings_provider.dart';
@@ -16,6 +17,7 @@ import 'package:jeeves/providers/gtd_lists_provider.dart'
     show unfilteredInboxProvider;
 import 'package:jeeves/providers/nudge_clock_provider.dart';
 import 'package:jeeves/providers/periodic_review_provider.dart';
+import 'package:jeeves/providers/shutdown_settings_provider.dart';
 import 'package:jeeves/providers/periodic_review_settings_provider.dart'
     show periodicReviewLastCompletedProvider;
 import 'package:jeeves/providers/synced_preferences_provider.dart';
@@ -34,6 +36,11 @@ class _DefaultPlanningSettingsNotifier
     extends FocusSessionPlanningSettingsNotifier {
   @override
   FocusSessionPlanningSettings build() => const FocusSessionPlanningSettings();
+}
+
+class _DefaultShutdownSettingsNotifier extends ShutdownSettingsNotifier {
+  @override
+  ShutdownSettings build() => const ShutdownSettings();
 }
 
 final _lastReviewed = DateTime.utc(2026, 3, 1, 9);
@@ -319,6 +326,8 @@ void main() {
           clockProvider.overrideWithValue(() => clock),
           focusSessionPlanningSettingsProvider
               .overrideWith(_DefaultPlanningSettingsNotifier.new),
+          shutdownSettingsProvider
+              .overrideWith(_DefaultShutdownSettingsNotifier.new),
           weeklyReviewDueAtProvider.overrideWithValue(_due),
           periodicReviewLastCompletedProvider.overrideWithValue(null),
           // No open session: the tick's session lookup is a live Drift watch.

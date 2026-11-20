@@ -273,8 +273,7 @@ void main() {
 
     test('Evening Shutdown arms at its configured time with a session open, '
         'follows a change and goes quiet when switched off', () async {
-      // Shutdown settings live in SharedPreferences, not synced preferences,
-      // so the non-default time goes in through the production notifier.
+      // The non-default time goes in through the production notifier.
       await boot(now: at(0, 7));
       await openSession(at(0, 7));
       await c

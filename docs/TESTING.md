@@ -283,13 +283,13 @@ status has to be answerable offline:
 
 - *not enrolled* — no stored keys **and** no pinned Root. The state the two doors above
   arbitrate between.
-- *half-founded* — either keys with a Workspace whose control log is still empty, or **a
+- *half-founded* — either keys with a Workspace this device has not registered in, or **a
   pinned Root with no keys at all**. The second is the one that is easy to get wrong:
   `enrolFirstDevice` writes the escrow and pins Root *before* it stores the keypairs, so a
   crash in that window leaves the account's escrow claimed by a device that cannot prove
   it, and founding again can only ever return `escrow_version_regression`. Both are
   recovered by re-entering the passphrase ("Enrol with the passphrase").
-- *enrolled* — keys stored and every derivable Workspace founded. No founding control is
+- *enrolled* — keys stored; registered in every derivable Workspace. No founding control is
   rendered, and the runner refuses a second founding below the UI as well.
 
 **Three deliberate divergences from an ordinary screen.** No copy-to-clipboard for the
