@@ -668,6 +668,55 @@ void main() {
       expect(entity.fields['value'], '"2026-07-01T18:00:00.000Z"');
     });
 
+    test('keeps the later snooze value in either input position, with its '
+        'own timestamp', () async {
+      const key = 'planning_notification_snoozed_until';
+      final later = _preferenceRow('preference/account', _userId,
+          '"2026-07-01T18:00:00.000Z"', '2026-07-01T09:00:00.000Z',
+          key: key);
+      final earlier = _preferenceRow('preference/local', 'local',
+          '"2026-07-01T12:00:00.000Z"', '2026-07-01T10:00:00.000Z',
+          key: key);
+      for (final rows in [
+        [later, earlier],
+        [earlier, later],
+      ]) {
+        final plan = await _plan({'user_preferences': rows});
+        final entity = plan.entitiesFor(userPreferencesCollection).single;
+        expect(entity.fields['value'], '"2026-07-01T18:00:00.000Z"');
+        expect(entity.fields['updated_at'], '2026-07-01T09:00:00.000Z');
+      }
+    });
+
+    test('a snooze floor, a later clear and a later re-snooze collapse to the '
+        're-snooze whatever the row order', () async {
+      const key = 'planning_notification_snoozed_until';
+      final floor = _preferenceRow('preference/a', 'user-a',
+          '"2026-07-01T18:00:00.000Z"', '2026-07-01T09:00:00.000Z',
+          key: key);
+      final clear = {
+        ..._preferenceRow('preference/b', 'user-b', '"x"',
+            '2026-07-01T10:00:00.000Z',
+            key: key),
+        'value': null,
+      };
+      final resnooze = _preferenceRow('preference/c', 'user-c',
+          '"2026-07-01T12:00:00.000Z"', '2026-07-01T11:00:00.000Z',
+          key: key);
+      for (final rows in [
+        [floor, clear, resnooze],
+        [floor, resnooze, clear],
+        [clear, floor, resnooze],
+        [clear, resnooze, floor],
+        [resnooze, floor, clear],
+        [resnooze, clear, floor],
+      ]) {
+        final plan = await _plan({'user_preferences': rows});
+        final entity = plan.entitiesFor(userPreferencesCollection).single;
+        expect(entity.fields['value'], '"2026-07-01T12:00:00.000Z"');
+      }
+    });
+
     test('walks the collections parents-first', () async {
       final plan = await _plan(storeWith(
         tags: [tagRow('tag/home', 'Home', areaTagType)],

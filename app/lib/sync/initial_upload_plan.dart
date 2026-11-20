@@ -508,6 +508,10 @@ Future<InitialUploadPlan> buildInitialUploadPlan({
     // order, so which of two identical junction rows "wins" is not a function
     // of iteration luck.
     final byEntityId = <String, PlannedEntity>{};
+    // Every encoded row seen so far for a snooze-floor preference entity. The
+    // collapse of three or more rows is decided over all of them at once, so
+    // the published value does not depend on row order.
+    final snoozeCandidatesByEntityId = <String, List<Map<String, Object?>>>{};
     for (final row in rows) {
       final legacyRowId = row['id'] is String ? row['id'] as String : null;
       final entityId = initialUploadEntityIdFor(
@@ -546,6 +550,10 @@ Future<InitialUploadPlan> buildInitialUploadPlan({
       }
       final existing = byEntityId[entityId];
       if (existing == null) {
+        if (collection == userPreferencesCollection &&
+            _isSnoozeFloor(encoded.fields)) {
+          snoozeCandidatesByEntityId[entityId] = [encoded.fields];
+        }
         byEntityId[entityId] = PlannedEntity(
           workspace: workspace,
           collection: collection,
@@ -567,13 +575,20 @@ Future<InitialUploadPlan> buildInitialUploadPlan({
       // keeps it — keeping the first row in table order would publish the
       // older copy and undo a change made after sign-in. Every other
       // collection keeps the first row, as before.
-      final keepNewer = collection == userPreferencesCollection &&
-          _isNewerPreferenceRow(encoded.fields, existing.fields);
+      var keptFields = existing.fields;
+      final snoozeCandidates = snoozeCandidatesByEntityId[entityId];
+      if (snoozeCandidates != null) {
+        snoozeCandidates.add(encoded.fields);
+        keptFields = _snoozeFloorWinner(snoozeCandidates);
+      } else if (collection == userPreferencesCollection &&
+          _isNewerPreferenceRow(encoded.fields, existing.fields)) {
+        keptFields = encoded.fields;
+      }
       byEntityId[entityId] = PlannedEntity(
         workspace: workspace,
         collection: collection,
         entityId: entityId,
-        fields: keepNewer ? encoded.fields : existing.fields,
+        fields: keptFields,
         legacyRowIds: [...existing.legacyRowIds, ?legacyRowId],
       );
     }
@@ -607,44 +622,48 @@ Future<InitialUploadPlan> buildInitialUploadPlan({
 }
 
 /// Whether [candidate] should replace [kept] when two rows collapse onto one
-/// preference entity.
+/// preference entity under last-write-wins: the strictly newer `updated_at`
+/// takes it. A timestamp that cannot be read counts as the oldest, and two rows
+/// stamped the same instant count as equal, so the first row is kept.
 ///
-/// The same rule the device's own carry applies
-/// (`UserPreferencesDao.carryNewestPreferencesInto`), so the copy the device
-/// keeps and the value the first upload publishes agree on which of two rows
-/// is the setting. A key the conflict registry arbitrates by
-/// `maxTimestampValue` (a snooze floor) goes to the registry's resolver, so the
-/// later snooze value wins and the upload never lowers a floor. Every other key
-/// takes the strictly newer `updated_at`: a timestamp that cannot be read
-/// counts as the oldest, and two rows stamped the same instant count as equal,
-/// so the first row is kept.
+/// Snooze-floor keys do not come here: see [_snoozeFloorWinner].
 bool _isNewerPreferenceRow(
   Map<String, Object?> candidate,
   Map<String, Object?> kept,
 ) {
-  final key = candidate['key'];
-  if (key is String &&
-      strategyForKey(key) == ConflictStrategy.maxTimestampValue) {
-    PreferenceRow rowOf(Map<String, Object?> fields) => PreferenceRow(
-          value: fields['value'] as String?,
-          updatedAt: _readInstant(fields['updated_at']),
-        );
-    final candidateRow = rowOf(candidate);
-    final keptRow = rowOf(kept);
-    final resolved = resolvePreferenceConflict(
-      key,
-      local: keptRow,
-      server: candidateRow,
-    );
-    bool same(PreferenceRow row) =>
-        resolved.value == row.value && resolved.updatedAt == row.updatedAt;
-    return same(candidateRow) && !same(keptRow);
-  }
   final candidateAt = _readInstant(candidate['updated_at']);
   final keptAt = _readInstant(kept['updated_at']);
   if (candidateAt == null) return false;
   if (keptAt == null) return true;
   return candidateAt.isAfter(keptAt);
+}
+
+/// Whether [fields] belong to a key the conflict registry arbitrates by
+/// `maxTimestampValue` (a snooze floor).
+bool _isSnoozeFloor(Map<String, Object?> fields) {
+  final key = fields['key'];
+  return key is String &&
+      strategyForKey(key) == ConflictStrategy.maxTimestampValue;
+}
+
+/// The fields of the row that holds among all of [candidates], the encoded
+/// rows for one snooze-floor entity. The same reduction the device's own carry
+/// applies (`resolveSnoozeFloorAmong`), which does not depend on row order.
+Map<String, Object?> _snoozeFloorWinner(
+  List<Map<String, Object?>> candidates,
+) {
+  final winner = resolveSnoozeFloorAmong([
+    for (final fields in candidates)
+      PreferenceRow(
+        value: fields['value'] as String?,
+        updatedAt: _readInstant(fields['updated_at']),
+      ),
+  ])!;
+  return candidates.firstWhere(
+    (fields) =>
+        fields['value'] == winner.value &&
+        _readInstant(fields['updated_at']) == winner.updatedAt,
+  );
 }
 
 /// The instant [raw] names, or null when it names none.

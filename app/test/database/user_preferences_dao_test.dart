@@ -163,6 +163,23 @@ void main() {
       expect(await dao.get(_accountId, key), '"2026-01-01T18:00:00.000Z"');
     });
 
+    test('the latest snooze floor of three users wins, not the newest write',
+        () async {
+      final dao = db.userPreferencesDao;
+      const key = 'planning_notification_snoozed_until';
+
+      await dao.set(_accountId, key, '"2026-01-01T16:00:00.000Z"',
+          updatedAt: '2026-01-01T09:00:00.000Z');
+      await dao.set(_signedOutUserId, key, '"2026-01-01T18:00:00.000Z"',
+          updatedAt: '2026-01-01T10:00:00.000Z');
+      await dao.set('other-account', key, '"2026-01-01T17:00:00.000Z"',
+          updatedAt: '2026-01-01T11:00:00.000Z');
+
+      await dao.carryNewestPreferencesInto(_accountId);
+
+      expect(await dao.get(_accountId, key), '"2026-01-01T18:00:00.000Z"');
+    });
+
     test('a newer clear of a snooze is carried over an older clear', () async {
       final dao = db.userPreferencesDao;
       const key = 'planning_notification_snoozed_until';

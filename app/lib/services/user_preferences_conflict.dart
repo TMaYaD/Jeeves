@@ -221,6 +221,65 @@ ResolvedPreference _maxTimestampValue(
   return _lww(local, server);
 }
 
+/// Reduces any number of rows for one snooze-floor key (a
+/// [ConflictStrategy.maxTimestampValue] key) to the one that holds, in a way
+/// that does not depend on the order of [rows].
+///
+/// Pairwise folding with [resolveWithStrategy] is not associative for three
+/// rows (a live floor, a clear, a later re-snooze), so a caller holding more
+/// than two copies must reduce them here instead. The rule agrees with the
+/// pairwise one for two rows:
+///
+///   * the newest tombstone is the clear;
+///   * a live row written after the clear survives it (a live row written
+///     before it was silenced by it); with no clear every live row survives;
+///   * among survivors the later snooze value wins, ties going to the later
+///     write; a value that is not a timestamp counts as the lowest;
+///   * with no survivor the newest tombstone is the result.
+///
+/// Returns null only when [rows] is empty. The returned row is one of [rows].
+PreferenceRow? resolveSnoozeFloorAmong(Iterable<PreferenceRow> rows) {
+  PreferenceRow? newestClear;
+  for (final row in rows) {
+    if (!row.isTombstone) continue;
+    if (newestClear == null ||
+        (row.updatedAt ?? _epoch).isAfter(newestClear.updatedAt ?? _epoch)) {
+      newestClear = row;
+    }
+  }
+  PreferenceRow? best;
+  DateTime? bestUntil;
+  for (final row in rows) {
+    if (row.isTombstone) continue;
+    if (newestClear != null &&
+        !(row.updatedAt ?? _epoch)
+            .isAfter(newestClear.updatedAt ?? _epoch)) {
+      continue;
+    }
+    final until = _parseTimestampValue(row.value);
+    if (best == null) {
+      best = row;
+      bestUntil = until;
+      continue;
+    }
+    final bool wins;
+    if (until != null && bestUntil == null) {
+      wins = true;
+    } else if (until == null && bestUntil != null) {
+      wins = false;
+    } else if (until != null && bestUntil != null && until != bestUntil) {
+      wins = until.isAfter(bestUntil);
+    } else {
+      wins = (row.updatedAt ?? _epoch).isAfter(best.updatedAt ?? _epoch);
+    }
+    if (wins) {
+      best = row;
+      bestUntil = until;
+    }
+  }
+  return best ?? newestClear;
+}
+
 ResolvedPreference _setMerge(PreferenceRow local, PreferenceRow server) {
   // A tombstone means the set was cleared. Unioning it with a live list would
   // resurrect deleted members, so tombstone-vs-live (and two tombstones)

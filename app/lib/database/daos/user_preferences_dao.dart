@@ -13,7 +13,7 @@ import '../../sync/collection_codecs.dart' show userPreferencesCollection;
 import '../../sync/ids.dart'
     show preferenceEntityId, userPreferencesWorkspaceId;
 import '../../services/user_preferences_conflict.dart'
-    show ConflictStrategy, PreferenceRow, resolvePreferenceConflict, strategyForKey;
+    show ConflictStrategy, PreferenceRow, resolveSnoozeFloorAmong, strategyForKey;
 import '../gtd_database.dart';
 
 class UserPreferencesDao {
@@ -213,9 +213,9 @@ class UserPreferencesDao {
       ).get();
       if (rows.isEmpty) return;
 
-      // The newest row per key among the rows stored under another user id,
-      // and the current user's own row for the same key.
-      final newestOther = <String, QueryRow>{};
+      // Every row stored under another user id, grouped by key, and the
+      // current user's own row for the same key.
+      final othersByKey = <String, List<QueryRow>>{};
       final current = <String, QueryRow>{};
       for (final row in rows) {
         final key = row.read<String>('key');
@@ -223,45 +223,58 @@ class UserPreferencesDao {
           current[key] = row;
           continue;
         }
-        final held = newestOther[key];
-        if (held == null || _isNewerThan(row, held)) {
-          newestOther[key] = row;
-        }
+        (othersByKey[key] ??= []).add(row);
       }
-      if (newestOther.isEmpty) return;
+      if (othersByKey.isEmpty) return;
+
+      PreferenceRow preferenceRowOf(QueryRow row) => PreferenceRow(
+            value: row.read<String?>('value'),
+            updatedAt: _parseTimestamp(row.read<String?>('updated_at')),
+          );
 
       final carries = <MapEntry<String, QueryRow>>[];
-      for (final entry in newestOther.entries) {
-        final mine = current[entry.key];
-        if (mine != null &&
-            strategyForKey(entry.key) == ConflictStrategy.maxTimestampValue) {
+      for (final entry in othersByKey.entries) {
+        final key = entry.key;
+        final mine = current[key];
+        if (strategyForKey(key) == ConflictStrategy.maxTimestampValue) {
           // A snooze floor: the later snooze value wins, not the later write,
           // so a carry can never lower an active floor and re-fire a silenced
-          // notification. The registry's own resolver decides.
-          final mineValue = mine.read<String?>('value');
-          final mineAt = _parseTimestamp(mine.read<String?>('updated_at'));
-          final resolved = resolvePreferenceConflict(
-            entry.key,
-            local: PreferenceRow(value: mineValue, updatedAt: mineAt),
-            server: PreferenceRow(
-              value: entry.value.read<String?>('value'),
-              updatedAt:
-                  _parseTimestamp(entry.value.read<String?>('updated_at')),
-            ),
+          // notification. Every copy on the device is reduced together, in an
+          // order-independent way, so a third copy cannot be ignored.
+          final candidates = <QueryRow>[?mine, ...entry.value];
+          final winnerRow = resolveSnoozeFloorAmong(
+            candidates.map(preferenceRowOf),
           );
+          if (winnerRow == null) continue;
           // The timestamp counts too: two equal values (two clears, say) with
           // different timestamps resolve to the newer one, and only a carry
           // brings that timestamp into the account's row.
-          if (resolved.value != mineValue || resolved.updatedAt != mineAt) {
-            carries.add(entry);
+          if (mine != null) {
+            final mineRow = preferenceRowOf(mine);
+            if (winnerRow.value == mineRow.value &&
+                winnerRow.updatedAt == mineRow.updatedAt) {
+              continue;
+            }
           }
+          carries.add(MapEntry(
+            key,
+            candidates.firstWhere((row) {
+              final candidate = preferenceRowOf(row);
+              return candidate.value == winnerRow.value &&
+                  candidate.updatedAt == winnerRow.updatedAt;
+            }),
+          ));
           continue;
         }
-        if (mine != null && !_isNewerThan(entry.value, mine)) {
+        var newest = entry.value.first;
+        for (final row in entry.value.skip(1)) {
+          if (_isNewerThan(row, newest)) newest = row;
+        }
+        if (mine != null && !_isNewerThan(newest, mine)) {
           // The current user's copy is newer, or equally new: leave it alone.
           continue;
         }
-        carries.add(entry);
+        carries.add(MapEntry(key, newest));
       }
       if (carries.isEmpty) return;
 
