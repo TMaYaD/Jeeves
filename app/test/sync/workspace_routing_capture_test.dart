@@ -404,6 +404,35 @@ void main() {
           reason: 'the wire refuses an op whose clock does not name its author');
     });
 
+    test('a host-clocked preference stored under another user id is reported',
+        () async {
+      await capture.bind(
+          gtdClient: gtdClient, preferencesClient: preferencesClient);
+
+      final clock = Hlc(_nowMs, 0, identity.memberIdHex);
+      final foreignEntityId = preferenceEntityId(
+        userPreferencesWorkspaceId('local'),
+        'clarify_mode',
+      );
+      await capture.onLocalChanges([
+        Change(
+          collection: userPreferencesCollection,
+          entityId: foreignEntityId,
+          fields: {
+            'key': ClockedValue('clarify_mode', clock),
+            'value': ClockedValue('"oneToOne"', clock),
+            'user_id': ClockedValue('local', clock),
+          },
+        ),
+      ]);
+      await capture.unauthoredHandedBack;
+
+      expect(reported, hasLength(1));
+      expect(reported.single.entityId, foreignEntityId);
+      expect(await queuedWorkspaceIds(), isEmpty,
+          reason: 'a row stored under another user id is never authored');
+    });
+
     test('an op authored on bind is not reported, and one outbox row exists',
         () async {
       await capture.onLocalChanges([hostChange()]);

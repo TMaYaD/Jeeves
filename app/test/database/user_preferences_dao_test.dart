@@ -133,6 +133,36 @@ void main() {
     });
     tearDown(() => db.close());
 
+    test('a snooze floor is never lowered by a carry, even from a newer write',
+        () async {
+      final dao = db.userPreferencesDao;
+      const key = 'planning_notification_snoozed_until';
+
+      await dao.set(_accountId, key, '"2026-01-01T18:00:00.000Z"',
+          updatedAt: '2026-01-01T10:00:00.000Z');
+      await dao.set(_signedOutUserId, key, '"2026-01-01T17:00:00.000Z"',
+          updatedAt: '2026-01-01T11:00:00.000Z');
+
+      await dao.carryNewestPreferencesInto(_accountId);
+
+      expect(await dao.get(_accountId, key), '"2026-01-01T18:00:00.000Z"');
+    });
+
+    test('a later snooze value is carried even when its write is older',
+        () async {
+      final dao = db.userPreferencesDao;
+      const key = 'planning_notification_snoozed_until';
+
+      await dao.set(_accountId, key, '"2026-01-01T17:00:00.000Z"',
+          updatedAt: '2026-01-01T11:00:00.000Z');
+      await dao.set(_signedOutUserId, key, '"2026-01-01T18:00:00.000Z"',
+          updatedAt: '2026-01-01T10:00:00.000Z');
+
+      await dao.carryNewestPreferencesInto(_accountId);
+
+      expect(await dao.get(_accountId, key), '"2026-01-01T18:00:00.000Z"');
+    });
+
     test('a change that lands while a setting is carried in is not undone',
         () async {
       final dao = db.userPreferencesDao;

@@ -12,6 +12,8 @@ import 'package:drift/drift.dart';
 import '../../sync/collection_codecs.dart' show userPreferencesCollection;
 import '../../sync/ids.dart'
     show preferenceEntityId, userPreferencesWorkspaceId;
+import '../../services/user_preferences_conflict.dart'
+    show ConflictStrategy, PreferenceRow, resolvePreferenceConflict, strategyForKey;
 import '../gtd_database.dart';
 
 class UserPreferencesDao {
@@ -231,6 +233,27 @@ class UserPreferencesDao {
       final carries = <MapEntry<String, QueryRow>>[];
       for (final entry in newestOther.entries) {
         final mine = current[entry.key];
+        if (mine != null &&
+            strategyForKey(entry.key) == ConflictStrategy.maxTimestampValue) {
+          // A snooze floor: the later snooze value wins, not the later write,
+          // so a carry can never lower an active floor and re-fire a silenced
+          // notification. The registry's own resolver decides.
+          final mineValue = mine.read<String?>('value');
+          final resolved = resolvePreferenceConflict(
+            entry.key,
+            local: PreferenceRow(
+              value: mineValue,
+              updatedAt: _parseTimestamp(mine.read<String?>('updated_at')),
+            ),
+            server: PreferenceRow(
+              value: entry.value.read<String?>('value'),
+              updatedAt:
+                  _parseTimestamp(entry.value.read<String?>('updated_at')),
+            ),
+          );
+          if (resolved.value != mineValue) carries.add(entry);
+          continue;
+        }
         if (mine != null && !_isNewerThan(entry.value, mine)) {
           // The current user's copy is newer, or equally new: leave it alone.
           continue;

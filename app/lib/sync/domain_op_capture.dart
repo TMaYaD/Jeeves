@@ -597,8 +597,13 @@ class WorkspaceRoutingOpCapture extends BufferedDomainOpCapture {
     // is not authored.
     if (op.collection == userPreferencesCollection) {
       final key = op.fields['key'];
-      if (key is! String) return;
-      if (preferenceEntityId(client.workspaceId, key) != op.entityId) return;
+      if (key is! String ||
+          preferenceEntityId(client.workspaceId, key) != op.entityId) {
+        // Never authored, so a host-clocked record of it is handed back like
+        // any other change this bridge will not author.
+        await _leaveUnauthored([op]);
+        return;
+      }
     }
     final hostClock = op.clock;
     // A change the host clocked under the device node id (made before this
