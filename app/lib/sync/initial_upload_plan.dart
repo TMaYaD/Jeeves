@@ -49,6 +49,7 @@ import '../database/daos/focus_session_dao.dart'
         focusSessionDispositionIdFor,
         focusSessionPlanningBypassIdFor,
         focusSessionRescheduleIdFor;
+import '../services/user_preferences_conflict.dart';
 import 'collection_codecs.dart';
 import 'ids.dart';
 
@@ -605,17 +606,40 @@ Future<InitialUploadPlan> buildInitialUploadPlan({
   );
 }
 
-/// Whether [candidate] holds a strictly newer `updated_at` than [kept].
+/// Whether [candidate] should replace [kept] when two rows collapse onto one
+/// preference entity.
 ///
 /// The same rule the device's own carry applies
 /// (`UserPreferencesDao.carryNewestPreferencesInto`), so the copy the device
 /// keeps and the value the first upload publishes agree on which of two rows
-/// is the newer one: a timestamp that cannot be read counts as the oldest, and
-/// two rows stamped the same instant count as equal, so the first row is kept.
+/// is the setting. A key the conflict registry arbitrates by
+/// `maxTimestampValue` (a snooze floor) goes to the registry's resolver, so the
+/// later snooze value wins and the upload never lowers a floor. Every other key
+/// takes the strictly newer `updated_at`: a timestamp that cannot be read
+/// counts as the oldest, and two rows stamped the same instant count as equal,
+/// so the first row is kept.
 bool _isNewerPreferenceRow(
   Map<String, Object?> candidate,
   Map<String, Object?> kept,
 ) {
+  final key = candidate['key'];
+  if (key is String &&
+      strategyForKey(key) == ConflictStrategy.maxTimestampValue) {
+    PreferenceRow rowOf(Map<String, Object?> fields) => PreferenceRow(
+          value: fields['value'] as String?,
+          updatedAt: _readInstant(fields['updated_at']),
+        );
+    final candidateRow = rowOf(candidate);
+    final keptRow = rowOf(kept);
+    final resolved = resolvePreferenceConflict(
+      key,
+      local: keptRow,
+      server: candidateRow,
+    );
+    bool same(PreferenceRow row) =>
+        resolved.value == row.value && resolved.updatedAt == row.updatedAt;
+    return same(candidateRow) && !same(keptRow);
+  }
   final candidateAt = _readInstant(candidate['updated_at']);
   final keptAt = _readInstant(kept['updated_at']);
   if (candidateAt == null) return false;

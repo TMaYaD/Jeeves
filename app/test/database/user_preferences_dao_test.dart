@@ -163,6 +163,25 @@ void main() {
       expect(await dao.get(_accountId, key), '"2026-01-01T18:00:00.000Z"');
     });
 
+    test('a newer clear of a snooze is carried over an older clear', () async {
+      final dao = db.userPreferencesDao;
+      const key = 'planning_notification_snoozed_until';
+
+      await dao.set(_accountId, key, null,
+          updatedAt: '2026-01-01T10:00:00.000Z');
+      await dao.set(_signedOutUserId, key, null,
+          updatedAt: '2026-01-01T12:00:00.000Z');
+
+      await dao.carryNewestPreferencesInto(_accountId);
+
+      final row = (await db.customSelect(
+        'SELECT updated_at FROM user_preferences WHERE user_id = ? AND "key" = ?',
+        variables: [Variable.withString(_accountId), Variable.withString(key)],
+      ).getSingle());
+      expect(DateTime.parse(row.read<String>('updated_at')).toUtc(),
+          DateTime.utc(2026, 1, 1, 12));
+    });
+
     test('a change that lands while a setting is carried in is not undone',
         () async {
       final dao = db.userPreferencesDao;

@@ -27,11 +27,12 @@ Map<String, Object?> _preferenceRow(
   String label,
   String userId,
   String value,
-  String updatedAt,
-) =>
+  String updatedAt, {
+  String key = 'clarify_mode',
+}) =>
     {
       'id': _id(label),
-      'key': 'clarify_mode',
+      'key': key,
       'value': value,
       'updated_at': updatedAt,
       'user_id': userId,
@@ -648,6 +649,23 @@ void main() {
       final entity = plan.entitiesFor(userPreferencesCollection).single;
       expect(entity.fields['value'], '"oneToOne"');
       expect(entity.fields['updated_at'], '2026-07-01T07:00:00.000Z');
+    });
+
+    test('keeps the later snooze value of two rows, not the later write',
+        () async {
+      const key = 'planning_notification_snoozed_until';
+      final plan = await _plan({
+        'user_preferences': [
+          _preferenceRow('preference/local', 'local',
+              '"2026-07-01T18:00:00.000Z"', '2026-07-01T09:00:00.000Z',
+              key: key),
+          _preferenceRow('preference/account', _userId,
+              '"2026-07-01T12:00:00.000Z"', '2026-07-01T10:00:00.000Z',
+              key: key),
+        ],
+      });
+      final entity = plan.entitiesFor(userPreferencesCollection).single;
+      expect(entity.fields['value'], '"2026-07-01T18:00:00.000Z"');
     });
 
     test('walks the collections parents-first', () async {

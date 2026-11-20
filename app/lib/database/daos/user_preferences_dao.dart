@@ -239,19 +239,22 @@ class UserPreferencesDao {
           // so a carry can never lower an active floor and re-fire a silenced
           // notification. The registry's own resolver decides.
           final mineValue = mine.read<String?>('value');
+          final mineAt = _parseTimestamp(mine.read<String?>('updated_at'));
           final resolved = resolvePreferenceConflict(
             entry.key,
-            local: PreferenceRow(
-              value: mineValue,
-              updatedAt: _parseTimestamp(mine.read<String?>('updated_at')),
-            ),
+            local: PreferenceRow(value: mineValue, updatedAt: mineAt),
             server: PreferenceRow(
               value: entry.value.read<String?>('value'),
               updatedAt:
                   _parseTimestamp(entry.value.read<String?>('updated_at')),
             ),
           );
-          if (resolved.value != mineValue) carries.add(entry);
+          // The timestamp counts too: two equal values (two clears, say) with
+          // different timestamps resolve to the newer one, and only a carry
+          // brings that timestamp into the account's row.
+          if (resolved.value != mineValue || resolved.updatedAt != mineAt) {
+            carries.add(entry);
+          }
           continue;
         }
         if (mine != null && !_isNewerThan(entry.value, mine)) {
