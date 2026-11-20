@@ -296,3 +296,281 @@ List<HabitJudgedUnit> judgeUnits(HabitHistory history, DateTime today) {
   }
   return units;
 }
+
+// ---------------------------------------------------------------------------
+// Streaks, rates and today's state (streak engine plan, §6.3 to §6.6).
+// ---------------------------------------------------------------------------
+
+/// Where a Habit stands today.
+enum HabitTodayState {
+  /// Today counts as achieved.
+  done,
+
+  /// Due today (or its period is still open) and not achieved yet.
+  notYet,
+
+  /// Nothing is asked of the Habit today.
+  notDue,
+
+  /// A paused or archived period covers today.
+  paused,
+}
+
+/// One rate over a window.
+class HabitRate {
+  const HabitRate({required this.windowLength, required this.value});
+
+  /// The window's length, in days for a day-based Habit, in weeks for a
+  /// weekly one and in finished months for a monthly one.
+  final int windowLength;
+
+  /// A fraction between 0 and 1, or null when the window has nothing to
+  /// count. The UI shows "—" for null.
+  final double? value;
+
+  @override
+  String toString() => 'HabitRate($windowLength: $value)';
+}
+
+/// Everything the UI and the check-in flow need to know about one Habit.
+class HabitProgress {
+  const HabitProgress({
+    required this.mainStreakKind,
+    required this.currentStreak,
+    required this.bestStreak,
+    required this.brokenStreakLength,
+    required this.rates,
+    required this.todayState,
+    this.periodCount,
+    this.periodTarget,
+    this.todayTotalAmount,
+    this.targetAmount,
+    this.unitLabel,
+    this.isOverTarget = false,
+  });
+
+  /// The unit the main number counts: a day for day-based kinds, a week or a
+  /// month for N per week or month.
+  final HabitUnitKind mainStreakKind;
+
+  /// The streak of [mainStreakKind] units that ends now.
+  final int currentStreak;
+
+  /// The longest streak of [mainStreakKind] units in the whole history.
+  final int bestStreak;
+
+  /// The length of the streak the latest miss ended, or null when the latest
+  /// settled unit was not a miss or no streak stood before it.
+  final int? brokenStreakLength;
+
+  /// The short, medium and long rates, in that order.
+  final List<HabitRate> rates;
+
+  final HabitTodayState todayState;
+
+  /// For a weekly or monthly Habit: Check-ins (or target-reaching days) so far
+  /// in the open period. Null for a day-based Habit.
+  final int? periodCount;
+
+  /// For a weekly or monthly Habit: N. Null for a day-based Habit.
+  final int? periodTarget;
+
+  /// For a measurable Habit: the total of today's Check-ins.
+  final double? todayTotalAmount;
+
+  /// For a measurable Habit: today's daily target.
+  final double? targetAmount;
+
+  /// For a measurable Habit: the unit of the amounts.
+  final String? unitLabel;
+
+  /// Whether today's total is above the target.
+  final bool isOverTarget;
+}
+
+HabitUnitKind _unitKindOf(HabitCommitment commitment) {
+  switch (commitment.repeatKind) {
+    case HabitRepeatKind.timesPerWeek:
+      return HabitUnitKind.week;
+    case HabitRepeatKind.timesPerMonth:
+      return HabitUnitKind.month;
+    case HabitRepeatKind.everyDay:
+    case HabitRepeatKind.chosenWeekdays:
+    case HabitRepeatKind.everyNDays:
+      return HabitUnitKind.day;
+  }
+}
+
+const _dayRateWindowLengths = [7, 30, 90];
+const _weekRateWindowLengths = [4, 12, 26];
+const _monthRateWindowLengths = [1, 3, 6];
+
+List<HabitRate> _computeRates(
+    List<HabitJudgedUnit> units, HabitUnitKind kind, DateTime today) {
+  final lengths = switch (kind) {
+    HabitUnitKind.day => _dayRateWindowLengths,
+    HabitUnitKind.week => _weekRateWindowLengths,
+    HabitUnitKind.month => _monthRateWindowLengths,
+  };
+  final ofKind = [for (final unit in units) if (unit.kind == kind) unit];
+
+  double? rateOver(DateTime windowStart) {
+    if (kind == HabitUnitKind.day) {
+      var done = 0;
+      var missed = 0;
+      for (final unit in ofKind) {
+        if (unit.lastDay.isBefore(windowStart)) continue;
+        if (unit.result == HabitUnitResult.done) done++;
+        if (unit.result == HabitUnitResult.missed) missed++;
+      }
+      return done + missed == 0 ? null : done / (done + missed);
+    }
+    var achieved = 0;
+    var asked = 0;
+    for (final unit in ofKind) {
+      if (unit.lastDay.isBefore(windowStart)) continue;
+      if (unit.result != HabitUnitResult.met &&
+          unit.result != HabitUnitResult.missed) {
+        continue;
+      }
+      final target = unit.commitment.timesPerPeriod!;
+      // A met unit counts as N even when it is over.
+      achieved += unit.count! < target ? unit.count! : target;
+      asked += target;
+    }
+    return asked == 0 ? null : achieved / asked;
+  }
+
+  DateTime windowStart(int length) {
+    switch (kind) {
+      case HabitUnitKind.day:
+        return DateTime.utc(today.year, today.month, today.day - (length - 1));
+      case HabitUnitKind.week:
+        final start = weekStart(today);
+        return DateTime.utc(start.year, start.month, start.day - 7 * length);
+      case HabitUnitKind.month:
+        return DateTime.utc(today.year, today.month - length);
+    }
+  }
+
+  return [
+    for (final length in lengths)
+      HabitRate(windowLength: length, value: rateOver(windowStart(length))),
+  ];
+}
+
+/// Computes streaks, rates and today's state for one Habit.
+///
+/// See the streak engine plan, §6.3 to §6.6. Pure: [today] is a calendar day
+/// the caller chose, and nothing is read from the clock or the database.
+HabitProgress computeHabitProgress(HabitHistory history, DateTime today) {
+  final todayDay = _utcDay(today);
+  final todayKey = habitDayKey(todayDay);
+  final runs = commitmentRuns(history, todayDay);
+  final units = judgeUnits(history, todayDay);
+
+  final commitmentToday = commitmentInForceOn(history.commitments, todayKey);
+  final mainKind = runs.isEmpty
+      ? HabitUnitKind.day
+      : _unitKindOf(runs.last.commitment);
+
+  // Streaks: a run of done or met units, passing over skipped ones and ended
+  // by a miss. A run only carries on while the unit kind stays the same.
+  HabitUnitKind? runKind;
+  var runLength = 0;
+  final bestByKind = <HabitUnitKind, int>{};
+  HabitJudgedUnit? latestSettled;
+  var lengthBeforeLatest = 0;
+  for (final unit in units) {
+    switch (unit.result) {
+      case HabitUnitResult.skipped:
+      case HabitUnitResult.inProgress:
+        continue;
+      case HabitUnitResult.done:
+      case HabitUnitResult.met:
+        if (runKind != unit.kind) {
+          runKind = unit.kind;
+          runLength = 0;
+        }
+        runLength++;
+        final best = bestByKind[unit.kind] ?? 0;
+        if (runLength > best) bestByKind[unit.kind] = runLength;
+        latestSettled = unit;
+        lengthBeforeLatest = runLength - 1;
+      case HabitUnitResult.missed:
+        lengthBeforeLatest = runKind == unit.kind ? runLength : 0;
+        runKind = unit.kind;
+        runLength = 0;
+        latestSettled = unit;
+    }
+  }
+  final brokenStreakLength = latestSettled?.result == HabitUnitResult.missed &&
+          lengthBeforeLatest >= 1
+      ? lengthBeforeLatest
+      : null;
+
+  // Today.
+  final inactiveToday = _isInactiveOn(history.inactivePeriods, todayKey);
+  final todaysCheckIns = [
+    for (final checkIn in history.checkIns)
+      if (checkIn.countsForDay == todayKey) checkIn
+  ];
+  var todayTotal = 0.0;
+  for (final checkIn in todaysCheckIns) {
+    todayTotal += checkIn.measuredAmount ?? 0;
+  }
+  final measurable = commitmentToday?.isMeasurable ?? false;
+  final todayAchieved = commitmentToday == null
+      ? false
+      : measurable
+          ? todayTotal >= commitmentToday.dailyTargetAmount!
+          : todaysCheckIns.isNotEmpty;
+
+  int? periodCount;
+  int? periodTarget;
+  final HabitTodayState todayState;
+  if (commitmentToday == null) {
+    todayState = HabitTodayState.notDue;
+  } else if (_unitKindOf(commitmentToday) == HabitUnitKind.day) {
+    if (inactiveToday) {
+      todayState = HabitTodayState.paused;
+    } else if (!isDueOn(commitmentToday, todayDay)) {
+      todayState = HabitTodayState.notDue;
+    } else {
+      todayState = todayAchieved ? HabitTodayState.done : HabitTodayState.notYet;
+    }
+  } else {
+    periodTarget = commitmentToday.timesPerPeriod;
+    for (final unit in units.reversed) {
+      if (unit.kind != HabitUnitKind.day && unit.lastDay == todayDay) {
+        periodCount = unit.count;
+        break;
+      }
+    }
+    if (inactiveToday) {
+      todayState = HabitTodayState.paused;
+    } else if (todayAchieved) {
+      todayState = HabitTodayState.done;
+    } else if ((periodCount ?? 0) < periodTarget!) {
+      todayState = HabitTodayState.notYet;
+    } else {
+      todayState = HabitTodayState.notDue;
+    }
+  }
+
+  return HabitProgress(
+    mainStreakKind: mainKind,
+    currentStreak: runKind == mainKind ? runLength : 0,
+    bestStreak: bestByKind[mainKind] ?? 0,
+    brokenStreakLength: brokenStreakLength,
+    rates: _computeRates(units, mainKind, todayDay),
+    todayState: todayState,
+    periodCount: periodCount,
+    periodTarget: periodTarget,
+    todayTotalAmount: measurable ? todayTotal : null,
+    targetAmount: measurable ? commitmentToday!.dailyTargetAmount : null,
+    unitLabel: measurable ? commitmentToday!.unitLabel : null,
+    isOverTarget:
+        measurable && todayTotal > commitmentToday!.dailyTargetAmount!,
+  );
+}
