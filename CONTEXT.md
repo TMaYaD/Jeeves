@@ -392,7 +392,7 @@ Sync is responsible for bidirectional offline-first replication of one User's da
 - **Sync host**: the app-owned part of Sync that holds a device's merge state and feeds every plugin; it decides what a field's value is. Design: [sync-plugins](docs/proposals/sync-plugins.md).
 - **Sync plugin**: a carrier of **Changes** between this device and somewhere else; it never decides a value.
 - **Change**: one clocked, field-grain write to one entity, a deletion included.
-- **Vault**: a folder of Markdown pages carrying a person's Outcomes, sessions and Captures as plain files, editable outside the app. The pages are the medium, not the truth: the sync host decides every value. The Settings tile says "Sync through a folder of pages", not "Vault". Design: [SYNC.md](docs/SYNC.md#the-vault-a-folder-of-markdown-pages).
+- **Vault**: a folder of Markdown pages carrying a person's synced data as plain files; Outcomes, sessions and Captures are editable outside the app. The pages are the medium, not the truth: the sync host decides every value. The Settings tile says "Sync through a folder of pages", not "Vault". Design: [SYNC.md](docs/SYNC.md#the-vault-a-folder-of-markdown-pages).
 
 _Avoid_: Provider, backend, driver (for plugin)
 

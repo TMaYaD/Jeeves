@@ -68,9 +68,45 @@ void main() {
   test('entities find their page', () {
     expect(pageOwning(planned), key);
     expect(pageOwning(link), key);
-    expect(pageOwning(tag), isNull);
+    expect(pageOwning(tag), const VaultPageKey(VaultPageKind.appOwned, 'tags'));
     expect(pageOwning(_change('time_logs', 'x', {'focus_session_id': 's1', 'task_id': 'o1'})),
         const VaultPageKey(VaultPageKind.session, 's1'));
     expect(pageOwning(_change('time_logs', 'x', {'task_id': 'o1'})), key);
+  });
+
+  group('pages the app keeps for itself', () {
+    test('a Tag and a preference each go to one page of their own', () {
+      expect(pageOwning(tag),
+          const VaultPageKey(VaultPageKind.appOwned, 'tags'));
+      expect(
+          pageOwning(_change('user_preferences', 'p1', {'key': 'k', 'value': 'v'})),
+          const VaultPageKey(VaultPageKind.appOwned, 'preferences'));
+      expect(appOwnedPagePath('tags'), 'Jeeves/Tags.md');
+      expect(appOwnedPagePath('preferences'), 'Jeeves/Preferences.md');
+    });
+
+    test('a Sprint goes to the page of the UTC day it started', () {
+      VaultPageKey? at(Object? startedAt) => pageOwning(
+          _change('sprints', 's1', {'started_at': startedAt, 'ended_at': null}));
+      expect(at('2026-11-20T23:30:00.000Z'),
+          const VaultPageKey(VaultPageKind.appOwned, 'sprints-2026-11-20'));
+      expect(at('2026-11-21T00:10:00.000Z'),
+          const VaultPageKey(VaultPageKind.appOwned, 'sprints-2026-11-21'));
+      expect(at('2026-11-20T23:30:00.000-02:00'),
+          const VaultPageKey(VaultPageKind.appOwned, 'sprints-2026-11-21'));
+      expect(at('not a date'),
+          const VaultPageKey(VaultPageKind.appOwned, 'sprints-undated'));
+      expect(appOwnedPagePath('sprints-2026-11-20'), 'Jeeves/Sprints/2026-11-20.md');
+      expect(appOwnedPagePath('sprints-undated'), 'Jeeves/Sprints/undated.md');
+    });
+
+    test('every value of such a page travels in the block', () {
+      final page = layOutPage(
+          const VaultPageKey(VaultPageKind.appOwned, 'tags'), [tag]);
+      expect(page.frontmatter, {'id': 'tags'});
+      expect(page.checklist, isEmpty);
+      expect(page.block, isNotEmpty);
+      expect(page.block!.every((entry) => entry.hasCarriedValue), isTrue);
+    });
   });
 }

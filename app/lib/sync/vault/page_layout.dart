@@ -17,7 +17,11 @@ import 'page_codec.dart';
 enum VaultPageKind {
   outcome('Outcomes'),
   session('Sessions'),
-  capture('Inbox');
+  capture('Inbox'),
+
+  /// Pages the app keeps for itself, so a new install can bring its data back.
+  /// Read only. Scanned last: Actions arrive before the Sprints that name them.
+  appOwned('Jeeves');
 
   const VaultPageKind(this.folder);
 
@@ -44,8 +48,7 @@ class VaultPageKey {
 }
 
 /// The page an entity of [change] belongs on, or null when it has no page of its
-/// own (a Tag is carried by every page that links it; preferences stay on the
-/// device).
+/// own. Tags, preferences and Sprints sit on pages the app keeps for itself.
 VaultPageKey? pageOwning(Change change) {
   String? field(String name) {
     final value = change.fields[name]?.value;
@@ -83,8 +86,28 @@ VaultPageKey? pageOwning(Change change) {
     case captureOutcomesCollection:
       final capture = field('capture_id');
       return capture == null ? null : VaultPageKey(VaultPageKind.capture, capture);
+    case tagsCollection:
+      return const VaultPageKey(VaultPageKind.appOwned, 'tags');
+    case userPreferencesCollection:
+      return const VaultPageKey(VaultPageKind.appOwned, 'preferences');
+    case sprintsCollection:
+      final started = parseTimestampUtcMs(change.fields['started_at']?.value);
+      final date = started == null ? 'undated' : started.substring(0, 10);
+      return VaultPageKey(VaultPageKind.appOwned, 'sprints-$date');
   }
   return null;
+}
+
+/// Where a page the app keeps for itself sits in the vault. A pure function of
+/// the page id, so every device writes the same path.
+String appOwnedPagePath(String pageId) {
+  const sprintsPrefix = 'sprints-';
+  if (pageId.startsWith(sprintsPrefix)) {
+    return '${VaultPageKind.appOwned.folder}/Sprints/'
+        '${pageId.substring(sprintsPrefix.length)}.md';
+  }
+  return '${VaultPageKind.appOwned.folder}/'
+      '${pageId[0].toUpperCase()}${pageId.substring(1)}.md';
 }
 
 /// The Tag ids a junction [change] links to, or null for any other entity.
@@ -206,6 +229,10 @@ PageModel layOutPage(VaultPageKey key, List<Change> entities) {
       if (labels.isNotEmpty) frontmatter['labels'] = labels;
       final body = rootValue('notes');
       notes = body is String && body.isNotEmpty ? '$body\n' : '';
+    case VaultPageKind.appOwned:
+      // Nothing here is shown: every value travels in the block.
+      notes = 'Jeeves keeps this page so a new install can bring your data '
+          'back. Edits here are not read.\n';
   }
 
   return PageModel(

@@ -544,6 +544,7 @@ class VaultPlugin implements SyncPlugin {
       case VaultPageKind.capture:
         return _isTombstoned(block, capturesCollection, key.entityId);
       case VaultPageKind.session:
+      case VaultPageKind.appOwned:
         return false;
     }
   }
@@ -961,6 +962,8 @@ class VaultPlugin implements SyncPlugin {
         stem = '$date-${key.entityId}';
       case VaultPageKind.capture:
         stem = key.entityId;
+      case VaultPageKind.appOwned:
+        return appOwnedPagePath(key.entityId);
     }
     return '${key.kind.folder}/$stem.md';
   }

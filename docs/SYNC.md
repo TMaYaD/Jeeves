@@ -148,11 +148,11 @@ A remote change is always projected on arrival. `DomainProjector.project`
 (`sync/domain_projector.dart`) gives the reason for each.
 ## The vault: a folder of Markdown pages
 
-The vault is the first plugin behind the host ([sync-plugins](proposals/sync-plugins.md)). It carries the device's merged state to a folder of pages a person can read, grep and edit, and brings back what they changed. It needs no account and no server: a file syncer of the person's choosing carries the folder between devices.
+The vault is the first plugin behind the host ([sync-plugins](proposals/sync-plugins.md)). It carries the device's merged state (all but device-local settings) to a folder of pages a person can read, grep and edit, and brings back what they changed. It needs no account and no server: a file syncer of the person's choosing carries the folder between devices.
 
 **It is a carrier, like any plugin.** It turns a page into changes and writes the host's merged state back as a page. It never chooses between two values and never writes a value the host did not give it; the one thing it authors is a clock for a hand edit, minted with `SyncHost.mintClock()`. It reads merged state through `SyncHost.mergedEntity` rather than comparing clocks itself.
 
-**What is on a page.** One page per Outcome (`Outcomes/`), one sheet per FocusSession (`Sessions/`), one page per Capture (`Inbox/`). A sheet's name carries the session's UTC date and its id, so two sittings on one day never collide. A page's identity is the `id` in its frontmatter, never its path. **What a person can edit is what a page shows**: an Outcome's title, intent, due date and notes, its Actions as a checklist, a Capture's clarification stamp, and the Labels and Area the page shows. The rest of a page is the app's to write.
+**What is on a page.** One page per Outcome (`Outcomes/`), one sheet per FocusSession (`Sessions/`), one page per Capture (`Inbox/`), and read-only pages under `Jeeves/` for preferences, Tags and each UTC day's Sprints. A sheet's name carries the session's UTC date and its id, so two sittings on one day never collide. A page's identity is the `id` in its frontmatter, never its path. **What a person can edit is what a page shows**: an Outcome's title, intent, due date and notes, its Actions as a checklist, a Capture's clarification stamp, and the Labels and Area the page shows. The rest of a page is the app's to write.
 
 **A page is a pure function of merged state**: the same state always renders the same bytes, in the same order and in UTC, so two devices in the same state write the same file and a file syncer never sees a conflict between them. The readable part is frontmatter, notes, and a final `## Actions` heading that is always written; everything between the frontmatter and that heading is the notes, byte for byte.
 
@@ -163,8 +163,6 @@ The vault is the first plugin behind the host ([sync-plugins](proposals/sync-plu
 **Deletion is a tombstone in the page, never a missing file** — a missing file may simply not have arrived. A deleted Outcome keeps its page and gains a `deleted` date in its frontmatter; a deleted Action's line disappears and its tombstone stays in the block. A deleted page is frozen: removing the `deleted` line does not bring the Outcome back.
 
 **Hand edits bypass the app's own write rules.** A hand edit writes the fields the page shows and no more; it does not run the DAOs, so it stamps no `last_clarified_at` and the app's re-clarification offers still apply. An entity a hand edit creates gets an id derived from what was typed, so two devices that read the same edit create one entity (`app/lib/sync/ids.dart`).
-
-**What the vault does not carry:** preferences, and Tags no page names — an Area with no Outcomes has no page. They stay on the device.
 
 **Where it fails.** A page that cannot be read or parsed is left alone and counted; a folder that cannot be listed is reported, and the other folders are still read. A page the host will not take is left alone and counted too: its content is in the folder and nowhere else, so it is kept — never removed, never written over — and the next pass takes it again. A page the folder will not write is owed a write-back that the next pass makes, and the pages that owe one are counted in the health. A delivery the folder could not read is not acknowledged, so the host sends it again. All of it shows in `VaultHealth` and the log, not yet in the drawer indicator (#916).
 
