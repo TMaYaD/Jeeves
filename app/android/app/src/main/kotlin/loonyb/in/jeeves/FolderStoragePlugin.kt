@@ -14,11 +14,13 @@ import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.PluginRegistry
-import java.io.FileInputStream
+import java.io.ByteArrayOutputStream
+import java.io.FileNotFoundException
+import java.io.InputStream
 import java.util.concurrent.Executors
 
 /**
- * File access for the op-log folder plugin, over the system folder picker.
+ * File access for the folder plugins, over the system folder picker.
  *
  * Channel: "jeeves/folder". `tree` is the persisted tree URI the picker returned;
  * `path` is a `/`-separated path relative to it ("" is the folder itself).
@@ -28,8 +30,18 @@ import java.util.concurrent.Executors
  *   listFiles({tree, path}) -> List<String>
  *   length({tree, path}) -> Long?                   null if it does not exist
  *   read({tree, path, offset, maxBytes}) -> ByteArray
+ *   readAll({tree, path}) -> ByteArray?             null if it does not exist
  *   append({tree, path, bytes}) -> null             creates the file if needed
  *   createIfAbsent({tree, path, bytes}) -> Boolean
+ *   writeAtomically({tree, path, bytes}) -> null    replaces the file
+ *   remove({tree, path}) -> null                    deletes the file, if it is there
+ *
+ * The vault's own are `readAll`, `writeAtomically` and `remove`. It reads a page
+ * whole, because a provider may answer a question about a document's size with
+ * nothing — so the size is not asked for, and only the absence of the document
+ * answers "there is no page here". It rewrites a whole page and must not leave a
+ * half-written one behind, and it removes a page file that has no page in it
+ * any more.
  *
  * No new dependency: the framework's DocumentsContract is enough. All work runs on
  * one background thread, in call order, so an append never overtakes a read.
@@ -150,11 +162,20 @@ class FolderStoragePlugin :
             (call.argument<Number>("offset") ?: 0).toLong(),
             (call.argument<Number>("maxBytes") ?: 0).toInt(),
         )
+        "readAll" -> readAll(tree, path)
         "append" -> {
             append(tree, path, call.argument<ByteArray>("bytes") ?: ByteArray(0))
             null
         }
         "createIfAbsent" -> createIfAbsent(tree, path, call.argument<ByteArray>("bytes") ?: ByteArray(0))
+        "writeAtomically" -> {
+            writeAtomically(tree, path, call.argument<ByteArray>("bytes") ?: ByteArray(0))
+            null
+        }
+        "remove" -> {
+            remove(tree, path)
+            null
+        }
         else -> throw IllegalArgumentException("unknown method ${call.method}")
     }
 
@@ -212,23 +233,68 @@ class FolderStoragePlugin :
         resolver.query(document, arrayOf(DocumentsContract.Document.COLUMN_SIZE), null, null, null)
             ?.use { cursor -> if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0) else null }
 
+    /**
+     * The bytes of the document at [path], from [offset] and at most [maxBytes].
+     *
+     * The descriptor behind a document need not be seekable: Android lets a
+     * provider hand back a pipe, and a pipe has no size and no position. So the
+     * bytes are read in sequence and the offset is skipped, rather than sought
+     * to, which reads the same bytes from a file and from a pipe.
+     */
     private fun read(tree: Uri, path: String, offset: Long, maxBytes: Int): ByteArray {
         val document = resolve(tree, path) ?: return ByteArray(0)
-        resolver.openFileDescriptor(document, "r")?.use { descriptor ->
-            FileInputStream(descriptor.fileDescriptor).use { stream ->
-                val channel = stream.channel
-                val size = channel.size()
-                if (offset >= size) return ByteArray(0)
-                val wanted = minOf(maxBytes.toLong(), size - offset).toInt()
-                val buffer = java.nio.ByteBuffer.allocate(wanted)
-                channel.position(offset)
-                while (buffer.hasRemaining()) {
-                    if (channel.read(buffer) < 0) break
-                }
-                return buffer.array().copyOf(buffer.position())
-            }
+        if (maxBytes <= 0) return ByteArray(0)
+        val stream = resolver.openInputStream(document) ?: return ByteArray(0)
+        return stream.use {
+            skip(it, offset)
+            readUpTo(it, maxBytes.toLong())
         }
-        return ByteArray(0)
+    }
+
+    /**
+     * The whole document at [path], or null when there is no document there.
+     *
+     * A document that is there and a document whose size is unknown are
+     * different things, so the size is not consulted at all: the bytes are read
+     * to the end, and only a document that is not there answers null.
+     */
+    private fun readAll(tree: Uri, path: String): ByteArray? {
+        val document = resolve(tree, path) ?: return null
+        val stream = try {
+            resolver.openInputStream(document)
+        } catch (error: FileNotFoundException) {
+            // It was there a moment ago and is not now: it is gone.
+            return null
+        }
+        if (stream == null) throw java.io.IOException("could not open $path")
+        return stream.use { readUpTo(it, Long.MAX_VALUE) }
+    }
+
+    /** Read up to [limit] bytes from [stream], to the end of it. */
+    private fun readUpTo(stream: InputStream, limit: Long): ByteArray {
+        val out = ByteArrayOutputStream()
+        val chunk = ByteArray(8192)
+        var remaining = limit
+        while (remaining > 0) {
+            val wanted = minOf(chunk.size.toLong(), remaining).toInt()
+            val read = stream.read(chunk, 0, wanted)
+            if (read < 0) break
+            out.write(chunk, 0, read)
+            remaining -= read
+        }
+        return out.toByteArray()
+    }
+
+    /** Skip [count] bytes of [stream], reading them if it cannot seek. */
+    private fun skip(stream: InputStream, count: Long) {
+        var remaining = count
+        val scratch = ByteArray(8192)
+        while (remaining > 0) {
+            val wanted = minOf(scratch.size.toLong(), remaining).toInt()
+            val read = stream.read(scratch, 0, wanted)
+            if (read < 0) return
+            remaining -= read
+        }
     }
 
     /** The directory document for [path], creating each missing level. */
@@ -263,13 +329,7 @@ class FolderStoragePlugin :
             ?: throw java.io.IOException("could not create $name")
         // Providers rename on a collision ("name (1)"); a file the other devices
         // cannot find by name is worse than a failed write.
-        val actual = resolver.query(
-            created,
-            arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
-            null,
-            null,
-            null,
-        )?.use { if (it.moveToFirst()) it.getString(0) else null }
+        val actual = displayName(created)
         if (actual != name) {
             DocumentsContract.deleteDocument(resolver, created)
             throw java.io.IOException("the storage provider renamed $name to $actual")
@@ -294,4 +354,191 @@ class FolderStoragePlugin :
         } ?: throw java.io.IOException("could not open $path for writing")
         return true
     }
+
+    /**
+     * Replace the file at [path] with [bytes], through a temporary document and
+     * a rename.
+     *
+     * The document tree has no atomic replace: a document is written by opening
+     * it, and a rename is the only way one document takes another's place. So
+     * the bytes go to a sibling temporary document and that document is renamed
+     * onto the page's name.
+     *
+     * How that rename behaves is the provider's business, and the three
+     * behaviours are handled:
+     *
+     *  - it lands on the name: the page is replaced, and the old page is gone
+     *    with it;
+     *  - it lands on another name (a provider that renames on a collision):
+     *    the old page is moved aside to a backup name first, so the name is
+     *    free and the rename lands on it exactly;
+     *  - it fails: the same fallback runs.
+     *
+     * The fallback keeps the old page until the new one is in place. The old
+     * page is renamed to a backup name, the document holding the new bytes is
+     * renamed onto the name, and only then is the backup deleted. If any of
+     * those steps fails, the backup is renamed back onto the name, so a failed
+     * write leaves the page as it was rather than leaving nothing there.
+     *
+     * A crash in the middle leaves a backup and no page, or a page and a
+     * backup; the next write recovers from either before it starts.
+     *
+     * The temporary and backup names do not end in `.md`, so a leftover of
+     * either is never listed as a page.
+     */
+    private fun writeAtomically(tree: Uri, path: String, bytes: ByteArray) {
+        val slash = path.lastIndexOf('/')
+        val directory = if (slash < 0) "" else path.substring(0, slash)
+        val name = path.substring(slash + 1)
+        val temporaryName = "$name.jeeves-tmp"
+        val backupName = "$name.jeeves-bak"
+
+        // A replacement that was interrupted leaves a backup and no page, or a
+        // page and a backup. It is recovered before anything else is touched,
+        // so the only copy of a page is never thrown away by accident.
+        recover(tree, directory, name, backupName)
+
+        val temporary = freshTemporary(tree, directory, temporaryName, bytes)
+        val renamed = rename(temporary, name)
+        if (renamed != null && displayName(renamed) == name) {
+            // The provider put the document on the name: the page is replaced.
+            return
+        }
+
+        // The provider either renamed the document onto another name (a
+        // collision) or refused the rename. Either way the document holding the
+        // new bytes is under a name of its own, and the old page is moved aside
+        // so that the name is free for the rename that follows.
+        val candidate = renamed ?: temporary
+        val candidateName = displayName(candidate)
+        val old = childNamed(tree, directory, name)
+        var backup: Uri? = null
+        if (old != null) {
+            val moved = rename(uriOf(tree, old), backupName)
+            if (moved == null || displayName(moved) != backupName) {
+                // The old page could not be moved aside: it stays where it is,
+                // and the write fails rather than losing it.
+                if (moved != null) rename(moved, name)
+                discard(tree, directory, candidateName, name)
+                throw java.io.IOException("could not set the old $name aside")
+            }
+            backup = moved
+        }
+
+        val replaced = rename(candidate, name)
+        if (replaced != null && displayName(replaced) == name) {
+            // The new page is in place: the backup is not needed any more.
+            deleteChild(tree, directory, backupName)
+            return
+        }
+        // The replacement failed: the old page goes back where it was.
+        if (backup != null) {
+            val restored = rename(backup, name)
+            if (restored == null || displayName(restored) != name) {
+                discard(tree, directory, candidateName, name)
+                throw java.io.IOException("could not replace $name; the old page is at $backupName")
+            }
+        }
+        discard(tree, directory, candidateName, name)
+        throw java.io.IOException("could not replace $name")
+    }
+
+    /**
+     * Put a page back after a replacement that was interrupted.
+     *
+     * A crash between moving the old page aside and putting the new one in
+     * place leaves a backup and no page: the backup is renamed back onto the
+     * name. A crash after the new page is in place leaves a page and a backup:
+     * the backup is a leftover, and it is deleted.
+     */
+    private fun recover(tree: Uri, directory: String, name: String, backupName: String) {
+        val backup = childNamed(tree, directory, backupName) ?: return
+        if (childNamed(tree, directory, name) != null) {
+            deleteChild(tree, directory, backupName)
+            return
+        }
+        val restored = rename(uriOf(tree, backup), name)
+        if (restored == null || displayName(restored) != name) {
+            throw java.io.IOException("the previous $name is at $backupName and could not be put back")
+        }
+    }
+
+    /**
+     * A temporary document holding [bytes], beside the page.
+     *
+     * A temporary document left behind by an earlier crash is deleted first: it
+     * would collide with the one written here. It holds the bytes of a write
+     * that did not finish, and the page itself is either there or in the
+     * backup, so it is never the only copy of anything.
+     */
+    private fun freshTemporary(
+        tree: Uri,
+        directory: String,
+        temporaryName: String,
+        bytes: ByteArray,
+    ): Uri {
+        deleteChild(tree, directory, temporaryName)
+        val document = createFile(tree, join(directory, temporaryName))
+        resolver.openOutputStream(document, "w")?.use {
+            it.write(bytes)
+            it.flush()
+        } ?: throw java.io.IOException("could not open $temporaryName for writing")
+        return document
+    }
+
+    /** Rename a document, or null when the provider refused the rename. */
+    private fun rename(document: Uri, newName: String): Uri? = try {
+        DocumentsContract.renameDocument(resolver, document, newName)
+    } catch (error: UnsupportedOperationException) {
+        // The provider does not rename at all.
+        null
+    }
+
+    /** Delete the file at [path]. A file that is not there is not an error. */
+    private fun remove(tree: Uri, path: String) {
+        val document = resolve(tree, path) ?: return
+        DocumentsContract.deleteDocument(resolver, document)
+    }
+
+    /** The child of [directory] called [name], if it is there. */
+    private fun childNamed(tree: Uri, directory: String, name: String): Child? {
+        val parentId = documentIdOf(tree, directory) ?: return null
+        return childrenOfId(tree, parentId).firstOrNull { it.name == name }
+    }
+
+    /** The document URI of a child of the tree. */
+    private fun uriOf(tree: Uri, child: Child): Uri =
+        DocumentsContract.buildDocumentUriUsingTree(tree, child.documentId)
+
+    /** Delete the child of [directory] called [name], if it is there. */
+    private fun deleteChild(tree: Uri, directory: String, name: String) {
+        val child = childNamed(tree, directory, name) ?: return
+        DocumentsContract.deleteDocument(resolver, uriOf(tree, child))
+    }
+
+    /**
+     * Delete the document called [candidateName], unless it is the page itself.
+     *
+     * A document that was renamed onto another name — a provider that renames
+     * on a collision — is left in the folder otherwise, and a leftover that
+     * ends in `.md` would be listed as a page of its own.
+     */
+    private fun discard(tree: Uri, directory: String, candidateName: String?, name: String) {
+        if (candidateName == null || candidateName == name) return
+        deleteChild(tree, directory, candidateName)
+    }
+
+    /** The name a document is known by, or null when it cannot be read. */
+    private fun displayName(document: Uri): String? =
+        resolver.query(
+            document,
+            arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+            null,
+            null,
+            null,
+        )?.use { if (it.moveToFirst()) it.getString(0) else null }
+
+    /** A path under [directory], with the separator the paths use. */
+    private fun join(directory: String, name: String): String =
+        if (directory.isEmpty()) name else "$directory/$name"
 }

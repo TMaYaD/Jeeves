@@ -111,6 +111,20 @@ void main() {
         value.encode());
   });
 
+  test('an Action carries its Timeboxed switch to the other device', () async {
+    final id = await outcomeOnA();
+    await a.domain.todoDao
+        .setCurrentActionText(id, 'Draft the memo', now: a.clock.asDateTime);
+    await a.domain.todoDao.updateFields(
+      id,
+      timeboxed: true,
+      now: a.clock.asDateTime,
+    );
+    await workspace.syncAll();
+    expect((await b.domain.actionDao.getCurrentAction(id))!.timeboxed, isTrue);
+    await expectTableConverges('actions');
+  });
+
   test('tags and todo_tags round-trip, junction id included', () async {
     final id = await outcomeOnA();
     final tagId = await a.domain.tagDao.findOrCreateTag('errand', 'context', _userId);

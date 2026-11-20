@@ -12,8 +12,11 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../models/estimate.dart' show kEstimateOptionsMinutes;
 import 'meta_chip.dart';
 import 'state_surfaces.dart';
+
+export '../models/estimate.dart' show kEstimateOptionsMinutes;
 
 const _labelGray = Color(0xFF9CA3AF);
 const _textGray = Color(0xFF6B7280);
@@ -28,13 +31,6 @@ const _energyHighColor = Color(0xFFDC2626);
 // capture_outcomes_section.dart.
 const _radiusButton = BorderRadius.all(Radius.circular(2));
 const _radiusChip = BorderRadius.all(Radius.circular(4));
-
-/// The time-estimate options, in minutes, every effort picker offers.
-///
-/// One list so the clarify card, the standalone clarify screen, the n-m New
-/// Outcome form and the Plan section's action sheet cannot drift apart — a
-/// user who learns the ladder on one surface meets the same one everywhere.
-const kEstimateOptionsMinutes = [5, 10, 15, 30, 45, 60, 90, 120];
 
 class ClarifyFieldLabel extends StatelessWidget {
   const ClarifyFieldLabel(this.label, {super.key});

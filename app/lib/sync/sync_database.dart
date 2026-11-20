@@ -451,6 +451,18 @@ class PluginCursors extends Table {
   Set<Column<Object>> get primaryKey => {pluginId};
 }
 
+/// The text of the last version of each vault page this device saw, keyed by its
+/// path inside the vault — the base a hand edit is read against. Private to the
+/// device and never synced; clearing it loses nothing (the next start reads the
+/// folder again).
+class VaultPageBases extends Table {
+  TextColumn get pagePath => text()();
+  TextColumn get pageText => text()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {pagePath};
+}
+
 /// Whether this device has walked its pre-existing domain rows into merge state.
 ///
 /// A single row (`id = 1`), written after the last collection of the walk. Its
@@ -609,6 +621,7 @@ class UnauthoredChanges extends Table {
     PluginCursors,
     MergeStateSeeding,
     UnauthoredChanges,
+    VaultPageBases,
     FolderSyncBindings,
     FolderPendingAppends,
     FolderPeers,
@@ -629,10 +642,11 @@ class SyncDatabase extends _$SyncDatabase {
   /// marker (#620); v10 adds the sync host's durable change sequence and its
   /// per-plugin cursors; v11 adds the marker that the pre-existing domain rows were
   /// walked into merge state; v12 adds the record of a merged change that still
-  /// needs an op; v13 adds the op-log folder plugin's binding, pending-append
-  /// and paired-peer tables.
+  /// needs an op; v13 adds the vault plugin's private base copies of pages; v14
+  /// adds the op-log folder plugin's binding, pending-append and paired-peer
+  /// tables.
   @override
-  int get schemaVersion => 13;
+  int get schemaVersion => 14;
 
   /// Additive only. A device that already holds a log keeps every byte of it:
   /// each step is `CREATE TABLE`s, an `ADD COLUMN` or a `CREATE INDEX`, and no
@@ -749,6 +763,10 @@ class SyncDatabase extends _$SyncDatabase {
             await migrator.createTable(unauthoredChanges);
           }
           if (from < 13) {
+            // One new table: private copies of vault pages, not user data.
+            await migrator.createTable(vaultPageBases);
+          }
+          if (from < 14) {
             // The op-log folder plugin's three tables, nothing altered or
             // backfilled: a device that predates them has no folder binding.
             await migrator.createTable(folderSyncBindings);

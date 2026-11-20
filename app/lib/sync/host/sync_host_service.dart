@@ -310,7 +310,9 @@ class SyncHostService implements SyncHost, OutboxDrainer {
   // --- SyncHost --------------------------------------------------------------
 
   @override
-  Future<void> applyRemote(String sourcePluginId, List<Change> changes) async {
+  Future<List<Change>> applyRemote(
+      String sourcePluginId, List<Change> changes) async {
+    final refused = <Change>[];
     final touched = <AffectedEntity>{};
     Object? storageError;
     for (final change in changes) {
@@ -325,8 +327,10 @@ class SyncHostService implements SyncHost, OutboxDrainer {
         ));
       } on SyncRejection catch (rejection) {
         // One bad change must not stall the batch or leave what merged
-        // unprojected; a redelivery would refuse it again.
+        // unprojected; a redelivery would refuse it again. It is reported to
+        // the caller, so a plugin can tell that its content was not taken.
         debugPrint('sync host: refused remote change from $sourcePluginId — $rejection');
+        refused.add(change);
         continue;
       } on Object catch (error) {
         storageError = error;
@@ -345,6 +349,7 @@ class SyncHostService implements SyncHost, OutboxDrainer {
       _deliverInBackground();
     }
     if (storageError != null) throw storageError;
+    return refused;
   }
 
   /// Run the convergence passes over what a projection changed, containing any
@@ -367,38 +372,126 @@ class SyncHostService implements SyncHost, OutboxDrainer {
         return byCollection != 0 ? byCollection : a.entityId.compareTo(b.entityId);
       });
     for (final entity in entities) {
-      yield await _readChange(entity.collection, entity.entityId);
+      yield await mergedEntity(entity.collection, entity.entityId);
     }
   }
 
+  @override
+  Future<Change> mergedEntity(String collection, String entityId) async {
+    final state = await _readState(collection, entityId);
+    return _effectiveChange(collection, entityId, state);
+  }
+
+  /// The entity's merged state, with its **stored** tombstone.
+  ///
+  /// This is the entity's history, not its visibility: a tombstone stays on
+  /// record, and an entity a newer field revived still carries the tombstone
+  /// that deleted it. The op log reads the tombstone this way.
   Future<Change> _readChange(String collection, String entityId) async {
-    final fieldRows = await _sync.customSelect(
-      'SELECT f.field AS field, f.value_json AS value_json, '
-      'c.wall_ms AS wall_ms, c.counter AS counter, c.member_id_hex AS member_id_hex '
-      'FROM reduced_fields f JOIN field_clocks c '
-      'ON c.collection = f.collection AND c.entity_id = f.entity_id AND c.field = f.field '
-      'WHERE f.collection = ? AND f.entity_id = ? ORDER BY f.field',
-      variables: [Variable<String>(collection), Variable<String>(entityId)],
-    ).get();
-    final tombstoneRow = await (_sync.select(_sync.rowTombstones)
-          ..where((row) =>
-              row.collection.equals(collection) & row.entityId.equals(entityId)))
-        .getSingleOrNull();
+    final state = await _readState(collection, entityId);
     return Change(
       collection: collection,
       entityId: entityId,
-      fields: {
-        for (final row in fieldRows)
-          row.read<String>('field'): ClockedValue(
-            jsonDecode(row.read<String>('value_json')),
-            Hlc(row.read<int>('wall_ms'), row.read<int>('counter'),
-                row.read<String>('member_id_hex')),
-          ),
-      },
-      tombstone: tombstoneRow == null
-          ? null
-          : Hlc(tombstoneRow.wallMs, tombstoneRow.counter, tombstoneRow.memberIdHex),
+      fields: state.fields,
+      tombstone: state.tombstone,
     );
+  }
+
+  /// The entity's merged state, with the tombstone the host's own rule makes
+  /// **effective**.
+  ///
+  /// The rule is the merge core's, and the SQL in `merge_state.dart` reads it
+  /// the same way: a field whose clock is newer than the tombstone is live and
+  /// revives the entity. So an entity that was deleted and then written again
+  /// is live again, and its tombstone is history rather than visibility.
+  ///
+  /// The fields are every field the host holds, live or not: a deleted
+  /// entity's hidden values are what a plugin needs to preserve what the
+  /// entity held.
+  Change _effectiveChange(
+    String collection,
+    String entityId,
+    ({Map<String, ClockedValue> fields, Hlc? tombstone}) state,
+  ) {
+    final tombstone = state.tombstone;
+    final revived = tombstone != null &&
+        state.fields.values.any((field) => field.hlc > tombstone);
+    return Change(
+      collection: collection,
+      entityId: entityId,
+      fields: state.fields,
+      tombstone: revived ? null : tombstone,
+    );
+  }
+
+  /// One entity's fields and its tombstone, read in **one statement**, so that
+  /// both come from the same snapshot of merge state.
+  ///
+  /// A merge commits a change's fields and its tombstone together, so a read
+  /// that took the fields and the tombstone separately could see one commit's
+  /// fields and another's tombstone: a state the store never held. One
+  /// statement cannot straddle a commit.
+  ///
+  /// The tombstone is the entity's **stored** deletion. Whether the entity is
+  /// live is decided at read time, against it.
+  ///
+  /// An entity the store holds nothing about yields no row at all, and an
+  /// entity whose only trace is its tombstone yields that tombstone: the two
+  /// are different, and the second is not the first.
+  Future<({Map<String, ClockedValue> fields, Hlc? tombstone})> _readState(
+    String collection,
+    String entityId,
+  ) async {
+    final rows = await _sync.customSelect(
+      'SELECT f.field AS field, f.value_json AS value_json, '
+      'c.wall_ms AS wall_ms, c.counter AS counter, c.member_id_hex AS member_id_hex, '
+      't.wall_ms AS tombstone_wall_ms, t.counter AS tombstone_counter, '
+      't.member_id_hex AS tombstone_member_id_hex '
+      'FROM reduced_fields f JOIN field_clocks c '
+      'ON c.collection = f.collection AND c.entity_id = f.entity_id '
+      'AND c.field = f.field '
+      'LEFT JOIN row_tombstones t '
+      'ON t.collection = f.collection AND t.entity_id = f.entity_id '
+      'WHERE f.collection = ? AND f.entity_id = ? '
+      'UNION ALL '
+      'SELECT NULL, NULL, NULL, NULL, NULL, '
+      't.wall_ms, t.counter, t.member_id_hex '
+      'FROM row_tombstones t '
+      'WHERE t.collection = ? AND t.entity_id = ? '
+      'AND NOT EXISTS (SELECT 1 FROM reduced_fields f '
+      'WHERE f.collection = t.collection AND f.entity_id = t.entity_id) '
+      'ORDER BY field',
+      variables: [
+        Variable<String>(collection),
+        Variable<String>(entityId),
+        Variable<String>(collection),
+        Variable<String>(entityId),
+      ],
+    ).get();
+    final fields = <String, ClockedValue>{};
+    Hlc? tombstone;
+    for (final row in rows) {
+      final field = row.readNullable<String>('field');
+      if (field != null) {
+        fields[field] = ClockedValue(
+          jsonDecode(row.read<String>('value_json')),
+          Hlc(
+            row.read<int>('wall_ms'),
+            row.read<int>('counter'),
+            row.read<String>('member_id_hex'),
+          ),
+        );
+      }
+      final tombstoneWallMs = row.readNullable<int>('tombstone_wall_ms');
+      if (tombstoneWallMs != null) {
+        tombstone = Hlc(
+          tombstoneWallMs,
+          row.read<int>('tombstone_counter'),
+          row.read<String>('tombstone_member_id_hex'),
+        );
+      }
+    }
+    return (fields: fields, tombstone: tombstone);
   }
 
   @override

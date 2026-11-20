@@ -15,6 +15,7 @@ import 'providers/nudge_action_outbox.dart';
 import 'providers/onboarding_provider.dart';
 import 'providers/sync_lifecycle_provider.dart';
 import 'providers/sync_stack_provider.dart';
+import 'providers/vault_sync_provider.dart';
 import 'router.dart';
 import 'services/due_date_notifications.dart';
 import 'services/follow_up_notifications.dart';
@@ -116,6 +117,11 @@ class JeevesApp extends ConsumerWidget {
     ref.watch(nudgeNotificationSchedulerProvider);
     // Keeps the first-launch card dismissal in step across devices.
     ref.watch(onboardingSyncProvider);
+    // Materialises the vault plugin when this device has a vault folder set,
+    // so the folder is read again while the app is open. Nothing else reads
+    // it, and without this watch the vault would only run while a screen that
+    // reads it was open.
+    ref.watch(vaultPluginProvider);
     return MaterialApp.router(
       title: 'Jeeves',
       theme: ThemeData(

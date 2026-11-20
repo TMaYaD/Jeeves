@@ -126,6 +126,15 @@ plugin. The first plugin is the **op-log folder** (`app/lib/sync/folder/`,
 [SYNC.md](SYNC.md)): per-device segment files in a folder a file syncer carries,
 for a signed-out device.
 
+**The vault** (`app/lib/sync/vault/`) is the first plugin to run in production. It
+carries the merged state to a folder of Markdown pages the person owns, reads and
+edits, and brings back what they changed by hand. It is a carrier like any other —
+it never decides a field's value — and its medium is a folder, so it needs no
+server and no account. A page is a pure function of merged state, and the clocks
+that order its fields ride in one machine-written block at the end of the page
+([ADR-0051](adr/0051-vault-pages-keep-field-clocks-in-one-end-block.md)). Shape in
+[SYNC.md](SYNC.md#the-vault-a-folder-of-markdown-pages).
+
 Four pieces carry the domain across the spine, and the split between the last two
 is load-bearing: the **capture seam** turns writes into ops; the **codecs** name
 the synced columns and the one canonical value encoding; the **projector** turns
@@ -194,6 +203,7 @@ The places designed to be extended, and the contract each one carries.
 | Merge strategy | `app/lib/sync/merge_strategy.dart` | A per-key registry; every non-LWW entry must be a join-semilattice |
 | Calendar reader | `app/lib/services/calendar/` | A read-only `CalendarSource`: `CalendarPlugin.kt` on Android, nothing on web, in-memory in the harness. Events are never stored, synced or logged |
 | Device key store | `app/lib/sync/` | Keychain/Keystore in production, in-memory in the harness — the same closures run in both |
+| Vault folder | `app/lib/sync/vault/vault_folder.dart` | One port — list, read, write-and-rename, remove — with a `dart:io` implementation, an Android document-tree one over the shared `jeeves/folder` channel, and a web stub; the plugin never touches a path itself |
 
 The platform-adapter rule is the one most easily broken by accident: three files
 per adapter, and the entry point picks the implementation by conditional export.

@@ -51,9 +51,9 @@ void main() {
     expect(offenders, isEmpty);
   });
 
-  test('a v12 sync store upgrades to v13 keeping every row, and the new tables start empty',
+  test('a v13 sync store upgrades to v14 keeping every row, and the new tables start empty',
       () async {
-    final directory = Directory.systemTemp.createTempSync('sync-v12-');
+    final directory = Directory.systemTemp.createTempSync('sync-v13-');
     addTearDown(() => directory.deleteSync(recursive: true));
     final file = File('${directory.path}/sync.sqlite');
 
@@ -71,7 +71,9 @@ void main() {
         "INSERT INTO change_sequence (change_id, source, change_json) VALUES ('c1', 'local', '{}')");
     await seed.customStatement(
         "INSERT INTO plugin_cursors (plugin_id, acknowledged_sequence) VALUES ('p', 0)");
-    await seed.customStatement('PRAGMA user_version = 12');
+    await seed.customStatement(
+        "INSERT INTO vault_page_bases (page_path, page_text) VALUES ('a.md', 'hello')");
+    await seed.customStatement('PRAGMA user_version = 13');
     await seed.close();
 
     final upgraded = SyncDatabase(NativeDatabase(file));
@@ -112,5 +114,11 @@ void main() {
     expect(cursor, hasLength(1));
     expect(cursor.single.read<String>('plugin_id'), 'p');
     expect(cursor.single.read<int>('acknowledged_sequence'), 0);
+    // The vault's table, which this store already had at v13, is untouched.
+    final base = await upgraded.customSelect('SELECT page_path, page_text FROM vault_page_bases').get();
+    expect(base, hasLength(1));
+    expect(base.single.read<String>('page_text'), 'hello');
+    final version = await upgraded.customSelect('PRAGMA user_version').get();
+    expect(version.single.read<int>('user_version'), 14);
   });
 }
