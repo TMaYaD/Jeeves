@@ -800,7 +800,9 @@ class VaultPlugin implements SyncPlugin {
       // The host did not take what this page says, so a copy of it still holds
       // an edit the app does not have. Writing the merged state over it would
       // lose that edit: the page is left alone until the host takes it. A page
-      // the app cannot read is left alone for the same reason.
+      // the app cannot read is left alone for the same reason. The write is
+      // owed, so a later pass makes it once the page can be read.
+      _pendingWriteBacks.add(key);
       return;
     }
     var attempts = 0;
@@ -839,11 +841,13 @@ class VaultPlugin implements SyncPlugin {
           page = parsePage(existing);
         } on PageParseException catch (error) {
           debugPrint('vault: $path left alone: ${error.message}');
+          _pendingWriteBacks.add(key);
           return;
         }
         final id = page.frontmatter['id'];
         if (id is! String) {
           debugPrint('vault: $path left alone: it names no entity');
+          _pendingWriteBacks.add(key);
           return;
         }
         if (id != key.entityId) {
@@ -852,6 +856,7 @@ class VaultPlugin implements SyncPlugin {
           // entity's page is left alone.
           if (fallbacks >= 3) {
             debugPrint('vault: $path left alone: another entity holds it');
+            _pendingWriteBacks.add(key);
             return;
           }
           path = _ownPath(key, path);

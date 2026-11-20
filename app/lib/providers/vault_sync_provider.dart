@@ -187,9 +187,12 @@ class SessionGateNotifier extends Notifier<SessionGate> {
 /// still being restored the answer is not known — so the vault waits for it
 /// rather than run beside an op log that is about to start.
 final vaultPluginProvider = FutureProvider<VaultPlugin?>((ref) async {
-  final gate = ref.watch(sessionGateProvider);
-  if (gate == SessionGate.checking) return null;
-  if (gate == SessionGate.ready) return null; // the op log runs; the vault does not.
+  // Only whether the vault may run is watched, not the gate itself: signing in
+  // moves the gate between two states that both allow the vault, and a rebuild
+  // would detach the plugin and clear its base copies for nothing.
+  final gateAllowsVault = ref.watch(sessionGateProvider.select(
+      (gate) => gate != SessionGate.checking && gate != SessionGate.ready));
+  if (!gateAllowsVault) return null; // checking, or the op log runs.
 
   // The provider is disposed when the vault is turned off, or when the folder
   // changes; the flag tells a build that is still waiting that it no longer

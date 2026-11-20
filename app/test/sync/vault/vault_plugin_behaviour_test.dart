@@ -801,7 +801,8 @@ void main() {
     addTearDown(device.close);
     final host = await device.startHost();
     final directory = Directory('${root.path}/vault')..createSync(recursive: true);
-    final folder = _SwappingFolder(DirectoryVaultFolder(directory));
+    final inner = DirectoryVaultFolder(directory);
+    final folder = _SwappingFolder(inner);
     final plugin = VaultPlugin(folder: folder, sync: device.sync);
     await host.attach(plugin);
 
@@ -824,7 +825,9 @@ void main() {
 
     await plugin.rescan();
 
-    final copyPage = await folder.read(copy);
+    // Read through the inner folder: a read through the swapping folder would
+    // itself trigger the replacement, and hide a copy that was removed.
+    final copyPage = await inner.read(copy);
     expect(copyPage, isNotNull,
         reason: 'the copy the syncer replaced was removed');
     expect(copyPage, contains('title: Later'),
@@ -1092,6 +1095,43 @@ void main() {
     expect(health, isNotEmpty, reason: 'the vault said nothing about itself');
     expect(health.last.unreadablePageCount, 1,
         reason: 'the page it could not read was not reported');
+  });
+
+  test('a page that cannot be read is owed its write, and gets it once repaired',
+      () async {
+    final device = HostDevice.open('a');
+    addTearDown(device.close);
+    final host = await device.startHost();
+    final directory = Directory('${root.path}/vault')..createSync(recursive: true);
+    final folder = DirectoryVaultFolder(directory);
+    final plugin = VaultPlugin(folder: folder, sync: device.sync);
+    await host.attach(plugin);
+
+    await device.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'Plan', userId: _userId);
+    await host.deliverAll();
+    await plugin.rescan();
+
+    final path = (await folder.listMarkdownFiles('Outcomes')).single;
+    final original = (await folder.read(path))!;
+
+    // The page is mangled, and then the app changes the Outcome: the write
+    // cannot be made, and it is not forgotten.
+    await folder.writeAtomically(path, 'not a page\n');
+    final health = <VaultHealth>[];
+    plugin.health.listen(health.add);
+    await device.domain.todoDao.updateFields(_outcomeId, title: 'Plan changed');
+    await host.deliverAll();
+    await pumpEventQueue();
+    expect(await folder.read(path), 'not a page\n',
+        reason: 'the mangled page was written over');
+    expect(health.last.owedWriteBackCount, 1,
+        reason: 'the write the page is owed was forgotten');
+
+    // The person puts the page back as it was; the next pass writes the title.
+    await folder.writeAtomically(path, original);
+    await plugin.rescan();
+    expect(await folder.read(path), contains('Plan changed'));
   });
 
   test('a page that cannot be written is owed, and counted in health',

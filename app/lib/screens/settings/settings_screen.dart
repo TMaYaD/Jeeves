@@ -170,8 +170,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   'everything stays here.',
                   style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
                 ),
-                onTap: () =>
-                    context.push(EnrolmentCeremonyScreen.routePath),
+                // Not while a folder turn is in progress: the vault's setting
+                // is not yet saved, so the ceremony could start beside it.
+                onTap: _vaultPickerPending
+                    ? null
+                    : () => context.push(EnrolmentCeremonyScreen.routePath),
               ),
             ListTile(
               key: const Key('sign_out_tile'),

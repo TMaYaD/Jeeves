@@ -167,8 +167,9 @@ String renderPage(PageModel page) {
   return out.toString();
 }
 
-final RegExp _plainScalar = RegExp(r'^[A-Za-z0-9][A-Za-z0-9 _./:+-]*$');
-final RegExp _numberLike = RegExp(r'^[0-9.+-]+$');
+final RegExp _plainScalar = RegExp(r'^[A-Za-z0-9][A-Za-z0-9 _./+-]*$');
+// A number, exponent forms included: a strict YAML reader types `1e5` as a float.
+final RegExp _numberLike = RegExp(r'^[0-9.+-]+([eE][+-]?[0-9]+)?$');
 const Set<String> _reservedWords = {'true', 'false', 'null', 'yes', 'no', 'on', 'off'};
 
 String _renderScalarOrList(Object value) {
@@ -243,31 +244,62 @@ PageModel parsePage(String text) {
 
 Map<String, Object> _parseFrontmatter(String body) {
   final result = <String, Object>{};
-  for (final line in body.split('\n')) {
+  final lines = body.split('\n');
+  for (var index = 0; index < lines.length; index++) {
+    final line = lines[index];
     if (line.trim().isEmpty) continue;
     final colon = line.indexOf(':');
     if (colon <= 0) throw PageParseException('bad frontmatter line: $line');
     final key = line.substring(0, colon).trim();
     final raw = line.substring(colon + 1).trim();
-    if (raw.isEmpty || raw == 'null' || raw == '~') continue;
-    if (raw.startsWith('"') || raw.startsWith('[')) {
+    if (raw.isEmpty) {
+      // An editor may write a list as a YAML block list: `key:` and then one
+      // `- item` line per item. An empty value with no items is an empty field.
+      final items = <String>[];
+      while (index + 1 < lines.length &&
+          RegExp(r'^\s*-(\s|$)').hasMatch(lines[index + 1])) {
+        index++;
+        final item = lines[index].trim().substring(1).trim();
+        items.add(_parseScalar(key, item));
+      }
+      if (items.isNotEmpty) result[key] = items;
+      continue;
+    }
+    if (raw == 'null' || raw == '~') continue;
+    if (raw.startsWith('[')) {
       try {
         final decoded = jsonDecode(raw);
-        if (decoded is String) {
-          result[key] = decoded;
-        } else if (decoded is List && decoded.every((item) => item is String)) {
+        if (decoded is List && decoded.every((item) => item is String)) {
           result[key] = decoded.cast<String>();
         } else {
-          throw const FormatException('not a string or list of strings');
+          throw const FormatException('not a list of strings');
         }
       } on FormatException catch (error) {
         throw PageParseException('bad value for $key: ${error.message}');
       }
     } else {
-      result[key] = raw;
+      result[key] = _parseScalar(key, raw);
     }
   }
   return result;
+}
+
+/// One scalar: double-quoted (JSON), single-quoted (YAML, `''` is a quote) or
+/// plain.
+String _parseScalar(String key, String raw) {
+  if (raw.startsWith('"')) {
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is String) return decoded;
+      throw const FormatException('not a string');
+    } on FormatException catch (error) {
+      throw PageParseException('bad value for $key: ${error.message}');
+    }
+  }
+  if (raw.length >= 2 && raw.startsWith("'") && raw.endsWith("'")) {
+    return raw.substring(1, raw.length - 1).replaceAll("''", "'");
+  }
+  return raw;
 }
 
 /// A checklist line holds one line of text.

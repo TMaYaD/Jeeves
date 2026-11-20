@@ -239,8 +239,9 @@ void main() {
       title: 'Old title',
       userId: _userId,
     ));
-    await _settle(tester);
-    await _settle(tester);
+    await _settleUntil(tester, () => folder.failedWriteCount > 0);
+    expect(folder.failedWriteCount, greaterThan(0),
+        reason: 'the delivery reached the folder while it refused writes');
     expect(folder.pages, isEmpty, reason: 'the page could not be written');
 
     // The folder is writable again, and the app comes forward.
@@ -319,6 +320,9 @@ class _FakeFolder implements VaultFolder {
   /// Whether a write fails.
   bool failWrites = false;
 
+  /// How many writes were refused because [failWrites] was set.
+  int failedWriteCount = 0;
+
   /// What a read waits for, when it is set.
   Completer<void>? readGate;
 
@@ -342,7 +346,10 @@ class _FakeFolder implements VaultFolder {
 
   @override
   Future<void> writeAtomically(String relativePath, String text) async {
-    if (failWrites) throw StateError('the folder is not writable');
+    if (failWrites) {
+      failedWriteCount++;
+      throw StateError('the folder is not writable');
+    }
     pages[relativePath] = text;
   }
 

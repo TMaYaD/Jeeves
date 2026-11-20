@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/sync/hlc.dart';
 import 'package:jeeves/sync/vault/page_codec.dart';
@@ -150,5 +152,29 @@ void main() {
     final text =
         renderPage(_page()).replaceAll('- [ ] first\n', '- [ ] fir\rst\n');
     expect(parsePage(text).checklist.first.text, 'fir\rst');
+  });
+
+  test('a title with a colon and space is written quoted, and round trips', () {
+    final page = _page();
+    for (final title in ['Fix: login', 'Ends with:', '1e5']) {
+      final text = renderPage(PageModel(
+        frontmatter: {...page.frontmatter, 'title': title},
+        notes: page.notes,
+        checklist: page.checklist,
+        block: page.block,
+      ));
+      expect(text, contains('title: ${jsonEncode(title)}'));
+      expect(parsePage(text).frontmatter['title'], title);
+    }
+  });
+
+  test('a block list and a single-quoted value from another editor are read',
+      () {
+    final text = renderPage(_page())
+        .replaceFirst(RegExp(r'labels: \[.*\]'), 'labels:\n  - x\n  - \'y z\'')
+        .replaceFirst(RegExp(r'title: .*'), "title: 'It''s planned'");
+    final read = parsePage(text).frontmatter;
+    expect(read['labels'], ['x', 'y z']);
+    expect(read['title'], "It's planned");
   });
 }
