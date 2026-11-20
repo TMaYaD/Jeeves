@@ -488,6 +488,82 @@ class MergeStateSeeding extends Table {
   Set<Column<Object>> get primaryKey => {id};
 }
 
+/// A folder this device syncs through, and this device's author state in it.
+///
+/// One row per folder; the folder id is the one `folder.json` names. The author
+/// state (next `author_seq`, last envelope hash, the segment being written) is the
+/// truth about this device's own chain in the folder — never a cache — so a row
+/// is never recomputed from the files.
+@DataClassName('FolderSyncBindingRow')
+class FolderSyncBindings extends Table {
+  TextColumn get folderId => text()();
+
+  /// Where the folder is: a path, or a persisted storage-access URI on Android.
+  TextColumn get folderLocation => text()();
+
+  /// This device's member directory name: its device node id as a canonical UUID.
+  TextColumn get memberId => text()();
+  TextColumn get deviceLabel => text()();
+  BoolColumn get isActive => boolean()();
+
+  /// Set in the transaction that enqueues the first upload, so it runs once.
+  BoolColumn get snapshotEnqueued => boolean()();
+  IntColumn get nextAuthorSeq => integer()();
+  BlobColumn get lastEnvelopeHash => blob().nullable()();
+
+  /// The segment file being appended to, how long it is as far as this device
+  /// has recorded, and when its first record was written (epoch ms UTC).
+  IntColumn get segmentNumber => integer()();
+  IntColumn get segmentLengthBytes => integer()();
+  IntColumn get segmentStartedAtMs => integer().nullable()();
+
+  /// The highest host change-sequence number turned into a pending record.
+  IntColumn get lastEnqueuedSequence => integer()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {folderId};
+}
+
+/// Signed records waiting to reach the segment file. The local queue is the
+/// durable hand-off; a row is deleted only after its bytes are on disk.
+@DataClassName('FolderPendingAppendRow')
+class FolderPendingAppends extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get folderId => text()();
+
+  /// Unique, so a redelivered change cannot be queued twice.
+  TextColumn get opId => text().unique()();
+  IntColumn get authorSeq => integer()();
+
+  /// The framed record (length prefix, envelope, checksum), ready to append.
+  BlobColumn get record => blob()();
+}
+
+/// A member of a folder this device has paired with, and how far it has read them.
+@DataClassName('FolderPeerRow')
+class FolderPeers extends Table {
+  TextColumn get folderId => text()();
+  TextColumn get memberId => text()();
+  BlobColumn get signPublicKey => blob()();
+  TextColumn get deviceLabel => text()();
+  IntColumn get pairedAtMs => integer()();
+
+  /// The read cursor: the segment and byte offset just past the last record
+  /// applied, and the chain head reached there.
+  IntColumn get cursorSegment => integer()();
+  IntColumn get cursorOffsetBytes => integer()();
+  IntColumn get headAuthorSeq => integer()();
+  BlobColumn get headEnvelopeHash => blob().nullable()();
+
+  /// The hash of the frame that ends at the byte cursor. It differs from the chain
+  /// head when the last frame was refused and skipped, and it is what a restored
+  /// file must hold again to clear a rollback alarm. Null until a frame is read.
+  BlobColumn get cursorFrameHash => blob().nullable()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {folderId, memberId};
+}
+
 /// A change the host merged that still needs an op.
 ///
 /// A local write made while the device was signed in carries the member id of
@@ -546,6 +622,9 @@ class UnauthoredChanges extends Table {
     MergeStateSeeding,
     UnauthoredChanges,
     VaultPageBases,
+    FolderSyncBindings,
+    FolderPendingAppends,
+    FolderPeers,
   ],
 )
 class SyncDatabase extends _$SyncDatabase {
@@ -563,9 +642,11 @@ class SyncDatabase extends _$SyncDatabase {
   /// marker (#620); v10 adds the sync host's durable change sequence and its
   /// per-plugin cursors; v11 adds the marker that the pre-existing domain rows were
   /// walked into merge state; v12 adds the record of a merged change that still
-  /// needs an op; v13 adds the vault plugin's private base copies of pages.
+  /// needs an op; v13 adds the vault plugin's private base copies of pages; v14
+  /// adds the op-log folder plugin's binding, pending-append and paired-peer
+  /// tables.
   @override
-  int get schemaVersion => 13;
+  int get schemaVersion => 14;
 
   /// Additive only. A device that already holds a log keeps every byte of it:
   /// each step is `CREATE TABLE`s, an `ADD COLUMN` or a `CREATE INDEX`, and no
@@ -684,6 +765,13 @@ class SyncDatabase extends _$SyncDatabase {
           if (from < 13) {
             // One new table: private copies of vault pages, not user data.
             await migrator.createTable(vaultPageBases);
+          }
+          if (from < 14) {
+            // The op-log folder plugin's three tables, nothing altered or
+            // backfilled: a device that predates them has no folder binding.
+            await migrator.createTable(folderSyncBindings);
+            await migrator.createTable(folderPendingAppends);
+            await migrator.createTable(folderPeers);
           }
         },
       );

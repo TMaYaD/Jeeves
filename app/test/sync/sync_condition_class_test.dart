@@ -44,11 +44,11 @@ extension _Alarms on SimDevice {
 
 void main() {
   group('the classification itself', () {
-    test('exactly four kinds are actionable, and every kind has a class', () {
+    test('exactly five kinds are actionable, and every kind has a class', () {
       // U1's spine half. The switch is exhaustive, so "has a class" is a compile
       // obligation; what a test can still add is the *count*, which is the claim
       // a future contributor would break by quietly promoting a fifth.
-      expect(IntegrityAlarmKind.values, hasLength(18));
+      expect(IntegrityAlarmKind.values, hasLength(19));
       expect(
         [
           for (final kind in IntegrityAlarmKind.values)
@@ -58,6 +58,7 @@ void main() {
           IntegrityAlarmKind.authorChainGap,
           IntegrityAlarmKind.ownWritesRollback,
           IntegrityAlarmKind.ownWriteRefusedPermanently,
+          IntegrityAlarmKind.segmentRolledBack,
           IntegrityAlarmKind.epochKeySetUnpublishable,
         ]),
       );
@@ -100,7 +101,7 @@ void main() {
         reason: 'the app refused the bytes, which is the rule working',
       );
       expect(transientRefusalCodes, hasLength(5));
-      expect(actionableAlarmCodes, hasLength(4));
+      expect(actionableAlarmCodes, hasLength(5));
     });
 
     test('an unknown stored code never throws, and reads as reported', () {

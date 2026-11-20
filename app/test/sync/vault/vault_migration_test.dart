@@ -65,6 +65,9 @@ void main() {
     // without the vault's table. The version is set back after the store is
     // opened, so the downgrade is never read as an upgrade in progress.
     await current.customStatement('DROP TABLE vault_page_bases');
+    await current.customStatement('DROP TABLE folder_sync_bindings');
+    await current.customStatement('DROP TABLE folder_pending_appends');
+    await current.customStatement('DROP TABLE folder_peers');
     await current.customStatement('PRAGMA user_version = 12');
     await closeCurrent();
 
@@ -125,7 +128,7 @@ void main() {
 
     // And the store is at the current version now.
     final version = await upgraded.customSelect('PRAGMA user_version').get();
-    expect(version.single.read<int>('user_version'), 13);
+    expect(version.single.read<int>('user_version'), 14);
 
     await closeUpgraded();
   });

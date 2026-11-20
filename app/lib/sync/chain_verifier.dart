@@ -160,7 +160,12 @@ enum IntegrityAlarmKind {
   /// append refuses rather than overwrites, because the log is evidence and
   /// evidence is not edited. The op is skipped and this accusation raised, so one
   /// poisoned position cannot stall the rest of a pull.
-  authorChainSlotCollision('author_chain_slot_collision');
+  authorChainSlotCollision('author_chain_slot_collision'),
+
+  /// A segment in an op-log folder is shorter than a reader already read, or has
+  /// gone: the file syncer rolled it back, or something replaced it. Detected by
+  /// the reader against its own cursor; resolves when the file is whole again.
+  segmentRolledBack('segment_rolled_back');
 
   const IntegrityAlarmKind(this.code);
 

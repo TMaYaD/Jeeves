@@ -61,19 +61,8 @@ class Reducer {
   /// Strategy registry's adapter; every collection but `user_preferences` resolves to LWW.
   final MergeStrategyRegistry strategies;
 
-  /// The op → [Change] conversion: a field's HLC is its own when it carries one,
-  /// else the op-level HLC, and a tombstone applies at its effective clock.
-  static Change toChange(OpPayload payload) => Change(
-        collection: payload.collection,
-        entityId: payload.entityId,
-        fields: {
-          for (final entry in payload.fields.entries)
-            entry.key: ClockedValue(
-                entry.value.value, entry.value.hlc ?? payload.hlc),
-        },
-        tombstone:
-            payload.tombstone ? payload.effectiveTombstoneHlc : null,
-      );
+  /// The op → [Change] conversion; see [OpPayload.toChange].
+  static Change toChange(OpPayload payload) => payload.toChange();
 
   /// Apply [payload], or throw [SyncRejection] so the caller quarantines it.
   ///

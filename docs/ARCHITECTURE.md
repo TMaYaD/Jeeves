@@ -122,7 +122,9 @@ enrolled or not. A write commits together with a clocked change in
 `pending_changes`; the host drains that into merge state and a durable change
 sequence and hands changes to plugins, each resumed from a cursor the host stores.
 The op-log client reaches the host through a temporary bridge until it becomes a
-plugin.
+plugin. The first plugin is the **op-log folder** (`app/lib/sync/folder/`,
+[FOLDER_SYNC.md](FOLDER_SYNC.md)): per-device segment files in a folder a file syncer carries,
+for a signed-out device.
 
 **The vault** (`app/lib/sync/vault/`) is the first plugin to run in production. It
 carries the merged state to a folder of Markdown pages the person owns, reads and

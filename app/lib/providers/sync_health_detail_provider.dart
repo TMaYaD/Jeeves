@@ -19,6 +19,7 @@ import 'package:jeeves/sync/sync_database.dart';
 
 import '../sync/sync_health_detail.dart';
 import 'auth_provider.dart';
+import 'folder_sync_provider.dart';
 import 'sync_lifecycle_provider.dart';
 import 'sync_stack_provider.dart';
 import 'user_constants.dart';
@@ -27,7 +28,18 @@ final syncHealthDetailProvider =
     StreamProvider<List<SyncHealthCondition>>((ref) async* {
   final userId = ref.watch(currentUserIdProvider);
   if (userId == kLocalUserId) {
-    yield const [];
+    // A signed-out device syncing through a folder shows the folder's rows.
+    final available = ref.watch(folderPlatformProvider).isAvailable;
+    final rows = available ? ref.watch(folderSyncRowsProvider).value : null;
+    final folderId =
+        available ? ref.watch(folderSyncSummaryProvider).value?.folderId : null;
+    yield rows == null || folderId == null
+        ? const []
+        : syncHealthConditionsFor(
+            workspaceId: folderId,
+            alarms: rows.alarms,
+            refusals: rows.refusals,
+          );
     return;
   }
 

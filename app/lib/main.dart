@@ -7,6 +7,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'capture/share_inbox_host.dart';
+import 'providers/folder_sync_provider.dart';
 import 'providers/auth_provider.dart';
 import 'providers/database_provider.dart';
 import 'providers/time_context_provider.dart';
@@ -98,6 +99,8 @@ class JeevesApp extends ConsumerWidget {
     // interrupted initial upload and subscribes.  Nothing else reads it, so
     // without this read it stays lazy and the device never syncs.
     ref.watch(syncLifecycleProvider);
+    // A device that turned folder sync on re-attaches its plugin at launch.
+    ref.watch(folderSyncResumeProvider);
 
     // Eagerly materialise [nudgeActionOutboxDrainerProvider] so Skip / Snooze
     // taps recorded by the notification handler (possibly in a background

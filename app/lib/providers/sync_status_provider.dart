@@ -22,6 +22,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../sync/enrolment_state.dart';
 import '../sync/sync_health.dart';
 import 'auth_provider.dart';
+import 'folder_sync_provider.dart';
 import 'sync_lifecycle_provider.dart';
 import 'sync_stack_provider.dart';
 import 'user_constants.dart';
@@ -128,7 +129,18 @@ SyncStatus syncStatusFor({
 final syncStatusProvider = StreamProvider<SyncIndication>((ref) async* {
   final userId = ref.watch(currentUserIdProvider);
   if (userId == kLocalUserId) {
-    yield (status: SyncStatus.localOnly, hasSomethingToReport: false);
+    // A signed-out device syncing through a folder reports on the folder's own
+    // alarms and refusals; one that is not says local only.
+    final folderHealth = ref.watch(folderPlatformProvider).isAvailable
+        ? ref.watch(folderSyncHealthProvider).value
+        : null;
+    yield folderHealth != null
+        ? syncIndicationFor(
+            enrolment: EnrolmentState.enrolled,
+            hasMemberCredential: true,
+            health: [folderHealth],
+          )
+        : (status: SyncStatus.localOnly, hasSomethingToReport: false);
     return;
   }
 

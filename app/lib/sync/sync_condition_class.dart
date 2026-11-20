@@ -56,6 +56,7 @@ SyncConditionClass syncConditionClassOf(IntegrityAlarmKind kind) => switch (kind
       IntegrityAlarmKind.authorChainGap ||
       IntegrityAlarmKind.ownWritesRollback ||
       IntegrityAlarmKind.ownWriteRefusedPermanently ||
+      IntegrityAlarmKind.segmentRolledBack ||
       IntegrityAlarmKind.epochKeySetUnpublishable =>
         SyncConditionClass.actionable,
 
