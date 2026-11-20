@@ -1194,12 +1194,34 @@ class SyncClient {
     // Placed first on the tail so that whatever a re-received op sets in
     // motion — a `missing_epoch_key` refusal, a raised epoch floor,
     // `_rebuildRequired` — is picked up by the blocks below in the same pull.
-    final knownSigningKeyCount = directory.knownSigningKeyCount;
-    if (knownSigningKeyCount != _knownSigningKeyCountAtLastUnchainedScan) {
-      affected.addAll(await _releaseOpsAwaitingMemberRegistration());
-      // Stored only after the scan returns, so a storage fault mid-scan — or a
-      // key learned during it — re-arms the next pull.
-      _knownSigningKeyCountAtLastUnchainedScan = knownSigningKeyCount;
+    //
+    // A control op refused because its predecessor was not applied yet is
+    // re-examined once the applied control head has moved (or on the first pull
+    // after a launch). The two refusals feed each other — an unchained revoke
+    // re-admitted below moves the head, which lets the registration refused
+    // behind it in, which teaches a key, which lets that device's unchained grant
+    // in — so the two scans run in one loop until neither has anything new to
+    // look at. It terminates: each gate value is read *before* its scan and only
+    // changes when a scan admits a row, an admitted row is stamped released and
+    // leaves both scans' sets, and the rows are finite.
+    while (true) {
+      var scanned = false;
+      final knownSigningKeyCount = directory.knownSigningKeyCount;
+      if (knownSigningKeyCount != _knownSigningKeyCountAtLastUnchainedScan) {
+        affected.addAll(await _releaseOpsAwaitingMemberRegistration());
+        // Stored only after the scan returns, so a storage fault mid-scan — or a
+        // key learned during it — re-arms the next pull.
+        _knownSigningKeyCountAtLastUnchainedScan = knownSigningKeyCount;
+        scanned = true;
+      }
+      final appliedControlHead = await this.appliedControlHead();
+      final headAtLastScan = _appliedControlHeadAtLastBreakScan;
+      if (headAtLastScan == null || !sameBytes(appliedControlHead, headAtLastScan)) {
+        affected.addAll(await _releaseOpsAwaitingControlPredecessor());
+        _appliedControlHeadAtLastBreakScan = appliedControlHead;
+        scanned = true;
+      }
+      if (!scanned) break;
     }
     // A rotation landed, or something is still waiting on a wrap. Either way the
     // fetch is bounded — one round-trip per pull, never one per op — and the
@@ -1525,7 +1547,17 @@ class SyncClient {
   /// against the same negative vectors, so the two stay in step. A refusal
   /// quarantines the op and the stream continues: one bad op from a server
   /// must not be able to stall a device.
-  Future<Set<AffectedEntity>> _receive(PulledOp pulled) async {
+  ///
+  /// [reclaimRefusedControlSlot] is set only by
+  /// [_releaseOpsAwaitingControlPredecessor]. A control op refused at the
+  /// position check is *logged-but-refused*, so its `op_log` slot is taken by its
+  /// own bytes and [_logReceived] would treat a second receipt as a re-serve and
+  /// skip it. With the flag, the control branch takes that slot back instead —
+  /// see [_reclaimRefusedControlSlot] — and every check after it runs unchanged.
+  Future<Set<AffectedEntity>> _receive(
+    PulledOp pulled, {
+    bool reclaimRefusedControlSlot = false,
+  }) async {
     OpHeader? header;
     try {
       final parts = splitEnvelope(pulled.envelope);
@@ -1565,7 +1597,10 @@ class SyncClient {
           // wrote nothing and returns false; on a genuine collision it wrote the
           // alarm and returns false. Returning normally (never throwing) commits
           // either way — the alarm, when there is one, must persist.
-          if (!await _logReceived(pulled, controlHeader)) return false;
+          final slotClaimed = reclaimRefusedControlSlot
+              ? await _reclaimRefusedControlSlot(pulled)
+              : await _logReceived(pulled, controlHeader);
+          if (!slotClaimed) return false;
           try {
             learned = await _applyControlOp(pulled, controlHeader, verified);
           } on SyncRejection catch (rejection) {
@@ -3142,6 +3177,13 @@ class SyncClient {
   /// [SyncStack.assemble] has already restored the directory by then.
   int? _knownSigningKeyCountAtLastUnchainedScan;
 
+  /// The applied control head at the last
+  /// [_releaseOpsAwaitingControlPredecessor] scan.
+  ///
+  /// Null until that scan has run, so the first pull after any launch runs it and
+  /// heals the rows an earlier build left behind.
+  Uint8List? _appliedControlHeadAtLastBreakScan;
+
   /// Set when this pull applied a `rotate` that actually **raised** the epoch floor.
   ///
   /// The trigger for [_releaseOpsAwaitingEpoch], the floor-keyed healer for
@@ -3382,6 +3424,113 @@ class SyncClient {
       await _markReleased(row.id);
     }
     return affected;
+  }
+
+  /// Re-receive the control ops refused because their predecessor was not applied.
+  ///
+  /// The healing half of the *positional* [SyncRejectionReason.controlChainBreak]:
+  /// a control op naming a predecessor this device had not applied yet. A zero
+  /// link or a genesis with a link is a shape break, permanent by construction,
+  /// and never passes the gate.
+  ///
+  /// The gate decides only *whether to ask again*; it verifies nothing. The row's
+  /// `prev_control_hash` must name an op in the applied control log, and its `seq`
+  /// must lie above every control op this device holds, which is where live
+  /// receipt always puts a control op — an op slotted *under* the head would leave
+  /// `applied.last` no longer the chain head. A predecessor that is applied but
+  /// not the head is admitted on purpose: [_receive] then takes the fork path and
+  /// settles it by tie-break, as it would live.
+  ///
+  /// Calling [_receive] on the row is not enough. A positional break is
+  /// logged-but-refused, so the `op_log` slot holds the op's own bytes and
+  /// [_logReceived] would read a second receipt as a re-serve and skip it —
+  /// the row would be stamped released with nothing applied. The scan passes
+  /// `reclaimRefusedControlSlot`, which takes the slot back inside the receive
+  /// transaction. Verification, authority, position and fork resolution all run
+  /// again.
+  ///
+  /// `_receive` comes before `_markReleased`, for the reason
+  /// [_releaseOpsAwaitingEpochKeys] gives. What the re-receive decided is read
+  /// back from `op_log`: still a positional break leaves the row unreleased; an
+  /// applied op, or a different refusal (which `_receive` has already filed under
+  /// its true reason), stamps it released.
+  Future<Set<AffectedEntity>> _releaseOpsAwaitingControlPredecessor() async {
+    final rows = await (_db.select(_db.quarantinedOps)
+          ..where((row) =>
+              row.workspaceId.equals(workspaceId) &
+              row.releasedAt.isNull() &
+              row.reason.equals(SyncRejectionReason.controlChainBreak.code))
+          ..orderBy([(row) => OrderingTerm(expression: row.id)]))
+        .get();
+    final affected = <AffectedEntity>{};
+    for (final row in rows) {
+      final seq = row.seq;
+      if (seq == null) continue;
+      if (!await _namesAppliedPredecessor(row.envelope, seq)) continue;
+      affected.addAll(await _receive(
+        PulledOp(seq: seq, envelope: row.envelope),
+        reclaimRefusedControlSlot: true,
+      ));
+      final after = await _opLogRowAt(seq);
+      if (after == null) continue;
+      if (after.appliedAt == null &&
+          after.refusedReason == SyncRejectionReason.controlChainBreak.code) {
+        // Refused for the same reason again: the slot was not in the state the
+        // reclaim needs, or the position check still fails. Not released.
+        continue;
+      }
+      if (after.appliedAt != null) {
+        // Its authority can change the grant verdict of content already judged at
+        // a later `seq`; the tail's `rebuildFromOpLog` recomputes that verdict.
+        _rebuildRequired = true;
+      }
+      await _markReleased(row.id);
+    }
+    return affected;
+  }
+
+  /// Whether [envelope], held at [seq], is a control op that names an applied
+  /// predecessor and sits above every control op this device holds. Advisory
+  /// only: see [_releaseOpsAwaitingControlPredecessor].
+  Future<bool> _namesAppliedPredecessor(Uint8List envelope, int seq) async {
+    final ControlPayload payload;
+    try {
+      final parts = splitEnvelope(envelope);
+      final header = OpHeader.parse(parts.header);
+      if (header.opClass != opClassControl) return false;
+      payload = ControlPayload.decode(parseBody(parts.body));
+    } on SyncRejection {
+      return false;
+    }
+    final applied = await _appliedControlLog();
+    if (!applied.any((row) => sameBytes(row.payloadHash, payload.prevControlHash))) {
+      return false;
+    }
+    final held = await _appliedControlLog(includeQuarantined: true);
+    return held.isEmpty || seq > held.last.seq;
+  }
+
+  Future<OpLogRow?> _opLogRowAt(int seq) => (_db.select(_db.opLog)
+        ..where((row) => row.workspaceId.equals(workspaceId) & row.seq.equals(seq)))
+      .getSingleOrNull();
+
+  /// Take back the `op_log` slot of a control op refused as a positional
+  /// [SyncRejectionReason.controlChainBreak], so it can be applied.
+  ///
+  /// Returns true only when the slot holds exactly this op's bytes, unapplied,
+  /// refused for that reason; the refusal stamp is then cleared and the caller
+  /// goes on to apply it. Any other state returns false and the op ends there, as
+  /// a taken slot does. Runs inside the receive transaction.
+  Future<bool> _reclaimRefusedControlSlot(PulledOp pulled) async {
+    final existing = await _opLogRowAt(pulled.seq);
+    if (existing == null ||
+        !sameBytes(existing.envelope, pulled.envelope) ||
+        existing.appliedAt != null ||
+        existing.refusedReason != SyncRejectionReason.controlChainBreak.code) {
+      return false;
+    }
+    await _clearRefused(pulled.seq);
+    return true;
   }
 
   /// Whether anything is still waiting on a key — the state-based half of the
