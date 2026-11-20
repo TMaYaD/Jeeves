@@ -4,7 +4,6 @@ library;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/sync/initial_upload_plan.dart';
-import 'package:jeeves/database/daos/tag_dao.dart' show todoTagIdFor;
 import 'package:jeeves/sync/collection_codecs.dart';
 import 'package:jeeves/sync/ids.dart';
 import 'package:uuid/uuid.dart';
