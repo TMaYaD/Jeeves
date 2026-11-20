@@ -24,6 +24,7 @@ import '../providers/task_detail_provider.dart';
 import '../providers/timeboxed_limit_provider.dart';
 import '../services/clarification_service.dart';
 import '../services/notification_service.dart';
+import 'batch_break_screen.dart';
 import '../widgets/app_title_bar/app_title_bar.dart';
 import '../widgets/capture/capture_action.dart';
 import '../widgets/elapsed_timer_widget.dart';
@@ -259,9 +260,18 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
       return;
     }
 
+    // The last member of a batch is followed by the one Break. Capture the
+    // root navigator first: go('/focus') unmounts this screen.
+    final isLastBatchMember = batchState[todoId]?.batchId != null;
+    final navigator = Navigator.of(context, rootNavigator: true);
     await ref.read(focusModeProvider.notifier).endFocus();
     if (!mounted) return;
     context.go('/focus');
+    if (isLastBatchMember) {
+      unawaited(navigator.push(
+        MaterialPageRoute<void>(builder: (_) => const BatchBreakScreen()),
+      ));
+    }
   }
 
   /// Stops the sprint and returns to the focus list without completing the task.
