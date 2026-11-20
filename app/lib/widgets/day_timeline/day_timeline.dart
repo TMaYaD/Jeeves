@@ -332,10 +332,40 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
         for (final entry in widget.entries)
           if (choice.memberIds.contains(entry.outcomeId)) entry,
       ];
+      // The sheet was open for a while: the entries and the day may have
+      // moved on, so check the answer against them as they stand now.
+      if (!mounted) return;
+      if (!_stillFits(suggestion.gapStart, chosen)) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(const SnackBar(
+            content: Text('The day has changed, sir. Nothing was moved.')));
+        return;
+      }
       await widget.onAcceptBatch!(batchMemberStarts(suggestion.gapStart, chosen));
     } else {
       await widget.onDeclineBatch?.call(choice.memberIds);
     }
+  }
+
+  /// Whether [chosen], run back to back from [gapStart], are still all
+  /// candidates and still land clear of every event and every other tile.
+  bool _stillFits(DateTime gapStart, List<DayTimelineEntry> chosen) {
+    if (chosen.length < 2) return false;
+    if (!chosen.every((entry) => isBatchCandidate(entry))) return false;
+    final end = gapStart.add(Duration(
+        minutes: chosen.fold(0, (sum, entry) => sum + entry.estimateMinutes)));
+    final chosenIds = {for (final entry in chosen) entry.outcomeId};
+    bool overlaps(DateTime start, DateTime finish) =>
+        start.isBefore(end) && finish.isAfter(gapStart);
+    for (final event in _events) {
+      if (overlaps(event.start, event.end)) return false;
+    }
+    for (final placement in _layout.entries) {
+      if (chosenIds.contains(placement.outcomeId)) continue;
+      for (final piece in placement.pieces) {
+        if (overlaps(piece.start, piece.end)) return false;
+      }
+    }
+    return true;
   }
 
   /// The quiet outline of a suggestion in its gap, with the chip that opens it.

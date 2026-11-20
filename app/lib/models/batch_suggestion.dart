@@ -109,12 +109,22 @@ BatchSuggestion? nextBatchSuggestion({
     ];
     for (final gap in freeGaps(lower, dayEnd, busy)) {
       final gapMinutes = gap.end.difference(gap.start).inMinutes;
-      final taken = <DayTimelineEntry>[];
-      var usedMinutes = 0;
-      for (final entry in group) {
-        if (usedMinutes + entry.estimateMinutes > gapMinutes) continue;
-        taken.add(entry);
-        usedMinutes += entry.estimateMinutes;
+      // Fill the gap in Plan order. When that leaves only one member, start
+      // again from the next candidate, so a pair that fits is not hidden
+      // behind a first entry that crowds it out.
+      var taken = <DayTimelineEntry>[];
+      for (var first = 0; first < group.length - 1; first++) {
+        final filled = <DayTimelineEntry>[];
+        var usedMinutes = 0;
+        for (final entry in group.skip(first)) {
+          if (usedMinutes + entry.estimateMinutes > gapMinutes) continue;
+          filled.add(entry);
+          usedMinutes += entry.estimateMinutes;
+        }
+        if (filled.length >= 2) {
+          taken = filled;
+          break;
+        }
       }
       if (taken.length < 2) continue;
       final starts = batchMemberStarts(gap.start, taken);

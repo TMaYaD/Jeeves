@@ -132,6 +132,17 @@ void main() {
     expect(suggestion!.gapStart, _at(11));
   });
 
+  test('a pair that fits is found behind a first entry that crowds it out', () {
+    // 10 + 5 would overflow the 12-minute gap, but 5 + 5 fits.
+    final suggestion = _suggest(
+      [_entry('big', 10), _entry('a', 5), _entry('b', 5)],
+      events: [_busy(_at(9), _at(9, 30)), _busy(_at(9, 42), _at(18))],
+    );
+    expect(suggestion, isNotNull);
+    expect([for (final m in suggestion!.members) m.outcomeId], ['a', 'b']);
+    expect(suggestion.gapStart, _at(9, 30));
+  });
+
   test('members go in Plan order, back to back', () {
     final suggestion =
         _suggest([_entry('c', 5), _entry('a', 10), _entry('b', 5)]);

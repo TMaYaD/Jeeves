@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/models/focus_settings.dart';
+import 'package:jeeves/providers/clock_provider.dart';
 import 'package:jeeves/providers/focus_settings_provider.dart';
 import 'package:jeeves/screens/batch_break_screen.dart';
 
@@ -13,9 +14,22 @@ class _FixedFocusSettings extends FocusSettingsNotifier {
   FocusSettings build() => const FocusSettings(breakDurationMinutes: 2);
 }
 
+/// The screen reads the wall clock through [clockProvider], so a test moves
+/// both that and the fake timers.
+var _now = DateTime.utc(2026, 11, 20, 12);
+
+Future<void> _advance(WidgetTester tester, Duration by) async {
+  _now = _now.add(by);
+  await tester.pump(by);
+}
+
 Future<void> _open(WidgetTester tester) async {
+  _now = DateTime.utc(2026, 11, 20, 12);
   await tester.pumpWidget(ProviderScope(
-    overrides: [focusSettingsProvider.overrideWith(_FixedFocusSettings.new)],
+    overrides: [
+      focusSettingsProvider.overrideWith(_FixedFocusSettings.new),
+      clockProvider.overrideWithValue(() => _now),
+    ],
     child: MaterialApp(
       home: Builder(
         builder: (context) => TextButton(
@@ -46,7 +60,7 @@ void main() {
 
   testWidgets('the countdown running out returns to the list', (tester) async {
     await _open(tester);
-    await tester.pump(const Duration(minutes: 2, seconds: 1));
+    await _advance(tester, const Duration(minutes: 2, seconds: 1));
     await tester.pumpAndSettle();
     expect(find.byType(BatchBreakScreen), findsNothing);
   });

@@ -162,7 +162,16 @@ class _BatchSuggestionSheetState extends State<BatchSuggestionSheet> {
 
   Widget _editView(BuildContext context) {
     final suggestion = widget.suggestion;
+    // A member just removed can be put back, as well as the other same-context
+    // Outcomes the timeline offered.
     final addable = [
+      for (final member in suggestion.members)
+        if (!_memberIds.contains(member.outcomeId))
+          (
+            outcomeId: member.outcomeId,
+            title: widget.titleFor(member.outcomeId),
+            minutes: member.minutes,
+          ),
       for (final candidate in widget.addable)
         if (!_memberIds.contains(candidate.outcomeId)) candidate,
     ];

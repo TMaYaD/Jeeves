@@ -31,7 +31,7 @@ import '../widgets/elapsed_timer_widget.dart';
 import '../widgets/meta_chip.dart' show formatMinutesLabel;
 import '../widgets/process_to_handlers.dart' show ProcessAction;
 import '../widgets/reclarify_prompt_sheet.dart';
-import '../widgets/timeboxed_gate.dart';
+import '../widgets/timeboxed_gate.dart' show guardSprintPastLimit;
 import '../widgets/timeboxed_limit_strip.dart';
 
 /// The focus-list transition message shown after a Focus "Done" verdict
@@ -253,16 +253,40 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
       ),
     );
 
+    var advancedToNextMember = false;
     if (batchNextId != null) {
       // No Break between batch members: the next one is in Focus at once, and
-      // its screen starts its Sprint.
-      await ref.read(focusModeProvider.notifier).advanceTo(batchNextId);
-      return;
+      // its screen starts its Sprint. A next member whose Timeboxed limit has
+      // passed goes past the gate first, like any Sprint; declining it leaves
+      // the member on the list to start later.
+      await guardSprintPastLimit(
+        context,
+        ref,
+        outcomeId: batchNextId,
+        start: () async {
+          await ref.read(focusModeProvider.notifier).advanceTo(batchNextId);
+          advancedToNextMember = true;
+        },
+      );
+      if (advancedToNextMember) {
+        // The notification was cancelled when Done was pressed; the next
+        // member's Focus shows it again.
+        if (mounted) {
+          _notificationTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+            if (mounted) _refreshNotification();
+          });
+          _refreshNotification();
+        }
+        return;
+      }
+      if (!mounted) return;
     }
 
-    // The last member of a batch is followed by the one Break. Capture the
-    // root navigator first: go('/focus') unmounts this screen.
-    final isLastBatchMember = batchState[todoId]?.batchId != null;
+    // The last member of a batch is followed by the one Break (a member left
+    // on the list by the gate is not the last). Capture the root navigator
+    // first: go('/focus') unmounts this screen.
+    final isLastBatchMember =
+        batchNextId == null && batchState[todoId]?.batchId != null;
     final navigator = Navigator.of(context, rootNavigator: true);
     await ref.read(focusModeProvider.notifier).endFocus();
     if (!mounted) return;
@@ -320,6 +344,9 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
               return const SizedBox.shrink();
             }
             return _FocusBody(
+              // A new body per Outcome, so a batch's next member starts its own
+              // Sprint rather than reusing the previous member's state.
+              key: ValueKey(todo.id),
               todo: todo,
               onComplete: () => _onComplete(todo),
               onStop: () => _onStop(todo.id),
@@ -337,6 +364,7 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
 
 class _FocusBody extends ConsumerStatefulWidget {
   const _FocusBody({
+    super.key,
     required this.todo,
     required this.onComplete,
     required this.onStop,

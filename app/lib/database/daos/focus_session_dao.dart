@@ -632,18 +632,20 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
     required String taskId,
     required DateTime? pinnedStartAt,
   }) async {
-    final membership = await (select(focusSessionTasks)
-          ..where((fst) =>
-              fst.focusSessionId.equals(sessionId) &
-              fst.taskId.equals(taskId)))
-        .getSingleOrNull();
-    if (membership == null) {
-      throw StateError('Task $taskId is not part of session $sessionId');
-    }
     final pinnedUtc = pinnedStartAt?.toUtc();
-    // Moving or freeing one member takes it out of its batch (issue #407).
-    final leavesBatch = membership.batchId != null;
     await attachedDatabase.capturing(() async {
+      // Read the membership inside the transaction that moves the entry, so a
+      // batch accepted in between cannot be missed (issue #407).
+      final membership = await (select(focusSessionTasks)
+            ..where((fst) =>
+                fst.focusSessionId.equals(sessionId) &
+                fst.taskId.equals(taskId)))
+          .getSingleOrNull();
+      if (membership == null) {
+        throw StateError('Task $taskId is not part of session $sessionId');
+      }
+      // Moving or freeing one member takes it out of its batch.
+      final leavesBatch = membership.batchId != null;
       await (update(focusSessionTasks)
             ..where((fst) =>
                 fst.focusSessionId.equals(sessionId) &
