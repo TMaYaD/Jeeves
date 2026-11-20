@@ -332,10 +332,6 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                           current: todo.timeEstimate,
                           actionText: action?.actionText ?? todo.title,
                           actionId: action?.id,
-                          // The limit is the Action's own estimate, so the
-                          // switch needs the Action's — not the mirror the
-                          // reader sees.
-                          actionEstimate: action?.timeEstimate,
                           // The switch reads as the limit does: on only
                           // when there is an estimate to limit.
                           timeboxed: isTimeboxedAction(

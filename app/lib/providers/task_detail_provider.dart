@@ -273,6 +273,14 @@ class TaskDetailNotifier {
   /// [minutes] is the new estimate; null leaves it alone unless [clearEstimate]
   /// says to clear it. [timeboxed] is the new switch; null leaves it alone.
   ///
+  /// [estimateIfUnset] is the estimate the sheet shows. It is written only
+  /// when the switch is turned on and the Action carries no estimate of its
+  /// own: a limit is measured against the Action's estimate, so a switch with
+  /// none is not a limit. The Action's own estimate is read here, inside the
+  /// write, so a peer that cleared it while the sheet was open cannot leave a
+  /// switch with nothing to limit — the estimate the sheet shows travels with
+  /// the switch instead.
+  ///
   /// The switch lives on the Action, not the Outcome, so it is written with the
   /// same guard [setTimeContext] uses: it is dropped when that Action is no
   /// longer the Outcome's current one, so an edit never lands on a successor
@@ -283,15 +291,23 @@ class TaskDetailNotifier {
     int? minutes,
     bool clearEstimate = false,
     bool? timeboxed,
+    int? estimateIfUnset,
   }) async {
     return _ifOutcomePresent(() async {
       final current = await _db.actionDao.getCurrentAction(_todoId);
-      final switchBelongs = current != null && current.id == actionId;
+      // The switch belongs to the Action the sheet was opened for: when that
+      // Action is no longer the current one, the switch is not written.
+      final action = current != null && current.id == actionId ? current : null;
+      final needsEstimate = action != null &&
+          timeboxed == true &&
+          !clearEstimate &&
+          action.timeEstimate == null &&
+          estimateIfUnset != null;
       await _db.todoDao.updateFields(
         _todoId,
-        timeEstimate: minutes,
+        timeEstimate: minutes ?? (needsEstimate ? estimateIfUnset : null),
         clearTimeEstimate: clearEstimate,
-        timeboxed: switchBelongs ? timeboxed : null,
+        timeboxed: action != null ? timeboxed : null,
       );
     });
   }

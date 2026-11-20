@@ -50,7 +50,7 @@ void main() {
   });
   tearDown(() async => db.close());
 
-  Widget harness({int? current, bool timeboxed = false, int? actionEstimate = 30}) {
+  Widget harness({int? current, bool timeboxed = false}) {
     return MaterialApp(
       home: Scaffold(
         body: Builder(
@@ -63,9 +63,44 @@ void main() {
                 actionText: 'Draft',
                 actionId: actionId,
                 timeboxed: timeboxed,
-                actionEstimate: actionEstimate,
               ),
               child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// A harness with a screen below the sheet, so a second pop would show it.
+  Widget twoRouteHarness() {
+    return MaterialApp(
+      home: Scaffold(
+        body: Builder(
+          builder: (context) => Center(
+            child: ElevatedButton(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => Scaffold(
+                    body: Builder(
+                      builder: (ctx) => Center(
+                        child: ElevatedButton(
+                          key: const Key('open_sheet'),
+                          onPressed: () => showOutcomeTimeEstimateSheet(
+                            ctx,
+                            notifier,
+                            current: 30,
+                            actionText: 'Draft',
+                            actionId: actionId,
+                          ),
+                          child: const Text('open'),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              child: const Text('push'),
             ),
           ),
         ),
@@ -77,12 +112,10 @@ void main() {
     WidgetTester tester, {
     int? current,
     bool timeboxed = false,
-    int? actionEstimate = 30,
   }) async {
     await tester.pumpWidget(harness(
       current: current,
       timeboxed: timeboxed,
-      actionEstimate: actionEstimate,
     ));
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
@@ -200,7 +233,7 @@ void main() {
     // switch needs that one — and the estimate the sheet shows is written
     // with it.
     await db.customStatement('UPDATE actions SET time_estimate = NULL');
-    await openSheet(tester, current: 30, actionEstimate: null);
+    await openSheet(tester, current: 30);
 
     await tester.tap(find.byKey(const Key('estimate_sheet_timeboxed')));
     await tester.pump();
@@ -210,5 +243,65 @@ void main() {
         await tester.runAsync(() => db.actionDao.getCurrentAction('t1'));
     expect(action!.timeboxed, isTrue);
     expect(action.timeEstimate, 30);
+  });
+
+  testWidgets('an estimate a peer clears while the sheet is open does not '
+      'leave the switch with nothing to limit', (tester) async {
+    await openSheet(tester, current: 30);
+
+    // A peer clears the estimate while the sheet is up. The sheet still shows
+    // 30, and the switch needs an estimate on the Action to limit.
+    await tester.runAsync(() async {
+      await db.customStatement('UPDATE actions SET time_estimate = NULL');
+      await db.customStatement('UPDATE todos SET time_estimate = NULL');
+    });
+
+    await tester.tap(find.byKey(const Key('estimate_sheet_timeboxed')));
+    await tester.pump();
+    await save(tester);
+
+    final action =
+        await tester.runAsync(() => db.actionDao.getCurrentAction('t1'));
+    expect(action!.timeboxed, isTrue);
+    expect(action.timeEstimate, 30);
+  });
+
+  testWidgets('the sheet cannot be saved twice over', (tester) async {
+    await openSheet(tester, current: 30);
+
+    await tester.tap(find.byKey(const Key('estimate_sheet_save')));
+    await tester.pump();
+
+    // The write is in flight: the button cannot be pressed again.
+    final button = tester.widget<FilledButton>(
+      find.byKey(const Key('estimate_sheet_save')),
+    );
+    expect(button.onPressed, isNull);
+
+    await tester.runAsync(() => pumpEventQueue());
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('a second save does not take the screen below the sheet with '
+      'it', (tester) async {
+    await tester.pumpWidget(twoRouteHarness());
+    await tester.tap(find.text('push'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('open_sheet')));
+    await tester.pumpAndSettle();
+
+    // The first save is still writing when the second one arrives.
+    final save = tester.widget<FilledButton>(
+      find.byKey(const Key('estimate_sheet_save')),
+    );
+    await tester.tap(find.byKey(const Key('estimate_sheet_save')));
+    await tester.pump();
+    save.onPressed!();
+    await tester.runAsync(() => pumpEventQueue());
+    await tester.pumpAndSettle();
+
+    // The sheet closed once, and the screen below it is still there.
+    expect(find.byKey(const Key('estimate_sheet_save')), findsNothing);
+    expect(find.byKey(const Key('open_sheet')), findsOneWidget);
   });
 }
