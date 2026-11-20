@@ -34,6 +34,7 @@ import 'daos/time_log_dao.dart';
 import 'daos/todo_dao.dart';
 import 'daos/user_preferences_dao.dart';
 import '../sync/domain_op_capture.dart';
+import 'store_refusal_error.dart';
 import 'tables.dart';
 
 export 'tables.dart';
@@ -194,7 +195,16 @@ class GtdDatabase extends _$GtdDatabase {
   late final UserPreferencesDao userPreferencesDao = UserPreferencesDao(this);
 
   @override
-  int get schemaVersion => 12;
+  int get schemaVersion => supportedSchemaVersion;
+
+  /// The schema version this build reads and writes.
+  ///
+  /// The number the store's file carries in `PRAGMA user_version`. A file
+  /// carrying a **higher** version was written by a newer build, and this
+  /// build refuses it: opening it would relabel the file with a version it
+  /// does not understand, and the newer build would then find a store it
+  /// believes is old.
+  static const int supportedSchemaVersion = 12;
 
   /// Completes with the [OpeningDetails] of this store's one open.
   ///
@@ -208,9 +218,25 @@ class GtdDatabase extends _$GtdDatabase {
   /// so the future always completes. Feeding it from `onUpgrade` instead would
   /// leave it unresolved for ever on a launch that migrates nothing, and hang the
   /// caller.
+  ///
+  /// It completes with a [StoreVersionTooNewError] when the open was refused
+  /// (see [_failOpen]), so a caller awaiting it learns why rather than hanging.
   Future<OpeningDetails> get opened => _opened.future;
 
   final Completer<OpeningDetails> _opened = Completer<OpeningDetails>();
+
+  /// Completes [opened] with [error] when the open failed.
+  ///
+  /// [opened] is fed from `beforeOpen`, which drift runs only after the
+  /// migration succeeded. A refused open never reaches it, so without this the
+  /// future would stay unresolved and a caller awaiting it would hang for ever.
+  void _failOpen(Object error) {
+    if (_opened.isCompleted) return;
+    _opened.completeError(error);
+    // Nobody may be awaiting this future yet, and an error nobody listens for
+    // is reported as unhandled. `ignore()` marks it as handled.
+    _opened.future.ignore();
+  }
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -234,6 +260,21 @@ class GtdDatabase extends _$GtdDatabase {
           await ensureDeviceClockIdentity();
         }),
         onUpgrade: (m, from, to) => _duringMigration(() async {
+          // A store written by a newer build. Drift calls
+          // `onUpgrade` for **any** version difference, a downgrade included,
+          // so this is where an older build meets a newer file. Refuse before
+          // touching anything: the file keeps its version and every row, and
+          // the app says the data belongs to a newer Jeeves instead of
+          // relabelling it with a version this build does not understand.
+          if (from > to) {
+            final refusal = StoreVersionTooNewError(
+              storeName: 'domain read model',
+              storedVersion: from,
+              supportedVersion: to,
+            );
+            _failOpen(refusal);
+            throw refusal;
+          }
           // v2 (issue #604): drop `todos.time_spent_minutes`, a denormalised
           // time-spent cache with no write path — time spent is derived from
           // `SUM(time_logs)` at read time. The column carried nothing on a v1
