@@ -156,7 +156,7 @@ To build a hybrid productivity application that merges the rigid organizational 
 
 * **Android system backup carries no Jeeves data.** Jeeves opts out of Android's cloud backup and phone-to-phone transfer. A phone set up from another phone's backup starts as a new, empty Jeeves with its own identity. A person's data reaches a new phone through sync or the export; nothing else moves it.
 
-* **An older build never touches data written by a newer one.** When a local store carries a schema version this build does not know, neither store is opened: nothing is migrated, projected or written, and the file keeps its version and every row. The app says the data belongs to a newer Jeeves, and that nothing was changed.
+* **An older build never touches data written by a newer one.** When a store carries a schema version this build does not know, neither store is opened, nothing is migrated, projected or written, and the file keeps its version and every row. The app says the data belongs to a newer Jeeves and nothing was changed.
 
 * **Build version in Settings → About:** it always shows the running build's version name and build number, plus the short commit sha when the build carries one (CI builds do; local builds omit it) (e.g. `Version 1.3.0-alpha.17 (412) · a1b2c3d`), read from the build rather than a checked-in value.
 

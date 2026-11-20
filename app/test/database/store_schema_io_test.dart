@@ -109,36 +109,36 @@ void main() {
   });
 
   test('a store written by a newer build is refused', () async {
-    _writeStoreFile(p.join(directory.path, domainStoreFileName), 12);
-    _writeStoreFile(p.join(directory.path, syncStoreFileName), 11);
+    _writeStoreFile(p.join(directory.path, domainStoreFileName), GtdDatabase.supportedSchemaVersion + 1);
+    _writeStoreFile(p.join(directory.path, syncStoreFileName), SyncDatabase.supportedSchemaVersion);
 
     final versions = await readLocalStoreVersionsIn(directory.path);
 
     final refusal = versions.tooNew;
     expect(refusal, isNotNull);
     expect(refusal!.storeName, 'domain read model');
-    expect(refusal.storedVersion, 12);
+    expect(refusal.storedVersion, GtdDatabase.supportedSchemaVersion + 1);
     expect(refusal.supportedVersion, GtdDatabase.supportedSchemaVersion);
     expect(versions.refusal, isNotNull);
   });
 
   test('an op log written by a newer build is refused', () async {
-    _writeStoreFile(p.join(directory.path, domainStoreFileName), 11);
-    _writeStoreFile(p.join(directory.path, syncStoreFileName), 12);
+    _writeStoreFile(p.join(directory.path, domainStoreFileName), GtdDatabase.supportedSchemaVersion);
+    _writeStoreFile(p.join(directory.path, syncStoreFileName), SyncDatabase.supportedSchemaVersion + 1);
 
     final versions = await readLocalStoreVersionsIn(directory.path);
 
     final refusal = versions.tooNew;
     expect(refusal, isNotNull);
     expect(refusal!.storeName, 'op log');
-    expect(refusal.storedVersion, 12);
+    expect(refusal.storedVersion, SyncDatabase.supportedSchemaVersion + 1);
     expect(refusal.supportedVersion, SyncDatabase.supportedSchemaVersion);
     expect(versions.refusal, isNotNull);
   });
 
   test('the read leaves both files exactly as it found them', () async {
-    _writeStoreFile(p.join(directory.path, domainStoreFileName), 12);
-    _writeStoreFile(p.join(directory.path, syncStoreFileName), 11);
+    _writeStoreFile(p.join(directory.path, domainStoreFileName), GtdDatabase.supportedSchemaVersion + 1);
+    _writeStoreFile(p.join(directory.path, syncStoreFileName), SyncDatabase.supportedSchemaVersion);
     final before = {
       for (final name in [domainStoreFileName, syncStoreFileName])
         name: File(p.join(directory.path, name)).readAsBytesSync(),
