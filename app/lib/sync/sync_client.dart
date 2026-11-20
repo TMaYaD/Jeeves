@@ -3330,6 +3330,11 @@ class SyncClient {
   /// re-receive that *refuses* returns normally, having quarantined a fresh row
   /// under the true reason; this row is then stamped released, so the scan does
   /// not examine it again.
+  ///
+  /// A **control** op re-admitted here carries two follow-ons the content path
+  /// gets for free and the control path does not: its authority can change the
+  /// grant verdict of content already judged, and it occupies a position in its
+  /// author's chain, so the successors held behind it are released with it.
   Future<Set<AffectedEntity>> _releaseOpsAwaitingMemberRegistration() async {
     final rows = await (_db.select(_db.quarantinedOps)
           ..where((row) =>
@@ -3356,6 +3361,21 @@ class SyncClient {
       }
       affected.addAll(await _receive(PulledOp(seq: seq, envelope: row.envelope)));
       await _markReleased(row.id);
+      // A control op admitted late does two things the content path gets for
+      // free and the control path does not.
+      if (header.opClass == opClassControl) {
+        // Its authority can change the grant verdict of content already judged
+        // at a later `seq`; the tail's existing `rebuildFromOpLog` recomputes
+        // exactly that verdict.
+        _rebuildRequired = true;
+        // A control op occupies a position in its author's chain, but the
+        // control branch of `_receive` returns without asking whether a held
+        // successor is now valid — the content and prune branches end in
+        // `_releaseChainSuccessors` and this one does not. Without this call,
+        // content held as `author_chain_gap` behind a re-admitted control op
+        // stays held.
+        affected.addAll(await _releaseChainSuccessors(header.authorMemberId));
+      }
     }
     return affected;
   }

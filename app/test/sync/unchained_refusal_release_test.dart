@@ -21,14 +21,18 @@
 @TestOn('!browser')
 library;
 
+import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:drift/drift.dart' show BooleanExpressionOperators;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/sync/chain_verifier.dart';
+import 'package:jeeves/sync/control_payload.dart';
+import 'package:jeeves/sync/envelope.dart';
 import 'package:jeeves/sync/host/merge_state.dart';
+import 'package:jeeves/sync/hlc.dart';
 import 'package:jeeves/sync/sync_client.dart';
 import 'package:jeeves/sync/sync_database.dart';
-import 'package:jeeves/sync/sync_rejection.dart';
 
 import 'harness/author_fixture.dart';
 import 'harness/sim_device.dart';
@@ -84,6 +88,20 @@ Future<SimWorkspace> _pair() async {
   );
   return workspace;
 }
+
+/// The rows in this device's applied control log of a given control type.
+///
+/// The chain's record of what actually applied. Read off the **live** store,
+/// so it is correct after a [SimDevice.reopenSyncStore].
+Future<List<AppliedControlRow>> _appliedOfType(
+  SimDevice device,
+  String controlType,
+) async =>
+    (device.syncStore.select(device.syncStore.appliedControlLog)
+          ..where((row) =>
+              row.workspaceId.equals(device.client.workspaceId) &
+              row.controlType.equals(controlType)))
+        .get();
 
 /// The quarantine rows this device holds for [authorMemberId].
 Future<List<QuarantineRow>> _rowsFor(
@@ -315,6 +333,223 @@ void main() {
         after.single.reason,
         SyncRejectionReason.memberNotChainedToRoot.code,
       );
+    });
+
+    test('a forged envelope naming a known key is refused by the pipeline, '
+        'and examined once', () async {
+      final workspace = await _pair();
+      final a = workspace.a;
+      final b = workspace.b;
+
+      final brokenClient = await b.reopenSyncStore(
+        attachTransport: true,
+        restoreChainedMembers: false,
+      );
+
+      await _write(a, _firstDocId);
+      await a.sync();
+
+      // A genuine envelope A posted, with its last byte flipped: the signature
+      // no longer verifies, but the header still names A's member and key.
+      final genuine = workspace.server.storedOps.firstWhere(
+        (op) =>
+            op.header?.authorMemberId == a.identity.memberId &&
+            op.header?.opClass == opClassContent,
+      );
+      final forged = Uint8List.fromList(genuine.envelope);
+      forged[forged.length - 1] ^= 0xff;
+      final forgedSeq = workspace.server.injectUnchecked(
+        workspace.workspaceId,
+        forged,
+      );
+
+      await brokenClient.pull();
+
+      final held = await _rowsFor(brokenClient, a.identity.memberId,
+          includeReleased: false);
+      final forgedRow = held.firstWhere((row) => row.seq == forgedSeq);
+      expect(
+        forgedRow.reason,
+        SyncRejectionReason.memberNotChainedToRoot.code,
+        reason: 'the directory did not know the key, so that refusal says '
+            'nothing about the signature',
+      );
+
+      final reopened = await b.reopenSyncStore(attachTransport: true);
+      await reopened.pull();
+      await reopened.pull();
+      await reopened.pull();
+
+      final logged = b.syncStore.select(b.syncStore.opLog)
+        ..where((row) => row.seq.equals(forgedSeq));
+      expect(await logged.get(), isEmpty,
+          reason: 'the forged envelope never reached the log');
+
+      final released = (await _rowsFor(reopened, a.identity.memberId))
+          .firstWhere((row) => row.id == forgedRow.id);
+      expect(released.releasedAt, isNotNull,
+          reason: 'the row the scan examined was released');
+
+      final unreleased = await _rowsFor(reopened, a.identity.memberId,
+          includeReleased: false);
+      final refiled = unreleased.where((row) => row.seq == forgedSeq);
+      expect(refiled, hasLength(1));
+      expect(refiled.single.reason, SyncRejectionReason.badSignature.code,
+          reason: 'the real reason is recorded, under a fresh row');
+
+      final alarms = await reopened.integrityAlarms();
+      final signatureAlarm = alarms.firstWhere(
+        (alarm) => alarm.kind == IntegrityAlarmKind.signatureInvalid.code,
+      );
+      expect(signatureAlarm.occurrenceCount, 1,
+          reason: 'a second examination would have raised it again');
+    });
+  });
+
+  group('a re-admitted control op releases what it was holding back', () {
+    test('control ops refused for an unknown key are re-admitted, and the '
+        'changes behind them apply', () async {
+      final workspace = await SimWorkspace.create(deviceCount: 3, fileBacked: true);
+      addTearDown(() async {
+        for (final device in workspace.devices) {
+          await device.close();
+        }
+      });
+      final a = workspace.a;
+      final b = workspace.b;
+      final c = workspace.devices[2];
+      await b.sync();
+      await a.sync();
+      await c.sync();
+
+      final brokenClient = await b.reopenSyncStore(
+        attachTransport: true,
+        restoreChainedMembers: false,
+      );
+
+      // A revokes C and rotates the Workspace, so the next epoch's key is
+      // wrapped to the survivors — B among them.
+      await a.enrolment.revokeAndRotate(
+        passphrase: a.outcome.passphrase,
+        memberId: c.identity.memberId,
+      );
+      await a.sync();
+
+      await brokenClient.pull();
+
+      final held = await _rowsFor(brokenClient, a.identity.memberId,
+          includeReleased: false);
+      expect(held, isNotEmpty);
+      expect(
+        held.every((row) =>
+            row.reason == SyncRejectionReason.memberNotChainedToRoot.code),
+        isTrue,
+      );
+      expect(await _appliedOfType(b, controlTypeRevoke), isEmpty);
+      expect(await _appliedOfType(b, controlTypeRotate), isEmpty);
+
+      final fixedClient = await b.reopenSyncStore(attachTransport: true);
+      // A writes a change at the new epoch before B pulls, so B meets it
+      // before it holds the key that epoch needs.
+      await _write(a, _firstDocId);
+      await a.sync();
+
+      await fixedClient.pull();
+      await fixedClient.pull();
+
+      expect(await _appliedOfType(b, controlTypeRevoke), hasLength(1));
+      expect(await _appliedOfType(b, controlTypeRotate), hasLength(1));
+      expect(await fixedClient.epochFloor(), 1,
+          reason: 'the re-admitted rotate raised this device\'s epoch floor');
+      expect(await _entity(b, _firstDocId), isNotNull,
+          reason: 'the change behind the re-admitted control ops applied');
+      expect(
+        await _rowsFor(fixedClient, a.identity.memberId,
+            includeReleased: false),
+        isEmpty,
+      );
+    });
+
+    test('a change held as a chain gap behind a re-admitted control op is '
+        'released with it', () async {
+      // The case the control path does not get for free. A control op occupies
+      // a position in its author's chain, but the control branch of `_receive`
+      // returns without asking whether a held successor is now valid — so the
+      // scan has to ask, or the change stays held as a chain gap for good.
+      //
+      // The control op here is a **grant**: it changes no epoch, so the change
+      // behind it stays in the same epoch and reaches the chain check rather
+      // than the epoch-key check.
+      final workspace = await _pair();
+      final b = workspace.b;
+
+      // A peer, enrolled as its own author, so the scan can re-admit a control
+      // op of its own without touching the epoch.
+      final peer = await AuthorFixture.create(
+        seed: Uint8List.fromList(List<int>.filled(32, 0x7e)),
+      );
+      final peerSession = await workspace.enrolFixture(peer);
+      await b.sync();
+
+      final brokenClient = await b.reopenSyncStore(
+        attachTransport: true,
+        restoreChainedMembers: false,
+      );
+
+      // The peer's grant: a control op that changes no epoch.
+      final grant = await grantEnvelope(
+        device: peer,
+        workspaceId: workspace.workspaceId,
+        root: await workspace.recoverRoot(),
+        prevControlHash: workspace.controlChainHead(),
+        memberId: peer.memberId,
+        wallMs: workspace.clock.nowMs,
+      );
+      await peerSession.postOps(workspace.workspaceId, [grant]);
+
+      await brokenClient.pull();
+
+      final held = await _rowsFor(brokenClient, peer.memberId,
+          includeReleased: false);
+      expect(held, hasLength(1));
+      expect(
+        held.single.reason,
+        SyncRejectionReason.memberNotChainedToRoot.code,
+      );
+
+      // The relaunch restores the directory, so this device knows the peer's
+      // key again. The peer's next change is published *before* the next pull,
+      // so it arrives while the grant is still held.
+      final fixedClient = await b.reopenSyncStore(attachTransport: true);
+      workspace.clock.advance(10);
+      await peerSession.postOps(workspace.workspaceId, [
+        await peer.nextEnvelope(
+          workspace.workspaceId,
+          payloadJson: jsonEncode({
+            'collection': _collection,
+            'id': _firstDocId,
+            'fields': {
+              'body': {'v': 'from the peer'},
+            },
+            'hlc': [workspace.clock.nowMs, 0, memberIdToHex(peer.memberId)],
+          }),
+        ),
+      ]);
+
+      await fixedClient.pull();
+
+      expect(
+        await _entity(b, _firstDocId),
+        isNotNull,
+        reason: 'the change held as a chain gap behind the re-admitted control '
+            'op was released with it',
+      );
+      final gapRows = (await _rowsFor(fixedClient, peer.memberId))
+          .where((row) =>
+              row.reason == SyncRejectionReason.authorChainGap.code)
+          .toList();
+      expect(gapRows, hasLength(1));
+      expect(gapRows.single.releasedAt, isNotNull);
     });
   });
 }
