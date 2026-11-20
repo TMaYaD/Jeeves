@@ -125,7 +125,7 @@ void main() {
 
     // And the store is at the current version now.
     final version = await upgraded.customSelect('PRAGMA user_version').get();
-    expect(version.single.read<int>('user_version'), 13);
+    expect(version.single.read<int>('user_version'), 14);
 
     await closeUpgraded();
   });
