@@ -107,8 +107,14 @@ Future<void> guardSprintPastLimit(
   required String outcomeId,
   required Future<void> Function() start,
 }) async {
+  // The screen may already be gone: there is nothing to read the limit for,
+  // and nothing to start the Sprint from.
+  if (!context.mounted) return;
   final db = ref.read(databaseProvider);
   final initial = await readTimeboxedLimitStatus(db, outcomeId);
+  // The screen may have gone while the status was being read. Starting the
+  // Sprint then would reach through a screen that is no longer there.
+  if (!context.mounted) return;
   if (initial == null) {
     await start();
     return;
@@ -130,6 +136,7 @@ Future<void> guardSprintPastLimit(
     status: status,
     now: now,
   );
+  if (!context.mounted) return;
   // "Raise the estimate…" opens the estimate sheet. Whatever happens there —
   // saved or cancelled — the gate asks again with the figures as they now
   // stand, so the user is never left without a way on.
@@ -137,29 +144,35 @@ Future<void> guardSprintPastLimit(
     if (!context.mounted) return;
     final saved = await _raiseTheEstimate(context, ref, outcomeId: outcomeId);
     if (!context.mounted) return;
-    // The clock is read again: the estimate sheet was open for a while, and
-    // the limit may have passed while it was. The figures the sheet shows are
-    // counted from the same instant.
-    now = ref.read(clockProvider)().toUtc();
     if (saved) {
       // A raised estimate moves the limit with it. If the limit is no longer
       // passed, the Sprint starts after all; if it is still passed, the gate
       // asks again with the new figures.
       final after = await readTimeboxedLimitStatus(db, outcomeId);
+      if (!context.mounted) return;
+      // The clock is read after the status is loaded: the read takes a
+      // moment, and a limit that passed during it must still ask.
+      now = ref.read(clockProvider)().toUtc();
       if (after == null || !after.hasPassedAt(now)) {
         await start();
         return;
       }
       status = after;
       action = await db.actionDao.getCurrentAction(outcomeId);
+      if (!context.mounted) return;
+    } else {
+      // The estimate sheet was open for a while, and the limit may have passed
+      // while it was. The figures the sheet shows are counted from this
+      // instant.
+      now = ref.read(clockProvider)().toUtc();
     }
-    if (!context.mounted) return;
     choice = await showTimeboxedSprintGate(
       context,
       actionText: todo?.title ?? action?.actionText ?? '',
       status: status,
       now: now,
     );
+    if (!context.mounted) return;
   }
   if (choice == TimeboxedGateChoice.regardless) {
     await start();
@@ -180,8 +193,8 @@ Future<bool> _raiseTheEstimate(
   final db = ref.read(databaseProvider);
   final action = await db.actionDao.getCurrentAction(outcomeId);
   if (action == null) return false;
-  final notifier = ref.read(taskDetailNotifierProvider(outcomeId));
   if (!context.mounted) return false;
+  final notifier = ref.read(taskDetailNotifierProvider(outcomeId));
   return showOutcomeTimeEstimateSheet(
     context,
     notifier,
@@ -197,9 +210,6 @@ Future<bool> _raiseTheEstimate(
       timeboxed: action.timeboxed,
       timeEstimate: action.timeEstimate,
     ),
-    // The sheet is opened on the Action's own estimate, so that is also the
-    // estimate the switch needs.
-    actionEstimate: action.timeEstimate,
   );
 }
 

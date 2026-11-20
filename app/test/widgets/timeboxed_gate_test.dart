@@ -34,12 +34,17 @@ Future<void> settle(WidgetTester tester) async {
 
 /// The screen the tests drive: one button that asks the guard to start.
 class _GateHarness extends ConsumerWidget {
-  const _GateHarness({required this.onStart});
+  const _GateHarness({required this.onStart, this.capture});
 
   final VoidCallback onStart;
 
+  /// Called with the screen's own context and ref when it builds, so a test
+  /// can reach the guard after the screen has gone.
+  final void Function(BuildContext context, WidgetRef ref)? capture;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    capture?.call(context, ref);
     return Scaffold(
       body: Center(
         child: ElevatedButton(
@@ -84,10 +89,15 @@ void main() {
   });
   tearDown(() async => db.close());
 
-  Widget harness({required VoidCallback onStart}) {
+  Widget harness({
+    required VoidCallback onStart,
+    void Function(BuildContext context, WidgetRef ref)? capture,
+  }) {
     return ProviderScope(
       overrides: [databaseProvider.overrideWithValue(db)],
-      child: MaterialApp(home: _GateHarness(onStart: onStart)),
+      child: MaterialApp(
+        home: _GateHarness(onStart: onStart, capture: capture),
+      ),
     );
   }
 
@@ -357,14 +367,48 @@ void main() {
     expect(find.byKey(const Key('timeboxed_gate_stop')), findsOneWidget);
 
     // The sheet goes without a choice — the screen is left, as it is when the
-    // user walks away from it.
-    await tester.pumpWidget(harness(onStart: () {}));
+    // user walks away from it. The screen is taken down first, so the sheet
+    // really goes: pumping the same harness again would leave it up, and the
+    // assertion below would be about that sheet rather than a new one.
+    await tester.pumpWidget(const SizedBox.shrink());
     await settle(tester);
+    expect(find.byKey(const Key('timeboxed_gate_stop')), findsNothing);
 
     // The gate asks again: a sheet that was never answered is not a gate that
     // has been shut.
+    await tester.pumpWidget(harness(onStart: () {}));
     await tester.tap(find.byKey(const Key('open_gate')));
     await settle(tester);
     expect(find.byKey(const Key('timeboxed_gate_stop')), findsOneWidget);
+  });
+
+  testWidgets('a screen that has gone does not start the Sprint', (
+    tester,
+  ) async {
+    var started = false;
+    BuildContext? gateContext;
+    WidgetRef? gateRef;
+    await tester.pumpWidget(harness(
+      onStart: () => started = true,
+      capture: (context, ref) {
+        gateContext = context;
+        gateRef = ref;
+      },
+    ));
+
+    // The screen is left while the gate is at work: the guard is asked from a
+    // screen that is no longer there.
+    await tester.pumpWidget(const SizedBox.shrink());
+
+    await guardSprintPastLimit(
+      gateContext!,
+      gateRef!,
+      outcomeId: 't1',
+      start: () async => started = true,
+    );
+
+    // The Sprint does not start: the screen that would have started it is
+    // gone, and a start would reach through a screen that is no longer there.
+    expect(started, isFalse);
   });
 }
