@@ -16,6 +16,8 @@ import '../providers/focus_session_planning_provider.dart'
         SessionSettlement,
         activeSessionSettlementsProvider,
         activeSessionTasksProvider;
+import '../providers/day_timeline_provider.dart'
+    show activeSessionBatchStateProvider, activeSessionPinnedStartsProvider;
 import '../providers/focus_session_provider.dart';
 import '../providers/sprint_timer_provider.dart';
 import '../providers/task_detail_provider.dart';
@@ -75,6 +77,36 @@ Todo? focusNextTask({
             t.doneAt == null &&
             !settlements.containsKey(t.id))
         .firstOrNull;
+
+/// The Outcome Focus goes straight on to after Done on [completedTodoId], when
+/// that Outcome belongs to an accepted small-task batch: the first other member
+/// of the same batch, in start-time order, that is not done and not Settled.
+/// Null when the Outcome is in no batch or was its batch's last member.
+@visibleForTesting
+String? batchNextMemberId({
+  required String completedTodoId,
+  required Map<String, ({String? batchId, bool declined})> batchState,
+  required Map<String, DateTime> pinnedStarts,
+  required List<Todo> sessionTasks,
+  required Map<String, SessionSettlement> settlements,
+}) {
+  final batchId = batchState[completedTodoId]?.batchId;
+  if (batchId == null) return null;
+  final members = [
+    for (final task in sessionTasks)
+      if (task.id != completedTodoId &&
+          batchState[task.id]?.batchId == batchId &&
+          task.doneAt == null &&
+          !settlements.containsKey(task.id))
+        task,
+  ]..sort((a, b) {
+      final aStart = pinnedStarts[a.id];
+      final bStart = pinnedStarts[b.id];
+      if (aStart == null || bStart == null) return 0;
+      return aStart.compareTo(bStart);
+    });
+  return members.firstOrNull?.id;
+}
 
 class ActiveFocusScreen extends ConsumerStatefulWidget {
   const ActiveFocusScreen({super.key});
@@ -173,11 +205,28 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
 
     // The completed Action's Outcome is excluded by `t.id != todoId` whether or
     // not it was achieved, so the advance-to-next pick is unchanged (AC5).
-    final nextTask = focusNextTask(
-      sessionTasks: allSessionTasks,
+    // An accepted small-task batch carries straight on to its next member
+    // (issue #407); anything else advances to the first Plan member owed
+    // attention.
+    final batchState = await ref.read(activeSessionBatchStateProvider.future);
+    if (!mounted) return;
+    final pinnedStarts =
+        await ref.read(activeSessionPinnedStartsProvider.future);
+    if (!mounted) return;
+    final batchNextId = batchNextMemberId(
       completedTodoId: todoId,
+      batchState: batchState,
+      pinnedStarts: pinnedStarts,
+      sessionTasks: allSessionTasks,
       settlements: settlements,
     );
+    final nextTask = batchNextId != null
+        ? allSessionTasks.firstWhere((t) => t.id == batchNextId)
+        : focusNextTask(
+            sessionTasks: allSessionTasks,
+            completedTodoId: todoId,
+            settlements: settlements,
+          );
 
     final message = focusAdvanceMessage(nextTask: nextTask, verdict: verdict);
 
@@ -202,6 +251,13 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
         backgroundColor: const Color(0xFF2667B7),
       ),
     );
+
+    if (batchNextId != null) {
+      // No Break between batch members: the next one is in Focus at once, and
+      // its screen starts its Sprint.
+      await ref.read(focusModeProvider.notifier).advanceTo(batchNextId);
+      return;
+    }
 
     await ref.read(focusModeProvider.notifier).endFocus();
     if (!mounted) return;
