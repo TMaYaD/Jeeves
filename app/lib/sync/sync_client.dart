@@ -270,6 +270,14 @@ class SyncClient {
   /// the page for no extra correctness.
   bool _rebuildRequired = false;
 
+  /// Quarantine rows of control ops applied late by
+  /// [_releaseOpsAwaitingControlPredecessor], stamped released only after the
+  /// pull-tail [rebuildFromOpLog] has recomputed the grant verdicts they change.
+  /// [_rebuildRequired] is memory only, so the unreleased row is the durable record
+  /// that the rebuild is owed: a process exit before the stamp makes the next
+  /// scan find the op already applied, set the flag again and retry.
+  final Set<int> _releaseAfterRebuild = <int>{};
+
   /// The pull in flight, and whether another pull was asked for while it ran.
   ///
   /// **One pull at a time** (#989). A pull reads the cursor, fetches a page and
@@ -1288,6 +1296,14 @@ class SyncClient {
       // A control fork resolved during this pull, so the authorization verdicts
       // the content ops applied under are no longer the right ones.
       affected.addAll(await rebuildFromOpLog());
+    }
+    // The rebuild owed by late-applied control ops has completed (or none was
+    // owed); only now is it safe to drop their rows out of the scan.
+    if (_releaseAfterRebuild.isNotEmpty) {
+      for (final rowId in _releaseAfterRebuild.toList()) {
+        await _markReleased(rowId);
+      }
+      _releaseAfterRebuild.clear();
     }
     // Projection is the tail of the receive order, one pass per batch: an
     // entity touched by three ops in one pull is projected once, from the
@@ -3466,6 +3482,16 @@ class SyncClient {
     for (final row in rows) {
       final seq = row.seq;
       if (seq == null) continue;
+      // Applied already (a stop between the receive commit and the stamp, or a
+      // failed read-back): nothing to apply, but the rebuild is still owed.
+      final alreadyHeld = await _opLogRowAt(seq);
+      if (alreadyHeld != null &&
+          alreadyHeld.appliedAt != null &&
+          sameBytes(alreadyHeld.envelope, row.envelope)) {
+        _rebuildRequired = true;
+        _releaseAfterRebuild.add(row.id);
+        continue;
+      }
       if (!await _namesAppliedPredecessor(row.envelope, seq)) continue;
       affected.addAll(await _receive(
         PulledOp(seq: seq, envelope: row.envelope),
@@ -3483,6 +3509,8 @@ class SyncClient {
         // Its authority can change the grant verdict of content already judged at
         // a later `seq`; the tail's `rebuildFromOpLog` recomputes that verdict.
         _rebuildRequired = true;
+        _releaseAfterRebuild.add(row.id);
+        continue;
       }
       await _markReleased(row.id);
     }
@@ -3490,7 +3518,7 @@ class SyncClient {
   }
 
   /// Whether [envelope], held at [seq], is a control op that names an applied
-  /// predecessor and sits above every control op this device holds. Advisory
+  /// predecessor and sits above every active control op this device holds. Advisory
   /// only: see [_releaseOpsAwaitingControlPredecessor].
   Future<bool> _namesAppliedPredecessor(Uint8List envelope, int seq) async {
     final ControlPayload payload;
@@ -3506,7 +3534,7 @@ class SyncClient {
     if (!applied.any((row) => sameBytes(row.payloadHash, payload.prevControlHash))) {
       return false;
     }
-    final held = await _appliedControlLog(includeQuarantined: true);
+    final held = await _appliedControlLog();
     return held.isEmpty || seq > held.last.seq;
   }
 

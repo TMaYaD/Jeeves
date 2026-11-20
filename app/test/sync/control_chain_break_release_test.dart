@@ -21,7 +21,7 @@ library;
 
 import 'dart:typed_data';
 
-import 'package:drift/drift.dart' show BooleanExpressionOperators;
+import 'package:drift/drift.dart' show BooleanExpressionOperators, Value;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/sync/control_payload.dart';
 import 'package:jeeves/sync/sync_client.dart';
@@ -182,6 +182,46 @@ void main() {
       expect(after.every((row) => row.releasedAt == null), isTrue);
       expect(reopened.directory.isChained(zeroLinked.memberId), isFalse);
       expect(reopened.directory.isChained(randomLinked.memberId), isFalse);
+    });
+
+    test('a refused slot holding different bytes is not taken back', () async {
+      final scene = await _scene();
+      final b = scene.workspace.b;
+      final dId = scene.dFixture.memberId;
+      final held = (await _breakRows(scene.broken)).singleWhere(
+          (row) => row.authorMemberId == dId && row.releasedAt == null);
+      final seq = held.seq!;
+
+      // Put a different envelope into the refused slot, as a forged or
+      // corrupted copy would be.
+      final slot = await (b.syncStore.select(b.syncStore.opLog)
+            ..where((r) =>
+                r.workspaceId.equals(scene.broken.workspaceId) &
+                r.seq.equals(seq)))
+          .getSingle();
+      final different = Uint8List.fromList(slot.envelope)
+        ..[slot.envelope.length - 1] ^= 0xff;
+      await (b.syncStore.update(b.syncStore.opLog)
+            ..where((r) =>
+                r.workspaceId.equals(scene.broken.workspaceId) &
+                r.seq.equals(seq)))
+          .write(OpLogCompanion(envelope: Value(different)));
+
+      final fixed = await b.reopenSyncStore(attachTransport: true);
+      await fixed.pull();
+      await fixed.pull();
+
+      final after = await (b.syncStore.select(b.syncStore.opLog)
+            ..where((r) =>
+                r.workspaceId.equals(fixed.workspaceId) & r.seq.equals(seq)))
+          .getSingle();
+      expect(after.envelope, different);
+      expect(after.appliedAt, isNull);
+      expect(after.refusedReason, _breakCode);
+      expect(
+        (await _breakRows(fixed)).singleWhere((r) => r.id == held.id).releasedAt,
+        isNull,
+      );
     });
   });
 }
