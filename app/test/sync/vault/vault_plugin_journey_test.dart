@@ -60,11 +60,12 @@ class _VaultDevice {
           .toList();
 }
 
-Future<_VaultDevice> _open(String label, Directory root) async {
+Future<_VaultDevice> _open(String label, Directory root, {String? folderName}) async {
   final device = HostDevice.open(label);
   addTearDown(device.close);
   final host = await device.startHost();
-  final directory = Directory('${root.path}/$label')..createSync(recursive: true);
+  final directory = Directory('${root.path}/${folderName ?? label}')
+    ..createSync(recursive: true);
   final plugin = VaultPlugin(folder: DirectoryVaultFolder(directory), sync: device.sync);
   await host.attach(plugin);
   return _VaultDevice(device, directory, plugin);
@@ -72,7 +73,7 @@ Future<_VaultDevice> _open(String label, Directory root) async {
 
 /// The syncer: every page of [from] replaces the same path in [to].
 Future<void> _copyVault(_VaultDevice from, _VaultDevice to) async {
-  for (final subfolder in ['Outcomes', 'Sessions', 'Inbox']) {
+  for (final subfolder in ['Outcomes', 'Sessions', 'Inbox', 'Jeeves']) {
     for (final path in await from.folder.listMarkdownFiles(subfolder)) {
       await to.folder.writeAtomically(path, (await from.folder.read(path))!);
     }
@@ -778,6 +779,151 @@ void main() {
     expect(await b.folder.listMarkdownFiles('Outcomes'), hasLength(1),
         reason: 'two copies of one page collapse to one');
     expect(await b.outcomePage(), contains('title: New title'));
+  });
+
+  group('pages the app keeps for itself', () {
+    Future<String> readPage(_VaultDevice device, String path) async =>
+        (await device.folder.read(path))!;
+
+    test('a preference set on one device reaches the other', () async {
+      final a = await _open('a', root);
+      final b = await _open('b', root);
+      await a.device.domain.userPreferencesDao
+          .set(_userId, 'clarify_mode', '"nToM"');
+      await _settle(a, b);
+
+      expect(await b.device.domain.userPreferencesDao.get(_userId, 'clarify_mode'),
+          '"nToM"');
+      expect(await readPage(b, 'Jeeves/Preferences.md'),
+          await readPage(a, 'Jeeves/Preferences.md'),
+          reason: 'two devices in one state write the same bytes');
+    });
+
+    test('a Tag no page names reaches the other device', () async {
+      final a = await _open('a', root);
+      final b = await _open('b', root);
+      await a.device.domain.tagDao.findOrCreateTag('Errands', 'area', _userId);
+      await _settle(a, b);
+
+      final rows = await b.device.domain
+          .customSelect('SELECT name, type FROM tags')
+          .get();
+      expect(rows.map((row) => (row.read<String>('name'), row.read<String>('type'))),
+          [('Errands', 'area')]);
+      expect(await readPage(b, 'Jeeves/Tags.md'), await readPage(a, 'Jeeves/Tags.md'));
+    });
+
+    test('Sprints on two days produce two day sheets, and reach the other device',
+        () async {
+      final a = await _open('a', root);
+      final b = await _open('b', root);
+      await a.device.domain.todoDao
+          .insertOutcome(id: _outcomeId, title: 'Plan', userId: _userId);
+      final dao = a.device.domain.sprintDao;
+      await dao.startSprint(
+          taskId: _outcomeId,
+          userId: _userId,
+          plannedDurationMinutes: 25,
+          now: DateTime.utc(2026, 11, 20, 9));
+      await dao.endRunningSprint(userId: _userId, now: DateTime.utc(2026, 11, 20, 9, 25));
+      await dao.startSprint(
+          taskId: _outcomeId,
+          userId: _userId,
+          plannedDurationMinutes: 50,
+          now: DateTime.utc(2026, 11, 21, 9));
+      await dao.endRunningSprint(userId: _userId, now: DateTime.utc(2026, 11, 21, 9, 50));
+      await _settle(a, b);
+
+      expect(await a.folder.listMarkdownFiles('Jeeves'), containsAll([
+        'Jeeves/Sprints/2026-11-20.md',
+        'Jeeves/Sprints/2026-11-21.md',
+      ]));
+      final rows = await b.device.domain.customSelect(
+          'SELECT started_at, ended_at, planned_duration_minutes, action_id '
+          'FROM sprints ORDER BY started_at').get();
+      expect(rows.map((row) => row.read<int>('planned_duration_minutes')), [25, 50]);
+      expect(rows.map((row) => row.read<String>('started_at')),
+          ['2026-11-20T09:00:00.000Z', '2026-11-21T09:00:00.000Z']);
+      expect(rows.map((row) => row.read<String>('ended_at')),
+          ['2026-11-20T09:25:00.000Z', '2026-11-21T09:50:00.000Z']);
+      expect(rows.every((row) => row.read<String?>('action_id') != null), isTrue);
+      for (final path in ['Jeeves/Sprints/2026-11-20.md', 'Jeeves/Sprints/2026-11-21.md']) {
+        expect(await readPage(b, path), await readPage(a, path));
+      }
+    });
+
+    test('a reinstall on the same folder brings back Sprints, preferences and Tags',
+        () async {
+      final a = await _open('a', root);
+      await a.device.domain.todoDao
+          .insertOutcome(id: _outcomeId, title: 'Plan', userId: _userId);
+      await a.device.domain.userPreferencesDao
+          .set(_userId, 'clarify_mode', '"nToM"');
+      await a.device.domain.tagDao.findOrCreateTag('Errands', 'area', _userId);
+      await a.device.domain.sprintDao.startSprint(
+          taskId: _outcomeId,
+          userId: _userId,
+          plannedDurationMinutes: 25,
+          now: DateTime.utc(2026, 11, 20, 9));
+      await a.device.domain.sprintDao
+          .endRunningSprint(userId: _userId, now: DateTime.utc(2026, 11, 20, 9, 25));
+      await a.device.host!.deliverAll();
+      await a.plugin.rescan();
+      final before = {
+        for (final path in await a.folder.listMarkdownFiles('Jeeves'))
+          path: await readPage(a, path),
+      };
+      expect(before.keys, containsAll([
+        'Jeeves/Preferences.md',
+        'Jeeves/Tags.md',
+        'Jeeves/Sprints/2026-11-20.md',
+      ]));
+
+      // A reinstall: new stores, the same folder.
+      final reinstalled = await _open('a2', root, folderName: 'a');
+      await reinstalled.device.host!.deliverAll();
+      await reinstalled.plugin.rescan();
+      await reinstalled.device.host!.deliverAll();
+
+      final domain = reinstalled.device.domain;
+      expect(await domain.userPreferencesDao.get(_userId, 'clarify_mode'), '"nToM"');
+      expect(
+          (await domain.customSelect('SELECT name, type FROM tags').get())
+              .map((row) => row.read<String>('name')),
+          contains('Errands'));
+      final sprints = await domain.customSelect(
+          'SELECT action_id, started_at, ended_at, planned_duration_minutes '
+          'FROM sprints').get();
+      expect(sprints, hasLength(1));
+      expect(sprints.single.read<String>('started_at'), '2026-11-20T09:00:00.000Z');
+      expect(sprints.single.read<String>('ended_at'), '2026-11-20T09:25:00.000Z');
+      expect(sprints.single.read<int>('planned_duration_minutes'), 25);
+      expect(sprints.single.read<String?>('action_id'), isNotNull);
+      for (final entry in before.entries) {
+        expect(await readPage(reinstalled, entry.key), entry.value,
+            reason: '${entry.key} is unchanged by the reinstall');
+      }
+    });
+
+    test('a page Jeeves keeps for itself is not read when edited by hand, '
+        'and is written back', () async {
+      final a = await _open('a', root);
+      await a.device.domain.userPreferencesDao
+          .set(_userId, 'clarify_mode', '"nToM"');
+      await a.device.host!.deliverAll();
+      await a.plugin.rescan();
+
+      final original = await readPage(a, 'Jeeves/Preferences.md');
+      final edited = original.replaceFirst('Edits here are not read.', 'I was here.');
+      expect(edited, isNot(original));
+      await a.folder.writeAtomically('Jeeves/Preferences.md', edited);
+      a.device.wall.advance(5000);
+      await a.plugin.rescan();
+
+      expect(await readPage(a, 'Jeeves/Preferences.md'), original);
+      expect(await a.device.domain.userPreferencesDao.get(_userId, 'clarify_mode'),
+          '"nToM"');
+    });
   });
 }
 
