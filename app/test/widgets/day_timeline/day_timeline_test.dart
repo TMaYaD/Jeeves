@@ -19,6 +19,7 @@ DayTimelineEntry _entry(
   TimeContext? timeContext,
   bool isDone = false,
   bool isRunning = false,
+  bool isTimeboxed = false,
 }) =>
     DayTimelineEntry(
       outcomeId: id,
@@ -29,7 +30,28 @@ DayTimelineEntry _entry(
       isDone: isDone,
       isRunning: isRunning,
       isEngaged: isDone || isRunning,
+      isTimeboxed: isTimeboxed,
     );
+
+/// The limit edge drawn over a tile's bottom, or null when the tile has none.
+Container? _limitEdge(WidgetTester tester, String outcomeId) {
+  final finder = find.byKey(Key('day_timeline_limit_edge_${outcomeId}_1'));
+  if (finder.evaluate().isEmpty) return null;
+  return tester.widget<Container>(finder);
+}
+
+/// Whether the tile's own border is uniform: every side the same colour and
+/// width. A rounded box border paints only when it is.
+bool _borderIsUniform(WidgetTester tester, String outcomeId) {
+  final container = tester.widget<Container>(
+    find.byKey(Key('day_timeline_tile_${outcomeId}_1')),
+  );
+  final decoration = container.decoration! as BoxDecoration;
+  final border = decoration.border! as Border;
+  return border.top == border.bottom &&
+      border.top == border.left &&
+      border.top == border.right;
+}
 
 class _Calls {
   final pins = <(String, DateTime?)>[];
@@ -230,6 +252,28 @@ void main() {
     expect(find.textContaining('Running'), findsOneWidget);
     // 'missed' sits at 11:00-12:00, after done and running; now is 12:30.
     expect(find.textContaining('Not started'), findsOneWidget);
+  });
+
+  testWidgets('a Timeboxed Outcome draws a heavier bottom edge', (tester) async {
+    // The tile of a Timeboxed Action carries the limit edge (issue #923);
+    // every other tile keeps the ordinary one.
+    await tester.pumpWidget(_app([
+      _entry('bounded', 30, isTimeboxed: true),
+      _entry('open', 30),
+    ]));
+
+    expect(_limitEdge(tester, 'bounded'), isNotNull);
+    expect(
+      tester.getSize(find.byKey(const Key('day_timeline_limit_edge_bounded_1'))).height,
+      4,
+      reason: 'the limit edge is heavier than the tile\'s one-pixel border',
+    );
+    expect(_limitEdge(tester, 'open'), isNull);
+    // The tile's own border stays uniform: a rounded box border paints only
+    // when every side is the same colour, and the limit edge is the one side
+    // that changes.
+    expect(_borderIsUniform(tester, 'bounded'), isTrue);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('a Sprint is drawn in the lane and counted on its tile',

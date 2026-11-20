@@ -168,7 +168,13 @@ void main() {
       expect(find.text('Medium'), findsNothing);
       expect(find.text('High'), findsNothing);
       expect(find.text('Energy'), findsOneWidget);
-      expect(find.text('Time'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('outcome_peek_time')),
+          matching: find.text('Set'),
+        ),
+        findsOneWidget,
+      );
       expect(find.text('Due'), findsOneWidget);
     });
 
@@ -356,11 +362,17 @@ void main() {
 
       await tester.tap(find.byKey(const Key('outcome_peek_time')));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('10m'));
-      await tester.pumpAndSettle();
+      // The estimate sheet is a stepper: one step up from no estimate is the
+      // shortest option.
+      await tester.tap(find.byKey(const Key('estimate_sheet_more')));
+      await tester.pump();
+      expect(find.text('5m'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('estimate_sheet_save')));
+      await tester.pump();
       await _drainWrites(tester);
+      await tester.pumpAndSettle();
 
-      expect((await _row(tester, db, 'e5')).timeEstimate, 10);
+      expect((await _row(tester, db, 'e5')).timeEstimate, 5);
     });
 
     testWidgets('energy chip sets the energy level', (tester) async {

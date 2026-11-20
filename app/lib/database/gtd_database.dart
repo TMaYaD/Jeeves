@@ -204,7 +204,7 @@ class GtdDatabase extends _$GtdDatabase {
   /// build refuses it: opening it would relabel the file with a version it
   /// does not understand, and the newer build would then find a store it
   /// believes is old.
-  static const int supportedSchemaVersion = 11;
+  static const int supportedSchemaVersion = 12;
 
   /// Completes with the [OpeningDetails] of this store's one open.
   ///
@@ -408,6 +408,18 @@ class GtdDatabase extends _$GtdDatabase {
                 .get();
             if (!tables.any((row) => row.read<String>('name') == 'sprints')) {
               await m.createTable(sprints);
+            }
+          }
+          // v12 (issue #923): `actions.timeboxed`, whether the estimate is a
+          // limit rather than a guess. A nullable `ADD COLUMN` — no table
+          // rebuild, every existing row reads NULL ("not Timeboxed"), nothing
+          // is lost. Guarded on the column's absence like v7.
+          if (from < 12) {
+            final existing = await m.database
+                .customSelect('PRAGMA table_info(actions)')
+                .get();
+            if (!existing.any((row) => row.read<String>('name') == 'timeboxed')) {
+              await m.addColumn(actions, actions.timeboxed);
             }
           }
         }),

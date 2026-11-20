@@ -10,7 +10,7 @@ Format: `- <date>: Instinct: X. Here: Y — <why>.`
 - 2026-06-11: Instinct: debug a stale UI by reading provider/widget code. Here: query the on-device database first — it splits persistence bugs from watcher bugs in one step (procedure: docs/TESTING.md § Inspecting the on-device database).
 - 2026-06-30: Instinct: hold a troublesome dependency by excluding the package from its Dependabot group. Here: "block the whole package" ≠ "block only the bad versions" — `exclude-patterns` stopped ALL file_picker updates (11.x patches included), not just the 12.0.0 betas. Holds must be surgical version ranges.
 - 2026-08-31: Instinct: Flutter's Gradle plugin printing "Your project is configured to compile against Android SDK X, but the following plugin(s) require to be compiled against a higher Android SDK version" means the build fails. Here: `detectLowCompileSdkVersionOrNdkVersion` only *logs* it — AGP 9's `checkAarMetadata` is what made the compileSdk half fatal, and the ndkVersion half still builds green on a mismatch. Read the exit code, not the log level.
-- 2026-07-16: Instinct: de-risk an epic by recommending a dependency be split out. Here: check what an existing ritual step already delivers first — the Day Check-in time question is the manual stand-in for calendar whitespace, so a calendar-less timeline duplicates shipped value; the integration IS the increment (#35 grilling).
+- 2026-07-16: Instinct: de-risk an epic by recommending a dependency be split out. Here: check what an existing ritual step already delivers first — the Day Check time question is the manual stand-in for calendar whitespace, so a calendar-less timeline duplicates shipped value; the integration IS the increment (#35 grilling).
 - 2026-07-16: Instinct: pass `gh` issue/PR bodies inline via `--body "..."`. Here: zsh command-substitutes unescaped backticks inside double quotes, so code spans silently vanish — use `--body-file` for any body containing them.
 
 ## 2026-07-16 (design pass restyle)
@@ -121,3 +121,6 @@ Format: `- <date>: Instinct: X. Here: Y — <why>.`
 
 ## 2026-11-18 (#989 — one refused op, one row)
 - 2026-11-18: Instinct: a dedupe is a read followed by an insert, and the read is what makes the second insert unnecessary. Here: the read and the insert were two separate steps, so two pulls that fetched the same op both read "no such row" and both inserted (#989) — a dedupe that is not one unit is not a dedupe, and the unit has to be the *whole* read-and-insert.
+
+## 2026-11-18 (#980 — the member directory after a relaunch)
+- 2026-11-18: Instinct: state a pull fills in order needs no rebuild, because the pull fills it again. Here: the pull cursor is stored and the state was not, so a relaunch never re-pulled the registrations and every peer's key was gone (#980) — anything learned only from pulled ops needs a restore from the stored log at assembly.

@@ -8,7 +8,7 @@ Realistic goals a first-time user would attempt. Each goal is exercised by a sep
 3. Clarify an inbox item into an Outcome with a plan of several Actions rather than a single one.
 
 ## Planning & Daily Ritual
-4. Plan today using the Daily Planning ritual (energy check-in → review → estimates → summary).
+4. Plan today using the Daily Planning ritual (energy check → review → estimates → summary).
 5. Multi-select several Next during planning review and pull them into today in one gesture.
 6. Re-clarify a stale task (aged `last_clarified_at`) via the Daily Planning review step.
 7. Change planning time so "today" rolls over at a different hour.

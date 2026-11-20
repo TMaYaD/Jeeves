@@ -4,34 +4,122 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../database/gtd_database.dart';
 import '../providers/tags_provider.dart';
 
-/// Displays the current project and opens a dialog to change it.
+/// The words and the mark the picker shows for one tag type.
+class _PickerCopy {
+  const _PickerCopy({
+    required this.emptyLabel,
+    required this.selectTitle,
+    required this.removeLabel,
+    required this.newLabel,
+    required this.nameHint,
+    required this.icon,
+    required this.rowIcon,
+  });
+
+  /// What the closed picker reads when nothing is assigned.
+  final String emptyLabel;
+
+  /// The dialog's title.
+  final String selectTitle;
+
+  /// The row that clears the assignment.
+  final String removeLabel;
+
+  /// The button that creates a tag of this type.
+  final String newLabel;
+
+  /// The hint of the name field.
+  final String nameHint;
+
+  /// The mark in front of the closed picker.
+  final IconData icon;
+
+  /// The mark in front of one row of the dialog.
+  final IconData rowIcon;
+}
+
+/// The copy for the tag types the app offers today. A type with no entry
+/// falls back to its own name, capitalised.
+const _kPickerCopyByType = <String, _PickerCopy>{
+  'project': _PickerCopy(
+    emptyLabel: 'No project',
+    selectTitle: 'Select project',
+    removeLabel: 'Remove project',
+    newLabel: 'New project',
+    nameHint: 'Project name',
+    icon: Icons.folder_outlined,
+    rowIcon: Icons.folder,
+  ),
+  // The Area's mark is provisional: the design boards that fix it have not
+  // reached engineering yet.
+  'area': _PickerCopy(
+    emptyLabel: 'No Area',
+    selectTitle: 'Select Area',
+    removeLabel: 'Remove Area',
+    newLabel: 'New Area',
+    nameHint: 'Area name',
+    icon: Icons.explore_outlined,
+    rowIcon: Icons.explore,
+  ),
+};
+
+_PickerCopy _copyFor(String tagType) {
+  final known = _kPickerCopyByType[tagType];
+  if (known != null) return known;
+  final label = tagType.isEmpty
+      ? 'tag'
+      : '${tagType[0].toUpperCase()}${tagType.substring(1)}';
+  return _PickerCopy(
+    emptyLabel: 'No $label',
+    selectTitle: 'Select $label',
+    removeLabel: 'Remove $label',
+    newLabel: 'New $label',
+    nameHint: '$label name',
+    icon: Icons.sell_outlined,
+    rowIcon: Icons.sell_outlined,
+  );
+}
+
+/// Displays the tag of one [tagType] and opens a dialog to change it.
+///
+/// It is the Outcome Project row today; the tag type decides which tags it
+/// offers and how it reads, so a habit's Area reuses it unchanged.
 class ProjectPickerWidget extends ConsumerWidget {
   const ProjectPickerWidget({
     super.key,
-    required this.currentProjectTag,
+    required this.currentTag,
     required this.onAssign,
     required this.onClear,
     this.customChild,
+    this.tagType = 'project',
   });
 
-  /// The currently assigned project tag, or null if none.
-  final Tag? currentProjectTag;
+  /// The assigned tag of [tagType], or null if none.
+  final Tag? currentTag;
 
-  /// Called with the selected [Tag] when the user picks or creates a project.
+  /// Called with the selected [Tag] when the user picks or creates a tag.
   final ValueChanged<Tag> onAssign;
 
-  /// Called when the user removes the project.
+  /// Called when the user removes the tag.
   final VoidCallback onClear;
 
   /// Optional custom child widget to display instead of the default styled container.
   final Widget? customChild;
 
+  /// The tag type this picker chooses among (`project`, `area`, …).
+  final String tagType;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final projectsAsync = ref.watch(projectTagsProvider);
+    final copy = _copyFor(tagType);
+    // The project rows keep their own provider, so every Outcome surface
+    // reads exactly the tags it read before the picker grew a tag type.
+    final tagsAsync = tagType == 'project'
+        ? ref.watch(projectTagsProvider)
+        : ref.watch(tagsByTypeProvider(tagType));
 
     return InkWell(
-      onTap: () => _showPicker(context, ref, projectsAsync.asData?.value ?? []),
+      onTap: () => _showPicker(context, ref, tagsAsync.asData?.value ?? []),
       borderRadius: BorderRadius.circular(8),
       child: customChild ??
           Container(
@@ -42,14 +130,13 @@ class ProjectPickerWidget extends ConsumerWidget {
             ),
             child: Row(
               children: [
-                const Icon(Icons.folder_outlined,
-                    size: 18, color: Color(0xFF6B7280)),
+                Icon(copy.icon, size: 18, color: const Color(0xFF6B7280)),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    currentProjectTag?.name ?? 'No project',
+                    currentTag?.name ?? copy.emptyLabel,
                     style: TextStyle(
-                      color: currentProjectTag != null
+                      color: currentTag != null
                           ? const Color(0xFF1A1A2E)
                           : const Color(0xFF9CA3AF),
                     ),
@@ -65,7 +152,7 @@ class ProjectPickerWidget extends ConsumerWidget {
   Future<void> _showPicker(
     BuildContext context,
     WidgetRef ref,
-    List<Tag> projects,
+    List<Tag> tags,
   ) async {
     // Read before the dialog await: the picker (e.g. in a bulk-selection bar)
     // can be disposed while the dialog is open, which invalidates `ref`.
@@ -73,8 +160,9 @@ class ProjectPickerWidget extends ConsumerWidget {
     final result = await showDialog<_ProjectPickerResult>(
       context: context,
       builder: (ctx) => _ProjectPickerDialog(
-        projects: projects,
-        currentId: currentProjectTag?.id,
+        tags: tags,
+        currentId: currentTag?.id,
+        copy: _copyFor(tagType),
       ),
     );
     if (result == null) return;
@@ -83,7 +171,7 @@ class ProjectPickerWidget extends ConsumerWidget {
     } else if (result.tag != null) {
       onAssign(result.tag!);
     } else if (result.newName != null) {
-      final tag = await tagNotifier.createTag(result.newName!, 'project');
+      final tag = await tagNotifier.createTag(result.newName!, tagType);
       onAssign(tag);
     }
   }
@@ -107,9 +195,14 @@ class _ProjectPickerResult {
 }
 
 class _ProjectPickerDialog extends StatefulWidget {
-  const _ProjectPickerDialog({required this.projects, this.currentId});
+  const _ProjectPickerDialog({
+    required this.tags,
+    required this.copy,
+    this.currentId,
+  });
 
-  final List<Tag> projects;
+  final List<Tag> tags;
+  final _PickerCopy copy;
   final String? currentId;
 
   @override
@@ -117,26 +210,26 @@ class _ProjectPickerDialog extends StatefulWidget {
 }
 
 class _ProjectPickerDialogState extends State<_ProjectPickerDialog> {
-  final _newProjectController = TextEditingController();
+  final _newTagController = TextEditingController();
   bool _creatingNew = false;
 
   @override
   void dispose() {
-    _newProjectController.dispose();
+    _newTagController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Select project'),
+      title: Text(widget.copy.selectTitle),
       content: SizedBox(
         width: double.maxFinite,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Project list in a bounded scrollable area so the dialog does not
-            // overflow when the project count grows beyond the viewport.
+            // Tag list in a bounded scrollable area so the dialog does not
+            // overflow when the tag count grows beyond the viewport.
             ConstrainedBox(
               constraints: BoxConstraints(
                 maxHeight: MediaQuery.sizeOf(context).height * 0.4,
@@ -148,21 +241,21 @@ class _ProjectPickerDialogState extends State<_ProjectPickerDialog> {
                     if (widget.currentId != null)
                       ListTile(
                         leading: const Icon(Icons.clear),
-                        title: const Text('Remove project'),
+                        title: Text(widget.copy.removeLabel),
                         onTap: () => Navigator.of(context)
                             .pop(const _ProjectPickerResult.none()),
                       ),
-                    for (final p in widget.projects)
+                    for (final tag in widget.tags)
                       ListTile(
                         leading: Icon(
-                          Icons.folder,
-                          color: p.id == widget.currentId
+                          widget.copy.rowIcon,
+                          color: tag.id == widget.currentId
                               ? Theme.of(context).colorScheme.primary
                               : null,
                         ),
-                        title: Text(p.name),
+                        title: Text(tag.name),
                         onTap: () => Navigator.of(context)
-                            .pop(_ProjectPickerResult.select(p)),
+                            .pop(_ProjectPickerResult.select(tag)),
                       ),
                   ],
                 ),
@@ -172,11 +265,11 @@ class _ProjectPickerDialogState extends State<_ProjectPickerDialog> {
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: TextField(
-                  controller: _newProjectController,
+                  controller: _newTagController,
                   autofocus: true,
-                  decoration: const InputDecoration(
-                    hintText: 'Project name',
-                    border: OutlineInputBorder(),
+                  decoration: InputDecoration(
+                    hintText: widget.copy.nameHint,
+                    border: const OutlineInputBorder(),
                     contentPadding:
                         EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   ),
@@ -192,7 +285,7 @@ class _ProjectPickerDialogState extends State<_ProjectPickerDialog> {
             else
               TextButton.icon(
                 icon: const Icon(Icons.add),
-                label: const Text('New project'),
+                label: Text(widget.copy.newLabel),
                 onPressed: () => setState(() => _creatingNew = true),
               ),
           ],
@@ -206,7 +299,7 @@ class _ProjectPickerDialogState extends State<_ProjectPickerDialog> {
         if (_creatingNew)
           FilledButton(
             onPressed: () {
-              final name = _newProjectController.text.trim();
+              final name = _newTagController.text.trim();
               if (name.isNotEmpty) {
                 Navigator.of(context)
                     .pop(_ProjectPickerResult.create(name));

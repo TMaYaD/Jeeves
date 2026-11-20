@@ -231,6 +231,7 @@ void main() {
       );
       await _pumpFrames(tester, frames: 5);
 
+      expect(find.text('PROJECT'), findsNothing);
       expect(find.text('LABELS'), findsNothing);
       expect(find.byType(ProjectPickerWidget), findsNothing);
       expect(find.byType(ContextTagPickerWidget), findsNothing);
@@ -296,6 +297,7 @@ void main() {
       ));
       await _pumpFrames(tester, frames: 5);
 
+      expect(find.text('PROJECT'), findsOneWidget);
       expect(find.text('LABELS'), findsOneWidget);
       expect(find.byType(ProjectPickerWidget), findsOneWidget);
       expect(find.byType(ContextTagPickerWidget), findsOneWidget);

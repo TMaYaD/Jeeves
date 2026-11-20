@@ -24,13 +24,11 @@ library;
 import 'dart:math';
 
 import '../database/gtd_database.dart';
-import 'control_payload.dart' show zeroPrevControlHash;
 import 'device_key_store.dart';
 import 'enrolment.dart';
 import 'domain_projector.dart';
 import 'domain_reconciler.dart';
 import 'enrolment_state.dart';
-import 'envelope.dart' show sameBytes;
 import 'hlc.dart';
 import 'host/sync_host_service.dart';
 import 'ids.dart';
@@ -73,6 +71,12 @@ class SyncStack {
   /// transport until a ceremony (or a later #553 slice that persists the token)
   /// gives it one. Every read the ceremony surface makes is therefore a local
   /// read.
+  ///
+  /// **The directory of other devices' keys is restored here**, from the
+  /// registrations this device already verified and applied — the applied
+  /// control log, which outlives the process. The pull cursor outlives it too,
+  /// so without that restore a relaunched device would never be served those
+  /// registrations again and would refuse every change from another device.
   static Future<SyncStack> assemble({
     required String userId,
     required SyncDatabase database,
@@ -149,6 +153,12 @@ class SyncStack {
       ..projector = projector
       ..reconciler = reconciler
       ..host = host;
+    // The directory of other devices' keys is restored here, from the
+    // registrations this device already verified and applied. It lives only in
+    // memory and the pull cursor outlives the process, so a relaunch would
+    // otherwise never be served those registrations again — and every change
+    // from another device would be refused as `member_not_chained_to_root`.
+    await defaultClient.restoreChainedMembersFromAppliedControlLog();
 
     // One client per Workspace over the *same* store, identity, clock and
     // member directory: a device is two Workspaces of one User, not two devices.
@@ -176,6 +186,10 @@ class SyncStack {
             ..reconciler = reconciler
             ..host = host,
       );
+      // The same restore the default client got, and for the same reason: a
+      // Workspace client built after a relaunch has the same empty directory
+      // and the same stored cursor.
+      await scoped.restoreChainedMembersFromAppliedControlLog();
       // **Lazily, on every call, and never at construction.** The ceremony
       // reaches this factory twice at different points of its own progress:
       // once at step 2 (`_writeEscrowSlot`) while no member credential exists
@@ -274,16 +288,20 @@ class SyncStack {
   /// controls to show. The reads and the
   /// derivation are here because two copies of either would be free to disagree,
   /// and the lifecycle's answer has to be the one the screen shows.
+  ///
+  /// A Workspace counts only when **this device's own registration** is in its
+  /// applied control log. A joining device applies the founder's genesis and
+  /// Grant as soon as it pulls, so a non-empty control log says the Workspace
+  /// exists — not that this device may claim it.
   Future<EnrolmentCeremonyStatus> readEnrolmentStatus() async {
-    final founded = <String>[];
+    final registered = <String>[];
     for (final workspaceId in workspaceIds) {
       final client = await workspaceClientFactory(workspaceId);
-      final head = await client.appliedControlHead();
-      if (!sameBytes(head, zeroPrevControlHash)) founded.add(workspaceId);
+      if (await client.ownRegistrationApplied()) registered.add(workspaceId);
     }
     return deriveEnrolmentCeremonyStatus(
       workspaceIds: workspaceIds,
-      foundedWorkspaceIds: founded,
+      registeredWorkspaceIds: registered,
       storedMemberId: (await keyStore.read(defaultClient.workspaceId))?.memberId,
       pinnedRootPk: await defaultClient.pinnedRootPk(),
       highestEscrowVersionSeen: await defaultClient.highestEscrowVersionSeen(),

@@ -10,6 +10,16 @@
 /// after that commit is the row deleted. A crash between the two commits replays
 /// the row: the merge is idempotent and `change_id` is a unique key on the
 /// sequence, so the replay leaves one entry.
+///
+/// That same transaction records a change merged under a member id in
+/// `unauthored_changes`: the record and the merge commit together, so no clock
+/// can name a member without either an op or a record. A row leaves that table
+/// when the op-log bridge has authored the change or handed it back.
+///
+/// **The bridge is handed the record, not the merge.** A change that still
+/// needs an op is exactly a change in that table, so the record is what the
+/// bridge is given — at the start of the process, for whatever a killed process
+/// left behind, and after every drain, for what it has just merged.
 library;
 
 import 'dart:async';
@@ -75,11 +85,49 @@ class SyncHostService implements SyncHost, OutboxDrainer {
   final Map<String, SyncPlugin> _plugins = <String, SyncPlugin>{};
   final Map<String, Future<void>> _deliveryTails = <String, Future<void>>{};
 
-  /// Load the device identity and replay whatever the outbox still holds — the
-  /// crash replay.
+  /// The highest `unauthored_changes` id this process has already handed to the
+  /// bridge.
+  ///
+  /// A high-water mark, not a cursor: a record stays in the table until the
+  /// bridge settles it, so the id is what says "already handed", and the bridge
+  /// is never handed the same change twice in one process.
+  int _lastHandedUnauthoredId = 0;
+
+  /// Load the device identity, hand the bridge whatever a killed process left
+  /// behind, and replay whatever the outbox still holds — the crash replay.
   Future<void> start() async {
     _deviceNodeId = (await readClockIdentity(_domain)).deviceNodeId;
+    await _handUnauthoredToBridge();
     await drain();
+  }
+
+  /// Hand the bridge every recorded change it has not been handed in this
+  /// process, oldest first. At start that is whatever a killed process left.
+  ///
+  /// The record is the right thing to hand: a change the device made under a
+  /// member id still needs an op, and a change it made under its own node id
+  /// never will. A failure is the bridge's to contain — the record stays where
+  /// it is, and the next launch hands it over again.
+  Future<void> _handUnauthoredToBridge() async {
+    final listener = localChangeListener;
+    if (listener == null) return;
+    final rows = await _sync.customSelect(
+      'SELECT id, change_json FROM unauthored_changes WHERE id > ? ORDER BY id',
+      variables: [Variable<int>(_lastHandedUnauthoredId)],
+    ).get();
+    if (rows.isEmpty) return;
+    _lastHandedUnauthoredId = rows.last.read<int>('id');
+    try {
+      await listener([
+        for (final row in rows)
+          Change.fromJson(
+            (jsonDecode(row.read<String>('change_json')) as Map)
+                .cast<String, Object?>(),
+          ),
+      ]);
+    } on Object catch (error) {
+      debugPrint('sync host: op-log bridge failed — $error');
+    }
   }
 
   // --- Seeding ---------------------------------------------------------------
@@ -110,7 +158,8 @@ class SyncHostService implements SyncHost, OutboxDrainer {
   // --- Local writes ----------------------------------------------------------
 
   /// Merge every outbox row into merge state, in row order, then project the
-  /// touched entities, notify the bridge and trigger delivery. Serialised.
+  /// touched entities, hand the bridge the changes it still owes and trigger
+  /// delivery. Serialised.
   @override
   Future<void> drain() {
     final run = _drainTail.then((_) => _drainOnce());
@@ -180,14 +229,10 @@ class SyncHostService implements SyncHost, OutboxDrainer {
         storageError ??= error;
       }
     }
-    final listener = localChangeListener;
-    if (listener != null && merged.isNotEmpty) {
-      try {
-        await listener(merged);
-      } on Object catch (error) {
-        debugPrint('sync host: op-log bridge failed — $error');
-      }
-    }
+    // The bridge is handed the recorded changes, not the merged ones: a change
+    // the device made under its own node id never needs an op, so it is not
+    // recorded and not handed over.
+    await _handUnauthoredToBridge();
     if (merged.isNotEmpty) _deliverInBackground();
     if (storageError != null) throw storageError;
   }
@@ -215,8 +260,48 @@ class SyncHostService implements SyncHost, OutboxDrainer {
             [changeId, source, jsonEncode(change.toJson())],
           );
         }
+        await _recordUnauthored(change, changeId, source);
         return affected;
       });
+
+  /// Record a merged change that still needs an op.
+  ///
+  /// A local write made while the device was signed in carries the member id of
+  /// that session. The op-log bridge authors it into the log, and until it has,
+  /// the change lives only in merge state — so a process killed in that window
+  /// loses it, and the next launch finds no trace of a change that still needs
+  /// an op. The record is written in the merge's own transaction, so the two
+  /// commit together: no clock can name a member without either an op or a
+  /// record.
+  ///
+  /// A change this device made under its own node id is left out: no op will
+  /// ever carry it, and every path that reads such a change looks for the
+  /// device node id.
+  Future<void> _recordUnauthored(
+    Change change,
+    String changeId,
+    String source,
+  ) async {
+    if (source != 'local') return;
+    final clock = change.highestClock;
+    if (clock == null) return;
+    final node = _deviceNodeId ?? (await readClockIdentity(_domain)).deviceNodeId;
+    if (clock.memberIdHex == node) return;
+    await _sync.customStatement(
+      'INSERT OR IGNORE INTO unauthored_changes '
+      '(change_id, collection, entity_id, member_id_hex, wall_ms, counter, change_json) '
+      'VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [
+        changeId,
+        change.collection,
+        change.entityId,
+        clock.memberIdHex,
+        clock.wallMs,
+        clock.counter,
+        jsonEncode(change.toJson()),
+      ],
+    );
+  }
 
   Future<bool> _hasCursors() async =>
       (await _sync.customSelect('SELECT 1 FROM plugin_cursors LIMIT 1').get())
@@ -225,7 +310,9 @@ class SyncHostService implements SyncHost, OutboxDrainer {
   // --- SyncHost --------------------------------------------------------------
 
   @override
-  Future<void> applyRemote(String sourcePluginId, List<Change> changes) async {
+  Future<List<Change>> applyRemote(
+      String sourcePluginId, List<Change> changes) async {
+    final refused = <Change>[];
     final touched = <AffectedEntity>{};
     Object? storageError;
     for (final change in changes) {
@@ -240,8 +327,10 @@ class SyncHostService implements SyncHost, OutboxDrainer {
         ));
       } on SyncRejection catch (rejection) {
         // One bad change must not stall the batch or leave what merged
-        // unprojected; a redelivery would refuse it again.
+        // unprojected; a redelivery would refuse it again. It is reported to
+        // the caller, so a plugin can tell that its content was not taken.
         debugPrint('sync host: refused remote change from $sourcePluginId — $rejection');
+        refused.add(change);
         continue;
       } on Object catch (error) {
         storageError = error;
@@ -260,6 +349,7 @@ class SyncHostService implements SyncHost, OutboxDrainer {
       _deliverInBackground();
     }
     if (storageError != null) throw storageError;
+    return refused;
   }
 
   /// Run the convergence passes over what a projection changed, containing any
@@ -282,38 +372,126 @@ class SyncHostService implements SyncHost, OutboxDrainer {
         return byCollection != 0 ? byCollection : a.entityId.compareTo(b.entityId);
       });
     for (final entity in entities) {
-      yield await _readChange(entity.collection, entity.entityId);
+      yield await mergedEntity(entity.collection, entity.entityId);
     }
   }
 
+  @override
+  Future<Change> mergedEntity(String collection, String entityId) async {
+    final state = await _readState(collection, entityId);
+    return _effectiveChange(collection, entityId, state);
+  }
+
+  /// The entity's merged state, with its **stored** tombstone.
+  ///
+  /// This is the entity's history, not its visibility: a tombstone stays on
+  /// record, and an entity a newer field revived still carries the tombstone
+  /// that deleted it. The op log reads the tombstone this way.
   Future<Change> _readChange(String collection, String entityId) async {
-    final fieldRows = await _sync.customSelect(
-      'SELECT f.field AS field, f.value_json AS value_json, '
-      'c.wall_ms AS wall_ms, c.counter AS counter, c.member_id_hex AS member_id_hex '
-      'FROM reduced_fields f JOIN field_clocks c '
-      'ON c.collection = f.collection AND c.entity_id = f.entity_id AND c.field = f.field '
-      'WHERE f.collection = ? AND f.entity_id = ? ORDER BY f.field',
-      variables: [Variable<String>(collection), Variable<String>(entityId)],
-    ).get();
-    final tombstoneRow = await (_sync.select(_sync.rowTombstones)
-          ..where((row) =>
-              row.collection.equals(collection) & row.entityId.equals(entityId)))
-        .getSingleOrNull();
+    final state = await _readState(collection, entityId);
     return Change(
       collection: collection,
       entityId: entityId,
-      fields: {
-        for (final row in fieldRows)
-          row.read<String>('field'): ClockedValue(
-            jsonDecode(row.read<String>('value_json')),
-            Hlc(row.read<int>('wall_ms'), row.read<int>('counter'),
-                row.read<String>('member_id_hex')),
-          ),
-      },
-      tombstone: tombstoneRow == null
-          ? null
-          : Hlc(tombstoneRow.wallMs, tombstoneRow.counter, tombstoneRow.memberIdHex),
+      fields: state.fields,
+      tombstone: state.tombstone,
     );
+  }
+
+  /// The entity's merged state, with the tombstone the host's own rule makes
+  /// **effective**.
+  ///
+  /// The rule is the merge core's, and the SQL in `merge_state.dart` reads it
+  /// the same way: a field whose clock is newer than the tombstone is live and
+  /// revives the entity. So an entity that was deleted and then written again
+  /// is live again, and its tombstone is history rather than visibility.
+  ///
+  /// The fields are every field the host holds, live or not: a deleted
+  /// entity's hidden values are what a plugin needs to preserve what the
+  /// entity held.
+  Change _effectiveChange(
+    String collection,
+    String entityId,
+    ({Map<String, ClockedValue> fields, Hlc? tombstone}) state,
+  ) {
+    final tombstone = state.tombstone;
+    final revived = tombstone != null &&
+        state.fields.values.any((field) => field.hlc > tombstone);
+    return Change(
+      collection: collection,
+      entityId: entityId,
+      fields: state.fields,
+      tombstone: revived ? null : tombstone,
+    );
+  }
+
+  /// One entity's fields and its tombstone, read in **one statement**, so that
+  /// both come from the same snapshot of merge state.
+  ///
+  /// A merge commits a change's fields and its tombstone together, so a read
+  /// that took the fields and the tombstone separately could see one commit's
+  /// fields and another's tombstone: a state the store never held. One
+  /// statement cannot straddle a commit.
+  ///
+  /// The tombstone is the entity's **stored** deletion. Whether the entity is
+  /// live is decided at read time, against it.
+  ///
+  /// An entity the store holds nothing about yields no row at all, and an
+  /// entity whose only trace is its tombstone yields that tombstone: the two
+  /// are different, and the second is not the first.
+  Future<({Map<String, ClockedValue> fields, Hlc? tombstone})> _readState(
+    String collection,
+    String entityId,
+  ) async {
+    final rows = await _sync.customSelect(
+      'SELECT f.field AS field, f.value_json AS value_json, '
+      'c.wall_ms AS wall_ms, c.counter AS counter, c.member_id_hex AS member_id_hex, '
+      't.wall_ms AS tombstone_wall_ms, t.counter AS tombstone_counter, '
+      't.member_id_hex AS tombstone_member_id_hex '
+      'FROM reduced_fields f JOIN field_clocks c '
+      'ON c.collection = f.collection AND c.entity_id = f.entity_id '
+      'AND c.field = f.field '
+      'LEFT JOIN row_tombstones t '
+      'ON t.collection = f.collection AND t.entity_id = f.entity_id '
+      'WHERE f.collection = ? AND f.entity_id = ? '
+      'UNION ALL '
+      'SELECT NULL, NULL, NULL, NULL, NULL, '
+      't.wall_ms, t.counter, t.member_id_hex '
+      'FROM row_tombstones t '
+      'WHERE t.collection = ? AND t.entity_id = ? '
+      'AND NOT EXISTS (SELECT 1 FROM reduced_fields f '
+      'WHERE f.collection = t.collection AND f.entity_id = t.entity_id) '
+      'ORDER BY field',
+      variables: [
+        Variable<String>(collection),
+        Variable<String>(entityId),
+        Variable<String>(collection),
+        Variable<String>(entityId),
+      ],
+    ).get();
+    final fields = <String, ClockedValue>{};
+    Hlc? tombstone;
+    for (final row in rows) {
+      final field = row.readNullable<String>('field');
+      if (field != null) {
+        fields[field] = ClockedValue(
+          jsonDecode(row.read<String>('value_json')),
+          Hlc(
+            row.read<int>('wall_ms'),
+            row.read<int>('counter'),
+            row.read<String>('member_id_hex'),
+          ),
+        );
+      }
+      final tombstoneWallMs = row.readNullable<int>('tombstone_wall_ms');
+      if (tombstoneWallMs != null) {
+        tombstone = Hlc(
+          tombstoneWallMs,
+          row.read<int>('tombstone_counter'),
+          row.read<String>('tombstone_member_id_hex'),
+        );
+      }
+    }
+    return (fields: fields, tombstone: tombstone);
   }
 
   @override
@@ -356,6 +534,72 @@ class SyncHostService implements SyncHost, OutboxDrainer {
   /// [changesStampedBy] for this device's own node id.
   Future<List<Change>> changesStampedByDevice() async => changesStampedBy(
       _deviceNodeId ?? (await readClockIdentity(_domain)).deviceNodeId);
+
+  /// Forget a change the op-log bridge has settled.
+  ///
+  /// The change has been authored into the op log, or refused for good, so the
+  /// record that said it still needed an op has nothing left to say. The match
+  /// is on the **exact** clock — wall time, counter and member id — so a
+  /// change written again since keeps its own record.
+  Future<void> forgetUnauthored(UnauthoredClock settled) async {
+    await _sync.customStatement(
+      'DELETE FROM unauthored_changes WHERE collection = ? AND entity_id = ? '
+      'AND wall_ms = ? AND counter = ? AND member_id_hex = ?',
+      [
+        settled.collection,
+        settled.entityId,
+        settled.clock.wallMs,
+        settled.clock.counter,
+        settled.clock.memberIdHex,
+      ],
+    );
+  }
+
+  /// Re-stamp [unauthored] clocks under this device's own node id.
+  ///
+  /// A change the op-log bridge will never author — the write made before the
+  /// session restore answered "signed out" — is left in merge state with a clock
+  /// that names a member no op carried. The bridge hands that clock back here,
+  /// and it becomes the device's own: the rebuild from the op log, the
+  /// signed-out upload and the enrolment upload all look for the device node id.
+  ///
+  /// The match is on the **exact** clock — wall time, counter and member id —
+  /// so a field written again since, or a change an account has already claimed,
+  /// is left alone. The value, the wall time and the counter do not change, so
+  /// nothing is projected.
+  ///
+  /// Called from inside a drain: it opens its own sync-store transaction and
+  /// never goes through [drain].
+  Future<void> restampUnauthoredClocksAsDevice(
+      List<UnauthoredClock> unauthored) async {
+    final node = _deviceNodeId ?? (await readClockIdentity(_domain)).deviceNodeId;
+    final foreign = [
+      for (final entry in unauthored)
+        if (entry.clock.memberIdHex != node) entry,
+    ];
+    if (foreign.isEmpty) return;
+    await _sync.transaction(() async {
+      for (final entry in foreign) {
+        for (final table in const ['field_clocks', 'row_tombstones']) {
+          await _sync.customStatement(
+            'UPDATE $table SET member_id_hex = ? WHERE collection = ? AND entity_id = ? '
+            'AND wall_ms = ? AND counter = ? AND member_id_hex = ?',
+            [node, entry.collection, entry.entityId, entry.clock.wallMs,
+                entry.clock.counter, entry.clock.memberIdHex],
+          );
+        }
+        // The change is the device's own now, so it no longer needs an op to be
+        // authored: its record leaves with the re-stamp, in the same
+        // transaction.
+        await _sync.customStatement(
+          'DELETE FROM unauthored_changes WHERE collection = ? AND entity_id = ? '
+          'AND wall_ms = ? AND counter = ? AND member_id_hex = ?',
+          [entry.collection, entry.entityId, entry.clock.wallMs,
+              entry.clock.counter, entry.clock.memberIdHex],
+        );
+      }
+    });
+  }
 
   /// What the device wrote under its own node id after [afterWallMs] that is still
   /// visible, per entity, for upload once an account is back.

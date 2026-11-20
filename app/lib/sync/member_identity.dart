@@ -209,4 +209,19 @@ class MemberDirectory {
     }
     return key;
   }
+
+  /// Whether this directory holds the signing key for [memberId] at [keyId].
+  ///
+  /// The same slot [publicKeyFor] resolves, read without throwing — so a caller
+  /// can ask whether a refusal would be lifted without asking for the key and
+  /// catching the refusal to learn the answer.
+  bool hasSigningKeyFor(String memberId, Uint8List keyId) =>
+      _keys.containsKey(_slot(memberId, keyId));
+
+  /// How many signing keys this directory holds.
+  ///
+  /// A count rather than a flag, because the directory is shared between the
+  /// Workspace clients of one device and is filled from several call sites; a
+  /// count needs no caller to remember to set anything.
+  int get knownSigningKeyCount => _keys.length;
 }
