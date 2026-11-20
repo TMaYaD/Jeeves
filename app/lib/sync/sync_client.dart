@@ -1511,40 +1511,49 @@ class SyncClient {
         // A reducer-guard refusal: honoured verbatim, never re-evaluated.
         continue;
       }
-      if (refused != null && await _refusedForGood(row)) {
-        // The User refused this change for good, and the log still carries the
-        // verdict that refused it. A replay is not a second chance at the
-        // User's decision: however the authorization question comes out this
-        // time, these bytes are not applied.
-        continue;
-      }
-
-      final authorization = view.verdictFor(
-        authorMemberId: header.authorMemberId,
-        opClass: header.opClass,
-        seq: row.seq,
-      );
-      if (authorization != null) {
-        await _stampRefused(row.seq, authorization.reason);
-        continue;
-      }
-      try {
-        affected.addAll(await _reducer.apply(
-          payload,
-          authorMemberIdHex: memberIdToHex(header.authorMemberId),
-        ));
-        // Newly authorized by the corrected view: clear the stale refusal so the
-        // row stops claiming a verdict that no longer stands.
-        if (refused != null) {
-          await _clearRefused(row.seq);
-          await _retireAdmittedRefusal(row, header.authorMemberId);
+      // The question "did the User refuse these bytes for good?" and everything
+      // that follows from the answer happen in one transaction. A rejection is
+      // recorded in a transaction too, so the two are serialized: if the
+      // rejection lands first the change is skipped; if the admission lands
+      // first the refusal is released, and the rejection finds nothing left to
+      // cover.
+      await _db.transaction(() async {
+        if (refused != null && await _refusedForGood(row)) {
+          // The User refused this change for good, and the log still carries
+          // the verdict that refused it. A replay is not a second chance at the
+          // User's decision: however the authorization question comes out this
+          // time, these bytes are not applied.
+          return;
         }
-        await _stampApplied(row.seq);
-      } on SyncRejection catch (rejection) {
-        // A guard that fires on a *fresh* evaluation is recorded as it was the
-        // first time; the clock is not re-consulted for anything already judged.
-        await _stampRefused(row.seq, rejection.reason);
-      }
+
+        final authorization = view.verdictFor(
+          authorMemberId: header.authorMemberId,
+          opClass: header.opClass,
+          seq: row.seq,
+        );
+        if (authorization != null) {
+          await _stampRefused(row.seq, authorization.reason);
+          return;
+        }
+        try {
+          affected.addAll(await _reducer.apply(
+            payload,
+            authorMemberIdHex: memberIdToHex(header.authorMemberId),
+          ));
+          // Newly authorized by the corrected view: clear the stale refusal so
+          // the row stops claiming a verdict that no longer stands.
+          if (refused != null) {
+            await _clearRefused(row.seq);
+            await _retireAdmittedRefusal(row, header.authorMemberId);
+          }
+          await _stampApplied(row.seq);
+        } on SyncRejection catch (rejection) {
+          // A guard that fires on a *fresh* evaluation is recorded as it was
+          // the first time; the clock is not re-consulted for anything already
+          // judged.
+          await _stampRefused(row.seq, rejection.reason);
+        }
+      });
     }
     // A change the User took upstream is applied again here. The wipe above
     // cleared the merge state, and the log cannot rebuild it: the change was
