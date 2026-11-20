@@ -1825,6 +1825,60 @@ void main() {
       expect((await a.client.health()).actionableAlarmCount, 1);
     });
 
+    test('a held change written for another Workspace is left undecided',
+        () async {
+      await peerSession.postOps(
+        workspace.workspaceId,
+        [await _op(workspace, peer, 'one')],
+      );
+      await a.sync();
+      final cursorBefore = await a.cursor();
+
+      // The peer signed this change for a different Workspace, far enough ahead
+      // of its chain here to be held as a gap. It is served at a position the
+      // cursor has already passed.
+      final otherWorkspaceId = _uuid.v4();
+      workspace.clock.advance(10);
+      final foreign = await peer.nextEnvelope(
+        otherWorkspaceId,
+        authorSeq: peer.nextAuthorSeq + 2,
+        advance: false,
+        payloadJson: jsonEncode({
+          'collection': _harnessCollection,
+          'id': _docId(workspace),
+          'fields': {
+            'step': {'v': 'foreign'},
+          },
+          'hlc': [workspace.clock.nowMs, 0, memberIdToHex(peer.memberId)],
+        }),
+      );
+      workspace.server.injectUnchecked(
+        workspace.workspaceId,
+        foreign,
+        atSeq: cursorBefore,
+      );
+      workspace.server.ignoreSinceParameter = true;
+      await a.sync();
+
+      final held = (await a.client.quarantined())
+          .where((row) => row.reason == SyncRejectionReason.authorChainGap.code)
+          .single;
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(gap.resolvedAt, isNull);
+
+      await a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+
+      expect(await _doc(a, workspace), {'step': 'one'});
+      final after = (await a.client.quarantined())
+          .singleWhere((row) => row.id == held.id);
+      expect(after.resolution, isNull);
+      final stillStanding =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(stillStanding.resolvedAt, isNull);
+      expect((await a.client.health()).actionableAlarmCount, 1);
+    });
+
     // --- Keeping ours on a rollback: the upload is in flight ----------------
 
     /// The rollback recipe: the server forgets a write it had acknowledged.
