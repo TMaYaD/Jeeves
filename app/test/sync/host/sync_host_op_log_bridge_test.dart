@@ -175,6 +175,11 @@ void main() {
       await phone.domain.userPreferencesDao.set(_userId, 'theme', '"dark"');
       await phone.stack.defaultClient.flushOutbox();
       await (await phone.preferencesClient).flushOutbox();
+      // The log learns of an upload when the device pulls it back, so the
+      // rebuild below replays what this device wrote instead of racing the
+      // pull that the upload's signal starts.
+      await phone.stack.defaultClient.pull();
+      await (await phone.preferencesClient).pull();
       return phone;
     }
 
