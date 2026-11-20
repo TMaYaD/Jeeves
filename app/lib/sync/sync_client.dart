@@ -3360,9 +3360,12 @@ class SyncClient {
         continue;
       }
       affected.addAll(await _receive(PulledOp(seq: seq, envelope: row.envelope)));
-      await _markReleased(row.id);
       // A control op admitted late does two things the content path gets for
-      // free and the control path does not.
+      // free and the control path does not. Both run **before** the row is
+      // stamped released: the unreleased row is the durable record that they
+      // are owed, so a fault or a kill between here and the stamp makes the next
+      // scan do them again (re-receiving a logged op is a no-op) instead of
+      // dropping the row out of the scan with the obligation unmet.
       if (header.opClass == opClassControl) {
         // Its authority can change the grant verdict of content already judged
         // at a later `seq`; the tail's existing `rebuildFromOpLog` recomputes
@@ -3376,6 +3379,7 @@ class SyncClient {
         // stays held.
         affected.addAll(await _releaseChainSuccessors(header.authorMemberId));
       }
+      await _markReleased(row.id);
     }
     return affected;
   }
