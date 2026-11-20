@@ -10,6 +10,8 @@
 @TestOn('!browser')
 library;
 
+import 'dart:async';
+
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -23,6 +25,39 @@ import '../test_helpers.dart';
 
 const _userId = 'local';
 final _ts = DateTime.utc(2026, 11, 16, 9);
+
+/// A notifier whose estimate write is held until the test lets it go, so a
+/// save can be observed while its write is still in flight. Once released the
+/// write is the real one, against the real in-memory database.
+class _HeldWriteNotifier extends TaskDetailNotifier {
+  _HeldWriteNotifier({
+    required super.db,
+    required super.userId,
+    required super.todoId,
+  });
+
+  final Completer<void> release = Completer<void>();
+  int writeCalls = 0;
+
+  @override
+  Future<bool> setEstimateAndTimeboxed({
+    required String actionId,
+    int? minutes,
+    bool clearEstimate = false,
+    bool? timeboxed,
+    int? estimateIfUnset,
+  }) async {
+    writeCalls++;
+    await release.future;
+    return super.setEstimateAndTimeboxed(
+      actionId: actionId,
+      minutes: minutes,
+      clearEstimate: clearEstimate,
+      timeboxed: timeboxed,
+      estimateIfUnset: estimateIfUnset,
+    );
+  }
+}
 
 void main() {
   setUpAll(configureSqliteForTests);
@@ -266,7 +301,8 @@ void main() {
     expect(action.timeEstimate, 30);
   });
 
-  testWidgets('the sheet cannot be saved twice over', (tester) async {
+  testWidgets('a save with nothing changed cannot be pressed twice over', (
+      tester) async {
     await openSheet(tester, current: 30);
 
     await tester.tap(find.byKey(const Key('estimate_sheet_save')));
@@ -282,8 +318,8 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  testWidgets('a second save does not take the screen below the sheet with '
-      'it', (tester) async {
+  testWidgets('a second save with nothing changed does not take the screen '
+      'below the sheet with it', (tester) async {
     await tester.pumpWidget(twoRouteHarness());
     await tester.tap(find.text('push'));
     await tester.pumpAndSettle();
@@ -301,6 +337,74 @@ void main() {
     await tester.pumpAndSettle();
 
     // The sheet closed once, and the screen below it is still there.
+    expect(find.byKey(const Key('estimate_sheet_save')), findsNothing);
+    expect(find.byKey(const Key('open_sheet')), findsOneWidget);
+  });
+
+  testWidgets('a save with a write in flight disables Save and writes once, '
+      'then closes the sheet once', (tester) async {
+    final held = _HeldWriteNotifier(db: db, userId: _userId, todoId: 't1');
+    notifier = held;
+    await openSheet(tester, current: 30);
+
+    await tester.tap(find.byKey(const Key('estimate_sheet_more')));
+    await tester.pump();
+    final onSave = tester
+        .widget<FilledButton>(find.byKey(const Key('estimate_sheet_save')))
+        .onPressed!;
+    await tester.tap(find.byKey(const Key('estimate_sheet_save')));
+    await tester.pump();
+
+    // The write is suspended: Save is disabled, and a second callback that
+    // was already handed out writes nothing more.
+    expect(held.writeCalls, 1);
+    expect(
+      tester
+          .widget<FilledButton>(find.byKey(const Key('estimate_sheet_save')))
+          .onPressed,
+      isNull,
+    );
+    onSave();
+    await tester.pump();
+    expect(held.writeCalls, 1);
+    expect(find.byKey(const Key('estimate_sheet_save')), findsOneWidget);
+
+    held.release.complete();
+    await tester.runAsync(() => pumpEventQueue());
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('estimate_sheet_save')), findsNothing);
+    expect(held.writeCalls, 1);
+    expect(await storedEstimate(tester), 45);
+  });
+
+  testWidgets('a second save with a write in flight does not take the screen '
+      'below the sheet with it', (tester) async {
+    final held = _HeldWriteNotifier(db: db, userId: _userId, todoId: 't1');
+    notifier = held;
+    await tester.pumpWidget(twoRouteHarness());
+    await tester.tap(find.text('push'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('open_sheet')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('estimate_sheet_more')));
+    await tester.pump();
+    final onSave = tester
+        .widget<FilledButton>(find.byKey(const Key('estimate_sheet_save')))
+        .onPressed!;
+    await tester.tap(find.byKey(const Key('estimate_sheet_save')));
+    await tester.pump();
+    // The second save arrives while the first write is suspended.
+    onSave();
+    await tester.pump();
+
+    held.release.complete();
+    await tester.runAsync(() => pumpEventQueue());
+    await tester.pumpAndSettle();
+
+    // The sheet closed once, and the screen below it is still there.
+    expect(held.writeCalls, 1);
     expect(find.byKey(const Key('estimate_sheet_save')), findsNothing);
     expect(find.byKey(const Key('open_sheet')), findsOneWidget);
   });
