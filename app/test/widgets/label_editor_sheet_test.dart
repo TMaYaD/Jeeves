@@ -172,5 +172,11 @@ void main() {
       find.descendant(of: appliedRow, matching: find.text('@Errands')),
       findsNothing,
     );
+
+    // Unmount inside the body so Drift's close timer fires before the binding
+    // checks for pending timers (docs/TESTING.md, the Drift timer trap).
+    await tester.pumpWidget(const SizedBox());
+    await tester.runAsync(() => pumpEventQueue());
+    await tester.pump(const Duration(milliseconds: 10));
   });
 }
