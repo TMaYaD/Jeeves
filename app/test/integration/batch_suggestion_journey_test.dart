@@ -181,6 +181,37 @@ void main() {
     }
   });
 
+  testWidgets(
+      'Edit removes a member: only the remaining entries are pinned and '
+      'batched, back to back', (tester) async {
+    try {
+      await openNowScreen(tester);
+      await openSuggestion(tester);
+      await tester.tap(find.byKey(const Key('batch_suggestion_edit')));
+      await _pumpFrames(tester);
+      expect(find.text('Whom shall I include, sir?'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('batch_edit_remove_book')));
+      await _pumpFrames(tester);
+      // The removed entry can be added back; it still fits the gap.
+      expect(find.byKey(const Key('batch_edit_add_book')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('batch_edit_accept')));
+      await _pumpFrames(tester);
+
+      final rows = await planRows(tester);
+      expect(rows['call']!.pinnedStartAt?.toUtc(),
+          _sessionStart.add(const Duration(minutes: 45)));
+      expect(rows['text']!.pinnedStartAt?.toUtc(),
+          _sessionStart.add(const Duration(minutes: 55)));
+      expect(rows['call']!.batchId, isNotNull);
+      expect(rows['call']!.batchId, rows['text']!.batchId);
+      expect(rows['book']!.pinnedStartAt, isNull);
+      expect(rows['book']!.batchId, isNull);
+    } finally {
+      await teardownApp(tester);
+    }
+  });
+
   testWidgets('Not today is remembered and the suggestion does not return',
       (tester) async {
     try {

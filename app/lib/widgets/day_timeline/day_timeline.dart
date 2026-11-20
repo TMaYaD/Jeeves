@@ -309,20 +309,30 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
   Future<void> _openBatchSheet() async {
     final suggestion = _batchSuggestion;
     if (suggestion == null) return;
+    final addable = batchAddable(entries: widget.entries, suggestion: suggestion);
     final choice = await showBatchSuggestionSheet(
       context,
       suggestion: suggestion,
       titleFor: (id) => _entryFor(id).title,
       clock: _clock,
+      addable: [
+        for (final entry in addable)
+          (
+            outcomeId: entry.outcomeId,
+            title: entry.title,
+            minutes: entry.estimateMinutes,
+          ),
+      ],
     );
     if (choice == null) return;
     if (choice.isAccepted) {
-      final starts = {
-        for (final member in suggestion.members)
-          if (choice.memberIds.contains(member.outcomeId))
-            member.outcomeId: member.start,
-      };
-      await widget.onAcceptBatch!(starts);
+      // Back to back from the gap's start, in Plan order, whoever was added or
+      // removed.
+      final chosen = [
+        for (final entry in widget.entries)
+          if (choice.memberIds.contains(entry.outcomeId)) entry,
+      ];
+      await widget.onAcceptBatch!(batchMemberStarts(suggestion.gapStart, chosen));
     } else {
       await widget.onDeclineBatch?.call(choice.memberIds);
     }
