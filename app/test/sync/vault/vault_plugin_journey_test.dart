@@ -263,6 +263,68 @@ void main() {
         reason: 'the hand edit is not applied, and the sheet is written back');
   });
 
+  test('a carried value changed inside the block is not taken, and is put back',
+      () async {
+    final a = await _open('a', root);
+    await a.device.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'Plan', userId: _userId);
+    final session = await a.device.domain.focusSessionDao.openSession(
+      userId: _userId,
+      taskIds: [_outcomeId],
+      now: DateTime.utc(2026, 11, 17, 9),
+    );
+    await a.device.domain.focusSessionDao
+        .closeSession(sessionId: session, now: DateTime.utc(2026, 11, 17, 10));
+    await a.device.host!.deliverAll();
+    await a.plugin.rescan();
+
+    final path = (await a.folder.listMarkdownFiles('Sessions')).single;
+    final original = (await a.folder.read(path))!;
+    final page = parsePage(original);
+    final entries = page.block!;
+    final target = entries.firstWhere(
+        (e) => e.hasCarriedValue && e.carriedValue is String && !e.isTombstone);
+    final before = (await a.device.host!.mergedEntity(
+            target.collection, target.entityId))
+        .fields[target.field]!
+        .value;
+
+    // The value is changed inside the block; its digest and clock are not.
+    final tampered = renderPage(PageModel(
+      frontmatter: page.frontmatter,
+      notes: page.notes,
+      checklist: page.checklist,
+      block: [
+        for (final e in entries)
+          if (identical(e, target))
+            BlockEntry(
+              collection: e.collection,
+              entityId: e.entityId,
+              field: e.field,
+              hlc: e.hlc,
+              digest: e.digest,
+              hasCarriedValue: true,
+              carriedValue: '${e.carriedValue}-tampered',
+            )
+          else
+            e,
+      ],
+    ));
+    expect(tampered, isNot(original));
+    await a.folder.writeAtomically(path, tampered);
+    a.device.wall.advance(5000);
+    await a.plugin.rescan();
+
+    final after = (await a.device.host!.mergedEntity(
+            target.collection, target.entityId))
+        .fields[target.field]!
+        .value;
+    expect(after, before,
+        reason: 'a value that is not what the clock stamped is not taken');
+    expect(await a.folder.read(path), original,
+        reason: 'the next write puts the sheet back');
+  });
+
   test('a Label typed into a page becomes a Tag and a link', () async {
     final a = await _open('a', root);
     await a.device.domain.todoDao

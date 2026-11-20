@@ -432,7 +432,10 @@ class VaultPlugin implements SyncPlugin {
     for (final entry in block) {
       if (entry.isTombstone) {
         tombstones['${entry.collection}/${entry.entityId}'] = entry.hlc;
-      } else if (entry.hasCarriedValue) {
+      } else if (entry.hasCarriedValue &&
+          digestOf(entry.carriedValue) == entry.digest) {
+        // A carried value that no longer matches its digest was changed inside
+        // the block: it is not what the clock stamped, so it is not carried.
         carry(entry.collection, entry.entityId, entry.field, entry.carriedValue,
             entry.hlc);
       }
