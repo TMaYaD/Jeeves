@@ -6,7 +6,7 @@
 /// [SyncHost.applyRemote] with the author's clocks untouched, and what it writes
 /// is what [SyncPlugin.deliver] gave it. It reaches the app only through those two.
 ///
-/// Design: `docs/SYNC.md`, "Op-log folder".
+/// Design: `docs/FOLDER_SYNC.md`.
 library;
 
 import 'dart:async';

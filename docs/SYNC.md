@@ -2,7 +2,7 @@
 
 <!-- This document describes the current state of the system. Rewrite sections when they become inaccurate. Do not append change logs. -->
 
-Jeeves is offline-first. Local writes go to the embedded SQLite store immediately, and are replicated between devices by the **op log** — signed ops over the minimal sync server — as soon as the device is enrolled and reachable ([ADR-0026](./adr/0026-minimal-sync-server.md), [ADR-0034](./adr/0034-sync-starts-at-enrolment.md)). Replication runs through the **sync host**, which owns the merge state; the op log and the **vault** are plugins behind it, and one plugin runs at a time (#914). There is one replication engine on the device, and no second (#595).
+Jeeves is offline-first. Local writes go to the embedded SQLite store immediately, and are replicated between devices by the **op log** — signed ops over the minimal sync server — as soon as the device is enrolled and reachable ([ADR-0026](./adr/0026-minimal-sync-server.md), [ADR-0034](./adr/0034-sync-starts-at-enrolment.md)). Replication runs through the **sync host**, which owns the merge state; the op log, the **vault** and the [op-log folder](FOLDER_SYNC.md) are plugins behind it, and one plugin runs at a time (#914). One replication engine runs on the device (#595).
 
 This document is about **merge**: how two devices that wrote concurrently end up agreeing, with the focus on the `user_preferences` synced key-value store, whose keys are the ones where blanket last-write-wins is sometimes the wrong answer.
 
@@ -230,20 +230,6 @@ The ceremony refuses before authoring anything rather than publishing a rotation
 that would strand the Service mid-stream. Revoking the Service is the way
 through.
 
-## Op-log folder
-
-A signed-out device can sync through a folder a file syncer carries, with no server (`app/lib/sync/folder/`). It is a plugin: it carries signed ops and hands them to the host untouched.
-
-- **One writer per file.** `folder.json` names the folder; each device owns `ops/<member id>/` — a `member.json` (public key, label) and numbered `NNNNNN.log` segments it alone appends to. A segment record is a length, a v1 envelope and a 4-byte checksum (`spec/sync/folder_record_vectors.json`); a segment rolls at 1 MiB or 24 hours and is never written again.
-- **Cursors.** Outbound, the host's own cursor plus a local queue of signed records waiting for the file. Inbound, one per paired device: segment, byte offset and the author chain head. A cursor moves only after the host has applied what was read.
-- **Reading.** A short or checksum-failing tail is "not yet arrived": no alarm, picked up on a later scan. A bad signature or a broken chain raises the existing alarm for that author and stops reading them; a chain-valid but refused payload is quarantined and skipped. A segment shorter than the read offset raises `segment_rolled_back`, and a skipped segment raises `author_chain_gap`; both resolve when the files are whole again.
-- **Pairing.** Setup reads a member's `member.json` to show its fingerprint; no operation segment is read from a device until the person has compared key fingerprints on both and paired. A member whose key later changes is refused, not trusted.
-- **Signed, not encrypted.** The folder gives integrity (no forgery; alarms on a broken chain, a rollback and a gap), not confidentiality: anyone who can read the folder can read the data. A rewrite of bytes a reader has already consumed is not detected: it checks that the file is still as long as what it read, not what those bytes say. Encrypting needs a way to share a key without a server — a later `aead_v1` suite on the same wire. A syncer that stops delivering is seen only as staleness.
-- **No downgrade.** A device that is signed in or enrolled never binds or attaches a folder, so a folder is never newly bound by a device that holds Workspace-key data. Turning folder sync off and enrolling later leaves the folder's existing plaintext files in place. The folder is untrusted input: member names are checked as canonical UUIDs before becoming a path, lengths are bounded before any read, and the two JSON files are parsed strictly.
-- **Not built:** unpairing, resetting a device's identity in a folder, compaction, scanning while the app is closed.
-
-**Manual Android runbook** (nothing in CI runs the storage channel): on two devices, turn folder sync on in a folder your syncer carries; confirm the files appear in `ops/`; pair each from the other after comparing fingerprints; edit on each and see both converge. Then pause the syncer on one (cellular counts as connected), edit, confirm the other has not received it, resume, and check it catches up. Confirm a restart resumes without duplicate records.
-
 ## What is asserted, and where
 
 - **Merge semantics**: `app/test/sync/merge_strategy_test.dart`, `app/test/services/user_preferences_conflict_test.dart`, and the golden vectors in `spec/sync/reducer_v1_vectors.json` (shared with the server's Python reducer, so a divergence is caught cross-language).
@@ -251,7 +237,6 @@ A signed-out device can sync through a folder a file syncer carries, with no ser
 - **Device names**: `app/test/sync/device_names_test.dart` (the key, the normaliser, ensure and rename) and `app/test/sync/host/device_name_convergence_test.dart` (two devices through the relay plugin).
 - **Convergence end to end**: `app/test/sync/convergence_test.dart` and `full_day_convergence_test.dart` run two simulated devices through enrol → write → sign → append → pull → verify → reduce and assert byte-identical reduced state.
 - **Projection**: `app/test/sync/projector_view_notify_test.dart` (a reduced-in row reaches the watching queries) and `domain_rebuild_test.dart` (a fresh domain store rebuilt from the log, tombstones included).
-- **Op-log folder**: `app/test/sync/folder/` — a two- and three-device journey over one real directory, one group per acceptance criterion; the refusals (enrolled device, unpaired or forged member, no secrets in the folder); the carrier source scan and the v13→v14 migration. The Android storage channel is compiled by CI and checked by the runbook above only.
 - **One refusal, one row**: `app/test/sync/quarantine_once_test.dart` — two pulls that fetch the same refused op file it once, and two different ops refused at one seq stay two rows.
 - **Unknown-key refusals heal**: `app/test/sync/unchained_refusal_release_test.dart` — a change refused as `member_not_chained_to_root` is re-received once this device knows the author's key, and a key Root never vouched for stays refused.
 - **A removal reaches the peer**: `app/test/sync/dao_capture_contract_test.dart` (each of the task detail's four removal paths describes the drop it makes, in the deletion's own transaction) and `app/test/sync/tag_convergence_test.dart` (a context, a person, the delegate set and the Project removed on one device are each gone on the other after the sync).
