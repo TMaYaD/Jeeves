@@ -728,4 +728,102 @@ void main() {
       expect(await _reArmMarked(a), isEmpty);
     });
   });
+
+  group('a pulled content op is received as one unit (#1031)', () {
+    const userId = 'sim-user';
+    String outcomeId(String label) =>
+        const Uuid().v5(jeevesWorkspaceNamespace, 'atomicity/$label');
+
+    Future<void> authorOutcomeOn(SimDevice device, String id) =>
+        device.domain.todoDao.insertOutcome(
+          id: id,
+          title: 'Outcome $id',
+          userId: userId,
+          now: device.clock.asDateTime,
+        );
+
+    test('a reducer fault after the receipt is logged leaves the op retryable, '
+        'so the next pull applies it (AC2, AC3)', () async {
+      final faults = FaultInjectingInterceptor();
+      final workspace = await SimWorkspace.create(
+        server: server,
+        aSyncStoreInterceptor: faults,
+      );
+      addTearDown(workspace.close);
+      final a = workspace.a;
+      final b = workspace.b;
+      await a.client.pull();
+      final alarmsBefore = (await a.client.integrityAlarms()).length;
+
+      final id = outcomeId('reducer-fault');
+      await authorOutcomeOn(b, id);
+      await b.sync();
+
+      // MergeCore's first write is a `reduced_fields` insert, after the receipt
+      // has been logged.
+      faults.failNextInsertInto('reduced_fields');
+      await expectLater(a.client.pull(), throwsA(isA<SqliteException>()));
+      expect(faults.firedCount, 1);
+
+      await a.client.pull();
+
+      expect(await a.domain.todoDao.getTodo(id), isNotNull,
+          reason: 'the re-served op was reduced, not skipped as already held');
+      final unapplied = await (a.syncStore.select(a.syncStore.opLog)
+            ..where((row) =>
+                row.workspaceId.equals(a.client.workspaceId) &
+                row.appliedAt.isNull() &
+                row.refusedReason.isNull()))
+          .get();
+      expect(unapplied, isEmpty, reason: 'every logged receipt is stamped');
+      expect(await a.client.quarantined(includeReleased: true), isEmpty);
+      expect((await a.client.integrityAlarms()).length, alarmsBefore);
+    });
+
+    test('an op reduced before a later op faults is projected by the next pull '
+        '(AC1)', () async {
+      final faults = FaultInjectingInterceptor();
+      final workspace = await SimWorkspace.create(
+        server: server,
+        aSyncStoreInterceptor: faults,
+      );
+      addTearDown(workspace.close);
+      final a = workspace.a;
+      final b = workspace.b;
+      await a.client.pull();
+
+      int storedOpCount() => server.storedOps
+          .where((op) => op.workspaceId == a.client.workspaceId)
+          .length;
+
+      final first = outcomeId('projected-before-fault');
+      final countBefore = storedOpCount();
+      await authorOutcomeOn(b, first);
+      await b.sync();
+      final firstOutcomeOpCount = storedOpCount() - countBefore;
+      expect(firstOutcomeOpCount, greaterThan(0));
+
+      final second = outcomeId('hits-the-fault');
+      await authorOutcomeOn(b, second);
+      await b.sync();
+
+      // The first Outcome's ops log and reduce; the next op's receipt faults, so
+      // the pull dies before its projection tail.
+      faults.failNthInsertInto('op_log', firstOutcomeOpCount + 1);
+      await expectLater(a.client.pull(), throwsA(isA<SqliteException>()));
+      expect(faults.firedCount, 1);
+      expect(await a.domain.todoDao.getTodo(first), isNull,
+          reason: 'the failed pull never reached its projection tail');
+
+      await a.client.pull();
+
+      expect(await a.domain.todoDao.getTodo(first), isNotNull,
+          reason: 'the reduced-but-unprojected entity was projected next pull');
+      expect(await a.domain.todoDao.getTodo(second), isNotNull);
+      final owed = await (a.syncStore.select(a.syncStore.entitiesAwaitingProjection)
+            ..where((row) => row.workspaceId.equals(a.client.workspaceId)))
+          .get();
+      expect(owed, isEmpty, reason: 'the record is cleared once projected');
+    });
+  });
 }

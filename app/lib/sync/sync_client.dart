@@ -1269,8 +1269,16 @@ class SyncClient {
     }
     // Projection is the tail of the receive order, one pass per batch: an
     // entity touched by three ops in one pull is projected once, from the
-    // reduced state all three produced.
+    // reduced state all three produced. It reads the durable record of reduced
+    // entities as well as this pull's own set, so a change reduced by a pull that
+    // later failed is projected by this one (#1031). The recorded rows are
+    // deleted only after `project` returns.
+    final recorded = projector == null
+        ? const <AffectedEntity>{}
+        : await _entitiesAwaitingProjection();
+    affected.addAll(recorded);
     final touched = await projector?.project(affected);
+    if (recorded.isNotEmpty) await _clearAwaitingProjection(recorded);
     // And the convergence passes run on what it changed. This is the route by
     // which a peer's Tag entity first reaches the domain store, so it is where a
     // duplicate `(name, type)` group is folded and a junction stranded on a
@@ -1278,6 +1286,46 @@ class SyncClient {
     // path — see [DomainReconciler.reconcile].
     if (touched != null) await _reconcileProjected(touched);
     await _stampPullCompleted();
+  }
+
+  /// Record [entities] as reduced and not yet projected, in this Workspace.
+  Future<void> _recordAwaitingProjection(Set<AffectedEntity> entities) async {
+    for (final entity in entities) {
+      await _db.into(_db.entitiesAwaitingProjection).insert(
+            EntitiesAwaitingProjectionCompanion.insert(
+              workspaceId: workspaceId,
+              collection: entity.collection,
+              entityId: entity.entityId,
+            ),
+            mode: InsertMode.insertOrIgnore,
+          );
+    }
+  }
+
+  /// The entities this Workspace reduced and has not yet projected.
+  Future<Set<AffectedEntity>> _entitiesAwaitingProjection() async {
+    final rows = await (_db.select(_db.entitiesAwaitingProjection)
+          ..where((row) => row.workspaceId.equals(workspaceId)))
+        .get();
+    return {
+      for (final row in rows)
+        (collection: row.collection, entityId: row.entityId),
+    };
+  }
+
+  /// Delete exactly the rows [projected] names — by key, never the whole table,
+  /// so a row recorded while projection ran stays.
+  Future<void> _clearAwaitingProjection(Set<AffectedEntity> projected) async {
+    await _db.transaction(() async {
+      for (final entity in projected) {
+        await (_db.delete(_db.entitiesAwaitingProjection)
+              ..where((row) =>
+                  row.workspaceId.equals(workspaceId) &
+                  row.collection.equals(entity.collection) &
+                  row.entityId.equals(entity.entityId)))
+            .go();
+      }
+    });
   }
 
   /// Run the convergence passes over what this batch projected, and **contain any
@@ -1630,43 +1678,67 @@ class SyncClient {
         return const {};
       }
 
-      if (!await _logReceived(pulled, header)) return const {};
+      // Log, authorise, reduce and stamp as **one** transaction, the shape the
+      // control and prune branches already use (#618). Run as separate statements,
+      // a storage fault inside the reducer left the `op_log` row committed with
+      // the cursor unmoved: the re-serve then stopped at "already held" and the op
+      // was never reduced (#1031). Rolled back together, the re-serve takes the
+      // ordinary path. `_refuse` (quarantine row, alarm) and the chain-successor
+      // scan stay **after** the commit, as in the control branch; `_stampRefused`
+      // is part of the receipt and commits with the log row.
+      // `header` is reassigned above, so a closure sees it as nullable; bind the
+      // parsed, non-null value once.
+      final contentHeader = header;
+      SyncRejection? refused;
+      var affected = const <AffectedEntity>{};
+      final logged = await _db.transaction(() async {
+        if (!await _logReceived(pulled, contentHeader)) return false;
 
-      // The authorization stage, between the chain verdict and the reducer
-      // guards. Evaluated at the op's *own* server seq, never against current
-      // control state — see [GrantsView]. A refusal here is #551's
-      // logged-but-refused class: the row above is already written and advances
-      // per-author accounting, so an honest successor is never falsely gapped.
-      final authorization = (await grantsView()).verdictFor(
-        authorMemberId: header.authorMemberId,
-        opClass: header.opClass,
-        seq: pulled.seq,
-      );
-      if (authorization != null) {
-        await _stampRefused(pulled.seq, authorization.reason);
-        await _refuse(pulled, authorization, header);
-        // The chain head advanced, so a quarantined successor may now be valid.
-        return await _releaseChainSuccessors(header.authorMemberId);
-      }
+        // The authorization stage, between the chain verdict and the reducer
+        // guards. Evaluated at the op's *own* server seq, never against current
+        // control state — see [GrantsView]. A refusal here is #551's
+        // logged-but-refused class: the row above is already written and advances
+        // per-author accounting, so an honest successor is never falsely gapped.
+        final authorization = (await grantsView()).verdictFor(
+          authorMemberId: contentHeader.authorMemberId,
+          opClass: contentHeader.opClass,
+          seq: pulled.seq,
+        );
+        if (authorization != null) {
+          await _stampRefused(pulled.seq, authorization.reason);
+          refused = authorization;
+          return true;
+        }
 
-      final affected = <AffectedEntity>{};
-      try {
-        affected.addAll(await _reducer.apply(
-          payload,
-          authorMemberIdHex: memberIdToHex(header.authorMemberId),
-        ));
+        try {
+          affected = await _reducer.apply(
+            payload,
+            authorMemberIdHex: memberIdToHex(contentHeader.authorMemberId),
+          );
+          await _stampApplied(pulled.seq);
+          // Recorded with the reduction, so a pull that fails before its
+          // projection tail still projects this entity on the next pull.
+          await _recordAwaitingProjection(affected);
+        } on SyncRejection catch (rejection) {
+          // Logged-but-refused: the envelope is chain evidence and stays, the
+          // payload never applies, and the row records which guard fired.
+          await _stampRefused(pulled.seq, rejection.reason);
+          refused = rejection;
+        }
+        return true;
+      });
+      if (!logged) return const {};
+      if (refused != null) {
+        await _refuse(pulled, refused!, contentHeader);
+      } else {
+        // After the commit, so a rolled-back apply never advances the clock.
         _clock.receive(payload.hlc);
-        await _stampApplied(pulled.seq);
-      } on SyncRejection catch (rejection) {
-        // Logged-but-refused: the envelope is chain evidence and stays, the
-        // payload never applies, and the row records which guard fired. Handled
-        // here rather than by the outer catch so the release scan below still
-        // runs — the head advanced, so a quarantined successor may now be valid.
-        await _stampRefused(pulled.seq, rejection.reason);
-        await _refuse(pulled, rejection, header);
       }
-      affected.addAll(await _releaseChainSuccessors(header.authorMemberId));
-      return affected;
+      // The head advanced either way, so a quarantined successor may now be valid.
+      return {
+        ...affected,
+        ...await _releaseChainSuccessors(contentHeader.authorMemberId),
+      };
     } on SyncRejection catch (rejection) {
       await _refuse(pulled, rejection, header);
       return const {};

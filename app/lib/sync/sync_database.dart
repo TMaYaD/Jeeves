@@ -524,6 +524,28 @@ class UnauthoredChanges extends Table {
   TextColumn get changeJson => text()();
 }
 
+/// The record that a reduced entity still needs projecting into the domain store
+/// (#1031).
+///
+/// The projector writes a different database, so projection cannot join the
+/// transaction that reduces an op. Written in that same transaction, a pull that
+/// fails — or a process that dies — between the reduction and the projection
+/// leaves a row naming the entity, and the next pull projects it. The row leaves
+/// only after `project` has returned. Projection is idempotent on reduced state,
+/// so a row projected twice is harmless.
+///
+/// Not named `cached_*`: this is not derived from anything. It is the record that
+/// a projection is owed.
+@DataClassName('EntityAwaitingProjectionRow')
+class EntitiesAwaitingProjection extends Table {
+  TextColumn get workspaceId => text()();
+  TextColumn get collection => text()();
+  TextColumn get entityId => text()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {workspaceId, collection, entityId};
+}
+
 @DriftDatabase(
   tables: [
     OpLog,
@@ -546,6 +568,7 @@ class UnauthoredChanges extends Table {
     MergeStateSeeding,
     UnauthoredChanges,
     VaultPageBases,
+    EntitiesAwaitingProjection,
   ],
 )
 class SyncDatabase extends _$SyncDatabase {
@@ -563,9 +586,10 @@ class SyncDatabase extends _$SyncDatabase {
   /// marker (#620); v10 adds the sync host's durable change sequence and its
   /// per-plugin cursors; v11 adds the marker that the pre-existing domain rows were
   /// walked into merge state; v12 adds the record of a merged change that still
-  /// needs an op; v13 adds the vault plugin's private base copies of pages.
+  /// needs an op; v13 adds the vault plugin's private base copies of pages; v14 adds the
+  /// record of a reduced entity that still needs projecting (#1031).
   @override
-  int get schemaVersion => 13;
+  int get schemaVersion => 14;
 
   /// Additive only. A device that already holds a log keeps every byte of it:
   /// each step is `CREATE TABLE`s, an `ADD COLUMN` or a `CREATE INDEX`, and no
@@ -684,6 +708,11 @@ class SyncDatabase extends _$SyncDatabase {
           if (from < 13) {
             // One new table: private copies of vault pages, not user data.
             await migrator.createTable(vaultPageBases);
+          }
+          if (from < 14) {
+            // One new table, nothing altered or backfilled: a device that
+            // predates it owes no projection it could have recorded.
+            await migrator.createTable(entitiesAwaitingProjection);
           }
         },
       );
