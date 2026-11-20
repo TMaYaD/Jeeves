@@ -132,7 +132,7 @@ clocks and merges its own writes, under a random device node id; once enrolled, 
 member id takes over as the tie-break so the wire is unchanged. Clocks stamped under
 the device node id are never ops, so the enrolment upload does not skip them, a
 rebuild from the log carries them across, and an account's later sign-in authors
-those made since its upload completed — creates, edits and deletes, not preferences. See [sync-plugins](proposals/sync-plugins.md).
+those made since its upload completed — creates, edits and deletes, not preferences. A change stamped under a member id that is then never authored — a write made before session restore answered "signed out" — has its clock handed back to the device node id, so the same three paths cover it. A change merged under a member id is kept in the sync store until the op-log bridge has authored it or handed it back, so a process killed in between authors it on the next launch. See [sync-plugins](proposals/sync-plugins.md).
 
 Rows that predate the host are seeded into merge state once per device, before any
 plugin can attach, so `snapshot()` holds the whole local dataset. Seeding inserts
@@ -213,4 +213,5 @@ through.
 - **Convergence end to end**: `app/test/sync/convergence_test.dart` and `full_day_convergence_test.dart` run two simulated devices through enrol → write → sign → append → pull → verify → reduce and assert byte-identical reduced state.
 - **Projection**: `app/test/sync/projector_view_notify_test.dart` (a reduced-in row reaches the watching queries) and `domain_rebuild_test.dart` (a fresh domain store rebuilt from the log, tombstones included).
 - **One refusal, one row**: `app/test/sync/quarantine_once_test.dart` — two pulls that fetch the same refused op file it once, and two different ops refused at one seq stay two rows.
+- **Unknown-key refusals heal**: `app/test/sync/unchained_refusal_release_test.dart` — a change refused as `member_not_chained_to_root` is re-received once this device knows the author's key, and a key Root never vouched for stays refused.
 - **A removal reaches the peer**: `app/test/sync/dao_capture_contract_test.dart` (each of the task detail's four removal paths describes the drop it makes, in the deletion's own transaction) and `app/test/sync/tag_convergence_test.dart` (a context, a person, the delegate set and the Project removed on one device are each gone on the other after the sync).

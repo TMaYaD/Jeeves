@@ -267,7 +267,11 @@ class _OutcomePeekSheetState extends ConsumerState<OutcomePeekSheet> {
                             timeContextChip:
                                 TimeContextChip(outcomeId: widget.todo.id),
                             onEnergyTap: () => showOutcomeEnergyLevelSheet(
-                                context, _notifier, energyLevel),
+                              context,
+                              onSet: (level) => _notifier.setEnergyLevel(level).ignore(),
+                              onClear: () => _notifier.clearEnergyLevel().ignore(),
+                              current: energyLevel,
+                            ),
                             onEstimateTap: () => showOutcomeTimeEstimateSheet(
                               context,
                               _notifier,

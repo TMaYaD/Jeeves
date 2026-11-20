@@ -34,7 +34,7 @@ EnrolmentCeremonyStatus _status(
     EnrolmentCeremonyStatus(
       state: state,
       workspaceIds: const ['workspace-default', 'workspace-preferences'],
-      foundedWorkspaceIds: founded,
+      registeredWorkspaceIds: founded,
       memberId: memberId,
       rootPkFingerprint: state == EnrolmentState.notEnrolled ? null : 'a1b2c3d4',
       escrowVersion: state == EnrolmentState.notEnrolled ? null : 1,

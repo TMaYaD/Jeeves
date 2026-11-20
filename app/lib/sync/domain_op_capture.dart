@@ -44,6 +44,7 @@ import 'collection_codecs.dart' show userPreferencesCollection;
 import 'host/change.dart';
 import 'hlc.dart';
 import 'sync_client.dart';
+import 'sync_rejection.dart';
 
 /// One coalesced domain effect, ready to be authored as an op.
 class CapturedOp {
@@ -420,8 +421,15 @@ enum _CaptureDecision {
 ///   lifecycle runs before it reaches [bind]. While [undecided] every emitted op
 ///   is buffered; [bind] drains the buffer in write order (authoring each, firing
 ///   [onOpAuthored] so the debounced flush is scheduled) before any live op; and
-///   [unbind] discards it. A write landing mid-drain is appended behind the
+///   [unbind] discards it, handing the host-clocked ops it will never author
+///   back to the sync host. A write landing mid-drain is appended behind the
 ///   pending tail, so authoring order always matches domain write order.
+///
+/// * **A settled change is reported.** The sync host keeps a record of every
+///   change that still needs an op, and that record is noise once the op has
+///   been authored or refused for good. The bridge reports each settled change
+///   to [onChangeAuthoredOrRefused] — the authored one and the refused one
+///   alike, and nothing else — so the host can forget it.
 ///
 /// It extends [BufferedDomainOpCapture] rather than reimplementing the buffer, so
 /// scope, coalescing and rollback semantics are the ones every other binding is
@@ -449,6 +457,57 @@ class WorkspaceRoutingOpCapture extends BufferedDomainOpCapture {
   /// op is when [bind] drains it.
   void Function()? onOpAuthored;
 
+  /// Where the changes this bridge will never author are handed back, so the
+  /// sync host can take their clocks back under the device node id.
+  ///
+  /// A change the bridge drops leaves a clock in merge state that names a
+  /// member no op ever carried, and only the host can re-stamp it. Null until
+  /// the host is wired up, which is a bridge that reports nothing.
+  Future<void> Function(List<UnauthoredClock> unauthored)? onChangesLeftUnauthored;
+
+  /// Where a change this bridge has settled is reported, so the sync host can
+  /// forget that it still needs an op.
+  ///
+  /// A change is settled when the wire has taken it or refused it for good:
+  /// either way no op will ever carry it, so the host's record of it has
+  /// nothing left to say. A change the bridge merely *holds* — buffered while
+  /// the enrolment decision is unmade — is not settled, and neither is one
+  /// whose capture failed for a reason that is not a refusal.
+  ///
+  /// Null until the host is wired up, which is a bridge that reports nothing.
+  Future<void> Function(UnauthoredClock settled)? onChangeAuthoredOrRefused;
+
+  /// The tail of the hand-back chain: every report made so far, in order.
+  Future<void> _handBackTail = Future<void>.value();
+
+  /// Completes once every op left unauthored so far has been reported.
+  Future<void> get unauthoredHandedBack => _handBackTail;
+
+  /// Report [ops] as changes this bridge will never author.
+  ///
+  /// Only the host-clocked ones: an op described straight through the seam
+  /// carries no clock, so there is nothing in merge state to take back.
+  ///
+  /// The reports are chained, so one sink call follows another in the order the
+  /// reports were made, and a sink that fails does not strand the ones behind
+  /// it.
+  Future<void> _leaveUnauthored(List<CapturedOp> ops) {
+    final sink = onChangesLeftUnauthored;
+    final clocks = <UnauthoredClock>[
+      for (final op in ops)
+        if (op.clock != null)
+          (collection: op.collection, entityId: op.entityId, clock: op.clock!),
+    ];
+    if (sink == null || clocks.isEmpty) return _handBackTail;
+    return _handBackTail = _handBackTail.then((_) async {
+      try {
+        await sink(clocks);
+      } on Object catch (error) {
+        debugPrint('op-log bridge: handing back unauthored clocks failed — $error');
+      }
+    });
+  }
+
   bool get isBound => _decision == _CaptureDecision.bound;
 
   /// Settle the decision to "author": record the clients, arm [onOpAuthored]
@@ -472,9 +531,15 @@ class WorkspaceRoutingOpCapture extends BufferedDomainOpCapture {
   /// or a call from [_CaptureDecision.undecided], is a no-op beyond clearing.
   /// A scope open across the transition still closes cleanly; its ops are
   /// dropped. A later [bind] authors only the writes made after it.
+  ///
+  /// The host-clocked ops it discards are handed back to the sync host, so
+  /// their clocks stop naming a member no op ever carried. The report is not
+  /// awaited: this stays synchronous, and [unauthoredHandedBack] is how a
+  /// caller waits for it.
   void unbind() {
     _gtdClient = null;
     _preferencesClient = null;
+    unawaited(_leaveUnauthored(List.of(_pending)));
     _pending.clear();
     _decision = _CaptureDecision.silent;
   }
@@ -517,21 +582,52 @@ class WorkspaceRoutingOpCapture extends BufferedDomainOpCapture {
     // whose clock does not name its author. It reaches the log through the
     // enrolment upload instead.
     if (hostClock != null && hostClock.memberIdHex != client.identity.memberIdHex) {
+      // The clock names a member this device cannot author for, so the change
+      // is handed back to the host rather than lost with the member it names.
+      await _leaveUnauthored([op]);
       return;
     }
-    await client.capture(
-      collection: op.collection,
-      entityId: op.entityId,
-      fields: op.fields,
-      tombstone: op.tombstone,
-      clock: hostClock,
-    );
+    try {
+      await client.capture(
+        collection: op.collection,
+        entityId: op.entityId,
+        fields: op.fields,
+        tombstone: op.tombstone,
+        clock: hostClock,
+      );
+    } on SyncRejection {
+      // The wire refused the op for good, so no op will ever carry this
+      // change: it is settled, and the host's record of it has nothing left to
+      // say. The refusal itself still travels to the caller.
+      await _reportSettled(op);
+      rethrow;
+    }
+    await _reportSettled(op);
     onOpAuthored?.call();
   }
 
-  /// The sync host's hand-off: each change the host has merged, in order. A
-  /// refusal is contained per change — the domain write and the host's merge have
-  /// both committed, and sync is not a correctness dependency (ADR-0040).
+  /// Report [op] as settled, so the host can forget that it still needs an op.
+  ///
+  /// Only an op the host clocked: one described straight through the seam
+  /// carries no clock, so there is no record to forget. A sink that fails is
+  /// contained — the change is settled whatever the host does with the report,
+  /// and a failed report must not lose the op.
+  Future<void> _reportSettled(CapturedOp op) async {
+    final clock = op.clock;
+    if (clock == null) return;
+    final sink = onChangeAuthoredOrRefused;
+    if (sink == null) return;
+    try {
+      await sink((collection: op.collection, entityId: op.entityId, clock: clock));
+    } on Object catch (error) {
+      debugPrint('op-log bridge: reporting a settled change failed — $error');
+    }
+  }
+
+  /// The sync host's hand-off: each change the host still needs an op for, in
+  /// order. A refusal is contained per change — the domain write and the host's
+  /// merge have both committed, and sync is not a correctness dependency
+  /// (ADR-0040).
   Future<void> onLocalChanges(List<Change> changes) async {
     for (final change in changes) {
       final op = CapturedOp._(change.collection, change.entityId)
@@ -556,6 +652,10 @@ class WorkspaceRoutingOpCapture extends BufferedDomainOpCapture {
       case _CaptureDecision.undecided:
         _pending.add(op);
       case _CaptureDecision.silent:
+        // The decision is settled and this op will never be authored, so its
+        // clock is handed back to the host rather than left naming a member
+        // no op carried.
+        await _leaveUnauthored([op]);
         return;
       case _CaptureDecision.bound:
         if (_draining) {
