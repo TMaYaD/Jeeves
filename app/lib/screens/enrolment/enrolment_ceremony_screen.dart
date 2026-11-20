@@ -319,7 +319,7 @@ class _EnrolmentCeremonyScreenState
         for (final workspaceId in status.workspaceIds)
           Text(
             'Workspace $workspaceId — '
-            '${status.foundedWorkspaceIds.contains(workspaceId) ? 'founded' : 'not founded'}',
+            '${status.registeredWorkspaceIds.contains(workspaceId) ? 'founded' : 'not founded'}',
             key: Key('enrolment_workspace_$workspaceId'),
           ),
       ];

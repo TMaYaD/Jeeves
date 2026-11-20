@@ -526,6 +526,42 @@ class MergeStateSeeding extends Table {
   Set<Column<Object>> get primaryKey => {id};
 }
 
+/// A change the host merged that still needs an op.
+///
+/// A local write made while the device was signed in carries the member id of
+/// that session. The op-log bridge authors it into the log, and until it has,
+/// the change lives only in merge state — so a process killed in that window
+/// loses it: the next launch finds no trace of a change that still needs an op.
+///
+/// The row leaves when the bridge has authored the change or handed it back.
+/// The record and the merge that caused it commit together, so no clock can
+/// name a member without either an op or a record.
+///
+/// Not named `cached_*`: this is not derived from anything. It is the record
+/// that a change still needs an op.
+@DataClassName('UnauthoredChangeRow')
+class UnauthoredChanges extends Table {
+  IntColumn get id => integer().autoIncrement()();
+
+  /// The outbox row's own `change_id`. Unique, so a crash between the merge
+  /// commit and the outbox delete replays the change into one record rather
+  /// than two.
+  TextColumn get changeId => text().unique()();
+
+  TextColumn get collection => text()();
+  TextColumn get entityId => text()();
+
+  /// The member the change's clock names — the session that made it.
+  TextColumn get memberIdHex => text()();
+
+  /// The clock the change was merged at.
+  IntColumn get wallMs => integer()();
+  IntColumn get counter => integer()();
+
+  /// The change itself, as the bridge will hand it over.
+  TextColumn get changeJson => text()();
+}
+
 @DriftDatabase(
   tables: [
     OpLog,
@@ -546,6 +582,7 @@ class MergeStateSeeding extends Table {
     ChangeSequence,
     PluginCursors,
     MergeStateSeeding,
+    UnauthoredChanges,
   ],
 )
 class SyncDatabase extends _$SyncDatabase {
@@ -562,11 +599,12 @@ class SyncDatabase extends _$SyncDatabase {
   /// `quarantined_ops.release_started_at`, the interrupted-chain-replay re-arm
   /// marker (#620); v10 adds the sync host's durable change sequence and its
   /// per-plugin cursors; v11 adds the marker that the pre-existing domain rows were
-  /// walked into merge state; v12 adds the columns that record the user's
-  /// decision on an integrity alarm or a refused op (#575); v13 adds the column
-  /// that records whether a take upstream reached the domain store (#575).
+  /// walked into merge state; v12 adds the record of a merged change that still
+  /// needs an op; v13 adds the columns that record the user's decision on an
+  /// integrity alarm or a refused op (#575); v14 adds the column that records
+  /// whether a take upstream reached the domain store (#575).
   @override
-  int get schemaVersion => 13;
+  int get schemaVersion => 14;
 
   /// Additive only. A device that already holds a log keeps every byte of it:
   /// each step is `CREATE TABLE`s, an `ADD COLUMN` or a `CREATE INDEX`, and no
@@ -699,6 +737,14 @@ CREATE TABLE integrity_alarms (
             await migrator.createTable(mergeStateSeeding);
           }
           if (from < 12) {
+            // One new table, nothing altered or backfilled. An empty table is
+            // exactly right for a device that predates it: nothing was
+            // recorded, because nothing had yet been merged under a member id
+            // that no op carried. Every row of the log, the outbox and the
+            // merge state survives untouched.
+            await migrator.createTable(unauthoredChanges);
+          }
+          if (from < 13) {
             // Five new columns, nothing altered or backfilled. Every one of
             // them is null until the user decides something, which is exactly
             // right for a device that predates the decision: nothing has been
@@ -718,7 +764,7 @@ CREATE TABLE integrity_alarms (
               quarantinedOps.resolutionDecidedAt,
             );
           }
-          if (from < 13) {
+          if (from < 14) {
             // One new nullable column, no backfill. A null reads as "no take
             // upstream has been waiting for a projection", which is exactly
             // right for a device that predates the decision: nothing has been

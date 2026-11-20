@@ -115,12 +115,13 @@ To build a hybrid productivity application that merges the rigid organizational 
 * **Graceful AI Degradation:** All AI-powered features must fall back gracefully when the AI service is unavailable, ensuring core GTD workflows remain fully functional without intelligence features.
 
 ### Epic 9: Habit Tracking
-**Goal:** Support recurring behavioral commitments that don't fit the "complete and forget" model of a GTD task.
-* **Habit Definition:** Create habits with title, frequency (daily, specific weekdays, X times per week/month), time-of-day anchor, and optional context/location link.
-* **Check-In:** Binary (done/not done) or measurable (numeric value, e.g., "glasses of water: 6").
-* **Streak Tracking:** Current streak, best streak, completion rate over 7/30/90 days. Flexible frequency awareness — rest days don't break non-daily streaks.
-* **Visualization:** Heatmap/calendar view showing consistency over time.
-* **GTD Integration:** Habits surface in the Daily Planning summary (without consuming task capacity), morning review, Evening Shutdown check-in, and context/location-based surfacing. Habits can optionally be worked on in Focus Mode with Pomodoro timing.
+**Goal:** Support recurring behavioral commitments that don't fit the "complete and forget" model of a GTD task. Design and decisions: TMaYaD/Jeeves#400.
+* **Habit Definition:** Title, repeat rule, anchor (including after or before another habit), Area and Labels.
+* **Check-In:** Binary, or measurable against a unit and daily target.
+* **Changes apply from the current period;** earlier periods are judged by the commitment they had.
+* **Streak Tracking:** Current and best streak, 7/30/90-day rates. Rest days don't break streaks.
+* **Visualization:** Per-habit history; any past day can be corrected.
+* **GTD Integration:** Daily Planning summary (outside task capacity), Evening Shutdown, optional Focus Mode. Location surfacing comes with #46.
 
 ### Epic 10: Extended Capture Channels
 **Goal:** Meet users where they are with additional low-friction capture methods beyond the core app and Android OS integration.

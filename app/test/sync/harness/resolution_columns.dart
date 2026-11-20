@@ -21,14 +21,14 @@ import 'package:jeeves/sync/sync_database.dart';
 /// fixture keeps a column the migration is about to add, and the upgrade
 /// fails on a duplicate column rather than on the thing it was meant to test.
 const Map<int, List<(String, String)>> columnsAddedAt = {
-  12: [
+  13: [
     ('integrity_alarms', 'resolution'),
     ('integrity_alarms', 'resolution_decided_at'),
     ('integrity_alarms', 'repost_from_author_seq'),
     ('quarantined_ops', 'resolution'),
     ('quarantined_ops', 'resolution_decided_at'),
   ],
-  13: [
+  14: [
     ('quarantined_ops', 'resolution_projected_at'),
   ],
 };

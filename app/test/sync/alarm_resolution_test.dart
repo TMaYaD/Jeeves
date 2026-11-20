@@ -197,15 +197,16 @@ void main() {
   });
 
   group('the store', () {
-    test('a v11 sync store upgrades through v12 and keeps every row',
+    test('a v11 sync store upgrades through v14 and keeps every row',
         () async {
       final directory = Directory.systemTemp.createTempSync('sync-v11-');
       addTearDown(() => directory.deleteSync(recursive: true));
       final file = File('${directory.path}/sync.sqlite');
 
       final seed = SyncDatabase(NativeDatabase(file));
-      // Take the columns v12 and v13 brought back out, so the file on disk is
-      // what a v11 store held.
+      // Take the columns v13 and v14 brought back out, and the table v12
+      // brought, so the file on disk is what a v11 store held.
+      await seed.customStatement('DROP TABLE unauthored_changes');
       await dropColumnsAddedAfter(seed, 11);
       await seed.customStatement(
         'INSERT INTO integrity_alarms (workspace_id, kind, detail, '
@@ -223,7 +224,7 @@ void main() {
 
       final upgraded = SyncDatabase(NativeDatabase(file));
       addTearDown(upgraded.close);
-      expect(upgraded.schemaVersion, 13);
+      expect(upgraded.schemaVersion, 14);
 
       final alarm = await upgraded.select(upgraded.integrityAlarms).getSingle();
       expect(alarm.kind, IntegrityAlarmKind.ownWritesRollback.code);
@@ -243,16 +244,76 @@ void main() {
       expect(quarantine.resolution, isNull);
       expect(quarantine.resolutionDecidedAt, isNull);
       expect(quarantine.resolutionProjectedAt, isNull);
+
+      final tables = (await upgraded
+              .customSelect("SELECT name FROM sqlite_master WHERE type = 'table'")
+              .get())
+          .map((r) => r.read<String>('name'));
+      expect(tables, contains('unauthored_changes'));
     });
 
-    test('a v12 sync store upgrades to v13 and keeps every row', () async {
+    test('a v12 sync store upgrades through v14 and keeps every row', () async {
       final directory = Directory.systemTemp.createTempSync('sync-v12-');
       addTearDown(() => directory.deleteSync(recursive: true));
       final file = File('${directory.path}/sync.sqlite');
 
       final seed = SyncDatabase(NativeDatabase(file));
-      // A v12 store had the decision columns but not the projection marker.
+      // A v12 store had the table for a merged change that still needs an op,
+      // and none of the decision columns.
       await dropColumnsAddedAfter(seed, 12);
+      await seed.customStatement(
+        'INSERT INTO integrity_alarms (workspace_id, kind, detail, '
+        'occurrence_count, first_detected_at, last_detected_at) '
+        "VALUES ('workspace-1', 'own_writes_rollback', 'the server lost a write', "
+        "1, '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z')",
+      );
+      await seed.customStatement(
+        'INSERT INTO quarantined_ops (workspace_id, reason, detail, envelope, '
+        "detected_at) VALUES ('workspace-1', 'bad_signature', 'forged', X'', "
+        "'2026-08-01T00:00:00.000Z')",
+      );
+      await seed.customStatement(
+        "INSERT INTO unauthored_changes (change_id, collection, entity_id, "
+        "member_id_hex, wall_ms, counter, change_json) VALUES "
+        "('change-1', 'todos', 't1', '${'a' * 32}', 5, 1, '{}')",
+      );
+      await seed.customStatement('PRAGMA user_version = 12');
+      await seed.close();
+
+      final upgraded = SyncDatabase(NativeDatabase(file));
+      addTearDown(upgraded.close);
+      expect(upgraded.schemaVersion, 14);
+
+      final alarm = await upgraded.select(upgraded.integrityAlarms).getSingle();
+      expect(alarm.kind, IntegrityAlarmKind.ownWritesRollback.code);
+      expect(
+        alarm.resolution,
+        isNull,
+        reason: 'nothing was decided before the decision existed',
+      );
+      expect(alarm.resolutionDecidedAt, isNull);
+      expect(alarm.repostFromAuthorSeq, isNull);
+
+      final quarantine = await upgraded.select(upgraded.quarantinedOps).getSingle();
+      expect(quarantine.reason, SyncRejectionReason.badSignature.code);
+      expect(quarantine.resolution, isNull);
+      expect(quarantine.resolutionDecidedAt, isNull);
+      expect(quarantine.resolutionProjectedAt, isNull);
+
+      final unauthed = await upgraded.select(upgraded.unauthoredChanges).getSingle();
+      expect(unauthed.changeId, 'change-1');
+      expect(unauthed.collection, 'todos');
+      expect(unauthed.entityId, 't1');
+    });
+
+    test('a v13 sync store upgrades to v14 and keeps its decisions', () async {
+      final directory = Directory.systemTemp.createTempSync('sync-v13-');
+      addTearDown(() => directory.deleteSync(recursive: true));
+      final file = File('${directory.path}/sync.sqlite');
+
+      final seed = SyncDatabase(NativeDatabase(file));
+      // A v13 store had the decision columns but not the projection marker.
+      await dropColumnsAddedAfter(seed, 13);
       await seed.customStatement(
         'INSERT INTO quarantined_ops (workspace_id, reason, detail, envelope, '
         "detected_at, resolution, resolution_decided_at) VALUES "
@@ -260,12 +321,12 @@ void main() {
         "'2026-08-01T00:00:00.000Z', 'took_upstream', "
         "'2026-08-01T00:00:00.000Z')",
       );
-      await seed.customStatement('PRAGMA user_version = 12');
+      await seed.customStatement('PRAGMA user_version = 13');
       await seed.close();
 
       final upgraded = SyncDatabase(NativeDatabase(file));
       addTearDown(upgraded.close);
-      expect(upgraded.schemaVersion, 13);
+      expect(upgraded.schemaVersion, 14);
 
       final quarantine = await upgraded.select(upgraded.quarantinedOps).getSingle();
       expect(quarantine.reason, SyncRejectionReason.badSignature.code);

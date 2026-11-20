@@ -26,8 +26,8 @@ enum EnrolmentState {
   /// The ceremony started and did not finish. Two shapes reach here, and both
   /// are recovered the same way — re-enter with the passphrase:
   ///
-  /// - **Keys present, a Workspace still un-founded.** The escrow and the pin
-  ///   landed, the log did not.
+  /// - **Keys present, and a Workspace this device has not registered in.** The
+  ///   escrow and the pin landed, the log did not.
   /// - **A pinned Root with no keys.** `enrolFirstDevice` writes the escrow and
   ///   pins Root *before* it stores the keypairs, so dying in that window leaves
   ///   the account's escrow claimed by a device that cannot prove it. Founding
@@ -35,7 +35,8 @@ enum EnrolmentState {
   ///   this is not [notEnrolled].
   foundingIncomplete,
 
-  /// Keys stored and every derivable Workspace's control log non-empty.
+  /// Keys stored and this device's own registration applied in every derivable
+  /// Workspace.
   enrolled,
 }
 
@@ -44,7 +45,7 @@ class EnrolmentCeremonyStatus {
   const EnrolmentCeremonyStatus({
     required this.state,
     required this.workspaceIds,
-    required this.foundedWorkspaceIds,
+    required this.registeredWorkspaceIds,
     this.memberId,
     this.rootPkFingerprint,
     this.escrowVersion,
@@ -55,8 +56,9 @@ class EnrolmentCeremonyStatus {
   /// Every Workspace this User's devices are enrolled into, in ceremony order.
   final List<String> workspaceIds;
 
-  /// Those whose control log this device has applied something into.
-  final List<String> foundedWorkspaceIds;
+  /// Those where this device's own registration (a genesis or a member
+  /// registration it authored) is in the applied control log.
+  final List<String> registeredWorkspaceIds;
 
   /// This device's Member id, once its keys are stored. Null in the pre-keys
   /// crash window — the ceremony minted an identity that nothing recorded.
@@ -75,12 +77,12 @@ class EnrolmentCeremonyStatus {
 /// asserted directly rather than through four staged ceremony failures.
 EnrolmentCeremonyStatus deriveEnrolmentCeremonyStatus({
   required List<String> workspaceIds,
-  required List<String> foundedWorkspaceIds,
+  required List<String> registeredWorkspaceIds,
   required String? storedMemberId,
   required Uint8List? pinnedRootPk,
   required int highestEscrowVersionSeen,
 }) {
-  final founded = foundedWorkspaceIds.toSet();
+  final registered = registeredWorkspaceIds.toSet();
   final EnrolmentState state;
   if (storedMemberId == null) {
     // Keys are ceremony step 3 of 7, so their absence alone says nothing about
@@ -90,16 +92,16 @@ EnrolmentCeremonyStatus deriveEnrolmentCeremonyStatus({
         ? EnrolmentState.notEnrolled
         : EnrolmentState.foundingIncomplete;
   } else {
-    state = workspaceIds.every(founded.contains)
+    state = workspaceIds.every(registered.contains)
         ? EnrolmentState.enrolled
         : EnrolmentState.foundingIncomplete;
   }
   return EnrolmentCeremonyStatus(
     state: state,
     workspaceIds: workspaceIds,
-    foundedWorkspaceIds: [
+    registeredWorkspaceIds: [
       for (final workspaceId in workspaceIds)
-        if (founded.contains(workspaceId)) workspaceId,
+        if (registered.contains(workspaceId)) workspaceId,
     ],
     memberId: storedMemberId,
     rootPkFingerprint: pinnedRootPk == null ? null : _fingerprint(pinnedRootPk),

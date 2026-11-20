@@ -6,6 +6,13 @@ library;
 
 import '../hlc.dart';
 
+/// A clock in merge state that no op ever carried, and the entity it belongs
+/// to.
+///
+/// The op-log bridge hands these back to the sync host when it will never
+/// author them, so the host can re-stamp them under the device node id.
+typedef UnauthoredClock = ({String collection, String entityId, Hlc clock});
+
 /// A field's value together with the clock that orders it.
 class ClockedValue {
   const ClockedValue(this.value, this.hlc);

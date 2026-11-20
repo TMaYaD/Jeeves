@@ -876,7 +876,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
         const SizedBox(height: 20),
 
         if (widget.tagSection == ClarifyTagSection.editablePickers) ...[
-          const ClarifyFieldLabel('LABELS'),
+          const ClarifyFieldLabel('PROJECT'),
           const SizedBox(height: 8),
           // Project row — single-select; reuse ProjectPickerWidget so styling
           // matches task_detail_screen.dart. Its "No project" state doubles as
@@ -892,7 +892,9 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
               unawaited(_saveClearProject());
             },
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 20),
+          const ClarifyFieldLabel('LABELS'),
+          const SizedBox(height: 8),
           // Context row — applied tags plus a dotted "+" that opens the tag
           // cloud; reuses ContextTagPickerWidget.
           ContextTagPickerWidget(
