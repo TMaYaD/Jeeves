@@ -1,7 +1,9 @@
-/// The energy and estimate sheets, driven by callbacks (#402).
+/// The energy sheet, driven by callbacks (#402).
 ///
-/// The sheets used to write through an Outcome's notifier. They now report
-/// every change to the caller, so any surface can offer them.
+/// The sheet used to write through an Outcome's notifier. It now reports
+/// every change to the caller, so any surface can offer it. The estimate sheet
+/// writes the estimate and the Timeboxed switch together, so it is covered by
+/// `outcome_time_estimate_sheet_test.dart`.
 library;
 
 import 'package:flutter/material.dart';
@@ -38,51 +40,5 @@ void main() {
     await tester.pumpAndSettle();
     expect(chosen, ['high']);
     expect(cleared, isFalse);
-  });
-
-  testWidgets('the estimate sheet reports a duration and a clear',
-      (tester) async {
-    final chosen = <int>[];
-    var cleared = false;
-
-    // The estimate ladder is a list of nine rows, and on the default test
-    // surface the sheet is taller than the viewport — so the lower rows are
-    // never built and cannot be tapped. A tall surface puts the whole
-    // ladder on screen.
-    tester.view.physicalSize = const Size(800, 1600);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.reset);
-
-    await tester.pumpWidget(MaterialApp(
-      home: Builder(
-        builder: (context) => Scaffold(
-          body: TextButton(
-            onPressed: () => showOutcomeTimeEstimateSheet(
-              context,
-              onSet: (minutes) => chosen.add(minutes),
-              onClear: () => cleared = true,
-              current: 30,
-            ),
-            child: const Text('open'),
-          ),
-        ),
-      ),
-    ));
-
-    await tester.tap(find.text('open'));
-    await tester.pumpAndSettle();
-    expect(find.text('Time Estimate'), findsOneWidget);
-
-    await tester.tap(find.text('1h'));
-    await tester.pumpAndSettle();
-    expect(chosen, [60]);
-    expect(cleared, isFalse);
-
-    await tester.tap(find.text('open'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('None'));
-    await tester.pumpAndSettle();
-    expect(cleared, isTrue);
-    expect(chosen, [60]);
   });
 }

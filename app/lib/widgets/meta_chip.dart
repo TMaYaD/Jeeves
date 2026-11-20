@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import 'timeboxed_glyph.dart';
+
 /// User-facing label for an energy level. Falls back to the raw value so an
 /// unknown level from a newer client renders as itself rather than vanishing.
 String energyLevelLabel(String level) => switch (level) {
@@ -33,6 +35,7 @@ class OutcomeMetaLine extends StatelessWidget {
     this.timeLoggedMinutes,
     this.dueDate,
     this.muted = false,
+    this.timeboxed = false,
   });
 
   final String? energyLevel;
@@ -40,6 +43,11 @@ class OutcomeMetaLine extends StatelessWidget {
   final int? timeLoggedMinutes;
   final DateTime? dueDate;
   final bool muted;
+
+  /// Whether the estimate is a limit rather than a guess (issue #923). The
+  /// mark rides the estimate chip, so it is only ever seen where the
+  /// estimate is.
+  final bool timeboxed;
 
   @override
   Widget build(BuildContext context) => Wrap(
@@ -57,6 +65,9 @@ class OutcomeMetaLine extends StatelessWidget {
           icon: Icons.timer_outlined,
           label: formatMinutesLabel(timeEstimateMinutes!),
           color: muted ? const Color(0xFFBDBDBD) : const Color(0xFF2563EB),
+          trailing: timeboxed
+              ? TimeboxedGlyph(color: muted ? const Color(0xFFBDBDBD) : null)
+              : null,
         ),
       if (timeLoggedMinutes != null)
         MetaChip(
@@ -91,11 +102,15 @@ class MetaChip extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.color,
+    this.trailing,
   });
 
   final IconData icon;
   final String label;
   final Color color;
+
+  /// A mark after the label — the Timeboxed glyph on the estimate chip.
+  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
@@ -119,6 +134,10 @@ class MetaChip extends StatelessWidget {
               fontWeight: FontWeight.w500,
             ),
           ),
+          if (trailing != null) ...[
+            const SizedBox(width: 4),
+            trailing!,
+          ],
         ],
       ),
     );

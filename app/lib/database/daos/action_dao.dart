@@ -82,6 +82,7 @@ import 'package:drift/drift.dart';
 import '../../utils/uuid.dart';
 
 import '../../models/time_context.dart';
+import '../../models/timeboxed.dart';
 import '../../sync/collection_codecs.dart';
 import '../gtd_database.dart';
 import 'sprint_dao.dart' show SprintDao;
@@ -586,6 +587,38 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     return result;
   }
 
+  /// Whether each Outcome's current Action is Timeboxed (issue #923), keyed
+  /// by Outcome id. An absent key means the Outcome is not Timeboxed.
+  ///
+  /// The read rule lives in [isTimeboxedAction]: the switch is on **and** the
+  /// Action has an estimate. Two devices can merge "the estimate was cleared"
+  /// with "the switch was turned on"; the rule reads that as off rather than
+  /// as a limit of nothing.
+  Stream<Map<String, bool>> watchCurrentTimeboxed() {
+    return (select(actions)..where((a) => a.role.equals('current')))
+        .watch()
+        .map(_timeboxedByOutcome);
+  }
+
+  Map<String, bool> _timeboxedByOutcome(List<Action> rows) {
+    final byOutcome = <String, List<Action>>{};
+    for (final a in rows) {
+      (byOutcome[a.outcomeId] ??= []).add(a);
+    }
+    final result = <String, bool>{};
+    for (final entry in byOutcome.entries) {
+      final winner = _pickWinner(entry.value);
+      if (winner == null) continue;
+      if (isTimeboxedAction(
+        timeboxed: winner.timeboxed,
+        timeEstimate: winner.timeEstimate,
+      )) {
+        result[entry.key] = true;
+      }
+    }
+    return result;
+  }
+
   /// Current Action text for each of [outcomeIds], keyed by Outcome id. An
   /// absent key means the Outcome is Actionless — the shape the one-at-a-time
   /// review snapshots consume, so a wizard step renders every item's Action
@@ -821,6 +854,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     String? text,
     String? energyLevel,
     int? timeEstimate,
+    bool? timeboxed,
     bool clearEnergyLevel = false,
     bool clearTimeEstimate = false,
     required DateTime ts,
@@ -840,7 +874,24 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     final timeDiffers = clearTimeEstimate
         ? row.timeEstimate != null
         : timeEstimate != null && timeEstimate != row.timeEstimate;
-    if (!textDiffers && !energyDiffers && !timeDiffers) return _noEffect;
+    // Clearing the estimate clears the Timeboxed switch with it (issue #923):
+    // a limit with no estimate is not a limit, and a later estimate must not
+    // bring the old limit back.
+    final timeboxedClears = clearTimeEstimate && (row.timeboxed ?? false);
+    // The switch set explicitly (issue #923) — the estimate sheet offers the
+    // estimate and the switch together, so they are written in one row write
+    // with one timestamp. A clear wins: an estimate with no value cannot
+    // limit anything.
+    final timeboxedDiffers = timeboxed != null &&
+        !clearTimeEstimate &&
+        (row.timeboxed ?? false) != timeboxed;
+    if (!textDiffers &&
+        !energyDiffers &&
+        !timeDiffers &&
+        !timeboxedClears &&
+        !timeboxedDiffers) {
+      return _noEffect;
+    }
 
     await (update(actions)..where((a) => a.id.equals(actionId))).write(
       ActionsCompanion(
@@ -851,6 +902,11 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         timeEstimate: clearTimeEstimate
             ? const Value(null)
             : timeDiffers ? Value(timeEstimate) : const Value.absent(),
+        timeboxed: timeboxedDiffers
+            ? Value(timeboxed)
+            : timeboxedClears
+                ? const Value(false)
+                : const Value.absent(),
         updatedAt: Value(ts),
       ),
     );
@@ -864,6 +920,8 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         'time_estimate': null
       else if (timeDiffers)
         'time_estimate': timeEstimate,
+      if (timeboxedDiffers) 'timeboxed': timeboxed,
+      if (timeboxedClears) 'timeboxed': false,
       'updated_at': encodeInstant(ts),
     });
     if (row.role == 'current') {
