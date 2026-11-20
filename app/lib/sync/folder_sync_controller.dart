@@ -100,6 +100,7 @@ class FolderSyncController {
     } on FolderSyncRefusal {
       // Signed in or enrolled since: the binding no longer stands.
       if (!await isEnrolled()) rethrow;
+      await host.detach(opLogFolderPluginId, forgetCursor: true);
       await _setupFor(openFolder(binding.folderLocation)).unbind(binding.folderId);
     }
   }

@@ -68,6 +68,7 @@ void main() {
   late _FlakyFolder folder;
   late InMemoryDeviceKeyStore keyStore;
   late FolderSyncController controller;
+  var enrolled = false;
 
   setUp(() async {
     directory = Directory.systemTemp.createTempSync('folder-attach-');
@@ -86,7 +87,7 @@ void main() {
       database: a.sync,
       keyStore: keyStore,
       openFolder: (_) => folder,
-      isEnrolled: () async => false,
+      isEnrolled: () async => enrolled,
       nowMs: () => a.wall.nowMs,
     );
   });
@@ -175,5 +176,18 @@ void main() {
 
     await b.plugin!.scan();
     expect(await outcomeCount(b), 2);
+  });
+
+  test('a binding turned off because the device enrolled leaves no cursor behind', () async {
+    await controller.turnOn(
+        location: directory.path, acknowledgedUnencrypted: true);
+    expect(await host.cursorOf(opLogFolderPluginId), isNotNull);
+
+    enrolled = true;
+    await controller.resume();
+
+    expect(await controller.activeBinding(), isNull);
+    expect(await host.cursorOf(opLogFolderPluginId), isNull,
+        reason: 'a stale cursor would hold back what the host may prune');
   });
 }
