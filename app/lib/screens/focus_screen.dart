@@ -13,6 +13,7 @@ import '../providers/timeboxed_limit_provider.dart';
 import '../providers/sprint_timer_provider.dart'
     show sprintTimerProvider;
 import '../models/day_timeline.dart';
+import '../utils/uuid.dart';
 import '../providers/clock_provider.dart';
 import '../providers/day_timeline_provider.dart';
 import '../utils/sprint_hint.dart';
@@ -595,6 +596,22 @@ class _NowTimeline extends ConsumerWidget {
       availableMinutes: extras.availableMinutes,
       chunkUnitMinutes: extras.settings.chunkUnitMinutes,
       sprintMarks: extras.sprintMarks,
+      onAcceptBatch: (startByOutcomeId) => ref
+          .read(databaseProvider)
+          .focusSessionDao
+          .acceptBatch(
+            sessionId: session.id,
+            batchId: uuid.v4(),
+            startByTaskId: startByOutcomeId,
+          ),
+      onDeclineBatch: (outcomeIds) => ref
+          .read(databaseProvider)
+          .focusSessionDao
+          .declineBatchSuggestion(
+            sessionId: session.id,
+            taskIds: outcomeIds,
+            declinedAt: ref.read(clockProvider)(),
+          ),
       onSetPinnedStart: (outcomeId, startAt) => ref
           .read(databaseProvider)
           .focusSessionDao

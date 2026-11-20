@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/autoflow.dart';
+import '../../models/batch_suggestion.dart';
 import '../../models/calendar_day.dart';
 import '../../models/day_timeline.dart';
 import '../../providers/calendar_timeline_provider.dart';
@@ -12,6 +13,7 @@ import '../../providers/day_timeline_provider.dart';
 import '../../providers/shutdown_settings_provider.dart';
 import '../../services/calendar/calendar_types.dart';
 import '../capacity_bar.dart';
+import 'batch_suggestion_sheet.dart';
 import 'set_time_sheet.dart';
 
 /// Today's Plan on a day timeline: a capacity bar, one tile per piece of each
@@ -39,6 +41,8 @@ class DayTimeline extends ConsumerStatefulWidget {
     required this.onSetPinnedStart,
     this.events = const [],
     this.sprintMarks = const [],
+    this.onAcceptBatch,
+    this.onDeclineBatch,
   });
 
   /// What the layout belongs to: the planning draft, or one session. A layout
@@ -62,6 +66,15 @@ class DayTimeline extends ConsumerStatefulWidget {
   /// the lane at the tile's right edge, at its real time, and counted in the
   /// tile it ran on.
   final List<TileSprintMark> sprintMarks;
+
+  /// The small-task suggestion (issue #407). Called with the start time of each
+  /// accepted member; null on a timeline that stores nothing, which then shows
+  /// no suggestion.
+  final Future<void> Function(Map<String, DateTime> startByOutcomeId)?
+      onAcceptBatch;
+
+  /// Called with the Outcomes of a suggestion the user answered "Not today".
+  final Future<void> Function(List<String> outcomeIds)? onDeclineBatch;
 
   @override
   ConsumerState<DayTimeline> createState() => _DayTimelineState();
@@ -112,6 +125,10 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
   List<_Move> _moves = const [];
   List<String> _conflictedPinnedIds = const [];
   Timer? _rereadTimer;
+
+  /// The small-task suggestion for the current layout, worked out when the
+  /// inputs change and not as time passes; null when there is none.
+  BatchSuggestion? _batchSuggestion;
 
   static const _rereadInterval = Duration(minutes: 5);
 
@@ -271,10 +288,95 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
               placement.outcomeId,
       ];
     }
+    _batchSuggestion = _workOutBatchSuggestion();
     _layoutReady = true;
     _previousEvents = _events;
     _sprintsSignature = _sprintsSignatureOf(widget);
     _computeWindow();
+  }
+
+  BatchSuggestion? _workOutBatchSuggestion() {
+    if (widget.onAcceptBatch == null) return null;
+    final now = ref.read(clockProvider)();
+    return nextBatchSuggestion(
+      entries: widget.entries,
+      layout: _layout,
+      flowFrom: now.isAfter(widget.flowOrigin) ? now : widget.flowOrigin,
+      dayEnd: widget.flowOrigin.add(Duration(minutes: _availableMinutes)),
+    );
+  }
+
+  Future<void> _openBatchSheet() async {
+    final suggestion = _batchSuggestion;
+    if (suggestion == null) return;
+    final choice = await showBatchSuggestionSheet(
+      context,
+      suggestion: suggestion,
+      titleFor: (id) => _entryFor(id).title,
+      clock: _clock,
+    );
+    if (choice == null) return;
+    if (choice.isAccepted) {
+      final starts = {
+        for (final member in suggestion.members)
+          if (choice.memberIds.contains(member.outcomeId))
+            member.outcomeId: member.start,
+      };
+      await widget.onAcceptBatch!(starts);
+    } else {
+      await widget.onDeclineBatch?.call(choice.memberIds);
+    }
+  }
+
+  /// The quiet outline of a suggestion in its gap, with the chip that opens it.
+  /// The outline ignores touches, so the tiles under it stay reachable.
+  Widget _batchOutline(BatchSuggestion suggestion) {
+    final top =
+        suggestion.gapStart.difference(_windowStart).inMinutes * _pixelsPerMinute;
+    final height = (suggestion.totalMinutes * _pixelsPerMinute)
+        .clamp(_minTileHeight, double.infinity)
+        .toDouble();
+    return Positioned(
+      key: const Key('day_timeline_batch_suggestion'),
+      top: top,
+      left: _gutterWidth,
+      right: _laneWidth,
+      height: height,
+      child: Stack(
+        children: [
+          IgnorePointer(
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                    color: const Color(0xFF9CA3AF), style: BorderStyle.solid),
+              ),
+            ),
+          ),
+          Positioned(
+            right: 4,
+            top: 2,
+            child: GestureDetector(
+              key: const Key('day_timeline_batch_suggestion_open'),
+              behavior: HitTestBehavior.opaque,
+              onTap: _openBatchSheet,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFF9CA3AF)),
+                ),
+                child: Text('Suggested · ${suggestion.contextName}',
+                    style: const TextStyle(
+                        fontSize: 11, color: Color(0xFF4B5563))),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   /// The stretch of the day the timeline draws.
@@ -506,6 +608,8 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
                   for (final piece in placement.pieces)
                     _tile(placement, piece, now, sprintsByOutcome),
                 _lane(now),
+                if (_batchSuggestion != null)
+                  _batchOutline(_batchSuggestion!),
                 if (!now.isBefore(_windowStart) && now.isBefore(_windowEnd))
                   Positioned(
                     key: const Key('day_timeline_now_line'),
