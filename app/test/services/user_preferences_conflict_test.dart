@@ -317,4 +317,48 @@ void main() {
       expect(r.updatedAt, DateTime.parse('2026-01-02T00:00:00Z'));
     });
   });
+
+  group('resolveSnoozeFloorAmong', () {
+    PreferenceRow live(String until, int hour) => PreferenceRow(
+          value: '"$until"',
+          updatedAt: DateTime.utc(2026, 1, 1, hour),
+        );
+
+    test('is empty for no rows', () {
+      expect(resolveSnoozeFloorAmong(const []), isNull);
+    });
+
+    test('gives the same row for every order of floor, clear and re-snooze',
+        () {
+      final floor = live('2026-01-01T18:00:00.000Z', 9);
+      final clear =
+          PreferenceRow(value: null, updatedAt: DateTime.utc(2026, 1, 1, 10));
+      final resnooze = live('2026-01-01T12:00:00.000Z', 11);
+      final orders = [
+        [floor, clear, resnooze],
+        [floor, resnooze, clear],
+        [clear, floor, resnooze],
+        [clear, resnooze, floor],
+        [resnooze, floor, clear],
+        [resnooze, clear, floor],
+      ];
+      for (final rows in orders) {
+        expect(resolveSnoozeFloorAmong(rows), same(resnooze));
+      }
+    });
+
+    test('a clear newer than every floor wins', () {
+      final floor = live('2026-01-01T18:00:00.000Z', 9);
+      final clear =
+          PreferenceRow(value: null, updatedAt: DateTime.utc(2026, 1, 1, 10));
+      expect(resolveSnoozeFloorAmong([floor, clear]), same(clear));
+    });
+
+    test('the later value wins among live floors', () {
+      final low = live('2026-01-01T12:00:00.000Z', 11);
+      final high = live('2026-01-01T18:00:00.000Z', 9);
+      expect(resolveSnoozeFloorAmong([low, high]), same(high));
+      expect(resolveSnoozeFloorAmong([high, low]), same(high));
+    });
+  });
 }

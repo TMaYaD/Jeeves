@@ -20,6 +20,24 @@ String Function() _minter() {
   return () => _id('minted/${++minted}');
 }
 
+/// One `user_preferences` row: the key is the same for both copies of a
+/// setting, so what tells the rows apart is the user id they sit under and
+/// the instant they were written.
+Map<String, Object?> _preferenceRow(
+  String label,
+  String userId,
+  String value,
+  String updatedAt, {
+  String key = 'clarify_mode',
+}) =>
+    {
+      'id': _id(label),
+      'key': key,
+      'value': value,
+      'updated_at': updatedAt,
+      'user_id': userId,
+    };
+
 /// A row source over a literal store, so the transform's inputs are visible in
 /// the test rather than assembled by a fixture.
 InitialUploadRowSource _rows(Map<String, List<Map<String, Object?>>> store) =>
@@ -555,6 +573,148 @@ void main() {
       expect(entity.fields['key'], 'clarify_mode');
       expect(entity.fields['user_id'], _userId);
       expect(entity.fields['updated_at'], '2026-07-01T07:00:00.000Z');
+    });
+
+    test('keeps the newer of two rows for one preference key', () async {
+      // The device kept one copy of the setting while signed out and the
+      // account brought another. The newer one is the setting.
+      final plan = await _plan({
+        'user_preferences': [
+          _preferenceRow(
+            'preference/local',
+            'local',
+            '"oneToOne"',
+            '2026-07-01T07:00:00.000Z',
+          ),
+          _preferenceRow(
+            'preference/account',
+            _userId,
+            '"askEachTime"',
+            '2026-07-02T07:00:00.000Z',
+          ),
+        ],
+      });
+      final entity = plan.entitiesFor(userPreferencesCollection).single;
+      expect(entity.fields['value'], '"askEachTime"');
+      expect(entity.fields['updated_at'], '2026-07-02T07:00:00.000Z');
+      // The collapse is still counted, and both rows are still named.
+      expect(
+        plan.anomalies.where((one) => one.kind == collapsedDuplicateRow),
+        hasLength(1),
+      );
+      expect(entity.legacyRowIds, hasLength(2));
+    });
+
+    test('keeps the newer of two rows for one preference key in any order',
+        () async {
+      final plan = await _plan({
+        'user_preferences': [
+          _preferenceRow(
+            'preference/account',
+            _userId,
+            '"askEachTime"',
+            '2026-07-02T07:00:00.000Z',
+          ),
+          _preferenceRow(
+            'preference/local',
+            'local',
+            '"oneToOne"',
+            '2026-07-01T07:00:00.000Z',
+          ),
+        ],
+      });
+      final entity = plan.entitiesFor(userPreferencesCollection).single;
+      expect(entity.fields['value'], '"askEachTime"');
+      expect(entity.fields['updated_at'], '2026-07-02T07:00:00.000Z');
+    });
+
+    test('keeps the first of two rows for one preference key with equal '
+        'timestamps', () async {
+      final plan = await _plan({
+        'user_preferences': [
+          _preferenceRow(
+            'preference/local',
+            'local',
+            '"oneToOne"',
+            '2026-07-01T07:00:00.000Z',
+          ),
+          _preferenceRow(
+            'preference/account',
+            _userId,
+            '"askEachTime"',
+            '2026-07-01T07:00:00.000Z',
+          ),
+        ],
+      });
+      final entity = plan.entitiesFor(userPreferencesCollection).single;
+      expect(entity.fields['value'], '"oneToOne"');
+      expect(entity.fields['updated_at'], '2026-07-01T07:00:00.000Z');
+    });
+
+    test('keeps the later snooze value of two rows, not the later write',
+        () async {
+      const key = 'planning_notification_snoozed_until';
+      final plan = await _plan({
+        'user_preferences': [
+          _preferenceRow('preference/local', 'local',
+              '"2026-07-01T18:00:00.000Z"', '2026-07-01T09:00:00.000Z',
+              key: key),
+          _preferenceRow('preference/account', _userId,
+              '"2026-07-01T12:00:00.000Z"', '2026-07-01T10:00:00.000Z',
+              key: key),
+        ],
+      });
+      final entity = plan.entitiesFor(userPreferencesCollection).single;
+      expect(entity.fields['value'], '"2026-07-01T18:00:00.000Z"');
+    });
+
+    test('keeps the later snooze value in either input position, with its '
+        'own timestamp', () async {
+      const key = 'planning_notification_snoozed_until';
+      final later = _preferenceRow('preference/account', _userId,
+          '"2026-07-01T18:00:00.000Z"', '2026-07-01T09:00:00.000Z',
+          key: key);
+      final earlier = _preferenceRow('preference/local', 'local',
+          '"2026-07-01T12:00:00.000Z"', '2026-07-01T10:00:00.000Z',
+          key: key);
+      for (final rows in [
+        [later, earlier],
+        [earlier, later],
+      ]) {
+        final plan = await _plan({'user_preferences': rows});
+        final entity = plan.entitiesFor(userPreferencesCollection).single;
+        expect(entity.fields['value'], '"2026-07-01T18:00:00.000Z"');
+        expect(entity.fields['updated_at'], '2026-07-01T09:00:00.000Z');
+      }
+    });
+
+    test('a snooze floor, a later clear and a later re-snooze collapse to the '
+        're-snooze whatever the row order', () async {
+      const key = 'planning_notification_snoozed_until';
+      final floor = _preferenceRow('preference/a', 'user-a',
+          '"2026-07-01T18:00:00.000Z"', '2026-07-01T09:00:00.000Z',
+          key: key);
+      final clear = {
+        ..._preferenceRow('preference/b', 'user-b', '"x"',
+            '2026-07-01T10:00:00.000Z',
+            key: key),
+        'value': null,
+      };
+      final resnooze = _preferenceRow('preference/c', 'user-c',
+          '"2026-07-01T12:00:00.000Z"', '2026-07-01T11:00:00.000Z',
+          key: key);
+      for (final rows in [
+        [floor, clear, resnooze],
+        [floor, resnooze, clear],
+        [clear, floor, resnooze],
+        [clear, resnooze, floor],
+        [resnooze, floor, clear],
+        [resnooze, clear, floor],
+      ]) {
+        final plan = await _plan({'user_preferences': rows});
+        final entity = plan.entitiesFor(userPreferencesCollection).single;
+        expect(entity.fields['value'], '"2026-07-01T12:00:00.000Z"');
+      }
     });
 
     test('walks the collections parents-first', () async {

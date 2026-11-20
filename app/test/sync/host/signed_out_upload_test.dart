@@ -162,6 +162,44 @@ void main() {
     expect(server.storedOps.length, storedBefore);
   });
 
+  test('a setting carried into the account reaches another device', () async {
+    final phone = await signedOutPhone();
+    // The row the carry leaves behind: stored under the account, written while
+    // the account was signed out, so clocked under the device.
+    await phone.domain.userPreferencesDao.set(_userId, 'theme', '"dark"');
+    final preferences = await phone.preferencesClient;
+
+    expect(await phone.activate(), SyncActivation.active);
+    await flush(phone);
+    await preferences.flushOutbox();
+
+    final witness = await phoneNamed('B');
+    await witness.enrolWithPassphrase(_passphrase);
+    expect(await witness.activate(), SyncActivation.active);
+
+    expect(await witness.domain.userPreferencesDao.get(_userId, 'theme'),
+        '"dark"');
+  });
+
+  test('a second activation authors nothing further', () async {
+    final phone = await signedOutPhone();
+    await phone.domain.userPreferencesDao.set(_userId, 'theme', '"dark"');
+    final preferences = await phone.preferencesClient;
+
+    expect(await phone.activate(), SyncActivation.active);
+    await flush(phone);
+    await preferences.flushOutbox();
+    final opsAfterFirst = server.storedOps.length;
+
+    await phone.lifecycle!.deactivate();
+    phone.lifecycle = null;
+    expect(await phone.activate(), SyncActivation.active);
+    await flush(phone);
+    await preferences.flushOutbox();
+
+    expect(server.storedOps.length, opsAfterFirst);
+  });
+
   test('an Outcome another device deleted is not revived by a signed-out edit',
       () async {
     final phone = await signedOutPhone();
@@ -272,6 +310,7 @@ void main() {
       },
       mintClock: phone.host!.clockForMember(phone.stack.identity.memberIdHex).send,
       gtdClient: gtdClient,
+      preferencesClient: await phone.preferencesClient,
       userId: _userId,
     );
     await flush(phone);
