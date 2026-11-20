@@ -283,3 +283,8 @@ jobs:
       # auto-managed ~/.android/debug.keystore regardless of signingConfigs, so
       # the setup-android-signing action is intentionally not invoked here.
       - run: flutter build apk --debug --flavor production --target-platform android-arm64
+
+      # JVM unit tests for the Android code (the vault's page replacement).
+      - name: Android unit tests
+        working-directory: app/android
+        run: ./gradlew :app:testProductionDebugUnitTest --console=plain
