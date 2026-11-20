@@ -108,7 +108,7 @@ A stored end later than the next Sprint's start (closed late on an offline devic
 
 Bypassed Outcomes add three collections, `focus_session_planning_bypasses`, `focus_session_reschedules` (one row per session and Outcome, replaced by a later edit) and `outcome_bypass_decisions` (append-only), each registered in `collection_codecs.dart` and carried by the initial upload like any domain collection. Jeeves works without them leaving the device: they are ordinary local rows first.
 
-`focus_session_tasks.pinned_start_at` is the start time the user set on a Plan entry (an `instant`); it merges last-write-wins per field like `disposition`, and clearing it writes a null.
+`focus_session_tasks.pinned_start_at` is the start time the user set on a Plan entry (an `instant`); it merges last-write-wins per field like `disposition`, and clearing it writes a null. `batch_id` (text, an accepted small-task suggestion) and `batch_suggestion_declined_at` (`instant`, "Not today") merge the same way, and die with the session.
 
 ### Device names
 

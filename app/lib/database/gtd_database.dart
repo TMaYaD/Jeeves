@@ -194,7 +194,7 @@ class GtdDatabase extends _$GtdDatabase {
   late final UserPreferencesDao userPreferencesDao = UserPreferencesDao(this);
 
   @override
-  int get schemaVersion => 12;
+  int get schemaVersion => 13;
 
   /// Completes with the [OpeningDetails] of this store's one open.
   ///
@@ -379,6 +379,26 @@ class GtdDatabase extends _$GtdDatabase {
                 .get();
             if (!existing.any((row) => row.read<String>('name') == 'timeboxed')) {
               await m.addColumn(actions, actions.timeboxed);
+            }
+          }
+          // v13 (issue #407): `focus_session_tasks.batch_id` and
+          // `batch_suggestion_declined_at`, an accepted small-task suggestion
+          // and a "Not today" on a Plan entry. Nullable `ADD COLUMN`s — no table
+          // rebuild, every existing entry reads NULL (not batched, not
+          // declined), nothing is lost. Each guarded on the column's absence
+          // like v7.
+          if (from < 13) {
+            final existing = await m.database
+                .customSelect('PRAGMA table_info(focus_session_tasks)')
+                .get();
+            bool has(String name) =>
+                existing.any((row) => row.read<String>('name') == name);
+            if (!has('batch_id')) {
+              await m.addColumn(focusSessionTasks, focusSessionTasks.batchId);
+            }
+            if (!has('batch_suggestion_declined_at')) {
+              await m.addColumn(
+                  focusSessionTasks, focusSessionTasks.batchSuggestionDeclinedAt);
             }
           }
         }),

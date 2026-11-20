@@ -82,16 +82,16 @@ void main() {
   setUpAll(configureSqliteForTests);
 
   group('schema version', () {
-    test('is 12 — eleven onUpgrade steps behind the fresh baseline', () async {
+    test('is 13 — twelve onUpgrade steps behind the fresh baseline', () async {
       final db = _openInMemory();
       addTearDown(db.close);
-      expect(db.schemaVersion, 12);
+      expect(db.schemaVersion, 13);
       // A fresh file runs onCreate at the current version, not the ladder.
       expect(
         await db.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        12,
+        13,
       );
     });
   });
@@ -192,6 +192,8 @@ void main() {
           'user_id', // v22 (issue #381)
           'pinned_start_at', // v9 (a time the user sets on a Plan entry)
           'added_during_execution_at', // v10 (issue #700)
+          'batch_id', // v13 (issue #407)
+          'batch_suggestion_declined_at', // v13 (issue #407)
         ]),
       );
     });
@@ -302,7 +304,7 @@ void main() {
       await seed.customStatement('PRAGMA user_version = 1');
       await seed.close();
 
-      // Open 2: Drift sees user_version=1 and schemaVersion=12, so it runs the
+      // Open 2: Drift sees user_version=1 and schemaVersion=13, so it runs the
       // whole ladder — the v2 drop asserted here, and the v3 `tags` recreate the
       // group below owns.
       final upgraded = GtdDatabase(
@@ -1163,6 +1165,107 @@ void main() {
       expect(actions.single.actionText, 'Call Bob');
       expect(actions.single.role, 'current');
       expect(actions.single.timeboxed, isNull);
+    });
+  });
+  group('v13 onUpgrade adds the small-task suggestion fields', () {
+    test('adds two nullable columns and keeps every existing Plan entry',
+        () async {
+      final raw = sqlite3.openInMemory();
+      addTearDown(raw.close);
+
+      final seed = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      var seedClosed = false;
+      Future<void> closeSeed() async {
+        if (seedClosed) return;
+        seedClosed = true;
+        await seed.close();
+      }
+
+      addTearDown(closeSeed);
+
+      // A v12 `focus_session_tasks` table: the current declaration with the two
+      // v13 columns cut out of the CREATE statement Drift itself emitted.
+      final createSql = (await seed
+              .customSelect("SELECT sql FROM sqlite_master "
+                  "WHERE type = 'table' AND name = 'focus_session_tasks'")
+              .getSingle())
+          .read<String>('sql');
+      final v12Sql = createSql
+          .replaceFirst(
+              RegExp(r',\s*"?batch_id"?\s+TEXT\s+NULL', caseSensitive: false),
+              '')
+          .replaceFirst(
+              RegExp(r',\s*"?batch_suggestion_declined_at"?\s+TEXT\s+NULL',
+                  caseSensitive: false),
+              '');
+      expect(v12Sql, isNot(contains('batch_')),
+          reason: 'the fixture is only a v12 store without the columns');
+      await seed.customStatement('DROP TABLE focus_session_tasks');
+      await seed.customStatement(v12Sql);
+
+      final createdAt = '2026-11-16T09:00:00.000Z';
+      await seed.customStatement(
+        'INSERT INTO todos (id, title, user_id, created_at, intent) '
+        "VALUES ('t1', 'Ship it', 'u1', ?, 'next')",
+        [createdAt],
+      );
+      await seed.customStatement(
+        'INSERT INTO focus_sessions (id, user_id, started_at) '
+        "VALUES ('s1', 'u1', '2026-11-16T09:00:00.000Z')",
+      );
+      await seed.customStatement(
+        'INSERT INTO focus_session_tasks '
+        '(id, focus_session_id, task_id, position, user_id) '
+        "VALUES ('fst1', 's1', 't1', 0, 'u1')",
+      );
+      await seed.customStatement('PRAGMA user_version = 12');
+      await closeSeed();
+
+      final upgraded = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      addTearDown(upgraded.close);
+      final fresh = GtdDatabase(NativeDatabase.memory());
+      addTearDown(fresh.close);
+
+      expect(await _columnNames(upgraded, 'focus_session_tasks'),
+          await _columnNames(fresh, 'focus_session_tasks'),
+          reason: 'the upgraded store matches a fresh one');
+      final rows = await upgraded
+          .customSelect('SELECT id, task_id, position, batch_id, '
+              'batch_suggestion_declined_at FROM focus_session_tasks')
+          .get();
+      expect(rows.single.read<String>('id'), 'fst1');
+      expect(rows.single.read<String>('task_id'), 't1');
+      expect(rows.single.read<int>('position'), 0);
+      expect(rows.single.read<String?>('batch_id'), isNull,
+          reason: 'an existing entry is in no batch');
+      expect(rows.single.read<String?>('batch_suggestion_declined_at'),
+          isNull,
+          reason: 'an existing entry was never declined');
+    });
+
+    test('a store that already carries the columns upgrades without failing',
+        () async {
+      final raw = sqlite3.openInMemory();
+      addTearDown(raw.close);
+
+      final seed = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      await seed.customStatement('SELECT 1');
+      await seed.customStatement('PRAGMA user_version = 12');
+      await seed.close();
+
+      final upgraded = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      addTearDown(upgraded.close);
+
+      expect(await _columnNames(upgraded, 'focus_session_tasks'),
+          containsAll(['batch_id', 'batch_suggestion_declined_at']));
     });
   });
 }

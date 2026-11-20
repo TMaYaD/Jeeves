@@ -12,6 +12,7 @@ import '../../sync/collection_codecs.dart';
 import '../../sync/ids.dart' show captureTagIdFor, todoTagIdFor;
 import '../../utils/tag_colors.dart';
 import '../gtd_database.dart';
+import 'focus_session_dao.dart' show FocusSessionDao;
 
 export '../../sync/ids.dart' show todoTagIdFor;
 
@@ -102,6 +103,35 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
           ..orderBy([(t) => OrderingTerm.asc(t.id)])
           ..limit(1))
         .getSingleOrNull();
+  }
+
+  /// The context tags of the open session's Plan Outcomes, keyed by Outcome id,
+  /// live (issue #407). Only tags of type `context` are returned, in name order;
+  /// an Outcome with none is absent. Reads the same open session as
+  /// [FocusSessionDao]'s Plan queries.
+  Stream<Map<String, List<({String id, String name})>>>
+      watchContextTagsForActiveSessionPlan() {
+    return customSelect(
+      'SELECT fst.task_id AS task_id, tags.id AS tag_id, tags.name AS tag_name '
+      'FROM focus_session_tasks fst '
+      'JOIN todo_tags tt ON tt.todo_id = fst.task_id '
+      'JOIN tags ON tags.id = tt.tag_id AND tags.type = \'context\' '
+      'WHERE fst.focus_session_id = (SELECT id FROM focus_sessions '
+      'WHERE ended_at IS NULL '
+      '${FocusSessionDao.openSessionWinnerFirstSql} LIMIT 1) '
+      'ORDER BY tags.name, tags.id',
+      variables: [],
+      readsFrom: {attachedDatabase.focusSessionTasks, attachedDatabase.focusSessions, todoTags, tags},
+    ).watch().map((rows) {
+      final byTask = <String, List<({String id, String name})>>{};
+      for (final row in rows) {
+        (byTask[row.read<String>('task_id')] ??= []).add((
+          id: row.read<String>('tag_id'),
+          name: row.read<String>('tag_name'),
+        ));
+      }
+      return byTask;
+    });
   }
 
   /// Stream of tags of [type] paired with their active-task count.
