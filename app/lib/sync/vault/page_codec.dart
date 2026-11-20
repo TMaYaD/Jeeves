@@ -167,7 +167,9 @@ String renderPage(PageModel page) {
   return out.toString();
 }
 
-final RegExp _plainScalar = RegExp(r'^[A-Za-z0-9][A-Za-z0-9 _./+-]*$');
+final RegExp _plainScalar = RegExp(r'^[A-Za-z0-9][A-Za-z0-9 _./:+-]*$');
+// A colon followed by a space, or ending the text, makes a plain scalar a mapping key.
+final RegExp _colonBreaksPlain = RegExp(r': |:$');
 // A number, exponent forms included: a strict YAML reader types `1e5` as a float.
 final RegExp _numberLike = RegExp(r'^[0-9.+-]+([eE][+-]?[0-9]+)?$');
 const Set<String> _reservedWords = {'true', 'false', 'null', 'yes', 'no', 'on', 'off'};
@@ -177,6 +179,7 @@ String _renderScalarOrList(Object value) {
   final text = value as String;
   final plain = _plainScalar.hasMatch(text) &&
       !text.endsWith(' ') &&
+      !_colonBreaksPlain.hasMatch(text) &&
       !_numberLike.hasMatch(text) &&
       !_reservedWords.contains(text.toLowerCase());
   return plain ? text : jsonEncode(text);
