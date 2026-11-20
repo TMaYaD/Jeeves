@@ -56,7 +56,13 @@ final syncAlarmResolverProvider = Provider<SyncAlarmResolver>((ref) {
     final client = await stack.workspaceClientFactory(condition.workspaceId);
     switch (condition.source) {
       case SyncConditionSource.standingCondition:
-        await client.resolveAlarm(condition.rowId, resolution);
+        await client.resolveAlarm(
+          condition.rowId,
+          resolution,
+          // The accusation the User was shown, so one raised again since is
+          // refused as a stale answer rather than answered by mistake.
+          expectedOccurrenceCount: condition.occurrenceCount,
+        );
       case SyncConditionSource.refusedItem:
         await client.resolveRefusedItem(condition.rowId, resolution);
     }

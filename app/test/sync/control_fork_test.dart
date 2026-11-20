@@ -611,6 +611,18 @@ void main() {
       reason: 'the Grant is applied, and it was live at the change\'s own seq',
     );
 
+    // The corrected view authorizes the change at its own seq, so a replay that
+    // skipped it can only be skipping the User's decision.
+    expect(
+      (await workspace.a.client.grantsView()).verdictFor(
+        authorMemberId: grantee.fixture.memberId,
+        opClass: opClassContent,
+        seq: content,
+      ),
+      isNull,
+      reason: 'nothing but the decision keeps the change out',
+    );
+
     // The User is asked about the refusal, and refuses it for good.
     final refusal = (await workspace.a.client.integrityAlarms())
         .singleWhere((row) => row.kind == IntegrityAlarmKind.noLiveGrant.code);

@@ -1323,7 +1323,14 @@ void main() {
       await a.client.resolveAlarm(fork.id, AlarmResolution.rejectedPermanently);
 
       final answered = (await a.client.quarantined())
-          .where((row) => row.authorSeq == firstPeerContentAuthorSeq + 2);
+          .where((row) => row.authorSeq == firstPeerContentAuthorSeq + 2)
+          .toList();
+      // Both original claimants are still there, and both are answered.
+      expect(
+        answered.map((row) => row.id).toSet(),
+        claimants.map((row) => row.id).toSet(),
+        reason: 'neither claimant was deleted',
+      );
       expect(answered.every((row) =>
           row.resolution == AlarmResolution.rejectedPermanently.code), isTrue,
           reason: 'both claimants were proven incompatible with the head');
@@ -1447,11 +1454,50 @@ void main() {
       expect(sameBytes(settled.envelope, refused), isTrue);
       expect(settled.releasedAt, isNull);
       expect((await a.client.health()).reportableQuarantineCount, 0);
-      // A refusal that escalates to an alarm is answered on the alarm, not here.
+      // A decision the refusal does not offer is refused.
       await expectLater(
         a.client.resolveRefusedItem(row.id, AlarmResolution.keptOurs),
         throwsA(isA<StateError>()),
       );
+    });
+
+    test('a refusal that escalates to an alarm is answered on the alarm, not '
+        'on the row', () async {
+      final planted = await plantTamperedEnvelope();
+      final row = (await a.client.quarantined()).single;
+
+      // The decision is one the row could otherwise take: only the alarm guard
+      // stands in the way.
+      await expectLater(
+        a.client.resolveRefusedItem(row.id, AlarmResolution.rejectedPermanently),
+        throwsA(isA<StateError>()),
+      );
+
+      expect((await a.client.quarantined()).single.resolution, isNull);
+      expect(
+        (await a.alarmsByKind())[IntegrityAlarmKind.signatureInvalid.code]!
+            .resolvedAt,
+        isNull,
+      );
+    });
+
+    test('an answer about an accusation raised again since is refused',
+        () async {
+      final planted = await plantTamperedEnvelope();
+
+      await expectLater(
+        a.client.resolveAlarm(
+          planted.alarm.id,
+          AlarmResolution.rejectedPermanently,
+          expectedOccurrenceCount: planted.alarm.occurrenceCount + 1,
+        ),
+        throwsA(isA<StateError>()),
+      );
+
+      final alarm =
+          (await a.alarmsByKind())[IntegrityAlarmKind.signatureInvalid.code]!;
+      expect(alarm.resolution, isNull);
+      expect((await a.client.quarantined()).single.resolution, isNull);
     });
 
     test('a resolution the kind does not offer is refused outright', () async {
@@ -1699,6 +1745,12 @@ void main() {
       // outstanding work is still outstanding when the prune is processed.
       a.client.projector = _FailingOnceProjector(original);
       await expectLater(a.sync(), throwsA(isA<StateError>()));
+      // The prune released the held row; the projection of it is still owed.
+      final releasedHeld = (await a.client.quarantined())
+          .singleWhere((row) => row.id == held.id);
+      expect(releasedHeld.releasedAt, isNotNull,
+          reason: 'the prune is what released the claimant');
+      expect(releasedHeld.resolutionProjectedAt, isNull);
 
       // The accusation stands: the settlement released the claimant, but the
       // change is still not on the screen, so there is still work to be done
@@ -1788,10 +1840,15 @@ void main() {
 
       final gap =
           (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
-      await a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+      // The answer says out loud that it could not be carried out.
+      await expectLater(
+        a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream),
+        throwsA(isA<StateError>()),
+      );
 
       // The change could not be read, so it was not taken: the row stays
       // undecided, and an undecided row keeps the accusation standing.
+      expect(await _doc(a, workspace), {'step': 'one'});
       final after = (await a.client.quarantined()).single;
       expect(after.id, held.id);
       expect(after.resolution, isNull);
@@ -1814,7 +1871,10 @@ void main() {
 
       final gap =
           (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
-      await a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+      await expectLater(
+        a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream),
+        throwsA(isA<StateError>()),
+      );
 
       expect(await _doc(a, workspace), {'step': 'one'});
       final after = (await a.client.quarantined()).single;
@@ -1867,7 +1927,10 @@ void main() {
           (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
       expect(gap.resolvedAt, isNull);
 
-      await a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+      await expectLater(
+        a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream),
+        throwsA(isA<StateError>()),
+      );
 
       expect(await _doc(a, workspace), {'step': 'one'});
       final after = (await a.client.quarantined())
@@ -2002,10 +2065,16 @@ void main() {
       final flush = a.client.flushOutbox();
       await a.link.postGateReached.future;
 
-      // The User answers while the flush is holding its batch.
-      await a.client.resolveAlarm(rollback.id, AlarmResolution.keptOurs);
-      gate.complete();
-      await flush;
+      // The User answers while the flush is holding its batch. The gate is
+      // released and the flush joined on every path, so a failed answer leaves
+      // no upload waiting behind it — and is still the failure that is seen.
+      try {
+        await a.client.resolveAlarm(rollback.id, AlarmResolution.keptOurs);
+      } finally {
+        if (!gate.isCompleted) gate.complete();
+        a.link.postGate = null;
+        await flush;
+      }
 
       // The decision is recorded, but the re-send has not been acknowledged:
       // the flush never carried the bytes from the agreed position.
@@ -2017,6 +2086,14 @@ void main() {
         await unsentAuthorSeqs(),
         contains(from),
         reason: 'the write from the agreed position is still queued',
+      );
+      // The acknowledgement the old flush brought back belongs to the old
+      // queue: the write it carried was re-queued with the rest, and the
+      // server may have lost it in the rollback the answer is about.
+      expect(
+        await unsentAuthorSeqs(),
+        [from, from + 1],
+        reason: 'a pre-answer acknowledgement does not count toward the re-send',
       );
 
       // The re-send goes out, and only then does the accusation close.

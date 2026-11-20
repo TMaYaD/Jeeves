@@ -922,6 +922,7 @@ class SyncClient {
   /// for. Chunking in chain order is what keeps the server seeing this author's
   /// positions in the order they were authored.
   Future<FlushOutcome> flushOutbox() async {
+    final queueGeneration = _outboxQueueGeneration;
     final pending = await (_db.select(_db.outbox)
           ..where((row) => row.workspaceId.equals(workspaceId) & row.sentAt.isNull())
           ..orderBy([(row) => OrderingTerm(expression: row.authorSeq)]))
@@ -936,6 +937,9 @@ class SyncClient {
         start,
         min(start + maxOpsPerBatch, pending.length),
       );
+      // The queue was re-made since this flush read it: what is left of this
+      // batch is stale, and the next flush reads the new queue.
+      if (queueGeneration != _outboxQueueGeneration) return FlushOutcome.retained;
       try {
         // A duplicate result is still an acknowledgement: the server holds the op.
         await transport.postOps(workspaceId, [for (final row in chunk) row.envelope]);
@@ -949,6 +953,8 @@ class SyncClient {
         await _dropUnacceptedOps(pending.sublist(start));
         return FlushOutcome.genesisSuperseded;
       }
+      // An acknowledgement for the old queue does not count toward the new one.
+      if (queueGeneration != _outboxQueueGeneration) return FlushOutcome.retained;
       await _markSent(chunk);
     }
     await _settleKeptOursRollback();
@@ -1529,7 +1535,10 @@ class SyncClient {
         ));
         // Newly authorized by the corrected view: clear the stale refusal so the
         // row stops claiming a verdict that no longer stands.
-        if (refused != null) await _clearRefused(row.seq);
+        if (refused != null) {
+          await _clearRefused(row.seq);
+          await _retireAdmittedRefusal(row, header.authorMemberId);
+        }
         await _stampApplied(row.seq);
       } on SyncRejection catch (rejection) {
         // A guard that fires on a *fresh* evaluation is recorded as it was the
@@ -1564,6 +1573,35 @@ class SyncClient {
   /// Every entity the reduced substrate currently holds any trace of — see the
   /// top-level [reducedEntities], which the first-open domain rebuild shares.
   Future<Set<AffectedEntity>> _reducedEntities() => reducedEntities(_db);
+
+  /// A rebuild admitted a change the log had refused for want of a Grant.
+  ///
+  /// The refusal no longer stands, so neither does the offer to refuse it for
+  /// good: offering it would close the accusation over a change that is
+  /// applied, and no later rebuild would check the decision. The held copy is
+  /// kept as evidence and marked released, like any refusal the world has
+  /// answered, and the accusation is closed once nothing it covers is left.
+  /// A refusal the User already decided is not touched.
+  Future<void> _retireAdmittedRefusal(OpLogRow row, String? author) async {
+    final held = await (_db.select(_db.quarantinedOps)
+          ..where((r) =>
+              r.workspaceId.equals(workspaceId) &
+              r.seq.equals(row.seq) &
+              r.reason.equals(SyncRejectionReason.noLiveGrant.code) &
+              r.releasedAt.isNull() &
+              r.resolution.isNull()))
+        .get();
+    for (final r in held) {
+      if (sameBytes(r.envelope, row.envelope)) await _markReleased(r.id);
+    }
+    final kind = alarmForRejection(SyncRejectionReason.noLiveGrant);
+    if (kind == null) return;
+    final alarm = await _standingAlarm(kind, author);
+    if (alarm == null) return;
+    if ((await _rowsCoveredByAlarm(alarm, kind)).isEmpty) {
+      await _resolveAlarm(kind, author);
+    }
+  }
 
   Future<void> _clearRefused(int seq) async {
     await (_db.update(_db.opLog)
@@ -3304,6 +3342,14 @@ class SyncClient {
   /// and re-fetching per op would spend a round-trip per op.
   bool _epochKeyRefreshRequired = false;
 
+  /// Bumped every time the outbox is re-queued for a re-send ("keep ours").
+  ///
+  /// A flush remembers the generation it read its queue in. An acknowledgement
+  /// that comes back after the queue was re-made belongs to the old queue: the
+  /// server may have lost that very write in the rollback the re-send answers,
+  /// so it must not mark the re-queued row sent.
+  int _outboxQueueGeneration = 0;
+
   /// The directory's signing-key count at the last
   /// [_releaseOpsAwaitingMemberRegistration] scan.
   ///
@@ -3984,6 +4030,10 @@ class SyncClient {
           header.authorSeq != row.authorSeq) {
         return const {};
       }
+      // This device's own position held with other bytes than the outbox has is
+      // a divergence, and the local copy stands — the receive path refuses it
+      // the same way, and taking upstream must not apply what it refuses.
+      await _checkOwnWrites(header, row.envelope);
       final signPk =
           directory.publicKeyFor(header.authorMemberId, header.authorKeyId);
       await verifyEnvelope(row.envelope, signPk);
@@ -4041,6 +4091,7 @@ class SyncClient {
     final affected = <AffectedEntity>{};
     final now = _now();
     var complete = false;
+    var stale = false;
     String? author;
     final decidedRowIds = <int>[];
     await _db.transaction(() async {
@@ -4048,6 +4099,7 @@ class SyncClient {
       // arrived while they were answering is a new question, not this one.
       final current = await _alarmRow(alarm.id);
       if (current == null || current.occurrenceCount != alarm.occurrenceCount) {
+        stale = true;
         return;
       }
       author = current.authorMemberId;
@@ -4105,16 +4157,32 @@ class SyncClient {
     if (projector != null) {
       final touched = await projector.project(affected);
       await _reconcileProjected(touched);
-      // The change is on the User's screen now, so the decision has taken
-      // effect. The stamp is what tells the recovery there is nothing left to
-      // put there — and it is only written once the projection has succeeded.
-      await _stampResolutionsProjected(decidedRowIds);
     }
-    if (!complete) return;
-    // The change is in the domain store now, so the decision has taken effect
-    // and the accusation is settled: nothing is left to decide about this
-    // author — and so is the fork the gap was holding open.
-    await _settleAuthorAlarms(author, now);
+    // The change is on the User's screen now, so the decision has taken
+    // effect. The stamp is what tells the recovery there is nothing left to put
+    // there — it is only written once the projection has succeeded — and it
+    // commits **with** the settlement: an app stopped between the two would
+    // leave an open accusation that no later pull looks at.
+    await _db.transaction(() async {
+      await _stampResolutionsProjected(decidedRowIds);
+      // The change is in the domain store now, so the accusation is settled:
+      // nothing is left to decide about this author — and so is the fork the
+      // gap was holding open.
+      if (complete && !stale) await _settleAuthorAlarms(author, now);
+    });
+    if (stale) {
+      throw StateError(
+        'the accusation changed while the answer was being recorded',
+      );
+    }
+    // What was applied stays applied and projected. The ones that could not be
+    // applied are said out loud, and their rows stay undecided.
+    if (!complete) {
+      throw StateError(
+        'some of the changes that arrived could not be applied, so the '
+        'accusation stands',
+      );
+    }
   }
 
   /// Stamp the rows whose take upstream has reached the domain store.
@@ -4159,12 +4227,19 @@ class SyncClient {
         .get();
     if (pending.isEmpty) return;
     final affected = <AffectedEntity>{};
+    final touchedByRow = <int, Set<AffectedEntity>>{};
     for (final row in pending) {
       // The change is applied again, so the merge sees it and names its
-      // entities. A row whose bytes cannot be read applies nothing — and that
-      // is the answer the decision already has.
-      affected.addAll(await _applyHeldChange(row));
+      // entities. A row that no longer re-verifies — a Grant a corrected
+      // control branch took away, bytes that cannot be read — applies nothing,
+      // and **stays pending**: it is not stamped, so the accusation it holds
+      // open is not closed over a change that is not there.
+      final touched = await _applyHeldChange(row);
+      if (touched.isEmpty) continue;
+      touchedByRow[row.id] = touched;
+      affected.addAll(touched);
     }
+    if (touchedByRow.isEmpty) return;
     // The whole reduced state, so the changes that were in the batch the
     // failed projection was carrying reach the screen too.
     affected.addAll({
@@ -4176,15 +4251,28 @@ class SyncClient {
       leaveEntitiesAwaitingMerge: true,
     );
     await _reconcileProjected(touched);
-    // The changes are on the screen now, so the decision has taken effect and
-    // the recovery has nothing left to do.
-    await _stampResolutionsProjected([for (final row in pending) row.id]);
-    // And the accusation the decision answered can close: the work it was
-    // about is done, and nothing it covers is left undecided.
-    for (final author in {for (final row in pending) row.authorMemberId}) {
-      if (author == null) continue;
-      await _settleAuthorAlarms(author, _now());
-    }
+    // An entity with a local change still in the outbox is left alone by this
+    // walk, so a row whose change touched one has not reached the screen yet:
+    // it stays pending until the outbox drain has merged and projected it.
+    final awaitingMerge = await projector.entitiesAwaitingMerge();
+    final projected = [
+      for (final entry in touchedByRow.entries)
+        if (!entry.value.any(awaitingMerge.contains)) entry.key,
+    ];
+    if (projected.isEmpty) return;
+    final authors = {
+      for (final row in pending)
+        if (projected.contains(row.id)) row.authorMemberId,
+    };
+    // The marker and the settlement commit together, so an app stopped between
+    // them cannot leave an open accusation that no later pull looks at.
+    await _db.transaction(() async {
+      await _stampResolutionsProjected(projected);
+      for (final author in authors) {
+        if (author == null) continue;
+        await _settleAuthorAlarms(author, _now());
+      }
+    });
   }
 
   /// Settle the accusations this author's take upstream answered.
@@ -4193,6 +4281,9 @@ class SyncClient {
   /// Both are settled only when nothing they cover is left undecided.
   Future<void> _settleAuthorAlarms(String? author, DateTime now) async {
     await _db.transaction(() async {
+      // A take upstream that has not reached the domain store is work still to
+      // do: the accusation stands until it has.
+      if (author != null && await _hasUnprojectedTakeUpstream(author)) return;
       final gap = await _standingAlarm(
         IntegrityAlarmKind.authorChainGap,
         author,
@@ -4296,6 +4387,9 @@ class SyncClient {
                 row.workspaceId.equals(workspaceId) &
                 row.authorSeq.isBiggerOrEqualValue(from)))
           .write(OutboxCompanion(sentAt: const Value<DateTime?>(null)));
+      // Flushes already in flight read the old queue; their acknowledgements
+      // must not mark the rows re-queued here.
+      _outboxQueueGeneration++;
     });
     if (stale) {
       throw StateError(
@@ -4326,7 +4420,11 @@ class SyncClient {
   /// ([_takeUpstream]), because it applies the held changes rather than only
   /// writing a decision about them. **Keeping ours on a rollback has one too**
   /// ([_keepOurs]), because its work is an upload rather than a note.
-  Future<void> resolveAlarm(int alarmRowId, AlarmResolution resolution) async {
+  Future<void> resolveAlarm(
+    int alarmRowId,
+    AlarmResolution resolution, {
+    int? expectedOccurrenceCount,
+  }) async {
     final alarm = await (_db.select(_db.integrityAlarms)
           ..where((row) => row.id.equals(alarmRowId)))
         .getSingleOrNull();
@@ -4336,6 +4434,15 @@ class SyncClient {
     if (alarm.workspaceId != workspaceId) {
       throw StateError(
         'integrity alarm $alarmRowId belongs to another Workspace',
+      );
+    }
+    // The answer is about the accusation the User was shown. One raised again
+    // since then — at another position, with more behind it — is a new
+    // question, and nothing is queued or stamped for it.
+    if (expectedOccurrenceCount != null &&
+        alarm.occurrenceCount != expectedOccurrenceCount) {
+      throw StateError(
+        'the accusation changed after it was shown; ask again',
       );
     }
     final kind = integrityAlarmKindByCodeOrNull(alarm.kind);
@@ -4711,6 +4818,9 @@ class SyncClient {
     if (author == null) return;
     final gap = await _standingAlarm(IntegrityAlarmKind.authorChainGap, author);
     if (gap == null) return;
+    // A row taken upstream that has not reached the domain store is still
+    // work: rejecting the fork does not answer it.
+    if (await _hasUnprojectedTakeUpstream(author)) return;
     await _settleWhenNothingUndecided(
       alarm: gap,
       kind: IntegrityAlarmKind.authorChainGap,

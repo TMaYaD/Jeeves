@@ -337,6 +337,9 @@ class DeviceLink implements SyncTransport, UserTransport {
     if (gate != null) {
       if (!postGateReached.isCompleted) postGateReached.complete();
       await gate.future;
+      // The device can have gone offline while the batch was held: an upload
+      // that was released after that never leaves it.
+      _requireOnline();
     }
     final results = await _member.postOps(workspaceId, envelopes);
     if (workspaceId == dropNextPostResponseForWorkspaceId) {

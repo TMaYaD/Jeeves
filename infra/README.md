@@ -241,11 +241,15 @@ export of a pinned commit when the host checkout is shared between runs. Sync
 that tree first, or the build compiles whatever was synced last. The excludes keep `.git` out and leave the
 guest's build output and caches alone, so the next build stays warm:
 
+`GUEST_DIR` is the guest directory this run builds in — `jeeves`, or the run's
+own directory (see below). Every command that follows uses the same one.
+
 ```bash
+GUEST_DIR=jeeves   # or jeeves-<its-own-name>
 rsync -a --delete \
   --exclude=.git --exclude=build/ --exclude=.dart_tool/ --exclude=.gradle/ \
   -e 'ssh -p 2222 -i ~/.ssh/id_ed25519' \
-  <mac-jeeves-checkout>/ paperclipai@127.0.0.1:~/jeeves/
+  <mac-jeeves-checkout>/ "paperclipai@127.0.0.1:~/$GUEST_DIR/"
 ```
 
 **Check the sync landed by content, not by rsync's silence.** A dry run
@@ -261,24 +265,28 @@ same `-e` and `--exclude` options:
 rsync -anci --delete \
   --exclude=.git --exclude=build/ --exclude=.dart_tool/ --exclude=.gradle/ \
   -e 'ssh -p 2222 -i ~/.ssh/id_ed25519' \
-  <mac-jeeves-checkout>/ paperclipai@127.0.0.1:~/jeeves/
+  <mac-jeeves-checkout>/ "paperclipai@127.0.0.1:~/$GUEST_DIR/"
 ```
 
 An empty list means the guest matches the export byte for byte. Anything
 listed is named: a file that would be transferred, or deleted, so a stale or
-missing test is read off the list rather than inferred. Sync everything the
-list names before you build.
+missing test is read off the list rather than inferred. The plain `rsync -a`
+skips a file whose size and modification time match, so it will not repair
+what the list names. Repair with the same command as the dry run, without
+`-n` (`rsync -aci --delete …`), then repeat the dry run and build only when
+it prints nothing.
 
 **Give a parallel run its own directory.** `~/jeeves` is one shared checkout,
 and two runs that sync different branches into it overwrite each other's
 tree: the second sync wins, and the first run then compiles and tests the
 second run's sources — which pass, and mean nothing. A run that shares the
-guest with another syncs into `~/jeeves-<its-own-name>/` and builds there.
+guest with another sets `GUEST_DIR=jeeves-<its-own-name>` for the sync, the
+check and the build, and builds there.
 
 Then, on the guest, the same command `pr-apk.yml` runs:
 
 ```bash
-cd ~/jeeves/app
+cd ~/$GUEST_DIR/app
 flutter pub get && \
   dart run build_runner build --delete-conflicting-outputs && \
   flutter build apk --profile --split-per-abi --target-platform android-arm64 --flavor dev

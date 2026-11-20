@@ -171,7 +171,7 @@ const String syncHealthRejectRefusedItemLabel = syncHealthRejectPermanentlyLabel
 /// here rather than coloured — the indicator is the blue Syncing one, and amber
 /// is spent on the calm state (docs/DESIGN.md § Sync health).
 const String syncHealthResolutionInFlightSentence =
-    "Sending this device's changes again.";
+    "This device's changes are queued to be sent again.";
 
 /// What the row says when a decision could not be finished.
 ///

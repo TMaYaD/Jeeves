@@ -247,7 +247,7 @@ through.
 | `prune_attestation_divergence` | reported | none — #660 | No mechanism exists to contest a compactor's attestation. |
 | Unknown code, self-healing refusal | — | none | Listed (unknown) or hidden (self-healing), as the classification says. |
 
-A decision is recorded on the refused change and the alarm; nothing is deleted.
+Decisions are stored on the refused change, the alarm, or both; bytes are kept.
 
 ## What is asserted, and where
 
