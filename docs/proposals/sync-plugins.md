@@ -76,7 +76,7 @@ The outbound half already exists: `DomainOpCapture` emits one coalesced `(collec
 
 **Vault.** A folder of Markdown pages that *is* the user's GTD system on disk, mirroring the paper practice of one sheet per thing:
 
-- `Outcomes/<slug>.md` — one page per Outcome. Frontmatter carries its id, Intent, due date, Area and Labels; the body carries its notes and its Actions as a checklist.
+- `Outcomes/<slug>.md` — one page per Outcome, named from its title when first written and keeping that name. Frontmatter carries its id, Intent, due date, Area and Labels; the body carries its notes and its Actions as a checklist.
 - `Sessions/<date>-<session-id>.md` — one sheet per FocusSession, so two sittings on one day never collide: the Plan as a checklist of links to Outcome pages, and the TimeLogs and Dispositions given at Review carried in the machine block rather than written on the sheet. The sheet a person writes when they sit down at the desk and files away when they leave. It is read only: a session is history, and history is not edited by hand.
 - `Inbox/<capture-id>.md` — one page per Capture. The body is the captured text and is never rewritten ([ADR-0023](../adr/0023-clarification-never-rewrites-the-capture.md)); frontmatter carries what does change — `clarified_at` and the tag hints — and merges like any other field.
 
