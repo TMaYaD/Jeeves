@@ -3,28 +3,19 @@ library;
 
 import 'package:drift/drift.dart';
 import '../../utils/uuid.dart';
-import 'package:uuid/enums.dart' show Namespace;
 
 import '../../sync/collection_codecs.dart';
+// The junction family derives its row ids here, so that a plugin which has to
+// name a link — the vault, when a person types a label into a page — reaches
+// the same derivation without the DAO layer. Re-exported so the callers that
+// already read it from this file keep reading it from here.
+import '../../sync/ids.dart' show captureTagIdFor, todoTagIdFor;
 import '../../utils/tag_colors.dart';
 import '../gtd_database.dart';
-// `capture_tags` is the second junction that references `tags.id`, so the fold
-// and the rehome pass both need its derived id. Owned by `capture_dao.dart`
-// alongside the table's other write paths.
-import 'capture_dao.dart' show captureTagIdFor;
+
+export '../../sync/ids.dart' show todoTagIdFor;
 
 part 'tag_dao.g.dart';
-
-/// Deterministic `todo_tags.id` for the (todoId, tagId) pair.
-///
-/// The op log names an entity by one id, so the junction row needs an
-/// explicit one. Deriving it as a UUID v5 of the pair makes re-assignment of the
-/// same tag produce the same id, so `INSERT OR REPLACE` collapses to a no-op
-/// rather than inserting a duplicate row each time the user taps the tag — and
-/// two devices assigning the same tag offline reduce to one junction entity
-/// rather than forking (`sync/ids.dart`).
-String todoTagIdFor(String todoId, String tagId) =>
-    uuid.v5(Namespace.url.value, 'jeeves://todo_tag/$todoId/$tagId');
 
 /// A [Tag] together with the count of active (not-done) tasks.
 class TagWithCount {

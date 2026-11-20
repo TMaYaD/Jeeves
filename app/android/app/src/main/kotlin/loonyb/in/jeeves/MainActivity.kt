@@ -12,6 +12,9 @@ class MainActivity : FlutterFragmentActivity() {
         super.configureFlutterEngine(flutterEngine)
         flutterEngine.plugins.add(MwaPlugin())
         flutterEngine.plugins.add(CalendarPlugin())
+        // The folder channel: the system folder picker and the document tree it
+        // grants. One channel, one picker, no broad storage permission.
+        flutterEngine.plugins.add(FolderStoragePlugin())
         // FLAG_SECURE, on request from lib/services/secure_screen.dart. Needed by
         // any surface that shows a secret once: without it the system's recents
         // thumbnail is a real capture of the recovery passphrase, taken with no
