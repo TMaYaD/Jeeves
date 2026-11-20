@@ -343,8 +343,54 @@ void main() {
             habitId: habitId, userId: _userId, today: '2026-11-18',
             now: _now, commitment: monthly);
         final commitments = await db.habitDao.commitmentsFor(habitId);
+        expect(commitments, hasLength(3));
+        // The write order is carried by strictly increasing creation times,
+        // so the winner never depends on the random id.
+        expect(commitments[0].createdAt.isBefore(commitments[1].createdAt),
+            isTrue);
+        expect(commitments[1].createdAt.isBefore(commitments[2].createdAt),
+            isTrue);
         expect(commitmentInForceOn(commitments, '2026-11-18')!.repeatKind,
             HabitRepeatKind.timesPerMonth);
+      });
+
+      test('refuses a new unit that reaches back to measured Check-ins',
+          () async {
+        final habitId = await createHabit(
+          commitment: const HabitCommitmentDraft(
+              repeatKind: HabitRepeatKind.everyDay,
+              unitLabel: 'pages',
+              dailyTargetAmount: 20),
+        );
+        await db.habitDao.addCheckIn(
+            habitId: habitId, userId: _userId, countsForDay: '2026-11-16',
+            now: _now, measuredAmount: 10);
+        await expectLater(
+          db.habitDao.setCommitment(
+            habitId: habitId,
+            userId: _userId,
+            today: '2026-11-18',
+            now: _later,
+            commitment: const HabitCommitmentDraft(
+                repeatKind: HabitRepeatKind.timesPerWeek,
+                timesPerPeriod: 3,
+                unitLabel: 'minutes',
+                dailyTargetAmount: 30),
+          ),
+          throwsArgumentError,
+        );
+        // The same unit with a new target is still allowed.
+        await db.habitDao.setCommitment(
+          habitId: habitId,
+          userId: _userId,
+          today: '2026-11-18',
+          now: _later,
+          commitment: const HabitCommitmentDraft(
+              repeatKind: HabitRepeatKind.timesPerWeek,
+              timesPerPeriod: 3,
+              unitLabel: 'pages',
+              dailyTargetAmount: 30),
+        );
       });
 
       test('refuses a measurable commitment that reaches back to a binary Check-in',
@@ -1052,6 +1098,50 @@ void main() {
     });
 
     group('pause, resume, archive and restore', () {
+      test('refuses a pause that reaches into a later pause', () async {
+        final habitId = await createHabit();
+        await db.habitDao.pause(
+            habitId: habitId, userId: _userId, today: '2026-11-25',
+            now: _now, resumesOn: '2026-11-28');
+        await expectLater(
+          db.habitDao.pause(
+              habitId: habitId, userId: _userId, today: '2026-11-20',
+              now: _now, resumesOn: '2026-11-26'),
+          throwsArgumentError,
+        );
+        // Ending on the day the next period starts is fine.
+        await db.habitDao.pause(
+            habitId: habitId, userId: _userId, today: '2026-11-20',
+            now: _now, resumesOn: '2026-11-25');
+        expect(await db.habitDao.stateOn(habitId, '2026-11-24'),
+            HabitState.paused);
+      });
+
+      test('restore closes only the archive that covers the day', () async {
+        final habitId = await createHabit();
+        await db.habitDao.archive(
+            habitId: habitId, userId: _userId, today: '2026-11-25', now: _now);
+        await db.habitDao.archive(
+            habitId: habitId, userId: _userId, today: '2026-11-20', now: _now);
+        await db.habitDao.restore(
+            habitId: habitId, userId: _userId, today: '2026-11-22', now: _now);
+        expect(await db.habitDao.stateOn(habitId, '2026-11-22'),
+            HabitState.active);
+        expect(await db.habitDao.stateOn(habitId, '2026-11-26'),
+            HabitState.archived);
+      });
+
+      test('watchHabits reads only the periods that cover the day', () async {
+        final habitId = await createHabit();
+        await db.habitDao.pause(
+            habitId: habitId, userId: _userId, today: '2026-11-18',
+            now: _now, resumesOn: '2026-11-20');
+        final active = await db.habitDao.watchHabits('2026-11-25').first;
+        expect(active.single.state, HabitState.active);
+        final paused = await db.habitDao.watchHabits('2026-11-19').first;
+        expect(paused.single.state, HabitState.paused);
+      });
+
       test('a pause with an end date reads as active from that date', () async {
         final habitId = await createHabit();
 

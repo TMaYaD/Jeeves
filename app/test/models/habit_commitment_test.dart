@@ -255,6 +255,19 @@ void main() {
       expect(() => commitment(id: 'c'), returnsNormally);
     });
 
+    test('the target is finite', () {
+      expect(
+        () => commitment(
+            id: 'c', unitLabel: 'pages', dailyTargetAmount: double.infinity),
+        throwsArgumentError,
+      );
+      expect(
+        () => commitment(
+            id: 'c', unitLabel: 'pages', dailyTargetAmount: double.nan),
+        throwsArgumentError,
+      );
+    });
+
     test('the target is more than zero', () {
       expect(
         () => commitment(id: 'c', unitLabel: 'pages', dailyTargetAmount: 0),

@@ -379,6 +379,19 @@ void main() {
       return id;
     }
 
+    test('a rehome onto a destination that is gone leaves the link alone',
+        () async {
+      final habitId = await createHabit();
+      final source = await createLabel('src', 'Focus');
+      await db.habitDao.assignLabel(
+          habitId: habitId, userId: _userId, tagId: source);
+
+      await db.tagDao.repointTagReferences(from: source, to: 'missing-tag');
+
+      final rows = await db.select(db.habitTags).get();
+      expect(rows.single.tagId, source);
+    });
+
     Future<int> habitTagRowCount(String habitId) async =>
         (await (db.select(db.habitTags)
                   ..where((ht) => ht.habitId.equals(habitId)))

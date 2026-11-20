@@ -566,6 +566,12 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
     required String to,
   }) =>
       attachedDatabase.capturing(() async {
+        // The destination was chosen before this scope began. If it has gone
+        // since (merged away or deleted), moving references onto it would
+        // strand them again, so they stay where they are.
+        final destination = await (select(tags)..where((t) => t.id.equals(to)))
+            .getSingleOrNull();
+        if (destination == null) return;
         await _repointTagReferences(from: from, to: to);
         attachedDatabase.notifyTodosViewWrite(includeTodoTags: true);
         attachedDatabase.notifyCapturesViewWrite();

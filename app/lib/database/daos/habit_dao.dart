@@ -358,7 +358,8 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
         chosenOn: today,
         createdAt: _storedInstant(createdAt),
       );
-      await _requireCheckInsStillMatch(habitId, [...existing, built], built);
+      await _requireCheckInsStillMatch(
+          habitId, existing, [...existing, built], built);
       await into(habitCommitments)
           .insert(_commitmentCompanion(built, userId));
       // The Habit's own row is stamped too: its rule just changed.
@@ -567,6 +568,17 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
         throw ArgumentError.value(resumesOn, 'resumesOn',
             'A pause ends after the day it starts.');
       }
+      // The whole interval must be free, not only its first day: a pause that
+      // reaches into a later pause or archive would name a first active day
+      // the Habit is not active on. A pause may end on the day another period
+      // starts.
+      final overlapping = (await _periodsFor(habitId)).any((p) =>
+          (endDay == null || p.startsOn.compareTo(endDay) < 0) &&
+          (p.endsBefore == null || p.endsBefore!.compareTo(startDay) > 0));
+      if (overlapping) {
+        throw ArgumentError.value(habitId, 'habitId',
+            'The pause would overlap a pause or archive of the Habit.');
+      }
       await into(habitInactivePeriods).insert(HabitInactivePeriodsCompanion.insert(
             id: Value(uuid.v4()),
             userId: userId,
@@ -687,7 +699,8 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
       await (update(habitInactivePeriods)..where((p) =>
               p.habitId.equals(habitId) &
               p.kind.equals(_archivedKind) &
-              p.endsBefore.isNull()))
+              p.startsOn.isSmallerOrEqualValue(day) &
+              (p.endsBefore.isNull() | p.endsBefore.isBiggerThanValue(day))))
           .write(HabitInactivePeriodsCompanion(endsBefore: Value(day)));
       await _stampEdited(habitId, instant);
     });
@@ -855,7 +868,10 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
     final query = select(habits).join([
       leftOuterJoin(
         habitInactivePeriods,
-        habitInactivePeriods.habitId.equalsExp(habits.id),
+        habitInactivePeriods.habitId.equalsExp(habits.id) &
+            habitInactivePeriods.startsOn.isSmallerOrEqualValue(day) &
+            (habitInactivePeriods.endsBefore.isNull() |
+                habitInactivePeriods.endsBefore.isBiggerThanValue(day)),
       ),
     ]);
     query.orderBy([
@@ -1043,7 +1059,8 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
   /// is binary. Otherwise the change is refused, and the caller can choose a
   /// rule that fits.
   Future<void> _requireCheckInsStillMatch(String habitId,
-      List<HabitCommitment> all, HabitCommitment added) async {
+      List<HabitCommitment> before, List<HabitCommitment> all,
+      HabitCommitment added) async {
     final fromDay = habitDayKey(effectiveStartOf(added));
     final checkIns = await (select(habitCheckIns)
           ..where((c) =>
@@ -1053,6 +1070,18 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
     for (final checkIn in checkIns) {
       final measurable =
           commitmentInForceOn(all, checkIn.countsForDay)?.isMeasurable ?? false;
+      final unitBefore =
+          commitmentInForceOn(before, checkIn.countsForDay)?.unitLabel;
+      final unitAfter =
+          commitmentInForceOn(all, checkIn.countsForDay)?.unitLabel;
+      // An amount is only a number: 10 pages must not turn into 10 minutes.
+      if (checkIn.measuredAmount != null && unitBefore != unitAfter) {
+        throw ArgumentError.value(
+            added.chosenOn,
+            'commitment',
+            'This commitment starts on $fromDay, and the Check-in on '
+                '${checkIn.countsForDay} was measured in another unit.');
+      }
       if (measurable != (checkIn.measuredAmount != null)) {
         throw ArgumentError.value(
             added.chosenOn,

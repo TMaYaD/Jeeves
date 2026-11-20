@@ -280,9 +280,10 @@ class HabitCommitment {
           unitLabel == null ? 'unitLabel' : 'dailyTargetAmount',
           'A measurable Habit has both a unit and a target; a binary Habit has neither.');
     }
-    if (dailyTargetAmount != null && !(dailyTargetAmount > 0)) {
+    if (dailyTargetAmount != null &&
+        !(dailyTargetAmount > 0 && dailyTargetAmount.isFinite)) {
       throw ArgumentError.value(dailyTargetAmount, 'dailyTargetAmount',
-          'The target is more than zero.');
+          'The target is a finite number more than zero.');
     }
   }
 
