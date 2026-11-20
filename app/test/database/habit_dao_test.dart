@@ -330,6 +330,57 @@ void main() {
         expect(commitments.last.createdAt, _later);
       });
 
+      test('a later commitment within one millisecond still wins', () async {
+        final habitId = await createHabit();
+        const weekly = HabitCommitmentDraft(
+            repeatKind: HabitRepeatKind.timesPerWeek, timesPerPeriod: 2);
+        const monthly = HabitCommitmentDraft(
+            repeatKind: HabitRepeatKind.timesPerMonth, timesPerPeriod: 9);
+        await db.habitDao.setCommitment(
+            habitId: habitId, userId: _userId, today: '2026-11-18',
+            now: _now, commitment: weekly);
+        await db.habitDao.setCommitment(
+            habitId: habitId, userId: _userId, today: '2026-11-18',
+            now: _now, commitment: monthly);
+        final commitments = await db.habitDao.commitmentsFor(habitId);
+        expect(commitmentInForceOn(commitments, '2026-11-18')!.repeatKind,
+            HabitRepeatKind.timesPerMonth);
+      });
+
+      test('refuses a measurable commitment that reaches back to a binary Check-in',
+          () async {
+        final habitId = await createHabit();
+        await db.habitDao.addCheckIn(
+            habitId: habitId, userId: _userId, countsForDay: '2026-11-16',
+            now: _now);
+        await expectLater(
+          db.habitDao.setCommitment(
+            habitId: habitId,
+            userId: _userId,
+            today: '2026-11-18',
+            now: _later,
+            commitment: const HabitCommitmentDraft(
+              repeatKind: HabitRepeatKind.timesPerWeek,
+              timesPerPeriod: 3,
+              unitLabel: 'pages',
+              dailyTargetAmount: 20,
+            ),
+          ),
+          throwsArgumentError,
+        );
+        expect(await db.habitDao.commitmentsFor(habitId), hasLength(1));
+      });
+
+      test('refuses a day key that is not canonical', () async {
+        final habitId = await createHabit();
+        await expectLater(
+          db.habitDao.addCheckIn(
+              habitId: habitId, userId: _userId,
+              countsForDay: '2026-+1-+2', now: _now),
+          throwsArgumentError,
+        );
+      });
+
       test('never rewrites an earlier commitment', () async {
         final habitId = await createHabit();
         final before = await db.habitDao.commitmentsFor(habitId);
@@ -681,6 +732,14 @@ void main() {
           kind: HabitAnchorKind.afterHabit,
           anchorHabitId: b,
         );
+        await db.habitDao.setAnchor(
+          habitId: b,
+          userId: _userId,
+          today: '2026-11-18',
+          now: _later,
+          kind: HabitAnchorKind.afterHabit,
+          anchorHabitId: c,
+        );
         // A follows B, B follows C — and A may follow C all the same, because
         // C does not follow A.
         await db.habitDao.setAnchor(
@@ -968,7 +1027,7 @@ void main() {
         final inRange =
             await db.habitDao.checkInsFor(habitId, '2026-11-19', '2026-11-20');
         expect(inRange.map((c) => c.countsForDay),
-            containsAllInOrder(['2026-11-19', '2026-11-20']));
+            ['2026-11-19', '2026-11-20']);
 
         final all = await db.habitDao.checkInsFor(habitId, '2026-11-01', '2026-11-30');
         expect(all.map((c) => c.countsForDay),
@@ -1093,6 +1152,79 @@ void main() {
         );
         expect(await db.habitDao.stateOn(habitId, '2026-11-18'),
             HabitState.active);
+      });
+
+      test('resume ends a pause that still had an end date ahead', () async {
+        final habitId = await createHabit();
+        await db.habitDao.pause(
+          habitId: habitId,
+          userId: _userId,
+          today: '2026-11-18',
+          now: _now,
+          resumesOn: '2026-11-25',
+        );
+        await db.habitDao.resume(
+          habitId: habitId,
+          userId: _userId,
+          today: '2026-11-20',
+          now: _later,
+        );
+        expect(await db.habitDao.stateOn(habitId, '2026-11-19'),
+            HabitState.paused);
+        expect(await db.habitDao.stateOn(habitId, '2026-11-20'),
+            HabitState.active);
+        expect(await db.habitDao.stateOn(habitId, '2026-11-22'),
+            HabitState.active);
+      });
+
+      test('a timed pause does not come back after archive and restore',
+          () async {
+        final habitId = await createHabit();
+        await db.habitDao.pause(
+          habitId: habitId,
+          userId: _userId,
+          today: '2026-11-18',
+          now: _now,
+          resumesOn: '2026-11-25',
+        );
+        await db.habitDao.archive(
+          habitId: habitId,
+          userId: _userId,
+          today: '2026-11-20',
+          now: _later,
+        );
+        await db.habitDao.restore(
+          habitId: habitId,
+          userId: _userId,
+          today: '2026-11-22',
+          now: _later,
+        );
+        expect(await db.habitDao.stateOn(habitId, '2026-11-19'),
+            HabitState.paused);
+        expect(await db.habitDao.stateOn(habitId, '2026-11-21'),
+            HabitState.archived);
+        expect(await db.habitDao.stateOn(habitId, '2026-11-22'),
+            HabitState.active);
+      });
+
+      test('refuses an archive dated before a pause that starts later',
+          () async {
+        final habitId = await createHabit();
+        await db.habitDao.pause(
+          habitId: habitId,
+          userId: _userId,
+          today: '2026-11-25',
+          now: _now,
+        );
+        await expectLater(
+          db.habitDao.archive(
+            habitId: habitId,
+            userId: _userId,
+            today: '2026-11-20',
+            now: _later,
+          ),
+          throwsArgumentError,
+        );
       });
 
       test('resume closes the pause at that day', () async {

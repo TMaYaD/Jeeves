@@ -166,8 +166,15 @@ class DomainReconciler {
       '  SELECT tag_id FROM todo_tags'
       '  UNION ALL'
       '  SELECT tag_id FROM capture_tags'
+      '  UNION ALL'
+      '  SELECT tag_id FROM habit_tags'
       ') WHERE tag_id NOT IN (SELECT id FROM tags)',
-      readsFrom: {domain.todoTags, domain.captureTags, domain.tags},
+      readsFrom: {
+        domain.todoTags,
+        domain.captureTags,
+        domain.habitTags,
+        domain.tags,
+      },
     ).get();
     if (dangling.isEmpty) return;
 

@@ -337,16 +337,28 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
   }) async {
     final instant = _storedInstant(now);
     final commitmentId = uuid.v4();
-    // The commitment is built before the transaction opens, so a rule that
-    // does not hold together is refused without a transaction at all.
-    final built = commitment.toCommitment(
-      id: commitmentId,
-      habitId: habitId,
-      chosenOn: today,
-      createdAt: instant,
-    );
     await attachedDatabase.capturing(() async {
       await _requireHabit(habitId, userId);
+      final existing = await commitmentsFor(habitId);
+      // Stored instants have millisecond precision, so two commitments
+      // written within one millisecond would tie and the random id would
+      // pick the winner. The later write always gets a later instant.
+      var createdAt = instant;
+      for (final other in existing) {
+        final otherAt = other.createdAt.toUtc();
+        if (!createdAt.isAfter(otherAt)) {
+          createdAt = otherAt.add(const Duration(milliseconds: 1));
+        }
+      }
+      // Built inside the transaction only so that createdAt is final; a rule
+      // that does not hold together still throws before anything is written.
+      final built = commitment.toCommitment(
+        id: commitmentId,
+        habitId: habitId,
+        chosenOn: today,
+        createdAt: _storedInstant(createdAt),
+      );
+      await _requireCheckInsStillMatch(habitId, [...existing, built], built);
       await into(habitCommitments)
           .insert(_commitmentCompanion(built, userId));
       // The Habit's own row is stamped too: its rule just changed.
@@ -391,6 +403,7 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
       clockTime: clockTime,
       anchorHabitId: anchorHabitId,
     );
+    final day = _validatedDay(today, 'today');
     final instant = _storedInstant(now);
     await attachedDatabase.capturing(() async {
       await _requireHabit(habitId, userId);
@@ -404,7 +417,7 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
           throw ArgumentError.value(
               targetId, 'anchorHabitId', 'There is no Habit with that id.');
         }
-        if (await _isArchivedOn(targetId, today)) {
+        if (await _isArchivedOn(targetId, day)) {
           throw ArgumentError.value(targetId, 'anchorHabitId',
               'An archived Habit cannot be the anchor of another Habit.');
         }
@@ -592,7 +605,7 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
         throw ArgumentError.value(
             habitId, 'habitId', 'The Habit is not paused.');
       }
-      await _closeOpenPause(habitId, day);
+      await _closePauseCovering(habitId, day);
       await _stampEdited(habitId, instant);
     });
   }
@@ -625,7 +638,19 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
         throw ArgumentError.value(
             habitId, 'habitId', 'The Habit is already archived.');
       }
-      await _closeOpenPause(habitId, day);
+      // A pause that starts after the archive day would end before it
+      // starts, so the archive is refused rather than leave an inverted row.
+      final laterPause = await (select(habitInactivePeriods)
+            ..where((p) =>
+                p.habitId.equals(habitId) &
+                p.kind.equals(_pausedKind) &
+                p.startsOn.isBiggerThanValue(day)))
+          .get();
+      if (laterPause.isNotEmpty) {
+        throw ArgumentError.value(day, 'today',
+            'The Habit has a pause that starts after that day.');
+      }
+      await _closePauseCovering(habitId, day);
       await into(habitInactivePeriods).insert(HabitInactivePeriodsCompanion.insert(
             id: Value(uuid.v4()),
             userId: userId,
@@ -1010,16 +1035,42 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
     return true;
   }
 
-  /// Closes an open pause at [day].
+  /// Refuses a commitment that would re-judge existing Check-ins wrongly.
   ///
-  /// A Habit holds at most one open pause, but the write closes every open
-  /// pause it has, so a Habit cannot be left paused by a row that was
-  /// already there.
-  Future<void> _closeOpenPause(String habitId, String day) async {
+  /// A weekly or monthly commitment governs from the start of its period, so
+  /// it can reach back to Check-ins already recorded. Those Check-ins must
+  /// still fit the new rule: an amount where it is measurable, none where it
+  /// is binary. Otherwise the change is refused, and the caller can choose a
+  /// rule that fits.
+  Future<void> _requireCheckInsStillMatch(String habitId,
+      List<HabitCommitment> all, HabitCommitment added) async {
+    final fromDay = habitDayKey(effectiveStartOf(added));
+    final checkIns = await (select(habitCheckIns)
+          ..where((c) =>
+              c.habitId.equals(habitId) &
+              c.countsForDay.isBiggerOrEqualValue(fromDay)))
+        .get();
+    for (final checkIn in checkIns) {
+      final measurable =
+          commitmentInForceOn(all, checkIn.countsForDay)?.isMeasurable ?? false;
+      if (measurable != (checkIn.measuredAmount != null)) {
+        throw ArgumentError.value(
+            added.chosenOn,
+            'commitment',
+            'This commitment starts on $fromDay, and the Check-in on '
+                '${checkIn.countsForDay} does not fit it.');
+      }
+    }
+  }
+
+  /// Ends every pause that covers [day] at [day], whether it is open or has
+  /// an end date still ahead. Days before [day] stay paused.
+  Future<void> _closePauseCovering(String habitId, String day) async {
     await (update(habitInactivePeriods)..where((p) =>
             p.habitId.equals(habitId) &
             p.kind.equals(_pausedKind) &
-            p.endsBefore.isNull()))
+            p.startsOn.isSmallerOrEqualValue(day) &
+            (p.endsBefore.isNull() | p.endsBefore.isBiggerThanValue(day))))
         .write(HabitInactivePeriodsCompanion(endsBefore: Value(day)));
   }
 

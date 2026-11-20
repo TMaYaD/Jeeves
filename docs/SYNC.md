@@ -2,7 +2,7 @@
 
 <!-- This document describes the current state of the system. Rewrite sections when they become inaccurate. Do not append change logs. -->
 
-Jeeves is offline-first. Local writes go to the embedded SQLite store immediately, and are replicated between devices by the **op log** — signed ops over the minimal sync server — as soon as the device is enrolled and reachable ([ADR-0026](./adr/0026-minimal-sync-server.md), [ADR-0034](./adr/0034-sync-starts-at-enrolment.md)). This is the only client sync path; there is no replication engine on the device (#595). The habit tables are the one exception for now: they are local rows with no codec, so they are not on the wire or in the export yet.
+Jeeves is offline-first. Local writes go to the embedded SQLite store immediately, and are replicated between devices by the **op log** — signed ops over the minimal sync server — as soon as the device is enrolled and reachable ([ADR-0026](./adr/0026-minimal-sync-server.md), [ADR-0034](./adr/0034-sync-starts-at-enrolment.md)). This is the only client sync path; there is no replication engine on the device (#595). Habit data stays in the device store: those tables have no codec, so they are absent from the wire and the export.
 
 This document is about **merge**: how two devices that wrote concurrently end up agreeing, with the focus on the `user_preferences` synced key-value store, whose keys are the ones where blanket last-write-wins is sometimes the wrong answer.
 

@@ -321,6 +321,7 @@ void main() {
       expect(habitDateFromDayKey('2026-11-31'), isNull);
       expect(habitDateFromDayKey('2026-13-01'), isNull);
       expect(habitDateFromDayKey('not a day'), isNull);
+      expect(habitDateFromDayKey('2026-+1-+2'), isNull);
     });
   });
 

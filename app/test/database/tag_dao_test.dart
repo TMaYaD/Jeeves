@@ -399,6 +399,19 @@ void main() {
           reason: 'the junction row must go too, or it is an orphan');
     });
 
+    test('merging moves a Label that only the source link held', () async {
+      final habitId = await createHabit();
+      await createLabel('label-one', 'Deep work');
+      await createLabel('label-two', 'Focus');
+      await db.habitDao
+          .assignLabel(habitId: habitId, userId: _userId, tagId: 'label-one');
+
+      await db.tagDao.merge('label-one', 'label-two');
+
+      final tags = await db.habitDao.tagsFor(habitId);
+      expect(tags.map((t) => t.id), ['label-two']);
+    });
+
     test('merging two Labels leaves the Habit with the target Label once',
         () async {
       final habitId = await createHabit();

@@ -367,11 +367,10 @@ String habitDayKey(DateTime date) =>
 
 /// The local date of a day key, or null when [dayKey] is not `YYYY-MM-DD`.
 DateTime? habitDateFromDayKey(String dayKey) {
+  // Exactly ASCII digits: int.tryParse alone accepts "+1" and "-1", which
+  // parse to a real date that would not round-trip to the key.
+  if (!RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(dayKey)) return null;
   final parts = dayKey.split('-');
-  if (parts.length != 3) return null;
-  if (parts[0].length != 4 || parts[1].length != 2 || parts[2].length != 2) {
-    return null;
-  }
   final year = int.tryParse(parts[0]);
   final month = int.tryParse(parts[1]);
   final day = int.tryParse(parts[2]);
@@ -395,7 +394,9 @@ DateTime effectiveStartOf(HabitCommitment commitment) {
   switch (commitment.repeatKind) {
     case HabitRepeatKind.timesPerWeek:
       final offset = (chosen.weekday - habitWeekStartsOn + 7) % 7;
-      final monday = chosen.subtract(Duration(days: offset));
+      // Calendar arithmetic, not elapsed time: a clock change inside the week
+      // would otherwise land on the wrong day.
+      final monday = DateTime(chosen.year, chosen.month, chosen.day - offset);
       return DateTime(monday.year, monday.month, monday.day);
     case HabitRepeatKind.timesPerMonth:
       return DateTime(chosen.year, chosen.month);
