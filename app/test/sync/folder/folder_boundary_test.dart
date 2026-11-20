@@ -51,9 +51,9 @@ void main() {
     expect(offenders, isEmpty);
   });
 
-  test('a v11 sync store upgrades to v12 keeping every row, and the new tables start empty',
+  test('a v12 sync store upgrades to v13 keeping every row, and the new tables start empty',
       () async {
-    final directory = Directory.systemTemp.createTempSync('sync-v11-');
+    final directory = Directory.systemTemp.createTempSync('sync-v12-');
     addTearDown(() => directory.deleteSync(recursive: true));
     final file = File('${directory.path}/sync.sqlite');
 
@@ -71,7 +71,7 @@ void main() {
         "INSERT INTO change_sequence (change_id, source, change_json) VALUES ('c1', 'local', '{}')");
     await seed.customStatement(
         "INSERT INTO plugin_cursors (plugin_id, acknowledged_sequence) VALUES ('p', 0)");
-    await seed.customStatement('PRAGMA user_version = 11');
+    await seed.customStatement('PRAGMA user_version = 12');
     await seed.close();
 
     final upgraded = SyncDatabase(NativeDatabase(file));
