@@ -3871,6 +3871,19 @@ class SyncClient {
     try {
       final parts = splitEnvelope(row.envelope);
       final header = OpHeader.parse(parts.header);
+      // The header gates the receive path applies before its chain verdict. A
+      // held row can have been filed without them (a stale-serve refusal), so
+      // they are asked again here, once, for every caller.
+      header.checkServed();
+      if (header.workspaceId != workspaceId) return const {};
+      if (header.opClass != opClassContent &&
+          header.opClass != opClassCompaction) {
+        return const {};
+      }
+      if (header.authorMemberId != row.authorMemberId ||
+          header.authorSeq != row.authorSeq) {
+        return const {};
+      }
       final signPk =
           directory.publicKeyFor(header.authorMemberId, header.authorKeyId);
       await verifyEnvelope(row.envelope, signPk);

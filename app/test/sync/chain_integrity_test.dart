@@ -1803,6 +1803,28 @@ void main() {
       expect((await a.client.health()).actionableAlarmCount, 1);
     });
 
+    test('a held change whose header disagrees with its row is not applied',
+        () async {
+      await withholdTheMiddleChange();
+      final held = (await a.client.quarantined()).single;
+      // The row claims a position its own header does not hold.
+      await (a.database.update(a.database.quarantinedOps)
+            ..where((row) => row.id.equals(held.id)))
+          .write(QuarantinedOpsCompanion(authorSeq: Value(held.authorSeq! + 1)));
+
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      await a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+
+      expect(await _doc(a, workspace), {'step': 'one'});
+      final after = (await a.client.quarantined()).single;
+      expect(after.resolution, isNull);
+      final stillStanding =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(stillStanding.resolvedAt, isNull);
+      expect((await a.client.health()).actionableAlarmCount, 1);
+    });
+
     // --- Keeping ours on a rollback: the upload is in flight ----------------
 
     /// The rollback recipe: the server forgets a write it had acknowledged.
