@@ -46,6 +46,12 @@ class _ShareInboxHostState extends ConsumerState<ShareInboxHost> {
 
   Future<void> _drain() async {
     try {
+      // **A store written by a newer build is not this build's to write
+      // into:** the drain would put the shared item into a read model this
+      // build cannot read. The shared item waits in the queue instead — the
+      // newer build picks it up.
+      final versions = await ref.read(localStoreVersionsProvider.future);
+      if (versions.refusal != null) return;
       final filesDirectory = await widget.filesDirectoryLoader();
       if (!mounted) return;
       await drainShareInbox(
