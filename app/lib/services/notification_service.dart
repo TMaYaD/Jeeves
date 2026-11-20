@@ -420,8 +420,12 @@ class NotificationService {
   }
 
   /// Schedules a one-off notification at [endTime] for the end of a break.
+  ///
+  /// [durationMinutes] is the length of the break that is ending — the short
+  /// Break's or the long Break's (issue #911) — and the notification says so.
   Future<void> scheduleBreakEndNotification({
     required DateTime endTime,
+    required int durationMinutes,
   }) async {
     await _plugin.cancel(id: _kBreakEndNotificationId);
     final scheduled = tz.TZDateTime.from(endTime, tz.local);
@@ -431,7 +435,7 @@ class NotificationService {
     await _plugin.zonedSchedule(
       id: _kBreakEndNotificationId,
       title: 'Break over — back to it!',
-      body: 'Your 3-minute break has ended. Start the next sprint.',
+      body: 'Your $durationMinutes-minute break has ended. Start the next sprint.',
       payload: 'focus',
       scheduledDate: scheduled,
       notificationDetails: const NotificationDetails(
