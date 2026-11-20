@@ -112,7 +112,7 @@ void main() {
     await seed.customStatement('DROP TABLE change_sequence');
     await seed.customStatement('DROP TABLE plugin_cursors');
     // A v9 store predates the decision columns, and opening it at the current
-    // schema runs every later step: v13 and v14 add columns, so the fixture
+    // schema runs every later step: v14 and v15 add columns, so the fixture
     // has to take them away too.
     await dropColumnsAddedAfter(seed, 9);
     await seed.customStatement(
@@ -151,7 +151,7 @@ void main() {
     final seed = SyncDatabase(NativeDatabase(file));
     await seed.customStatement('DROP TABLE unauthored_changes');
     // A v11 store predates the decision columns, and opening it at the current
-    // schema runs every later step: v13 and v14 add columns, so the fixture
+    // schema runs every later step: v14 and v15 add columns, so the fixture
     // has to take them away too.
     await dropColumnsAddedAfter(seed, 11);
     await seed.into(seed.opLog).insert(

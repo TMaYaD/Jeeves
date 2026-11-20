@@ -8,6 +8,7 @@ import '../../../models/day_timeline.dart';
 import '../../../providers/clock_provider.dart';
 import '../../../providers/day_timeline_provider.dart';
 import '../../../providers/focus_session_planning_provider.dart';
+import '../../../providers/timeboxed_limit_provider.dart';
 import '../../../widgets/day_timeline/day_timeline.dart';
 import '../../../widgets/day_timeline/plan_and_timeline_layout.dart';
 import '../../../widgets/outcome_row.dart';
@@ -108,12 +109,22 @@ class _ScheduledReviewStepState extends ConsumerState<ScheduledReviewStep> {
     // draws, so the two timelines of one day read alike.
     final sprintMarks =
         ref.watch(planningSprintMarksProvider).asData?.value ?? const [];
+    // Which Outcomes are Timeboxed (issue #923): their tile carries the
+    // heavier bottom edge. Absent from the map == not Timeboxed, and the map
+    // is empty until the first emission lands, so no tile shows the edge
+    // speculatively.
+    final timeboxedIds =
+        ref.watch(currentTimeboxedProvider).value ?? const <String, bool>{};
     final entries = dayTimelineEntriesFor(
       tasks: tasks,
       defaultEstimateMinutes: settings.defaultEstimateMinutes,
       now: _flowOrigin,
       timeContexts: timeContexts,
       pinnedStarts: planning.pinnedStartByTaskId,
+      timeboxedTaskIds: {
+        for (final entry in timeboxedIds.entries)
+          if (entry.value) entry.key
+      },
     );
     return DayTimeline(
       scope: 'planning',

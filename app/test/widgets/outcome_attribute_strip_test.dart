@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/widgets/meta_chip.dart';
 import 'package:jeeves/widgets/outcome_attribute_strip.dart';
+import 'package:jeeves/widgets/timeboxed_glyph.dart';
 
 void main() {
   testWidgets('editable chips dispatch separately; logged time is read-only', (
@@ -57,9 +58,46 @@ void main() {
         tester
             .widgetList<MetaChip>(find.byType(MetaChip))
             .map((chip) => chip.label),
-        ['Energy', 'Time', 'Due'],
+        ['Energy', 'Set', 'Due'],
       );
       expect(find.byTooltip('Clear date'), findsNothing);
     },
   );
+
+  testWidgets('a Timeboxed estimate carries the limit mark', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: OutcomeAttributeStrip(
+            timeEstimateMinutes: 30,
+            timeboxed: true,
+            onEnergyTap: () {},
+            onEstimateTap: () {},
+            onDueTap: () {},
+            onClearDue: () {},
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byType(TimeboxedGlyph), findsOneWidget);
+  });
+
+  testWidgets('a plain estimate carries no mark', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: OutcomeAttributeStrip(
+            timeEstimateMinutes: 30,
+            onEnergyTap: () {},
+            onEstimateTap: () {},
+            onDueTap: () {},
+            onClearDue: () {},
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byType(TimeboxedGlyph), findsNothing);
+  });
 }

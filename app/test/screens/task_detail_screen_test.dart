@@ -417,6 +417,12 @@ void main() {
       expect(await db.focusSessionDao.getActiveSession(), isNull);
 
       await tapBarAction(tester, const Key('task_detail_start_focus'));
+      // The Timeboxed gate reads the limit from the database before the
+      // engagement opens a TimeLog (issue #923), so the tap is followed by
+      // two real-async rounds: one for that read, one for the write it
+      // leads to. Drift only answers outside the fake async zone.
+      await tester.runAsync(() => pumpEventQueue());
+      await tester.pumpAndSettle();
       await tester.runAsync(() => pumpEventQueue());
       await tester.pumpAndSettle();
 
@@ -1261,7 +1267,15 @@ void main() {
       final rowId = (await h.plannedRows()).single.id;
 
       expect(find.byKey(Key('planned_effort_unset_$rowId')), findsOneWidget);
-      expect(find.text('Set'), findsOneWidget);
+      // The row's own affordance reads "Set". It is read off the keyed widget
+      // rather than off the text, because the Outcome's own estimate tag also
+      // reads "Set" now that it is a quiet prompt (issue #923).
+      expect(
+        tester
+            .widget<Text>(find.byKey(Key('planned_effort_unset_$rowId')))
+            .data,
+        'Set',
+      );
       expect(find.byKey(Key('planned_meta_$rowId')), findsNothing);
     });
 

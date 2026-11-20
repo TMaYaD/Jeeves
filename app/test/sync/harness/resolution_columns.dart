@@ -21,14 +21,14 @@ import 'package:jeeves/sync/sync_database.dart';
 /// fixture keeps a column the migration is about to add, and the upgrade
 /// fails on a duplicate column rather than on the thing it was meant to test.
 const Map<int, List<(String, String)>> columnsAddedAt = {
-  13: [
+  14: [
     ('integrity_alarms', 'resolution'),
     ('integrity_alarms', 'resolution_decided_at'),
     ('integrity_alarms', 'repost_from_author_seq'),
     ('quarantined_ops', 'resolution'),
     ('quarantined_ops', 'resolution_decided_at'),
   ],
-  14: [
+  15: [
     ('quarantined_ops', 'resolution_projected_at'),
   ],
 };
@@ -40,6 +40,10 @@ const Map<int, List<(String, String)>> columnsAddedAt = {
 /// The tables a later version added are the fixture's own business — it drops
 /// them by hand, because only the fixture knows which table it is about.
 Future<void> dropColumnsAddedAfter(SyncDatabase database, int version) async {
+  // v13 added the vault's table; a store from before it does not hold it.
+  if (version < 13) {
+    await database.customStatement('DROP TABLE IF EXISTS vault_page_bases');
+  }
   for (final entry in columnsAddedAt.entries) {
     if (entry.key <= version) continue;
     for (final (table, column) in entry.value) {

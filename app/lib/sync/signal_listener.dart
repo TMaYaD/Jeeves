@@ -258,10 +258,11 @@ class SignalListener {
   /// for this to call. (After a relaunch the directory is restored from the
   /// applied control log at assembly, before any of this runs.) Ops from a
   /// Member whose registration has not been verified still quarantine as
-  /// `member_not_chained_to_root`, and terminally: the release scan re-admits
-  /// chain-gap refusals only, so an unchained author's content stays refused
-  /// until #549 opens membership up. A refresh here could not have prevented it
-  /// either way.
+  /// `member_not_chained_to_root`. That refusal is not terminal: the release
+  /// scan on the pull tail re-examines those rows once this device knows the
+  /// author's key, so a device that came back from a restart with an empty
+  /// directory heals rather than staying stuck. A key Root never vouched for
+  /// stays refused. A refresh here could not have prevented either way.
   Future<void> _runSync() async {
     _syncRunCount++;
     await _client.pull();

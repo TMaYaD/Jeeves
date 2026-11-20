@@ -21,6 +21,7 @@ import 'package:flutter/material.dart' hide Action;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/gtd_database.dart';
+import '../models/timeboxed.dart';
 import '../providers/database_provider.dart';
 import '../providers/task_detail_provider.dart';
 import 'outcome_attribute_strip.dart';
@@ -164,6 +165,8 @@ class _OutcomePeekSheetState extends ConsumerState<OutcomePeekSheet> {
     final tags = ref.watch(taskTagsProvider(todoId)).asData?.value ??
         const <Tag>[];
     final timeLogged = ref.watch(outcomePeekTimeLoggedProvider(todoId));
+    // The Timeboxed switch lives on the Action, not the Outcome (issue #923).
+    final action = ref.watch(currentActionProvider(todoId)).value;
 
     // Deleted while open: the stream has resolved to "no row".
     final isMissing = todoAsync.hasValue && todoAsync.value == null;
@@ -255,14 +258,33 @@ class _OutcomePeekSheetState extends ConsumerState<OutcomePeekSheet> {
                             keyPrefix: 'outcome_peek',
                             energyLevel: energyLevel,
                             timeEstimateMinutes: timeEstimate,
+                            timeboxed: isTimeboxedAction(
+                              timeboxed: action?.timeboxed,
+                              timeEstimate: action?.timeEstimate,
+                            ),
                             timeLoggedMinutes: timeLogged,
                             dueDate: dueDate,
                             timeContextChip:
                                 TimeContextChip(outcomeId: widget.todo.id),
                             onEnergyTap: () => showOutcomeEnergyLevelSheet(
-                                context, _notifier, energyLevel),
+                              context,
+                              onSet: (level) => _notifier.setEnergyLevel(level).ignore(),
+                              onClear: () => _notifier.clearEnergyLevel().ignore(),
+                              current: energyLevel,
+                            ),
                             onEstimateTap: () => showOutcomeTimeEstimateSheet(
-                                context, _notifier, timeEstimate),
+                              context,
+                              _notifier,
+                              current: timeEstimate,
+                              actionText: action?.actionText ?? todo.title,
+                              actionId: action?.id,
+                              // The switch reads as the limit does: on only
+                              // when there is an estimate to limit.
+                              timeboxed: isTimeboxedAction(
+                                timeboxed: action?.timeboxed,
+                                timeEstimate: action?.timeEstimate,
+                              ),
+                            ),
                             onDueTap: () async {
                               final picked = await pickOutcomeDueDate(context, dueDate);
                               if (picked != null) {

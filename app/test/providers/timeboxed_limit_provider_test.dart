@@ -1,0 +1,194 @@
+/// The limit status of a Timeboxed Action (issue #923).
+///
+/// The status is derived, never stored: the limit is the Action's estimate,
+/// the instant it passed comes from the Action's TimeLogs, and the counts
+/// come from the Sprints recorded against it. Asserted over a real store, so
+/// the derivation is exercised against the same rows the app reads.
+library;
+
+import 'package:drift/native.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/timeboxed.dart';
+import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/providers/timeboxed_limit_provider.dart';
+
+import '../test_helpers.dart';
+
+const _userId = 'local';
+final _ts = DateTime.utc(2026, 11, 16, 9);
+
+void main() {
+  setUpAll(configureSqliteForTests);
+
+  late GtdDatabase db;
+  late ProviderContainer container;
+
+  setUp(() async {
+    db = GtdDatabase(NativeDatabase.memory());
+    container = ProviderContainer(
+      overrides: [databaseProvider.overrideWithValue(db)],
+    );
+    await db.todoDao.insertOutcome(
+      id: 't1',
+      title: 'Write the report',
+      userId: _userId,
+      now: _ts,
+    );
+    await db.actionDao.setCurrentAction(
+      't1',
+      'Draft',
+      timeEstimate: 30,
+      now: _ts,
+    );
+  });
+  tearDown(() async {
+    container.dispose();
+    await db.close();
+  });
+
+  /// The live status, read through the provider.
+  ///
+  /// The provider is autoDispose, so something must keep it alive while the
+  /// value is awaited — a bare read lets it be disposed before it has emitted,
+  /// and the read then throws instead of answering.
+  ///
+  /// The read waits for the provider to settle first. The provider is live:
+  /// a write reaches it a turn later, so a read in the same turn as the write
+  /// answers with the value the write replaced. The subscription stays open
+  /// across the wait, so the provider is not disposed and rebuilt under the
+  /// read — the answer is the one the live provider settled on, and a provider
+  /// that never settles still fails the assertion.
+  Future<TimeboxedLimitStatus?> status() async {
+    final subscription = container.listen(
+      timeboxedLimitStatusProvider('t1'),
+      (_, _) {},
+    );
+    try {
+      await pumpEventQueue();
+      return await container.read(timeboxedLimitStatusProvider('t1').future);
+    } finally {
+      subscription.close();
+    }
+  }
+
+  test('an Action that is not Timeboxed has no status', () async {
+    expect(await status(), isNull);
+  });
+
+  test('the switch with an estimate is a limit', () async {
+    await db.todoDao.updateFields('t1', timeboxed: true, now: _ts);
+
+    final current = await status();
+
+    expect(current, isNotNull);
+    expect(current!.limitMinutes, 30);
+    expect(current.hasPassed, isFalse);
+    expect(current.limitPassedAt, isNull);
+    expect(current.minutesPast(_ts), 0);
+    expect(current.sprintsBeforeLimit, 0);
+    expect(current.sprintsPastLimit, 0);
+  });
+
+  test(
+    'the switch needs an estimate: a merged "estimate cleared" reads as off',
+    () async {
+      await db.todoDao.updateFields('t1', timeboxed: true, now: _ts);
+      // Another device cleared the estimate; the switch survived the merge. A
+      // limit of nothing is not a limit.
+      await db.customStatement('UPDATE actions SET time_estimate = NULL');
+
+      expect(await status(), isNull);
+    },
+  );
+
+  test('logged time past the estimate passes the limit', () async {
+    await db.todoDao.updateFields('t1', timeboxed: true, now: _ts);
+    await db.timeLogDao.openLog(taskId: 't1', userId: _userId, now: _ts);
+    await db.timeLogDao.closeLog(
+      taskId: 't1',
+      now: _ts.add(const Duration(minutes: 45)),
+    );
+
+    final current = await status();
+
+    expect(current!.hasPassed, isTrue);
+    expect(current.limitPassedAt, _ts.add(const Duration(minutes: 30)));
+    expect(current.minutesPast(_ts.add(const Duration(minutes: 52))), 22);
+  });
+
+  test('Sprints are counted on the side of the limit they started', () async {
+    await db.todoDao.updateFields('t1', timeboxed: true, now: _ts);
+    await db.timeLogDao.openLog(taskId: 't1', userId: _userId, now: _ts);
+    await db.timeLogDao.closeLog(
+      taskId: 't1',
+      now: _ts.add(const Duration(minutes: 45)),
+    );
+    // The first Sprint started before the limit passed, the second after.
+    await db.sprintDao.startSprint(
+      taskId: 't1',
+      userId: _userId,
+      plannedDurationMinutes: 20,
+      now: _ts.add(const Duration(minutes: 10)),
+    );
+    await db.sprintDao.startSprint(
+      taskId: 't1',
+      userId: _userId,
+      plannedDurationMinutes: 20,
+      now: _ts.add(const Duration(minutes: 40)),
+    );
+
+    final current = await status();
+
+    expect(current!.sprintsBeforeLimit, 1);
+    expect(current.sprintsPastLimit, 1);
+    expect(current.sprintStarts, hasLength(2));
+    expect(current.runningSprintPastLimitNumber, 1);
+  });
+
+  test('a Sprint running when the limit passes is not interrupted', () async {
+    await db.todoDao.updateFields('t1', timeboxed: true, now: _ts);
+    // Work logged from before the instant, and still running: the stint
+    // counts on, so the limit is reached inside it.
+    await db.timeLogDao.openLog(
+      taskId: 't1',
+      userId: _userId,
+      now: _ts.subtract(const Duration(minutes: 50)),
+    );
+    // The Sprint started before the limit passed, and is still running.
+    final sprintId = await db.sprintDao.startSprint(
+      taskId: 't1',
+      userId: _userId,
+      plannedDurationMinutes: 20,
+      now: _ts.subtract(const Duration(minutes: 45)),
+    );
+
+    final current = await status();
+
+    // The limit passed twenty minutes before the instant.
+    expect(current!.hasPassedAt(_ts), isTrue);
+    expect(current.limitPassedAt, _ts.subtract(const Duration(minutes: 20)));
+
+    // The running Sprint started before the limit, so it is not one of the
+    // ones past it — and nothing ends it.
+    expect(current.sprintsBeforeLimit, 1);
+    expect(current.sprintsPastLimit, 0);
+    expect(current.runningSprintPastLimitNumber, isNull);
+    final sprint = (await (db.select(db.sprints)
+          ..where((s) => s.id.equals(sprintId)))
+        .get())
+        .single;
+    expect(sprint.endedAt, isNull);
+  });
+
+  test('turning the switch off leaves no status behind', () async {
+    await db.todoDao.updateFields('t1', timeboxed: true, now: _ts);
+    expect(await status(), isNotNull);
+
+    await db.todoDao.updateFields('t1', timeboxed: false, now: _ts);
+
+    expect(await status(), isNull);
+  });
+}

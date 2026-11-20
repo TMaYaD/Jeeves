@@ -1265,6 +1265,22 @@ class SyncClient {
       }
       hasMore = page.hasMore && page.ops.isNotEmpty && advanced;
     }
+    // A change this device refused for an author key it did not know is
+    // re-examined once it knows that key. The gate is the directory's
+    // signing-key count: it runs on the first pull after any launch (the count
+    // is unknown then) and on a pull that learned a key, and on no other pull,
+    // so a standing stranger row costs nothing.
+    //
+    // Placed first on the tail so that whatever a re-received op sets in
+    // motion — a `missing_epoch_key` refusal, a raised epoch floor,
+    // `_rebuildRequired` — is picked up by the blocks below in the same pull.
+    final knownSigningKeyCount = directory.knownSigningKeyCount;
+    if (knownSigningKeyCount != _knownSigningKeyCountAtLastUnchainedScan) {
+      affected.addAll(await _releaseOpsAwaitingMemberRegistration());
+      // Stored only after the scan returns, so a storage fault mid-scan — or a
+      // key learned during it — re-arms the next pull.
+      _knownSigningKeyCountAtLastUnchainedScan = knownSigningKeyCount;
+    }
     // A rotation landed, or something is still waiting on a wrap. Either way the
     // fetch is bounded — one round-trip per pull, never one per op — and the
     // freshness race F14b names (the wraps PUT landing moments after the rotate op)
@@ -3288,6 +3304,14 @@ class SyncClient {
   /// and re-fetching per op would spend a round-trip per op.
   bool _epochKeyRefreshRequired = false;
 
+  /// The directory's signing-key count at the last
+  /// [_releaseOpsAwaitingMemberRegistration] scan.
+  ///
+  /// Null until that scan has run, so the first pull after any launch runs it:
+  /// that is the heal for the rows a pre-#980 build left behind, because
+  /// [SyncStack.assemble] has already restored the directory by then.
+  int? _knownSigningKeyCountAtLastUnchainedScan;
+
   /// Set when this pull applied a `rotate` that actually **raised** the epoch floor.
   ///
   /// The trigger for [_releaseOpsAwaitingEpoch], the floor-keyed healer for
@@ -3449,6 +3473,82 @@ class SyncClient {
       // epoch. Leave it quarantined rather than re-receive it into a fresh refusal.
       if (header.keyEpoch > floor) continue;
       affected.addAll(await _receive(PulledOp(seq: seq, envelope: row.envelope)));
+      await _markReleased(row.id);
+    }
+    return affected;
+  }
+
+  /// Re-receive the ops refused for an author key this device did not know.
+  ///
+  /// The healing half of [SyncRejectionReason.memberNotChainedToRoot]: a device
+  /// that refused a peer's change because its directory of other devices' keys
+  /// was empty applies that change once it knows the author's key again. The
+  /// rows are already here — a refusal quarantines the envelope and the pull
+  /// cursor moves past it, so the server never serves it again.
+  ///
+  /// The per-row gate decides only *whether to ask again*. The ordinary receive
+  /// pipeline then decides the row's fate with no check skipped: signature,
+  /// decrypt, shape, chain and grant all run again. A key Root never vouched for
+  /// therefore stays refused — the gate skips that row, so the pipeline is
+  /// never asked about it, the row keeps its reason and stays unreleased, and
+  /// no second row is filed.
+  ///
+  /// `_receive` comes before `_markReleased` for the reason
+  /// [_releaseOpsAwaitingEpochKeys] gives: `_receive` rethrows
+  /// [SqliteException] rather than quarantining it, so a storage fault must not
+  /// drop the row out of this scan with the cursor already past the op. A
+  /// re-receive that *refuses* returns normally, having quarantined a fresh row
+  /// under the true reason; this row is then stamped released, so the scan does
+  /// not examine it again.
+  ///
+  /// A **control** op re-admitted here carries two follow-ons the content path
+  /// gets for free and the control path does not: its authority can change the
+  /// grant verdict of content already judged, and it occupies a position in its
+  /// author's chain, so the successors held behind it are released with it.
+  Future<Set<AffectedEntity>> _releaseOpsAwaitingMemberRegistration() async {
+    final rows = await (_db.select(_db.quarantinedOps)
+          ..where((row) =>
+              row.workspaceId.equals(workspaceId) &
+              row.releasedAt.isNull() &
+              row.reason.equals(SyncRejectionReason.memberNotChainedToRoot.code))
+          ..orderBy([(row) => OrderingTerm(expression: row.id)]))
+        .get();
+    final affected = <AffectedEntity>{};
+    for (final row in rows) {
+      final seq = row.seq;
+      if (seq == null) continue;
+      final OpHeader header;
+      try {
+        header = OpHeader.parse(splitEnvelope(row.envelope).header);
+      } on SyncRejection {
+        continue;
+      }
+      // The author's key is unknown here, so the refusal stands — but only for
+      // now: a device that learns the key asks again on the next pull that
+      // learned one.
+      if (!directory.hasSigningKeyFor(header.authorMemberId, header.authorKeyId)) {
+        continue;
+      }
+      affected.addAll(await _receive(PulledOp(seq: seq, envelope: row.envelope)));
+      // A control op admitted late does two things the content path gets for
+      // free and the control path does not. Both run **before** the row is
+      // stamped released: the unreleased row is the durable record that they
+      // are owed, so a fault or a kill between here and the stamp makes the next
+      // scan do them again (re-receiving a logged op is a no-op) instead of
+      // dropping the row out of the scan with the obligation unmet.
+      if (header.opClass == opClassControl) {
+        // Its authority can change the grant verdict of content already judged
+        // at a later `seq`; the tail's existing `rebuildFromOpLog` recomputes
+        // exactly that verdict.
+        _rebuildRequired = true;
+        // A control op occupies a position in its author's chain, but the
+        // control branch of `_receive` returns without asking whether a held
+        // successor is now valid — the content and prune branches end in
+        // `_releaseChainSuccessors` and this one does not. Without this call,
+        // content held as `author_chain_gap` behind a re-admitted control op
+        // stays held.
+        affected.addAll(await _releaseChainSuccessors(header.authorMemberId));
+      }
       await _markReleased(row.id);
     }
     return affected;
