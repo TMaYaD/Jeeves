@@ -785,7 +785,16 @@ class SimDevice {
   /// is untouched: it is memory-backed and independent of the sync store file,
   /// so the same read model keeps accumulating projected rows across the
   /// "restart".
-  Future<SyncClient> reopenSyncStore({bool attachTransport = false}) async {
+  ///
+  /// [restoreChainedMembers] false reproduces the relaunch of a build from
+  /// before #980: the directory comes back empty of other devices' keys, so a
+  /// peer's change is refused as `member_not_chained_to_root` even though this
+  /// device verified that peer's registration before the restart. True — the
+  /// default — is what a current build does.
+  Future<SyncClient> reopenSyncStore({
+    bool attachTransport = false,
+    bool restoreChainedMembers = true,
+  }) async {
     final directory = storeDirectory;
     if (directory == null) {
       throw StateError('a memory-backed device has no file to reopen');
@@ -807,7 +816,9 @@ class SimDevice {
     )
       ..projector = DomainProjector(registry: freshRegistry, domain: domain)
       ..reconciler = DomainReconciler(registry: freshRegistry, domain: domain);
-    await reopenedClient.restoreChainedMembersFromAppliedControlLog();
+    if (restoreChainedMembers) {
+      await reopenedClient.restoreChainedMembersFromAppliedControlLog();
+    }
     return reopenedClient;
   }
 
