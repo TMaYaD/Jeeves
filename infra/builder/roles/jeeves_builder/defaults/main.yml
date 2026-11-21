@@ -1,0 +1,76 @@
+# Defaults. Every builder_* value can be overridden from your inventory.
+# Project facts (versions) are read from the repo itself where possible, so
+# they cannot drift from what CI builds.
+
+# Whose machine: the account Ansible connects as, unless told otherwise.
+builder_user: "{{ ansible_user_id }}"
+builder_home: "{{ ansible_user_dir }}"
+
+# Java: same major as CI (`java-version: 17`, temurin).
+builder_java_major: 17
+builder_java_home: "/usr/lib/jvm/temurin-{{ builder_java_major }}-jdk-amd64"
+
+# Flutter: exactly app/.fvmrc.
+builder_flutter_version: "{{ (lookup('ansible.builtin.file', playbook_dir ~ '/../../app/.fvmrc') | from_json).flutter }}"
+builder_flutter_dir: "{{ builder_home }}/flutter"
+
+# Android SDK.
+builder_android_sdk: "{{ builder_home }}/Android/sdk"
+builder_compile_sdk: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../app/android/app/build.gradle.kts') | regex_search('compileSdk\\s*=\\s*(\\d+)', '\\1') | first }}"
+# cmdline-tools 19.0, deliberately: 23.0 replaces sdkmanager with the new
+# Android CLI, which dropped --licenses; Flutter still calls it and reports
+# "Android license status unknown" against licences that are fine.
+builder_cmdline_tools_revision: "19.0"
+builder_cmdline_tools_url: https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip
+builder_cmdline_tools_sha256: 7ec965280a073311c339e571cd5de778b9975026cfcbe79f2b1cdcb1e15317ee
+# Must include platforms;android-<compileSdk> (checked at the start of a run).
+# NDK and CMake are what a first Gradle build would otherwise download.
+builder_android_packages:
+  - platform-tools
+  - platforms;android-37.0
+  - platforms;android-36
+  - platforms;android-35
+  - build-tools;36.0.0
+  - ndk;28.2.13676358     # flutter.ndkVersion on the Flutter in app/.fvmrc
+  - cmake;3.22.1
+
+# Gradle and Kotlin daemon heaps: ~1/4 and ~1/8 of RAM, between 1 and 8 GB.
+_builder_ram_gb: "{{ (ansible_memtotal_mb | int / 1024) | round(0, 'floor') | int }}"
+builder_gradle_xmx_gb: "{{ [[(_builder_ram_gb | int) // 4, 2] | max, 8] | min }}"
+builder_kotlin_xmx_gb: "{{ [[(_builder_ram_gb | int) // 8, 1] | max, 4] | min }}"
+
+# Swapfile created only when the machine has no swap. "" = never.
+builder_swapfile_size: 8G
+
+builder_install_guest_agent: "{{ ansible_virtualization_role == 'guest' and ansible_virtualization_type in ['kvm', 'qemu'] }}"
+
+builder_tool_env:
+  JAVA_HOME: "{{ builder_java_home }}"
+  ANDROID_HOME: "{{ builder_android_sdk }}"
+  ANDROID_SDK_ROOT: "{{ builder_android_sdk }}"
+  PATH: "{{ builder_java_home }}/bin:{{ builder_android_sdk }}/cmdline-tools/latest/bin:{{ builder_android_sdk }}/platform-tools:{{ builder_flutter_dir }}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+builder_apt_packages:
+  - git
+  - curl
+  - ca-certificates
+  - gnupg
+  - unzip
+  - xz-utils
+  - zip
+  - rsync
+  - jq
+  - file
+  - util-linux        # flock
+  # native toolchain: Flutter Linux desktop and native assets
+  - build-essential
+  - clang
+  - cmake
+  - ninja-build
+  - pkg-config
+  - libgtk-3-dev
+  - liblzma-dev
+  - libglu1-mesa
+  # drift/sqlite3 tests load the system libsqlite3
+  - libsqlite3-dev
+  - sqlite3
