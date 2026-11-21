@@ -34,6 +34,9 @@ class _HabitCalendarScreenState extends ConsumerState<HabitCalendarScreen> {
   /// opening month applies.
   DateTime? _shownMonth;
 
+  /// Whether the year view replaces the month view.
+  bool _showYear = false;
+
   @override
   Widget build(BuildContext context) {
     final history = ref.watch(habitHistoryProvider(widget.habitId));
@@ -72,6 +75,26 @@ class _HabitCalendarScreenState extends ConsumerState<HabitCalendarScreen> {
       ),
       body: history == null
           ? const Center(child: CircularProgressIndicator())
+          : _showYear
+          ? _YearView(
+              history: history,
+              today: today,
+              year: shown.year,
+              firstMonth: firstMonth,
+              currentMonth: currentMonth,
+              onYear: (year) => setState(
+                () => _shownMonth = _clampMonth(
+                  DateTime.utc(year, shown.month),
+                  firstMonth,
+                  currentMonth,
+                ),
+              ),
+              onMonth: (m) => setState(() {
+                _shownMonth = m;
+                _showYear = false;
+              }),
+              onBackToMonth: () => setState(() => _showYear = false),
+            )
           : _MonthView(
               history: history,
               today: today,
@@ -79,6 +102,7 @@ class _HabitCalendarScreenState extends ConsumerState<HabitCalendarScreen> {
               canGoBack: shown.isAfter(firstMonth),
               canGoForward: shown.isBefore(currentMonth),
               onMonth: (m) => setState(() => _shownMonth = m),
+              onTitleTap: () => setState(() => _showYear = true),
             ),
     );
   }
@@ -103,6 +127,166 @@ class _HabitCalendarScreenState extends ConsumerState<HabitCalendarScreen> {
   }
 }
 
+DateTime _clampMonth(DateTime month, DateTime first, DateTime last) =>
+    month.isBefore(first)
+    ? first
+    : month.isAfter(last)
+    ? last
+    : month;
+
+/// The twelve months of one year, each a small grid of day marks painted by
+/// one `CustomPaint`; tapping a month opens it.
+class _YearView extends ConsumerWidget {
+  const _YearView({
+    required this.history,
+    required this.today,
+    required this.year,
+    required this.firstMonth,
+    required this.currentMonth,
+    required this.onYear,
+    required this.onMonth,
+    required this.onBackToMonth,
+  });
+
+  final HabitHistory history;
+  final DateTime today;
+  final int year;
+  final DateTime firstMonth;
+  final DateTime currentMonth;
+  final ValueChanged<int> onYear;
+  final ValueChanged<DateTime> onMonth;
+  final VoidCallback onBackToMonth;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: InkWell(
+                onTap: onBackToMonth,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Semantics(
+                    button: true,
+                    hint: habitCalendarShowMonth,
+                    child: Text(
+                      '$year',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            IconButton(
+              tooltip: habitCalendarPreviousYear,
+              icon: const Icon(Icons.chevron_left),
+              onPressed: year > firstMonth.year ? () => onYear(year - 1) : null,
+            ),
+            IconButton(
+              tooltip: habitCalendarNextYear,
+              icon: const Icon(Icons.chevron_right),
+              onPressed: year < currentMonth.year
+                  ? () => onYear(year + 1)
+                  : null,
+            ),
+          ],
+        ),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (var m = 1; m <= 12; m++)
+              _YearMonthTile(
+                history: history,
+                today: today,
+                month: DateTime.utc(year, m),
+                enabled:
+                    !DateTime.utc(year, m).isBefore(firstMonth) &&
+                    !DateTime.utc(year, m).isAfter(currentMonth),
+                onTap: onMonth,
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+const double _yearCellHeight = 9;
+
+class _YearMonthTile extends ConsumerWidget {
+  const _YearMonthTile({
+    required this.history,
+    required this.today,
+    required this.month,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final HabitHistory history;
+  final DateTime today;
+  final DateTime month;
+  final bool enabled;
+  final ValueChanged<DateTime> onTap;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final lastDay = DateTime.utc(month.year, month.month + 1, 0);
+    final marks =
+        ref.watch(
+          habitDayMarksProvider((
+            habitId: history.habit.id,
+            fromDay: habitDayKey(month),
+            toDay: habitDayKey(lastDay),
+          )),
+        ) ??
+        const <HabitDayMark>[];
+    final cells = <HabitDayMark?>[
+      for (var i = 0; i < month.weekday - 1; i++) null,
+      ...marks,
+    ];
+    final name = DateFormat('MMMM').format(month);
+    final width = (MediaQuery.sizeOf(context).width - 32 - 16) / 3;
+    return Semantics(
+      button: true,
+      enabled: enabled,
+      label: '$name ${month.year}',
+      child: ExcludeSemantics(
+        child: InkWell(
+          onTap: enabled ? () => onTap(month) : null,
+          child: Opacity(
+            opacity: enabled ? 1 : 0.4,
+            child: SizedBox(
+              width: width,
+              height: 6 * _yearCellHeight + 32,
+              child: Padding(
+                padding: const EdgeInsets.all(4),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(name, style: Theme.of(context).textTheme.labelMedium),
+                    const SizedBox(height: 4),
+                    HabitDayMarkGrid(
+                      cells: cells,
+                      cellHeight: _yearCellHeight,
+                      markRadius: 3,
+                      markCenterY: _yearCellHeight / 2,
+                      todayDay: today,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _MonthView extends ConsumerWidget {
   const _MonthView({
     required this.history,
@@ -111,6 +295,7 @@ class _MonthView extends ConsumerWidget {
     required this.canGoBack,
     required this.canGoForward,
     required this.onMonth,
+    required this.onTitleTap,
   });
 
   final HabitHistory history;
@@ -119,6 +304,7 @@ class _MonthView extends ConsumerWidget {
   final bool canGoBack;
   final bool canGoForward;
   final ValueChanged<DateTime> onMonth;
+  final VoidCallback onTitleTap;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -149,9 +335,19 @@ class _MonthView extends ConsumerWidget {
         Row(
           children: [
             Expanded(
-              child: Text(
-                DateFormat('MMMM yyyy').format(month),
-                style: Theme.of(context).textTheme.titleMedium,
+              child: InkWell(
+                onTap: onTitleTap,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Semantics(
+                    button: true,
+                    hint: habitCalendarShowYear,
+                    child: Text(
+                      DateFormat('MMMM yyyy').format(month),
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  ),
+                ),
               ),
             ),
             IconButton(

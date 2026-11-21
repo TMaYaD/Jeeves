@@ -345,6 +345,10 @@ const habitCalendarTitle = 'Check-ins';
 const habitCalendarOverline = 'HABIT';
 const habitCalendarPreviousMonth = 'Previous month';
 const habitCalendarNextMonth = 'Next month';
+const habitCalendarPreviousYear = 'Previous year';
+const habitCalendarNextYear = 'Next year';
+const habitCalendarShowYear = 'Show the year';
+const habitCalendarShowMonth = 'Show the month';
 const habitCalendarRepeatChangedNote =
     'Repeat changed. Earlier days keep the old rule.';
 const habitCalendarNoHabit = 'This Habit is not here any more.';
