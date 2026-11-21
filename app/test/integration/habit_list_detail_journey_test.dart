@@ -1011,6 +1011,30 @@ void main() {
     }
   });
 
+  testWidgets('an edit restored to its old text while an earlier save is still '
+      'pending is stored last', (tester) async {
+    final id = await seed('Read');
+    await openApp(tester);
+    try {
+      await tester.tap(find.byKey(Key('habit_row_$id')));
+      await _settle(tester);
+      await tester.enterText(find.byKey(const Key('habit_notes')), 'Ten pages');
+      await tester.pump();
+      // Leaving the field issues a save; no real async runs before the pane
+      // closes, so that save is still pending at teardown.
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pump();
+      await tester.enterText(find.byKey(const Key('habit_notes')), '');
+      await tester.pump();
+      await tester.pageBack();
+      await _settle(tester, 10);
+      final habit = await tester.runAsync(() => db.habitDao.habitById(id));
+      expect(habit!.notes ?? '', '');
+    } finally {
+      await closeApp(tester);
+    }
+  });
+
   testWidgets('notes typed on a draft are stored when the title is submitted', (
     tester,
   ) async {

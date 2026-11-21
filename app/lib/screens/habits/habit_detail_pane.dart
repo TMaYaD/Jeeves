@@ -93,8 +93,13 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
   bool _disposing = false;
   // The last title and notes known to be stored; teardown flushes a field only
   // when it differs, so an untouched field cannot overwrite a newer stored one.
+  // Updated when a write is issued (not when it lands), so a later edit back to
+  // an earlier value still differs and is flushed. Writes per field are chained
+  // so the last one issued is the last one stored.
   String _savedTitle = '';
   String _savedNotes = '';
+  Future<void> _titleWrites = Future<void>.value();
+  Future<void> _notesWrites = Future<void>.value();
   List<Tag> _draftLabels = const [];
   late final HabitActions _habitActions;
 
@@ -127,11 +132,15 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
       unawaited(_writeDraft());
     } else if (_titleSeeded) {
       final id = widget.habitId!;
-      if (_titleController.text != _savedTitle) {
-        unawaited(_habitActions.setTitle(id, _titleController.text));
+      final title = _titleController.text;
+      final notes = _notesController.text;
+      if (title != _savedTitle) {
+        _titleWrites = _titleWrites.then((_) => _habitActions.setTitle(id, title));
+        unawaited(_titleWrites);
       }
-      if (_notesController.text != _savedNotes) {
-        unawaited(_habitActions.setNotes(id, _notesController.text));
+      if (notes != _savedNotes) {
+        _notesWrites = _notesWrites.then((_) => _habitActions.setNotes(id, notes));
+        unawaited(_notesWrites);
       }
     }
     _titleController.dispose();
@@ -145,11 +154,16 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
 
   Future<void> _commitTitle() async {
     final text = _titleController.text;
-    final accepted = await _habitActions.setTitle(widget.habitId!, text);
-    if (accepted) {
-      _savedTitle = text;
-      return;
-    }
+    final previous = _savedTitle;
+    _savedTitle = text;
+    var accepted = false;
+    final write = _titleWrites.then((_) async {
+      accepted = await _habitActions.setTitle(widget.habitId!, text);
+    });
+    _titleWrites = write;
+    await write;
+    if (accepted) return;
+    if (_savedTitle == text) _savedTitle = previous;
     final habit = ref.read(habitByIdProvider(widget.habitId!)).value;
     if (habit != null) _titleController.text = habit.title;
     if (mounted) {
@@ -161,8 +175,12 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
 
   Future<void> _commitNotes() async {
     final text = _notesController.text;
-    await _habitActions.setNotes(widget.habitId!, text);
     _savedNotes = text;
+    final write = _notesWrites.then(
+      (_) => _habitActions.setNotes(widget.habitId!, text),
+    );
+    _notesWrites = write;
+    await write;
   }
 
   /// Writes the draft once, in one transaction. Returns the new Habit's id,
