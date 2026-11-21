@@ -366,7 +366,7 @@ String habitDayKey(DateTime date) =>
     '${date.month.toString().padLeft(2, '0')}-'
     '${date.day.toString().padLeft(2, '0')}';
 
-/// The local date of a day key, or null when [dayKey] is not `YYYY-MM-DD`.
+/// The UTC calendar day of a day key, or null when [dayKey] is not `YYYY-MM-DD`.
 DateTime? habitDateFromDayKey(String dayKey) {
   // Exactly ASCII digits: int.tryParse alone accepts "+1" and "-1", which
   // parse to a real date that would not round-trip to the key.
@@ -378,7 +378,9 @@ DateTime? habitDateFromDayKey(String dayKey) {
   if (year == null || month == null || day == null) return null;
   if (month < 1 || month > 12) return null;
   if (day < 1 || day > 31) return null;
-  final date = DateTime(year, month, day);
+  // UTC parts, so a day a time zone skipped (Pacific/Apia, 2011-12-30)
+  // still parses.
+  final date = DateTime.utc(year, month, day);
   // DateTime rolls an impossible date over (32 January is 1 February), so
   // check the parts survived.
   if (date.month != month || date.day != day) return null;
@@ -397,10 +399,10 @@ DateTime effectiveStartOf(HabitCommitment commitment) {
       final offset = (chosen.weekday - habitWeekStartsOn + 7) % 7;
       // Calendar arithmetic, not elapsed time: a clock change inside the week
       // would otherwise land on the wrong day.
-      final monday = DateTime(chosen.year, chosen.month, chosen.day - offset);
-      return DateTime(monday.year, monday.month, monday.day);
+      final monday = DateTime.utc(chosen.year, chosen.month, chosen.day - offset);
+      return DateTime.utc(monday.year, monday.month, monday.day);
     case HabitRepeatKind.timesPerMonth:
-      return DateTime(chosen.year, chosen.month);
+      return DateTime.utc(chosen.year, chosen.month);
     case HabitRepeatKind.everyDay:
     case HabitRepeatKind.chosenWeekdays:
     case HabitRepeatKind.everyNDays:
@@ -437,7 +439,7 @@ Map<String, DateTime> effectiveStartsOf(List<HabitCommitment> commitments) {
       var lockedThrough = start.subtract(const Duration(days: 1));
       for (var day = start;
           day.isBefore(chosen);
-          day = DateTime(day.year, day.month, day.day + 1)) {
+          day = DateTime.utc(day.year, day.month, day.day + 1)) {
         HabitCommitment? governing;
         for (var k = 0; k < i; k++) {
           final earlier = ordered[k];
@@ -451,7 +453,7 @@ Map<String, DateTime> effectiveStartsOf(List<HabitCommitment> commitments) {
         if (periodEnd != null && periodEnd.isBefore(chosen)) lockedThrough = day;
       }
       if (!lockedThrough.isBefore(start)) {
-        start = DateTime(
+        start = DateTime.utc(
             lockedThrough.year, lockedThrough.month, lockedThrough.day + 1);
       }
     }
@@ -466,9 +468,9 @@ DateTime? _periodEndOf(HabitCommitment commitment, DateTime day) {
   switch (commitment.repeatKind) {
     case HabitRepeatKind.timesPerWeek:
       final offset = (day.weekday - habitWeekStartsOn + 7) % 7;
-      return DateTime(day.year, day.month, day.day - offset + 6);
+      return DateTime.utc(day.year, day.month, day.day - offset + 6);
     case HabitRepeatKind.timesPerMonth:
-      return DateTime(day.year, day.month + 1, 0);
+      return DateTime.utc(day.year, day.month + 1, 0);
     case HabitRepeatKind.everyDay:
     case HabitRepeatKind.chosenWeekdays:
     case HabitRepeatKind.everyNDays:
