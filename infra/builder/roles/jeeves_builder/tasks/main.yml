@@ -1,0 +1,181 @@
+# Tasks for the jeeves_builder role. Defaults: ../defaults/main.yml.
+# ---------------------------------------------------------------- system
+- name: Base packages
+  become: true
+  ansible.builtin.apt:
+    name: "{{ builder_apt_packages }}"
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Guest agent on KVM/QEMU guests (clean shutdown, IP reporting)
+  become: true
+  when: builder_install_guest_agent | bool
+  block:
+    - name: qemu-guest-agent installed
+      ansible.builtin.apt:
+        name: qemu-guest-agent
+    - name: qemu-guest-agent running
+      ansible.builtin.systemd_service:
+        name: qemu-guest-agent
+        state: started
+      ignore_errors: "{{ ansible_check_mode }}"
+
+- name: Adoptium apt key
+  become: true
+  ansible.builtin.get_url:
+    url: https://packages.adoptium.net/artifactory/api/gpg/key/public
+    dest: /etc/apt/keyrings/adoptium.asc
+    mode: "0644"
+
+- name: Adoptium apt repository
+  become: true
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/etc/apt/keyrings/adoptium.asc] https://packages.adoptium.net/artifactory/deb {{ ansible_distribution_release }} main"
+    filename: adoptium
+
+- name: Temurin JDK {{ builder_java_major }}
+  become: true
+  ansible.builtin.apt:
+    name: "temurin-{{ builder_java_major }}-jdk"
+
+- name: Swap (only when the machine has none and a size is set)
+  become: true
+  when: builder_swapfile_size | length > 0 and (ansible_swaptotal_mb | int) == 0
+  block:
+    - name: Swapfile allocated
+      ansible.builtin.command: "fallocate -l {{ builder_swapfile_size }} /swapfile"
+      args:
+        creates: /swapfile
+    - name: Swapfile on
+      ansible.builtin.shell: chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+    - name: Swapfile in fstab
+      ansible.builtin.lineinfile:
+        path: /etc/fstab
+        line: "/swapfile none swap sw 0 0"
+
+# ------------------------------------------------------- user environment
+- name: Toolchain environment file
+  ansible.builtin.template:
+    src: templates/jeeves_env.j2
+    dest: "{{ builder_home }}/.jeeves_env"
+    mode: "0644"
+
+# Must sit ABOVE Debian/Ubuntu's non-interactive early-return in .bashrc,
+# or `ssh host '<cmd>'` loses java and flutter.
+- name: Source env at the top of .bashrc
+  ansible.builtin.lineinfile:
+    path: "{{ builder_home }}/.bashrc"
+    line: '[ -f "$HOME/.jeeves_env" ] && . "$HOME/.jeeves_env"'
+    insertbefore: BOF
+    create: true
+    mode: "0644"
+
+- name: Source env from .profile (login shells, jeeves-build's bash -l)
+  ansible.builtin.lineinfile:
+    path: "{{ builder_home }}/.profile"
+    line: '[ -f "$HOME/.jeeves_env" ] && . "$HOME/.jeeves_env"'
+    create: true
+    mode: "0644"
+
+- name: Gradle user dir
+  ansible.builtin.file:
+    path: "{{ builder_home }}/.gradle"
+    state: directory
+    mode: "0755"
+
+# The repo allows each daemon 8 GB, which pages on a small machine. Size
+# the daemons from this machine's RAM unless the inventory says otherwise.
+- name: Gradle daemon heap caps
+  ansible.builtin.template:
+    src: templates/gradle.properties.j2
+    dest: "{{ builder_home }}/.gradle/gradle.properties"
+    mode: "0644"
+
+# ------------------------------------------------------------ Android SDK
+- name: SDK dir
+  ansible.builtin.file:
+    path: "{{ builder_android_sdk }}/cmdline-tools"
+    state: directory
+    mode: "0755"
+
+- name: cmdline-tools {{ builder_cmdline_tools_revision }} at cmdline-tools/latest
+  ansible.builtin.shell: |
+    set -euo pipefail
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    curl -fsSL --retry 3 -o "$tmp/c.zip" "{{ builder_cmdline_tools_url }}"
+    echo "{{ builder_cmdline_tools_sha256 }}  $tmp/c.zip" | sha256sum -c --quiet -
+    unzip -q "$tmp/c.zip" -d "$tmp"
+    mv "$tmp/cmdline-tools" "{{ builder_android_sdk }}/cmdline-tools/latest"
+  args:
+    executable: /bin/bash
+    creates: "{{ builder_android_sdk }}/cmdline-tools/latest/bin/sdkmanager"
+
+- name: SDK licences accepted
+  ansible.builtin.shell: yes | sdkmanager --sdk_root="{{ builder_android_sdk }}" --licenses >/dev/null
+  args:
+    creates: "{{ builder_android_sdk }}/licenses/android-sdk-license"
+  environment: "{{ builder_tool_env }}"
+
+- name: SDK packages
+  ansible.builtin.command:
+    argv: [sdkmanager, "--sdk_root={{ builder_android_sdk }}", "--install", "{{ item }}"]
+    creates: "{{ builder_android_sdk }}/{{ item | replace(';', '/') }}"
+  loop: "{{ builder_android_packages }}"
+  environment: "{{ builder_tool_env }}"
+
+# ---------------------------------------------------------------- Flutter
+# Not the git module: it crashes revisiting a shallow clone checked out at a
+# tag (no branch at HEAD). Compare the installed tag instead, and swap in a
+# fresh shallow clone only when it differs from app/.fvmrc.
+- name: Installed Flutter version
+  ansible.builtin.command: git -C "{{ builder_flutter_dir }}" describe --tags --exact-match
+  register: flutter_installed
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Flutter {{ builder_flutter_version }} (from app/.fvmrc)
+  ansible.builtin.shell: |
+    set -euo pipefail
+    rm -rf "{{ builder_flutter_dir }}.new"
+    git clone -q --depth 1 --branch "{{ builder_flutter_version }}" \
+      https://github.com/flutter/flutter.git "{{ builder_flutter_dir }}.new"
+    rm -rf "{{ builder_flutter_dir }}"
+    mv "{{ builder_flutter_dir }}.new" "{{ builder_flutter_dir }}"
+  args:
+    executable: /bin/bash
+  when: flutter_installed.stdout != builder_flutter_version
+  register: flutter_checkout
+
+- name: Flutter configured, Android artifacts cached, licences seen
+  ansible.builtin.shell: |
+    set -e
+    flutter config --no-analytics --android-sdk "{{ builder_android_sdk }}" >/dev/null
+    dart --disable-analytics >/dev/null
+    flutter precache --android --no-ios --no-web --no-macos --no-windows
+    yes | flutter doctor --android-licenses >/dev/null 2>&1 || true
+  when: flutter_checkout.changed
+  environment: "{{ builder_tool_env }}"
+
+# ------------------------------------------------------------ build entry
+- name: jeeves-build
+  become: true
+  ansible.builtin.copy:
+    src: files/jeeves-build
+    dest: /usr/local/bin/jeeves-build
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Toolchain check
+  ansible.builtin.command: flutter --version --machine
+  environment: "{{ builder_tool_env }}"
+  register: fv
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Toolchain
+  ansible.builtin.debug:
+    msg: "Flutter {{ (fv.stdout | from_json).frameworkVersion }} on {{ inventory_hostname }}"
+  when: not ansible_check_mode
