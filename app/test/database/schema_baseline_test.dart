@@ -82,16 +82,16 @@ void main() {
   setUpAll(configureSqliteForTests);
 
   group('schema version', () {
-    test('is 12 — eleven onUpgrade steps behind the fresh baseline', () async {
+    test('is 13 — twelve onUpgrade steps behind the fresh baseline', () async {
       final db = _openInMemory();
       addTearDown(db.close);
-      expect(db.schemaVersion, 12);
+      expect(db.schemaVersion, 13);
       // A fresh file runs onCreate at the current version, not the ladder.
       expect(
         await db.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        12,
+        13,
       );
     });
   });
@@ -302,7 +302,7 @@ void main() {
       await seed.customStatement('PRAGMA user_version = 1');
       await seed.close();
 
-      // Open 2: Drift sees user_version=1 and schemaVersion=12, so it runs the
+      // Open 2: Drift sees user_version=1 and schemaVersion=13, so it runs the
       // whole ladder — the v2 drop asserted here, and the v3 `tags` recreate the
       // group below owns.
       final upgraded = GtdDatabase(
@@ -314,7 +314,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        12,
+        13,
       );
       expect(await _columnNames(upgraded, 'todos'),
           isNot(contains('time_spent_minutes')),
@@ -441,7 +441,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        12,
+        13,
       );
       expect(await _uniqueConstraintIndexes(upgraded, 'tags'), isEmpty,
           reason: 'v3 drops UNIQUE (name, type)');
@@ -501,7 +501,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        12,
+        13,
       );
       expect(await _objects(upgraded, 'table'), contains('capture_attachments'));
       expect(await _rows(upgraded, 'captures'), hasLength(1));
@@ -606,7 +606,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        12,
+        13,
       );
       expect(await _columnNames(upgraded, 'todos'), isNot(contains('clarified')),
           reason: 'v5 drops the dead flag');
@@ -707,7 +707,7 @@ void main() {
           await upgraded.customSelect('PRAGMA user_version').getSingle().then(
                 (r) => r.read<int>('user_version'),
               ),
-          12,
+          13,
         );
         expect(await _rows(upgraded, 'todos'), todosBefore);
         expect(await _rows(upgraded, 'captures'), capturesBefore);
@@ -1163,6 +1163,148 @@ void main() {
       expect(actions.single.actionText, 'Call Bob');
       expect(actions.single.role, 'current');
       expect(actions.single.timeboxed, isNull);
+    });
+  });
+
+  group('v13 onUpgrade adds the Habit tables', () {
+    /// The five tables the Habit data model adds, with their exact column
+    /// sets. Written out rather than derived from the declarations: the point
+    /// of the assertion is that the *stored* shape is the agreed one, and a
+    /// fixture generated from the same declaration would agree with any
+    /// mistake in it.
+    const habitTables = <String, Set<String>>{
+      'habits': {
+        'id',
+        'user_id',
+        'title',
+        'notes',
+        'energy_level',
+        'time_estimate_minutes',
+        'anchor_kind',
+        'anchor_part_of_day',
+        'anchor_clock_time',
+        'anchor_habit_id',
+        'created_at',
+        'updated_at',
+      },
+      'habit_commitments': {
+        'id',
+        'user_id',
+        'habit_id',
+        'chosen_on',
+        'created_at',
+        'repeat_kind',
+        'chosen_weekdays',
+        'times_per_period',
+        'interval_days',
+        'preferred_days',
+        'unit_label',
+        'daily_target_amount',
+      },
+      'habit_check_ins': {
+        'id',
+        'user_id',
+        'habit_id',
+        'counts_for_day',
+        'checked_in_at',
+        'measured_amount',
+      },
+      'habit_inactive_periods': {
+        'id',
+        'user_id',
+        'habit_id',
+        'kind',
+        'starts_on',
+        'ends_before',
+      },
+      'habit_tags': {
+        'id',
+        'habit_id',
+        'tag_id',
+        'user_id',
+      },
+    };
+
+    test('creates the five tables, keeps every existing row and leaves the '
+        'habit tables empty', () async {
+      final raw = sqlite3.openInMemory();
+      addTearDown(raw.close);
+
+      final seed = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      var seedClosed = false;
+      Future<void> closeSeed() async {
+        if (seedClosed) return;
+        seedClosed = true;
+        await seed.close();
+      }
+
+      addTearDown(closeSeed);
+
+      // A v12 store: the Habit tables did not exist. Dropped children first,
+      // so the fixture stays a faithful v11 store whatever a reader assumes
+      // about foreign keys.
+      for (final table in const [
+        'habit_tags',
+        'habit_commitments',
+        'habit_check_ins',
+        'habit_inactive_periods',
+        'habits',
+      ]) {
+        await seed.customStatement('DROP TABLE $table');
+      }
+      final createdMs =
+          DateTime.parse('2026-11-18T09:00:00.000Z').millisecondsSinceEpoch;
+      await seed.customStatement(
+        'INSERT INTO todos (id, title, user_id, created_at, intent) '
+        "VALUES ('t1', 'Ship it', 'u1', ?, 'next')",
+        [createdMs],
+      );
+      await seed.customStatement(
+        'INSERT INTO time_logs (id, user_id, task_id, started_at) '
+        "VALUES ('tl1', 'u1', 't1', '2026-11-18T09:30:00.000Z')",
+      );
+      await seed.customStatement('PRAGMA user_version = 12');
+      await closeSeed();
+
+      final upgraded = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      addTearDown(upgraded.close);
+
+      expect(
+        await upgraded.customSelect('PRAGMA user_version').getSingle().then(
+              (r) => r.read<int>('user_version'),
+            ),
+        13,
+      );
+
+      for (final entry in habitTables.entries) {
+        expect(await _objects(upgraded, 'table'), contains(entry.key),
+            reason: 'the migration creates ${entry.key}');
+        expect(await _columnNames(upgraded, entry.key), entry.value,
+            reason: 'the columns of ${entry.key} are the declared ones');
+        expect(await _rows(upgraded, entry.key), isEmpty,
+            reason: '${entry.key} holds no row — nothing is backfilled');
+      }
+
+      // The Check-in read asks for a day's Check-ins by (habit, day); without
+      // the index that is a scan per Habit.
+      expect(await _objects(upgraded, 'index'),
+          contains('idx_habit_check_ins_habit_day'));
+
+      // The rows that were there before the upgrade are still there.
+      expect(
+        (await upgraded.customSelect('SELECT id FROM todos').getSingle())
+            .read<String>('id'),
+        't1',
+      );
+      expect(
+        (await upgraded.customSelect('SELECT id FROM time_logs').getSingle())
+            .read<String>('id'),
+        'tl1',
+      );
     });
   });
 }

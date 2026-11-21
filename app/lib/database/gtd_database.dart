@@ -27,6 +27,7 @@ import '../utils/uuid.dart';
 import 'daos/action_dao.dart';
 import 'daos/capture_dao.dart';
 import 'daos/focus_session_dao.dart';
+import 'daos/habit_dao.dart';
 import 'daos/search_dao.dart';
 import 'daos/tag_dao.dart';
 import 'daos/sprint_dao.dart';
@@ -42,8 +43,8 @@ export 'tables.dart';
 part 'gtd_database.g.dart';
 
 @DriftDatabase(
-  tables: [Todos, Tags, TodoTags, TimeLogs, Sprints, FocusSessions, FocusSessionTasks, FocusSessionDispositions, FocusSessionPlanningBypasses, FocusSessionReschedules, OutcomeBypassDecisions, UserPreferences, Captures, CaptureAttachments, CaptureOutcomes, CaptureTags, Actions, LocalMigrationMarkers, PendingChanges, DeviceClockIdentity],
-  daos: [TagDao, TodoDao, TimeLogDao, SprintDao, FocusSessionDao, CaptureDao, ActionDao],
+  tables: [Todos, Tags, TodoTags, TimeLogs, Sprints, FocusSessions, FocusSessionTasks, FocusSessionDispositions, FocusSessionPlanningBypasses, FocusSessionReschedules, OutcomeBypassDecisions, UserPreferences, Captures, CaptureAttachments, CaptureOutcomes, CaptureTags, Actions, LocalMigrationMarkers, PendingChanges, DeviceClockIdentity, Habits, HabitCommitments, HabitCheckIns, HabitInactivePeriods, HabitTags],
+  daos: [TagDao, TodoDao, TimeLogDao, SprintDao, FocusSessionDao, CaptureDao, ActionDao, HabitDao],
 )
 class GtdDatabase extends _$GtdDatabase {
   GtdDatabase(super.executor, {this.opCapture = const NoopDomainOpCapture()});
@@ -204,7 +205,7 @@ class GtdDatabase extends _$GtdDatabase {
   /// build refuses it: opening it would relabel the file with a version it
   /// does not understand, and the newer build would then find a store it
   /// believes is old.
-  static const int supportedSchemaVersion = 12;
+  static const int supportedSchemaVersion = 13;
 
   /// Completes with the [OpeningDetails] of this store's one open.
   ///
@@ -214,13 +215,18 @@ class GtdDatabase extends _$GtdDatabase {
   /// pre-migration state. A caller that has to act on "did this launch upgrade the
   /// schema?" therefore issues a query to force the open and awaits this.
   ///
-  /// Fed from [MigrationStrategy.beforeOpen], which drift runs on **every** open,
-  /// so the future always completes. Feeding it from `onUpgrade` instead would
-  /// leave it unresolved for ever on a launch that migrates nothing, and hang the
-  /// caller.
+  /// Fed from [MigrationStrategy.beforeOpen], which drift runs on **every**
+  /// successful open, so the future completes on a launch that migrates
+  /// nothing. Feeding it from `onUpgrade` instead would leave it unresolved for
+  /// ever on such a launch, and hang the caller.
+  ///
+  /// **A migration that throws leaves it pending**: `beforeOpen` never runs,
+  /// and the error surfaces through the query that forced the open. Force the
+  /// open with a query first, and await this after it.
   ///
   /// It completes with a [StoreVersionTooNewError] when the open was refused
   /// (see [_failOpen]), so a caller awaiting it learns why rather than hanging.
+  /// Any other migration failure is not routed here.
   Future<OpeningDetails> get opened => _opened.future;
 
   final Completer<OpeningDetails> _opened = Completer<OpeningDetails>();
@@ -420,6 +426,45 @@ class GtdDatabase extends _$GtdDatabase {
                 .get();
             if (!existing.any((row) => row.read<String>('name') == 'timeboxed')) {
               await m.addColumn(actions, actions.timeboxed);
+            }
+          }
+          // v13 (issue #401): the Habit data model. Purely additive — five new
+          // tables and one index, no existing row or column touched, nothing
+          // backfilled (there were no Habits before this build, so there is
+          // nothing to backfill *from*).
+          //
+          // Each table is created only when it is missing, as v11 does for
+          // `sprints`: a store that already carries one (a rebuilt fixture, a
+          // half-applied earlier attempt) must not fail the ladder on it.
+          if (from < 13) {
+            final tables = await m.database
+                .customSelect(
+                    "SELECT name FROM sqlite_master WHERE type='table'")
+                .get();
+            bool hasTable(String name) =>
+                tables.any((row) => row.read<String>('name') == name);
+            if (!hasTable('habits')) await m.createTable(habits);
+            if (!hasTable('habit_commitments')) {
+              await m.createTable(habitCommitments);
+            }
+            if (!hasTable('habit_check_ins')) {
+              await m.createTable(habitCheckIns);
+            }
+            if (!hasTable('habit_inactive_periods')) {
+              await m.createTable(habitInactivePeriods);
+            }
+            if (!hasTable('habit_tags')) await m.createTable(habitTags);
+            // The Check-in index is declared on the table, but `createTable`
+            // creates the table and not its indices — drift installs those
+            // from `createAll`, which a migration does not run. Without it,
+            // reading a day's Check-ins is a scan per Habit.
+            final indices = await m.database
+                .customSelect(
+                    "SELECT name FROM sqlite_master WHERE type='index'")
+                .get();
+            if (!indices.any((row) =>
+                row.read<String>('name') == 'idx_habit_check_ins_habit_day')) {
+              await m.createIndex(idxHabitCheckInsHabitDay);
             }
           }
         }),
