@@ -20,6 +20,7 @@ import 'package:jeeves/models/habit_commitment.dart';
 import 'package:jeeves/providers/clock_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/screens/habits/habit_calendar_screen.dart';
+import 'package:jeeves/widgets/habit_day_mark_grid.dart';
 
 import '../test_helpers.dart';
 
@@ -143,6 +144,14 @@ void main() {
         ),
       );
 
+  IconButton yearArrow(WidgetTester tester, {required bool previous}) =>
+      tester.widget<IconButton>(
+        find.widgetWithIcon(
+          IconButton,
+          previous ? Icons.chevron_left : Icons.chevron_right,
+        ),
+      );
+
   testWidgets('every day of the month carries a label that says what it was', (
     tester,
   ) async {
@@ -227,6 +236,74 @@ void main() {
       await tester.tap(find.byTooltip('Next month'));
       await _settle(tester, 2);
       expect(find.text('November 2026'), findsOneWidget);
+    } finally {
+      await closeApp(tester);
+    }
+  });
+
+  testWidgets('the month title opens the year, a month opens that month', (
+    tester,
+  ) async {
+    await openCalendar(tester);
+    try {
+      await tester.tap(find.text('November 2026'));
+      await _settle(tester, 2);
+      expect(find.text('2026'), findsOneWidget);
+      expect(find.text('September'), findsOneWidget);
+      expect(find.byType(Tab), findsNothing);
+      expect(find.byType(TabBar), findsNothing);
+
+      // The Habit began in 2026 and today is in 2026: no other year.
+      expect(yearArrow(tester, previous: true).onPressed, isNull);
+      expect(yearArrow(tester, previous: false).onPressed, isNull);
+
+      await tester.tap(find.text('October'));
+      await _settle(tester, 2);
+      expect(find.text('October 2026'), findsOneWidget);
+      expect(find.byType(Tab), findsNothing);
+    } finally {
+      await closeApp(tester);
+    }
+  });
+
+  testWidgets('a year of 400 days is 12 painters, not a widget per day', (
+    tester,
+  ) async {
+    final start = DateTime.utc(2025, 10, 14);
+    habitId = await db.habitDao.createHabit(
+      userId: _userId,
+      title: 'Walk',
+      today: habitDayKey(start),
+      now: start.add(const Duration(hours: 8)),
+      firstCommitment: const HabitCommitmentDraft(
+        repeatKind: HabitRepeatKind.everyDay,
+      ),
+    );
+    for (var i = 0; i < 400; i++) {
+      final day = start.add(Duration(days: i));
+      await db.habitDao.addCheckIn(
+        habitId: habitId,
+        userId: _userId,
+        countsForDay: habitDayKey(day),
+        now: day.add(const Duration(hours: 9)),
+      );
+    }
+    await openCalendar(tester);
+    try {
+      await tester.tap(find.text('November 2026'));
+      await _settle(tester, 2);
+      expect(
+        find.byWidgetPredicate(
+          (w) => w is CustomPaint && w.painter is HabitDayMarkPainter,
+        ),
+        findsNWidgets(12),
+      );
+
+      // The Habit began in 2025: the year arrows now have somewhere to go.
+      await tester.tap(find.byTooltip('Previous year'));
+      await _settle(tester, 2);
+      expect(find.text('2025'), findsOneWidget);
+      expect(yearArrow(tester, previous: true).onPressed, isNull);
     } finally {
       await closeApp(tester);
     }
