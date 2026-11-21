@@ -213,7 +213,13 @@ class HabitRow extends ConsumerWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 if (!inactive)
-                  HabitNumberColumn(progress: progress, entries: entries),
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: HabitNumberColumn(
+                      progress: progress,
+                      entries: entries,
+                    ),
+                  ),
                 HabitMarkButton(habit: habit),
               ],
             ),
