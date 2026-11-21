@@ -66,4 +66,21 @@ class HabitCheckInActions extends Notifier<void> {
           userId: ref.read(currentUserIdProvider),
         );
   }
+
+  /// Removes the latest Check-in counted for today and returns its id, or
+  /// returns null when there is none.
+  ///
+  /// Today is the clock day, as for [checkIn]. The latest is the one with the
+  /// greatest `checkedInAt`, then the greatest id.
+  Future<String?> removeLatestOfToday(String habitId) async {
+    final today = habitDayKey(ref.read(clockProvider)());
+    final todays = await ref
+        .read(databaseProvider)
+        .habitDao
+        .checkInsFor(habitId, today, today);
+    if (todays.isEmpty) return null;
+    final latestId = todays.last.id;
+    await remove(latestId);
+    return latestId;
+  }
 }

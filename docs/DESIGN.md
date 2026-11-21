@@ -534,12 +534,13 @@ their reasons so that a new surface can reuse the same contract.
 | [`OutcomeRow`](../app/lib/widgets/outcome_row.dart) | Optional leading slot, title (normal, muted or struck), secondary line, metadata (default `OutcomeMetaLine`), optional trailing slot. Flat or framed with r12 border and h16/v12 padding. | Whole-row tap and long-press callbacks. No ink or chevron when no tap callback exists. |
 | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Banner (icon, text, tone), people chips, title, current Action, notes, optional metadata and actions. Absent Action and notes are omitted. | Injected `ProcessToHandlers` or resolution buttons. |
 | Outcome detail / [`OutcomeAttributeStrip`](../app/lib/widgets/outcome_attribute_strip.dart) | Title → editable attribute strip → contexts → people → Plan → notes. Strip uses the metadata order with shared attribute editors. | Each editable chip has an ancestor tap target; logged time stays read-only. |
+| [`HabitCheckInMark`](../app/lib/widgets/habit_check_in_mark.dart) | 28px circle in a 48px tap target, theme colours: `primary` ring (open), filled with `onPrimary` check (done), ring with `add` (measurable, below target), dashed `outline` ring with `remove` (not due), `outline` ring on `surfaceContainerHighest` with `pause` (paused). | Tap on open, done and add-amount; none when not due or paused. |
 
 Energy uses purple `#7C3AED` and `bolt_outlined`; estimate uses blue `#2563EB`
 and `timer_outlined`; logged time uses green `#16A34A` and
 `history_toggle_off_outlined`; due uses red `#DC2626` and `event_outlined`.
 `formatMinutesLabel` renders durations as `45m`, `2h` or `2h 5m`.
-`energyLevelLabel` preserves unknown values. `formatDueDateLabel` converts to
+`formatDueDateLabel` converts to
 local time and renders `MMM d, y` (for example, `Nov 9, 2026`).
 
 ### Surface inventory

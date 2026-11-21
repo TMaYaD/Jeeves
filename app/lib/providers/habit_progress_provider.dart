@@ -8,8 +8,9 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/daos/habit_dao.dart';
-import '../database/gtd_database.dart' show Habit;
-import '../models/habit_commitment.dart' show habitDayKey;
+import '../database/gtd_database.dart' show Habit, HabitCheckIn;
+import '../models/habit_commitment.dart'
+    show HabitCommitment, commitmentInForceOn, habitDayKey;
 import '../models/habit_days.dart' show parseHabitDay;
 import '../models/habit_progress.dart';
 import '../models/habit_stack.dart';
@@ -82,6 +83,41 @@ final habitProgressProvider =
     if (history.habit.id == habitId) {
       return computeHabitProgress(history, today);
     }
+  }
+  return null;
+});
+
+/// The commitment in force today and today's Check-ins of one Habit.
+class HabitTodayEntries {
+  const HabitTodayEntries({required this.commitment, required this.checkIns});
+
+  /// The commitment in force today; null before the Habit's first day.
+  final HabitCommitment? commitment;
+
+  /// Today's Check-ins, oldest first (`checkedInAt`, then `id`).
+  final List<HabitCheckIn> checkIns;
+}
+
+/// Today's commitment and Check-ins for one Habit, or null while loading or
+/// when there is no such Habit.
+final habitTodayEntriesProvider =
+    Provider.family<HabitTodayEntries?, String>((ref, habitId) {
+  final today = ref.watch(habitTodayProvider);
+  final histories = ref.watch(habitHistoriesProvider).value;
+  if (histories == null) return null;
+  for (final history in histories) {
+    if (history.habit.id != habitId) continue;
+    final checkIns = [
+      for (final checkIn in history.checkIns)
+        if (checkIn.countsForDay == today) checkIn,
+    ]..sort((a, b) {
+        final byInstant = a.checkedInAt.compareTo(b.checkedInAt);
+        return byInstant != 0 ? byInstant : a.id.compareTo(b.id);
+      });
+    return HabitTodayEntries(
+      commitment: commitmentInForceOn(history.commitments, today),
+      checkIns: List.unmodifiable(checkIns),
+    );
   }
   return null;
 });

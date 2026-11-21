@@ -209,4 +209,37 @@ void main() {
     final rows = await db.habitDao.checkInsFor(habit, '2026-11-01', '2026-11-30');
     expect(rows.singleWhere((row) => row.id == id).countsForDay, '2026-11-19');
   });
+
+  test('removeLatestOfToday removes only the later of today\'s Check-ins',
+      () async {
+    final habit = await createHabit(
+        'Run',
+        const HabitCommitmentDraft(
+            repeatKind: HabitRepeatKind.timesPerWeek, timesPerPeriod: 3),
+        at: DateTime(2026, 11, 10, 8));
+    final yesterday = await actions().checkIn(habit, countsForDay: '2026-11-17');
+    now = DateTime(2026, 11, 18, 9, 0);
+    final morning = await actions().checkIn(habit);
+    now = DateTime(2026, 11, 18, 9, 30);
+    final later = await actions().checkIn(habit);
+
+    final removed = await actions().removeLatestOfToday(habit);
+
+    expect(removed, later);
+    final rows = await db.habitDao.checkInsFor(habit, '2026-11-01', '2026-11-30');
+    expect({for (final row in rows) row.id}, {yesterday, morning});
+  });
+
+  test('removeLatestOfToday changes nothing when there is none today',
+      () async {
+    final habit = await createHabit(
+        'Run', const HabitCommitmentDraft(repeatKind: HabitRepeatKind.everyDay),
+        at: DateTime(2026, 11, 10, 8));
+    final yesterday = await actions().checkIn(habit, countsForDay: '2026-11-17');
+
+    expect(await actions().removeLatestOfToday(habit), isNull);
+
+    final rows = await db.habitDao.checkInsFor(habit, '2026-11-01', '2026-11-30');
+    expect([for (final row in rows) row.id], [yesterday]);
+  });
 }
