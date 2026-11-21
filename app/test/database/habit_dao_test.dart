@@ -112,7 +112,9 @@ void main() {
                 habitId: habitId,
                 chosenOn: '2026-11-19',
                 createdAt: encodeInstant(_later)!,
-                repeatKind: 'every_day')));
+                repeatKind: 'every_day',
+                unitLabel: const Value('glasses'),
+                dailyTargetAmount: const Value(8))));
         expect(emissions.last.single.commitments, hasLength(2));
 
         await expectEmissionAfter(() => db.habitDao.addCheckIn(
