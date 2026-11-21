@@ -87,6 +87,14 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
   String _flashFacts = '';
   bool _titleSeeded = false;
   bool _draftWritten = false;
+  // True while the draft is being created: its editors are locked so an edit
+  // cannot land after the snapshot and be lost.
+  bool _creating = false;
+  bool _disposing = false;
+  // The last title and notes known to be stored; teardown flushes a field only
+  // when it differs, so an untouched field cannot overwrite a newer stored one.
+  String _savedTitle = '';
+  String _savedNotes = '';
   List<Tag> _draftLabels = const [];
   late final HabitActions _habitActions;
 
@@ -112,14 +120,19 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
 
   @override
   void dispose() {
+    _disposing = true;
     // A focused field is not committed by its focus listener on teardown, and
     // a titled draft left in the wide pane has no Back to save it: write both.
     if (_isDraft) {
       unawaited(_writeDraft());
     } else if (_titleSeeded) {
       final id = widget.habitId!;
-      unawaited(_habitActions.setTitle(id, _titleController.text));
-      unawaited(_habitActions.setNotes(id, _notesController.text));
+      if (_titleController.text != _savedTitle) {
+        unawaited(_habitActions.setTitle(id, _titleController.text));
+      }
+      if (_notesController.text != _savedNotes) {
+        unawaited(_habitActions.setNotes(id, _notesController.text));
+      }
     }
     _titleController.dispose();
     _notesController.dispose();
@@ -131,11 +144,12 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
   // --- writes ---------------------------------------------------------------
 
   Future<void> _commitTitle() async {
-    final accepted = await _habitActions.setTitle(
-      widget.habitId!,
-      _titleController.text,
-    );
-    if (accepted) return;
+    final text = _titleController.text;
+    final accepted = await _habitActions.setTitle(widget.habitId!, text);
+    if (accepted) {
+      _savedTitle = text;
+      return;
+    }
     final habit = ref.read(habitByIdProvider(widget.habitId!)).value;
     if (habit != null) _titleController.text = habit.title;
     if (mounted) {
@@ -145,8 +159,11 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
     }
   }
 
-  Future<void> _commitNotes() =>
-      _habitActions.setNotes(widget.habitId!, _notesController.text);
+  Future<void> _commitNotes() async {
+    final text = _notesController.text;
+    await _habitActions.setNotes(widget.habitId!, text);
+    _savedNotes = text;
+  }
 
   /// Writes the draft once, in one transaction. Returns the new Habit's id,
   /// or null when the title is empty or the draft was already written.
@@ -155,6 +172,10 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
     if (title.isEmpty || _draftWritten) return null;
     _draftWritten = true;
     final anchor = _draft.anchor;
+    if (mounted && !_disposing) {
+      FocusManager.instance.primaryFocus?.unfocus();
+      setState(() => _creating = true);
+    }
     try {
       return await _habitActions.createFromDraft(
         HabitDraftValues(
@@ -173,6 +194,7 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
       );
     } catch (_) {
       _draftWritten = false;
+      if (mounted && !_disposing) setState(() => _creating = false);
       rethrow;
     }
   }
@@ -187,7 +209,10 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
 
   @override
   Widget build(BuildContext context) {
-    final body = _isDraft ? _buildDraft(context) : _buildExisting(context);
+    final body = IgnorePointer(
+      ignoring: _creating,
+      child: _isDraft ? _buildDraft(context) : _buildExisting(context),
+    );
     if (widget.embedded) return body;
     return PopScope(
       onPopInvokedWithResult: (didPop, _) {
@@ -241,6 +266,8 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
       _titleSeeded = true;
       _titleController.text = habit.title;
       _notesController.text = habit.notes ?? '';
+      _savedTitle = habit.title;
+      _savedNotes = habit.notes ?? '';
     }
     final inForce =
         commitmentInForceOn(commitments, _today) ??

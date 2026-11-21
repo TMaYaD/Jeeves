@@ -982,4 +982,50 @@ void main() {
       await closeApp(tester);
     }
   });
+
+  testWidgets('closing an untouched detail does not overwrite a newer stored '
+      'title and notes', (tester) async {
+    final id = await seed('Read');
+    await openApp(tester);
+    try {
+      await tester.tap(find.byKey(Key('habit_row_$id')));
+      await _settle(tester);
+      await tester.runAsync(
+        () => db.habitDao.updateHabitDetails(
+          habitId: id,
+          userId: _userId,
+          title: 'Read more',
+          notes: 'From elsewhere',
+          energyLevel: null,
+          timeEstimateMinutes: null,
+          now: DateTime.now().toUtc(),
+        ),
+      );
+      await tester.pageBack();
+      await _settle(tester, 10);
+      final habit = await tester.runAsync(() => db.habitDao.habitById(id));
+      expect(habit!.title, 'Read more');
+      expect(habit.notes, 'From elsewhere');
+    } finally {
+      await closeApp(tester);
+    }
+  });
+
+  testWidgets('notes typed on a draft are stored when the title is submitted', (
+    tester,
+  ) async {
+    await openApp(tester);
+    try {
+      await tester.tap(find.byKey(const Key('habits_add')));
+      await _settle(tester);
+      await tester.enterText(find.byKey(const Key('habit_notes')), 'Slowly');
+      await tester.enterText(find.byKey(const Key('habit_title')), 'Walk');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await _settle(tester, 10);
+      final habit = await habitTitled(tester, 'Walk');
+      expect(habit!.notes, 'Slowly');
+    } finally {
+      await closeApp(tester);
+    }
+  });
 }
