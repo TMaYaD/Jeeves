@@ -152,7 +152,7 @@ The vault is the first plugin behind the host ([sync-plugins](proposals/sync-plu
 
 **It is a carrier, like any plugin.** It turns a page into changes and writes the host's merged state back as a page. It never chooses between two values and never writes a value the host did not give it; the one thing it authors is a clock for a hand edit, minted with `SyncHost.mintClock()`.
 
-**What is on a page.** One page per Outcome (`Outcomes/`), one sheet per FocusSession (`Sessions/`), one page per Capture (`Inbox/`). A sheet's name carries the session's UTC date and its id, so two sittings on one day never collide. A page's identity is the `id` in its frontmatter, never its path. **What a person can edit is what a page shows**: an Outcome's title, intent, due date and notes, its Actions as a checklist, a Capture's clarification stamp, and the Labels and Area the page shows. The rest of a page is the app's to write.
+**What is on a page.** One page per Outcome (`Outcomes/`), one sheet per FocusSession (`Sessions/`), one per Capture (`Inbox/`). A sheet's name carries the session's UTC date and its id, so sittings never collide. A page's identity is the `id` in its frontmatter, never its path. **What a person can edit is what a page shows**: an Outcome's title, intent, due date and notes, its Actions as a checklist, a Capture's clarification stamp, and the Labels and Area the page shows. The rest of a page is the app's to write.
 
 **A page is a pure function of merged state**: the same state always renders the same bytes, in the same order and in UTC, so two devices in the same state write the same file and a file syncer never sees a conflict between them. The readable part is frontmatter, notes, and a final `## Actions` heading that is always written; everything between the frontmatter and that heading is the notes, byte for byte.
 
@@ -193,7 +193,7 @@ representable and folded, not prevented
 ([ADR-0043](adr/0043-tag-duplicates-are-representable-and-folded.md)).
 
 **One stored value for Label.** Label is `type='context'`; the reconciler
-retypes any `'label'` Tag to it before folding, so older Devices are unaffected.
+retypes any `'label'` Tag to it before folding.
 
 **One Project per Outcome.** Each Outcome–Project link is its own entity, so two
 Devices assigning different Projects while apart leave two live links that
