@@ -10,6 +10,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../database/daos/habit_dao.dart';
 import '../database/gtd_database.dart' show Habit;
 import '../models/habit_commitment.dart' show habitDayKey;
+import '../models/habit_day_marks.dart';
 import '../models/habit_days.dart' show parseHabitDay;
 import '../models/habit_progress.dart';
 import '../models/habit_stack.dart';
@@ -70,6 +71,37 @@ final _activeHabitsProvider = StreamProvider<List<Habit>>((ref) {
 });
 
 DateTime _todayAsDay(String todayKey) => parseHabitDay(todayKey)!;
+
+/// One Habit's full history, or null while loading or when there is no such
+/// Habit.
+final habitHistoryProvider =
+    Provider.family<HabitHistory?, String>((ref, habitId) {
+  final histories = ref.watch(habitHistoriesProvider).value;
+  if (histories == null) return null;
+  for (final history in histories) {
+    if (history.habit.id == habitId) return history;
+  }
+  return null;
+});
+
+/// The day marks of one Habit from [HabitDayMarksRange.fromDay] to
+/// [HabitDayMarksRange.toDay], or null while the history is loading.
+///
+/// Recomputed once per history change or day change, not per month shown.
+final habitDayMarksProvider =
+    Provider.family<List<HabitDayMark>?, HabitDayMarksRange>((ref, range) {
+  final history = ref.watch(habitHistoryProvider(range.habitId));
+  if (history == null) return null;
+  final today = _todayAsDay(ref.watch(habitTodayProvider));
+  final fromDay = parseHabitDay(range.fromDay);
+  final toDay = parseHabitDay(range.toDay);
+  if (fromDay == null || toDay == null) return const [];
+  return habitDayMarks(history, today, fromDay, toDay);
+});
+
+/// The key of [habitDayMarksProvider]: a Habit and a range of day keys
+/// (`yyyy-MM-dd`), both ends included.
+typedef HabitDayMarksRange = ({String habitId, String fromDay, String toDay});
 
 /// The progress of one Habit, or null while loading or when there is no such
 /// Habit.
