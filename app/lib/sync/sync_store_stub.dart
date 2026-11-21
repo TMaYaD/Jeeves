@@ -6,6 +6,13 @@
 // not there.
 import 'sync_database.dart';
 
+/// The file the op log lives in, beside the domain store and never inside it.
+///
+/// Declared here as well as in the native opener, so the name resolves on
+/// every platform — the same rule `database/domain_store_stub.dart` follows
+/// for the domain store's file name.
+const String syncStoreFileName = 'jeeves_sync.sqlite';
+
 class SyncStoreImpl {
   Future<SyncDatabase> openDatabase() {
     throw UnsupportedError(
