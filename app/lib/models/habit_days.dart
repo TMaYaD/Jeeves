@@ -14,9 +14,18 @@ import 'habit_commitment.dart';
 ///
 /// The inverse of `habitDayKey`.
 DateTime? parseHabitDay(String dayKey) {
-  final local = habitDateFromDayKey(dayKey);
-  if (local == null) return null;
-  return DateTime.utc(local.year, local.month, local.day);
+  final match = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$').firstMatch(dayKey);
+  if (match == null) return null;
+  final year = int.parse(match.group(1)!);
+  final month = int.parse(match.group(2)!);
+  final day = int.parse(match.group(3)!);
+  // UTC parts, so a date a device's zone skipped (Pacific/Apia, 2011-12-30)
+  // still parses; a rolled-over date such as 02-30 is not a day.
+  final parsed = DateTime.utc(year, month, day);
+  if (parsed.year != year || parsed.month != month || parsed.day != day) {
+    return null;
+  }
+  return parsed;
 }
 
 /// The UTC calendar day with the same year, month and day as [date],

@@ -104,12 +104,15 @@ void main() {
             now: _later));
         expect(emissions.last.single.habit.title, 'Read more');
 
-        await expectEmissionAfter(() => db.habitDao.setCommitment(
-            habitId: habitId,
-            userId: _userId,
-            today: '2026-11-19',
-            now: _later,
-            commitment: _measurable));
+        // Inserted directly: setCommitment also stamps the habits row, which
+        // would re-emit even without the commitments table being watched.
+        await expectEmissionAfter(() => db.into(db.habitCommitments).insert(
+            HabitCommitmentsCompanion.insert(
+                userId: _userId,
+                habitId: habitId,
+                chosenOn: '2026-11-19',
+                createdAt: encodeInstant(_later),
+                repeatKind: 'every_day')));
         expect(emissions.last.single.commitments, hasLength(2));
 
         await expectEmissionAfter(() => db.habitDao.addCheckIn(
@@ -120,8 +123,12 @@ void main() {
             measuredAmount: 5));
         expect(emissions.last.single.checkIns, hasLength(1));
 
-        await expectEmissionAfter(() => db.habitDao.pause(
-            habitId: habitId, userId: _userId, today: '2026-11-19', now: _later));
+        await expectEmissionAfter(() => db.into(db.habitInactivePeriods).insert(
+            HabitInactivePeriodsCompanion.insert(
+                userId: _userId,
+                habitId: habitId,
+                kind: 'paused',
+                startsOn: '2026-11-19')));
         expect(emissions.last.single.inactivePeriods, hasLength(1));
       });
     });

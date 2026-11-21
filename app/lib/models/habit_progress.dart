@@ -190,7 +190,14 @@ bool _isInactiveOn(List<HabitInactivePeriod> periods, String dayKey) {
 /// Days after [today] are not judged. See the streak engine plan, §6.2.
 List<HabitJudgedUnit> judgeUnits(HabitHistory history, DateTime today) {
   final todayDay = _utcDay(today);
-  final runs = commitmentRuns(history, todayDay);
+  return _judgeRuns(history, commitmentRuns(history, todayDay), todayDay);
+}
+
+List<HabitJudgedUnit> _judgeRuns(
+  HabitHistory history,
+  List<HabitCommitmentRun> runs,
+  DateTime todayDay,
+) {
   if (runs.isEmpty) return const [];
 
   // Check-ins grouped by the day they count for.
@@ -211,7 +218,7 @@ List<HabitJudgedUnit> judgeUnits(HabitHistory history, DateTime today) {
     for (final checkIn in onDay) {
       total += checkIn.measuredAmount ?? 0;
     }
-    return _settledAmount(total) >= commitment.dailyTargetAmount!;
+    return _reachesTarget(total, commitment.dailyTargetAmount!);
   }
 
   final units = <HabitJudgedUnit>[];
@@ -467,7 +474,7 @@ HabitProgress computeHabitProgress(HabitHistory history, DateTime today) {
   final todayDay = _utcDay(today);
   final todayKey = habitDayKey(todayDay);
   final runs = commitmentRuns(history, todayDay);
-  final units = judgeUnits(history, todayDay);
+  final units = _judgeRuns(history, runs, todayDay);
 
   final commitmentToday = commitmentInForceOn(history.commitments, todayKey);
   final mainKind = runs.isEmpty
@@ -485,6 +492,13 @@ HabitProgress computeHabitProgress(HabitHistory history, DateTime today) {
     switch (unit.result) {
       case HabitUnitResult.skipped:
       case HabitUnitResult.inProgress:
+        // A change of unit kind ends the streak even when the first unit of
+        // the new kind is skipped; within one kind skipped units are passed
+        // over.
+        if (runKind != null && runKind != unit.kind) {
+          runKind = unit.kind;
+          runLength = 0;
+        }
         continue;
       case HabitUnitResult.done:
       case HabitUnitResult.met:
@@ -519,12 +533,11 @@ HabitProgress computeHabitProgress(HabitHistory history, DateTime today) {
   for (final checkIn in todaysCheckIns) {
     todayTotal += checkIn.measuredAmount ?? 0;
   }
-  todayTotal = _settledAmount(todayTotal);
   final measurable = commitmentToday?.isMeasurable ?? false;
   final todayAchieved = commitmentToday == null
       ? false
       : measurable
-          ? todayTotal >= commitmentToday.dailyTargetAmount!
+          ? _reachesTarget(todayTotal, commitmentToday.dailyTargetAmount!)
           : todaysCheckIns.isNotEmpty;
 
   int? periodCount;
@@ -572,11 +585,20 @@ HabitProgress computeHabitProgress(HabitHistory history, DateTime today) {
     targetAmount: measurable ? commitmentToday!.dailyTargetAmount : null,
     unitLabel: measurable ? commitmentToday!.unitLabel : null,
     isOverTarget:
-        measurable && todayTotal > commitmentToday!.dailyTargetAmount!,
+        measurable &&
+        _exceedsTarget(todayTotal, commitmentToday!.dailyTargetAmount!),
   );
 }
 
-/// Rounds a sum of entered amounts to micro-units, so that decimal entries
-/// such as 0.1 + 0.2 compare equal to a target of 0.3 despite binary
-/// floating-point error.
-double _settledAmount(double total) => (total * 1e6).round() / 1e6;
+/// How far a sum of entered amounts may differ from a target and still count
+/// as equal to it: binary floating-point error (0.1 + 0.2 against 0.3), and
+/// nothing a user could enter. Relative, so it never scales a total beyond the
+/// finite range.
+double _amountTolerance(double target) =>
+    1e-9 * (target.abs() < 1 ? 1 : target.abs());
+
+bool _reachesTarget(double total, double target) =>
+    total >= target - _amountTolerance(target);
+
+bool _exceedsTarget(double total, double target) =>
+    total > target + _amountTolerance(target);

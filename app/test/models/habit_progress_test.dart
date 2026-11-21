@@ -350,6 +350,52 @@ void main() {
       expect(exact.isOverTarget, isFalse);
       expect(exact.todayState, HabitTodayState.done);
     });
+
+    test('an accepted shortfall does not complete the target', () {
+      final progress = computeHabitProgress(
+          history([
+            commitment(
+                chosenOn: '2026-11-20', unitLabel: 'l', dailyTargetAmount: 0.8)
+          ], checkIns: [
+            checkIn(key(11, 20), amount: 0.7999999)
+          ]),
+          today);
+      expect(progress.todayState, HabitTodayState.notYet);
+    });
+
+    test('a very large finite amount is over the target without throwing', () {
+      final progress = computeHabitProgress(
+          history([
+            commitment(
+                chosenOn: '2026-11-20', unitLabel: 'l', dailyTargetAmount: 8)
+          ], checkIns: [
+            checkIn(key(11, 20), amount: 1e303)
+          ]),
+          today);
+      expect(progress.todayState, HabitTodayState.done);
+      expect(progress.isOverTarget, isTrue);
+    });
+  });
+
+  group('streak across a change of unit kind', () {
+    test('a skipped weekly unit still ends the daily streak', () {
+      final progress = computeHabitProgress(
+          history([
+            commitment(id: 'a', chosenOn: '2026-11-02'),
+            commitment(
+                id: 'b',
+                chosenOn: '2026-11-09',
+                repeatKind: HabitRepeatKind.timesPerWeek,
+                timesPerPeriod: 3),
+            commitment(id: 'c', chosenOn: '2026-11-12'),
+          ], checkIns: [
+            for (var d = 2; d <= 8; d++) checkIn(key(11, d)),
+            for (var d = 12; d <= 19; d++) checkIn(key(11, d)),
+          ]),
+          today);
+      // Nov 12-19 is eight done days; the earlier seven must not join them.
+      expect(progress.currentStreak, 8);
+    });
   });
 
   group('today', () {

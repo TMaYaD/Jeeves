@@ -878,7 +878,10 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
 
   /// Everything the streak engine needs to know about one Habit, or null when
   /// there is no such Habit. A one-shot read.
-  Future<HabitHistory?> habitHistory(String habitId) async {
+  Future<HabitHistory?> habitHistory(String habitId) =>
+      transaction(() => _habitHistoryInTransaction(habitId));
+
+  Future<HabitHistory?> _habitHistoryInTransaction(String habitId) async {
     final habit = await habitById(habitId);
     if (habit == null) return null;
     return HabitHistory(
@@ -904,14 +907,22 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
     return customSelect(
       'SELECT id FROM habits ORDER BY created_at, id',
       readsFrom: {habits, habitCommitments, habitCheckIns, habitInactivePeriods},
-    ).watch().asyncMap((rows) async {
-      final histories = <HabitHistory>[];
-      for (final row in rows) {
-        final history = await habitHistory(row.read<String>('id'));
-        if (history != null) histories.add(history);
-      }
-      return histories;
-    });
+    ).watch().asyncMap((_) => transaction(() async {
+          // One snapshot for the Habit list and every history, so a write
+          // cannot land between two of the reads.
+          final histories = <HabitHistory>[];
+          final habitRows = await (select(habits)
+                ..orderBy([
+                  (h) => OrderingTerm.asc(h.createdAt),
+                  (h) => OrderingTerm.asc(h.id),
+                ]))
+              .get();
+          for (final habit in habitRows) {
+            final history = await _habitHistoryInTransaction(habit.id);
+            if (history != null) histories.add(history);
+          }
+          return histories;
+        }));
   }
 
   /// The state of a Habit on [day].
