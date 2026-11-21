@@ -163,7 +163,7 @@ UI label mapping — the `trash` action in `ProcessToHandlers` resolves its copy
 _Avoid_: Delete, Dismiss, Done (Done is a different verdict entirely), Trash (Trash is the Outcome-side List)
 
 **System Trust**:
-Whether the user's system can still be trusted: one indicator over three signals — Captures in the Inbox, days since the last Weekly Review, Bypassed Outcomes — read as all good or needs attention, never a number. Guardrails nudge towards the habit; they never block. Surface: [docs/DESIGN.md § Guardrails](docs/DESIGN.md#guardrails--nudges-never-blocks).
+Whether the user's system can still be trusted: one indicator over three signals — Captures in the Inbox, days since the last Weekly Review, Bypassed Outcomes — read as all good or needs attention, never a number. Guardrails nudge; they never block. Surface: [docs/DESIGN.md § Guardrails](docs/DESIGN.md#guardrails--nudges-never-blocks).
 _Avoid_: health score, score, System Health
 
 #### Relationships

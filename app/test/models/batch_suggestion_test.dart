@@ -133,10 +133,11 @@ void main() {
   });
 
   test('a pair that fits is found behind a first entry that crowds it out', () {
-    // 10 + 5 would overflow the 12-minute gap, but 5 + 5 fits.
+    // 10 + 5 would overflow the 12-minute gap, but 5 + 5 fits. `big` takes the
+    // 9:00-9:10 gap before the event, so it does not sit on the pair's gap.
     final suggestion = _suggest(
       [_entry('big', 10), _entry('a', 5), _entry('b', 5)],
-      events: [_busy(_at(9), _at(9, 30)), _busy(_at(9, 42), _at(18))],
+      events: [_busy(_at(9, 10), _at(9, 30)), _busy(_at(9, 42), _at(18))],
     );
     expect(suggestion, isNotNull);
     expect([for (final m in suggestion!.members) m.outcomeId], ['a', 'b']);

@@ -13,6 +13,10 @@ import '../../sync/ids.dart' show captureTagIdFor, todoTagIdFor;
 import '../../utils/tag_colors.dart';
 import '../gtd_database.dart';
 import 'focus_session_dao.dart' show FocusSessionDao;
+// `habit_tags` is the third junction that references `tags.id`: it holds a
+// Habit's Area and Labels. Its derived id lives with the Habit writes, in
+// `habit_dao.dart`.
+import 'habit_dao.dart' show habitTagIdFor;
 
 export '../../sync/ids.dart' show todoTagIdFor;
 
@@ -28,7 +32,7 @@ class TagWithCount {
   final int count;
 }
 
-@DriftAccessor(tables: [Tags, TodoTags, Todos, CaptureTags])
+@DriftAccessor(tables: [Tags, TodoTags, Todos, CaptureTags, HabitTags])
 class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   TagDao(super.db);
 
@@ -377,10 +381,10 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   /// Merge [sourceTagId] into [targetTagId] — the *user's* deliberate fold, as
   /// opposed to [foldDuplicateTags]' automatic one.
   ///
-  /// Repoints every `todo_tags` row **and** every `capture_tags` row that
-  /// references [sourceTagId] to [targetTagId] (an item holding both ends up
-  /// with exactly one link to the target), then deletes the source tag. Colour
-  /// and name of the target are kept.
+  /// Repoints every `todo_tags` row, every `capture_tags` row **and** every
+  /// `habit_tags` row that references [sourceTagId] to [targetTagId] (an item
+  /// holding both ends up with exactly one link to the target), then deletes
+  /// the source tag. Colour and name of the target are kept.
   ///
   /// Throws [ArgumentError] if [sourceTagId] equals [targetTagId] — a
   /// self-merge would silently delete the tag and strip every association — or
@@ -431,6 +435,11 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   /// tag. Does not stamp `last_clarified_at`: removing an entry from a
   /// management list is not thinking about each Outcome. Returns without
   /// writing when [tagId] is unknown.
+  ///
+  /// A Habit's `habit_tags` row goes too, and **without a tombstone**: the
+  /// habit tables are local until Habits sync, so there is no op to author and
+  /// no peer to tell. The row would otherwise sit on as an orphan pointing at
+  /// a tag that is gone — invisible to the read, but still a row.
   Future<void> deleteTag(String tagId) {
     return attachedDatabase.capturing(() async {
       final existing = await (select(tags)..where((t) => t.id.equals(tagId)))
@@ -443,6 +452,7 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
           .get();
       await (delete(todoTags)..where((tt) => tt.tagId.equals(tagId))).go();
       await (delete(captureTags)..where((ct) => ct.tagId.equals(tagId))).go();
+      await (delete(habitTags)..where((ht) => ht.tagId.equals(tagId))).go();
       for (final row in todoJunctions) {
         _tombstoneTodoTag(row.todoId, tagId);
       }
@@ -586,19 +596,29 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
     required String to,
   }) =>
       attachedDatabase.capturing(() async {
+        // The destination was chosen before this scope began. If it has gone
+        // since (merged away or deleted), moving references onto it would
+        // strand them again, so they stay where they are.
+        final destination = await (select(tags)..where((t) => t.id.equals(to)))
+            .getSingleOrNull();
+        if (destination == null) return;
         await _repointTagReferences(from: from, to: to);
         attachedDatabase.notifyTodosViewWrite(includeTodoTags: true);
         attachedDatabase.notifyCapturesViewWrite();
       });
 
-  /// Repoint **both** junction tables that reference `tags.id`.
+  /// Repoint **every** junction table that references `tags.id`.
   ///
-  /// `todo_tags` and `capture_tags` — both, because FK enforcement is off (#637)
-  /// so an orphaned junction row is not an error but a silently invisible Tag
-  /// assignment or tag hint. Each junction's identity is its pair, so the row
-  /// moves by inserting the derived id for `(parent, to)` and deleting the old
-  /// one; a `(parent, to)` row that already existed collapses under the primary
-  /// key via `INSERT OR REPLACE`.
+  /// `todo_tags`, `capture_tags` and `habit_tags` — all three, because FK
+  /// enforcement is off (#637) so an orphaned junction row is not an error but
+  /// a silently invisible Tag assignment, tag hint or Habit Label. Each
+  /// junction's identity is its pair, so the row moves by inserting the
+  /// derived id for `(parent, to)` and deleting the old one; a `(parent, to)`
+  /// row that already existed collapses under the primary key via
+  /// `INSERT OR REPLACE`.
+  ///
+  /// The `habit_tags` rows move **without an op**: the habit tables are local
+  /// until Habits sync, so there is nothing to author and no peer to tell.
   Future<void> _repointTagReferences({
     required String from,
     required String to,
@@ -641,6 +661,26 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
         await (delete(captureTags)..where((ct) => ct.id.equals(row.id))).go();
       }
       _tombstoneCaptureTag(row.captureId, from);
+    }
+
+    // The Habit's Area and Labels. No op is authored: the habit tables are
+    // local until Habits sync.
+    final habitJunctions =
+        await (select(habitTags)..where((ht) => ht.tagId.equals(from))).get();
+    for (final row in habitJunctions) {
+      final movedId = habitTagIdFor(row.habitId, to);
+      await into(habitTags).insert(
+        HabitTagsCompanion.insert(
+          id: movedId,
+          habitId: row.habitId,
+          tagId: to,
+          userId: row.userId,
+        ),
+        mode: InsertMode.insertOrReplace,
+      );
+      if (row.id != movedId) {
+        await (delete(habitTags)..where((ht) => ht.id.equals(row.id))).go();
+      }
     }
   }
 
