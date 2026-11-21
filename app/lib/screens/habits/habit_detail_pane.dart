@@ -134,14 +134,8 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
       final id = widget.habitId!;
       final title = _titleController.text;
       final notes = _notesController.text;
-      if (title != _savedTitle) {
-        _titleWrites = _titleWrites.then((_) => _habitActions.setTitle(id, title));
-        unawaited(_titleWrites);
-      }
-      if (notes != _savedNotes) {
-        _notesWrites = _notesWrites.then((_) => _habitActions.setNotes(id, notes));
-        unawaited(_notesWrites);
-      }
+      if (title != _savedTitle) unawaited(_queueTitleWrite(id, title));
+      if (notes != _savedNotes) unawaited(_queueNotesWrite(id, notes));
     }
     _titleController.dispose();
     _notesController.dispose();
@@ -152,20 +146,54 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
 
   // --- writes ---------------------------------------------------------------
 
+  // Each field's writes run one after another. A failed write is swallowed
+  // here (the caller learns of it through the result) so the queue tail never
+  // completes with an error and later writes still run.
+  /// Returns true when stored, false when refused (empty title), null when the
+  /// write threw.
+  Future<bool?> _queueTitleWrite(String id, String text) {
+    bool? result;
+    final write = _titleWrites.then((_) async {
+      try {
+        result = await _habitActions.setTitle(id, text);
+      } catch (_) {
+        result = null;
+      }
+    });
+    _titleWrites = write;
+    return write.then((_) => result);
+  }
+
+  Future<bool> _queueNotesWrite(String id, String text) {
+    var stored = false;
+    final write = _notesWrites.then((_) async {
+      try {
+        await _habitActions.setNotes(id, text);
+        stored = true;
+      } catch (_) {
+        stored = false;
+      }
+    });
+    _notesWrites = write;
+    return write.then((_) => stored);
+  }
+
   Future<void> _commitTitle() async {
     final text = _titleController.text;
     final previous = _savedTitle;
     _savedTitle = text;
-    var accepted = false;
-    final write = _titleWrites.then((_) async {
-      accepted = await _habitActions.setTitle(widget.habitId!, text);
-    });
-    _titleWrites = write;
-    await write;
-    if (accepted) return;
+    final result = await _queueTitleWrite(widget.habitId!, text);
+    if (result == true) return;
+    // Rejected or failed: the stored title is still the previous one, so the
+    // field stays eligible for another save.
     if (_savedTitle == text) _savedTitle = previous;
-    final habit = ref.read(habitByIdProvider(widget.habitId!)).value;
-    if (habit != null) _titleController.text = habit.title;
+    if (result == null) return;
+    // Put the stored title back only if the field still holds the rejected
+    // text; newer typing is kept.
+    if (mounted && _titleController.text == text) {
+      final habit = ref.read(habitByIdProvider(widget.habitId!)).value;
+      if (habit != null) _titleController.text = habit.title;
+    }
     if (mounted) {
       ScaffoldMessenger.of(
         context,
@@ -175,12 +203,10 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
 
   Future<void> _commitNotes() async {
     final text = _notesController.text;
+    final previous = _savedNotes;
     _savedNotes = text;
-    final write = _notesWrites.then(
-      (_) => _habitActions.setNotes(widget.habitId!, text),
-    );
-    _notesWrites = write;
-    await write;
+    final stored = await _queueNotesWrite(widget.habitId!, text);
+    if (!stored && _savedNotes == text) _savedNotes = previous;
   }
 
   /// Writes the draft once, in one transaction. Returns the new Habit's id,

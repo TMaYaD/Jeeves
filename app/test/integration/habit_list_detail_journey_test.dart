@@ -1035,6 +1035,29 @@ void main() {
     }
   });
 
+  testWidgets('a rejected empty title does not erase newer typing', (
+    tester,
+  ) async {
+    final id = await seed('Read');
+    await openApp(tester);
+    try {
+      await tester.tap(find.byKey(Key('habit_row_$id')));
+      await _settle(tester);
+      await tester.enterText(find.byKey(const Key('habit_title')), 'B');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pump();
+      await tester.enterText(find.byKey(const Key('habit_title')), '');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await tester.pump();
+      await tester.enterText(find.byKey(const Key('habit_title')), 'C');
+      await _settle(tester, 10);
+      final field = tester.widget<TextField>(find.byKey(const Key('habit_title')));
+      expect(field.controller!.text, 'C');
+    } finally {
+      await closeApp(tester);
+    }
+  });
+
   testWidgets('notes typed on a draft are stored when the title is submitted', (
     tester,
   ) async {
