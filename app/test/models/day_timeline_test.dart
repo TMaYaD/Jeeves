@@ -136,6 +136,42 @@ void main() {
       );
       expect(entries.single.isTimeboxed, isFalse);
     });
+
+    test('carries each Outcome\'s contexts and batch state (issue #407)', () {
+      final entries = dayTimelineEntriesFor(
+        tasks: [_todo('a', estimate: 5), _todo('b', estimate: 5)],
+        defaultEstimateMinutes: 10,
+        now: _at(9),
+        contextTags: {
+          'a': [(id: 'ctx-phone', name: '@phone')],
+        },
+        batchState: {
+          'a': (batchId: 'batch-1', declined: false),
+          'b': (batchId: null, declined: true),
+        },
+      );
+      expect(entries[0].contextTags.single.name, '@phone');
+      expect(entries[0].batchId, 'batch-1');
+      expect(entries[0].isBatchSuggestionDeclined, isFalse);
+      expect(entries[1].contextTags, isEmpty);
+      expect(entries[1].batchId, isNull);
+      expect(entries[1].isBatchSuggestionDeclined, isTrue);
+    });
+
+    test('a change of context or batch changes the layout signature', () {
+      final plain = dayTimelineEntriesFor(
+        tasks: [_todo('a', estimate: 5)],
+        defaultEstimateMinutes: 10,
+        now: _at(9),
+      ).single;
+      final batched = dayTimelineEntriesFor(
+        tasks: [_todo('a', estimate: 5)],
+        defaultEstimateMinutes: 10,
+        now: _at(9),
+        batchState: {'a': (batchId: 'batch-1', declined: false)},
+      ).single;
+      expect(batched.layoutSignature, isNot(plain.layoutSignature));
+    });
   });
 
   group('flowDay', () {

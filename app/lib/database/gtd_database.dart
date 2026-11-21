@@ -205,7 +205,7 @@ class GtdDatabase extends _$GtdDatabase {
   /// build refuses it: opening it would relabel the file with a version it
   /// does not understand, and the newer build would then find a store it
   /// believes is old.
-  static const int supportedSchemaVersion = 13;
+  static const int supportedSchemaVersion = 14;
 
   /// Completes with the [OpeningDetails] of this store's one open.
   ///
@@ -465,6 +465,26 @@ class GtdDatabase extends _$GtdDatabase {
             if (!indices.any((row) =>
                 row.read<String>('name') == 'idx_habit_check_ins_habit_day')) {
               await m.createIndex(idxHabitCheckInsHabitDay);
+            }
+          }
+          // v14 (issue #407): `focus_session_tasks.batch_id` and
+          // `batch_suggestion_declined_at`, an accepted small-task suggestion
+          // and a "Not today" on a Plan entry. Nullable `ADD COLUMN`s — no table
+          // rebuild, every existing entry reads NULL (not batched, not
+          // declined), nothing is lost. Each guarded on the column's absence
+          // like v7.
+          if (from < 14) {
+            final existing = await m.database
+                .customSelect('PRAGMA table_info(focus_session_tasks)')
+                .get();
+            bool has(String name) =>
+                existing.any((row) => row.read<String>('name') == name);
+            if (!has('batch_id')) {
+              await m.addColumn(focusSessionTasks, focusSessionTasks.batchId);
+            }
+            if (!has('batch_suggestion_declined_at')) {
+              await m.addColumn(
+                  focusSessionTasks, focusSessionTasks.batchSuggestionDeclinedAt);
             }
           }
         }),

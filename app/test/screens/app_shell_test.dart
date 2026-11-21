@@ -137,6 +137,10 @@ Widget _buildShellOnly({
                     builder: (_, _) => const Scaffold(body: Text('Focus body')),
                   ),
                   GoRoute(
+                    path: '/habits',
+                    builder: (_, _) => const Scaffold(body: Text('Habits body')),
+                  ),
+                  GoRoute(
                     path: '/done',
                     builder: (_, _) => const Scaffold(body: Text('Done body')),
                   ),

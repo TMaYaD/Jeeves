@@ -560,6 +560,8 @@ Coordinates are `(x, y)` in device pixels. The drawer lives under a hamburger ic
 | **Mock MWA Wallet — connect prompt** → "Connect" | `(810, 2200)` | Green button, bottom-right. |
 | **Mock MWA Wallet — SIWS sign message** → "Approve" | `(800, 2160)` | Green button, bottom-right. |
 
+**Habits** has no device coordinates yet. Its tap path (drawer → Habits → Add a Habit → type a title) runs in `app/test/integration/habit_list_detail_journey_test.dart`.
+
 ### Reference flows
 
 **First-launch SWS sign-in** (assumes Mock MWA Wallet already installed):
@@ -573,4 +575,4 @@ Coordinates are `(x, y)` in device pixels. The drawer lives under a hamburger ic
 1. From `/inbox`: `tap 106 170` → `tap 250 2280` → `/settings`
 2. `tap 540 440` (Sign out tile) → dialog
 3. `tap 844 1378` (red confirm)
-4. Verify: still on `/settings`, SYNC section now shows the "Sign in to sync across devices" tile in place of "Sign out". The section has exactly these two states and never reports sync *state* — that is the drawer indicator's job.
+4. Verify: still on `/settings`, SYNC section now shows the "Sign in to sync across devices" tile in place of "Sign out".

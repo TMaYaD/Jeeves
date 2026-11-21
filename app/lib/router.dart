@@ -9,6 +9,8 @@ import 'screens/auth/login_screen.dart';
 import 'screens/auth/register_screen.dart';
 import 'screens/done/done_screen.dart';
 import 'screens/enrolment/enrolment_ceremony_screen.dart';
+import 'screens/habits/habit_detail_pane.dart';
+import 'screens/habits/habits_screen.dart';
 import 'screens/inbox/inbox_screen.dart';
 import 'screens/next/next_screen.dart';
 import 'screens/project/project_screen.dart';
@@ -164,6 +166,10 @@ final appRouter = GoRouter(
           builder: (context, state) => const SomedayMaybeScreen(),
         ),
         GoRoute(
+          path: '/habits',
+          builder: (context, state) => const HabitsScreen(),
+        ),
+        GoRoute(
           path: '/focus',
           builder: (context, state) => const FocusScreen(),
         ),
@@ -182,6 +188,17 @@ final appRouter = GoRouter(
       builder: (context, state) => InboxClarifyScreen(
         captureId: state.pathParameters['id']!,
         sequence: state.uri.queryParameters['sequence'] == '1',
+      ),
+    ),
+    GoRoute(
+      path: '/habits/new',
+      builder: (context, state) => const HabitDetailScreen(habitId: null),
+    ),
+    GoRoute(
+      path: '/habits/:id',
+      builder: (context, state) => HabitDetailScreen(
+        habitId: state.pathParameters['id']!,
+        justCreated: state.uri.queryParameters['new'] == '1',
       ),
     ),
     GoRoute(
