@@ -561,6 +561,7 @@ Paths are under `app/lib/`; DPR means Daily Planning and ES means Evening Shutdo
 | Search — `screens/search/widgets/search_result_tile.dart` | Title, snippet, match hint, status | Flat `OutcomeRow` | Capture → clarify; Outcome → detail |
 | GTD lists / Project / Waiting For (grouped by person) — `screens/common/gtd_list_screen.dart` | Title, energy, estimate, due when set | Flat `OutcomeRow` | Open detail; long-press multi-selects |
 | Habit list and detail — `screens/habits/habits_screen.dart` | Title, anchor, state; notes, Check-in, Repeat, Area, Labels, energy, estimate | Detail beside the list from 840 px; theme colours | Edit in place; sheets with Done/Cancel; pause, archive, restore |
+| Check-in calendar — `screens/habits/habit_calendar_screen.dart` | Month of day marks (done, partial, missed, not due, paused, before the Habit); "5 of 8", "2×", repeat-changed flag; legend | Round marks by shape, never colour; missed is never red; one painter for month, year and strip; phone layout on every width | Title opens the year; a day opens the day sheet: add, change, remove at once with no confirmation or undo |
 | Linked Outcomes — `widgets/capture_outcomes_section.dart` | Title, next Action, contexts, Capture provenance count | Framed `OutcomeRow` | Unlink |
 
 ### Deliberate variations

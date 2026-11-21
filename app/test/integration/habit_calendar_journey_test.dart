@@ -19,6 +19,7 @@ import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/habit_commitment.dart';
 import 'package:jeeves/providers/clock_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/providers/habit_progress_provider.dart';
 import 'package:jeeves/screens/habits/habit_calendar_screen.dart';
 import 'package:jeeves/widgets/habit_day_mark_grid.dart';
 
@@ -306,6 +307,220 @@ void main() {
       expect(yearArrow(tester, previous: true).onPressed, isNull);
     } finally {
       await closeApp(tester);
+    }
+  });
+
+  // ---- The past-day sheet (step 5) ----
+
+  Finder cell(String label) => find.bySemanticsLabel(RegExp('^$label'));
+
+  Future<void> tapCell(WidgetTester tester, String label) async {
+    await tester.tap(cell(label));
+    await _settle(tester, 3);
+  }
+
+  Future<String> createBinaryHabit(String title, String startDay) =>
+      db.habitDao.createHabit(
+        userId: _userId,
+        title: title,
+        today: startDay,
+        now: DateTime.parse('${startDay}T08:00:00Z'),
+        firstCommitment: const HabitCommitmentDraft(
+          repeatKind: HabitRepeatKind.everyDay,
+        ),
+      );
+
+  testWidgets('a missed day takes a Check-in: the cell is done and the best '
+      'streak is the engine\'s new value', (tester) async {
+    final semantics = tester.ensureSemantics();
+    await openCalendar(tester);
+    try {
+      final before = container.read(habitProgressProvider(habitId))!;
+      await tapCell(tester, '6 November, missed');
+      expect(find.text('Friday 6 November'), findsOneWidget);
+      for (var i = 0; i < 5; i++) {
+        await tester.tap(find.byTooltip('More'));
+        await tester.pump();
+      }
+      await tester.tap(find.byKey(const Key('habit_day_add')));
+      await _settle(tester);
+      await tester.tap(find.byKey(const Key('habit_day_close')));
+      await _settle(tester, 3);
+
+      expect(cell('6 November, done, 6 of 6 glasses'), findsOneWidget);
+      final after = container.read(habitProgressProvider(habitId))!;
+      expect(after.bestStreak, before.bestStreak + 1);
+    } finally {
+      await closeApp(tester);
+      semantics.dispose();
+    }
+  });
+
+  testWidgets('a measurable day: change one entry, then remove one', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    await openCalendar(tester);
+    try {
+      await tapCell(tester, '5 November, done');
+      expect(find.byTooltip('Remove this Check-in'), findsNWidgets(2));
+
+      await tester.tap(find.byTooltip('Change this value').first);
+      await _settle(tester, 2);
+      await tester.enterText(find.byKey(const Key('habit_day_change_field')), '1');
+      await tester.tap(find.byKey(const Key('habit_day_change_save')));
+      await _settle(tester);
+      await tester.tap(find.byKey(const Key('habit_day_close')));
+      await _settle(tester, 3);
+      expect(
+        cell('5 November, partly done, 4 of 6 glasses, 2 Check-ins'),
+        findsOneWidget,
+      );
+
+      await tapCell(tester, '5 November');
+      await tester.tap(find.byTooltip('Remove this Check-in').first);
+      await _settle(tester);
+      await tester.tap(find.byKey(const Key('habit_day_close')));
+      await _settle(tester, 3);
+      expect(
+        cell('5 November, partly done, 3 of 6 glasses, 1 Check-in'),
+        findsOneWidget,
+      );
+    } finally {
+      await closeApp(tester);
+      semantics.dispose();
+    }
+  });
+
+  testWidgets('a binary day is one tap to add; after the change to a '
+      'measurable Habit, Add asks for an amount', (tester) async {
+    habitId = await createBinaryHabit('Read', '2026-10-01');
+    await db.habitDao.setCommitment(
+      habitId: habitId,
+      userId: _userId,
+      today: '2026-11-10',
+      now: DateTime.utc(2026, 11, 10, 8),
+      commitment: const HabitCommitmentDraft(
+        repeatKind: HabitRepeatKind.everyDay,
+        unitLabel: 'pages',
+        dailyTargetAmount: 10,
+      ),
+    );
+    final semantics = tester.ensureSemantics();
+    await openCalendar(tester);
+    try {
+      await tapCell(tester, '12 November');
+      expect(find.byKey(const Key('habit_day_new_amount')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('habit_day_close')));
+      await _settle(tester, 3);
+
+      await tester.tap(find.byTooltip('Previous month'));
+      await _settle(tester, 2);
+      await tapCell(tester, '20 October');
+      expect(find.byKey(const Key('habit_day_new_amount')), findsNothing);
+      expect(find.text('A Check-in here counts for 20 October.'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('habit_day_add')));
+      await _settle(tester);
+      expect(find.byTooltip('Remove this Check-in'), findsOneWidget);
+      expect(find.text('Close'), findsOneWidget);
+    } finally {
+      await closeApp(tester);
+      semantics.dispose();
+    }
+  });
+
+  testWidgets('today with one Check-in takes a second from the sheet', (
+    tester,
+  ) async {
+    habitId = await createBinaryHabit('Journal', '2026-11-01');
+    await db.habitDao.addCheckIn(
+      habitId: habitId,
+      userId: _userId,
+      countsForDay: '2026-11-18',
+      now: DateTime.utc(2026, 11, 18, 7),
+    );
+    final semantics = tester.ensureSemantics();
+    await openCalendar(tester);
+    try {
+      await tapCell(tester, '18 November, done');
+      expect(find.byTooltip('Remove this Check-in'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('habit_day_add')));
+      await _settle(tester);
+      expect(find.byTooltip('Remove this Check-in'), findsNWidgets(2));
+      await tester.tap(find.byKey(const Key('habit_day_close')));
+      await _settle(tester, 3);
+      expect(cell('18 November, done, 2 Check-ins'), findsOneWidget);
+    } finally {
+      await closeApp(tester);
+      semantics.dispose();
+    }
+  });
+
+  testWidgets('a paused day says it does not change the streak and still '
+      'takes a Check-in', (tester) async {
+    final semantics = tester.ensureSemantics();
+    await openCalendar(tester);
+    try {
+      await tapCell(tester, '14 November, paused');
+      expect(
+        find.text("This day's Check-ins do not change the streak."),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('habit_day_add')));
+      await _settle(tester);
+      await tester.tap(find.byKey(const Key('habit_day_close')));
+      await _settle(tester, 3);
+      expect(
+        cell('14 November, paused, 1 of 8 glasses, 1 Check-in'),
+        findsOneWidget,
+      );
+    } finally {
+      await closeApp(tester);
+      semantics.dispose();
+    }
+  });
+
+  testWidgets('future days and days before the Habit open no sheet', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    await openCalendar(tester);
+    try {
+      await tapCell(tester, '19 November, not yet');
+      expect(find.byKey(const Key('habit_day_add')), findsNothing);
+
+      await tester.tap(find.byTooltip('Previous month'));
+      await _settle(tester, 2);
+      await tester.tap(find.byTooltip('Previous month'));
+      await _settle(tester, 2);
+      await tapCell(tester, '5 September, before the Habit');
+      expect(find.byKey(const Key('habit_day_add')), findsNothing);
+    } finally {
+      await closeApp(tester);
+      semantics.dispose();
+    }
+  });
+
+  testWidgets('a Habit archived today is read-only: no day opens a sheet', (
+    tester,
+  ) async {
+    habitId = await createBinaryHabit('Old', '2026-11-01');
+    await db.habitDao.archive(
+      habitId: habitId,
+      userId: _userId,
+      today: '2026-11-18',
+      now: DateTime.utc(2026, 11, 18, 8),
+    );
+    final semantics = tester.ensureSemantics();
+    await openCalendar(tester);
+    try {
+      await tapCell(tester, '10 November');
+      expect(find.byKey(const Key('habit_day_add')), findsNothing);
+      await tapCell(tester, '18 November');
+      expect(find.byKey(const Key('habit_day_add')), findsNothing);
+    } finally {
+      await closeApp(tester);
+      semantics.dispose();
     }
   });
 }

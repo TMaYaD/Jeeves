@@ -13,6 +13,7 @@ import '../../models/habit_progress.dart';
 import '../../providers/habit_progress_provider.dart';
 import '../../widgets/habit_day_mark_grid.dart';
 import 'habit_copy.dart';
+import 'widgets/habit_day_sheet.dart';
 
 const double _cellHeight = 64;
 const double _markCenterY = 34;
@@ -443,7 +444,24 @@ class _MonthView extends ConsumerWidget {
     if (index >= cells.length || cells[index] == null) {
       return const SizedBox.shrink();
     }
-    return _DayCell(mark: cells[index]!, today: today, history: history);
+    final mark = cells[index]!;
+    // A Habit that is archived now is read-only: no day opens a sheet.
+    final archivedNow =
+        inactiveKindOn(history.inactivePeriods, today) ==
+        HabitInactiveKind.archived;
+    final opens = habitDayOpensSheet(mark.state) && !archivedNow;
+    return Builder(
+      builder: (context) => InkWell(
+        onTap: opens
+            ? () => showHabitDaySheet(
+                context,
+                habitId: history.habit.id,
+                day: mark.day,
+              )
+            : null,
+        child: _DayCell(mark: mark, today: today, history: history),
+      ),
+    );
   }
 }
 
