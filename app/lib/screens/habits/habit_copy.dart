@@ -230,3 +230,20 @@ String? habitSheetStatusLine(HabitProgress progress) {
 /// "3 glasses": the unit exactly as stored.
 String habitEntryAmountText(double amount, String? unitLabel) =>
     '${habitAmountText(amount)} ${unitLabel ?? ''}'.trimRight();
+
+// ---- Next-in-stack offer ----------------------------------------------------
+
+const habitOfferLine = 'Next in the order, sir.';
+const habitOfferAcceptLabel = 'Right ho';
+const habitOfferDismissLabel = 'Not now';
+const habitOfferNotYetLine = 'Next in this stack \u00b7 not yet today';
+
+/// The row offer's sub-line: "Stretch is attended to. Shall I take the
+/// glasses?" for a measurable offered Habit, else without the question.
+String habitOfferSubLine({required String sourceTitle, String? offeredUnit}) =>
+    offeredUnit == null
+        ? '$sourceTitle is attended to.'
+        : '$sourceTitle is attended to. Shall I take the $offeredUnit?';
+
+/// The entry sheet card's title.
+String habitOfferFollowsLine(String title) => '$title follows, sir.';

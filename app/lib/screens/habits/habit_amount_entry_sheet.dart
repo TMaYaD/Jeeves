@@ -8,7 +8,9 @@ import '../../database/gtd_database.dart' show Habit, HabitCheckIn;
 import '../../models/habit_commitment.dart' show habitDateFromDayKey;
 import '../../providers/habit_check_ins_provider.dart';
 import '../../providers/habit_progress_provider.dart';
+import '../../providers/habit_stack_offer_provider.dart';
 import 'habit_copy.dart';
+import 'habit_row.dart' show HabitOfferButtons;
 
 /// Opens the entry sheet of [habit].
 Future<void> showHabitAmountEntrySheet(BuildContext context, Habit habit) {
@@ -34,9 +36,12 @@ class _HabitAmountEntrySheetState extends ConsumerState<HabitAmountEntrySheet> {
   int _stepperAmount = 1;
   String? _editingCheckInId;
 
-  Future<void> _add(int amount) => ref
-      .read(habitCheckInsProvider.notifier)
-      .checkIn(widget.habit.id, amount: amount.toDouble());
+  Future<void> _add(int amount) async {
+    await ref
+        .read(habitCheckInsProvider.notifier)
+        .checkIn(widget.habit.id, amount: amount.toDouble());
+    ref.read(habitStackOfferProvider.notifier).checkedIn(widget.habit.id);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -50,6 +55,7 @@ class _HabitAmountEntrySheetState extends ConsumerState<HabitAmountEntrySheet> {
     final target = progress.targetAmount ?? 0;
     final status = habitSheetStatusLine(progress);
     final unit = progress.unitLabel;
+    final offered = ref.watch(offeredHabitProvider);
     return SafeArea(
       child: SingleChildScrollView(
         padding: EdgeInsets.fromLTRB(
@@ -132,7 +138,8 @@ class _HabitAmountEntrySheetState extends ConsumerState<HabitAmountEntrySheet> {
                       _editingCheckInId == checkIn.id ? null : checkIn.id,
                 ),
               ),
-            // Where the next-in-stack offer card goes.
+            if (offered != null && ref.watch(habitStackOfferProvider) == widget.habit.id)
+              _SheetOfferCard(offered: offered),
             const SizedBox(height: 8),
             Row(
               children: [
@@ -280,6 +287,40 @@ class _EntryRow extends ConsumerWidget {
           icon: const Icon(Icons.delete_outline),
         ),
       ],
+    );
+  }
+}
+
+class _SheetOfferCard extends StatelessWidget {
+  const _SheetOfferCard({required this.offered});
+
+  final Habit offered;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      key: const Key('habit_sheet_offer'),
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: scheme.primaryContainer,
+        border: Border.all(color: scheme.primary, width: 2),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            habitOfferFollowsLine(offered.title),
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+          const Text(habitOfferNotYetLine),
+          const SizedBox(height: 8),
+          HabitOfferButtons(offered: offered, inSheet: true),
+        ],
+      ),
     );
   }
 }

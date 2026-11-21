@@ -10,6 +10,7 @@ import '../../database/gtd_database.dart' show Habit;
 import '../../models/habit_progress.dart';
 import '../../providers/habit_check_ins_provider.dart';
 import '../../providers/habit_progress_provider.dart';
+import '../../providers/habit_stack_offer_provider.dart';
 import '../../widgets/habit_check_in_mark.dart';
 import 'habit_amount_entry_sheet.dart';
 import 'habit_copy.dart';
@@ -30,12 +31,64 @@ Future<void> tapHabitMark(
   switch (markState) {
     case HabitCheckInMarkState.open:
       await actions.checkIn(habitId);
+      ref.read(habitStackOfferProvider.notifier).checkedIn(habitId);
     case HabitCheckInMarkState.done:
       await actions.removeLatestOfToday(habitId);
     case HabitCheckInMarkState.addAmount:
     case HabitCheckInMarkState.notDue:
     case HabitCheckInMarkState.paused:
       break;
+  }
+}
+
+/// "Right ho": a binary Habit is checked in at once and becomes the new source
+/// of the offer (until #405, that includes one with an estimate); a measurable
+/// one opens its entry sheet, after closing a sheet that is open.
+Future<void> acceptHabitOffer(
+  BuildContext context,
+  WidgetRef ref,
+  Habit offered, {
+  bool closeSheet = false,
+}) async {
+  final isMeasurable =
+      ref.read(habitTodayEntriesProvider(offered.id))?.commitment?.isMeasurable ??
+          false;
+  final navigator = Navigator.of(context);
+  if (isMeasurable) {
+    if (closeSheet) navigator.pop();
+    await showHabitAmountEntrySheet(navigator.context, offered);
+    return;
+  }
+  await ref.read(habitCheckInsProvider.notifier).checkIn(offered.id);
+  ref.read(habitStackOfferProvider.notifier).checkedIn(offered.id);
+}
+
+/// "Right ho" (filled) and "Not now" (text).
+class HabitOfferButtons extends ConsumerWidget {
+  const HabitOfferButtons({super.key, required this.offered, this.inSheet = false});
+
+  final Habit offered;
+  final bool inSheet;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        FilledButton(
+          key: Key('habit_offer_accept_${offered.id}'),
+          onPressed: () =>
+              acceptHabitOffer(context, ref, offered, closeSheet: inSheet),
+          child: const Text(habitOfferAcceptLabel),
+        ),
+        const SizedBox(width: 8),
+        TextButton(
+          key: Key('habit_offer_dismiss_${offered.id}'),
+          onPressed: () => ref.read(habitStackOfferProvider.notifier).dismiss(),
+          child: const Text(habitOfferDismissLabel),
+        ),
+      ],
+    );
   }
 }
 
@@ -173,6 +226,9 @@ class HabitRow extends ConsumerWidget {
             commitment: entries?.commitment,
             todaysCheckIns: entries?.checkIns ?? const [],
           );
+    final offerSource = ref.watch(offeredHabitProvider)?.id == habit.id
+        ? ref.watch(offerSourceHabitProvider)
+        : null;
     final anchorText = habitAnchorSummary(habit);
     final secondLine = [
       ?stateText,
@@ -183,14 +239,14 @@ class HabitRow extends ConsumerWidget {
         !inactive &&
         habitShowsPips(progress.targetAmount) &&
         (entries?.commitment?.isMeasurable ?? false);
-    return ListTile(
+    final tile = ListTile(
       key: Key('habit_row_${habit.id}'),
       selected: selected,
       title: Text(
         habit.title,
         style: inactive ? TextStyle(color: scheme.onSurfaceVariant) : null,
       ),
-      subtitle: secondLine.isEmpty && !showPips
+      subtitle: secondLine.isEmpty && !showPips && offerSource == null
           ? null
           : Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -204,6 +260,12 @@ class HabitRow extends ConsumerWidget {
                       target: progress.targetAmount!.round(),
                       done: progress.todayTotalAmount ?? 0,
                     ),
+                  ),
+                if (offerSource != null)
+                  _OfferBody(
+                    source: offerSource,
+                    offered: habit,
+                    offeredUnit: progress?.unitLabel,
                   ),
               ],
             ),
@@ -224,6 +286,57 @@ class HabitRow extends ConsumerWidget {
               ],
             ),
       onTap: () => openHabitDetail(context, habit.id),
+    );
+    if (offerSource == null) return tile;
+    return Container(
+      key: Key('habit_offer_${habit.id}'),
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: scheme.primaryContainer,
+        border: Border.all(color: scheme.primary, width: 2),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: tile,
+    );
+  }
+}
+
+class _OfferBody extends StatelessWidget {
+  const _OfferBody({
+    required this.source,
+    required this.offered,
+    required this.offeredUnit,
+  });
+
+  final Habit source;
+  final Habit offered;
+  final String? offeredUnit;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(top: 8, bottom: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            habitOfferLine,
+            style: theme.textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          Text(
+            habitOfferSubLine(
+              sourceTitle: source.title,
+              offeredUnit: offeredUnit,
+            ),
+            key: Key('habit_offer_subline_${offered.id}'),
+          ),
+          const SizedBox(height: 8),
+          HabitOfferButtons(offered: offered),
+        ],
+      ),
     );
   }
 }

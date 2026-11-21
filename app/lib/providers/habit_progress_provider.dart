@@ -123,7 +123,7 @@ final habitTodayEntriesProvider =
 });
 
 /// The progress of the active Habits, by Habit id.
-final _activeProgressProvider = Provider<Map<String, HabitProgress>>((ref) {
+final activeHabitProgressProvider = Provider<Map<String, HabitProgress>>((ref) {
   final today = _todayAsDay(ref.watch(habitTodayProvider));
   final histories = ref.watch(habitHistoriesProvider).value;
   final active = ref.watch(_activeHabitsProvider).value;
@@ -138,7 +138,7 @@ final _activeProgressProvider = Provider<Map<String, HabitProgress>>((ref) {
 
 /// The ids of the active Habits that are for today.
 final habitsForTodayProvider = Provider<Set<String>>(
-  (ref) => habitsForToday(ref.watch(_activeProgressProvider)),
+  (ref) => habitsForToday(ref.watch(activeHabitProgressProvider)),
 );
 
 /// The active Habits in stack order, one chain per root.
