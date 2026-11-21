@@ -7,7 +7,6 @@ import '../models/habit_commitment.dart' show habitDayKey;
 import 'auth_provider.dart';
 import 'clock_provider.dart';
 import 'database_provider.dart';
-import 'habit_progress_provider.dart';
 
 /// The day a Check-in counts for.
 ///
@@ -39,7 +38,10 @@ class HabitCheckInActions extends Notifier<void> {
     return ref.read(databaseProvider).habitDao.addCheckIn(
           habitId: habitId,
           userId: ref.read(currentUserIdProvider),
-          countsForDay: countsForDay ?? ref.read(habitTodayProvider),
+          // Read the clock now, not the cached habitTodayProvider: that one can
+          // lag after the app wakes past midnight.
+          countsForDay: habitCheckInDay(
+              now: ref.read(clockProvider)(), closingDay: countsForDay),
           now: ref.read(clockProvider)().toUtc(),
           measuredAmount: amount,
         );

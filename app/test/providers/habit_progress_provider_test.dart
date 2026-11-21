@@ -1,5 +1,6 @@
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
+import 'package:flutter/widgets.dart' show AppLifecycleState;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show ProviderListenable;
 import 'package:flutter_test/flutter_test.dart';
@@ -16,7 +17,10 @@ import '../test_helpers.dart';
 const _userId = 'test-user';
 
 void main() {
-  setUpAll(configureSqliteForTests);
+  setUpAll(() {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    configureSqliteForTests();
+  });
 
   late GtdDatabase db;
   late DateTime now;
@@ -136,5 +140,22 @@ void main() {
     final forToday = await settled(
         habitsForTodayProvider, (set) => set.contains(habitId));
     expect(forToday, contains(habitId));
+  });
+
+  testWidgets('habitTodayProvider re-checks the day when the app resumes',
+      (tester) async {
+    now = DateTime(2026, 11, 18, 22, 0);
+    final resumed = ProviderContainer(overrides: [
+      databaseProvider.overrideWithValue(db),
+      clockProvider.overrideWithValue(() => now),
+    ]);
+    resumed.listen(habitTodayProvider, (_, _) {});
+    expect(resumed.read(habitTodayProvider), '2026-11-18');
+
+    now = DateTime(2026, 11, 19, 7, 0);
+    expect(resumed.read(habitTodayProvider), '2026-11-18');
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    expect(resumed.read(habitTodayProvider), '2026-11-19');
+    resumed.dispose();
   });
 }

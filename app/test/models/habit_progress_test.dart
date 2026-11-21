@@ -293,6 +293,65 @@ void main() {
     });
   });
 
+  group('an N-times-a-month Habit', () {
+    String monthDay(int month, int dayOfMonth) => key(month, dayOfMonth);
+
+    test('streaks and 1/3/6-month rates over finished months (AC 6)', () {
+      // 2 a month since May. May, Jun, Jul met; Aug paused; Sep 1 of 2
+      // (missed); Oct met; the open month (Nov) already has 2 Check-ins.
+      final progress = computeHabitProgress(
+          history([
+            commitment(
+                chosenOn: '2026-05-01',
+                repeatKind: HabitRepeatKind.timesPerMonth,
+                timesPerPeriod: 2)
+          ], checkIns: [
+            checkIn(monthDay(5, 3)), checkIn(monthDay(5, 20)),
+            checkIn(monthDay(6, 3)), checkIn(monthDay(6, 20)),
+            checkIn(monthDay(7, 3)), checkIn(monthDay(7, 20)),
+            checkIn(monthDay(9, 5)),
+            checkIn(monthDay(10, 3)), checkIn(monthDay(10, 4)),
+            checkIn(monthDay(11, 2)), checkIn(monthDay(11, 3)),
+          ], inactivePeriods: [
+            inactive('paused', '2026-08-01', '2026-09-01'),
+          ]),
+          today);
+      expect([for (final rate in progress.rates) rate.windowLength],
+          [1, 3, 6]);
+      // Oct: 2/2. Aug skipped, Sep 1/2, Oct 2/2: 3/4. May..Oct without Aug:
+      // 2+2+2+1+2 of 10.
+      expect(progress.rates[0].value, closeTo(1.0, 1e-9));
+      expect(progress.rates[1].value, closeTo(3 / 4, 1e-9));
+      expect(progress.rates[2].value, closeTo(9 / 10, 1e-9));
+      // Sep was missed, so only October counts; November is still open.
+      expect(progress.currentStreak, 1);
+      // May, Jun, Jul; the paused August is passed over but Sep ends it.
+      expect(progress.bestStreak, 3);
+    });
+  });
+
+  group('decimal amounts', () {
+    test('0.7 + 0.1 reaches a target of 0.8 and 0.1 + 0.2 is not over 0.3', () {
+      HabitProgress progressFor(double target, List<double> amounts) =>
+          computeHabitProgress(
+              history([
+                commitment(
+                    chosenOn: '2026-11-20',
+                    unitLabel: 'l',
+                    dailyTargetAmount: target)
+              ], checkIns: [
+                for (final amount in amounts) checkIn(key(11, 20), amount: amount)
+              ]),
+              today);
+
+      final reached = progressFor(0.8, [0.7, 0.1]);
+      expect(reached.todayState, HabitTodayState.done);
+      final exact = progressFor(0.3, [0.1, 0.2]);
+      expect(exact.isOverTarget, isFalse);
+      expect(exact.todayState, HabitTodayState.done);
+    });
+  });
+
   group('today', () {
     test('measurable: total, target, unit and over-target (6.6)', () {
       final progress = computeHabitProgress(
