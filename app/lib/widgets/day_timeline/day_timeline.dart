@@ -335,7 +335,7 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
       // The sheet was open for a while: the entries and the day may have
       // moved on, so check the answer against them as they stand now.
       if (!mounted) return;
-      if (!_stillFits(suggestion.gapStart, chosen)) {
+      if (!_stillFits(suggestion.gapStart, chosen, suggestion.contextTagId)) {
         ScaffoldMessenger.maybeOf(context)?.showSnackBar(const SnackBar(
             content: Text('The day has changed, sir. Nothing was moved.')));
         return;
@@ -348,8 +348,13 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
 
   /// Whether [chosen], run back to back from [gapStart], are still all
   /// candidates and still land clear of every event and every other tile.
-  bool _stillFits(DateTime gapStart, List<DayTimelineEntry> chosen) {
+  bool _stillFits(
+      DateTime gapStart, List<DayTimelineEntry> chosen, String contextTagId) {
     if (chosen.length < 2) return false;
+    if (!chosen.every(
+        (entry) => entry.contextTags.any((tag) => tag.id == contextTagId))) {
+      return false;
+    }
     if (!chosen.every((entry) => isBatchCandidate(entry))) return false;
     final end = gapStart.add(Duration(
         minutes: chosen.fold(0, (sum, entry) => sum + entry.estimateMinutes)));

@@ -220,6 +220,19 @@ void main() {
     expect([for (final e in addable) e.outcomeId], ['c']);
   });
 
+  test('a gap holding a left-out member\'s tile is not suggested', () {
+    // a (10) sits at the gap start; only b + c (6 + 6) fit the 12-min gap, but
+    // accepting them would land on a's tile.
+    final entries = [_entry('a', 10), _entry('b', 6), _entry('c', 6)];
+    final suggestion = nextBatchSuggestion(
+      entries: entries,
+      layout: _layout(entries),
+      flowFrom: _at(9),
+      dayEnd: _at(9, 12),
+    );
+    expect(suggestion, isNull);
+  });
+
   test('batchMemberStarts puts members back to back', () {
     final starts =
         batchMemberStarts(_at(14), [_entry('a', 10), _entry('b', 5)]);

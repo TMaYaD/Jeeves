@@ -127,6 +127,17 @@ BatchSuggestion? nextBatchSuggestion({
         }
       }
       if (taken.length < 2) continue;
+      // A group entry left out of the batch keeps its tile; the batch must not
+      // land on it, or accepting would be refused as an overlap.
+      final takenIds = {for (final entry in taken) entry.outcomeId};
+      final batchEnd = gap.start.add(Duration(
+          minutes: taken.fold(0, (sum, entry) => sum + entry.estimateMinutes)));
+      final crowdsLeftOutMember = layout.entries.any((placement) =>
+          groupIds.contains(placement.outcomeId) &&
+          !takenIds.contains(placement.outcomeId) &&
+          placement.pieces.any((piece) =>
+              piece.start.isBefore(batchEnd) && piece.end.isAfter(gap.start)));
+      if (crowdsLeftOutMember) continue;
       final starts = batchMemberStarts(gap.start, taken);
       return BatchSuggestion(
         contextTagId: tagId,
