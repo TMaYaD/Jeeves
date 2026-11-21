@@ -49,6 +49,7 @@ import 'package:drift/drift.dart';
 
 import '../database/daos/tag_dao.dart' show todoTagIdFor;
 import '../database/gtd_database.dart';
+import '../database/tables.dart' show labelTagType, retiredLabelTagType;
 import 'collection_codecs.dart';
 import 'domain_projector.dart';
 import 'host/merge_state.dart';
@@ -198,10 +199,13 @@ class DomainReconciler {
       // Unrecoverable: nothing on record carries the pair, which is the state a
       // rebuild from a pruned log leaves. Left as the dangling reference it is.
       if (name is! String || type is! String) continue;
+      // A folded duplicate keeps the type it had when it was tombstoned, which
+      // may be the retired one; its live survivor holds the Label value.
+      final survivorType = type == retiredLabelTagType ? labelTagType : type;
 
       final live = await domain.customSelect(
         'SELECT id FROM tags WHERE name = ? AND type = ? ORDER BY id LIMIT 1',
-        variables: [Variable<String>(name), Variable<String>(type)],
+        variables: [Variable<String>(name), Variable<String>(survivorType)],
         readsFrom: {domain.tags},
       ).getSingleOrNull();
       // No live tag holds the pair — the user deleted it outright, or it has not

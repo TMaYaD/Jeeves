@@ -148,9 +148,9 @@ A remote change is always projected on arrival. `DomainProjector.project`
 (`sync/domain_projector.dart`) gives the reason for each.
 ## The vault: a folder of Markdown pages
 
-The vault is the first plugin behind the host ([sync-plugins](proposals/sync-plugins.md)). It carries the device's merged state to a folder of pages a person can read, grep and edit, and brings back what they changed. It needs no account and no server: a file syncer of the person's choosing carries the folder between devices.
+The vault is the first plugin behind the host ([sync-plugins](proposals/sync-plugins.md)). It carries the device's merged state to a folder of pages a person can read and edit, and brings back their changes. It needs no account and no server: a file syncer of the person's choosing carries the folder between devices.
 
-**It is a carrier, like any plugin.** It turns a page into changes and writes the host's merged state back as a page. It never chooses between two values and never writes a value the host did not give it; the one thing it authors is a clock for a hand edit, minted with `SyncHost.mintClock()`. It reads merged state through `SyncHost.mergedEntity` rather than comparing clocks itself.
+**It is a carrier, like any plugin.** It turns a page into changes and writes the host's merged state back as a page. It never chooses between two values and never writes a value the host did not give it; the one thing it authors is a clock for a hand edit, minted with `SyncHost.mintClock()`.
 
 **What is on a page.** One page per Outcome (`Outcomes/`), one sheet per FocusSession (`Sessions/`), one page per Capture (`Inbox/`). A sheet's name carries the session's UTC date and its id, so two sittings on one day never collide. A page's identity is the `id` in its frontmatter, never its path. **What a person can edit is what a page shows**: an Outcome's title, intent, due date and notes, its Actions as a checklist, a Capture's clarification stamp, and the Labels and Area the page shows. The rest of a page is the app's to write.
 

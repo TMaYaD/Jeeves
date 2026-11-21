@@ -389,6 +389,13 @@ Future<ImportResult> importJeevesExport({
     _notifyAllViews(db);
   }
 
+  // The raw writes above keep the file's own `type`, so a file from a build
+  // that stored Labels as the retired value is retyped, and folded into any
+  // same-name Label, before the import returns.
+  if (await db.tagDao.retypeRetiredLabelTags() > 0) {
+    await db.tagDao.foldDuplicateTags();
+  }
+
   _notifyAllViews(db);
   return ImportResult(
     importedCount: importedOutcomeCount,

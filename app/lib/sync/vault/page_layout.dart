@@ -12,6 +12,7 @@ library;
 
 import '../collection_codecs.dart';
 import '../host/change.dart';
+import '../../database/tables.dart' show labelTagType, retiredLabelTagType;
 import 'page_codec.dart';
 
 enum VaultPageKind {
@@ -104,6 +105,9 @@ String? linkedTagId(Change change) {
 /// matched to Actions by the clocks and values in the block, a Capture's title
 /// and notes are written once and never read back, and session sheets are read
 /// only, so all of theirs travel in the block with their values.
+/// A Label's stored value, and the retired one older peers may still send.
+const Set<String> _labelTypes = {labelTagType, retiredLabelTagType};
+
 const Map<String, Set<String>> _shownFields = {
   todosCollection: {'title', 'intent', 'due_date', 'notes'},
   capturesCollection: {'clarified_at'},
@@ -136,7 +140,7 @@ PageModel layOutPage(VaultPageKey key, List<Change> entities) {
       if (change.collection == tagsCollection && change.tombstone == null)
         change.entityId: change,
   };
-  List<String> linkedNames(String type) {
+  List<String> linkedNames(Set<String> types) {
     // A name is a name: two Tags with it (a duplicate a peer created, folded
     // afterwards) are one name on the page.
     final names = <String>{};
@@ -144,7 +148,7 @@ PageModel layOutPage(VaultPageKey key, List<Change> entities) {
       final tagId = linkedTagId(change);
       if (tagId == null || change.tombstone != null) continue;
       final tag = tagsById[tagId];
-      if (tag != null && tag.fields['type']?.value == type) {
+      if (tag != null && types.contains(tag.fields['type']?.value)) {
         final name = tag.fields['name']?.value;
         if (name is String) names.add(name);
       }
@@ -160,9 +164,9 @@ PageModel layOutPage(VaultPageKey key, List<Change> entities) {
       if (intent is String && intent.isNotEmpty) frontmatter['intent'] = intent;
       final due = rootValue('due_date');
       if (due is String) frontmatter['due'] = due;
-      final areas = linkedNames('area');
+      final areas = linkedNames({'area'});
       if (areas.isNotEmpty) frontmatter['area'] = areas.first;
-      final labels = linkedNames('label');
+      final labels = linkedNames(_labelTypes);
       if (labels.isNotEmpty) frontmatter['labels'] = labels;
       final rootChange = root.isEmpty ? null : root.first;
       if (rootChange?.tombstone != null) {
@@ -200,9 +204,9 @@ PageModel layOutPage(VaultPageKey key, List<Change> entities) {
       if (title is String) frontmatter['title'] = title;
       final clarified = rootValue('clarified_at');
       if (clarified is String) frontmatter['clarified_at'] = clarified;
-      final areas = linkedNames('area');
+      final areas = linkedNames({'area'});
       if (areas.isNotEmpty) frontmatter['area'] = areas.first;
-      final labels = linkedNames('label');
+      final labels = linkedNames(_labelTypes);
       if (labels.isNotEmpty) frontmatter['labels'] = labels;
       final body = rootValue('notes');
       notes = body is String && body.isNotEmpty ? '$body\n' : '';

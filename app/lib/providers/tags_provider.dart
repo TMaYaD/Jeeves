@@ -155,7 +155,10 @@ final FutureProvider<int> labelTagTypeFoldProvider =
   final db = ref.read(databaseProvider);
   try {
     final retyped = await db.tagDao.retypeRetiredLabelTags();
-    if (retyped > 0) await db.tagDao.foldDuplicateTags();
+    // Always fold, not only after a retype: the retype commits first, so a fold
+    // that threw would otherwise never be retried (the next launch sees no
+    // retired row). It writes nothing when no duplicate group exists.
+    await db.tagDao.foldDuplicateTags();
     return retyped;
   } on Object catch (error) {
     debugPrint('label tag type fold: failed — $error');

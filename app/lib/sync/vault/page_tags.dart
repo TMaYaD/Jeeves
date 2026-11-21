@@ -17,6 +17,7 @@ import '../collection_codecs.dart';
 import '../host/change.dart';
 import '../hlc.dart';
 import '../ids.dart';
+import '../../database/tables.dart' show labelTagType, retiredLabelTagType;
 import 'page_codec.dart';
 import 'page_layout.dart';
 
@@ -129,7 +130,9 @@ List<Change> tagLinkChanges({
     final type = tagType[tagId];
     if (name == null || type == null) continue;
     final link = _Link(entityId: entry.key, tagId: tagId, name: name);
-    if (type == 'label') labelLinks.add(link);
+    if (type == labelTagType || type == retiredLabelTagType) {
+      labelLinks.add(link);
+    }
     if (type == 'area') areaLinks.add(link);
   }
 
@@ -159,7 +162,7 @@ List<Change> tagLinkChanges({
   }
   for (final name in shownLabelNames) {
     if (labelLinks.any((link) => link.name == name)) continue;
-    createLink(name, 'label');
+    createLink(name, labelTagType);
   }
 
   // The Area: the page shows one name, so the entity has one area link. More

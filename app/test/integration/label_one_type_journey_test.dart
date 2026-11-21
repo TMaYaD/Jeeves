@@ -53,6 +53,7 @@ void main() {
     final container = ProviderContainer(overrides: [
       nudgeBoundaryTickProvider.overrideWithValue(0),
       databaseProvider.overrideWithValue(db),
+      domainStoreRebuildProvider.overrideWith((ref) async => 0),
     ]);
     addTearDown(container.dispose);
 
