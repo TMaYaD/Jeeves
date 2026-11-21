@@ -50,7 +50,7 @@ void main() {
       declinedAt: now,
     );
 
-    container.listen(activeSessionBatchStateProvider, (_, __) {});
+    container.listen(activeSessionBatchStateProvider, (_, _) {});
     final state = await container.read(activeSessionBatchStateProvider.future);
     expect(state['a'], (batchId: 'batch-1', declined: false));
     expect(state['b'], (batchId: null, declined: true));
