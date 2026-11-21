@@ -16,19 +16,22 @@ import '../providers/focus_session_planning_provider.dart'
         SessionSettlement,
         activeSessionSettlementsProvider,
         activeSessionTasksProvider;
+import '../providers/day_timeline_provider.dart'
+    show activeSessionBatchStateProvider, activeSessionPinnedStartsProvider;
 import '../providers/focus_session_provider.dart';
 import '../providers/sprint_timer_provider.dart';
 import '../providers/task_detail_provider.dart';
 import '../providers/timeboxed_limit_provider.dart';
 import '../services/clarification_service.dart';
 import '../services/notification_service.dart';
+import 'batch_break_screen.dart';
 import '../widgets/app_title_bar/app_title_bar.dart';
 import '../widgets/capture/capture_action.dart';
 import '../widgets/elapsed_timer_widget.dart';
 import '../widgets/meta_chip.dart' show formatMinutesLabel;
 import '../widgets/process_to_handlers.dart' show ProcessAction;
 import '../widgets/reclarify_prompt_sheet.dart';
-import '../widgets/timeboxed_gate.dart';
+import '../widgets/timeboxed_gate.dart' show guardSprintPastLimit;
 import '../widgets/timeboxed_limit_strip.dart';
 
 /// The focus-list transition message shown after a Focus "Done" verdict
@@ -75,6 +78,36 @@ Todo? focusNextTask({
             t.doneAt == null &&
             !settlements.containsKey(t.id))
         .firstOrNull;
+
+/// The Outcome Focus goes straight on to after Done on [completedTodoId], when
+/// that Outcome belongs to an accepted small-task batch: the first other member
+/// of the same batch, in start-time order, that is not done and not Settled.
+/// Null when the Outcome is in no batch or was its batch's last member.
+@visibleForTesting
+String? batchNextMemberId({
+  required String completedTodoId,
+  required Map<String, ({String? batchId, bool declined})> batchState,
+  required Map<String, DateTime> pinnedStarts,
+  required List<Todo> sessionTasks,
+  required Map<String, SessionSettlement> settlements,
+}) {
+  final batchId = batchState[completedTodoId]?.batchId;
+  if (batchId == null) return null;
+  final members = [
+    for (final task in sessionTasks)
+      if (task.id != completedTodoId &&
+          batchState[task.id]?.batchId == batchId &&
+          task.doneAt == null &&
+          !settlements.containsKey(task.id))
+        task,
+  ]..sort((a, b) {
+      final aStart = pinnedStarts[a.id];
+      final bStart = pinnedStarts[b.id];
+      if (aStart == null || bStart == null) return 0;
+      return aStart.compareTo(bStart);
+    });
+  return members.firstOrNull?.id;
+}
 
 class ActiveFocusScreen extends ConsumerStatefulWidget {
   const ActiveFocusScreen({super.key});
@@ -173,11 +206,28 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
 
     // The completed Action's Outcome is excluded by `t.id != todoId` whether or
     // not it was achieved, so the advance-to-next pick is unchanged (AC5).
-    final nextTask = focusNextTask(
-      sessionTasks: allSessionTasks,
+    // An accepted small-task batch carries straight on to its next member
+    // (issue #407); anything else advances to the first Plan member owed
+    // attention.
+    final batchState = await ref.read(activeSessionBatchStateProvider.future);
+    if (!mounted) return;
+    final pinnedStarts =
+        await ref.read(activeSessionPinnedStartsProvider.future);
+    if (!mounted) return;
+    final batchNextId = batchNextMemberId(
       completedTodoId: todoId,
+      batchState: batchState,
+      pinnedStarts: pinnedStarts,
+      sessionTasks: allSessionTasks,
       settlements: settlements,
     );
+    final nextTask = batchNextId != null
+        ? allSessionTasks.firstWhere((t) => t.id == batchNextId)
+        : focusNextTask(
+            sessionTasks: allSessionTasks,
+            completedTodoId: todoId,
+            settlements: settlements,
+          );
 
     final message = focusAdvanceMessage(nextTask: nextTask, verdict: verdict);
 
@@ -203,9 +253,49 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
       ),
     );
 
+    var advancedToNextMember = false;
+    if (batchNextId != null) {
+      // No Break between batch members: the next one is in Focus at once, and
+      // its screen starts its Sprint. A next member whose Timeboxed limit has
+      // passed goes past the gate first, like any Sprint; declining it leaves
+      // the member on the list to start later.
+      await guardSprintPastLimit(
+        context,
+        ref,
+        outcomeId: batchNextId,
+        start: () async {
+          await ref.read(focusModeProvider.notifier).advanceTo(batchNextId);
+          advancedToNextMember = true;
+        },
+      );
+      if (advancedToNextMember) {
+        // The notification was cancelled when Done was pressed; the next
+        // member's Focus shows it again.
+        if (mounted) {
+          _notificationTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+            if (mounted) _refreshNotification();
+          });
+          _refreshNotification();
+        }
+        return;
+      }
+      if (!mounted) return;
+    }
+
+    // The last member of a batch is followed by the one Break (a member left
+    // on the list by the gate is not the last). Capture the root navigator
+    // first: go('/focus') unmounts this screen.
+    final isLastBatchMember =
+        batchNextId == null && batchState[todoId]?.batchId != null;
+    final navigator = Navigator.of(context, rootNavigator: true);
     await ref.read(focusModeProvider.notifier).endFocus();
     if (!mounted) return;
     context.go('/focus');
+    if (isLastBatchMember) {
+      unawaited(navigator.push(
+        MaterialPageRoute<void>(builder: (_) => const BatchBreakScreen()),
+      ));
+    }
   }
 
   /// Stops the sprint and returns to the focus list without completing the task.
@@ -254,6 +344,9 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
               return const SizedBox.shrink();
             }
             return _FocusBody(
+              // A new body per Outcome, so a batch's next member starts its own
+              // Sprint rather than reusing the previous member's state.
+              key: ValueKey(todo.id),
               todo: todo,
               onComplete: () => _onComplete(todo),
               onStop: () => _onStop(todo.id),
@@ -271,6 +364,7 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
 
 class _FocusBody extends ConsumerStatefulWidget {
   const _FocusBody({
+    super.key,
     required this.todo,
     required this.onComplete,
     required this.onStop,

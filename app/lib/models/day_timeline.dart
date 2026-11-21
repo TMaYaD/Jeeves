@@ -25,6 +25,9 @@ class DayTimelineEntry {
     this.isRunning = false,
     this.isEngaged = false,
     this.isTimeboxed = false,
+    this.contextTags = const [],
+    this.batchId,
+    this.isBatchSuggestionDeclined = false,
   });
 
   final String outcomeId;
@@ -50,6 +53,16 @@ class DayTimelineEntry {
   /// Timeboxed, so its estimate is a limit (issue #923).
   final bool isTimeboxed;
 
+  /// The Outcome's context tags (for example "@phone"), in tag order. A small-task
+  /// suggestion groups entries by these (issue #407).
+  final List<({String id, String name})> contextTags;
+
+  /// The accepted small-task suggestion this entry belongs to; null = none.
+  final String? batchId;
+
+  /// The user answered "Not today" to a suggestion that included this entry.
+  final bool isBatchSuggestionDeclined;
+
   /// A comparable summary of everything the layout depends on, so the widget
   /// re-flows when an input changed and not when only time passed.
   String get layoutSignature => [
@@ -58,6 +71,9 @@ class DayTimelineEntry {
         timeContext?.encode() ?? '',
         pinnedStartAt?.toUtc().toIso8601String() ?? '',
         isEngaged || isDone || isRunning,
+        contextTags.map((tag) => tag.id).join(','),
+        batchId ?? '',
+        isBatchSuggestionDeclined,
       ].join('|');
 }
 
@@ -70,6 +86,10 @@ class DayTimelineEntry {
 /// [timeboxedTaskIds] names the Outcomes whose current Action is Timeboxed:
 /// their tiles carry the heavier bottom edge (issue #923). An Outcome absent
 /// from the set is not Timeboxed, so its tile keeps the ordinary edge.
+///
+/// [contextTags] and [batchState] feed the small-task suggestion (issue #407):
+/// each Outcome's context tags, and the accepted batch / declined suggestion of
+/// each Plan entry. An Outcome absent from either has none.
 List<DayTimelineEntry> dayTimelineEntriesFor({
   required List<Todo> tasks,
   required int defaultEstimateMinutes,
@@ -79,6 +99,8 @@ List<DayTimelineEntry> dayTimelineEntriesFor({
   Set<String> engagedTaskIds = const {},
   String? runningTaskId,
   Set<String> timeboxedTaskIds = const {},
+  Map<String, List<({String id, String name})>> contextTags = const {},
+  Map<String, ({String? batchId, bool declined})> batchState = const {},
 }) {
   final startOfToday = DateTime(now.year, now.month, now.day);
   return [
@@ -101,6 +123,9 @@ List<DayTimelineEntry> dayTimelineEntriesFor({
           isRunning: isRunning,
           isEngaged: isDone || isRunning || engagedTaskIds.contains(task.id),
           isTimeboxed: timeboxedTaskIds.contains(task.id),
+          contextTags: contextTags[task.id] ?? const [],
+          batchId: batchState[task.id]?.batchId,
+          isBatchSuggestionDeclined: batchState[task.id]?.declined ?? false,
         );
       }(),
   ];

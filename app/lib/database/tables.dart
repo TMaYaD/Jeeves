@@ -229,6 +229,18 @@ class FocusSessionTasks extends Table {
   DateTimeColumn get addedDuringExecutionAt =>
       dateTime().named('added_during_execution_at').nullable()();
 
+  /// Groups the Plan entries of one accepted small-task suggestion (issue #407):
+  /// entries sharing a value run back to back. NULL = not in a batch. Like
+  /// [pinnedStartAt] it dies with the session, merges last-write-wins per field,
+  /// and is cleared when the user moves a member.
+  TextColumn get batchId => text().named('batch_id').nullable()();
+
+  /// When the user answered "Not today" to a small-task suggestion that
+  /// included this entry (issue #407). NULL = never declined. Dies with the
+  /// session; the entry is not offered in a suggestion again.
+  DateTimeColumn get batchSuggestionDeclinedAt =>
+      dateTime().named('batch_suggestion_declined_at').nullable()();
+
   @override
   Set<Column<Object>> get primaryKey => {focusSessionId, taskId};
 }

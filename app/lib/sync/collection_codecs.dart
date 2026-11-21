@@ -383,6 +383,8 @@ const Map<String, CollectionCodec> collectionCodecs = {
       'disposition': FieldKind.text,
       'pinned_start_at': FieldKind.instant,
       'added_during_execution_at': FieldKind.instant,
+      'batch_id': FieldKind.text,
+      'batch_suggestion_declined_at': FieldKind.instant,
       ..._junctionUserId,
     },
     requiredColumns: {'focus_session_id', 'task_id', 'position', 'user_id'},

@@ -40,6 +40,51 @@ void main() {
           'Alicia');
     });
 
+    test('context tags of the open Plan are reported per Outcome, other types '
+        'and other Outcomes left out (issue #407)', () async {
+      final now = DateTime.utc(2026, 11, 16, 8);
+      for (final id in ['planned', 'unplanned']) {
+        await db.into(db.todos).insert(TodosCompanion(
+              id: Value(id),
+              title: Value(id),
+              userId: const Value(_userId),
+              createdAt: Value(now),
+              updatedAt: Value(now),
+            ));
+      }
+      for (final (id, type) in [
+        ('phone', 'context'),
+        ('computer', 'context'),
+        ('home', 'project'),
+      ]) {
+        await db.tagDao.upsertTag(TagsCompanion(
+          id: Value(id),
+          name: Value('@$id'),
+          type: Value(type),
+          userId: const Value(_userId),
+        ));
+      }
+      for (final (todo, tag) in [
+        ('planned', 'phone'),
+        ('planned', 'home'),
+        ('unplanned', 'computer'),
+      ]) {
+        await db.into(db.todoTags).insert(TodoTagsCompanion(
+              id: Value(todoTagIdFor(todo, tag)),
+              todoId: Value(todo),
+              tagId: Value(tag),
+              userId: const Value(_userId),
+            ));
+      }
+      await db.focusSessionDao
+          .openSession(userId: _userId, taskIds: ['planned']);
+
+      final byTask =
+          await db.tagDao.watchContextTagsForActiveSessionPlan().first;
+      expect(byTask.keys, ['planned']);
+      expect(byTask['planned'], [(id: 'phone', name: '@phone')]);
+    });
+
     test('upsertTag creates a new tag', () async {
       await db.tagDao.upsertTag(TagsCompanion(
         id: const Value('t1'),
