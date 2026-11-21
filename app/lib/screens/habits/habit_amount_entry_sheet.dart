@@ -6,7 +6,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../database/gtd_database.dart' show Habit, HabitCheckIn;
 import '../../models/habit_commitment.dart' show habitDateFromDayKey;
-import '../../models/habit_progress.dart';
 import '../../providers/habit_check_ins_provider.dart';
 import '../../providers/habit_progress_provider.dart';
 import 'habit_copy.dart';
