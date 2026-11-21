@@ -112,11 +112,6 @@ void main() {
     await tester.pump(const Duration(milliseconds: 10));
   }
 
-  Finder inRow(String id, String text) => find.descendant(
-    of: find.byKey(Key('habit_row_$id')),
-    matching: find.text(text),
-  );
-
   Finder doneInRow(String id) => find.descendant(
     of: find.byKey(Key('habit_row_$id')),
     matching: find.textContaining('Done 09:30'),

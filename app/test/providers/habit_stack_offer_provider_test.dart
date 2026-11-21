@@ -49,6 +49,16 @@ void main() {
     );
   }
 
+  Future<void> follow(String habitId, String anchorId) =>
+      db.habitDao.setAnchor(
+        habitId: habitId,
+        userId: container.read(currentUserIdProvider),
+        today: habitDayKey(now),
+        now: now.toUtc(),
+        kind: HabitAnchorKind.afterHabit,
+        anchorHabitId: anchorId,
+      );
+
   Future<T> settled<T>(
       ProviderListenable<T> provider, bool Function(T) ready) async {
     container.listen(provider, (_, _) {}, fireImmediately: true);
@@ -64,6 +74,7 @@ void main() {
       () async {
     final stretch = await createHabit('Stretch', 0);
     final water = await createHabit('Water', 1);
+    await follow(water, stretch);
     final offered = offeredHabitProvider;
 
     container.read(habitStackOfferProvider.notifier).checkedIn(stretch);
@@ -81,6 +92,7 @@ void main() {
   test('"Not now" clears the offer', () async {
     final stretch = await createHabit('Stretch', 0);
     final water = await createHabit('Water', 1);
+    await follow(water, stretch);
     container.read(habitStackOfferProvider.notifier).checkedIn(stretch);
     await container.read(habitCheckInsProvider.notifier).checkIn(stretch);
     expect((await settled(offeredHabitProvider, (h) => h != null))?.id, water);
