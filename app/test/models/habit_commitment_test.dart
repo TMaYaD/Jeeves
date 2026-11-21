@@ -591,7 +591,7 @@ void main() {
       expect(commitmentInForceOn(commitments, '2026-11-25'), monthly);
       // The Habit began with the weekly rule, so days before it have none.
       expect(commitmentInForceOn(commitments, '2026-11-10'), isNull);
-      expect(effectiveStartsOf(commitments)['c2'], DateTime(2026, 11, 23));
+      expect(effectiveStartsOf(commitments)['c2'], DateTime.utc(2026, 11, 23));
     });
 
     test('a day before the first commitment has none', () {
