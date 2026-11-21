@@ -4,6 +4,7 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/daos/habit_dao.dart';
@@ -23,9 +24,32 @@ final habitTodayProvider = Provider<String>((ref) {
   final now = ref.watch(clockProvider)();
   final nextMidnight = DateTime(now.year, now.month, now.day + 1);
   final timer = Timer(nextMidnight.difference(now), ref.invalidateSelf);
-  ref.onDispose(timer.cancel);
-  return habitDayKey(now);
+  // A Dart Timer does not count time the process was suspended, so also
+  // re-check the day when the app resumes.
+  final todayKey = habitDayKey(now);
+  final observer = _HabitDayResumeObserver(() {
+    if (habitDayKey(ref.read(clockProvider)()) != todayKey) {
+      ref.invalidateSelf();
+    }
+  });
+  WidgetsBinding.instance.addObserver(observer);
+  ref.onDispose(() {
+    timer.cancel();
+    WidgetsBinding.instance.removeObserver(observer);
+  });
+  return todayKey;
 });
+
+class _HabitDayResumeObserver with WidgetsBindingObserver {
+  _HabitDayResumeObserver(this._onResumed);
+
+  final void Function() _onResumed;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _onResumed();
+  }
+}
 
 /// Every Habit with its full history, re-emitted after any Habit write.
 final habitHistoriesProvider = StreamProvider<List<HabitHistory>>((ref) {

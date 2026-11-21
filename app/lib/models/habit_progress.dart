@@ -211,7 +211,7 @@ List<HabitJudgedUnit> judgeUnits(HabitHistory history, DateTime today) {
     for (final checkIn in onDay) {
       total += checkIn.measuredAmount ?? 0;
     }
-    return total >= commitment.dailyTargetAmount!;
+    return _settledAmount(total) >= commitment.dailyTargetAmount!;
   }
 
   final units = <HabitJudgedUnit>[];
@@ -519,6 +519,7 @@ HabitProgress computeHabitProgress(HabitHistory history, DateTime today) {
   for (final checkIn in todaysCheckIns) {
     todayTotal += checkIn.measuredAmount ?? 0;
   }
+  todayTotal = _settledAmount(todayTotal);
   final measurable = commitmentToday?.isMeasurable ?? false;
   final todayAchieved = commitmentToday == null
       ? false
@@ -574,3 +575,8 @@ HabitProgress computeHabitProgress(HabitHistory history, DateTime today) {
         measurable && todayTotal > commitmentToday!.dailyTargetAmount!,
   );
 }
+
+/// Rounds a sum of entered amounts to micro-units, so that decimal entries
+/// such as 0.1 + 0.2 compare equal to a target of 0.3 despite binary
+/// floating-point error.
+double _settledAmount(double total) => (total * 1e6).round() / 1e6;

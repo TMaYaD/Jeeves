@@ -19,7 +19,10 @@ import '../test_helpers.dart';
 const _userId = 'test-user';
 
 void main() {
-  setUpAll(configureSqliteForTests);
+  setUpAll(() {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    configureSqliteForTests();
+  });
 
   late GtdDatabase db;
   late DateTime now;
@@ -188,5 +191,22 @@ void main() {
 
     final rows = await db.habitDao.checkInsFor(habit, '2026-11-01', '2026-11-30');
     expect([for (final row in rows) row.id], [second]);
+  });
+
+  test('a Check-in counts for the clock day even when habitTodayProvider is '
+      'stale after the app wakes past midnight', () async {
+    final habit = await createHabit('Stretch',
+        const HabitCommitmentDraft(repeatKind: HabitRepeatKind.everyDay),
+        at: DateTime(2026, 11, 17, 8));
+    now = DateTime(2026, 11, 18, 22, 0);
+    expect(container.read(habitTodayProvider), '2026-11-18');
+
+    // The device slept: the clock moved on, the cached provider did not.
+    now = DateTime(2026, 11, 19, 7, 0);
+    expect(container.read(habitTodayProvider), '2026-11-18');
+
+    final id = await actions().checkIn(habit);
+    final rows = await db.habitDao.checkInsFor(habit, '2026-11-01', '2026-11-30');
+    expect(rows.singleWhere((row) => row.id == id).countsForDay, '2026-11-19');
   });
 }
