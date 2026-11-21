@@ -158,7 +158,7 @@ To build a hybrid productivity application that merges the rigid organizational 
 
 * **Build version in Settings → About:** Settings → About always shows the running build's version name and build number, plus the short commit sha when the build carries one (CI builds do; local builds omit it) (e.g. `Version 1.3.0-alpha.17 (412) · a1b2c3d`), read from the build rather than a checked-in value, so a rollout can be checked from the device.
 
-* **Export (developer options):** The app can export the current user's GTD data to a JSON file: Captures, Outcomes, Actions, Tags (Labels, Areas, Contexts, Projects, Persons), TimeLogs, FocusSessions and their links. No preference and no credential is ever exported. The export is the same encoding sync uses ([ADR-0047](adr/0047-export-is-the-op-log-wire-encoding-and-import-detects-it-silently.md)), so a round-trip loses nothing.
+* **Export (developer options):** The app can export the current user's GTD data to a JSON file: Captures, Outcomes, Actions, Tags (Labels, Areas, Projects, Persons), TimeLogs, FocusSessions and their links. No preference and no credential is ever exported. The export is the same encoding sync uses ([ADR-0047](adr/0047-export-is-the-op-log-wire-encoding-and-import-detects-it-silently.md)), so a round-trip loses nothing.
 
   **The export UI is a hidden Easter egg.** It is reached only by tapping the "Jeeves" name in Settings → About seven times (the Android developer-mode gesture), which reveals a **Developer Options** section with an *Export data* item; the unlock is session-scoped and never persisted. The file is saved through the platform save dialog, on mobile and desktop alike.
 

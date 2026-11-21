@@ -80,7 +80,7 @@ A domain of recurring responsibility — Allen's GTD horizon-2 concept. Examples
 _Avoid_: Category, Topic, Folder, Project (a named group, not a responsibility domain)
 
 **Label**:
-A user-defined granular grouping, and the system's only cross-cutting one: an Outcome carries any number of Labels, and a Label may span Areas ("urgent-this-week" across Health and Finance). Jeeves-specific extension, not GTD canon. Free-form; the user creates and retires Labels as needed. Where **Area** answers *where does this live*, Label answers *what else is this about* (ADR-0025). Legacy `@` `Tag(type='context')` rows show as Labels, never Tags.
+A user-defined granular grouping, and the system's only cross-cutting one: an Outcome carries any number of Labels, and a Label may span Areas ("urgent-this-week" across Health and Finance). Jeeves-specific extension, not GTD canon. Free-form; the user creates and retires Labels as needed. Where **Area** answers *where does this live*, Label answers *what else is this about* (ADR-0025). Stored as `Tag(type='context')`, the `@` rows; the value predates the name and stays so older Devices read every Label, and `'label'` is retyped on arrival ([SYNC.md](docs/SYNC.md)).
 _Avoid_: Tag (Tag is the storage shape, not the concept), Bucket, Area (Area is the exclusive home; Label is the cross-cutting one)
 
 **Blocker**:
@@ -195,7 +195,6 @@ _Avoid_: health score, score, System Health
 - The proposal's four long-term states collapse two independent axes into one enum; the code's `intent` column and `done_at` keep them apart.
 - A trivially-actionable Capture ("call John") could in principle skip Outcome creation and land directly as an Action. The model says no — every Capture clarifies through an Outcome.
 - **Project and Area exclusivity are not enforced in storage.** Both are typed Tags linked through `todo_tags`, which carries no `type`, so "at most one" is not expressible as a unique index. Project's rule is held by the writers and the reconciler; Area's by the cutover.
-- **Label has two storage values.** `'context'` rows (shown as Labels) and cutover-minted `'label'` rows back one concept; folding them is a migration (TMaYaD/Jeeves#1001).
 
 ### Engagement
 
@@ -440,10 +439,10 @@ _Avoid_: Backup (it recovers keys, not data — data recovery is any surviving d
 What a Device records when the log it was served cannot be reconciled with the chains bound into it, or with the keys it holds — a withheld op, a forked stream, a rollback of its own writes, a signature that does not verify. **An accusation standing is not the same as the User being told something is wrong**, and most standing accusations are records of the app working, not evidence that something of the User's is stuck or lost. **A refusal is never an error to the User** — the bytes were refused, which is the outcome the rule exists to produce. A key that has not arrived yet is a delivery gap that heals, never an accusation. Kinds, classes and resolution in [docs/SYNC.md](docs/SYNC.md).
 _Avoid_: Sync error (a transport failure of one attempt is not an accusation), Conflict (merge conflicts are resolved by the merge strategy and are not integrity events), Dead Letter (retired vocabulary, for an unrelated mechanism), Rejected op (a rejection is the server's answer to an append, not the receiver's record)
 
-**Tag** *(backs the GTD Core concepts Person, Project, Area, Label, and legacy Context)*:
+**Tag** *(backs the GTD Core concepts Person, Project, Area and Label)*:
 The shared storage row backing several conceptual entities, discriminated by a `Tag.type` field. Outcome ↔ Tag links are stored in a `TodoTags` join table; the join carries no role information of its own (its semantics depend entirely on the linked Tag's `type`). The user does not think in terms of Tags — they think in the domain entities Tag backs. Physical-world equivalent: a folder, sticky note, or label-maker — a categorisation mechanism, not a domain concept.
 
-**A Tag has two identities, and only one of them is the primary key.** `id` is the op-log identity, client-random; `(name, type)` is the *user-facing* one — two rows with the same pair are one Person, one Project, one Area, one Label or one Context. Two Devices creating the same pair while apart mint two entities for one pair; they fold as the Devices converge. Fold mechanics in [docs/SYNC.md](docs/SYNC.md).
+**A Tag has two identities, and only one of them is the primary key.** `id` is the op-log identity, client-random; `(name, type)` is the *user-facing* one — two rows with the same pair are one Person, one Project, one Area or one Label. Two Devices creating the same pair while apart mint two entities for one pair; they fold as the Devices converge. Fold mechanics in [docs/SYNC.md](docs/SYNC.md).
 _Avoid_: (none — Tag is the canonical name for the storage)
 
 **Banner** *(an in-app surface for a Nudge)*:

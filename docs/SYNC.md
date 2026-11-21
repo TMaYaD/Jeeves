@@ -184,17 +184,20 @@ int, bool and null pass through as JSON natives. A column that changes its Dart
 type changes its encoding, and that is a protocol change.
 
 **Entity ids.** Normal collections keep client-random UUIDs. Two kinds are
-deterministic, and must be: `user_preferences` derives its id from
+deterministic: `user_preferences` derives its id from
 `(workspace, key)`, and junctions derive theirs from their pair. The rule is in
-`app/lib/sync/ids.dart`, and the Tag collection is named there explicitly as one
+`app/lib/sync/ids.dart`, and the Tag collection is named there as one
 that must *not* derive — a Tag's op-log identity is its random `id`, while
 `(name, type)` is only its user-facing identity, which is why duplicates are
-representable and folded rather than prevented
+representable and folded, not prevented
 ([ADR-0043](adr/0043-tag-duplicates-are-representable-and-folded.md)).
+
+**One stored value for Label.** Label is `type='context'`; the reconciler
+retypes any `'label'` Tag to it before folding, so older Devices are unaffected.
 
 **One Project per Outcome.** Each Outcome–Project link is its own entity, so two
 Devices assigning different Projects while apart leave two live links that
-last-write-wins never compares. The reconciler's third pass keeps the link with
+last-write-wins never compares. The one-Project pass keeps the link with
 the greatest clock (ties: smaller tag id) and unassigns the rest by tombstone;
 the winner is not re-asserted, so a later assignment elsewhere still beats it.
 
