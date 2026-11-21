@@ -42,7 +42,6 @@ void main() {
   // Wednesday 18 Nov 2026, 09:30 local.
   final now = DateTime(2026, 11, 18, 9, 30);
   const mon = '2026-11-16';
-  const tue = '2026-11-17';
   const wed = '2026-11-18';
 
   var seedCount = 0;
@@ -57,17 +56,6 @@ void main() {
       today: chosenOn,
       now: now.subtract(Duration(days: 5, milliseconds: seedCount++)),
       firstCommitment: commitment,
-    );
-  }
-
-  Future<void> checkInOn(WidgetTester tester, String id, String day) async {
-    await tester.runAsync(
-      () => db.habitDao.addCheckIn(
-        habitId: id,
-        userId: _userId,
-        countsForDay: day,
-        now: DateTime.parse('${day}T08:00:00'),
-      ),
     );
   }
 
