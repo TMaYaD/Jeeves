@@ -125,14 +125,27 @@
   environment: "{{ builder_tool_env }}"
 
 # ---------------------------------------------------------------- Flutter
+# Not the git module: it crashes revisiting a shallow clone checked out at a
+# tag (no branch at HEAD). Compare the installed tag instead, and swap in a
+# fresh shallow clone only when it differs from app/.fvmrc.
+- name: Installed Flutter version
+  ansible.builtin.command: git -C "{{ builder_flutter_dir }}" describe --tags --exact-match
+  register: flutter_installed
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
 - name: Flutter {{ builder_flutter_version }} (from app/.fvmrc)
-  ansible.builtin.git:
-    repo: https://github.com/flutter/flutter.git
-    dest: "{{ builder_flutter_dir }}"
-    version: "{{ builder_flutter_version }}"
-    depth: 1
-    single_branch: true
-    force: true
+  ansible.builtin.shell: |
+    set -euo pipefail
+    rm -rf "{{ builder_flutter_dir }}.new"
+    git clone -q --depth 1 --branch "{{ builder_flutter_version }}" \
+      https://github.com/flutter/flutter.git "{{ builder_flutter_dir }}.new"
+    rm -rf "{{ builder_flutter_dir }}"
+    mv "{{ builder_flutter_dir }}.new" "{{ builder_flutter_dir }}"
+  args:
+    executable: /bin/bash
+  when: flutter_installed.stdout != builder_flutter_version
   register: flutter_checkout
 
 - name: Flutter configured, Android artifacts cached, licences seen
