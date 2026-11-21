@@ -334,6 +334,41 @@ void main() {
       expect(await restored.select(restored.tags).get(), hasLength(4));
     });
 
+    test('a file with retired-type Labels lands them as the stored Label value',
+        () async {
+      // The second name is over the 100-character limit the typed write
+      // enforces: the import must still return its summary.
+      final content = jsonEncode({
+        jeevesExportEnvelopeKey: jeevesExportVersion,
+        jeevesExportCollectionsKey: {
+          'tags': [
+            {'id': 'a', 'name': 'Home', 'type': 'label', 'user_id': _userId},
+            {
+              'id': 'b',
+              'name': 'x' * 150,
+              'type': 'label',
+              'user_id': _userId,
+            },
+          ],
+        },
+      });
+      final restored = _openInMemory();
+      addTearDown(restored.close);
+      await restored.into(restored.tags).insert(TagsCompanion(
+          id: const Value('0-mine'),
+          name: const Value('Home'),
+          type: const Value('context'),
+          userId: const Value(_userId)));
+
+      final result =
+          await importJeevesExport(content: content, userId: _userId, db: restored);
+
+      expect(result.failedRecords, isEmpty);
+      final live = await restored.select(restored.tags).get();
+      expect(live.where((t) => t.type == 'label'), isEmpty);
+      expect(live.where((t) => t.name == 'Home'), hasLength(1));
+    });
+
     test('the importing account owns every imported row', () async {
       final source = _openInMemory();
       addTearDown(source.close);

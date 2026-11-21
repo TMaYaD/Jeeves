@@ -516,6 +516,10 @@ class VaultPlugin implements SyncPlugin {
         page: page,
         block: block,
         mintClock: _host.mintClock,
+        baseLabelNames: {
+          for (final name in (base?.frontmatter['labels'] as List?) ?? const [])
+            if (name is String) name,
+        },
       )) {
         for (final entry in change.fields.entries) {
           edit(change.collection, change.entityId, entry.key, entry.value.value,

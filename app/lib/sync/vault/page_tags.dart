@@ -23,7 +23,16 @@ import 'page_layout.dart';
 
 /// One link between a page's entity and a Tag.
 class _Link {
-  const _Link({required this.entityId, required this.tagId, required this.name});
+  const _Link({
+    required this.entityId,
+    required this.tagId,
+    required this.name,
+    this.isRetiredType = false,
+  });
+
+  /// Whether the Tag has the retired Label type. Pages always showed those;
+  /// pages from before the Label type was unified never showed the others.
+  final bool isRetiredType;
 
   /// The junction entity: its id is the pair, derived.
   final String entityId;
@@ -39,11 +48,13 @@ class _Link {
 ///
 /// [block] is the page's machine block — the page's own, or the base copy's
 /// when the page's is missing or mangled. [mintClock] stamps a hand edit.
+/// [baseLabelNames] is the Labels the base copy of the page showed.
 List<Change> tagLinkChanges({
   required VaultPageKey key,
   required PageModel page,
   required List<BlockEntry> block,
   required Hlc Function() mintClock,
+  Set<String> baseLabelNames = const {},
 }) {
   final isOutcome = key.kind == VaultPageKind.outcome;
   final isCapture = key.kind == VaultPageKind.capture;
@@ -129,7 +140,12 @@ List<Change> tagLinkChanges({
     final name = tagName[tagId];
     final type = tagType[tagId];
     if (name == null || type == null) continue;
-    final link = _Link(entityId: entry.key, tagId: tagId, name: name);
+    final link = _Link(
+      entityId: entry.key,
+      tagId: tagId,
+      name: name,
+      isRetiredType: type == retiredLabelTagType,
+    );
     if (type == labelTagType || type == retiredLabelTagType) {
       labelLinks.add(link);
     }
@@ -156,8 +172,13 @@ List<Change> tagLinkChanges({
   // The Labels: a name the page adds is a link to create, a name the page
   // drops is a link to delete.
   final shownLabelNames = shownLabels.toSet();
+  // A page rendered before the stored Label type was shown never named those
+  // Labels, so their absence from it is no removal. A name is dropped only if
+  // it is a retired-type Label (every page has always shown those) or the base
+  // copy the page was last rendered as showed it.
   for (final link in labelLinks) {
     if (shownLabelNames.contains(link.name)) continue;
+    if (!link.isRetiredType && !baseLabelNames.contains(link.name)) continue;
     addTombstone(junctionCollection, link.entityId, mintClock());
   }
   for (final name in shownLabelNames) {

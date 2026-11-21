@@ -370,6 +370,27 @@ void main() {
     expect(await a.outcomePage(), isNot(contains('labels:')));
   });
 
+  test('a stored-type Label taken off a page stops being a link', () async {
+    final a = await _open('a', root);
+    await a.device.domain.todoDao
+        .insertOutcome(id: _outcomeId, title: 'Plan', userId: _userId);
+    final tagId = await a.device.domain.tagDao
+        .findOrCreateTag('Home', labelTagType, _userId);
+    await a.device.domain.tagDao.assignTag(_outcomeId, tagId, _userId);
+    await a.device.host!.deliverAll();
+    await a.plugin.rescan();
+
+    final path = await a.outcomePath();
+    expect(await a.outcomePage(), contains('labels: ["Home"]'));
+    final edited =
+        (await a.outcomePage()).replaceFirst('labels: ["Home"]\n', '');
+    await a.folder.writeAtomically(path, edited);
+    a.device.wall.advance(5000);
+    await a.plugin.rescan();
+
+    expect(await _linkCount(a, _outcomeId), 0);
+  });
+
   test('the Area typed into a page becomes a link', () async {
     final a = await _open('a', root);
     await a.device.domain.todoDao
