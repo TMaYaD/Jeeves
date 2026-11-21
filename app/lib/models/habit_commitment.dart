@@ -408,11 +408,80 @@ DateTime effectiveStartOf(HabitCommitment commitment) {
   }
 }
 
+/// The first day each commitment governs, by commitment id.
+///
+/// [effectiveStartOf] says where a commitment's own period begins. This also
+/// keeps a **finished** week or month with the commitment that governed it:
+/// a per-week or per-month commitment never reaches back over a day whose
+/// period (of the per-week or per-month commitment then in force) had already
+/// ended when the new one was chosen. A change from "3 times a week" to "10
+/// times a month" on 25 November leaves the week of 16–22 November judged by
+/// the weekly rule, and the monthly rule governs from 23 November.
+///
+/// The daily kinds are judged a day at a time, so a new per-week or per-month
+/// commitment still governs the days of its own period that came earlier.
+Map<String, DateTime> effectiveStartsOf(List<HabitCommitment> commitments) {
+  final ordered = [...commitments]
+    ..sort((a, b) => _isLater(a, b) ? 1 : (_isLater(b, a) ? -1 : 0));
+  final starts = <String, DateTime>{};
+  for (var i = 0; i < ordered.length; i++) {
+    final commitment = ordered[i];
+    var start = effectiveStartOf(commitment);
+    final chosen = habitDateFromDayKey(commitment.chosenOn)!;
+    final countedKind =
+        commitment.repeatKind == HabitRepeatKind.timesPerWeek ||
+            commitment.repeatKind == HabitRepeatKind.timesPerMonth;
+    if (countedKind) {
+      // Walk the days the new commitment would reach back over, and lock the
+      // ones that a finished period of an earlier commitment judged.
+      var lockedThrough = start.subtract(const Duration(days: 1));
+      for (var day = start;
+          day.isBefore(chosen);
+          day = DateTime(day.year, day.month, day.day + 1)) {
+        HabitCommitment? governing;
+        for (var k = 0; k < i; k++) {
+          final earlier = ordered[k];
+          if (starts[earlier.id]!.isAfter(day)) continue;
+          if (governing == null || _isLater(earlier, governing)) {
+            governing = earlier;
+          }
+        }
+        if (governing == null) continue;
+        final periodEnd = _periodEndOf(governing, day);
+        if (periodEnd != null && periodEnd.isBefore(chosen)) lockedThrough = day;
+      }
+      if (!lockedThrough.isBefore(start)) {
+        start = DateTime(
+            lockedThrough.year, lockedThrough.month, lockedThrough.day + 1);
+      }
+    }
+    starts[commitment.id] = start;
+  }
+  return starts;
+}
+
+/// The last day of the period of [commitment] that holds [day], or null for a
+/// kind that is judged a day at a time.
+DateTime? _periodEndOf(HabitCommitment commitment, DateTime day) {
+  switch (commitment.repeatKind) {
+    case HabitRepeatKind.timesPerWeek:
+      final offset = (day.weekday - habitWeekStartsOn + 7) % 7;
+      return DateTime(day.year, day.month, day.day - offset + 6);
+    case HabitRepeatKind.timesPerMonth:
+      return DateTime(day.year, day.month + 1, 0);
+    case HabitRepeatKind.everyDay:
+    case HabitRepeatKind.chosenWeekdays:
+    case HabitRepeatKind.everyNDays:
+      return null;
+  }
+}
+
 /// The commitment in force on [dayKey], or null when there is none yet.
 ///
-/// A commitment governs a day when its effective start is on or before that
-/// day. Among those, the most recently created wins, with the id as the
-/// tie-break between two written at the same instant.
+/// A commitment governs a day when its effective start (see
+/// [effectiveStartsOf]) is on or before that day. Among those, the most
+/// recently created wins, with the id as the tie-break between two written at
+/// the same instant.
 ///
 /// The commitments are the ones of one Habit; the caller passes that Habit's
 /// commitments.
@@ -420,9 +489,10 @@ HabitCommitment? commitmentInForceOn(
     List<HabitCommitment> commitments, String dayKey) {
   final day = habitDateFromDayKey(dayKey);
   if (day == null) return null;
+  final starts = effectiveStartsOf(commitments);
   HabitCommitment? winner;
   for (final commitment in commitments) {
-    if (effectiveStartOf(commitment).isAfter(day)) continue;
+    if (starts[commitment.id]!.isAfter(day)) continue;
     if (winner == null || _isLater(commitment, winner)) winner = commitment;
   }
   return winner;

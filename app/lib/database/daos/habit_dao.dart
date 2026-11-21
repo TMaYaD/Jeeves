@@ -166,6 +166,23 @@ class HabitCommitmentDraft {
   /// [unitLabel] for a measurable Habit, null for both on a binary one.
   final double? dailyTargetAmount;
 
+  /// A copy that no later change to the caller's lists can reach.
+  ///
+  /// The draft holds the caller's lists by reference, and a write awaits the
+  /// store before it builds the commitment. A copy taken before the first
+  /// await keeps the rule the caller submitted.
+  HabitCommitmentDraft snapshot() => HabitCommitmentDraft(
+        repeatKind: repeatKind,
+        chosenWeekdays:
+            chosenWeekdays == null ? null : List<int>.of(chosenWeekdays!),
+        timesPerPeriod: timesPerPeriod,
+        intervalDays: intervalDays,
+        preferredDays:
+            preferredDays == null ? null : List<int>.of(preferredDays!),
+        unitLabel: unitLabel,
+        dailyTargetAmount: dailyTargetAmount,
+      );
+
   /// The commitment this draft becomes for [habitId], chosen on [chosenOn] and
   /// written at [createdAt].
   ///
@@ -335,6 +352,8 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
     required DateTime now,
     required HabitCommitmentDraft commitment,
   }) async {
+    // Before the first await: the caller may reuse its lists once we yield.
+    final draft = commitment.snapshot();
     final instant = _storedInstant(now);
     final commitmentId = uuid.v4();
     await attachedDatabase.capturing(() async {
@@ -352,7 +371,7 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
       }
       // Built inside the transaction only so that createdAt is final; a rule
       // that does not hold together still throws before anything is written.
-      final built = commitment.toCommitment(
+      final built = draft.toCommitment(
         id: commitmentId,
         habitId: habitId,
         chosenOn: today,
@@ -572,7 +591,9 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
       // reaches into a later pause or archive would name a first active day
       // the Habit is not active on. A pause may end on the day another period
       // starts.
+      // An empty period (paused and resumed the same day) covers no days.
       final overlapping = (await _periodsFor(habitId)).any((p) =>
+          p.startsOn != p.endsBefore &&
           (endDay == null || p.startsOn.compareTo(endDay) < 0) &&
           (p.endsBefore == null || p.endsBefore!.compareTo(startDay) > 0));
       if (overlapping) {
@@ -658,7 +679,8 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
                 p.kind.equals(_pausedKind) &
                 p.startsOn.isBiggerThanValue(day)))
           .get();
-      if (laterPause.isNotEmpty) {
+      // A pause resumed the day it started covers no days and blocks nothing.
+      if (laterPause.any((p) => p.endsBefore != p.startsOn)) {
         throw ArgumentError.value(day, 'today',
             'The Habit has a pause that starts after that day.');
       }
@@ -1061,7 +1083,7 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
   Future<void> _requireCheckInsStillMatch(String habitId,
       List<HabitCommitment> before, List<HabitCommitment> all,
       HabitCommitment added) async {
-    final fromDay = habitDayKey(effectiveStartOf(added));
+    final fromDay = habitDayKey(effectiveStartsOf(all)[added.id]!);
     final checkIns = await (select(habitCheckIns)
           ..where((c) =>
               c.habitId.equals(habitId) &
@@ -1198,6 +1220,13 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
     if (repeatKind == null) return null;
     final createdAt = DateTime.tryParse(row.createdAt);
     if (createdAt == null) return null;
+    final chosenWeekdays = parseDayListJson(row.chosenWeekdays);
+    final preferredDays = parseDayListJson(row.preferredDays);
+    // A stored value that does not decode is not "no value": skip the row.
+    if ((row.chosenWeekdays != null && chosenWeekdays == null) ||
+        (row.preferredDays != null && preferredDays == null)) {
+      return null;
+    }
     try {
       return HabitCommitment(
         id: row.id,
@@ -1205,10 +1234,10 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
         chosenOn: row.chosenOn,
         createdAt: createdAt.toUtc(),
         repeatKind: repeatKind,
-        chosenWeekdays: parseDayListJson(row.chosenWeekdays),
+        chosenWeekdays: chosenWeekdays,
         timesPerPeriod: row.timesPerPeriod,
         intervalDays: row.intervalDays,
-        preferredDays: parseDayListJson(row.preferredDays),
+        preferredDays: preferredDays,
         unitLabel: row.unitLabel,
         dailyTargetAmount: row.dailyTargetAmount,
       );

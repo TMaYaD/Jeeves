@@ -350,6 +350,11 @@ void main() {
             isTrue);
         expect(commitments[1].createdAt.isBefore(commitments[2].createdAt),
             isTrue);
+        expect(commitments.map((c) => c.repeatKind), [
+          HabitRepeatKind.everyDay,
+          HabitRepeatKind.timesPerWeek,
+          HabitRepeatKind.timesPerMonth,
+        ]);
         expect(commitmentInForceOn(commitments, '2026-11-18')!.repeatKind,
             HabitRepeatKind.timesPerMonth);
       });
@@ -1115,6 +1120,81 @@ void main() {
             now: _now, resumesOn: '2026-11-25');
         expect(await db.habitDao.stateOn(habitId, '2026-11-24'),
             HabitState.paused);
+      });
+
+      test('a pause resumed the day it started blocks no later pause or archive',
+          () async {
+        final habitId = await createHabit();
+        await db.habitDao.pause(
+            habitId: habitId, userId: _userId, today: '2026-11-25',
+            now: _now, resumesOn: '2026-11-26');
+        await db.habitDao.resume(
+            habitId: habitId, userId: _userId, today: '2026-11-25', now: _now);
+        // The empty period covers no days, so a pause across it is fine.
+        await db.habitDao.pause(
+            habitId: habitId, userId: _userId, today: '2026-11-20',
+            now: _now, resumesOn: '2026-11-27');
+        await db.habitDao.resume(
+            habitId: habitId, userId: _userId, today: '2026-11-21', now: _now);
+        await db.habitDao.archive(
+            habitId: habitId, userId: _userId, today: '2026-11-22', now: _now);
+        expect(await db.habitDao.stateOn(habitId, '2026-11-23'),
+            HabitState.archived);
+      });
+
+      test('watchHabits refreshes an open subscription on a pause', () async {
+        final habitId = await createHabit();
+        final states = <HabitState>[];
+        final subscription = db.habitDao
+            .watchHabits('2026-11-19')
+            .listen((rows) => states.add(rows.single.state));
+        await pumpEventQueue();
+        await db.habitDao.pause(
+            habitId: habitId, userId: _userId, today: '2026-11-18',
+            now: _now, resumesOn: '2026-11-25');
+        await pumpEventQueue();
+        await subscription.cancel();
+        expect(states.first, HabitState.active);
+        expect(states.last, HabitState.paused);
+      });
+
+      test('a commitment keeps the weekdays the caller submitted', () async {
+        final habitId = await createHabit();
+        final weekdays = [1, 3];
+        final future = db.habitDao.setCommitment(
+          habitId: habitId,
+          userId: _userId,
+          today: '2026-11-18',
+          now: _later,
+          commitment: HabitCommitmentDraft(
+              repeatKind: HabitRepeatKind.chosenWeekdays,
+              chosenWeekdays: weekdays),
+        );
+        // The caller reuses its list while the write is pending.
+        weekdays
+          ..clear()
+          ..add(5);
+        await future;
+        final commitments = await db.habitDao.commitmentsFor(habitId);
+        expect(commitments.last.chosenWeekdays, [1, 3]);
+      });
+
+      test('a stored preferred-days text that does not decode skips the row',
+          () async {
+        final habitId = await createHabit();
+        await db.habitDao.setCommitment(
+          habitId: habitId,
+          userId: _userId,
+          today: '2026-11-18',
+          now: _later,
+          commitment: const HabitCommitmentDraft(
+              repeatKind: HabitRepeatKind.timesPerWeek, timesPerPeriod: 3),
+        );
+        await db.customStatement(
+            "UPDATE habit_commitments SET preferred_days = '[1,\"Wed\"]' "
+            "WHERE repeat_kind = 'times_per_week'");
+        final commitments = await db.habitDao.commitmentsFor(habitId);
+        expect(commitments.single.repeatKind, HabitRepeatKind.everyDay);
       });
 
       test('restore closes only the archive that covers the day', () async {

@@ -554,6 +554,34 @@ void main() {
       expect(commitmentInForceOn(commitments, '2026-12-03'), second);
     });
 
+    test('a finished week keeps its weekly commitment when a monthly one follows',
+        () {
+      final weekly = commitment(
+        id: 'c1',
+        repeatKind: HabitRepeatKind.timesPerWeek,
+        timesPerPeriod: 3,
+        chosenOn: '2026-11-16',
+        createdAt: DateTime.utc(2026, 11, 16, 9),
+      );
+      final monthly = commitment(
+        id: 'c2',
+        repeatKind: HabitRepeatKind.timesPerMonth,
+        timesPerPeriod: 10,
+        chosenOn: '2026-11-25',
+        createdAt: DateTime.utc(2026, 11, 25, 9),
+      );
+      final commitments = [weekly, monthly];
+
+      // The week of 16-22 November finished before the change.
+      expect(commitmentInForceOn(commitments, '2026-11-22'), weekly);
+      // The current week, and the month, take the monthly rule.
+      expect(commitmentInForceOn(commitments, '2026-11-23'), monthly);
+      expect(commitmentInForceOn(commitments, '2026-11-25'), monthly);
+      // Days before the weekly rule began are reached by the monthly one.
+      expect(commitmentInForceOn(commitments, '2026-11-10'), monthly);
+      expect(effectiveStartsOf(commitments)['c2'], DateTime(2026, 11, 23));
+    });
+
     test('a day before the first commitment has none', () {
       final only = commitment(
         id: 'c1',

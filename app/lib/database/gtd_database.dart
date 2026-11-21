@@ -215,13 +215,18 @@ class GtdDatabase extends _$GtdDatabase {
   /// pre-migration state. A caller that has to act on "did this launch upgrade the
   /// schema?" therefore issues a query to force the open and awaits this.
   ///
-  /// Fed from [MigrationStrategy.beforeOpen], which drift runs on **every** open,
-  /// so the future always completes. Feeding it from `onUpgrade` instead would
-  /// leave it unresolved for ever on a launch that migrates nothing, and hang the
-  /// caller.
+  /// Fed from [MigrationStrategy.beforeOpen], which drift runs on **every**
+  /// successful open, so the future completes on a launch that migrates
+  /// nothing. Feeding it from `onUpgrade` instead would leave it unresolved for
+  /// ever on such a launch, and hang the caller.
+  ///
+  /// **A migration that throws leaves it pending**: `beforeOpen` never runs,
+  /// and the error surfaces through the query that forced the open. Force the
+  /// open with a query first, and await this after it.
   ///
   /// It completes with a [StoreVersionTooNewError] when the open was refused
   /// (see [_failOpen]), so a caller awaiting it learns why rather than hanging.
+  /// Any other migration failure is not routed here.
   Future<OpeningDetails> get opened => _opened.future;
 
   final Completer<OpeningDetails> _opened = Completer<OpeningDetails>();
