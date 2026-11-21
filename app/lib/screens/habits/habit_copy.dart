@@ -3,6 +3,10 @@
 /// lines from the design are a one-file change.
 library;
 
+import '../../database/gtd_database.dart' show HabitCheckIn;
+import '../../models/habit_commitment.dart';
+import '../../models/habit_progress.dart';
+
 /// Which flash banner is showing.
 enum HabitFlash { created, paused, archived, anchorStopped, streakBroken }
 
@@ -52,3 +56,139 @@ const habitsNothingDueLine = 'Nothing is due today.';
 const habitsAddLabel = 'Add a Habit';
 const habitsDetailPlaceholder = 'Choose a Habit to see its detail.';
 const habitTitleEmptyMessage = 'A Habit needs a name.';
+
+// ---- Check-in wording: the row, the number column and the Today card --------
+
+const habitNotYetLine = 'Not yet';
+
+String habitMarkLabel({
+  required String title,
+  required bool isMeasurable,
+  required bool isDone,
+  bool onTodayCard = false,
+}) {
+  if (isMeasurable) return 'Add a Check-in for $title';
+  if (isDone) {
+    return onTodayCard
+        ? 'Checked in today. Tap to undo'
+        : '$title: checked in. Tap to undo';
+  }
+  return 'Check in: $title';
+}
+
+/// The label under the streak number, from today's commitment.
+String habitStreakLabel(HabitCommitment? commitment) =>
+    switch (commitment?.repeatKind) {
+      HabitRepeatKind.everyDay => 'day streak',
+      HabitRepeatKind.timesPerWeek => 'week streak',
+      HabitRepeatKind.timesPerMonth => 'month streak',
+      _ => 'streak',
+    };
+
+/// "2 of 3 this week" for an N-a-week or N-a-month Habit, else null.
+String? habitPeriodLine(HabitProgress progress, HabitCommitment? commitment) {
+  final count = progress.periodCount;
+  final target = progress.periodTarget;
+  if (count == null || target == null) return null;
+  final span =
+      commitment?.repeatKind == HabitRepeatKind.timesPerMonth ? 'month' : 'week';
+  return '$count of $target this $span';
+}
+
+/// Whether an N-a-week or N-a-month Habit has reached N and asks no more today.
+bool habitPeriodComplete(HabitProgress progress) =>
+    progress.todayState == HabitTodayState.notDue &&
+    progress.periodTarget != null &&
+    (progress.periodCount ?? 0) >= progress.periodTarget!;
+
+String habitPeriodCompleteLine(HabitCommitment? commitment) =>
+    commitment?.repeatKind == HabitRepeatKind.timesPerMonth
+        ? 'Complete for this month'
+        : 'Complete for this week';
+
+/// An amount with thousands separators and no needless decimals.
+String habitAmountText(double amount) {
+  final whole = amount == amount.roundToDouble();
+  final text = whole ? amount.round().toString() : amount.toStringAsFixed(1);
+  final parts = text.split('.');
+  final digits = parts.first;
+  final negative = digits.startsWith('-');
+  final body = negative ? digits.substring(1) : digits;
+  final grouped = StringBuffer();
+  for (var i = 0; i < body.length; i++) {
+    if (i > 0 && (body.length - i) % 3 == 0) grouped.write(',');
+    grouped.write(body[i]);
+  }
+  return '${negative ? '-' : ''}$grouped${parts.length > 1 ? '.${parts[1]}' : ''}';
+}
+
+/// "5 of 8 glasses".
+String habitAmountLine(HabitProgress progress) =>
+    '${habitAmountText(progress.todayTotalAmount ?? 0)} of '
+    '${habitAmountText(progress.targetAmount ?? 0)} ${progress.unitLabel ?? ''}'
+        .trimRight();
+
+/// Pips show only for a whole target of 10 or less.
+bool habitShowsPips(double? target) =>
+    target != null && target == target.roundToDouble() && target >= 1 && target <= 10;
+
+/// "07:34", local time, of a Check-in.
+String habitCheckInClock(HabitCheckIn checkIn) {
+  final local = DateTime.parse(checkIn.checkedInAt).toLocal();
+  String two(int n) => n.toString().padLeft(2, '0');
+  return '${two(local.hour)}:${two(local.minute)}';
+}
+
+/// The state part of the row's second line, or null.
+String? habitRowStateText({
+  required HabitProgress progress,
+  required HabitCommitment? commitment,
+  required List<HabitCheckIn> todaysCheckIns,
+}) {
+  switch (progress.todayState) {
+    case HabitTodayState.paused:
+      return null;
+    case HabitTodayState.notDue:
+      return habitPeriodComplete(progress)
+          ? habitPeriodCompleteLine(commitment)
+          : null;
+    case HabitTodayState.done:
+    case HabitTodayState.notYet:
+      if (commitment?.isMeasurable ?? false) return habitAmountLine(progress);
+      if (progress.todayState == HabitTodayState.notYet) return habitNotYetLine;
+      return todaysCheckIns.isEmpty
+          ? null
+          : 'Done ${habitCheckInClock(todaysCheckIns.last)}';
+  }
+}
+
+const _weekdayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const _monthNames = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
+/// "Wed 18 Nov".
+String habitTodayDateText(DateTime day) =>
+    '${_weekdayNames[day.weekday - 1]} ${day.day} ${_monthNames[day.month - 1]}';
+
+/// The Today card's state line.
+String habitTodayCardState({
+  required HabitProgress progress,
+  required HabitCommitment? commitment,
+  required List<HabitCheckIn> todaysCheckIns,
+}) {
+  final period = habitPeriodLine(progress, commitment);
+  if (commitment?.isMeasurable ?? false) {
+    final n = todaysCheckIns.length;
+    return '${habitAmountLine(progress)} · $n ${n == 1 ? 'entry' : 'entries'}';
+  }
+  if (progress.todayState == HabitTodayState.done && todaysCheckIns.isNotEmpty) {
+    return 'Done ${habitCheckInClock(todaysCheckIns.last)} · tap the mark to undo';
+  }
+  if (habitPeriodComplete(progress)) return habitPeriodCompleteLine(commitment);
+  if (progress.todayState == HabitTodayState.notYet && period != null) {
+    return '$habitNotYetLine · $period';
+  }
+  return habitNotYetLine;
+}
