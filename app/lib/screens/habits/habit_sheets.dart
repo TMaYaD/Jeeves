@@ -500,7 +500,7 @@ class _AnchorSheetState extends State<_AnchorSheet> {
           ),
         if (_kind == HabitAnchorKind.clockTime)
           TextField(
-            key: const Key('anchor_clock_time'),
+            key: const Key('anchor_clock_time_field'),
             controller: _time,
             decoration: const InputDecoration(labelText: 'Time, HH:MM'),
             onChanged: (_) => setState(() {}),

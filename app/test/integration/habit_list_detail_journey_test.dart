@@ -16,6 +16,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/database/daos/habit_dao.dart';
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/estimate.dart';
 import 'package:jeeves/models/habit_commitment.dart';
 import 'package:jeeves/providers/clock_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
@@ -573,7 +574,7 @@ void main() {
   });
 
   testWidgets(
-    'a pause with a "resumes on" date ends on that date with no write',
+    'a pause with a "resumes on" date ends on that date',
     (tester) async {
       var now = DateTime.now();
       final id = await seed('Read');
@@ -678,8 +679,32 @@ void main() {
       await _settle(tester);
       await tester.tap(find.byKey(const Key('habit_sheet_done')));
       await _settle(tester);
-      final habit = await tester.runAsync(() => db.habitDao.habitById(a));
-      expect(habit!.anchorKind, 'none');
+      final none = await tester.runAsync(() => db.habitDao.habitById(a));
+      expect(none!.anchorKind, 'none');
+
+      await tester.tap(find.byKey(const Key('habit_row_anchor')));
+      await _settle(tester);
+      await tester.tap(find.byKey(const Key('anchor_part_of_day')));
+      await _settle(tester);
+      await tester.tap(find.byKey(const Key('anchor_part_evening')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('habit_sheet_done')));
+      await _settle(tester);
+      final part = await tester.runAsync(() => db.habitDao.habitById(a));
+      expect(part!.anchorKind, 'part_of_day');
+      expect(part.anchorPartOfDay, 'evening');
+
+      await tester.tap(find.byKey(const Key('habit_row_anchor')));
+      await _settle(tester);
+      await tester.tap(find.byKey(const Key('anchor_clock_time')));
+      await _settle(tester);
+      await tester.enterText(find.byKey(const Key('anchor_clock_time_field')), '07:30');
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('habit_sheet_done')));
+      await _settle(tester);
+      final clock = await tester.runAsync(() => db.habitDao.habitById(a));
+      expect(clock!.anchorKind, 'clock_time');
+      expect(clock.anchorClockTime, '07:30');
     } finally {
       await closeApp(tester);
     }
@@ -691,8 +716,8 @@ void main() {
     final id = await db.habitDao.createHabit(
       userId: _userId,
       title: 'Read',
-      today: dayKeyAgo(10),
-      now: DateTime.now().subtract(const Duration(days: 10)),
+      today: dayKeyAgo(90),
+      now: DateTime.now().subtract(const Duration(days: 90)),
       firstCommitment: defaultNewHabitCommitment,
     );
     await openApp(tester);
@@ -737,6 +762,11 @@ void main() {
         HabitRepeatKind.everyDay,
       ]);
       expect(commitmentInForceOn(commitments, today)!.id, commitments.last.id);
+      // A day long before every change still reads the first, every-day rule.
+      expect(
+        commitmentInForceOn(commitments, dayKeyAgo(80))!.id,
+        commitments.first.id,
+      );
     } finally {
       await closeApp(tester);
     }
@@ -762,14 +792,23 @@ void main() {
       await _settle(tester);
       await tester.tap(find.text('Home'));
       await _settle(tester);
+      await tester.tap(find.byKey(const Key('habit_row_energy')));
+      await _settle(tester);
+      await tester.tap(find.text('High'));
+      await _settle(tester);
       await tester.tap(find.byKey(const Key('habit_row_estimate')));
       await _settle(tester);
-      await tester.tap(find.byKey(Key('habit_estimate_${5}')));
+      // The Outcome estimate sheet, without its Timeboxed switch.
+      expect(find.byKey(const Key('estimate_sheet_timeboxed')), findsNothing);
+      await tester.tap(find.byKey(const Key('estimate_sheet_more')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('estimate_sheet_save')));
       await _settle(tester);
       final tags = await tester.runAsync(() => db.habitDao.tagsFor(id));
       expect(tags!.map((t) => t.id), ['area-home']);
       final habit = await tester.runAsync(() => db.habitDao.habitById(id));
-      expect(habit!.timeEstimateMinutes, 5);
+      expect(habit!.timeEstimateMinutes, stepEstimateUp(null));
+      expect(habit.energyLevel, 'high');
     } finally {
       await closeApp(tester);
     }

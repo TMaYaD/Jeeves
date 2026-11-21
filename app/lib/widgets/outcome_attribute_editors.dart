@@ -116,15 +116,26 @@ void showOutcomeContextTagEditor(BuildContext context, String todoId) {
 /// sheet was open cannot leave the switch with nothing to limit.
 ///
 /// Returns whether the sheet was saved.
+///
+/// A Habit has no Action and so no Timeboxed switch. It passes
+/// [onSaveEstimate] (called with the new minutes, or null to clear) instead of
+/// a [notifier], and [showTimeboxedSwitch] false. Exactly one of [notifier] and
+/// [onSaveEstimate] is given; Outcome call sites pass the notifier as before.
 Future<bool> showOutcomeTimeEstimateSheet(
   BuildContext context,
-  TaskDetailNotifier notifier, {
+  TaskDetailNotifier? notifier, {
   required int? current,
   int? initial,
   String? actionText,
   String? actionId,
   bool timeboxed = false,
+  bool showTimeboxedSwitch = true,
+  Future<void> Function(int? minutes)? onSaveEstimate,
 }) async {
+  assert(
+    (notifier == null) != (onSaveEstimate == null),
+    'Give either a notifier or onSaveEstimate',
+  );
   final saved = await showModalBottomSheet<bool>(
     context: context,
     backgroundColor: Colors.white,
@@ -136,6 +147,8 @@ Future<bool> showOutcomeTimeEstimateSheet(
       actionText: actionText,
       actionId: actionId,
       timeboxed: timeboxed,
+      showTimeboxedSwitch: showTimeboxedSwitch,
+      onSaveEstimate: onSaveEstimate,
     ),
   );
   return saved ?? false;
@@ -148,12 +161,20 @@ class _EstimateSheet extends StatefulWidget {
     required this.notifier,
     required this.current,
     required this.timeboxed,
+    this.showTimeboxedSwitch = true,
+    this.onSaveEstimate,
     this.initial,
     this.actionText,
     this.actionId,
   });
 
-  final TaskDetailNotifier notifier;
+  final TaskDetailNotifier? notifier;
+
+  /// Saves the estimate when there is no notifier (a Habit); null clears it.
+  final Future<void> Function(int? minutes)? onSaveEstimate;
+
+  /// False where there is no Action to limit (a Habit).
+  final bool showTimeboxedSwitch;
 
   /// The estimate as it stands now; null when there is none.
   final int? current;
@@ -228,7 +249,9 @@ class _EstimateSheetState extends State<_EstimateSheet> {
     final estimateMoved = _stepped && _minutes != widget.current;
     final switchMoved = _hasEstimate && _timeboxed != widget.timeboxed;
     try {
-      if (estimateMoved || switchMoved) {
+      if (notifier == null) {
+        if (estimateMoved) await widget.onSaveEstimate!(_minutes);
+      } else if (estimateMoved || switchMoved) {
         // One write, so the estimate and the switch land together.
         await notifier.setEstimateAndTimeboxed(
           actionId: widget.actionId ?? '',
@@ -298,6 +321,7 @@ class _EstimateSheetState extends State<_EstimateSheet> {
                   icon: const Icon(Icons.add),
                   tooltip: 'More',
                 ),
+                if (widget.showTimeboxedSwitch) ...[
                 const SizedBox(width: 16),
                 _TimeboxedToggle(
                   value: _timeboxed,
@@ -308,6 +332,7 @@ class _EstimateSheetState extends State<_EstimateSheet> {
                       : 'This Outcome has no current Action to limit.',
                   onChanged: (value) => setState(() => _timeboxed = value),
                 ),
+                ],
               ],
             ),
             const SizedBox(height: 24),

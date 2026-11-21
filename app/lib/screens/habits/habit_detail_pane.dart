@@ -12,7 +12,6 @@ import 'package:go_router/go_router.dart';
 
 import '../../database/daos/habit_dao.dart';
 import '../../database/gtd_database.dart' show Habit, Tag;
-import '../../models/estimate.dart';
 import '../../models/habit_commitment.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/clock_provider.dart';
@@ -508,10 +507,13 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
           rowKey: const Key('habit_row_estimate'),
           label: 'Time estimate',
           value: estimate == null ? 'Not set' : '$estimate min',
-          onTap: () async {
-            final picked = await _pickEstimate(context, estimate);
-            if (picked != null) await _setEstimate(habit, picked.minutes);
-          },
+          onTap: () => showOutcomeTimeEstimateSheet(
+            context,
+            null,
+            current: estimate,
+            showTimeboxedSwitch: false,
+            onSaveEstimate: (minutes) => _setEstimate(habit, minutes),
+          ),
         ),
         if (!isDraft) ..._actions(context, habit, state),
       ],
@@ -760,41 +762,6 @@ class _FieldRow extends StatelessWidget {
     title: Text(label),
     trailing: Text(value, style: Theme.of(context).textTheme.bodyMedium),
     onTap: onTap,
-  );
-}
-
-/// An estimate chosen on the sheet; [minutes] null clears it.
-class _EstimatePick {
-  const _EstimatePick(this.minutes);
-  final int? minutes;
-}
-
-Future<_EstimatePick?> _pickEstimate(BuildContext context, int? current) {
-  return showModalBottomSheet<_EstimatePick>(
-    context: context,
-    builder: (ctx) => SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            for (final m in estimateLadderMinutes)
-              ChoiceChip(
-                key: Key('habit_estimate_$m'),
-                label: Text('$m min'),
-                selected: current == m,
-                onSelected: (_) => Navigator.of(ctx).pop(_EstimatePick(m)),
-              ),
-            ActionChip(
-              key: const Key('habit_estimate_clear'),
-              label: const Text('No estimate'),
-              onPressed: () => Navigator.of(ctx).pop(const _EstimatePick(null)),
-            ),
-          ],
-        ),
-      ),
-    ),
   );
 }
 
