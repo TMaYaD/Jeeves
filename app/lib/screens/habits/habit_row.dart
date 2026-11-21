@@ -11,18 +11,21 @@ import '../../models/habit_progress.dart';
 import '../../providers/habit_check_ins_provider.dart';
 import '../../providers/habit_progress_provider.dart';
 import '../../widgets/habit_check_in_mark.dart';
+import 'habit_amount_entry_sheet.dart';
 import 'habit_copy.dart';
 import 'habit_routes.dart';
 
 /// A binary Habit's mark checks in or undoes; a measurable Habit's mark opens
-/// the entry sheet, which arrives in a later step.
+/// the entry sheet, filled or not.
 Future<void> tapHabitMark(
+  BuildContext context,
   WidgetRef ref, {
-  required String habitId,
+  required Habit habit,
   required HabitCheckInMarkState markState,
   required bool isMeasurable,
 }) async {
-  if (isMeasurable) return;
+  if (isMeasurable) return showHabitAmountEntrySheet(context, habit);
+  final habitId = habit.id;
   final actions = ref.read(habitCheckInsProvider.notifier);
   switch (markState) {
     case HabitCheckInMarkState.open:
@@ -67,8 +70,9 @@ class HabitMarkButton extends ConsumerWidget {
         key: Key('habit_mark_${habit.id}${onTodayCard ? '_today' : ''}'),
         state: markState,
         onTap: () => tapHabitMark(
+          context,
           ref,
-          habitId: habit.id,
+          habit: habit,
           markState: markState,
           isMeasurable: isMeasurable,
         ),

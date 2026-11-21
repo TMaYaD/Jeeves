@@ -268,4 +268,124 @@ void main() {
       await closeApp(tester);
     }
   });
+
+  group('the measurable entry sheet', () {
+    Future<String> seedWater() => seed(
+      'Water',
+      commitment: const HabitCommitmentDraft(
+        repeatKind: HabitRepeatKind.everyDay,
+        unitLabel: 'glasses',
+        dailyTargetAmount: 8,
+      ),
+    );
+
+    Future<void> tapKey(WidgetTester tester, String key) async {
+      await tester.tap(find.byKey(Key(key)));
+      await _settle(tester);
+    }
+
+    String sheetTotal(WidgetTester tester) =>
+        tester.widget<Text>(find.byKey(const Key('habit_sheet_total'))).data!;
+
+    testWidgets('entries add up to the target and past it', (tester) async {
+      final id = await seedWater();
+      await openApp(tester);
+      try {
+        expect(inRow(id, '0 of 8 glasses'), findsOneWidget);
+        await tapMark(tester, id);
+        expect(find.text('HABIT · CHECK-IN'), findsOneWidget);
+        expect(find.text('Today · Wed 18 Nov · each entry adds to the day'),
+            findsOneWidget);
+
+        await tester.tap(find.byTooltip('More'));
+        await tester.tap(find.byTooltip('More'));
+        await tester.pump();
+        expect(find.byKey(const Key('habit_sheet_stepper')), findsOneWidget);
+        await tapKey(tester, 'habit_sheet_add');
+        expect(sheetTotal(tester), '3');
+        expect(find.text('5 to go'), findsOneWidget);
+        expect(inRow(id, '3 of 8 glasses'), findsOneWidget);
+
+        await tapKey(tester, 'habit_sheet_chip_4');
+        expect(sheetTotal(tester), '7');
+        await tapKey(tester, 'habit_sheet_add');
+        expect(sheetTotal(tester), '8');
+        expect(find.text('Target reached'), findsOneWidget);
+        expect(inRow(id, '8 of 8 glasses'), findsOneWidget);
+
+        await tapKey(tester, 'habit_sheet_chip_2');
+        expect(find.text('2 over. It all counts.'), findsOneWidget);
+        expect(find.text('+2'), findsWidgets);
+        await tapKey(tester, 'habit_sheet_done');
+        expect(find.byKey(const Key('habit_entry_sheet')), findsNothing);
+        expect(inRow(id, '10 of 8 glasses'), findsOneWidget);
+      } finally {
+        await closeApp(tester);
+      }
+    });
+
+    testWidgets('removing and changing an entry lower the total', (
+      tester,
+    ) async {
+      final id = await seedWater();
+      await openApp(tester);
+      try {
+        // Inserted out of order: the sheet lists them oldest first.
+        for (final (time, amount) in [('08:20', 2.0), ('08:10', 4.0)]) {
+          await tester.runAsync(
+            () => db.habitDao.addCheckIn(
+              habitId: id,
+              userId: _userId,
+              countsForDay: wed,
+              now: DateTime.parse('${wed}T$time:00'),
+              measuredAmount: amount,
+            ),
+          );
+        }
+        await tapMark(tester, id);
+        expect(sheetTotal(tester), '6');
+        expect(
+          tester.getTopLeft(find.text('4 glasses')).dy,
+          lessThan(tester.getTopLeft(find.text('2 glasses')).dy),
+        );
+
+        await tester.tap(find.byTooltip('Remove this Check-in').first);
+        await _settle(tester);
+        expect(sheetTotal(tester), '2');
+
+        await tester.tap(find.byTooltip('Change this value'));
+        await _settle(tester);
+        await tester.tap(find.byTooltip('Less').last);
+        await _settle(tester);
+        expect(sheetTotal(tester), '1');
+        expect(inRow(id, '1 of 8 glasses'), findsOneWidget);
+      } finally {
+        await closeApp(tester);
+      }
+    });
+
+    testWidgets('Less is disabled at 1 and pips are absent for a target of 20', (
+      tester,
+    ) async {
+      final id = await seed(
+        'Read',
+        commitment: const HabitCommitmentDraft(
+          repeatKind: HabitRepeatKind.everyDay,
+          unitLabel: 'pages',
+          dailyTargetAmount: 20,
+        ),
+      );
+      await openApp(tester);
+      try {
+        await tapMark(tester, id);
+        final less = tester.widget<IconButton>(
+          find.widgetWithIcon(IconButton, Icons.remove),
+        );
+        expect(less.onPressed, isNull);
+        expect(find.byKey(const Key('habit_sheet_pips')), findsNothing);
+      } finally {
+        await closeApp(tester);
+      }
+    });
+  });
 }

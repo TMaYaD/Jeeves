@@ -192,3 +192,41 @@ String habitTodayCardState({
   }
   return habitNotYetLine;
 }
+
+// ---- The measurable entry sheet ---------------------------------------------
+
+const habitSheetOverline = 'HABIT · CHECK-IN';
+const habitSheetDoneLabel = 'Done';
+const habitSheetAddLabel = 'Add';
+const habitSheetLessLabel = 'Less';
+const habitSheetMoreLabel = 'More';
+const habitSheetChangeLabel = 'Change this value';
+const habitSheetRemoveLabel = 'Remove this Check-in';
+const habitSheetTargetReachedLine = 'Target reached';
+const habitSheetQuickAmounts = [2, 4];
+
+/// "Today · Wed 18 Nov · each entry adds to the day".
+String habitSheetDayLine(DateTime day) =>
+    'Today · ${habitTodayDateText(day)} · each entry adds to the day';
+
+/// "of 8 glasses".
+String habitSheetOfTargetLine(HabitProgress progress) =>
+    'of ${habitAmountText(progress.targetAmount ?? 0)} '
+            '${progress.unitLabel ?? ''}'
+        .trimRight();
+
+/// "3 to go" below the target, "2 over. It all counts." above it, and null at
+/// it (the sheet shows [habitSheetTargetReachedLine] there).
+String? habitSheetStatusLine(HabitProgress progress) {
+  final total = progress.todayTotalAmount ?? 0;
+  final target = progress.targetAmount ?? 0;
+  if (total < target) return '${habitAmountText(target - total)} to go';
+  if (total > target) {
+    return '${habitAmountText(total - target)} over. It all counts.';
+  }
+  return null;
+}
+
+/// "3 glasses": the unit exactly as stored.
+String habitEntryAmountText(double amount, String? unitLabel) =>
+    '${habitAmountText(amount)} ${unitLabel ?? ''}'.trimRight();
