@@ -5,6 +5,8 @@
 /// title; then it is written once, in one transaction.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -13,9 +15,8 @@ import 'package:go_router/go_router.dart';
 import '../../database/daos/habit_dao.dart';
 import '../../database/gtd_database.dart' show Habit, Tag;
 import '../../models/habit_commitment.dart';
-import '../../providers/auth_provider.dart';
 import '../../providers/clock_provider.dart';
-import '../../providers/database_provider.dart';
+import '../../providers/habit_actions_provider.dart';
 import '../../providers/habit_progress_provider.dart';
 import '../../providers/habits_provider.dart';
 import '../../widgets/outcome_attribute_editors.dart';
@@ -85,17 +86,17 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
   HabitFlash? _flash;
   String _flashFacts = '';
   bool _titleSeeded = false;
-  bool _saving = false;
+  bool _draftWritten = false;
+  List<Tag> _draftLabels = const [];
+  late final HabitActions _habitActions;
 
   bool get _isDraft => widget.habitId == null;
-  String get _userId => ref.read(currentUserIdProvider);
-  DateTime get _now => ref.read(clockProvider)();
-  String get _today => habitDayKey(_now);
-  HabitDao get _dao => ref.read(databaseProvider).habitDao;
+  String get _today => habitDayKey(ref.read(clockProvider)());
 
   @override
   void initState() {
     super.initState();
+    _habitActions = ref.read(habitActionsProvider);
     if (!_isDraft) {
       _titleFocus.addListener(() {
         if (!_titleFocus.hasFocus) _commitTitle();
@@ -111,6 +112,15 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
 
   @override
   void dispose() {
+    // A focused field is not committed by its focus listener on teardown, and
+    // a titled draft left in the wide pane has no Back to save it: write both.
+    if (_isDraft) {
+      unawaited(_writeDraft());
+    } else if (_titleSeeded) {
+      final id = widget.habitId!;
+      unawaited(_habitActions.setTitle(id, _titleController.text));
+      unawaited(_habitActions.setNotes(id, _notesController.text));
+    }
     _titleController.dispose();
     _notesController.dispose();
     _titleFocus.dispose();
@@ -120,121 +130,55 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
 
   // --- writes ---------------------------------------------------------------
 
-  Future<void> _updateDetails(
-    Habit habit, {
-    String? title,
-    Object? notes = _keep,
-    Object? energy = _keep,
-    Object? estimate = _keep,
-  }) {
-    return _dao.updateHabitDetails(
-      habitId: habit.id,
-      userId: _userId,
-      title: title ?? habit.title,
-      notes: identical(notes, _keep) ? habit.notes : notes as String?,
-      energyLevel: identical(energy, _keep)
-          ? habit.energyLevel
-          : energy as String?,
-      timeEstimateMinutes: identical(estimate, _keep)
-          ? habit.timeEstimateMinutes
-          : estimate as int?,
-      now: _now,
-    );
-  }
-
   Future<void> _commitTitle() async {
+    final accepted = await _habitActions.setTitle(
+      widget.habitId!,
+      _titleController.text,
+    );
+    if (accepted) return;
     final habit = ref.read(habitByIdProvider(widget.habitId!)).value;
-    if (habit == null) return;
-    final text = _titleController.text.trim();
-    if (text == habit.title) return;
-    if (text.isEmpty) {
-      _titleController.text = habit.title;
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text(habitTitleEmptyMessage)));
-      }
-      return;
+    if (habit != null) _titleController.text = habit.title;
+    if (mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text(habitTitleEmptyMessage)));
     }
-    await _updateDetails(habit, title: text);
   }
 
-  Future<void> _commitNotes() async {
-    final habit = ref.read(habitByIdProvider(widget.habitId!)).value;
-    if (habit == null) return;
-    final text = _notesController.text.trim();
-    final notes = text.isEmpty ? null : text;
-    if (notes == habit.notes) return;
-    await _updateDetails(habit, notes: notes);
-  }
+  Future<void> _commitNotes() =>
+      _habitActions.setNotes(widget.habitId!, _notesController.text);
 
-  /// Writes the draft in one transaction. Returns the new Habit's id, or null
-  /// when the title is still empty.
-  Future<String?> _saveDraft() async {
+  /// Writes the draft once, in one transaction. Returns the new Habit's id,
+  /// or null when the title is empty or the draft was already written.
+  Future<String?> _writeDraft() async {
     final title = _titleController.text.trim();
-    if (title.isEmpty || _saving) return null;
-    _saving = true;
-    final db = ref.read(databaseProvider);
-    final labels = ref.read(draftHabitLabelsProvider);
-    final userId = _userId;
-    final now = _now;
-    final today = habitDayKey(now);
-    final notes = _notesController.text.trim();
+    if (title.isEmpty || _draftWritten) return null;
+    _draftWritten = true;
+    final anchor = _draft.anchor;
     try {
-      return await db.capturing(() async {
-        final dao = db.habitDao;
-        final id = await dao.createHabit(
-          userId: userId,
+      return await _habitActions.createFromDraft(
+        HabitDraftValues(
           title: title,
-          today: today,
-          now: now,
-          firstCommitment: _draft.commitment,
-        );
-        if (notes.isNotEmpty ||
-            _draft.energyLevel != null ||
-            _draft.estimateMinutes != null) {
-          await dao.updateHabitDetails(
-            habitId: id,
-            userId: userId,
-            title: title,
-            notes: notes.isEmpty ? null : notes,
-            energyLevel: _draft.energyLevel,
-            timeEstimateMinutes: _draft.estimateMinutes,
-            now: now,
-          );
-        }
-        if (_draft.area != null) {
-          await dao.setArea(
-            habitId: id,
-            userId: userId,
-            areaTagId: _draft.area!.id,
-          );
-        }
-        for (final label in labels) {
-          await dao.assignLabel(habitId: id, userId: userId, tagId: label.id);
-        }
-        final anchor = _draft.anchor;
-        if (anchor.kind != HabitAnchorKind.none) {
-          await dao.setAnchor(
-            habitId: id,
-            userId: userId,
-            today: today,
-            now: now,
-            kind: anchor.kind,
-            partOfDay: anchor.partOfDay,
-            clockTime: anchor.clockTime,
-            anchorHabitId: anchor.anchorHabitId,
-          );
-        }
-        return id;
-      });
-    } finally {
-      _saving = false;
+          notes: _notesController.text,
+          energyLevel: _draft.energyLevel,
+          estimateMinutes: _draft.estimateMinutes,
+          commitment: _draft.commitment,
+          anchorKind: anchor.kind,
+          anchorPartOfDay: anchor.partOfDay,
+          anchorClockTime: anchor.clockTime,
+          anchorHabitId: anchor.anchorHabitId,
+          areaTagId: _draft.area?.id,
+          labelTagIds: [for (final t in _draftLabels) t.id],
+        ),
+      );
+    } catch (_) {
+      _draftWritten = false;
+      rethrow;
     }
   }
 
   Future<void> _submitDraftTitle() async {
-    final id = await _saveDraft();
+    final id = await _writeDraft();
     if (id == null || !mounted) return;
     openHabitDetail(context, id, justCreated: true, replace: true);
   }
@@ -247,7 +191,7 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
     if (widget.embedded) return body;
     return PopScope(
       onPopInvokedWithResult: (didPop, _) {
-        if (didPop && _isDraft) _saveDraft();
+        if (didPop && _isDraft) unawaited(_writeDraft());
       },
       child: Scaffold(
         appBar: AppBar(
@@ -261,6 +205,10 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
 
   Widget _buildDraft(BuildContext context) {
     final labels = ref.watch(draftHabitLabelsProvider);
+    _draftLabels = labels;
+    // A new Habit has no anchors yet, so no loop is possible: every active
+    // Habit may be followed or preceded.
+    final rows = ref.watch(habitListProvider).value ?? const [];
     return _fields(
       context,
       title: _draft.title,
@@ -272,7 +220,10 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
       estimate: _draft.estimateMinutes,
       state: HabitState.active,
       anchorTarget: null,
-      candidates: const [],
+      candidates: [
+        for (final row in rows)
+          if (row.state == HabitState.active) row.habit,
+      ],
     );
   }
 
@@ -551,13 +502,7 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
       setState(() => _draft.commitment = next);
       return;
     }
-    await _dao.setCommitment(
-      habitId: habit.id,
-      userId: _userId,
-      today: _today,
-      now: _now,
-      commitment: next,
-    );
+    await _habitActions.setCommitment(habit.id, next);
   }
 
   Future<void> _editAnchor(
@@ -575,11 +520,8 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
       setState(() => _draft.anchor = next);
       return;
     }
-    await _dao.setAnchor(
-      habitId: habit.id,
-      userId: _userId,
-      today: _today,
-      now: _now,
+    await _habitActions.setAnchor(
+      habit.id,
       kind: next.kind,
       partOfDay: next.partOfDay,
       clockTime: next.clockTime,
@@ -589,10 +531,11 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
 
   Future<void> _setArea(Habit? habit, Tag? tag) async {
     if (habit == null) {
+      if (!mounted) return;
       setState(() => _draft.area = tag);
       return;
     }
-    await _dao.setArea(habitId: habit.id, userId: _userId, areaTagId: tag?.id);
+    await _habitActions.setArea(habit.id, tag?.id);
   }
 
   void _editLabels(Habit? habit) {
@@ -618,10 +561,8 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
             in ref.watch(habitTagsProvider(habit.id)).value ?? const <Tag>[])
           if (habitLabelTagTypes.contains(t.type)) t,
       ],
-      onAssign: (ref, tag) =>
-          _dao.assignLabel(habitId: habit.id, userId: _userId, tagId: tag.id),
-      onRemove: (ref, tag) =>
-          _dao.unassignLabel(habitId: habit.id, userId: _userId, tagId: tag.id),
+      onAssign: (ref, tag) => _habitActions.assignLabel(habit.id, tag.id),
+      onRemove: (ref, tag) => _habitActions.unassignLabel(habit.id, tag.id),
     );
   }
 
@@ -630,7 +571,7 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
       setState(() => _draft.energyLevel = level);
       return;
     }
-    await _updateDetails(habit, energy: level);
+    await _habitActions.setEnergy(habit.id, level);
   }
 
   Future<void> _setEstimate(Habit? habit, int? minutes) async {
@@ -638,7 +579,7 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
       setState(() => _draft.estimateMinutes = minutes);
       return;
     }
-    await _updateDetails(habit, estimate: minutes);
+    await _habitActions.setEstimate(habit.id, minutes);
   }
 
   // --- pause / archive --------------------------------------------------------
@@ -674,13 +615,7 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
                   );
                   if (choice == null) return;
                   await run(
-                    () => _dao.pause(
-                      habitId: habit.id,
-                      userId: _userId,
-                      today: _today,
-                      now: _now,
-                      resumesOn: choice.resumesOn,
-                    ),
+                    () => _habitActions.pause(habit.id, resumesOn: choice.resumesOn),
                     HabitFlash.paused,
                     choice.resumesOn == null
                         ? 'Until you resume it.'
@@ -693,12 +628,7 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
               OutlinedButton(
                 key: const Key('habit_resume'),
                 onPressed: () => run(
-                  () => _dao.resume(
-                    habitId: habit.id,
-                    userId: _userId,
-                    today: _today,
-                    now: _now,
-                  ),
+                  () => _habitActions.resume(habit.id),
                   null,
                   '',
                 ),
@@ -708,12 +638,7 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
               OutlinedButton(
                 key: const Key('habit_archive'),
                 onPressed: () => run(
-                  () => _dao.archive(
-                    habitId: habit.id,
-                    userId: _userId,
-                    today: _today,
-                    now: _now,
-                  ),
+                  () => _habitActions.archive(habit.id),
                   HabitFlash.archived,
                   'Its Check-ins are kept. Restore it any time.',
                 ),
@@ -723,12 +648,7 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
               OutlinedButton(
                 key: const Key('habit_restore'),
                 onPressed: () => run(
-                  () => _dao.restore(
-                    habitId: habit.id,
-                    userId: _userId,
-                    today: _today,
-                    now: _now,
-                  ),
+                  () => _habitActions.restore(habit.id),
                   null,
                   '',
                 ),
@@ -740,8 +660,6 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
     ];
   }
 }
-
-const Object _keep = Object();
 
 class _FieldRow extends StatelessWidget {
   const _FieldRow({

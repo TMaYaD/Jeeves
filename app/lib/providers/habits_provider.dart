@@ -17,16 +17,16 @@ final habitListProvider = StreamProvider<List<HabitWithState>>((ref) {
 });
 
 /// One Habit, or null when there is none.
-final habitByIdProvider = StreamProvider.family<Habit?, String>((ref, id) =>
+final habitByIdProvider = StreamProvider.autoDispose.family<Habit?, String>((ref, id) =>
     ref.watch(databaseProvider).habitDao.watchHabit(id));
 
 /// One Habit's commitments, oldest first.
 final habitCommitmentsProvider =
-    StreamProvider.family<List<HabitCommitment>, String>((ref, id) =>
+    StreamProvider.autoDispose.family<List<HabitCommitment>, String>((ref, id) =>
         ref.watch(databaseProvider).habitDao.watchCommitmentsFor(id));
 
 /// The Area and Labels of one Habit.
-final habitTagsProvider = StreamProvider.family<List<Tag>, String>((ref, id) =>
+final habitTagsProvider = StreamProvider.autoDispose.family<List<Tag>, String>((ref, id) =>
     ref.watch(databaseProvider).habitDao.watchTagsFor(id));
 
 /// The state of one Habit today, from the list stream.

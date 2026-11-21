@@ -890,4 +890,96 @@ void main() {
       await closeApp(tester);
     }
   });
+
+  testWidgets('a measured target of Infinity cannot press Done', (
+    tester,
+  ) async {
+    final id = await seed('Read');
+    await openApp(tester);
+    try {
+      await tester.tap(find.byKey(Key('habit_row_$id')));
+      await _settle(tester);
+      await tester.tap(find.byKey(const Key('habit_row_checkin')));
+      await _settle(tester);
+      await tester.tap(find.byKey(const Key('checkin_kind_measurable')));
+      await tester.pump();
+      await tester.enterText(find.byKey(const Key('checkin_unit')), 'pages');
+      await tester.enterText(
+        find.byKey(const Key('checkin_target')),
+        'Infinity',
+      );
+      await tester.pump();
+      final done = tester.widget<FilledButton>(
+        find.byKey(const Key('habit_sheet_done')),
+      );
+      expect(done.onPressed, isNull);
+    } finally {
+      await closeApp(tester);
+    }
+  });
+
+  testWidgets('notes typed in a focused field are saved when Back is pressed', (
+    tester,
+  ) async {
+    final id = await seed('Read');
+    await openApp(tester);
+    try {
+      await tester.tap(find.byKey(Key('habit_row_$id')));
+      await _settle(tester);
+      await tester.enterText(find.byKey(const Key('habit_notes')), 'Ten pages');
+      await tester.pump();
+      await tester.pageBack();
+      await _settle(tester, 10);
+      final habit = await tester.runAsync(() => db.habitDao.habitById(id));
+      expect(habit!.notes, 'Ten pages');
+    } finally {
+      await closeApp(tester);
+    }
+  });
+
+  testWidgets('a titled draft in the wide pane is kept when another Habit is '
+      'selected', (tester) async {
+    final a = await seed('Alpha');
+    await openApp(tester, size: const Size(1440, 900));
+    try {
+      await tester.tap(find.byKey(const Key('habits_add')));
+      await _settle(tester);
+      await tester.enterText(find.byKey(const Key('habit_title')), 'Stretch');
+      await tester.pump();
+      await tester.tap(find.byKey(Key('habit_row_$a')));
+      await _settle(tester, 10);
+      expect(await habitTitled(tester, 'Stretch'), isNotNull);
+      final rows = await tester.runAsync(() => db.select(db.habits).get());
+      expect(rows!.where((h) => h.title == 'Stretch'), hasLength(1));
+    } finally {
+      await closeApp(tester);
+    }
+  });
+
+  testWidgets('a new Habit can be anchored after an existing one', (
+    tester,
+  ) async {
+    final a = await seed('Alpha');
+    await openApp(tester);
+    try {
+      await tester.tap(find.byKey(const Key('habits_add')));
+      await _settle(tester);
+      await tester.tap(find.byKey(const Key('habit_row_anchor')));
+      await _settle(tester);
+      await tester.tap(find.byKey(const Key('anchor_after_habit')));
+      await _settle(tester);
+      await tester.tap(find.byKey(Key('anchor_candidate_$a')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('habit_sheet_done')));
+      await _settle(tester);
+      await tester.enterText(find.byKey(const Key('habit_title')), 'Floss');
+      await tester.testTextInput.receiveAction(TextInputAction.done);
+      await _settle(tester, 10);
+      final habit = await habitTitled(tester, 'Floss');
+      expect(habit!.anchorKind, 'after_habit');
+      expect(habit.anchorHabitId, a);
+    } finally {
+      await closeApp(tester);
+    }
+  });
 }

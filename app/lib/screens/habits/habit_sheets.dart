@@ -139,7 +139,10 @@ class _CheckInKindSheetState extends State<_CheckInKindSheet> {
   double? get _targetValue => double.tryParse(_target.text.trim());
 
   bool get _valid =>
-      !_measurable || (_unit.text.trim().isNotEmpty && (_targetValue ?? 0) > 0);
+      !_measurable || (_unit.text.trim().isNotEmpty &&
+          _targetValue != null &&
+          _targetValue!.isFinite &&
+          _targetValue! > 0);
 
   void _done() {
     final c = widget.current;
