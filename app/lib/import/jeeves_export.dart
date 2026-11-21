@@ -55,7 +55,6 @@ import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:drift/drift.dart';
 
 import '../database/gtd_database.dart';
-import '../database/tables.dart' show labelTagType, retiredLabelTagType;
 import '../sync/collection_codecs.dart';
 import 'import_progress.dart';
 import 'nirvana_local_import.dart' show ImportFailure, ImportResult;
