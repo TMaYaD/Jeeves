@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/daos/habit_dao.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/habit_commitment.dart';
+import 'package:jeeves/models/habit_progress.dart' show HabitHistory;
 import 'package:jeeves/sync/collection_codecs.dart' show encodeInstant;
 import 'package:jeeves/sync/domain_op_capture.dart';
 import '../test_helpers.dart';
@@ -52,6 +53,87 @@ void main() {
           now: now ?? _now,
           firstCommitment: commitment,
         );
+
+    group('history reads', () {
+      test('habitHistory gathers commitments, periods and Check-ins', () async {
+        final habitId = await createHabit();
+        await db.habitDao.addCheckIn(
+            habitId: habitId,
+            userId: _userId,
+            countsForDay: '2026-11-18',
+            now: _now);
+        await db.habitDao.pause(
+            habitId: habitId, userId: _userId, today: '2026-11-19', now: _later);
+
+        final history = await db.habitDao.habitHistory(habitId);
+
+        expect(history!.habit.id, habitId);
+        expect(history.commitments, hasLength(1));
+        expect(history.checkIns, hasLength(1));
+        expect(history.inactivePeriods, hasLength(1));
+        expect(await db.habitDao.inactivePeriodsFor(habitId), hasLength(1));
+        expect(await db.habitDao.habitHistory('nope'), isNull);
+      });
+
+      test('watchHabitHistories emits again after a write to each table',
+          () async {
+        final habitId = await createHabit();
+        final emissions = <List<HabitHistory>>[];
+        final sub = db.habitDao.watchHabitHistories().listen(emissions.add);
+        addTearDown(sub.cancel);
+
+        Future<void> expectEmissionAfter(Future<void> Function() write) async {
+          final before = emissions.length;
+          await write();
+          for (var i = 0; i < 100 && emissions.length == before; i++) {
+            await Future<void>.delayed(const Duration(milliseconds: 10));
+          }
+          expect(emissions.length, greaterThan(before));
+        }
+
+        await expectEmissionAfter(() async {});
+        expect(emissions.last.single.checkIns, isEmpty);
+
+        await expectEmissionAfter(() => db.habitDao.updateHabitDetails(
+            habitId: habitId,
+            userId: _userId,
+            title: 'Read more',
+            notes: null,
+            energyLevel: null,
+            timeEstimateMinutes: null,
+            now: _later));
+        expect(emissions.last.single.habit.title, 'Read more');
+
+        // Inserted directly: setCommitment also stamps the habits row, which
+        // would re-emit even without the commitments table being watched.
+        await expectEmissionAfter(() => db.into(db.habitCommitments).insert(
+            HabitCommitmentsCompanion.insert(
+                userId: _userId,
+                habitId: habitId,
+                chosenOn: '2026-11-19',
+                createdAt: encodeInstant(_later)!,
+                repeatKind: 'every_day',
+                unitLabel: const Value('glasses'),
+                dailyTargetAmount: const Value(8))));
+        expect(emissions.last.single.commitments, hasLength(2));
+
+        await expectEmissionAfter(() => db.habitDao.addCheckIn(
+            habitId: habitId,
+            userId: _userId,
+            countsForDay: '2026-11-19',
+            now: _later,
+            measuredAmount: 5));
+        expect(emissions.last.single.checkIns, hasLength(1));
+
+        await expectEmissionAfter(() => db.into(db.habitInactivePeriods).insert(
+            HabitInactivePeriodsCompanion.insert(
+                userId: _userId,
+                habitId: habitId,
+                kind: 'paused',
+                startsOn: '2026-11-19')));
+        expect(emissions.last.single.inactivePeriods, hasLength(1));
+      });
+    });
 
     group('create', () {
       test('creates a Habit with its first commitment and reads them back',
