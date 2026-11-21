@@ -565,12 +565,18 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   /// the peer's duplicate. References on the losers are repointed by
   /// [repointTagReferences]; the loser itself is tombstoned, never merely deleted.
   ///
+  /// With [userId] set, only that account's rows are grouped, so a same-name
+  /// row left on the device by another account is never folded into it. The
+  /// reconciler and the startup fold pass none: they fold the whole store.
+  ///
   /// Idempotent: with no duplicate group it authors nothing and writes nothing.
-  Future<void> foldDuplicateTags() {
+  Future<void> foldDuplicateTags({String? userId}) {
     return attachedDatabase.capturing(() async {
       final groups = await customSelect(
         'SELECT name, type, MIN(id) AS keep_id FROM tags '
+        '${userId == null ? '' : 'WHERE user_id = ? '}'
         'GROUP BY name, type HAVING COUNT(*) > 1',
+        variables: [if (userId != null) Variable<String>(userId)],
         readsFrom: {tags},
       ).get();
       if (groups.isEmpty) return;
@@ -581,6 +587,7 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
               ..where((t) =>
                   t.name.equals(group.read<String>('name')) &
                   t.type.equals(group.read<String>('type')) &
+                  (userId == null ? const Constant(true) : t.userId.equals(userId)) &
                   t.id.equals(keepId).not()))
             .get();
 

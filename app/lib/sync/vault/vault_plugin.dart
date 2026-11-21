@@ -517,8 +517,10 @@ class VaultPlugin implements SyncPlugin {
         block: block,
         mintClock: _host.mintClock,
         baseLabelNames: {
-          for (final name in (base?.frontmatter['labels'] as List?) ?? const [])
-            if (name is String) name,
+          // A hand-written `labels: Home` parses as a scalar, not a list.
+          if (base?.frontmatter['labels'] case final List<dynamic> names)
+            for (final name in names)
+              if (name is String) name,
         },
       )) {
         for (final entry in change.fields.entries) {

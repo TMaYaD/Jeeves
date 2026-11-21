@@ -392,13 +392,13 @@ Future<ImportResult> importJeevesExport({
   }
 
   // Imported Labels are written under the stored Label value, so the fold
-  // merges them into any same-name Label. It runs whether or not anything was
+  // merges them into any same-name Label of the importing account. It runs whether or not anything was
   // retyped: a pull between two batches may have folded a Tag a later batch
   // links to. The rows are committed by now, so a failure here is not the
   // import's: the startup fold and the next pull's reconcile repeat it.
   try {
     await db.tagDao.retypeRetiredLabelTags();
-    await db.tagDao.foldDuplicateTags();
+    await db.tagDao.foldDuplicateTags(userId: userId);
   } catch (error, stackTrace) {
     debugPrint('Import label fold failed: $error\n$stackTrace');
   }
