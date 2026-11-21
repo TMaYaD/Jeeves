@@ -8,18 +8,28 @@
 /// ops, which means they cannot run inside the projector's un-captured
 /// transaction. They run after it.
 ///
-/// **Three passes, three independent detection queries** (ADR-0043):
+/// **Four passes, four independent detection queries** (ADR-0043):
 ///
-/// 1. **Fold** — collapse each duplicate `(name, type)` group onto `MIN(id)`
+/// 1. **Retype** — give the retired `'label'` Tag type the one value Labels
+///    have now ([TagDao.retypeRetiredLabelTags]).
+/// 2. **Fold** — collapse each duplicate `(name, type)` group onto `MIN(id)`
 ///    ([TagDao.foldDuplicateTags]).
-/// 2. **Rehome** — repoint junction rows whose `tag_id` has no row in `tags` at
+/// 3. **Rehome** — repoint junction rows whose `tag_id` has no row in `tags` at
 ///    all.
-/// 3. **One Project** — when an Outcome holds links to more than one Project
+/// 4. **One Project** — when an Outcome holds links to more than one Project
 ///    ([resolveMultipleProjects]), keep the most recently asserted and unassign
 ///    the rest.
 ///
-/// The second is not a tidy-up of the first; it recovers a state the first cannot
-/// see. With `X < Y < Z`: device A folds `Z→Y` and asserts its junction on Y, then
+/// **The retype runs before the fold, and the order is load-bearing.** A Tag
+/// the sync cutover minted as `'label'` and a Label the user made as
+/// `'context'` are two different `(name, type)` pairs, so the fold cannot see
+/// them as one group. The retype turns the first into the second, and only then
+/// has the fold a duplicate group to collapse — and the fold is what merges the
+/// two Labels onto one row without losing a link. The other order would leave
+/// the pair standing until a later reconcile.
+///
+/// The rehome pass is not a tidy-up of the fold; it recovers a state the fold
+/// cannot see. With `X < Y < Z`: device A folds `Z→Y` and asserts its junction on Y, then
 /// goes offline before pushing. B and C, never having seen that, fold `Y→X`. When
 /// A's ops finally arrive, the junction on Y is live under a *greater* HLC than the
 /// tombstone of Y — and the group is now `COUNT = 1`, so no duplicate-based
@@ -93,6 +103,7 @@ class DomainReconciler {
         !collections.contains(captureTagsCollection)) {
       return;
     }
+    await domain.tagDao.retypeRetiredLabelTags();
     await domain.tagDao.foldDuplicateTags();
     await rehomeDanglingTagLinks();
     await resolveMultipleProjects();
@@ -187,10 +198,13 @@ class DomainReconciler {
       // Unrecoverable: nothing on record carries the pair, which is the state a
       // rebuild from a pruned log leaves. Left as the dangling reference it is.
       if (name is! String || type is! String) continue;
+      // A folded duplicate keeps the type it had when it was tombstoned, which
+      // may be the retired one; its live survivor holds the Label value.
+      final survivorType = type == retiredLabelTagType ? labelTagType : type;
 
       final live = await domain.customSelect(
         'SELECT id FROM tags WHERE name = ? AND type = ? ORDER BY id LIMIT 1',
-        variables: [Variable<String>(name), Variable<String>(type)],
+        variables: [Variable<String>(name), Variable<String>(survivorType)],
         readsFrom: {domain.tags},
       ).getSingleOrNull();
       // No live tag holds the pair — the user deleted it outright, or it has not

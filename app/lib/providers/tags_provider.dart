@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/daos/tag_dao.dart' show TagWithCount;
@@ -136,3 +137,31 @@ class TagNotifier {
     }
   }
 }
+
+/// Folds the retired `'label'` Tag type into the one value Labels have, once per
+/// launch. Eagerly watched from `main.dart`.
+///
+/// Reconciliation retypes the rows a peer sends, but a row this device holds
+/// from an earlier sync cutover or an import never passes through a reconcile
+/// tail, so it is retyped here and then folded into any same-name Label. Both
+/// steps are idempotent and cheap — with nothing retired they write nothing and
+/// author no op — so no completion marker is kept. Ordered after
+/// [domainStoreRebuildProvider] so the post-upgrade re-projection cannot bring a
+/// retired row back. A failure rethrows into the provider's error state.
+final FutureProvider<int> labelTagTypeFoldProvider =
+    FutureProvider<int>((ref) async {
+  ref.keepAlive();
+  await ref.read(domainStoreRebuildProvider.future);
+  final db = ref.read(databaseProvider);
+  try {
+    final retyped = await db.tagDao.retypeRetiredLabelTags();
+    // Always fold, not only after a retype: the retype commits first, so a fold
+    // that threw would otherwise never be retried (the next launch sees no
+    // retired row). It writes nothing when no duplicate group exists.
+    await db.tagDao.foldDuplicateTags();
+    return retyped;
+  } on Object catch (error) {
+    debugPrint('label tag type fold: failed — $error');
+    rethrow;
+  }
+});
