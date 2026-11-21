@@ -72,18 +72,18 @@ class HabitOfferButtons extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
+    final keySuffix = inSheet ? '_sheet' : '';
+    return Wrap(
+      spacing: 8,
       children: [
         FilledButton(
-          key: Key('habit_offer_accept_${offered.id}'),
+          key: Key('habit_offer_accept_${offered.id}$keySuffix'),
           onPressed: () =>
               acceptHabitOffer(context, ref, offered, closeSheet: inSheet),
           child: const Text(habitOfferAcceptLabel),
         ),
-        const SizedBox(width: 8),
         TextButton(
-          key: Key('habit_offer_dismiss_${offered.id}'),
+          key: Key('habit_offer_dismiss_${offered.id}$keySuffix'),
           onPressed: () => ref.read(habitStackOfferProvider.notifier).dismiss(),
           child: const Text(habitOfferDismissLabel),
         ),

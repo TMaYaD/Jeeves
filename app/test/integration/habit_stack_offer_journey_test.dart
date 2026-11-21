@@ -272,7 +272,7 @@ void main() {
       expect(find.text('Next in this stack \u00b7 not yet today'),
           findsOneWidget);
 
-      await tapKey(tester, 'habit_offer_accept_${ids.journal}');
+      await tapKey(tester, 'habit_offer_accept_${ids.journal}_sheet');
       expect(inRow(ids.journal, 'Done 09:30'), findsOneWidget);
     } finally {
       await closeApp(tester);
