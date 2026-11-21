@@ -63,6 +63,8 @@ import 'project_picker.dart';
 ///
 /// Has no Capture counterpart: a Capture's text is never written, so on that
 /// shape there is no such failure to report (ADR-0023).
+const _kMakeHabitFailedMessage =
+    "Couldn't make it a Habit. It's still in your Inbox.";
 const _kTextSaveFailedMessage =
     'Routed, but your latest edit to the text was not saved.';
 
@@ -98,6 +100,7 @@ class ClarifyCard extends ConsumerStatefulWidget {
     this.footer,
     this.missingCta,
     this.onProcessingChanged,
+    this.onMakeHabit,
   }) : todoId = null;
 
   /// Re-clarify an Outcome that has already been through the flow once.
@@ -119,7 +122,8 @@ class ClarifyCard extends ConsumerStatefulWidget {
         // The one host is [ReclarifyRoute], which owns its own chrome.
         footer = null,
         missingCta = null,
-        onProcessingChanged = null;
+        onProcessingChanged = null,
+        onMakeHabit = null;
 
   /// The Capture being clarified, or null when re-clarifying an Outcome.
   final String? captureId;
@@ -183,11 +187,27 @@ class ClarifyCard extends ConsumerStatefulWidget {
   /// the host has unmounted — hosts must guard their own `setState`.
   final ValueChanged<bool>? onProcessingChanged;
 
+  /// Offers **Make it a Habit** when set: the host turns the Capture into a
+  /// Habit with the given title and notes and then navigates. In 1-1 these are
+  /// the card's live title and notes; in n-m, the Capture's own.
+  ///
+  /// The card shows the button and reports busy; it never learns what a Habit
+  /// is or where to go next. Null (every host but the standalone Inbox
+  /// clarify screen) offers no button. A throw is reported in a SnackBar and
+  /// the Capture stays in the Inbox.
+  final Future<void> Function({required String title, String? notes})?
+      onMakeHabit;
+
   @override
   ConsumerState<ClarifyCard> createState() => _ClarifyCardState();
 }
 
 class _ClarifyCardState extends ConsumerState<ClarifyCard> {
+  /// True while [ClarifyCard.onMakeHabit] runs, so the routing bar and the
+  /// button shut and the host's escapes shut with them (via
+  /// [ClarifyCard.onProcessingChanged]).
+  bool _makingHabit = false;
+
   /// The Outcome write seam, captured while the element is still mounted so
   /// [dispose] can issue the Outcome shape's pending-edit flush. Null on a
   /// Capture, which flushes nothing.
@@ -799,14 +819,16 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     // Title is required to route to anything except Trash. Disable the
     // committed routes; Trash stays enabled so the user can throw away an
     // unnamed item.
-    final disabled = _titleIsBlank
-        ? <ProcessAction>{
-            ProcessAction.next,
-            ProcessAction.waitingFor,
-            ProcessAction.someday,
-            if (!_isCapture) ProcessAction.done,
-          }
-        : const <ProcessAction>{};
+    final disabled = _makingHabit
+        ? {...ProcessAction.values}
+        : _titleIsBlank
+            ? <ProcessAction>{
+                ProcessAction.next,
+                ProcessAction.waitingFor,
+                ProcessAction.someday,
+                if (!_isCapture) ProcessAction.done,
+              }
+            : const <ProcessAction>{};
 
     return ListView(
       physics: const ClampingScrollPhysics(),
@@ -1008,6 +1030,13 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
           // agrees with it.
           liveTitle: () async => _titleCtrl?.text.trim(),
         ),
+        if (widget.onMakeHabit != null) ...[
+          const SizedBox(height: 12),
+          _makeHabitButton(
+            title: _titleCtrl?.text ?? '',
+            notes: _notesCtrl?.text,
+          ),
+        ],
         if (widget.footer != null) ...[
           const SizedBox(height: 20),
           widget.footer!,
@@ -1033,6 +1062,10 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
           personTagHintIds: draft.personTagHintIds,
           onCompleted: _onCaptureCompleted,
         ),
+        if (widget.onMakeHabit != null) ...[
+          const SizedBox(height: 12),
+          _makeHabitButton(title: capture.title, notes: capture.notes),
+        ],
         // The footer survives into n-m unchanged: leaving mid-split is exactly
         // what that mode is for — the Capture keeps whatever Outcomes it has
         // carved so far and stays in the Inbox.
@@ -1042,6 +1075,31 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
         ],
       ],
     );
+  }
+
+  Widget _makeHabitButton({required String title, required String? notes}) {
+    return ClarifyDestinationButton(
+      label: 'Make it a Habit',
+      icon: Icons.repeat,
+      color: const Color(0xFF0D9488),
+      enabled: !_makingHabit && title.trim().isNotEmpty,
+      onTap: () => unawaited(_makeHabit(title: title, notes: notes)),
+    );
+  }
+
+  Future<void> _makeHabit({required String title, required String? notes}) async {
+    final makeHabit = widget.onMakeHabit;
+    if (makeHabit == null || _makingHabit) return;
+    setState(() => _makingHabit = true);
+    widget.onProcessingChanged?.call(true);
+    try {
+      await makeHabit(title: title, notes: notes);
+    } catch (_) {
+      _report(_kMakeHabitFailedMessage);
+    } finally {
+      if (mounted) setState(() => _makingHabit = false);
+      widget.onProcessingChanged?.call(false);
+    }
   }
 
   /// Post-routing bookkeeping.

@@ -3,7 +3,8 @@
 /// Three surfaces render [ClarifyCard]: the ceremony Clarify Inbox step, the
 /// standalone `/inbox/:id/clarify` screen and the Re-clarify route. What they
 /// legitimately differ in is expressed as one option ([ClarifyTagSection]) and
-/// three composition slots (`footer`, `missingCta`, `onProcessingChanged`).
+/// four composition slots (`footer`, `missingCta`, `onProcessingChanged`,
+/// `onMakeHabit`).
 /// Everything else is shared, and the tests here are what stops a future
 /// change quietly forking it again.
 ///
@@ -173,6 +174,7 @@ Widget _card(
   Widget? footer,
   Widget? missingCta,
   ValueChanged<bool>? onProcessingChanged,
+  Future<void> Function({required String title, String? notes})? onMakeHabit,
   Future<void> Function(ProcessAction)? onAfterRoute,
   List<Tag> contextTags = const <Tag>[],
   Stream<Capture?>? captureStream,
@@ -208,6 +210,7 @@ Widget _card(
           footer: footer,
           missingCta: missingCta,
           onProcessingChanged: onProcessingChanged,
+          onMakeHabit: onMakeHabit,
           onAfterRoute: onAfterRoute,
         ),
       ),
@@ -364,6 +367,69 @@ void main() {
         tester.getTopLeft(find.text('Skip')).dy,
         greaterThan(tester.getTopLeft(find.text('Discard Capture')).dy),
       );
+    });
+
+    testWidgets('no onMakeHabit means no Make it a Habit button',
+        (tester) async {
+      final capture = await _insertCapture(db, id: 'x');
+
+      await tester.pumpWidget(
+        _card(db, capture, tagSection: ClarifyTagSection.draftInputOnly),
+      );
+      await _pumpFrames(tester, frames: 5);
+
+      expect(find.text('Make it a Habit', skipOffstage: false), findsNothing);
+    });
+
+    testWidgets('onMakeHabit offers the button; a tap passes the live title '
+        'and notes and reports busy', (tester) async {
+      final capture = await _insertCapture(db, id: 'x');
+      final calls = <(String, String?)>[];
+      final busy = <bool>[];
+
+      await tester.pumpWidget(_card(
+        db,
+        capture,
+        tagSection: ClarifyTagSection.draftInputOnly,
+        onProcessingChanged: busy.add,
+        onMakeHabit: ({required title, notes}) async =>
+            calls.add((title, notes)),
+      ));
+      await _pumpFrames(tester, frames: 5);
+
+      final button = find.text('Make it a Habit');
+      await tester.scrollUntilVisible(button, 200,
+          scrollable: find.byType(Scrollable).first);
+      await tester.tap(button);
+      await _pumpFrames(tester, frames: 5);
+
+      expect(calls, hasLength(1));
+      expect(calls.single.$1, capture.title);
+      expect(busy, [true, false]);
+    });
+
+    testWidgets('Make it a Habit is disabled while the title is blank',
+        (tester) async {
+      final capture = await _insertCapture(db, id: 'x');
+      var calls = 0;
+
+      await tester.pumpWidget(_card(
+        db,
+        capture,
+        tagSection: ClarifyTagSection.draftInputOnly,
+        onMakeHabit: ({required title, notes}) async => calls++,
+      ));
+      await _pumpFrames(tester, frames: 5);
+
+      await tester.enterText(find.byType(TextField).first, '   ');
+      await _pumpFrames(tester, frames: 3);
+      final button = find.text('Make it a Habit');
+      await tester.scrollUntilVisible(button, 200,
+          scrollable: find.byType(Scrollable).first);
+      await tester.tap(button, warnIfMissed: false);
+      await _pumpFrames(tester, frames: 3);
+
+      expect(calls, 0);
     });
 
     testWidgets('no footer means no extra child', (tester) async {

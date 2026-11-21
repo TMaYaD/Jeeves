@@ -22,7 +22,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../models/habit_commitment.dart' show habitDayKey;
+import '../../providers/auth_provider.dart';
+import '../../providers/clock_provider.dart';
+import '../../providers/database_provider.dart';
 import '../../providers/inbox_provider.dart';
+import '../../services/habit_from_capture.dart';
+import '../habits/habit_routes.dart';
 import '../../widgets/app_title_bar/app_title_bar.dart';
 import '../../widgets/capture/capture_action.dart';
 import '../../widgets/clarify_card.dart';
@@ -81,6 +87,22 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
     }
   }
 
+  /// Makes the Capture a Habit, then replaces this screen with the Habit's
+  /// detail, so one Back from the Habit lands on the Inbox. A Habit ends a
+  /// sequence: it is not a verdict that moves on to the next Capture.
+  Future<void> _makeHabit({required String title, String? notes}) async {
+    final habitId = await makeHabitFromCapture(
+      ref.read(databaseProvider),
+      captureId: widget.captureId,
+      title: title,
+      notes: notes,
+      userId: ref.read(currentUserIdProvider),
+      today: habitDayKey(ref.read(clockProvider)()),
+    );
+    if (!mounted) return;
+    openHabitDetail(context, habitId, justCreated: true, replace: true);
+  }
+
   @override
   Widget build(BuildContext context) {
     return PopScope(
@@ -125,6 +147,7 @@ class _InboxClarifyScreenState extends ConsumerState<InboxClarifyScreen> {
             onPressed: () => context.pop(),
             child: const Text('Back to Inbox'),
           ),
+          onMakeHabit: _makeHabit,
           onProcessingChanged: (busy) {
             if (mounted) setState(() => _routing = busy);
           },
