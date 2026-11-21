@@ -430,7 +430,7 @@ void main() {
         countsForDay: today,
         now: DateTime.now(),
       );
-      await openApp(tester);
+      await openApp(tester, size: const Size(420, 1500));
       try {
         await tester.tap(find.byKey(Key('habit_row_$id')));
         await _settle(tester);
@@ -577,7 +577,7 @@ void main() {
     (tester) async {
       var now = DateTime.now();
       final id = await seed('Read');
-      await openApp(tester, clock: () => now);
+      await openApp(tester, size: const Size(420, 1500), clock: () => now);
       try {
         await tester.tap(find.byKey(Key('habit_row_$id')));
         await _settle(tester);
