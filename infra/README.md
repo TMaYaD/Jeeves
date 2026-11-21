@@ -1,7 +1,8 @@
 # Jeeves — Infrastructure
 
-Local development stack using Docker Compose, and the server-version computation
-Backend CD runs (`ci/`).
+Local development stack using Docker Compose, the server-version computation
+Backend CD runs (`ci/`), and portable provisioning for an Android build
+machine ([`builder/`](builder/README.md)).
 
 ## Services
 

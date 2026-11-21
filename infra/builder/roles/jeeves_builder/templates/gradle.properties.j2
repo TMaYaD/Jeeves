@@ -1,0 +1,6 @@
+# Managed by infra/builder (Ansible). Daemon heaps sized for this machine
+# ({{ ansible_memtotal_mb }} MB RAM); the repo's own -Xmx8G stays in place for CI and
+# developers. Override builder_gradle_xmx_gb / builder_kotlin_xmx_gb in your
+# inventory if a build hits OutOfMemoryError while memory is free.
+org.gradle.jvmargs=-Xmx{{ builder_gradle_xmx_gb }}g -XX:MaxMetaspaceSize=4G -XX:ReservedCodeCacheSize=512m -XX:+HeapDumpOnOutOfMemoryError
+kotlin.daemon.jvmargs=-Xmx{{ builder_kotlin_xmx_gb }}g

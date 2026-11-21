@@ -1,0 +1,9 @@
+# Jeeves Android build toolchain. Managed by infra/builder (Ansible).
+# Sourced at the top of ~/.bashrc (above the non-interactive early-return) and
+# from ~/.profile.
+export JAVA_HOME="{{ builder_java_home }}"
+export ANDROID_HOME="{{ builder_android_sdk }}"
+export ANDROID_SDK_ROOT="$ANDROID_HOME"
+case ":$PATH:" in *":{{ builder_flutter_dir }}/bin:"*) ;; *)
+  export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/latest/bin:{{ builder_flutter_dir }}/bin:$PATH" ;;
+esac
