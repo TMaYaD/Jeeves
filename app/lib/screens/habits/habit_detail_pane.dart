@@ -6,6 +6,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -40,7 +41,10 @@ class _DraftLabels extends Notifier<List<Tag>> {
     if (state.every((t) => t.id != tag.id)) state = [...state, tag];
   }
 
-  void remove(Tag tag) => state = [for (final t in state) if (t.id != tag.id) t];
+  void remove(Tag tag) => state = [
+    for (final t in state)
+      if (t.id != tag.id) t,
+  ];
 }
 
 /// Everything a draft holds before it is written.
@@ -117,18 +121,21 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
 
   // --- writes ---------------------------------------------------------------
 
-  Future<void> _updateDetails(Habit habit,
-      {String? title,
-      Object? notes = _keep,
-      Object? energy = _keep,
-      Object? estimate = _keep}) {
+  Future<void> _updateDetails(
+    Habit habit, {
+    String? title,
+    Object? notes = _keep,
+    Object? energy = _keep,
+    Object? estimate = _keep,
+  }) {
     return _dao.updateHabitDetails(
       habitId: habit.id,
       userId: _userId,
       title: title ?? habit.title,
       notes: identical(notes, _keep) ? habit.notes : notes as String?,
-      energyLevel:
-          identical(energy, _keep) ? habit.energyLevel : energy as String?,
+      energyLevel: identical(energy, _keep)
+          ? habit.energyLevel
+          : energy as String?,
       timeEstimateMinutes: identical(estimate, _keep)
           ? habit.timeEstimateMinutes
           : estimate as int?,
@@ -144,8 +151,9 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
     if (text.isEmpty) {
       _titleController.text = habit.title;
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text(habitTitleEmptyMessage)));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text(habitTitleEmptyMessage)));
       }
       return;
     }
@@ -173,56 +181,62 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
     final now = _now;
     final today = habitDayKey(now);
     final notes = _notesController.text.trim();
-    final id = await db.capturing(() async {
-      final dao = db.habitDao;
-      final id = await dao.createHabit(
-        userId: userId,
-        title: title,
-        today: today,
-        now: now,
-        firstCommitment: _draft.commitment,
-      );
-      if (notes.isNotEmpty ||
-          _draft.energyLevel != null ||
-          _draft.estimateMinutes != null) {
-        await dao.updateHabitDetails(
-          habitId: id,
+    try {
+      return await db.capturing(() async {
+        final dao = db.habitDao;
+        final id = await dao.createHabit(
           userId: userId,
           title: title,
-          notes: notes.isEmpty ? null : notes,
-          energyLevel: _draft.energyLevel,
-          timeEstimateMinutes: _draft.estimateMinutes,
-          now: now,
-        );
-      }
-      if (_draft.area != null) {
-        await dao.setArea(habitId: id, userId: userId, areaTagId: _draft.area!.id);
-      }
-      for (final label in labels) {
-        await dao.assignLabel(habitId: id, userId: userId, tagId: label.id);
-      }
-      final anchor = _draft.anchor;
-      if (anchor.kind != HabitAnchorKind.none) {
-        await dao.setAnchor(
-          habitId: id,
-          userId: userId,
           today: today,
           now: now,
-          kind: anchor.kind,
-          partOfDay: anchor.partOfDay,
-          clockTime: anchor.clockTime,
-          anchorHabitId: anchor.anchorHabitId,
+          firstCommitment: _draft.commitment,
         );
-      }
-      return id;
-    });
-    return id;
+        if (notes.isNotEmpty ||
+            _draft.energyLevel != null ||
+            _draft.estimateMinutes != null) {
+          await dao.updateHabitDetails(
+            habitId: id,
+            userId: userId,
+            title: title,
+            notes: notes.isEmpty ? null : notes,
+            energyLevel: _draft.energyLevel,
+            timeEstimateMinutes: _draft.estimateMinutes,
+            now: now,
+          );
+        }
+        if (_draft.area != null) {
+          await dao.setArea(
+            habitId: id,
+            userId: userId,
+            areaTagId: _draft.area!.id,
+          );
+        }
+        for (final label in labels) {
+          await dao.assignLabel(habitId: id, userId: userId, tagId: label.id);
+        }
+        final anchor = _draft.anchor;
+        if (anchor.kind != HabitAnchorKind.none) {
+          await dao.setAnchor(
+            habitId: id,
+            userId: userId,
+            today: today,
+            now: now,
+            kind: anchor.kind,
+            partOfDay: anchor.partOfDay,
+            clockTime: anchor.clockTime,
+            anchorHabitId: anchor.anchorHabitId,
+          );
+        }
+        return id;
+      });
+    } finally {
+      _saving = false;
+    }
   }
 
   Future<void> _submitDraftTitle() async {
     final id = await _saveDraft();
     if (id == null || !mounted) return;
-    _seenFlashKeys.add('new:$id');
     openHabitDetail(context, id, justCreated: true, replace: true);
   }
 
@@ -278,14 +292,18 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
       _titleController.text = habit.title;
       _notesController.text = habit.notes ?? '';
     }
-    final inForce = commitmentInForceOn(commitments, _today) ??
+    final inForce =
+        commitmentInForceOn(commitments, _today) ??
         (commitments.isEmpty ? null : commitments.last);
     final activeHabits = [
       for (final row in rows)
         if (row.state == HabitState.active) row.habit,
     ];
     final candidates = anchorCandidates(
-        habit, [for (final r in rows) r.habit], {for (final h in activeHabits) h.id});
+      habit,
+      [for (final r in rows) r.habit],
+      {for (final h in activeHabits) h.id},
+    );
     Habit? anchorTarget;
     HabitState? anchorTargetState;
     for (final row in rows) {
@@ -301,7 +319,9 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
       context,
       habit: habit,
       title: habit.title,
-      commitment: inForce == null ? defaultNewHabitCommitment : habitDraftOf(inForce),
+      commitment: inForce == null
+          ? defaultNewHabitCommitment
+          : habitDraftOf(inForce),
       anchor: HabitAnchorChoice(
         HabitAnchorKind.tryParse(habit.anchorKind) ?? HabitAnchorKind.none,
         partOfDay: habit.anchorPartOfDay,
@@ -309,7 +329,10 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
         anchorHabitId: habit.anchorHabitId,
       ),
       area: tags.where((t) => t.type == habitAreaTagType).firstOrNull,
-      labels: [for (final t in tags) if (habitLabelTagTypes.contains(t.type)) t],
+      labels: [
+        for (final t in tags)
+          if (habitLabelTagTypes.contains(t.type)) t,
+      ],
       energy: habit.energyLevel,
       estimate: habit.timeEstimateMinutes,
       state: state,
@@ -322,11 +345,14 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
 
   /// The banner a condition calls for when the detail is first opened.
   HabitFlash? _derivedFlash(Habit habit, bool anchorStopped, Habit? target) {
-    if (anchorStopped && _seenFlashKeys.add('anchor:${habit.id}:${target!.id}')) {
+    if (anchorStopped &&
+        _seenFlashKeys.add('anchor:${habit.id}:${target!.id}')) {
       _flashFacts = '${target.title} is no longer active.';
       return _flash = HabitFlash.anchorStopped;
     }
-    final broken = ref.watch(habitProgressProvider(habit.id))?.brokenStreakLength;
+    final broken = ref
+        .watch(habitProgressProvider(habit.id))
+        ?.brokenStreakLength;
     if (broken != null && _seenFlashKeys.add('streak:${habit.id}:$broken')) {
       _flashFacts = 'A streak of $broken ended.';
       return _flash = HabitFlash.streakBroken;
@@ -357,8 +383,11 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
       children: [
         if (flash != null)
           HabitFlashBanner(
-            text: habitFlashText(flash, (habit?.id.hashCode ?? 0) + flash.index,
-                _flashFacts),
+            text: habitFlashText(
+              flash,
+              (habit?.id.hashCode ?? 0) + flash.index,
+              _flashFacts,
+            ),
             onDismissed: () => setState(() {
               _flash = null;
               _flashFacts = '';
@@ -371,10 +400,13 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
             controller: _titleController,
             focusNode: _titleFocus,
             autofocus: isDraft,
+            inputFormatters: [LengthLimitingTextInputFormatter(500)],
             textInputAction: TextInputAction.done,
             style: theme.textTheme.headlineSmall,
             decoration: const InputDecoration(
-                hintText: 'Name the Habit', border: InputBorder.none),
+              hintText: 'Name the Habit',
+              border: InputBorder.none,
+            ),
             onChanged: isDraft ? (v) => _draft.title = v : null,
             onSubmitted: (_) => isDraft ? _submitDraftTitle() : _commitTitle(),
           ),
@@ -388,7 +420,9 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
             minLines: 1,
             maxLines: 6,
             decoration: const InputDecoration(
-                hintText: 'Notes', border: InputBorder.none),
+              hintText: 'Notes',
+              border: InputBorder.none,
+            ),
           ),
         ),
         const Divider(),
@@ -397,8 +431,11 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
           label: 'Check-in',
           value: habitCheckInSummary(commitment),
           onTap: () async {
-            final next = await showCheckInKindSheet(context, commitment,
-                appliesNote: isDraft ? null : _appliesNote(commitment, false));
+            final next = await showCheckInKindSheet(
+              context,
+              commitment,
+              appliesNote: isDraft ? null : _appliesNote(commitment, false),
+            );
             if (next != null) await _setCommitment(habit, next);
           },
         ),
@@ -407,8 +444,11 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
           label: 'Repeat',
           value: habitRepeatSummary(commitment),
           onTap: () async {
-            final next = await showRepeatSheet(context, commitment,
-                appliesNote: isDraft ? null : _appliesNote(commitment, true));
+            final next = await showRepeatSheet(
+              context,
+              commitment,
+              appliesNote: isDraft ? null : _appliesNote(commitment, true),
+            );
             if (next != null) await _setCommitment(habit, next);
           },
         ),
@@ -421,16 +461,21 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
         if (anchorStopped)
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-            child: Row(children: [
-              Expanded(
-                  child: Text('${anchorTarget!.title} is paused or archived.',
-                      key: const Key('habit_anchor_stopped_note'))),
-              TextButton(
-                key: const Key('habit_choose_new_anchor'),
-                onPressed: () => _editAnchor(habit, anchor, candidates),
-                child: const Text('Choose a new anchor'),
-              ),
-            ]),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '${anchorTarget!.title} is paused or archived.',
+                    key: const Key('habit_anchor_stopped_note'),
+                  ),
+                ),
+                TextButton(
+                  key: const Key('habit_choose_new_anchor'),
+                  onPressed: () => _editAnchor(habit, anchor, candidates),
+                  child: const Text('Choose a new anchor'),
+                ),
+              ],
+            ),
           ),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
@@ -514,9 +559,15 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
   }
 
   Future<void> _editAnchor(
-      Habit? habit, HabitAnchorChoice current, List<Habit> candidates) async {
-    final next = await showAnchorSheet(context,
-        current: current, candidates: candidates);
+    Habit? habit,
+    HabitAnchorChoice current,
+    List<Habit> candidates,
+  ) async {
+    final next = await showAnchorSheet(
+      context,
+      current: current,
+      candidates: candidates,
+    );
     if (next == null) return;
     if (habit == null) {
       setState(() => _draft.anchor = next);
@@ -539,8 +590,7 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
       setState(() => _draft.area = tag);
       return;
     }
-    await _dao.setArea(
-        habitId: habit.id, userId: _userId, areaTagId: tag?.id);
+    await _dao.setArea(habitId: habit.id, userId: _userId, areaTagId: tag?.id);
   }
 
   void _editLabels(Habit? habit) {
@@ -562,13 +612,14 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
       title: 'Labels',
       cloudOnly: true,
       watchAssignedTags: (ref) => [
-        for (final t in ref.watch(habitTagsProvider(habit.id)).value ?? const <Tag>[])
+        for (final t
+            in ref.watch(habitTagsProvider(habit.id)).value ?? const <Tag>[])
           if (habitLabelTagTypes.contains(t.type)) t,
       ],
-      onAssign: (ref, tag) => _dao.assignLabel(
-          habitId: habit.id, userId: _userId, tagId: tag.id),
-      onRemove: (ref, tag) => _dao.unassignLabel(
-          habitId: habit.id, userId: _userId, tagId: tag.id),
+      onAssign: (ref, tag) =>
+          _dao.assignLabel(habitId: habit.id, userId: _userId, tagId: tag.id),
+      onRemove: (ref, tag) =>
+          _dao.unassignLabel(habitId: habit.id, userId: _userId, tagId: tag.id),
     );
   }
 
@@ -591,8 +642,11 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
   // --- pause / archive --------------------------------------------------------
 
   List<Widget> _actions(BuildContext context, Habit habit, HabitState state) {
-    Future<void> run(Future<void> Function() write, HabitFlash? flash,
-        String facts) async {
+    Future<void> run(
+      Future<void> Function() write,
+      HabitFlash? flash,
+      String facts,
+    ) async {
       await write();
       if (!mounted) return;
       setState(() {
@@ -605,69 +659,81 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
       const Divider(),
       Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16),
-        child: Wrap(spacing: 8, children: [
-          if (state == HabitState.active)
-            OutlinedButton(
-              key: const Key('habit_pause'),
-              onPressed: () async {
-                final choice = await showPauseSheet(context,
-                    today: habitDateFromDayKey(_today)!);
-                if (choice == null) return;
-                await run(
+        child: Wrap(
+          spacing: 8,
+          children: [
+            if (state == HabitState.active)
+              OutlinedButton(
+                key: const Key('habit_pause'),
+                onPressed: () async {
+                  final choice = await showPauseSheet(
+                    context,
+                    today: habitDateFromDayKey(_today)!,
+                  );
+                  if (choice == null) return;
+                  await run(
                     () => _dao.pause(
-                          habitId: habit.id,
-                          userId: _userId,
-                          today: _today,
-                          now: _now,
-                          resumesOn: choice.resumesOn,
-                        ),
+                      habitId: habit.id,
+                      userId: _userId,
+                      today: _today,
+                      now: _now,
+                      resumesOn: choice.resumesOn,
+                    ),
                     HabitFlash.paused,
                     choice.resumesOn == null
                         ? 'Until you resume it.'
-                        : 'Resumes on ${choice.resumesOn}.');
-              },
-              child: const Text('Pause'),
-            ),
-          if (state == HabitState.paused)
-            OutlinedButton(
-              key: const Key('habit_resume'),
-              onPressed: () => run(
+                        : 'Resumes on ${choice.resumesOn}.',
+                  );
+                },
+                child: const Text('Pause'),
+              ),
+            if (state == HabitState.paused)
+              OutlinedButton(
+                key: const Key('habit_resume'),
+                onPressed: () => run(
                   () => _dao.resume(
-                      habitId: habit.id,
-                      userId: _userId,
-                      today: _today,
-                      now: _now),
+                    habitId: habit.id,
+                    userId: _userId,
+                    today: _today,
+                    now: _now,
+                  ),
                   null,
-                  ''),
-              child: const Text('Resume'),
-            ),
-          if (state != HabitState.archived)
-            OutlinedButton(
-              key: const Key('habit_archive'),
-              onPressed: () => run(
+                  '',
+                ),
+                child: const Text('Resume'),
+              ),
+            if (state != HabitState.archived)
+              OutlinedButton(
+                key: const Key('habit_archive'),
+                onPressed: () => run(
                   () => _dao.archive(
-                      habitId: habit.id,
-                      userId: _userId,
-                      today: _today,
-                      now: _now),
+                    habitId: habit.id,
+                    userId: _userId,
+                    today: _today,
+                    now: _now,
+                  ),
                   HabitFlash.archived,
-                  'Its Check-ins are kept. Restore it any time.'),
-              child: const Text('Archive'),
-            ),
-          if (state == HabitState.archived)
-            OutlinedButton(
-              key: const Key('habit_restore'),
-              onPressed: () => run(
+                  'Its Check-ins are kept. Restore it any time.',
+                ),
+                child: const Text('Archive'),
+              ),
+            if (state == HabitState.archived)
+              OutlinedButton(
+                key: const Key('habit_restore'),
+                onPressed: () => run(
                   () => _dao.restore(
-                      habitId: habit.id,
-                      userId: _userId,
-                      today: _today,
-                      now: _now),
+                    habitId: habit.id,
+                    userId: _userId,
+                    today: _today,
+                    now: _now,
+                  ),
                   null,
-                  ''),
-              child: const Text('Restore'),
-            ),
-        ]),
+                  '',
+                ),
+                child: const Text('Restore'),
+              ),
+          ],
+        ),
       ),
     ];
   }
@@ -690,11 +756,11 @@ class _FieldRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => ListTile(
-        key: rowKey,
-        title: Text(label),
-        trailing: Text(value, style: Theme.of(context).textTheme.bodyMedium),
-        onTap: onTap,
-      );
+    key: rowKey,
+    title: Text(label),
+    trailing: Text(value, style: Theme.of(context).textTheme.bodyMedium),
+    onTap: onTap,
+  );
 }
 
 /// An estimate chosen on the sheet; [minutes] null clears it.
@@ -709,20 +775,24 @@ Future<_EstimatePick?> _pickEstimate(BuildContext context, int? current) {
     builder: (ctx) => SafeArea(
       child: Padding(
         padding: const EdgeInsets.all(16),
-        child: Wrap(spacing: 8, runSpacing: 8, children: [
-          for (final m in estimateLadderMinutes)
-            ChoiceChip(
-              key: Key('habit_estimate_$m'),
-              label: Text('$m min'),
-              selected: current == m,
-              onSelected: (_) => Navigator.of(ctx).pop(_EstimatePick(m)),
+        child: Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final m in estimateLadderMinutes)
+              ChoiceChip(
+                key: Key('habit_estimate_$m'),
+                label: Text('$m min'),
+                selected: current == m,
+                onSelected: (_) => Navigator.of(ctx).pop(_EstimatePick(m)),
+              ),
+            ActionChip(
+              key: const Key('habit_estimate_clear'),
+              label: const Text('No estimate'),
+              onPressed: () => Navigator.of(ctx).pop(const _EstimatePick(null)),
             ),
-          ActionChip(
-            key: const Key('habit_estimate_clear'),
-            label: const Text('No estimate'),
-            onPressed: () => Navigator.of(ctx).pop(const _EstimatePick(null)),
-          ),
-        ]),
+          ],
+        ),
       ),
     ),
   );
@@ -730,7 +800,11 @@ Future<_EstimatePick?> _pickEstimate(BuildContext context, int? current) {
 
 /// The detail as its own route on a phone.
 class HabitDetailScreen extends StatelessWidget {
-  const HabitDetailScreen({super.key, required this.habitId, this.justCreated = false});
+  const HabitDetailScreen({
+    super.key,
+    required this.habitId,
+    this.justCreated = false,
+  });
 
   final String? habitId;
   final bool justCreated;

@@ -22,8 +22,7 @@ class HabitsScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final wide =
-        MediaQuery.sizeOf(context).width >= habitsWideBreakpointWidth;
+    final wide = MediaQuery.sizeOf(context).width >= habitsWideBreakpointWidth;
     final query = GoRouterState.of(context).uri.queryParameters;
     final selected = query['habit'];
     final list = _HabitList(selectedHabitId: wide ? selected : null);
@@ -96,25 +95,31 @@ class _HabitList extends ConsumerWidget {
           final note = _todayNote(ref, active, forToday);
           final children = <Widget>[
             if (active.isEmpty)
-              const _Note(habitsOnlyInactiveLine, key: Key('habits_only_inactive')),
+              const _Note(
+                habitsOnlyInactiveLine,
+                key: Key('habits_only_inactive'),
+              ),
             if (note != null) _Note(note, key: const Key('habits_today_note')),
             for (final habit in active)
               _HabitRow(
-                  habit: habit,
-                  state: HabitState.active,
-                  selected: habit.id == selectedHabitId),
+                habit: habit,
+                state: HabitState.active,
+                selected: habit.id == selectedHabitId,
+              ),
             if (paused.isNotEmpty) const _SectionHeader('Paused'),
             for (final habit in paused)
               _HabitRow(
-                  habit: habit,
-                  state: HabitState.paused,
-                  selected: habit.id == selectedHabitId),
+                habit: habit,
+                state: HabitState.paused,
+                selected: habit.id == selectedHabitId,
+              ),
             if (archived.isNotEmpty) const _SectionHeader('Archived'),
             for (final habit in archived)
               _HabitRow(
-                  habit: habit,
-                  state: HabitState.archived,
-                  selected: habit.id == selectedHabitId),
+                habit: habit,
+                state: HabitState.archived,
+                selected: habit.id == selectedHabitId,
+              ),
           ];
           return ListView.builder(
             padding: const EdgeInsets.only(bottom: 96),
@@ -131,8 +136,10 @@ class _HabitList extends ConsumerWidget {
     if (active.isEmpty) return null;
     if (forToday.isEmpty) return habitsNothingDueLine;
     final allDone = forToday.every(
-        (id) => ref.watch(habitProgressProvider(id))?.todayState ==
-            HabitTodayState.done);
+      (id) =>
+          ref.watch(habitProgressProvider(id))?.todayState ==
+          HabitTodayState.done,
+    );
     return allDone ? habitsAllDoneLine : null;
   }
 }
@@ -143,10 +150,9 @@ class _Note extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-        child: Text(text,
-            style: TextStyle(color: Theme.of(context).hintColor)),
-      );
+    padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+    child: Text(text, style: TextStyle(color: Theme.of(context).hintColor)),
+  );
 }
 
 class _SectionHeader extends StatelessWidget {
@@ -155,15 +161,20 @@ class _SectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 20, 16, 4),
-        child: Text(text.toUpperCase(),
-            style: Theme.of(context).textTheme.labelSmall),
-      );
+    padding: const EdgeInsets.fromLTRB(16, 20, 16, 4),
+    child: Text(
+      text.toUpperCase(),
+      style: Theme.of(context).textTheme.labelSmall,
+    ),
+  );
 }
 
 class _HabitRow extends StatelessWidget {
-  const _HabitRow(
-      {required this.habit, required this.state, required this.selected});
+  const _HabitRow({
+    required this.habit,
+    required this.state,
+    required this.selected,
+  });
 
   final Habit habit;
   final HabitState state;
@@ -194,7 +205,9 @@ String? habitAnchorSummary(Habit habit) {
     case HabitAnchorKind.partOfDay:
       return habit.anchorPartOfDay;
     case HabitAnchorKind.clockTime:
-      return habit.anchorClockTime == null ? null : 'At ${habit.anchorClockTime}';
+      return habit.anchorClockTime == null
+          ? null
+          : 'At ${habit.anchorClockTime}';
     case HabitAnchorKind.afterHabit:
       return 'After another Habit';
     case HabitAnchorKind.beforeHabit:

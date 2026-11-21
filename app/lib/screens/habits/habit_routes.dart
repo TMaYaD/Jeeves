@@ -30,11 +30,14 @@ void openHabitDetail(
   final wide = MediaQuery.sizeOf(context).width >= habitsWideBreakpointWidth;
   final query = justCreated ? '?new=1' : '';
   if (wide) {
-    context.go('$habitsListPath?habit=${habitId ?? 'new'}'
-        '${justCreated ? '&new=1' : ''}');
+    context.go(
+      '$habitsListPath?habit=${habitId ?? 'new'}'
+      '${justCreated ? '&new=1' : ''}',
+    );
     return;
   }
-  final path = '${habitId == null ? habitNewPath : habitDetailPath(habitId)}$query';
+  final path =
+      '${habitId == null ? habitNewPath : habitDetailPath(habitId)}$query';
   if (replace) {
     context.pushReplacement(path);
   } else {
