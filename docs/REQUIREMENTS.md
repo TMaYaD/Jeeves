@@ -118,9 +118,10 @@ To build a hybrid productivity application that merges the rigid organizational 
 **Goal:** Support recurring behavioral commitments that don't fit the "complete and forget" model of a GTD task. Design and decisions: TMaYaD/Jeeves#400.
 * **Habit Definition:** Title, repeat rule, anchor (including after or before another habit), Area and Labels.
 * **Check-In:** Binary, or measurable against a unit and daily target.
-* **Changes apply from the current period;** earlier periods are judged by the commitment they had.
+* **Changes apply from the current period;** earlier ones keep their commitment.
 * **Streak Tracking:** Current and best streak, 7/30/90-day rates. Rest days don't break streaks.
 * **Visualization:** Per-habit history; any past day can be corrected.
+* **From the Inbox:** Clarify a Capture into a Habit.
 * **GTD Integration:** Daily Planning summary (outside task capacity), Evening Shutdown, optional Focus Mode. Location surfacing comes with #46.
 
 ### Epic 10: Extended Capture Channels

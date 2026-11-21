@@ -335,6 +335,7 @@ Widget _captureHarness(
   // exercised by clarify_surface_parity_test.dart.
   ClarifyTagSection tagSection = ClarifyTagSection.editablePickers,
   Widget? footer,
+  Future<void> Function({required String title, String? notes})? onMakeHabit,
   // The clarify-mode preference, when a test needs to flip it under an open
   // card. Left null everywhere else, where the real notifier's default
   // (`oneToOne`) is what every other test in this file exercises.
@@ -374,6 +375,7 @@ Widget _captureHarness(
           onAfterRoute: onAfterRoute,
           retention: retention,
           footer: footer,
+          onMakeHabit: onMakeHabit,
         ),
       ),
     ),
@@ -382,6 +384,71 @@ Widget _captureHarness(
 
 void main() {
   setUpAll(configureSqliteForTests);
+
+  group('ClarifyCard — Make it a Habit (#999)', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    testWidgets('is absent when the host sets no onMakeHabit', (tester) async {
+      final capture = await _insertCapture(db, id: 'x', title: 'Stretch');
+      await tester.pumpWidget(_captureHarness(db, capture: capture));
+      await _pumpFrames(tester, frames: 5);
+
+      expect(find.text('Make it a Habit'), findsNothing);
+    });
+
+    testWidgets('passes the live title and notes to the host', (tester) async {
+      final capture = await _insertCapture(db, id: 'x', title: 'Stretch');
+      String? madeTitle;
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: capture,
+        onMakeHabit: ({required title, notes}) async => madeTitle = title,
+      ));
+      await _pumpFrames(tester, frames: 5);
+
+      await _scrollAndTap(tester, 'Make it a Habit');
+      await _pumpFrames(tester, frames: 5);
+
+      expect(madeTitle, 'Stretch');
+    });
+
+    testWidgets('is disabled while the title is blank', (tester) async {
+      final capture = await _insertCapture(db, id: 'x', title: 'Stretch');
+      var calls = 0;
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: capture,
+        onMakeHabit: ({required title, notes}) async => calls++,
+      ));
+      await _pumpFrames(tester, frames: 5);
+      await tester.enterText(find.byType(TextField).first, '   ');
+      await _pumpFrames(tester, frames: 3);
+
+      await _scrollAndTap(tester, 'Make it a Habit');
+      await _pumpFrames(tester, frames: 3);
+
+      expect(calls, 0);
+    });
+
+    testWidgets('a failure shows a message and leaves the card usable',
+        (tester) async {
+      final capture = await _insertCapture(db, id: 'x', title: 'Stretch');
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: capture,
+        onMakeHabit: ({required title, notes}) async => throw StateError('no'),
+      ));
+      await _pumpFrames(tester, frames: 5);
+
+      await _scrollAndTap(tester, 'Make it a Habit');
+      await _pumpFrames(tester, frames: 5);
+
+      expect(find.textContaining("It's still in your Inbox"), findsOneWidget);
+    });
+  });
 
   group('ClarifyCard — Next on a Capture asks for the action (#689)', () {
     late GtdDatabase db;
