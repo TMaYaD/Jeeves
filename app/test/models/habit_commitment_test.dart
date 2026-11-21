@@ -577,8 +577,8 @@ void main() {
       // The current week, and the month, take the monthly rule.
       expect(commitmentInForceOn(commitments, '2026-11-23'), monthly);
       expect(commitmentInForceOn(commitments, '2026-11-25'), monthly);
-      // Days before the weekly rule began are reached by the monthly one.
-      expect(commitmentInForceOn(commitments, '2026-11-10'), monthly);
+      // The Habit began with the weekly rule, so days before it have none.
+      expect(commitmentInForceOn(commitments, '2026-11-10'), isNull);
       expect(effectiveStartsOf(commitments)['c2'], DateTime(2026, 11, 23));
     });
 
