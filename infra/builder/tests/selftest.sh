@@ -9,15 +9,23 @@ set -u
 SCRIPT=$1; REPO=$2
 : "${BUILDER_SSH:?set BUILDER_SSH to the builder (an ssh destination or alias)}"
 read -r -a _opts <<< "${BUILDER_SSH_OPTS:-}"
-vm() { ssh -o BatchMode=yes "${_opts[@]}" "$BUILDER_SSH" "$@"; }
+SSH=(ssh -o BatchMode=yes "${_opts[@]}" "$BUILDER_SSH")
+vm() { "${SSH[@]}" "$@"; }
 vm 'rm -rf ~/jb-selftest && mkdir -p ~/jb-selftest && cat > ~/jb-selftest/jeeves-build && chmod +x ~/jb-selftest/jeeves-build' < "$SCRIPT"
 
-# End the sshd session serving the command matching $1 — only that session.
-# This is what sshd does itself when a caller disconnects. Some user-mode NAT
-# setups never pass the disconnect through to the server, so the test does it
-# explicitly rather than depending on the network in between.
-drop_session() {
-  vm "p=\$(pgrep -u \$USER -n -f '^sleep $1\$'); while [ -n \"\$p\" ] && [ \"\$p\" -gt 1 ]; do p=\$(ps -o ppid= -p \$p | tr -d ' '); case \$(ps -o comm= -p \$p) in sshd*) kill \$p; exit 0;; esac; done; exit 1" </dev/null
+# Start a caller and kill its ssh client outright, as when an agent run is
+# killed mid-build. The ssh process itself is backgrounded (not a function
+# wrapping it), so $! is the real client.
+# Checks first that the caller really holds the lock, so a later "lock
+# released" pass cannot be vacuous.
+kill_caller_during() {
+  "${SSH[@]}" "$1" </dev/null >/dev/null 2>&1 &
+  local client=$!
+  sleep 3
+  vm "$JB --no-sync --wait 1 -- true" </dev/null >/dev/null 2>&1
+  check "  (caller holds the lock before it is killed)" 75 $?
+  kill -9 "$client"
+  wait "$client" 2>/dev/null
 }
 JB='env JEEVES_BUILD_TREE=$HOME/jb-selftest/tree JEEVES_BUILD_LOCK=$HOME/jb-selftest/lock JEEVES_BUILD_STAGE=$HOME/jb-selftest/stage $HOME/jb-selftest/jeeves-build'
 cd "$REPO"
@@ -50,17 +58,15 @@ wait
 # ...but a daemon left behind by a build must not keep the lock.
 vm "$JB --no-sync -- 'nohup sleep 20 >/dev/null 2>&1 & true'" </dev/null >/dev/null 2>&1
 vm "$JB --no-sync --wait 2 -- true" </dev/null >/dev/null 2>&1; check "leftover daemon does not hold the lock" 0 $?
-# ...and a dropped ssh connection releases it.
-vm "$JB --no-sync -- 'sleep 30'" </dev/null >/dev/null 2>&1 &
-holder=$!; sleep 3; drop_session 30; wait $holder 2>/dev/null
-vm "$JB --no-sync --wait 15 -- true" </dev/null >/dev/null 2>&1; check "dropped connection releases the lock" 0 $?
+# ...and a caller killed mid-build releases it and stops its build.
+kill_caller_during "$JB --no-sync -- 'sleep 30'"
+vm "$JB --no-sync --wait 15 -- true" </dev/null >/dev/null 2>&1; check "killed caller releases the lock" 0 $?
 left=$(vm 'pgrep -u "$USER" -f "^sleep 30$" | wc -l' </dev/null | tr -d ' ')
-check "dropped connection stops the build" 0 "$left"
+check "killed caller's build is stopped" 0 "$left"
 
 # Callers that wrap the command in a shell (cd && ...) must get the same protection.
-vm "cd /tmp && $JB --no-sync -- 'sleep 31'" </dev/null >/dev/null 2>&1 &
-holder=$!; sleep 3; drop_session 31; wait $holder 2>/dev/null
-vm "$JB --no-sync --wait 15 -- true" </dev/null >/dev/null 2>&1; check "dropped connection via wrapper shell releases the lock" 0 $?
+kill_caller_during "cd /tmp && $JB --no-sync -- 'sleep 31'"
+vm "$JB --no-sync --wait 15 -- true" </dev/null >/dev/null 2>&1; check "killed caller via wrapper shell releases the lock" 0 $?
 
 # A real exit status still comes back through the job wait.
 vm "$JB --no-sync -- 'exit 7'" </dev/null >/dev/null 2>&1; check "exit code passthrough via job" 7 $?
