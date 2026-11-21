@@ -364,8 +364,15 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
     for (final event in _events) {
       if (overlaps(event.start, event.end)) return false;
     }
+    // An entry left out of the batch that nobody has pinned is flexible: once
+    // the chosen ones are pinned it re-flows out of the way, so it never blocks.
+    final flexibleIds = {
+      for (final entry in widget.entries)
+        if (isBatchCandidate(entry)) entry.outcomeId,
+    };
     for (final placement in _layout.entries) {
       if (chosenIds.contains(placement.outcomeId)) continue;
+      if (flexibleIds.contains(placement.outcomeId)) continue;
       for (final piece in placement.pieces) {
         if (overlaps(piece.start, piece.end)) return false;
       }
