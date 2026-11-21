@@ -436,3 +436,72 @@ List<String> habitRateTileLabels(HabitUnitKind kind, List<int> lengths) {
 String habitHistoryStripLabel(int checkInDays, int dueDays) =>
     'Check-ins over the last five months: $checkInDays on $dueDays due days. '
     'Open the calendar';
+
+// ---- Past-day sheet ----
+
+const habitDaySheetAdd = 'Add a Check-in';
+const habitDaySheetClose = 'Close';
+const habitDaySheetDone = 'Done';
+const habitDaySheetPausedLine =
+    "This day's Check-ins do not change the streak.";
+const habitDaySheetChangeTooltip = 'Change this value';
+const habitDaySheetRemoveTooltip = 'Remove this Check-in';
+const habitDaySheetAmountLabel = 'Amount';
+const habitDaySheetAmountIncrease = 'More';
+const habitDaySheetAmountDecrease = 'Less';
+
+/// The sheet's date title: "Thursday 12 November".
+String habitDaySheetTitle(DateTime day) => _dayTitle(day);
+
+String _dayTitle(DateTime day) {
+  const weekdays = [
+    'Monday',
+    'Tuesday',
+    'Wednesday',
+    'Thursday',
+    'Friday',
+    'Saturday',
+    'Sunday',
+  ];
+  const months = [
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ];
+  return '${weekdays[day.weekday - 1]} ${day.day} ${months[day.month - 1]}';
+}
+
+/// "Water · no Check-in on this day".
+String habitDaySheetEmptyLine(String title) =>
+    '$title · no Check-in on this day';
+
+/// "Water · 8 of 8 glasses · 3 entries".
+String habitDaySheetMeasurableLine(
+  String title,
+  double total,
+  double target,
+  String? unit,
+  int entries,
+) =>
+    '$title · ${habitDayAmountText(total, target)}'
+    '${unit == null ? '' : ' $unit'}'
+    '${entries == 0 ? '' : ' · $entries ${entries == 1 ? 'entry' : 'entries'}'}';
+
+/// "Water · 2 Check-ins" for a binary day with Check-ins.
+String habitDaySheetBinaryLine(String title, int count) =>
+    '$title · ${habitCheckInCountWords(count)}';
+
+/// "A Check-in here counts for 17 November."
+String habitDaySheetCountsNote(DateTime day) {
+  final title = _dayTitle(day);
+  return 'A Check-in here counts for ${title.substring(title.indexOf(' ') + 1)}.';
+}
