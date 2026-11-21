@@ -211,6 +211,12 @@ class HabitCommitmentDraft {
       );
 }
 
+/// The commitment a new Habit starts with: every day, binary.
+///
+/// One place for the default, so every way of creating a Habit starts alike.
+const HabitCommitmentDraft defaultNewHabitCommitment =
+    HabitCommitmentDraft(repeatKind: HabitRepeatKind.everyDay);
+
 /// The three effort levels a Habit can ask for — the values an Action
 /// carries, so the Outcome editors the Habit form reuses work on them
 /// unchanged.
@@ -818,6 +824,43 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
   /// The Habit with [habitId], or null when there is none.
   Future<Habit?> habitById(String habitId) =>
       (select(habits)..where((h) => h.id.equals(habitId))).getSingleOrNull();
+
+  /// The Habit with [habitId], re-emitted after every change to its row;
+  /// null when there is none.
+  Stream<Habit?> watchHabit(String habitId) =>
+      (select(habits)..where((h) => h.id.equals(habitId)))
+          .watchSingleOrNull();
+
+  /// The Habit's commitments, oldest first, re-emitted after a commitment is
+  /// written.
+  Stream<List<HabitCommitment>> watchCommitmentsFor(String habitId) {
+    return (select(habitCommitments)
+          ..where((c) => c.habitId.equals(habitId))
+          ..orderBy([
+            (c) => OrderingTerm.asc(c.createdAt),
+            (c) => OrderingTerm.asc(c.id),
+          ]))
+        .watch()
+        .map((rows) => [
+              for (final row in rows) ?_toCommitment(row),
+            ]);
+  }
+
+  /// The tags a Habit holds, re-emitted after a Label or Area changes.
+  /// Same rows as [tagsFor].
+  Stream<List<Tag>> watchTagsFor(String habitId) {
+    final query = select(habitTags).join([
+      innerJoin(tags, tags.id.equalsExp(habitTags.tagId)),
+    ])
+      ..where(habitTags.habitId.equals(habitId));
+    query.orderBy([
+      OrderingTerm.asc(tags.name),
+      OrderingTerm.asc(tags.id),
+    ]);
+    return query
+        .watch()
+        .map((rows) => [for (final row in rows) row.readTable(tags)]);
+  }
 
   /// The Habit's commitments, oldest first.
   ///
