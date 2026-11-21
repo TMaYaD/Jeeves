@@ -7,13 +7,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/daos/habit_dao.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/habit_commitment.dart';
+import 'package:jeeves/providers/auth_provider.dart';
 import 'package:jeeves/providers/clock_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/habit_check_ins_provider.dart';
 import 'package:jeeves/providers/habit_stack_offer_provider.dart';
 import '../test_helpers.dart';
-
-const _userId = 'test-user';
 
 void main() {
   setUpAll(() {
@@ -41,7 +40,7 @@ void main() {
   Future<String> createHabit(String title, int minute) {
     final created = DateTime(2026, 11, 10, 8, minute);
     return db.habitDao.createHabit(
-      userId: _userId,
+      userId: container.read(currentUserIdProvider),
       title: title,
       today: habitDayKey(created),
       now: created.toUtc(),

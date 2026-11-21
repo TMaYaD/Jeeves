@@ -112,14 +112,22 @@ class _HabitAmountEntrySheetState extends ConsumerState<HabitAmountEntrySheet> {
                       style: TextStyle(color: scheme.primary),
                     ),
                   )
-                else ...[
-                  Icon(Icons.check, size: 18, color: scheme.primary),
-                  Text(
-                    habitSheetTargetReachedLine,
-                    key: const Key('habit_sheet_status'),
-                    style: TextStyle(color: scheme.primary),
+                else
+                  Flexible(
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.check, size: 18, color: scheme.primary),
+                        Flexible(
+                          child: Text(
+                            habitSheetTargetReachedLine,
+                            key: const Key('habit_sheet_status'),
+                            style: TextStyle(color: scheme.primary),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ],
               ],
             ),
             if (habitShowsPips(target)) ...[

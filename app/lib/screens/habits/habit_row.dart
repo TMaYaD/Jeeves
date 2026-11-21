@@ -288,15 +288,18 @@ class HabitRow extends ConsumerWidget {
       onTap: () => openHabitDetail(context, habit.id),
     );
     if (offerSource == null) return tile;
-    return Container(
+    return Padding(
       key: Key('habit_offer_${habit.id}'),
-      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      decoration: BoxDecoration(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      child: Material(
         color: scheme.primaryContainer,
-        border: Border.all(color: scheme.primary, width: 2),
-        borderRadius: BorderRadius.circular(6),
+        clipBehavior: Clip.antiAlias,
+        shape: RoundedRectangleBorder(
+          side: BorderSide(color: scheme.primary, width: 2),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: tile,
       ),
-      child: tile,
     );
   }
 }

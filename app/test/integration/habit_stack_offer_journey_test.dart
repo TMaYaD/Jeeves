@@ -117,6 +117,11 @@ void main() {
     matching: find.text(text),
   );
 
+  Finder doneInRow(String id) => find.descendant(
+    of: find.byKey(Key('habit_row_$id')),
+    matching: find.textContaining('Done 09:30'),
+  );
+
   Future<void> tapKey(WidgetTester tester, String key) async {
     await tester.tap(find.byKey(Key(key)));
     await _settle(tester);
@@ -246,7 +251,7 @@ void main() {
       expect(offerOn(journal), findsOneWidget);
       await tapKey(tester, 'habit_offer_accept_$journal');
       expect(offerOn(journal), findsNothing);
-      expect(inRow(journal, 'Done 09:30'), findsOneWidget);
+      expect(doneInRow(journal), findsOneWidget);
       expect(offerOn(read), findsOneWidget);
       await tapKey(tester, 'habit_offer_accept_$read');
       expect(find.text('Next in the order, sir.'), findsNothing);
@@ -273,7 +278,7 @@ void main() {
           findsOneWidget);
 
       await tapKey(tester, 'habit_offer_accept_${ids.journal}_sheet');
-      expect(inRow(ids.journal, 'Done 09:30'), findsOneWidget);
+      expect(doneInRow(ids.journal), findsOneWidget);
     } finally {
       await closeApp(tester);
     }
