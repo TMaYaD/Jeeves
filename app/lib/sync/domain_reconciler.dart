@@ -49,7 +49,6 @@ import 'package:drift/drift.dart';
 
 import '../database/daos/tag_dao.dart' show todoTagIdFor;
 import '../database/gtd_database.dart';
-import '../database/tables.dart' show labelTagType, retiredLabelTagType;
 import 'collection_codecs.dart';
 import 'domain_projector.dart';
 import 'host/merge_state.dart';
