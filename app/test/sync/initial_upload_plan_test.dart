@@ -3,6 +3,8 @@
 library;
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jeeves/database/tables.dart'
+    show labelTagType, retiredLabelTagType;
 import 'package:jeeves/sync/initial_upload_plan.dart';
 import 'package:jeeves/sync/collection_codecs.dart';
 import 'package:jeeves/sync/ids.dart';
@@ -358,6 +360,43 @@ void main() {
       expect(plan.labelsMinted, 0);
       // Nothing minted, so the Tag set is exactly the legacy one.
       expect(plan.entitiesFor(tagsCollection), hasLength(3));
+    });
+
+    test("merges a surplus Area onto the user's own Label of the same name",
+        () async {
+      // The user's `@home` Label is stored as `'context'`; the surplus Area
+      // "Home" must merge into it rather than mint a second Label.
+      final plan = await _plan(storeWith(
+        tags: [
+          tagRow('tag/admin', 'admin', areaTagType),
+          tagRow('tag/home-area', 'Home', areaTagType),
+          tagRow('tag/home-label', 'home', 'context'),
+        ],
+        todos: [todoRow('todo/one', 'One')],
+        todoTags: [
+          membership('junction/admin', 'todo/one', 'tag/admin'),
+          membership('junction/home', 'todo/one', 'tag/home-area'),
+        ],
+      ));
+      final conversion = plan.resolutions.single.converted.single;
+      expect(conversion.labelOrigin, labelOriginLegacyTag);
+      expect(conversion.label.id, _id('tag/home-label'));
+      expect(plan.labelsMinted, 0);
+    });
+
+    test("a Label still stored as the retired type is asserted as 'context'",
+        () async {
+      final plan = await _plan(storeWith(
+        tags: [tagRow('tag/old', 'Errands', retiredLabelTagType)],
+      ));
+      final errands = plan
+          .entitiesFor(tagsCollection)
+          .singleWhere((entity) => entity.fields['name'] == 'Errands');
+      expect(errands.fields['type'], 'context');
+    });
+
+    test('the one Label type is the one every released build shows', () {
+      expect(labelTagType, 'context');
     });
 
     test('resolves same-name legacy Labels by (casefolded name, id)', () async {

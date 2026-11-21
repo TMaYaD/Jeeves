@@ -465,6 +465,44 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
     return {for (final r in rows) r.read<String>('tag_id')};
   }
 
+  /// Retype every Tag still carrying the retired `'label'` type to `'context'`.
+  ///
+  /// Labels used to be stored under two `tags.type` values: `'context'` — the
+  /// `@` rows every released build already shows as its Labels — and `'label'`,
+  /// what the sync cutover minted surplus Areas as, which no surface showed.
+  /// One value backs Labels now, and this is what folds the other into it.
+  ///
+  /// **The tag id does not change**, so every link to the Tag stays exactly
+  /// where it was: an Outcome's assignment (`todo_tags`) and a Capture's tag
+  /// hint (`capture_tags`) both reference the tag by id. Only the `type` field
+  /// is written.
+  ///
+  /// **It travels as an op**, so a peer's copy is retyped too: the write goes
+  /// through [upsertTag], which describes the field change to the capture seam.
+  /// That is what lets two devices converge on one value — and it needs no wire
+  /// step, because a peer on an older build reads `'context'` as its Label
+  /// surface already (docs/SYNC.md).
+  ///
+  /// Idempotent: with no retired row it writes nothing and authors no op.
+  /// Returns the number of rows retyped.
+  Future<int> retypeRetiredLabelTags() {
+    return attachedDatabase.capturing(() async {
+      final retired = await (select(tags)
+            ..where((t) => t.type.equals(retiredLabelTagType))
+            ..orderBy([(t) => OrderingTerm.asc(t.id)]))
+          .get();
+      if (retired.isEmpty) return 0;
+      for (final tag in retired) {
+        await upsertTag(TagsCompanion(
+          id: Value(tag.id),
+          type: const Value(labelTagType),
+        ));
+      }
+      attachedDatabase.notifyTagsViewWrite();
+      return retired.length;
+    });
+  }
+
   /// Collapse every duplicate `(name, type)` group onto one surviving Tag.
   ///
   /// The fold pass of `DomainReconciler`. `(name, type)` is the user-facing
