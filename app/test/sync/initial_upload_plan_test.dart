@@ -388,6 +388,7 @@ void main() {
         () async {
       final plan = await _plan(storeWith(
         tags: [tagRow('tag/old', 'Errands', retiredLabelTagType)],
+        todoTags: const [],
       ));
       final errands = plan
           .entitiesFor(tagsCollection)
