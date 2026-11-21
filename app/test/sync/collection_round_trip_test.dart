@@ -261,6 +261,62 @@ void main() {
     await expectTableConverges('focus_session_tasks', orderBy: 'position');
   });
 
+  test('focus_session_tasks batch fields round-trip: an accepted batch, a '
+      'declined suggestion, and a member moved out of its batch', () async {
+    final first = await outcomeOnA(id: _id('batch-first'));
+    final second = await outcomeOnA(id: _id('batch-second'));
+    final declined = await outcomeOnA(id: _id('batch-declined'));
+    final sessionId = await a.domain.focusSessionDao.openSession(
+      userId: _userId,
+      taskIds: [first, second, declined],
+      now: a.clock.asDateTime,
+    );
+    final gapStart = DateTime.utc(2026, 11, 16, 10, 0);
+    await a.domain.focusSessionDao.acceptBatch(
+      sessionId: sessionId,
+      batchId: 'batch-1',
+      startByTaskId: {
+        first: gapStart,
+        second: gapStart.add(const Duration(minutes: 10)),
+      },
+    );
+    await a.domain.focusSessionDao.declineBatchSuggestion(
+      sessionId: sessionId,
+      taskIds: [declined],
+      declinedAt: DateTime.utc(2026, 11, 16, 9, 5, 0, 250),
+    );
+    await workspace.syncAll();
+    await expectTableConverges('focus_session_tasks', orderBy: 'position');
+
+    Future<Map<String, Object?>> rowOnB(String taskId) async {
+      final row = await b.domain.customSelect(
+        'SELECT pinned_start_at, batch_id, batch_suggestion_declined_at '
+        'FROM focus_session_tasks WHERE task_id = ?',
+        variables: [Variable<String>(taskId)],
+      ).getSingle();
+      return row.data;
+    }
+
+    expect((await rowOnB(first))['batch_id'], 'batch-1');
+    expect((await rowOnB(second))['batch_id'], 'batch-1');
+    expect((await rowOnB(declined))['batch_id'], isNull);
+    expect((await rowOnB(declined))['batch_suggestion_declined_at'],
+        isNotNull);
+    expect((await rowOnB(first))['batch_suggestion_declined_at'], isNull);
+
+    a.clock.advance(60000);
+    await a.domain.focusSessionDao.setPinnedStart(
+      sessionId: sessionId,
+      taskId: second,
+      pinnedStartAt: DateTime.utc(2026, 11, 16, 15),
+    );
+    await workspace.syncAll();
+    await expectTableConverges('focus_session_tasks', orderBy: 'position');
+    expect((await rowOnB(second))['batch_id'], isNull);
+    expect((await rowOnB(first))['batch_id'], 'batch-1',
+        reason: 'moving one member leaves the others in the batch');
+  });
+
   test('focus_session_dispositions round-trip for off-Plan engagement',
       () async {
     final planned = await outcomeOnA(id: _id('planned-1'));
