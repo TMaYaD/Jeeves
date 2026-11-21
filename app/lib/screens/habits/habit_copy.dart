@@ -399,3 +399,40 @@ const habitDayNotCountedArchived = 'not counted, archived';
 const habitDayNotCountedRestDay = 'not counted, rest day';
 const habitDayRepeatChangedWords = 'repeat changed';
 const habitDayToday = 'today';
+
+// ---- Stats block and history strip on the detail ----
+
+/// The streak label under the main number.
+String habitStreakLabel(HabitUnitKind kind) => switch (kind) {
+  HabitUnitKind.day => 'day streak',
+  HabitUnitKind.week => 'week streak',
+  HabitUnitKind.month => 'month streak',
+};
+
+const habitBestStreakLabel = 'best streak';
+
+/// "1 of 3 this week" / "1 of 4 this month", for an open period.
+String habitPeriodProgressText(HabitUnitKind kind, int count, int target) =>
+    '$count of $target this ${kind == HabitUnitKind.week ? 'week' : 'month'}';
+
+/// A rate as a whole percent, or "—" when the window has nothing to count.
+String habitRateText(double? value) =>
+    value == null ? '—' : '${(value * 100).round()}%';
+
+/// The tile labels of the three rate windows: the first reads "rate · …".
+List<String> habitRateTileLabels(HabitUnitKind kind, List<int> lengths) {
+  final unit = switch (kind) {
+    HabitUnitKind.day => 'day',
+    HabitUnitKind.week => 'week',
+    HabitUnitKind.month => 'month',
+  };
+  return [
+    for (var i = 0; i < lengths.length; i++)
+      '${i == 0 ? 'rate · ' : ''}${lengths[i]} $unit${lengths[i] == 1 ? '' : 's'}',
+  ];
+}
+
+/// The strip's one screen-reader label.
+String habitHistoryStripLabel(int checkInDays, int dueDays) =>
+    'Check-ins over the last five months: $checkInDays on $dueDays due days. '
+    'Open the calendar';
