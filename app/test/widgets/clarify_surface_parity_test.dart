@@ -3,7 +3,8 @@
 /// Three surfaces render [ClarifyCard]: the ceremony Clarify Inbox step, the
 /// standalone `/inbox/:id/clarify` screen and the Re-clarify route. What they
 /// legitimately differ in is expressed as one option ([ClarifyTagSection]) and
-/// three composition slots (`footer`, `missingCta`, `onProcessingChanged`).
+/// composition slots (`footer`, `missingCta`, `onProcessingChanged` and
+/// `onMakeHabit`, which only the standalone screen sets).
 /// Everything else is shared, and the tests here are what stops a future
 /// change quietly forking it again.
 ///
