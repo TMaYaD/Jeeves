@@ -36,17 +36,23 @@ class HabitFlashBanner extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(text.line,
-                style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                    color: scheme.onSecondaryContainer)),
+            Text(
+              text.line,
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: scheme.onSecondaryContainer,
+              ),
+            ),
             if (text.facts.isNotEmpty)
-              Text(text.facts,
-                  style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                      color: scheme.onSecondaryContainer)),
+              Text(
+                text.facts,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  color: scheme.onSecondaryContainer,
+                ),
+              ),
           ],
         ),
       ),

@@ -38,7 +38,8 @@ String habitRepeatSummary(HabitCommitmentDraft c) {
 }
 
 /// A short description of a commitment's Check-in kind.
-String habitCheckInSummary(HabitCommitmentDraft c) => c.dailyTargetAmount == null
+String habitCheckInSummary(HabitCommitmentDraft c) =>
+    c.dailyTargetAmount == null
     ? 'Done or not'
     : '${_amount(c.dailyTargetAmount!)} ${c.unitLabel}';
 
@@ -54,7 +55,11 @@ Future<T?> _showSheet<T>(BuildContext context, WidgetBuilder builder) =>
       isScrollControlled: true,
       builder: (ctx) => Padding(
         padding: EdgeInsets.fromLTRB(
-            24, 24, 24, 24 + MediaQuery.viewInsetsOf(ctx).bottom),
+          24,
+          24,
+          24,
+          24 + MediaQuery.viewInsetsOf(ctx).bottom,
+        ),
         child: SingleChildScrollView(child: builder(ctx)),
       ),
     );
@@ -65,20 +70,20 @@ class _DoneRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Row(
-        mainAxisAlignment: MainAxisAlignment.end,
-        children: [
-          TextButton(
-            key: const Key('habit_sheet_cancel'),
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            key: const Key('habit_sheet_done'),
-            onPressed: onDone,
-            child: const Text('Done'),
-          ),
-        ],
-      );
+    mainAxisAlignment: MainAxisAlignment.end,
+    children: [
+      TextButton(
+        key: const Key('habit_sheet_cancel'),
+        onPressed: () => Navigator.of(context).pop(),
+        child: const Text('Cancel'),
+      ),
+      FilledButton(
+        key: const Key('habit_sheet_done'),
+        onPressed: onDone,
+        child: const Text('Done'),
+      ),
+    ],
+  );
 }
 
 class _AppliesNote extends StatelessWidget {
@@ -101,9 +106,10 @@ Future<HabitCommitmentDraft?> showCheckInKindSheet(
   BuildContext context,
   HabitCommitmentDraft current, {
   String? appliesNote,
-}) =>
-    _showSheet(
-        context, (_) => _CheckInKindSheet(current: current, note: appliesNote));
+}) => _showSheet(
+  context,
+  (_) => _CheckInKindSheet(current: current, note: appliesNote),
+);
 
 class _CheckInKindSheet extends StatefulWidget {
   const _CheckInKindSheet({required this.current, this.note});
@@ -118,9 +124,10 @@ class _CheckInKindSheetState extends State<_CheckInKindSheet> {
   late bool _measurable = widget.current.dailyTargetAmount != null;
   late final _unit = TextEditingController(text: widget.current.unitLabel);
   late final _target = TextEditingController(
-      text: widget.current.dailyTargetAmount == null
-          ? ''
-          : _amount(widget.current.dailyTargetAmount!));
+    text: widget.current.dailyTargetAmount == null
+        ? ''
+        : _amount(widget.current.dailyTargetAmount!),
+  );
 
   @override
   void dispose() {
@@ -132,20 +139,21 @@ class _CheckInKindSheetState extends State<_CheckInKindSheet> {
   double? get _targetValue => double.tryParse(_target.text.trim());
 
   bool get _valid =>
-      !_measurable ||
-      (_unit.text.trim().isNotEmpty && (_targetValue ?? 0) > 0);
+      !_measurable || (_unit.text.trim().isNotEmpty && (_targetValue ?? 0) > 0);
 
   void _done() {
     final c = widget.current;
-    Navigator.of(context).pop(HabitCommitmentDraft(
-      repeatKind: c.repeatKind,
-      chosenWeekdays: c.chosenWeekdays,
-      timesPerPeriod: c.timesPerPeriod,
-      intervalDays: c.intervalDays,
-      preferredDays: c.preferredDays,
-      unitLabel: _measurable ? _unit.text.trim() : null,
-      dailyTargetAmount: _measurable ? _targetValue : null,
-    ));
+    Navigator.of(context).pop(
+      HabitCommitmentDraft(
+        repeatKind: c.repeatKind,
+        chosenWeekdays: c.chosenWeekdays,
+        timesPerPeriod: c.timesPerPeriod,
+        intervalDays: c.intervalDays,
+        preferredDays: c.preferredDays,
+        unitLabel: _measurable ? _unit.text.trim() : null,
+        dailyTargetAmount: _measurable ? _targetValue : null,
+      ),
+    );
   }
 
   @override
@@ -159,11 +167,13 @@ class _CheckInKindSheetState extends State<_CheckInKindSheet> {
         SegmentedButton<bool>(
           segments: const [
             ButtonSegment(
-                value: false,
-                label: Text('Done or not', key: Key('checkin_kind_binary'))),
+              value: false,
+              label: Text('Done or not', key: Key('checkin_kind_binary')),
+            ),
             ButtonSegment(
-                value: true,
-                label: Text('Measured', key: Key('checkin_kind_measurable'))),
+              value: true,
+              label: Text('Measured', key: Key('checkin_kind_measurable')),
+            ),
           ],
           selected: {_measurable},
           onSelectionChanged: (s) => setState(() => _measurable = s.first),
@@ -173,7 +183,9 @@ class _CheckInKindSheetState extends State<_CheckInKindSheet> {
           TextField(
             key: const Key('checkin_unit'),
             controller: _unit,
-            decoration: const InputDecoration(labelText: 'Unit (pages, glasses)'),
+            decoration: const InputDecoration(
+              labelText: 'Unit (pages, glasses)',
+            ),
             onChanged: (_) => setState(() {}),
           ),
           TextField(
@@ -199,9 +211,10 @@ Future<HabitCommitmentDraft?> showRepeatSheet(
   BuildContext context,
   HabitCommitmentDraft current, {
   String? appliesNote,
-}) =>
-    _showSheet(
-        context, (_) => _RepeatSheet(current: current, note: appliesNote));
+}) => _showSheet(
+  context,
+  (_) => _RepeatSheet(current: current, note: appliesNote),
+);
 
 const _repeatLabels = {
   HabitRepeatKind.everyDay: 'Every day',
@@ -228,12 +241,14 @@ class _RepeatSheetState extends State<_RepeatSheet> {
       ...?widget.current.preferredDays,
   };
   late final _count = TextEditingController(
-      text: (widget.current.timesPerPeriod ?? widget.current.intervalDays ?? '')
-          .toString());
+    text: (widget.current.timesPerPeriod ?? widget.current.intervalDays ?? '')
+        .toString(),
+  );
   late final _dates = TextEditingController(
-      text: widget.current.repeatKind == HabitRepeatKind.timesPerMonth
-          ? (widget.current.preferredDays ?? const []).join(', ')
-          : '');
+    text: widget.current.repeatKind == HabitRepeatKind.timesPerMonth
+        ? (widget.current.preferredDays ?? const []).join(', ')
+        : '',
+  );
 
   @override
   void dispose() {
@@ -278,38 +293,42 @@ class _RepeatSheetState extends State<_RepeatSheet> {
     final c = widget.current;
     List<int>? sorted(Iterable<int> days) =>
         days.isEmpty ? null : (days.toList()..sort());
-    Navigator.of(context).pop(HabitCommitmentDraft(
-      repeatKind: _kind,
-      chosenWeekdays:
-          _kind == HabitRepeatKind.chosenWeekdays ? sorted(_weekdays) : null,
-      timesPerPeriod: _kind == HabitRepeatKind.timesPerWeek ||
-              _kind == HabitRepeatKind.timesPerMonth
-          ? _countValue
-          : null,
-      intervalDays: _kind == HabitRepeatKind.everyNDays ? _countValue : null,
-      preferredDays: switch (_kind) {
-        HabitRepeatKind.timesPerWeek => sorted(_preferredWeekdays),
-        HabitRepeatKind.timesPerMonth => sorted(_parsedDates ?? const []),
-        _ => null,
-      },
-      unitLabel: c.unitLabel,
-      dailyTargetAmount: c.dailyTargetAmount,
-    ));
+    Navigator.of(context).pop(
+      HabitCommitmentDraft(
+        repeatKind: _kind,
+        chosenWeekdays: _kind == HabitRepeatKind.chosenWeekdays
+            ? sorted(_weekdays)
+            : null,
+        timesPerPeriod:
+            _kind == HabitRepeatKind.timesPerWeek ||
+                _kind == HabitRepeatKind.timesPerMonth
+            ? _countValue
+            : null,
+        intervalDays: _kind == HabitRepeatKind.everyNDays ? _countValue : null,
+        preferredDays: switch (_kind) {
+          HabitRepeatKind.timesPerWeek => sorted(_preferredWeekdays),
+          HabitRepeatKind.timesPerMonth => sorted(_parsedDates ?? const []),
+          _ => null,
+        },
+        unitLabel: c.unitLabel,
+        dailyTargetAmount: c.dailyTargetAmount,
+      ),
+    );
   }
 
   Widget _weekdayChips(Set<int> selected) => Wrap(
-        spacing: 6,
-        children: [
-          for (var day = 1; day <= 7; day++)
-            FilterChip(
-              key: Key('weekday_$day'),
-              label: Text(_weekdayName(day)),
-              selected: selected.contains(day),
-              onSelected: (on) =>
-                  setState(() => on ? selected.add(day) : selected.remove(day)),
-            ),
-        ],
-      );
+    spacing: 6,
+    children: [
+      for (var day = 1; day <= 7; day++)
+        FilterChip(
+          key: Key('weekday_$day'),
+          label: Text(_weekdayName(day)),
+          selected: selected.contains(day),
+          onSelected: (on) =>
+              setState(() => on ? selected.add(day) : selected.remove(day)),
+        ),
+    ],
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -339,9 +358,10 @@ class _RepeatSheetState extends State<_RepeatSheet> {
             controller: _count,
             keyboardType: TextInputType.number,
             decoration: InputDecoration(
-                labelText: _kind == HabitRepeatKind.everyNDays
-                    ? 'Every how many days'
-                    : 'How many times'),
+              labelText: _kind == HabitRepeatKind.everyNDays
+                  ? 'Every how many days'
+                  : 'How many times',
+            ),
             onChanged: (_) => setState(() {}),
           ),
         if (_kind == HabitRepeatKind.timesPerWeek) ...[
@@ -354,7 +374,8 @@ class _RepeatSheetState extends State<_RepeatSheet> {
             key: const Key('repeat_dates'),
             controller: _dates,
             decoration: const InputDecoration(
-                labelText: 'Preferred dates, 1 to 31 (a hint)'),
+              labelText: 'Preferred dates, 1 to 31 (a hint)',
+            ),
             onChanged: (_) => setState(() {}),
           ),
         const SizedBox(height: 12),
@@ -369,8 +390,12 @@ class _RepeatSheetState extends State<_RepeatSheet> {
 
 /// What the Anchor sheet returns.
 class HabitAnchorChoice {
-  const HabitAnchorChoice(this.kind,
-      {this.partOfDay, this.clockTime, this.anchorHabitId});
+  const HabitAnchorChoice(
+    this.kind, {
+    this.partOfDay,
+    this.clockTime,
+    this.anchorHabitId,
+  });
   final HabitAnchorKind kind;
   final String? partOfDay;
   final String? clockTime;
@@ -383,9 +408,10 @@ Future<HabitAnchorChoice?> showAnchorSheet(
   BuildContext context, {
   required HabitAnchorChoice current,
   required List<Habit> candidates,
-}) =>
-    _showSheet(context,
-        (_) => _AnchorSheet(current: current, candidates: candidates));
+}) => _showSheet(
+  context,
+  (_) => _AnchorSheet(current: current, candidates: candidates),
+);
 
 class _AnchorSheet extends StatefulWidget {
   const _AnchorSheet({required this.current, required this.candidates});
@@ -413,21 +439,22 @@ class _AnchorSheetState extends State<_AnchorSheet> {
       _kind == HabitAnchorKind.beforeHabit;
 
   bool get _valid => switch (_kind) {
-        HabitAnchorKind.none => true,
-        HabitAnchorKind.partOfDay => _part != null,
-        HabitAnchorKind.clockTime =>
-          habitClockTimePattern.hasMatch(_time.text.trim()),
-        _ => _habitId != null &&
-            widget.candidates.any((h) => h.id == _habitId),
-      };
+    HabitAnchorKind.none => true,
+    HabitAnchorKind.partOfDay => _part != null,
+    HabitAnchorKind.clockTime => habitClockTimePattern.hasMatch(
+      _time.text.trim(),
+    ),
+    _ => _habitId != null && widget.candidates.any((h) => h.id == _habitId),
+  };
 
-  void _done() => Navigator.of(context).pop(HabitAnchorChoice(
-        _kind,
-        partOfDay: _kind == HabitAnchorKind.partOfDay ? _part : null,
-        clockTime:
-            _kind == HabitAnchorKind.clockTime ? _time.text.trim() : null,
-        anchorHabitId: _isHabitKind ? _habitId : null,
-      ));
+  void _done() => Navigator.of(context).pop(
+    HabitAnchorChoice(
+      _kind,
+      partOfDay: _kind == HabitAnchorKind.partOfDay ? _part : null,
+      clockTime: _kind == HabitAnchorKind.clockTime ? _time.text.trim() : null,
+      anchorHabitId: _isHabitKind ? _habitId : null,
+    ),
+  );
 
   static const _kindLabels = {
     HabitAnchorKind.none: 'None',
@@ -459,15 +486,18 @@ class _AnchorSheetState extends State<_AnchorSheet> {
         ),
         const SizedBox(height: 12),
         if (_kind == HabitAnchorKind.partOfDay)
-          Wrap(spacing: 6, children: [
-            for (final part in habitPartsOfDay.toList()..sort())
-              ChoiceChip(
-                key: Key('anchor_part_$part'),
-                label: Text(part),
-                selected: _part == part,
-                onSelected: (_) => setState(() => _part = part),
-              ),
-          ]),
+          Wrap(
+            spacing: 6,
+            children: [
+              for (final part in habitPartsOfDay.toList()..sort())
+                ChoiceChip(
+                  key: Key('anchor_part_$part'),
+                  label: Text(part),
+                  selected: _part == part,
+                  onSelected: (_) => setState(() => _part = part),
+                ),
+            ],
+          ),
         if (_kind == HabitAnchorKind.clockTime)
           TextField(
             key: const Key('anchor_clock_time'),
@@ -479,17 +509,21 @@ class _AnchorSheetState extends State<_AnchorSheet> {
           if (widget.candidates.isEmpty)
             const Text('No other active Habit can be followed.')
           else
-            Column(children: [
-              for (final habit in widget.candidates)
-                ListTile(
-                  key: Key('anchor_candidate_${habit.id}'),
-                  dense: true,
-                  title: Text(habit.title),
-                  selected: _habitId == habit.id,
-                  trailing: _habitId == habit.id ? const Icon(Icons.check) : null,
-                  onTap: () => setState(() => _habitId = habit.id),
-                ),
-            ]),
+            Column(
+              children: [
+                for (final habit in widget.candidates)
+                  ListTile(
+                    key: Key('anchor_candidate_${habit.id}'),
+                    dense: true,
+                    title: Text(habit.title),
+                    selected: _habitId == habit.id,
+                    trailing: _habitId == habit.id
+                        ? const Icon(Icons.check)
+                        : null,
+                    onTap: () => setState(() => _habitId = habit.id),
+                  ),
+              ],
+            ),
         const SizedBox(height: 12),
         _DoneRow(onDone: _valid ? _done : null),
       ],
@@ -511,8 +545,7 @@ class HabitPauseChoice {
 Future<HabitPauseChoice?> showPauseSheet(
   BuildContext context, {
   required DateTime today,
-}) =>
-    _showSheet(context, (_) => _PauseSheet(today: today));
+}) => _showSheet(context, (_) => _PauseSheet(today: today));
 
 class _PauseSheet extends StatefulWidget {
   const _PauseSheet({required this.today});
@@ -527,8 +560,11 @@ class _PauseSheetState extends State<_PauseSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final tomorrow =
-        DateTime(widget.today.year, widget.today.month, widget.today.day + 1);
+    final tomorrow = DateTime(
+      widget.today.year,
+      widget.today.month,
+      widget.today.day + 1,
+    );
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -539,9 +575,9 @@ class _PauseSheetState extends State<_PauseSheet> {
           key: const Key('pause_resumes_on'),
           contentPadding: EdgeInsets.zero,
           title: const Text('Resumes on'),
-          subtitle: Text(_resumesOn == null
-              ? 'No end date'
-              : habitDayKey(_resumesOn!)),
+          subtitle: Text(
+            _resumesOn == null ? 'No end date' : habitDayKey(_resumesOn!),
+          ),
           trailing: _resumesOn == null
               ? null
               : IconButton(
@@ -560,8 +596,11 @@ class _PauseSheetState extends State<_PauseSheet> {
           },
         ),
         _DoneRow(
-          onDone: () => Navigator.of(context).pop(HabitPauseChoice(
-              _resumesOn == null ? null : habitDayKey(_resumesOn!))),
+          onDone: () => Navigator.of(context).pop(
+            HabitPauseChoice(
+              _resumesOn == null ? null : habitDayKey(_resumesOn!),
+            ),
+          ),
         ),
       ],
     );
