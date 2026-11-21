@@ -111,7 +111,7 @@ void main() {
                 userId: _userId,
                 habitId: habitId,
                 chosenOn: '2026-11-19',
-                createdAt: encodeInstant(_later),
+                createdAt: encodeInstant(_later)!,
                 repeatKind: 'every_day')));
         expect(emissions.last.single.commitments, hasLength(2));
 
