@@ -40,7 +40,7 @@ Future<void> _seed(GtdDatabase db, {String userId = _userId}) async {
       id: const Value('tag-label'),
       name: const Value('urgent-this-week'),
       color: const Value('#ff0000'),
-      type: const Value('label'),
+      type: const Value('context'),
       userId: Value(userId)));
   await db.into(db.tags).insert(TagsCompanion(
       id: const Value('tag-area'),
