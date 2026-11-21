@@ -142,18 +142,34 @@ void main() {
     expect(await db.select(db.habits).get(), isEmpty);
   });
 
-  test(
-    'a failure rolls back: no Habit, the Capture stays in the Inbox',
-    () async {
-      await _insertCapture(db, 'c1', 'Stretch');
+  test('a blank title is refused and writes nothing', () async {
+    await _insertCapture(db, 'c1', 'Stretch');
 
-      await expectLater(
-        make('c1', title: '   '),
-        throwsA(isA<ArgumentError>()),
-      );
+    await expectLater(make('c1', title: '   '), throwsA(isA<ArgumentError>()));
 
-      expect(await db.select(db.habits).get(), isEmpty);
-      expect((await db.captureDao.getCapture('c1'))!.clarifiedAt, isNull);
-    },
-  );
+    expect(await db.select(db.habits).get(), isEmpty);
+    expect((await db.captureDao.getCapture('c1'))!.clarifiedAt, isNull);
+  });
+
+  test('a failure after the Habit, commitment and tag writes rolls them all '
+      'back', () async {
+    await _insertCapture(db, 'c1', 'Stretch', notes: 'daily');
+    final ctx = await db.tagDao.findOrCreateTag('home', 'context', _userId);
+    await db.captureDao.assignTagHint('c1', ctx, _userId);
+    final pendingBefore = (await db.select(db.pendingChanges).get()).length;
+    // The stamp is the last write; make the database refuse it.
+    await db.customStatement(
+      'CREATE TRIGGER refuse_stamp BEFORE UPDATE ON captures '
+      "WHEN NEW.clarified_at IS NOT NULL "
+      "BEGIN SELECT RAISE(ABORT, 'refused'); END",
+    );
+
+    await expectLater(make('c1', notes: 'daily'), throwsA(anything));
+
+    expect(await db.select(db.habits).get(), isEmpty);
+    expect(await db.select(db.habitCommitments).get(), isEmpty);
+    expect(await db.select(db.habitTags).get(), isEmpty);
+    expect((await db.captureDao.getCapture('c1'))!.clarifiedAt, isNull);
+    expect((await db.select(db.pendingChanges).get()).length, pendingBefore);
+  });
 }

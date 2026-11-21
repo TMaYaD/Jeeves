@@ -222,6 +222,28 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   /// True while [ClarifyCard.onMakeHabit] runs.
   bool _makingHabit = false;
 
+  /// True while the routing bar or the n-m Outcome section has a write in
+  /// flight on this Capture. Kept apart from [_makingHabit] so one write
+  /// finishing cannot clear the other's busy state for the host.
+  bool _routingBusy = false;
+  bool _carveBusy = false;
+
+  bool get _anyCaptureWriteBusy => _makingHabit || _routingBusy || _carveBusy;
+
+  void _emitBusy() => widget.onProcessingChanged?.call(_anyCaptureWriteBusy);
+
+  void _onRoutingBusy(bool busy) {
+    _routingBusy = busy;
+    if (mounted) setState(() {});
+    _emitBusy();
+  }
+
+  void _onCarveBusy(bool busy) {
+    _carveBusy = busy;
+    if (mounted) setState(() {});
+    _emitBusy();
+  }
+
   /// Focus nodes for the two text fields. On the Outcome shape their listeners
   /// are the save trigger — the same focus-loss rule `task_detail_screen` and
   /// `active_focus_screen` use, so re-clarify does not behave differently from
@@ -1023,7 +1045,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
             except: {if (_isCapture) ProcessAction.done},
             lastAction: widget.lastAction,
             onAfterRoute: _onAfterRoute,
-            onProcessingChanged: widget.onProcessingChanged,
+            onProcessingChanged: _onRoutingBusy,
             // The Outcome's title is edited in an unsaved controller, so the
             // dialog must read it live rather than from the (stale) subject row —
             // both for display and for the blank-save fallback mirror (§6). On a
@@ -1064,6 +1086,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
           tagIds: draft.tagIds,
           personTagHintIds: draft.personTagHintIds,
           onCompleted: _onCaptureCompleted,
+          onBusyChanged: _onCarveBusy,
         ),
         if (widget.onMakeHabit != null) ...[
           const SizedBox(height: 12),
@@ -1093,21 +1116,23 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
       label: 'Make it a Habit',
       icon: Icons.repeat,
       color: const Color(0xFF7C3AED),
-      enabled: enabled && !_makingHabit,
+      enabled: enabled && !_anyCaptureWriteBusy,
       onTap: () => unawaited(_makeHabit(title(), notes())),
     );
   }
 
   Future<void> _makeHabit(String title, String? notes) async {
+    if (_anyCaptureWriteBusy) return;
     setState(() => _makingHabit = true);
-    widget.onProcessingChanged?.call(true);
+    _emitBusy();
     try {
       await widget.onMakeHabit!(title: title, notes: notes);
     } catch (_) {
       _report(_kMakeHabitFailedMessage);
     } finally {
-      widget.onProcessingChanged?.call(false);
-      if (mounted) setState(() => _makingHabit = false);
+      _makingHabit = false;
+      if (mounted) setState(() {});
+      _emitBusy();
     }
   }
 
