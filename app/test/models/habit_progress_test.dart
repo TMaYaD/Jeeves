@@ -351,6 +351,16 @@ void main() {
       expect(exact.todayState, HabitTodayState.done);
     });
 
+    test('a tiny target is not reached with no Check-ins', () {
+      final progress = computeHabitProgress(
+          history([
+            commitment(
+                chosenOn: '2026-11-20', unitLabel: 'l', dailyTargetAmount: 1e-10)
+          ]),
+          today);
+      expect(progress.todayState, isNot(HabitTodayState.done));
+    });
+
     test('an accepted shortfall does not complete the target', () {
       final progress = computeHabitProgress(
           history([

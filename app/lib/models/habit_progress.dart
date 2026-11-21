@@ -594,8 +594,7 @@ HabitProgress computeHabitProgress(HabitHistory history, DateTime today) {
 /// as equal to it: binary floating-point error (0.1 + 0.2 against 0.3), and
 /// nothing a user could enter. Relative, so it never scales a total beyond the
 /// finite range.
-double _amountTolerance(double target) =>
-    1e-9 * (target.abs() < 1 ? 1 : target.abs());
+double _amountTolerance(double target) => 1e-9 * target.abs();
 
 bool _reachesTarget(double total, double target) =>
     total >= target - _amountTolerance(target);
