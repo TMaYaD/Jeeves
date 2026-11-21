@@ -121,7 +121,7 @@ To build a hybrid productivity application that merges the rigid organizational 
 * **Changes apply from the current period;** earlier periods are judged by the commitment they had.
 * **Streak Tracking:** Current and best streak, 7/30/90-day rates. Rest days don't break streaks.
 * **Visualization:** Per-habit history; any past day can be corrected.
-* **GTD Integration:** Daily Planning summary (outside task capacity), Evening Shutdown, optional Focus Mode. Location surfacing comes with #46.
+* **GTD Integration:** Daily Planning summary (outside task capacity), Evening Shutdown, optional Focus Mode. Location surfacing comes with #46. An Inbox capture can be made a Habit from its clarify screen; Area and Labels carry over.
 
 ### Epic 10: Extended Capture Channels
 **Goal:** Meet users where they are with additional low-friction capture methods beyond the core app and Android OS integration.
