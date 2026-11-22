@@ -141,6 +141,29 @@ void main() {
       expect(capture.recorded, isEmpty, reason: 'nothing to decide, nothing to author');
     });
 
+    test('with a userId, leaves another account\'s same-name Tag alone', () async {
+      for (final (id, owner) in [
+        ('t-a', 'other-user'),
+        ('t-b', _userId),
+        ('t-c', _userId),
+      ]) {
+        await db.tagDao.upsertTag(TagsCompanion(
+          id: Value(id),
+          name: const Value('Home'),
+          type: const Value('context'),
+          userId: Value(owner),
+        ));
+      }
+      final before = await db.select(db.tags).get();
+      expect(before, hasLength(3));
+
+      await db.tagDao.foldDuplicateTags(userId: _userId);
+
+      final after = await db.select(db.tags).get();
+      expect(after.where((t) => t.userId == 'other-user'), hasLength(1));
+      expect(after.where((t) => t.userId == _userId), hasLength(1));
+    });
+
     test('folds onto MIN(id) whatever the reference counts say', () async {
       // The ranking `dedupeTags` used — `ref_count DESC, id ASC` — is device-local:
       // two devices folding concurrently would pick different survivors and

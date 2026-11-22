@@ -37,6 +37,25 @@ final activeSessionEngagedTaskIdsProvider = StreamProvider<Set<String>>((ref) {
       .watchActiveSessionEngagedTaskIds();
 });
 
+/// The context tags of the open session's Plan Outcomes (issue #407).
+final activeSessionContextTagsProvider =
+    StreamProvider<Map<String, List<({String id, String name})>>>((ref) {
+  return ref
+      .watch(databaseProvider)
+      .tagDao
+      .watchContextTagsForActiveSessionPlan();
+});
+
+/// The accepted batch and declined suggestion of each Plan entry of the open
+/// session (issue #407).
+final activeSessionBatchStateProvider =
+    StreamProvider<Map<String, ({String? batchId, bool declined})>>((ref) {
+  return ref
+      .watch(databaseProvider)
+      .focusSessionDao
+      .watchActiveSessionBatchState();
+});
+
 /// The current Action's Time context for every Outcome that has one, live.
 final currentTimeContextsProvider =
     StreamProvider<Map<String, TimeContext>>((ref) {
@@ -104,6 +123,8 @@ class NowTimelineExtras {
     this.pinnedStarts = const {},
     this.engagedTaskIds = const {},
     this.timeContexts = const {},
+    this.contextTags = const {},
+    this.batchState = const {},
     this.sprintMarks = const [],
     this.availableMinutes = kFallbackAvailableMinutes,
     this.settings = const DayTimelineSettings(),
@@ -112,6 +133,12 @@ class NowTimelineExtras {
   final Map<String, DateTime> pinnedStarts;
   final Set<String> engagedTaskIds;
   final Map<String, TimeContext> timeContexts;
+
+  /// Each Plan Outcome's context tags, for the small-task suggestion.
+  final Map<String, List<({String id, String name})>> contextTags;
+
+  /// Each Plan entry's accepted batch and declined suggestion.
+  final Map<String, ({String? batchId, bool declined})> batchState;
 
   /// The Sprints done, as the timeline draws them: a bar in the lane at the
   /// time it ran, and a count on the tile it ran on.
@@ -137,6 +164,10 @@ final nowTimelineExtrasProvider = Provider<NowTimelineExtras>((ref) {
             const {},
     timeContexts:
         ref.watch(currentTimeContextsProvider).asData?.value ?? const {},
+    contextTags:
+        ref.watch(activeSessionContextTagsProvider).asData?.value ?? const {},
+    batchState:
+        ref.watch(activeSessionBatchStateProvider).asData?.value ?? const {},
     sprintMarks:
         ref.watch(dayTimelineSprintsProvider).asData?.value ?? const [],
     availableMinutes: remembered != null && remembered > 0

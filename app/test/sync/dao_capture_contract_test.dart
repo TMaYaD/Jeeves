@@ -437,6 +437,35 @@ void main() {
       expect(capture.forCollection(todosCollection), isEmpty);
     });
 
+    test('the estimate sheet\'s write captures the estimate and the Timeboxed '
+        'switch on the actions op', () async {
+      final id = await seedOutcome();
+      await db.actionDao.setCurrentAction(id, 'Draft', now: _ts);
+      capture.clear();
+      // The path the app takes: the estimate sheet writes the estimate and the
+      // switch together, in one row write with one timestamp.
+      await db.todoDao.updateFields(
+        id,
+        timeEstimate: 30,
+        timeboxed: true,
+        now: _ts,
+      );
+      final op = only(actionsCollection);
+      expect(op.fields['timeboxed'], isTrue);
+      expect(op.fields['time_estimate'], 30);
+      expect(op.fields.containsKey('updated_at'), isTrue);
+      // The switch is Action metadata, but turning it is a clarifying act, so
+      // the Outcome's timestamp moves with it — unlike an organising tag,
+      // which leaves the Outcome alone.
+      final outcomeOps = capture.forCollection(todosCollection);
+      expect(
+        outcomeOps.any((op) => op.fields.containsKey('last_clarified_at')),
+        isTrue,
+        reason: 'the Outcome is stamped as a clarifying act',
+      );
+      expect(outcomeOps.every((op) => op.entityId == id), isTrue);
+    });
+
     test('a seeded promote captures the drafted effort on the actions op, not '
         'just the todos mirror', () async {
       final id = await seedOutcome();
@@ -957,6 +986,106 @@ void main() {
         throwsStateError,
       );
       expect(capture.recorded, isEmpty);
+    });
+
+    test('acceptBatch authors one field op per member, atomically', () async {
+      final first = await seedOutcome(id: 'batch-1', title: 'First');
+      final second = await seedOutcome(id: 'batch-2', title: 'Second');
+      final sessionId = await db.focusSessionDao.openSession(
+          userId: _userId, taskIds: [first, second], now: _ts);
+      capture.clear();
+      await db.focusSessionDao.acceptBatch(
+        sessionId: sessionId,
+        batchId: 'batch-x',
+        startByTaskId: {
+          first: DateTime.utc(2026, 11, 16, 10),
+          second: DateTime.utc(2026, 11, 16, 10, 10),
+        },
+      );
+      final ops = capture.forCollection(focusSessionTasksCollection);
+      expect(ops, hasLength(2));
+      final byEntity = {for (final op in ops) op.entityId: op};
+      expect(byEntity[focusSessionTaskIdFor(sessionId, first)]!.fields, {
+        'pinned_start_at': '2026-11-16T10:00:00.000Z',
+        'batch_id': 'batch-x',
+      });
+      expect(byEntity[focusSessionTaskIdFor(sessionId, second)]!.fields, {
+        'pinned_start_at': '2026-11-16T10:10:00.000Z',
+        'batch_id': 'batch-x',
+      });
+    });
+
+    test('acceptBatch refuses an Outcome outside the Plan and writes nothing',
+        () async {
+      final planned = await seedOutcome(id: 'planned-1', title: 'Planned');
+      final other = await seedOutcome(id: 'other-1', title: 'Other');
+      final sessionId = await db.focusSessionDao
+          .openSession(userId: _userId, taskIds: [planned], now: _ts);
+      capture.clear();
+      await expectLater(
+        db.focusSessionDao.acceptBatch(
+          sessionId: sessionId,
+          batchId: 'batch-x',
+          startByTaskId: {
+            planned: DateTime.utc(2026, 11, 16, 10),
+            other: DateTime.utc(2026, 11, 16, 10, 10),
+          },
+        ),
+        throwsStateError,
+      );
+      expect(capture.recorded, isEmpty);
+      final row = await (db.select(db.focusSessionTasks)
+            ..where((fst) => fst.taskId.equals(planned)))
+          .getSingle();
+      expect(row.batchId, isNull);
+      expect(row.pinnedStartAt, isNull);
+    });
+
+    test('declineBatchSuggestion authors one field op per entry', () async {
+      final first = await seedOutcome(id: 'dec-1', title: 'First');
+      final second = await seedOutcome(id: 'dec-2', title: 'Second');
+      final sessionId = await db.focusSessionDao.openSession(
+          userId: _userId, taskIds: [first, second], now: _ts);
+      capture.clear();
+      await db.focusSessionDao.declineBatchSuggestion(
+        sessionId: sessionId,
+        taskIds: [first, second],
+        declinedAt: DateTime.utc(2026, 11, 16, 9, 5, 0, 250),
+      );
+      final ops = capture.forCollection(focusSessionTasksCollection);
+      expect(ops, hasLength(2));
+      for (final op in ops) {
+        expect(op.fields, {
+          'batch_suggestion_declined_at': '2026-11-16T09:05:00.250Z',
+        });
+      }
+    });
+
+    test('setPinnedStart on a batch member also clears its batch', () async {
+      final first = await seedOutcome(id: 'mv-1', title: 'First');
+      final second = await seedOutcome(id: 'mv-2', title: 'Second');
+      final sessionId = await db.focusSessionDao.openSession(
+          userId: _userId, taskIds: [first, second], now: _ts);
+      await db.focusSessionDao.acceptBatch(
+        sessionId: sessionId,
+        batchId: 'batch-x',
+        startByTaskId: {
+          first: DateTime.utc(2026, 11, 16, 10),
+          second: DateTime.utc(2026, 11, 16, 10, 10),
+        },
+      );
+      capture.clear();
+      await db.focusSessionDao.setPinnedStart(
+        sessionId: sessionId,
+        taskId: second,
+        pinnedStartAt: null,
+      );
+      expect(only(focusSessionTasksCollection).fields,
+          {'pinned_start_at': null, 'batch_id': null});
+      final rows = await (db.select(db.focusSessionTasks)
+            ..orderBy([(fst) => OrderingTerm(expression: fst.position)]))
+          .get();
+      expect(rows.map((r) => r.batchId), ['batch-x', null]);
     });
 
     test('setCurrentTask moves the pointer and opens a log', () async {

@@ -96,6 +96,10 @@ Every device holds two SQLite files, deliberately not one.
 Two files rather than two schemas in one file, so that an operation whose whole
 premise is that the read model can be discarded cannot take the evidence with it.
 
+**A store written by a newer build is never opened.** Each file carries its
+schema version, and a build that meets a higher one opens neither store and
+changes nothing in either — it says the data belongs to a newer Jeeves instead.
+
 ## The sync spine
 
 `app/lib/sync/` is the largest region in the client and has its own map:
@@ -123,6 +127,15 @@ enrolled or not. A write commits together with a clocked change in
 sequence and hands changes to plugins, each resumed from a cursor the host stores.
 The op-log client reaches the host through a temporary bridge until it becomes a
 plugin.
+
+**The vault** (`app/lib/sync/vault/`) is the first plugin to run in production. It
+carries the merged state to a folder of Markdown pages the person owns, reads and
+edits, and brings back what they changed by hand. It is a carrier like any other —
+it never decides a field's value — and its medium is a folder, so it needs no
+server and no account. A page is a pure function of merged state, and the clocks
+that order its fields ride in one machine-written block at the end of the page
+([ADR-0051](adr/0051-vault-pages-keep-field-clocks-in-one-end-block.md)). Shape in
+[SYNC.md](SYNC.md#the-vault-a-folder-of-markdown-pages).
 
 Four pieces carry the domain across the spine, and the split between the last two
 is load-bearing: the **capture seam** turns writes into ops; the **codecs** name
@@ -192,6 +205,7 @@ The places designed to be extended, and the contract each one carries.
 | Merge strategy | `app/lib/sync/merge_strategy.dart` | A per-key registry; every non-LWW entry must be a join-semilattice |
 | Calendar reader | `app/lib/services/calendar/` | A read-only `CalendarSource`: `CalendarPlugin.kt` on Android, nothing on web, in-memory in the harness. Events are never stored, synced or logged |
 | Device key store | `app/lib/sync/` | Keychain/Keystore in production, in-memory in the harness — the same closures run in both |
+| Vault folder | `app/lib/sync/vault/vault_folder.dart` | One port — list, read, write-and-rename, remove — with a `dart:io` implementation, an Android document-tree one over the shared `jeeves/folder` channel, and a web stub; the plugin never touches a path itself |
 
 The platform-adapter rule is the one most easily broken by accident: three files
 per adapter, and the entry point picks the implementation by conditional export.

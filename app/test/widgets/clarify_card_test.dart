@@ -31,9 +31,11 @@ import 'package:jeeves/sync/domain_op_capture.dart'
 import 'package:jeeves/widgets/clarify_card.dart';
 import 'package:jeeves/widgets/clarify_retention.dart';
 import 'package:jeeves/widgets/clarify_shared_widgets.dart';
+import 'package:jeeves/widgets/context_tag_picker.dart';
 import 'package:jeeves/widgets/next_action_dialog.dart';
 import 'package:jeeves/widgets/person_tag_picker.dart';
 import 'package:jeeves/widgets/process_to_handlers.dart';
+import 'package:jeeves/widgets/project_picker.dart';
 import 'package:jeeves/widgets/state_surfaces.dart';
 import 'package:jeeves/widgets/tag_text.dart';
 
@@ -333,6 +335,7 @@ Widget _captureHarness(
   // exercised by clarify_surface_parity_test.dart.
   ClarifyTagSection tagSection = ClarifyTagSection.editablePickers,
   Widget? footer,
+  Future<void> Function({required String title, String? notes})? onMakeHabit,
   // The clarify-mode preference, when a test needs to flip it under an open
   // card. Left null everywhere else, where the real notifier's default
   // (`oneToOne`) is what every other test in this file exercises.
@@ -372,6 +375,7 @@ Widget _captureHarness(
           onAfterRoute: onAfterRoute,
           retention: retention,
           footer: footer,
+          onMakeHabit: onMakeHabit,
         ),
       ),
     ),
@@ -380,6 +384,71 @@ Widget _captureHarness(
 
 void main() {
   setUpAll(configureSqliteForTests);
+
+  group('ClarifyCard — Make it a Habit (#999)', () {
+    late GtdDatabase db;
+
+    setUp(() => db = _openInMemory());
+    tearDown(() async => db.close());
+
+    testWidgets('is absent when the host sets no onMakeHabit', (tester) async {
+      final capture = await _insertCapture(db, id: 'x', title: 'Stretch');
+      await tester.pumpWidget(_captureHarness(db, capture: capture));
+      await _pumpFrames(tester, frames: 5);
+
+      expect(find.text('Make it a Habit'), findsNothing);
+    });
+
+    testWidgets('passes the live title and notes to the host', (tester) async {
+      final capture = await _insertCapture(db, id: 'x', title: 'Stretch');
+      String? madeTitle;
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: capture,
+        onMakeHabit: ({required title, notes}) async => madeTitle = title,
+      ));
+      await _pumpFrames(tester, frames: 5);
+
+      await _scrollAndTap(tester, 'Make it a Habit');
+      await _pumpFrames(tester, frames: 5);
+
+      expect(madeTitle, 'Stretch');
+    });
+
+    testWidgets('is disabled while the title is blank', (tester) async {
+      final capture = await _insertCapture(db, id: 'x', title: 'Stretch');
+      var calls = 0;
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: capture,
+        onMakeHabit: ({required title, notes}) async => calls++,
+      ));
+      await _pumpFrames(tester, frames: 5);
+      await tester.enterText(find.byType(TextField).first, '   ');
+      await _pumpFrames(tester, frames: 3);
+
+      await _scrollAndTap(tester, 'Make it a Habit');
+      await _pumpFrames(tester, frames: 3);
+
+      expect(calls, 0);
+    });
+
+    testWidgets('a failure shows a message and leaves the card usable',
+        (tester) async {
+      final capture = await _insertCapture(db, id: 'x', title: 'Stretch');
+      await tester.pumpWidget(_captureHarness(
+        db,
+        capture: capture,
+        onMakeHabit: ({required title, notes}) async => throw StateError('no'),
+      ));
+      await _pumpFrames(tester, frames: 5);
+
+      await _scrollAndTap(tester, 'Make it a Habit');
+      await _pumpFrames(tester, frames: 5);
+
+      expect(find.textContaining("It's still in your Inbox"), findsOneWidget);
+    });
+  });
 
   group('ClarifyCard — Next on a Capture asks for the action (#689)', () {
     late GtdDatabase db;
@@ -753,7 +822,8 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    testWidgets('renders a Tags section with empty-state placeholders',
+    testWidgets(
+        'renders Project and Labels headings with empty-state placeholders',
         (tester) async {
       final todo = await _insertInboxTodo(db, id: 't-empty');
 
@@ -762,11 +832,25 @@ void main() {
       );
       await tester.pumpAndSettle();
 
+      expect(find.text('PROJECT'), findsOneWidget);
       expect(find.text('LABELS'), findsOneWidget);
       // Project picker's optional-state affordance.
       expect(find.text('No project'), findsOneWidget);
       // Context picker's "add a tag" placeholder chip.
       expect(find.byKey(const Key('context_tag_picker_add')), findsOneWidget);
+
+      // The order is the point: the Project picker sits under PROJECT and the
+      // Label picker under LABELS. Without it, a single heading over both
+      // pickers would still pass the two assertions above.
+      final projectHeadingY = tester.getTopLeft(find.text('PROJECT')).dy;
+      final projectPickerY =
+          tester.getTopLeft(find.byType(ProjectPickerWidget)).dy;
+      final labelsHeadingY = tester.getTopLeft(find.text('LABELS')).dy;
+      final labelPickerY =
+          tester.getTopLeft(find.byType(ContextTagPickerWidget)).dy;
+      expect(projectHeadingY, lessThan(projectPickerY));
+      expect(projectPickerY, lessThan(labelsHeadingY));
+      expect(labelsHeadingY, lessThan(labelPickerY));
     });
 
     testWidgets('assigning a context tag persists via DAO and renders selected',

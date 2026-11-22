@@ -121,6 +121,37 @@ class FocusModeNotifier extends Notifier<FocusModeState> {
     );
   }
 
+  /// Moves Focus straight from the Outcome just completed to [todoId], with
+  /// no pass through the list: closes any open TimeLog, opens one on [todoId]
+  /// and points the session at it in one write (issue #407).
+  ///
+  /// The state never reads inactive in between, so the Focus screen is not
+  /// sent back to the list. Without an open session the engagement is ad hoc,
+  /// as in [startFocus].
+  Future<void> advanceTo(String todoId) async {
+    final db = ref.read(databaseProvider);
+    final now = DateTime.now();
+    final session = await db.focusSessionDao.getActiveSession();
+    if (session != null) {
+      await db.focusSessionDao.setCurrentTask(
+        sessionId: session.id,
+        taskId: todoId,
+        now: now,
+      );
+    } else {
+      final previousTodoId = state.activeTodoId;
+      if (previousTodoId != null) {
+        await db.timeLogDao.closeLog(taskId: previousTodoId);
+      }
+      await db.timeLogDao.openLog(
+        taskId: todoId,
+        userId: ref.read(currentUserIdProvider),
+        now: now,
+      );
+    }
+    state = FocusModeState(activeTodoId: todoId, sessionStart: now);
+  }
+
   /// Clears the focused task and resets the timer, closing the open TimeLog
   /// (through the session when one is open; directly for ad-hoc engagement).
   ///

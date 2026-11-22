@@ -6,7 +6,7 @@ This document outlines the core aesthetic and functional principles of our desig
 
 ## Reference design prototypes
 
-Four design references are canonical for the execution-layer experience. Epic-level design work extends them; new surfaces must match their design language (and this document's tokens):
+Five design references are canonical for the execution-layer experience. Epic-level design work extends them; new surfaces must match their design language (and this document's tokens):
 
 | Project | Covers |
 |---|---|
@@ -14,8 +14,9 @@ Four design references are canonical for the execution-layer experience. Epic-le
 | [Jeeves — Daily Execution Layer](https://claude.ai/design/p/6a1ed3d8-1b97-4abd-8f45-0315ca69bc07?file=Jeeves+Daily+Execution+Layer.html) | The full desktop day loop (1440px sidebar shell): Morning planning (clarify → energy → selection → estimates) → Agenda → day timeline → Focus → Shutdown (dispositions + journal), plus a mobile companion panel. Also the desktop-layout reference for cross-platform work. |
 | [Jeeves — System Trust guardrails](https://claude.ai/artifact/4cwXKxksQeWFdNesbQvAFQ) | The guardrail surfaces of TMaYaD/Jeeves#45: the Banner's Bertie buttons and swipe dismiss, the Now screen's empty-state nudge, Inbox too full, System Trust in Settings, the Weekly Review's Bypassed step — light and dark. |
 | [Day timeline and sprints](proposals/day-timeline-and-sprints-design.html) | The epic-level pass for TMaYaD/Jeeves#43, phone first and then wide: the day timeline with suggested-time tiles beside hatched calendar events, Autoflow chunking and batching, the Timeboxed switch on the estimate and its red overflow dots, Focus Mode's "Sprint N" with hint dots, short and long breaks, and the capacity bar — light and dark. Open the file in a browser. |
+| [Jeeves — Habits](https://claude.ai/artifact/PNwLJBVCVMv6QTG7MRSLRR) | Every habit surface of TMaYaD/Jeeves#400: list, detail, field editors, Check-in, Planning, Shutdown, Focus, reminders. |
 
-The first two are accessible via the claude_design MCP (`https://api.anthropic.com/v1/design/mcp`, auth via `/design-login`); the third is a claude.ai Design canvas, shared from its page; the fourth is a page in this repository.
+The first two are accessible via the claude_design MCP (`https://api.anthropic.com/v1/design/mcp`, auth via `/design-login`); the third and fifth are claude.ai Design canvases, shared from their page; the fourth is in this repository.
 
 ### Epic-level design precedes stories
 
@@ -549,18 +550,17 @@ Paths are under `app/lib/`; DPR means Daily Planning and ES means Evening Shutdo
 |---|---|---|---|
 | Task detail — `screens/task_detail/task_detail_screen.dart` | Project, status, title, attributes, contexts, people, Plan, History, notes, reminders, captured-from | Full Outcome detail | Autosave edits; status menu; attribute editors |
 | Peek — `widgets/outcome_peek_sheet.dart` | Title, energy, estimate, logged time, due, contexts, people, Plan, notes | Bottom-sheet Outcome detail | Edit in place; close |
-| Clarify — `widgets/clarify_card.dart` | Title, notes, project, contexts, energy, estimate, due, process-to | Outlined form; shared labels and estimate picker | Capture draft or Outcome autosave; process-to routing |
+| Clarify — `widgets/clarify_card.dart` | Title, notes, project, labels, energy, estimate, due, process-to | Outlined form; shared labels and estimate picker | Capture draft or Outcome autosave; process-to routing |
 | DPR plan summary — `screens/planning/steps/plan_summary_step.dart` | Title, off-Up-Next reason, estimate, energy | Framed `OutcomeRow`, checkbox and selection controls | Peek, long-press selection, Select/Skip/Undo |
 | DPR re-clarify — `screens/planning/steps/task_review_step.dart` | Hint, title, notes, current Action | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | `ProcessToHandlers` |
 | DPR scheduled — `screens/planning/steps/scheduled_review_step.dart` | Title, due, estimate | Framed `OutcomeRow` | None |
 | ES settled — `screens/shutdown/steps/settled_review_step.dart` | Settlement icon, title, estimate vs actual, added-during-the-day tag | Framed `OutcomeRow` | None |
 | ES disposition — `screens/shutdown/steps/unfinished_tasks_step.dart` | Title, current Action, notes, estimate, logged, added-during-the-day tag | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Done (verdict sheet) / Roll over / Return to Next / Defer |
 | Weekly review — `screens/periodic_review/steps/list_review_step.dart` | Banner, people, title, current Action, notes | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Injected `ProcessToHandlers` |
-| Focus — `screens/focus_screen.dart` | Title, due, estimate, sprint hint, added-during-the-day tag | Flat `OutcomeRow`, trailing Start/status | Open detail; Start/Resume |
-| Focus carried-over — `screens/focus_screen.dart` | Muted title, estimate | Flat `OutcomeRow`, leading icon | None |
+| Focus — `screens/focus_screen.dart` | Title, due, estimate, sprint hint, added-during-the-day tag; carried-over: muted title, estimate | Flat `OutcomeRow`, trailing Start/status | Open detail; Start/Resume |
 | Search — `screens/search/widgets/search_result_tile.dart` | Title, snippet, match hint, status | Flat `OutcomeRow` | Capture → clarify; Outcome → detail |
-| GTD lists / Project — `screens/common/gtd_list_screen.dart` | Title, energy, estimate, due when set | Flat `OutcomeRow` | Open detail; long-press multi-selects |
-| Waiting For — `screens/waiting_for/waiting_for_screen.dart` | Title, energy, estimate, due when set | Flat `OutcomeRow`, grouped by person | Open detail; long-press multi-selects |
+| GTD lists / Project / Waiting For (grouped by person) — `screens/common/gtd_list_screen.dart` | Title, energy, estimate, due when set | Flat `OutcomeRow` | Open detail; long-press multi-selects |
+| Habit list and detail — `screens/habits/habits_screen.dart` | Title, anchor, state; notes, Check-in, Repeat, Area, Labels, energy, estimate | Detail beside the list from 840 px; theme colours | Edit in place; sheets with Done/Cancel; pause, archive, restore |
 | Linked Outcomes — `widgets/capture_outcomes_section.dart` | Title, next Action, contexts, Capture provenance count | Framed `OutcomeRow` | Unlink |
 
 ### Deliberate variations

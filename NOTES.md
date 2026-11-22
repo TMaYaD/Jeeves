@@ -121,3 +121,6 @@ Format: `- <date>: Instinct: X. Here: Y — <why>.`
 
 ## 2026-11-18 (#989 — one refused op, one row)
 - 2026-11-18: Instinct: a dedupe is a read followed by an insert, and the read is what makes the second insert unnecessary. Here: the read and the insert were two separate steps, so two pulls that fetched the same op both read "no such row" and both inserted (#989) — a dedupe that is not one unit is not a dedupe, and the unit has to be the *whole* read-and-insert.
+
+## 2026-11-18 (#980 — the member directory after a relaunch)
+- 2026-11-18: Instinct: state a pull fills in order needs no rebuild, because the pull fills it again. Here: the pull cursor is stored and the state was not, so a relaunch never re-pulled the registrations and every peer's key was gone (#980) — anything learned only from pulled ops needs a restore from the stored log at assembly.

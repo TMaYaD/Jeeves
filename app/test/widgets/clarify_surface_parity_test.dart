@@ -3,7 +3,8 @@
 /// Three surfaces render [ClarifyCard]: the ceremony Clarify Inbox step, the
 /// standalone `/inbox/:id/clarify` screen and the Re-clarify route. What they
 /// legitimately differ in is expressed as one option ([ClarifyTagSection]) and
-/// three composition slots (`footer`, `missingCta`, `onProcessingChanged`).
+/// composition slots (`footer`, `missingCta`, `onProcessingChanged` and
+/// `onMakeHabit`, which only the standalone screen sets).
 /// Everything else is shared, and the tests here are what stops a future
 /// change quietly forking it again.
 ///
@@ -231,6 +232,7 @@ void main() {
       );
       await _pumpFrames(tester, frames: 5);
 
+      expect(find.text('PROJECT'), findsNothing);
       expect(find.text('LABELS'), findsNothing);
       expect(find.byType(ProjectPickerWidget), findsNothing);
       expect(find.byType(ContextTagPickerWidget), findsNothing);
@@ -296,6 +298,7 @@ void main() {
       ));
       await _pumpFrames(tester, frames: 5);
 
+      expect(find.text('PROJECT'), findsOneWidget);
       expect(find.text('LABELS'), findsOneWidget);
       expect(find.byType(ProjectPickerWidget), findsOneWidget);
       expect(find.byType(ContextTagPickerWidget), findsOneWidget);

@@ -49,7 +49,8 @@ import '../database/daos/focus_session_dao.dart'
         focusSessionDispositionIdFor,
         focusSessionPlanningBypassIdFor,
         focusSessionRescheduleIdFor;
-import '../database/daos/tag_dao.dart' show todoTagIdFor;
+import '../database/tables.dart'
+    show labelTagType, labelTagTypes, retiredLabelTagType;
 import 'collection_codecs.dart';
 import 'ids.dart';
 
@@ -79,8 +80,12 @@ enum InitialUploadWorkspace {
 }
 
 /// The `tags.type` values ADR-0025's conversion is about.
+///
+/// [labelTagType] is not here: it lives in `database/tables.dart`, next to the
+/// table it names. One value backs Labels now, and the retype that folds the
+/// retired value into it is a domain-layer write, so the constant belongs with
+/// the table rather than with this one consumer of it.
 const String areaTagType = 'area';
-const String labelTagType = 'label';
 
 /// Authoring order: parents before the junctions that reference them.
 ///
@@ -400,7 +405,9 @@ Future<Map<String, InitialUploadTagRef>> readSpineLabelTags(
   final reduced = await readReducedCollection(tagsCollection);
   final labels = <InitialUploadTagRef>[];
   for (final entry in reduced.entries) {
-    if (entry.value['type'] != labelTagType) continue;
+    // Both values that name a Label: the retired one is still on the spine
+    // when an older build minted it, and that row is a Label like any other.
+    if (!labelTagTypes.contains(entry.value['type'])) continue;
     final name = entry.value['name'];
     if (name is! String) continue;
     labels.add(InitialUploadTagRef(id: entry.key, name: name));
@@ -734,6 +741,14 @@ EncodedLegacyRow encodeLegacyRow({
     fields[column] = encoded.value;
   }
 
+  // A Tag row still carrying the retired Label type is asserted as the current
+  // one. The row is a Label either way — the two types only ever split the same
+  // concept in two — and an updated build must not put the retired value back
+  // on the wire, or the fold would have to keep retyping it.
+  if (collection == tagsCollection && fields['type'] == retiredLabelTagType) {
+    fields['type'] = labelTagType;
+  }
+
   return EncodedLegacyRow(
     fields: fields,
     anomalies: anomalies,
@@ -812,7 +827,10 @@ _AreaResolutionResult _resolveAreaExclusivity({
   // two Labels called "Home" cannot make the conversion depend on row order.
   final legacyLabelsByName = <String, _LegacyTag>{};
   for (final tag in tagsById.values.toList()..sort(_LegacyTag.compare)) {
-    if (tag.type != labelTagType) continue;
+    // Both values that name a Label, for the same reason as the spine read
+    // above: a Label the user made is a Label whether the store spells its type
+    // the current way or the retired one.
+    if (!labelTagTypes.contains(tag.type)) continue;
     legacyLabelsByName.putIfAbsent(tag.name.toLowerCase(), () => tag);
   }
 

@@ -88,6 +88,7 @@ class CaptureOutcomesSection extends ConsumerStatefulWidget {
     this.tagIds = const {},
     this.personTagHintIds = const {},
     this.onCompleted,
+    this.onBusyChanged,
   });
 
   /// The Capture being clarified. Rendered read-only at the top, and the
@@ -105,6 +106,10 @@ class CaptureOutcomesSection extends ConsumerStatefulWidget {
   /// Called after the verdict lands — the host owns the exit (pop the screen,
   /// advance the ceremony cursor).
   final Future<void> Function()? onCompleted;
+
+  /// Called with true when one of this surface's own writes starts and false
+  /// when it ends, so a host can shut what must not overlap it.
+  final ValueChanged<bool>? onBusyChanged;
 
   @override
   ConsumerState<CaptureOutcomesSection> createState() =>
@@ -206,12 +211,14 @@ class _CaptureOutcomesSectionState
       _busy = true;
       _error = null;
     });
+    widget.onBusyChanged?.call(true);
     try {
       await write();
     } catch (_) {
       if (mounted) setState(() => _error = _kWriteFailedMessage);
     } finally {
       if (mounted) setState(() => _busy = false);
+      widget.onBusyChanged?.call(false);
     }
   }
 

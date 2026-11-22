@@ -26,9 +26,15 @@ import 'database_provider.dart';
 import 'user_constants.dart';
 
 /// The process-wide op-log store, opened once and closed on disposal.
+///
+/// **It refuses a store written by a newer build:** the file is left exactly
+/// as it is, and the refusal is what the app's blocking screen is built
+/// from.
 final FutureProvider<SyncDatabase> syncDatabaseProvider =
     FutureProvider<SyncDatabase>((ref) async {
   ref.keepAlive();
+  final refusal = (await ref.read(localStoreVersionsProvider.future)).refusal;
+  if (refusal != null) throw refusal;
   final database = await SyncStoreImpl().openDatabase();
   ref.onDispose(database.close);
   return database;
@@ -48,6 +54,17 @@ final FutureProvider<SyncHostService> syncHostProvider =
     domain: ref.read(databaseProvider),
     clock: ref.read(deviceClockProvider),
   )..localChangeListener = ref.read(domainOpCaptureProvider).onLocalChanges;
+  // A change the bridge will never author is handed back, so the host can take
+  // its clock back under the device node id. Wired before the start-up drain,
+  // because that drain can deliver a change the bridge will drop.
+  ref.read(domainOpCaptureProvider).onChangesLeftUnauthored =
+      host.restampUnauthoredClocksAsDevice;
+  // A change the bridge has authored, or had refused for good, is settled: no
+  // op will ever carry it, so the host forgets that it still needs one. Wired
+  // before the start-up drain, because that drain hands the bridge what a
+  // killed process left behind.
+  ref.read(domainOpCaptureProvider).onChangeAuthoredOrRefused =
+      host.forgetUnauthored;
   final capture = ref.read(hostedDomainOpCaptureProvider);
   ref.onDispose(capture.detach);
   await host.start();

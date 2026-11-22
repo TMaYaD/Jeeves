@@ -14,6 +14,8 @@ library;
 
 import 'package:drift/drift.dart';
 
+import '../database/store_refusal_error.dart';
+
 part 'sync_database.g.dart';
 
 /// Every envelope this device has received, byte for byte, in arrival order.
@@ -451,6 +453,18 @@ class PluginCursors extends Table {
   Set<Column<Object>> get primaryKey => {pluginId};
 }
 
+/// The text of the last version of each vault page this device saw, keyed by its
+/// path inside the vault — the base a hand edit is read against. Private to the
+/// device and never synced; clearing it loses nothing (the next start reads the
+/// folder again).
+class VaultPageBases extends Table {
+  TextColumn get pagePath => text()();
+  TextColumn get pageText => text()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {pagePath};
+}
+
 /// Whether this device has walked its pre-existing domain rows into merge state.
 ///
 /// A single row (`id = 1`), written after the last collection of the walk. Its
@@ -476,6 +490,42 @@ class MergeStateSeeding extends Table {
   Set<Column<Object>> get primaryKey => {id};
 }
 
+/// A change the host merged that still needs an op.
+///
+/// A local write made while the device was signed in carries the member id of
+/// that session. The op-log bridge authors it into the log, and until it has,
+/// the change lives only in merge state — so a process killed in that window
+/// loses it: the next launch finds no trace of a change that still needs an op.
+///
+/// The row leaves when the bridge has authored the change or handed it back.
+/// The record and the merge that caused it commit together, so no clock can
+/// name a member without either an op or a record.
+///
+/// Not named `cached_*`: this is not derived from anything. It is the record
+/// that a change still needs an op.
+@DataClassName('UnauthoredChangeRow')
+class UnauthoredChanges extends Table {
+  IntColumn get id => integer().autoIncrement()();
+
+  /// The outbox row's own `change_id`. Unique, so a crash between the merge
+  /// commit and the outbox delete replays the change into one record rather
+  /// than two.
+  TextColumn get changeId => text().unique()();
+
+  TextColumn get collection => text()();
+  TextColumn get entityId => text()();
+
+  /// The member the change's clock names — the session that made it.
+  TextColumn get memberIdHex => text()();
+
+  /// The clock the change was merged at.
+  IntColumn get wallMs => integer()();
+  IntColumn get counter => integer()();
+
+  /// The change itself, as the bridge will hand it over.
+  TextColumn get changeJson => text()();
+}
+
 @DriftDatabase(
   tables: [
     OpLog,
@@ -496,6 +546,8 @@ class MergeStateSeeding extends Table {
     ChangeSequence,
     PluginCursors,
     MergeStateSeeding,
+    UnauthoredChanges,
+    VaultPageBases,
   ],
 )
 class SyncDatabase extends _$SyncDatabase {
@@ -512,9 +564,18 @@ class SyncDatabase extends _$SyncDatabase {
   /// `quarantined_ops.release_started_at`, the interrupted-chain-replay re-arm
   /// marker (#620); v10 adds the sync host's durable change sequence and its
   /// per-plugin cursors; v11 adds the marker that the pre-existing domain rows were
-  /// walked into merge state.
+  /// walked into merge state; v12 adds the record of a merged change that still
+  /// needs an op; v13 adds the vault plugin's private base copies of pages.
   @override
-  int get schemaVersion => 11;
+  int get schemaVersion => supportedSchemaVersion;
+
+  /// The schema version this build reads and writes.
+  ///
+  /// The number the store's file carries in `PRAGMA user_version`. A file
+  /// carrying a **higher** version was written by a newer build, and this
+  /// build refuses it: the op log is the evidence every merge verdict is
+  /// derived from, and a build that cannot read it must not relabel it.
+  static const int supportedSchemaVersion = 13;
 
   /// Additive only. A device that already holds a log keeps every byte of it:
   /// each step is `CREATE TABLE`s, an `ADD COLUMN` or a `CREATE INDEX`, and no
@@ -526,6 +587,19 @@ class SyncDatabase extends _$SyncDatabase {
   MigrationStrategy get migration => MigrationStrategy(
         onCreate: (migrator) => migrator.createAll(),
         onUpgrade: (migrator, from, to) async {
+          // A store written by a newer build. Drift calls
+          // `onUpgrade` for **any** version difference, a downgrade included,
+          // so this is where an older build meets a newer file. Refuse before
+          // touching anything: the file keeps its version and every row, and
+          // the app says the data belongs to a newer Jeeves instead of
+          // relabelling it with a version this build does not understand.
+          if (from > to) {
+            throw StoreVersionTooNewError(
+              storeName: 'op log',
+              storedVersion: from,
+              supportedVersion: to,
+            );
+          }
           if (from < 2) {
             await migrator.createTable(rootPins);
             await migrator.createTable(controlChainState);
@@ -621,6 +695,18 @@ class SyncDatabase extends _$SyncDatabase {
             // One new table, nothing altered or backfilled. An absent marker is
             // exactly right for a device that predates it: it has not walked.
             await migrator.createTable(mergeStateSeeding);
+          }
+          if (from < 12) {
+            // One new table, nothing altered or backfilled. An empty table is
+            // exactly right for a device that predates it: nothing was
+            // recorded, because nothing had yet been merged under a member id
+            // that no op carried. Every row of the log, the outbox and the
+            // merge state survives untouched.
+            await migrator.createTable(unauthoredChanges);
+          }
+          if (from < 13) {
+            // One new table: private copies of vault pages, not user data.
+            await migrator.createTable(vaultPageBases);
           }
         },
       );

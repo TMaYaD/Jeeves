@@ -22,7 +22,20 @@ import '../utils/uuid.dart';
 /// surfaces that display it read that derivation directly; nothing caches it,
 /// because a cached total is a value that can only ever be stale (ADR-0030).
 class Todos extends Table {
+  /// The longest title a row holds.
+  static const int maxTitleLength = 500;
+
   TextColumn get id => text().clientDefault(() => uuid.v4())();
+
+  /// The limit is a literal here on purpose, and it must stay equal to
+  /// [maxTitleLength].
+  ///
+  /// Drift reads a length constraint out of the source with `readIntLiteral`,
+  /// which takes an integer literal and nothing else. A constant reference is
+  /// not a literal, so it reads as "no limit": the generated code drops the
+  /// check and the store accepts a title of any length. Nothing says so — the
+  /// column simply stops refusing. `outcome_title_limit_test.dart` holds the
+  /// two numbers together.
   TextColumn get title => text().withLength(max: 500)();
   TextColumn get notes => text().nullable()();
   IntColumn get priority => integer().nullable()();
@@ -216,6 +229,18 @@ class FocusSessionTasks extends Table {
   DateTimeColumn get addedDuringExecutionAt =>
       dateTime().named('added_during_execution_at').nullable()();
 
+  /// Groups the Plan entries of one accepted small-task suggestion (issue #407):
+  /// entries sharing a value run back to back. NULL = not in a batch. Like
+  /// [pinnedStartAt] it dies with the session, merges last-write-wins per field,
+  /// and is cleared when the user moves a member.
+  TextColumn get batchId => text().named('batch_id').nullable()();
+
+  /// When the user answered "Not today" to a small-task suggestion that
+  /// included this entry (issue #407). NULL = never declined. Dies with the
+  /// session; the entry is not offered in a suggestion again.
+  DateTimeColumn get batchSuggestionDeclinedAt =>
+      dateTime().named('batch_suggestion_declined_at').nullable()();
+
   @override
   Set<Column<Object>> get primaryKey => {focusSessionId, taskId};
 }
@@ -324,12 +349,40 @@ class OutcomeBypassDecisions extends Table {
 // tags
 // ---------------------------------------------------------------------------
 
+/// The `tags.type` value that backs a Label.
+///
+/// **`'context'` is the stored value, and it stays `'context'`.** The value
+/// predates the name "Label" — these are the `@` rows the app used to show as
+/// "Tags" — and it is what every released build already reads as its Label
+/// surface. Folding the retired `'label'` value into this one therefore costs
+/// only the few rows the sync cutover minted, and no wire change
+/// (docs/SYNC.md).
+const String labelTagType = 'context';
+
+/// The retired `tags.type` value: what the sync cutover minted Labels as,
+/// before they were folded into [labelTagType].
+///
+/// A row still carrying it is retyped on arrival, so no build after this one
+/// writes it.
+const String retiredLabelTagType = 'label';
+
+/// Every `tags.type` value that names a Label: the current one and the retired
+/// one.
+///
+/// A reader that looks for a Label has to accept both, because a peer on an
+/// older build can still send the retired value.
+const Set<String> labelTagTypes = {labelTagType, retiredLabelTagType};
+
 class Tags extends Table {
   TextColumn get id => text().clientDefault(() => uuid.v4())();
   TextColumn get name => text().withLength(max: 100)();
   TextColumn get color => text().nullable()();
 
-  /// GTD discriminator: context | project | area | label | person
+  /// GTD discriminator: context | project | area | person
+  ///
+  /// **`'context'` backs Label**, and it is the only value that does: the
+  /// retired `'label'` value is retyped to it on arrival
+  /// (`TagDao.retypeRetiredLabelTags`), never stored by a current build.
   TextColumn get type => text()
       .withDefault(const Constant('context'))
       .clientDefault(() => 'context')();
@@ -632,6 +685,11 @@ class Actions extends Table {
   /// NULL = not gated. Belongs to this Action row; never copied to a successor.
   TextColumn get timeContext => text().named('time_context').nullable()();
 
+  /// Timeboxed (issue #923): whether the estimate is a limit rather than a
+  /// guess. NULL and false both mean off. Belongs to this Action row; never
+  /// copied to a successor.
+  BoolColumn get timeboxed => boolean().nullable()();
+
   DateTimeColumn get createdAt => dateTime()();
 
   /// Client-stamped; a superseded row's timestamp is read from here.
@@ -642,4 +700,247 @@ class Actions extends Table {
 
   @override
   Set<Column<Object>> get primaryKey => {id};
+}
+
+// ---------------------------------------------------------------------------
+// habits  (the Habit data model — issue #401)
+// ---------------------------------------------------------------------------
+
+// The five tables below hold the Habit data model.
+//
+// **Two kinds of timestamp, and they are not interchangeable.** An *instant* is
+// canonical ISO-8601 UTC text with exactly three fractional digits
+// (`2026-11-18T05:12:03.042Z`) — `encodeInstant`, the form `sprints` already
+// stores. A *day* is a local calendar date, `YYYY-MM-DD`. A day is the local
+// calendar day (ADR-0049): there is no timezone column anywhere, because the
+// day a Check-in counts for is the day the user meant, not an instant
+// converted into one.
+//
+// **No CHECK constraints.** The DAO validates what it writes and the reads
+// tolerate what they meet, so a row a future build writes is not refused by
+// an older one.
+
+/// One row per Habit: something the user does regularly, on a rule they chose.
+///
+/// A Habit has **no state column**. Active, paused and archived are derived
+/// from [HabitInactivePeriods]: a day is archived when an archived period
+/// covers it, paused when a paused period covers it, active otherwise. The
+/// derivation lives in the DAO, so the stored rows can never disagree with it.
+///
+/// **Device-local until Habits sync**: this table has no codec and authors no
+/// op, like `capture_attachments`. A store rebuilt from the op log does not
+/// bring the Habits back, and they are not in the data export.
+class Habits extends Table {
+  /// Client-random UUIDv4, minted by the writer.
+  TextColumn get id => text().clientDefault(() => uuid.v4())();
+  TextColumn get userId => text()();
+
+  /// The Habit's name, as the user wrote it.
+  TextColumn get title => text().withLength(max: 500)();
+
+  /// Free text; null when the user wrote none.
+  TextColumn get notes => text().nullable()();
+
+  /// The effort the Habit asks for: low | medium | high (nullable).
+  ///
+  /// The three values an Action carries, so the Outcome editors the Habit
+  /// form reuses work on them unchanged.
+  TextColumn get energyLevel => text().nullable()();
+
+  /// How long the Habit takes, in minutes (nullable).
+  IntColumn get timeEstimateMinutes => integer().nullable()();
+
+  /// What anchors the Habit in the day: none | part_of_day | clock_time |
+  /// after_habit | before_habit.
+  ///
+  /// **The anchor is not dated.** It says where the Habit sits in the day, not
+  /// how much of it is expected, so it is not a commitment and no copy of it
+  /// is kept per period — only the target and the repeat rule are judged per
+  /// period, and those live in [HabitCommitments].
+  TextColumn get anchorKind => text().withDefault(const Constant('none'))();
+
+  /// morning | afternoon | evening — set when [anchorKind] is `part_of_day`.
+  TextColumn get anchorPartOfDay => text().nullable()();
+
+  /// Local `HH:MM`, 24-hour — set when [anchorKind] is `clock_time`.
+  TextColumn get anchorClockTime => text().nullable()();
+
+  /// The Habit this one follows or precedes — set when [anchorKind] is
+  /// `after_habit` or `before_habit`.
+  ///
+  /// NULL once that Habit is gone. An archived target is refused at write
+  /// time rather than stored, and a chain that would loop is refused too.
+  TextColumn get anchorHabitId => text().nullable().references(Habits, #id)();
+
+  /// When the Habit was created (an instant).
+  TextColumn get createdAt => text()();
+
+  /// When the Habit was last edited (an instant); null while it never has been.
+  TextColumn get updatedAt => text().nullable()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {id};
+}
+
+/// One row per commitment: the repeat rule and the measurable target a period
+/// of a Habit is judged by.
+///
+/// **Append-only.** A row is never updated and never deleted. A change of rule
+/// or target is a new row, and the row in force on a day is the most recently
+/// created one whose effective start is on or before that day — so a finished
+/// period keeps the commitment it was judged by, without anything having to
+/// be rewritten.
+///
+/// This is a code name, not a glossary term: the design calls it "the
+/// commitment a period is judged by".
+///
+/// The stored row is `HabitCommitmentRow`, not `HabitCommitment`: the domain
+/// value of that name (`models/habit_commitment.dart`) is what the app
+/// reasons about, and the row is only its stored form.
+@DataClassName('HabitCommitmentRow')
+class HabitCommitments extends Table {
+  /// Client-random UUIDv4, minted by the writer.
+  TextColumn get id => text().clientDefault(() => uuid.v4())();
+  TextColumn get userId => text()();
+
+  /// The Habit this commitment governs.
+  TextColumn get habitId => text().references(Habits, #id)();
+
+  /// The day the user made this commitment (a day).
+  ///
+  /// The rule's effective start is derived from it — the day itself for the
+  /// daily kinds, the Monday of its week for a weekly target, the first of
+  /// its month for a monthly one — so only the chosen day is stored and the
+  /// week start stays a code constant.
+  TextColumn get chosenOn => text()();
+
+  /// When the row was written (an instant). The tie-break between two
+  /// commitments chosen on the same day.
+  TextColumn get createdAt => text()();
+
+  /// every_day | chosen_weekdays | times_per_week | times_per_month |
+  /// every_n_days.
+  TextColumn get repeatKind => text()();
+
+  /// The chosen weekdays as canonical JSON, ISO 1 = Monday … 7 = Sunday.
+  /// Null unless [repeatKind] is `chosen_weekdays`.
+  TextColumn get chosenWeekdays => text().nullable()();
+
+  /// N — how many times a week or a month. Null unless [repeatKind] is
+  /// `times_per_week` or `times_per_month`.
+  IntColumn get timesPerPeriod => integer().nullable()();
+
+  /// The N of `every_n_days`. Null unless [repeatKind] is `every_n_days`.
+  IntColumn get intervalDays => integer().nullable()();
+
+  /// A hint, not a rule: canonical JSON of the days the user prefers —
+  /// weekdays 1–7 for a week, dates 1–31 for a month. Stored as given; a
+  /// 31st stays a 31st.
+  TextColumn get preferredDays => text().nullable()();
+
+  /// The unit the target is counted in ("pages", "glasses"). Null for a
+  /// binary Habit.
+  TextColumn get unitLabel => text().nullable()();
+
+  /// How much of one period the target asks for. Set together with
+  /// [unitLabel] for a measurable Habit, null for both on a binary one.
+  RealColumn get dailyTargetAmount => real().nullable()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {id};
+}
+
+/// One row per Check-in: the user saying they did the Habit on a day.
+///
+/// A day can hold several Check-ins — two glasses of water are two Check-ins,
+/// not one row with a count of two, because each is its own record with its
+/// own time.
+///
+/// **A Check-in does not store a copy of the target.** What the day's
+/// Check-ins are read against is the commitment in force that day, so the
+/// target cannot disagree with itself when the target changes mid-day.
+@TableIndex(
+  name: 'idx_habit_check_ins_habit_day',
+  columns: {#habitId, #countsForDay},
+)
+class HabitCheckIns extends Table {
+  /// Client-random UUIDv4, minted by the writer.
+  TextColumn get id => text().clientDefault(() => uuid.v4())();
+  TextColumn get userId => text()();
+
+  /// The Habit this Check-in is for.
+  TextColumn get habitId => text().references(Habits, #id)();
+
+  /// The day this Check-in counts for (a day).
+  ///
+  /// The caller passes it, so a Check-in made in the evening for the day being
+  /// closed counts for that day and not for today.
+  TextColumn get countsForDay => text()();
+
+  /// When the Check-in was made (an instant).
+  TextColumn get checkedInAt => text()();
+
+  /// How much was done, for a measurable Habit. Null on a binary one.
+  RealColumn get measuredAmount => real().nullable()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {id};
+}
+
+/// One row per pause or archive period of a Habit.
+///
+/// The dates are stored rather than a flag, so that "was this Habit paused
+/// on Tuesday?" is a fact about a row and not a question about the Habit's
+/// current state.
+class HabitInactivePeriods extends Table {
+  /// Client-random UUIDv4, minted by the writer.
+  TextColumn get id => text().clientDefault(() => uuid.v4())();
+  TextColumn get userId => text()();
+
+  /// The Habit the period belongs to.
+  TextColumn get habitId => text().references(Habits, #id)();
+
+  /// paused | archived.
+  TextColumn get kind => text()();
+
+  /// The first day the period covers (a day).
+  TextColumn get startsOn => text()();
+
+  /// The first day the Habit is active again (a day); null while the period
+  /// is open.
+  ///
+  /// A pause with an end date stores it, so the pause ends with no timer.
+  /// Resuming by hand sets it to today; archiving closes an open pause.
+  TextColumn get endsBefore => text().nullable()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {id};
+}
+
+/// The Habit's Area and Labels.
+///
+/// Mirrors `todo_tags`: the logical identity of a junction row is the pair,
+/// and the row carries a derived id so a repeat assignment collapses into
+/// one row instead of accumulating duplicates.
+///
+/// A Habit holds at most one Area — an `area` tag — and any number of
+/// Labels. The DAO keeps that rule; the schema does not, because a
+/// constraint here would refuse a row rather than correct it.
+class HabitTags extends Table {
+  /// A derived row identifier — `habitTagIdFor(habitId, tagId)`, so the same
+  /// pair always lands on the same row.
+  TextColumn get id => text().unique()();
+
+  /// The Habit that carries the tag.
+  TextColumn get habitId => text().references(Habits, #id)();
+
+  /// The tag: an Area (`area`) or a Label.
+  TextColumn get tagId => text().references(Tags, #id)();
+
+  /// Denormalized from `habits.user_id` so a junction row carries its owner
+  /// without a JOIN.
+  TextColumn get userId => text()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {habitId, tagId};
 }
