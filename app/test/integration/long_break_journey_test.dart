@@ -322,6 +322,8 @@ void main() {
     final timer = container.read(sprintTimerProvider.notifier);
 
     await tester.runAsync(() async {
+      await db.timeLogDao
+          .openLog(taskId: 'o1', userId: focusUserId, now: DateTime.now());
       await timer.startSprint(todo);
       await timer.completeSprint();
     });
