@@ -114,9 +114,10 @@ void main() {
 
   Future<void> closeApp(WidgetTester tester) async {
     await tester.pumpWidget(const SizedBox.shrink());
-    await tester.runAsync(() => pumpEventQueue());
+    await tester.pump();
     // The midnight timer must be gone before the test body ends.
-    container.dispose();
+    await tester.runAsync(() async => container.dispose());
+    await tester.pump();
   }
 
   Future<void> insertOutcome(WidgetTester tester, String id) async {
@@ -169,9 +170,10 @@ void main() {
       expect(find.text('0 days'), findsOneWidget); // Read: a 0 streak shows
       expect(find.text('Gym'), findsNothing);
       expect(find.text('Paused one'), findsNothing);
+      // Two-column grid: stack order reads left to right, then down.
       expect(
-        tester.getTopLeft(find.text('Stretch')).dy,
-        lessThan(tester.getTopLeft(find.text('Read')).dy),
+        tester.getTopLeft(find.text('Stretch')).dx,
+        lessThan(tester.getTopLeft(find.text('Read')).dx),
       );
       expect(find.text('0 of 2 done'), findsOneWidget);
       expect(find.text('Not part of the plan and not counted in capacity.'),
