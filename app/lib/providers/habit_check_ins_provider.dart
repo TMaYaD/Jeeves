@@ -47,6 +47,18 @@ class HabitCheckInActions extends Notifier<void> {
         );
   }
 
+  /// Adds today's first Check-in of a binary Habit and returns its id, or
+  /// returns null when today already has one (a second tap in a stale frame).
+  Future<String?> checkInFirstOfToday(String habitId) {
+    final now = ref.read(clockProvider)();
+    return ref.read(databaseProvider).habitDao.addFirstCheckInOfDay(
+          habitId: habitId,
+          userId: ref.read(currentUserIdProvider),
+          countsForDay: habitCheckInDay(now: now),
+          now: now.toUtc(),
+        );
+  }
+
   /// Takes back the Check-in [checkInId] returned by [checkIn].
   Future<void> undo(String checkInId) => remove(checkInId);
 

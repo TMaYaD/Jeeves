@@ -37,10 +37,12 @@ class _HabitAmountEntrySheetState extends ConsumerState<HabitAmountEntrySheet> {
   String? _editingCheckInId;
 
   Future<void> _add(int amount) async {
-    await ref
-        .read(habitCheckInsProvider.notifier)
-        .checkIn(widget.habit.id, amount: amount.toDouble());
-    ref.read(habitStackOfferProvider.notifier).checkedIn(widget.habit.id);
+    // Read both notifiers before awaiting: the sheet may close meanwhile.
+    final actions = ref.read(habitCheckInsProvider.notifier);
+    final offer = ref.read(habitStackOfferProvider.notifier);
+    final habitId = widget.habit.id;
+    await actions.checkIn(habitId, amount: amount.toDouble());
+    offer.checkedIn(habitId);
   }
 
   @override
@@ -241,7 +243,7 @@ class _SheetPips extends StatelessWidget {
   }
 }
 
-class _EntryRow extends ConsumerWidget {
+class _EntryRow extends ConsumerStatefulWidget {
   const _EntryRow({
     super.key,
     required this.checkIn,
@@ -256,38 +258,61 @@ class _EntryRow extends ConsumerWidget {
   final VoidCallback onToggleEdit;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_EntryRow> createState() => _EntryRowState();
+}
+
+class _EntryRowState extends ConsumerState<_EntryRow> {
+  /// The amount last asked for, until the stored one catches up. Quick taps
+  /// build on it, not on the stale stored amount, so none is lost.
+  double? _requestedAmount;
+
+  @override
+  void didUpdateWidget(_EntryRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.checkIn.measuredAmount != widget.checkIn.measuredAmount) {
+      _requestedAmount = null;
+    }
+  }
+
+  void _step(double by) {
+    final next = (_requestedAmount ?? widget.checkIn.measuredAmount ?? 0) + by;
+    if (next < 1) return;
+    setState(() => _requestedAmount = next);
+    ref.read(habitCheckInsProvider.notifier).change(widget.checkIn.id, next);
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final actions = ref.read(habitCheckInsProvider.notifier);
-    final amount = checkIn.measuredAmount ?? 0;
+    final checkIn = widget.checkIn;
+    final amount = _requestedAmount ?? checkIn.measuredAmount ?? 0;
     return Row(
       children: [
         Text(habitCheckInClock(checkIn)),
         const SizedBox(width: 12),
         Expanded(
-          child: editing
+          child: widget.editing
               ? Row(
                   children: [
                     IconButton(
                       tooltip: habitSheetLessLabel,
-                      onPressed: amount > 1
-                          ? () => actions.change(checkIn.id, amount - 1)
-                          : null,
+                      onPressed: amount > 1 ? () => _step(-1) : null,
                       icon: const Icon(Icons.remove),
                     ),
                     Text(habitAmountText(amount)),
                     IconButton(
                       tooltip: habitSheetMoreLabel,
-                      onPressed: () => actions.change(checkIn.id, amount + 1),
+                      onPressed: () => _step(1),
                       icon: const Icon(Icons.add),
                     ),
                   ],
                 )
-              : Text(habitEntryAmountText(amount, unit)),
+              : Text(habitEntryAmountText(amount, widget.unit)),
         ),
         IconButton(
           tooltip: habitSheetChangeLabel,
-          onPressed: onToggleEdit,
-          icon: Icon(editing ? Icons.check : Icons.edit_outlined),
+          onPressed: widget.onToggleEdit,
+          icon: Icon(widget.editing ? Icons.check : Icons.edit_outlined),
         ),
         IconButton(
           tooltip: habitSheetRemoveLabel,

@@ -27,11 +27,13 @@ Future<void> tapHabitMark(
 }) async {
   if (isMeasurable) return showHabitAmountEntrySheet(context, habit);
   final habitId = habit.id;
+  // Read both notifiers before awaiting: the widget may unmount meanwhile.
   final actions = ref.read(habitCheckInsProvider.notifier);
+  final offer = ref.read(habitStackOfferProvider.notifier);
   switch (markState) {
     case HabitCheckInMarkState.open:
-      await actions.checkIn(habitId);
-      ref.read(habitStackOfferProvider.notifier).checkedIn(habitId);
+      final added = await actions.checkInFirstOfToday(habitId);
+      if (added != null) offer.checkedIn(habitId);
     case HabitCheckInMarkState.done:
       await actions.removeLatestOfToday(habitId);
     case HabitCheckInMarkState.addAmount:
@@ -59,8 +61,10 @@ Future<void> acceptHabitOffer(
     await showHabitAmountEntrySheet(navigator.context, offered);
     return;
   }
-  await ref.read(habitCheckInsProvider.notifier).checkIn(offered.id);
-  ref.read(habitStackOfferProvider.notifier).checkedIn(offered.id);
+  final actions = ref.read(habitCheckInsProvider.notifier);
+  final offer = ref.read(habitStackOfferProvider.notifier);
+  await actions.checkIn(offered.id);
+  offer.checkedIn(offered.id);
 }
 
 /// "Right ho" (filled) and "Not now" (text).
@@ -110,6 +114,15 @@ class HabitMarkButton extends ConsumerWidget {
     if (progress == null) return const SizedBox(width: 48, height: 48);
     final isMeasurable = entries?.commitment?.isMeasurable ?? false;
     final markState = habitMarkState(progress.todayState, isMeasurable);
+    void onTap() => tapHabitMark(
+          context,
+          ref,
+          habit: habit,
+          markState: markState,
+          isMeasurable: isMeasurable,
+        );
+    final tappable = markState != HabitCheckInMarkState.notDue &&
+        markState != HabitCheckInMarkState.paused;
     return Semantics(
       label: habitMarkLabel(
         title: habit.title,
@@ -118,17 +131,12 @@ class HabitMarkButton extends ConsumerWidget {
         onTodayCard: onTodayCard,
       ),
       button: true,
+      onTap: tappable ? onTap : null,
       excludeSemantics: true,
       child: HabitCheckInMark(
         key: Key('habit_mark_${habit.id}${onTodayCard ? '_today' : ''}'),
         state: markState,
-        onTap: () => tapHabitMark(
-          context,
-          ref,
-          habit: habit,
-          markState: markState,
-          isMeasurable: isMeasurable,
-        ),
+        onTap: onTap,
       ),
     );
   }

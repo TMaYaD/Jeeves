@@ -60,6 +60,8 @@ const habitTitleEmptyMessage = 'A Habit needs a name.';
 // ---- Check-in wording: the row, the number column and the Today card --------
 
 const habitNotYetLine = 'Not yet';
+const habitPausedLine = 'Paused';
+const habitNotDueLine = 'Not due today';
 
 String habitMarkLabel({
   required String title,
@@ -108,8 +110,14 @@ String habitPeriodCompleteLine(HabitCommitment? commitment) =>
 
 /// An amount with thousands separators and no needless decimals.
 String habitAmountText(double amount) {
-  final whole = amount == amount.roundToDouble();
-  final text = whole ? amount.round().toString() : amount.toStringAsFixed(1);
+  // Six places absorb float noise (0.7 + 0.1); trailing zeros are dropped.
+  final rounded = double.parse(amount.toStringAsFixed(6));
+  final whole = rounded == rounded.roundToDouble();
+  final text = whole
+      ? rounded.round().toString()
+      : rounded
+          .toStringAsFixed(6)
+          .replaceFirst(RegExp(r'0+$'), '');
   final parts = text.split('.');
   final digits = parts.first;
   final negative = digits.startsWith('-');
@@ -179,6 +187,12 @@ String habitTodayCardState({
   required List<HabitCheckIn> todaysCheckIns,
 }) {
   final period = habitPeriodLine(progress, commitment);
+  if (progress.todayState == HabitTodayState.paused) return habitPausedLine;
+  if (progress.todayState == HabitTodayState.notDue) {
+    return habitPeriodComplete(progress)
+        ? habitPeriodCompleteLine(commitment)
+        : habitNotDueLine;
+  }
   if (commitment?.isMeasurable ?? false) {
     final n = todaysCheckIns.length;
     return '${habitAmountLine(progress)} · $n ${n == 1 ? 'entry' : 'entries'}';
