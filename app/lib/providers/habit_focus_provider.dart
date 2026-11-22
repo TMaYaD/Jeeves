@@ -7,13 +7,14 @@
 /// was killed resumes from the record. Sprint and break lengths come from the
 /// existing Focus settings.
 ///
-/// **One thing at a time.** [HabitFocusNotifier.start] ends an Outcome
-/// engagement first; `FocusModeNotifier.startFocus` closes an open Focus on a
-/// Habit. No notification is scheduled for a Focus on a Habit.
+/// **One thing at a time.** Starting a Focus on a Habit ends an Outcome
+/// engagement in the same transaction that opens it;
+/// `FocusModeNotifier.startFocus` closes an open Focus on a Habit. No notification is scheduled for a Focus on a Habit.
 library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:drift/drift.dart' show TableUpdateQuery;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -28,6 +29,7 @@ import 'focus_settings_provider.dart';
 import '../database/daos/habit_dao.dart' show HabitState;
 import 'habits_provider.dart';
 import 'sprint_timer_provider.dart' show SprintTimerState;
+import 'synced_preferences_provider.dart' show syncedPreferencesProvider;
 
 final habitFocusProvider =
     NotifierProvider<HabitFocusNotifier, SprintTimerState>(
@@ -76,15 +78,19 @@ class HabitFocusNotifier extends Notifier<SprintTimerState> {
     try {
       await _reload();
       if (state.isActive && state.activeTaskId == habitId) return;
-      if (ref.read(focusModeProvider).activeTodoId != null) {
-        await ref.read(focusModeProvider.notifier).endFocus();
-      }
+      await _awaitSyncedSettings();
+      // Validates the Habit first and ends any Outcome engagement still open
+      // in the store in the same transaction: a Habit that is rejected leaves
+      // the engagement running.
       await db.habitFocusDao.openHabitFocus(
         habitId: habitId,
         userId: _userId,
         plannedSprintMinutes: _sprintMinutes,
         now: ref.read(clockProvider)(),
       );
+      // The store is settled; clear the Outcome Focus state that mirrors it
+      // (and a session's pointer to the task whose log just ended).
+      await ref.read(focusModeProvider.notifier).endFocus();
       await _reload();
     } finally {
       if (!_disposed && state.isProcessing) {
@@ -106,6 +112,7 @@ class HabitFocusNotifier extends Notifier<SprintTimerState> {
   /// Starts the next Sprint of the open Focus.
   Future<void> startSprint() async {
     if (!state.isActive || state.isProcessing) return;
+    await _awaitSyncedSettings();
     await ref.read(databaseProvider).habitFocusDao.startHabitSprint(
           userId: _userId,
           plannedSprintMinutes: _sprintMinutes,
@@ -121,6 +128,23 @@ class HabitFocusNotifier extends Notifier<SprintTimerState> {
           now: ref.read(clockProvider)(),
         );
     await _reload();
+  }
+
+  /// The Sprint length is a synced preference that loads after launch; until
+  /// it has, the notifier holds defaults and the wrong length would be
+  /// recorded (and synced), as the Outcome Sprint path avoids.
+  Future<void> _awaitSyncedSettings() async {
+    ref.read(focusSettingsProvider); // starts the settings watch if not yet
+    try {
+      // `exists`: a container that replaced the settings (as tests do) never
+      // starts the synced-preferences load, and there is nothing to wait for.
+      // ignore: deprecated_member_use
+      if (ref.exists(syncedPreferencesProvider)) {
+        await ref.read(syncedPreferencesProvider.future);
+      }
+    } catch (error) {
+      debugPrint('Sprint length: synced preferences unavailable: $error');
+    }
   }
 
   Future<void> _reload() async {

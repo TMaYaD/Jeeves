@@ -58,12 +58,21 @@ class _HabitFocusCheckInSheetState
     final actions = ref.read(habitCheckInsProvider.notifier);
     final offer = ref.read(habitStackOfferProvider.notifier);
     final navigator = Navigator.of(context);
-    await actions.checkIn(
-      widget.habit.id,
-      amount: measurable ? _amount.toDouble() : null,
-    );
+    final route = ModalRoute.of(context);
+    try {
+      await actions.checkIn(
+        widget.habit.id,
+        amount: measurable ? _amount.toDouble() : null,
+      );
+    } catch (_) {
+      // Nothing was written: let the user try again.
+      if (mounted) setState(() => _saving = false);
+      rethrow;
+    }
     offer.checkedIn(widget.habit.id);
-    navigator.pop();
+    // Pop only while this sheet is still the current route (it may have been
+    // dismissed while the write was in flight).
+    if (mounted && (route?.isCurrent ?? false)) navigator.pop();
   }
 
   @override
@@ -165,7 +174,12 @@ class _HabitFocusCheckInSheetState
                 Expanded(
                   child: FilledButton(
                     key: const Key('habit_focus_check_in_yes'),
-                    onPressed: () => _veryGood(measurable: measurable),
+                    // Until the Habit's commitment has loaded, whether this is
+                    // a measurable Habit is unknown: a binary Check-in would
+                    // be written for a measurable one.
+                    onPressed: entries == null || _saving
+                        ? null
+                        : () => _veryGood(measurable: measurable),
                     child: const Text(habitFocusCheckInYesLabel),
                   ),
                 ),

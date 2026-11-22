@@ -71,6 +71,17 @@ class HabitFocusDao extends DatabaseAccessor<GtdDatabase>
       if (state != HabitState.active) {
         throw StateError('A Habit that is not active today has no Focus Mode.');
       }
+      // One thing at a time: an Outcome engagement still open in the store
+      // (the in-memory state is empty after a restart) ends in the same
+      // transaction, before the Habit log opens. A Habit rejected above
+      // leaves it running.
+      final openOutcomeLogs = await (attachedDatabase.select(
+              attachedDatabase.timeLogs)
+            ..where((t) => t.userId.equals(userId) & t.endedAt.isNull()))
+          .get();
+      for (final taskId in {for (final log in openOutcomeLogs) log.taskId}) {
+        await attachedDatabase.timeLogDao.closeLog(taskId: taskId, now: instant);
+      }
       await _closeOpenFocus(userId, stamp);
       await into(habitTimeLogs).insert(HabitTimeLogsCompanion.insert(
         id: Value(logId),
@@ -130,12 +141,17 @@ class HabitFocusDao extends DatabaseAccessor<GtdDatabase>
   ///
   /// The Sprints are those the Habit ran since the log started.
   Stream<HabitFocusRecords> watchHabitFocusRecords(String habitId) {
-    final logs = (select(habitTimeLogs)
-          ..where((l) => l.habitId.equals(habitId) & l.endedAt.isNull())
-          ..orderBy([(l) => OrderingTerm.desc(l.startedAt)])
-          ..limit(1))
-        .watch();
-    return logs.asyncMap((rows) async {
+    // A Sprint starting or ending does not touch the log row, so the watch
+    // reads both tables and re-queries on a change to either.
+    return customSelect(
+      'SELECT 1',
+      readsFrom: {habitTimeLogs, habitSprints},
+    ).watch().asyncMap((_) async {
+      final rows = await (select(habitTimeLogs)
+            ..where((l) => l.habitId.equals(habitId) & l.endedAt.isNull())
+            ..orderBy([(l) => OrderingTerm.desc(l.startedAt)])
+            ..limit(1))
+          .get();
       if (rows.isEmpty) {
         return const HabitFocusRecords(openLog: null, sprints: []);
       }

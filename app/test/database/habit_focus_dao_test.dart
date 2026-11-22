@@ -133,6 +133,54 @@ void main() {
       await db.habitFocusDao.closeHabitFocus(userId: _userId, now: _t0);
     });
 
+    test('opening a Focus ends an Outcome engagement still open in the store',
+        () async {
+      final habit = await createHabit();
+      await db.todoDao.insertOutcome(
+          id: 'outcome-1', title: 'Write', userId: _userId, now: _t0);
+      await db.timeLogDao.openLog(taskId: 'outcome-1', userId: _userId, now: _t0);
+      final later = _t0.add(const Duration(minutes: 5));
+      await db.habitFocusDao.openHabitFocus(
+          habitId: habit, userId: _userId, plannedSprintMinutes: 25, now: later);
+      final outcomeLog = (await db.select(db.timeLogs).get()).single;
+      expect(outcomeLog.endedAt, isNotNull);
+      expect(await db.habitFocusDao.openHabitTimeLog(_userId), isNotNull);
+    });
+
+    test('a rejected Habit leaves an Outcome engagement running', () async {
+      final noEstimate = await createHabit(estimate: null);
+      await db.todoDao.insertOutcome(
+          id: 'outcome-1', title: 'Write', userId: _userId, now: _t0);
+      await db.timeLogDao.openLog(taskId: 'outcome-1', userId: _userId, now: _t0);
+      await expectLater(
+        db.habitFocusDao.openHabitFocus(
+            habitId: noEstimate,
+            userId: _userId,
+            plannedSprintMinutes: 25,
+            now: _t0),
+        throwsStateError,
+      );
+      expect((await db.select(db.timeLogs).get()).single.endedAt, isNull);
+    });
+
+    test('the Focus records stream follows a Sprint starting', () async {
+      final habit = await createHabit();
+      await db.habitFocusDao.openHabitFocus(
+          habitId: habit, userId: _userId, plannedSprintMinutes: 25, now: _t0);
+      final counts = <int>[];
+      final sub = db.habitFocusDao
+          .watchHabitFocusRecords(habit)
+          .listen((records) => counts.add(records.sprints.length));
+      addTearDown(sub.cancel);
+      await pumpEventQueue();
+      await db.habitFocusDao.startHabitSprint(
+          userId: _userId,
+          plannedSprintMinutes: 25,
+          now: _t0.add(const Duration(minutes: 30)));
+      await pumpEventQueue();
+      expect(counts.last, 2);
+    });
+
     test('never writes a time_logs or sprints row, nor an op', () async {
       final habit = await createHabit();
       final opsBefore = capture.recorded.length;

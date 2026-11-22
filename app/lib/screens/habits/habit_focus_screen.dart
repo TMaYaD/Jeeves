@@ -34,6 +34,7 @@ class _HabitFocusScreenState extends ConsumerState<HabitFocusScreen>
     with SingleTickerProviderStateMixin {
   late final AnimationController _pulseCtrl;
   bool _stopping = false;
+  Future<void>? _beginFuture;
 
   @override
   void initState() {
@@ -44,7 +45,10 @@ class _HabitFocusScreenState extends ConsumerState<HabitFocusScreen>
     )..repeat(reverse: true);
     // The Focus starts the moment the screen opens; a Focus already open on
     // this Habit (the app was closed mid-Focus) is adopted, not duplicated.
-    WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_begin()));
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _beginFuture = _begin();
+      unawaited(_beginFuture);
+    });
   }
 
   Future<void> _begin() async {
@@ -71,6 +75,9 @@ class _HabitFocusScreenState extends ConsumerState<HabitFocusScreen>
   Future<void> _stop() async {
     if (_stopping) return;
     _stopping = true;
+    // A Stop while the Focus is still starting waits for the start to settle,
+    // so it closes the Focus instead of racing ahead of it.
+    await _beginFuture;
     final clock = ref.read(clockProvider);
     final habit = ref.read(habitByIdProvider(widget.habitId)).value;
     final startedAt = ref
@@ -78,7 +85,13 @@ class _HabitFocusScreenState extends ConsumerState<HabitFocusScreen>
         .value
         ?.openLog
         ?.startedAt;
-    await ref.read(habitFocusProvider.notifier).stop();
+    try {
+      await ref.read(habitFocusProvider.notifier).stop();
+    } catch (_) {
+      // The Focus is still open: release the latch so Stop can be tried again.
+      _stopping = false;
+      rethrow;
+    }
     if (!mounted) return;
     if (habit != null) {
       final started =

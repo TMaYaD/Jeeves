@@ -224,7 +224,7 @@ class SprintDotsColumn extends StatelessWidget {
         final isCurrent = !timer.isBreak && i == timer.sprintNumber - 1;
         final isFilled = isCompleted || isCurrent;
         // Red means a limit has been passed (docs/DESIGN.md § Colour).
-        final isPastLimit = isFilled && i >= firstPast;
+        final isPastLimit = limit != null && isFilled && i >= firstPast;
 
         Widget dot = Container(
           key: ValueKey('sprint_dot_$i'),
