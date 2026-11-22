@@ -10,6 +10,7 @@ import 'screens/auth/register_screen.dart';
 import 'screens/done/done_screen.dart';
 import 'screens/enrolment/enrolment_ceremony_screen.dart';
 import 'screens/habits/habit_detail_pane.dart';
+import 'screens/habits/habit_focus_screen.dart';
 import 'screens/habits/habits_screen.dart';
 import 'screens/inbox/inbox_screen.dart';
 import 'screens/next/next_screen.dart';
@@ -193,6 +194,11 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/habits/new',
       builder: (context, state) => const HabitDetailScreen(habitId: null),
+    ),
+    GoRoute(
+      path: '/habits/:id/focus',
+      builder: (context, state) =>
+          HabitFocusScreen(habitId: state.pathParameters['id']!),
     ),
     GoRoute(
       path: '/habits/:id',

@@ -1,0 +1,201 @@
+/// Focus Mode on a Habit (issue #405): the Sprint timer of a Habit and the
+/// writes that drive it.
+///
+/// **The record is the source of truth.** The state is derived from the open
+/// Habit log and its Sprints through `deriveHabitSprintTimerState`; the
+/// one-second ticker only re-evaluates it, so a Focus left open when the app
+/// was killed resumes from the record. Sprint and break lengths come from the
+/// existing Focus settings.
+///
+/// **One thing at a time.** [HabitFocusNotifier.start] ends an Outcome
+/// engagement first; `FocusModeNotifier.startFocus` closes an open Focus on a
+/// Habit. No notification is scheduled for a Focus on a Habit.
+library;
+
+import 'dart:async';
+
+import 'package:drift/drift.dart' show TableUpdateQuery;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../database/daos/habit_focus_dao.dart' show HabitFocusRecords;
+import '../database/gtd_database.dart';
+import '../models/habit_focus_timer.dart';
+import 'auth_provider.dart';
+import 'clock_provider.dart';
+import 'database_provider.dart';
+import 'focus_session_provider.dart';
+import 'focus_settings_provider.dart';
+import '../database/daos/habit_dao.dart' show HabitState;
+import 'habits_provider.dart';
+import 'sprint_timer_provider.dart' show SprintTimerState;
+
+final habitFocusProvider =
+    NotifierProvider<HabitFocusNotifier, SprintTimerState>(
+  HabitFocusNotifier.new,
+);
+
+class HabitFocusNotifier extends Notifier<SprintTimerState> {
+  Timer? _ticker;
+  StreamSubscription<Object?>? _tableUpdates;
+  bool _disposed = false;
+
+  HabitTimeLog? _openLog;
+  List<HabitSprint> _sprints = const [];
+  Habit? _habit;
+
+  @override
+  SprintTimerState build() {
+    ref.onDispose(() {
+      _disposed = true;
+      _ticker?.cancel();
+      _tableUpdates?.cancel();
+    });
+    final db = ref.read(databaseProvider);
+    _tableUpdates = db
+        .tableUpdates(
+            TableUpdateQuery.onAllTables([db.habitTimeLogs, db.habitSprints]))
+        .listen((_) => unawaited(_reload()));
+    unawaited(_reload());
+    return const SprintTimerState();
+  }
+
+  int get _sprintMinutes =>
+      ref.read(focusSettingsProvider).sprintDurationMinutes;
+  int get _breakMinutes => ref.read(focusSettingsProvider).breakDurationMinutes;
+  String get _userId => ref.read(currentUserIdProvider);
+
+  /// Starts a Focus on [habitId], or adopts the one already open on it.
+  ///
+  /// Ends an Outcome engagement first, and closes an open Focus on another
+  /// Habit. Throws a [StateError] for a Habit with no estimate or one that is
+  /// not active today.
+  Future<void> start(String habitId) async {
+    if (state.isProcessing) return;
+    final db = ref.read(databaseProvider);
+    state = state.copyWith(isProcessing: true);
+    try {
+      await _reload();
+      if (state.isActive && state.activeTaskId == habitId) return;
+      if (ref.read(focusModeProvider).activeTodoId != null) {
+        await ref.read(focusModeProvider.notifier).endFocus();
+      }
+      await db.habitFocusDao.openHabitFocus(
+        habitId: habitId,
+        userId: _userId,
+        plannedSprintMinutes: _sprintMinutes,
+        now: ref.read(clockProvider)(),
+      );
+      await _reload();
+    } finally {
+      if (!_disposed && state.isProcessing) {
+        state = state.copyWith(isProcessing: false);
+      }
+    }
+  }
+
+  /// Ends the running Sprint early; the gap that follows is a break.
+  Future<void> startBreak() async {
+    if (!state.isFocus || state.isProcessing) return;
+    await ref.read(databaseProvider).habitFocusDao.endRunningHabitSprint(
+          userId: _userId,
+          now: ref.read(clockProvider)(),
+        );
+    await _reload();
+  }
+
+  /// Starts the next Sprint of the open Focus.
+  Future<void> startSprint() async {
+    if (!state.isActive || state.isProcessing) return;
+    await ref.read(databaseProvider).habitFocusDao.startHabitSprint(
+          userId: _userId,
+          plannedSprintMinutes: _sprintMinutes,
+          now: ref.read(clockProvider)(),
+        );
+    await _reload();
+  }
+
+  /// Stops: ends the running Sprint and the open log.
+  Future<void> stop() async {
+    await ref.read(databaseProvider).habitFocusDao.closeHabitFocus(
+          userId: _userId,
+          now: ref.read(clockProvider)(),
+        );
+    await _reload();
+  }
+
+  Future<void> _reload() async {
+    if (_disposed) return;
+    final db = ref.read(databaseProvider);
+    final log = await db.habitFocusDao.openHabitTimeLog(_userId);
+    var sprints = const <HabitSprint>[];
+    Habit? habit;
+    if (log != null) {
+      sprints = await db.habitFocusDao.sprintsOfLog(log);
+      habit = _habit?.id == log.habitId
+          ? _habit
+          : await db.habitDao.habitById(log.habitId);
+    }
+    if (_disposed) return;
+    _openLog = log;
+    _sprints = sprints;
+    _habit = habit;
+    _recompute();
+  }
+
+  void _recompute() {
+    if (_disposed) return;
+    final previous = state;
+    final next = deriveHabitSprintTimerState(
+      openLog: _openLog,
+      sprints: _sprints,
+      sprintMinutesSetting: _openLog == null ? 20 : _sprintMinutes,
+      breakMinutesSetting: _openLog == null ? 3 : _breakMinutes,
+      estimateMinutes: _habit?.timeEstimateMinutes,
+      now: ref.read(clockProvider)(),
+      habitTitle: _habit?.title,
+    ).copyWith(isProcessing: previous.isProcessing);
+    state = next;
+    final counting =
+        next.isActive && !(next.isOvertime && next.overtime >= next.total);
+    if (counting) {
+      _ticker ??=
+          Timer.periodic(const Duration(seconds: 1), (_) => _recompute());
+    } else {
+      _ticker?.cancel();
+      _ticker = null;
+    }
+  }
+}
+
+/// The open Focus on [habitId] and its Sprints, live.
+final habitFocusRecordsProvider = StreamProvider.autoDispose
+    .family<HabitFocusRecords, String>((ref, habitId) => ref
+        .watch(databaseProvider)
+        .habitFocusDao
+        .watchHabitFocusRecords(habitId));
+
+/// How the Habit detail offers Focus Mode.
+enum HabitFocusEntry {
+  /// No offer: the Habit has no estimate or is not active today.
+  none,
+
+  /// "Start Focus Mode on this Habit".
+  start,
+
+  /// A Focus is open on it (the app was closed mid-Focus): "Resume Focus".
+  resume,
+}
+
+/// Whether the detail of [habitId] offers to start or resume Focus Mode.
+final habitFocusEntryProvider =
+    Provider.autoDispose.family<HabitFocusEntry, String>((ref, habitId) {
+  final habit = ref.watch(habitByIdProvider(habitId)).value;
+  final state = ref.watch(habitStateTodayProvider(habitId));
+  if (habit?.timeEstimateMinutes == null || state != HabitState.active) {
+    return HabitFocusEntry.none;
+  }
+  final records = ref.watch(habitFocusRecordsProvider(habitId)).value;
+  return records?.openLog != null
+      ? HabitFocusEntry.resume
+      : HabitFocusEntry.start;
+});

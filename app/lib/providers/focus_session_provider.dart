@@ -84,6 +84,12 @@ class FocusModeNotifier extends Notifier<FocusModeState> {
     final db = ref.read(databaseProvider);
     final now = DateTime.now();
 
+    // One thing at a time: a Focus on a Habit does not run beside an Outcome.
+    await db.habitFocusDao.closeHabitFocus(
+      userId: ref.read(currentUserIdProvider),
+      now: now,
+    );
+
     final session = await db.focusSessionDao.getActiveSession();
     if (session != null) {
       await db.focusSessionDao.setCurrentTask(

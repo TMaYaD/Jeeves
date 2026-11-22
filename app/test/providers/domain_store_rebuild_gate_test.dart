@@ -157,7 +157,7 @@ void main() {
     final details = await db.opened;
     expect(details.hadUpgrade, isTrue);
     expect(details.versionBefore, 2);
-    expect(details.versionNow, 14);
+    expect(details.versionNow, 15);
   });
 
   test('`opened` completes on a launch that migrates nothing', () async {
@@ -165,7 +165,7 @@ void main() {
     // drift runs `beforeOpen` on *every* open, so the future always resolves. A
     // completer fed only by `onUpgrade` would hang here for ever, and the app
     // would never get past the gate.
-    await seedStoreAt(14);
+    await seedStoreAt(15);
     final container = containerOverDirectory();
 
     final projected = await container.read(domainStoreRebuildProvider.future);

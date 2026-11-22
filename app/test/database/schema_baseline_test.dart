@@ -82,16 +82,16 @@ void main() {
   setUpAll(configureSqliteForTests);
 
   group('schema version', () {
-    test('is 14 — thirteen onUpgrade steps behind the fresh baseline', () async {
+    test('is 15 — fourteen onUpgrade steps behind the fresh baseline', () async {
       final db = _openInMemory();
       addTearDown(db.close);
-      expect(db.schemaVersion, 14);
+      expect(db.schemaVersion, 15);
       // A fresh file runs onCreate at the current version, not the ladder.
       expect(
         await db.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        14,
+        15,
       );
     });
   });
@@ -302,7 +302,7 @@ void main() {
       await seed.customStatement('PRAGMA user_version = 1');
       await seed.close();
 
-      // Open 2: Drift sees user_version=1 and schemaVersion=14, so it runs the
+      // Open 2: Drift sees user_version=1 and schemaVersion=15, so it runs the
       // whole ladder — the v2 drop asserted here, and the v3 `tags` recreate the
       // group below owns.
       final upgraded = GtdDatabase(
@@ -314,7 +314,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        14,
+        15,
       );
       expect(await _columnNames(upgraded, 'todos'),
           isNot(contains('time_spent_minutes')),
@@ -441,7 +441,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        14,
+        15,
       );
       expect(await _uniqueConstraintIndexes(upgraded, 'tags'), isEmpty,
           reason: 'v3 drops UNIQUE (name, type)');
@@ -501,7 +501,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        14,
+        15,
       );
       expect(await _objects(upgraded, 'table'), contains('capture_attachments'));
       expect(await _rows(upgraded, 'captures'), hasLength(1));
@@ -606,7 +606,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        14,
+        15,
       );
       expect(await _columnNames(upgraded, 'todos'), isNot(contains('clarified')),
           reason: 'v5 drops the dead flag');
@@ -707,7 +707,7 @@ void main() {
           await upgraded.customSelect('PRAGMA user_version').getSingle().then(
                 (r) => r.read<int>('user_version'),
               ),
-          14,
+          15,
         );
         expect(await _rows(upgraded, 'todos'), todosBefore);
         expect(await _rows(upgraded, 'captures'), capturesBefore);
@@ -1277,7 +1277,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        14,
+        15,
       );
 
       for (final entry in habitTables.entries) {
@@ -1407,6 +1407,77 @@ void main() {
 
       expect(await _columnNames(upgraded, 'focus_session_tasks'),
           containsAll(['batch_id', 'batch_suggestion_declined_at']));
+    });
+  });
+
+  group('v15 onUpgrade adds the Habit Focus tables', () {
+    test('creates both tables with their exact columns and keeps every row',
+        () async {
+      final raw = sqlite3.openInMemory();
+      addTearDown(raw.close);
+
+      final seed = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      var seedClosed = false;
+      Future<void> closeSeed() async {
+        if (seedClosed) return;
+        seedClosed = true;
+        await seed.close();
+      }
+
+      addTearDown(closeSeed);
+
+      // A v14 store: the two tables did not exist.
+      await seed.customStatement('DROP TABLE habit_sprints');
+      await seed.customStatement('DROP TABLE habit_time_logs');
+      await seed.customStatement(
+        'INSERT INTO todos (id, title, user_id, created_at, intent) '
+        "VALUES ('t1', 'Ship it', 'u1', '2026-11-18T09:00:00.000Z', 'next')",
+      );
+      await seed.customStatement(
+        'INSERT INTO habits (id, user_id, title, anchor_kind, created_at, '
+        "updated_at) VALUES ('h1', 'u1', 'Meditate', 'none', "
+        "'2026-11-18T09:00:00.000Z', '2026-11-18T09:00:00.000Z')",
+      );
+      await seed.customStatement('PRAGMA user_version = 14');
+      await closeSeed();
+
+      final upgraded = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      addTearDown(upgraded.close);
+
+      expect(
+        await upgraded.customSelect('PRAGMA user_version').getSingle().then(
+              (r) => r.read<int>('user_version'),
+            ),
+        15,
+      );
+      expect(await _columnNames(upgraded, 'habit_time_logs'),
+          {'id', 'user_id', 'habit_id', 'started_at', 'ended_at'});
+      expect(await _columnNames(upgraded, 'habit_sprints'), {
+        'id',
+        'user_id',
+        'habit_id',
+        'started_at',
+        'ended_at',
+        'planned_duration_minutes',
+      });
+      expect(await _rows(upgraded, 'habit_time_logs'), isEmpty);
+      expect(await _rows(upgraded, 'habit_sprints'), isEmpty);
+      expect(await _objects(upgraded, 'index'),
+          contains('idx_habit_time_logs_habit'));
+      expect(
+        (await upgraded.customSelect('SELECT id FROM todos').getSingle())
+            .read<String>('id'),
+        't1',
+      );
+      expect(
+        (await upgraded.customSelect('SELECT id FROM habits').getSingle())
+            .read<String>('id'),
+        'h1',
+      );
     });
   });
 }
