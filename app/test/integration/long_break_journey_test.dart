@@ -7,6 +7,8 @@
 @TestOn('!browser')
 library;
 
+import 'dart:async';
+
 import 'package:flutter_local_notifications/flutter_local_notifications.dart'
     show FlutterLocalNotificationsPlatform;
 import 'package:flutter/material.dart' show SizedBox, Text;
@@ -18,6 +20,7 @@ import 'package:jeeves/providers/focus_settings_provider.dart';
 import 'package:jeeves/providers/sprint_timer_provider.dart';
 import 'package:jeeves/screens/active_focus_screen.dart';
 import 'package:jeeves/widgets/elapsed_timer_widget.dart';
+import 'package:jeeves/services/notification_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:timezone/data/latest_all.dart' as tz_data;
 
@@ -40,6 +43,40 @@ List<String> _bannerTexts(WidgetTester tester) => tester
 class _FixedFocusSettings extends FocusSettingsNotifier {
   @override
   FocusSettings build() => const FocusSettings();
+}
+
+/// Focus settings the test can change while the timer runs.
+class _MutableFocusSettings extends FocusSettingsNotifier {
+  @override
+  FocusSettings build() => const FocusSettings();
+
+  void change(FocusSettings next) => state = next;
+}
+
+/// Records the Break reminders; the second one is held until [gate] opens.
+class _GatedBreakNotifications extends RecordingNotificationService {
+  final events = <String>[];
+  final gate = Completer<void>();
+  int _breakCalls = 0;
+
+  @override
+  Future<void> scheduleSprintEndNotification({
+    required DateTime endTime,
+    required String taskTitle,
+  }) async {}
+
+  @override
+  Future<void> scheduleBreakEndNotification({
+    required DateTime endTime,
+    required int durationMinutes,
+  }) async {
+    _breakCalls++;
+    if (_breakCalls == 2) await gate.future;
+    events.add('scheduled:$durationMinutes');
+  }
+
+  @override
+  Future<void> cancelSprintNotifications() async => events.add('cancel');
 }
 
 void main() {
@@ -260,6 +297,50 @@ void main() {
     expect(state.isLongBreak, isFalse);
     expect(state.currentBreakDurationMinutes, 3);
     expect(find.text('Long break'), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+      'a Break reminder still being scheduled when the Break is skipped is '
+      'taken back, not left to fire', (tester) async {
+    final notifications = _GatedBreakNotifications();
+    final todo = await tester.runAsync(() => insertFocusTodo(db, id: 'o1'));
+
+    await tester.pumpWidget(focusHarness(
+      db,
+      todo: todo!,
+      sprintTimer: SprintTimerNotifier.new,
+      overrides: [
+        focusSettingsProvider.overrideWith(_MutableFocusSettings.new),
+        notificationServiceProvider.overrideWithValue(notifications),
+      ],
+    ));
+    await pumpFocusFrames(tester, 5);
+    final container =
+        ProviderScope.containerOf(tester.element(find.byType(ActiveFocusScreen)));
+    final timer = container.read(sprintTimerProvider.notifier);
+
+    await tester.runAsync(() async {
+      await timer.startSprint(todo);
+      await timer.completeSprint();
+    });
+    expect(container.read(sprintTimerProvider).phase, SprintPhase.break_);
+
+    // A setting edited mid-Break moves the reminder: the replacement is held
+    // in flight by the gate.
+    (container.read(focusSettingsProvider.notifier) as _MutableFocusSettings)
+        .change(const FocusSettings(shortBreakDurationMinutes: 5));
+    await tester.pump(const Duration(seconds: 2));
+
+    // The Break is skipped while the replacement is still being scheduled.
+    await tester.runAsync(timer.skipBreak);
+    notifications.gate.complete();
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+
+    expect(notifications.events, contains('scheduled:5'));
+    expect(notifications.events.last, 'cancel',
+        reason: 'the reminder that landed after the skip is cancelled');
 
     await tester.pumpWidget(const SizedBox.shrink());
   });

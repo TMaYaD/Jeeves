@@ -645,7 +645,8 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
     _ticker = null;
   }
 
-  Future<void> _scheduleEndNotification(
+  /// Returns whether the reminder was scheduled.
+  Future<bool> _scheduleEndNotification(
     DateTime endTime, {
     required bool isFocus,
     String? taskTitle,
@@ -666,8 +667,10 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
           durationMinutes: breakDurationMinutes,
         );
       }
+      return true;
     } catch (error) {
       debugPrint('Sprint end notification not scheduled: $error');
+      return false;
     }
   }
 
@@ -678,7 +681,7 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
   int? _scheduledBreakMinutes;
 
   void _reconcileBreakNotification(SprintTimerState next) {
-    if (_scheduledBreakEndAt == null) return;
+    if (_scheduledBreakEndAt == null || _breakScheduleInFlight) return;
     if (next.phase != SprintPhase.break_) return;
     final endAt = DateTime.now().add(next.remaining);
     final moved = endAt.difference(_scheduledBreakEndAt!).abs() >
@@ -689,17 +692,47 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
     unawaited(_scheduleBreakEnd(endAt, next.currentBreakDurationMinutes));
   }
 
+  /// Bumped by every cancel, so a schedule that was already in flight when
+  /// the Break was cancelled can tell it is stale.
+  int _breakNotificationGeneration = 0;
+  bool _breakScheduleInFlight = false;
+
   Future<void> _scheduleBreakEnd(DateTime endAt, int minutes) async {
-    _scheduledBreakEndAt = endAt;
-    _scheduledBreakMinutes = minutes;
-    await _scheduleEndNotification(
-      endAt,
-      isFocus: false,
-      breakDurationMinutes: minutes,
-    );
+    final generation = _breakNotificationGeneration;
+    _breakScheduleInFlight = true;
+    final bool scheduled;
+    try {
+      scheduled = await _scheduleEndNotification(
+        endAt,
+        isFocus: false,
+        breakDurationMinutes: minutes,
+      );
+    } finally {
+      _breakScheduleInFlight = false;
+    }
+    if (generation != _breakNotificationGeneration) {
+      // The Break was skipped or ended while this reminder was being
+      // scheduled: take it back rather than let it fire for a Break that is
+      // over, and do not record it.
+      if (scheduled) {
+        try {
+          await ref.read(notificationServiceProvider).cancelSprintNotifications();
+        } catch (error) {
+          debugPrint('Stale Break reminder not cancelled: $error');
+        }
+      }
+      return;
+    }
+    // Recorded only once it exists, so a failed schedule is not mistaken for
+    // a reminder that is already in place.
+    if (scheduled) {
+      _scheduledBreakEndAt = endAt;
+      _scheduledBreakMinutes = minutes;
+    }
   }
 
   Future<void> _cancelSprintNotifications() async {
+    _breakNotificationGeneration++;
     _scheduledBreakEndAt = null;
     _scheduledBreakMinutes = null;
     final svc = ref.read(notificationServiceProvider);
