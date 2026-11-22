@@ -206,12 +206,9 @@ void main() {
       await tester.tap(find.text('Stretch'));
       await tester.tap(find.byIcon(Icons.radio_button_unchecked).first);
       await _settle(tester);
-      final histories = await tester
-          .runAsync(() => db.habitDao.watchHabitHistories().first);
-      expect(
-        histories!.singleWhere((h) => h.habit.id == id).checkIns,
-        isEmpty,
-      );
+      final checkIns =
+          await tester.runAsync(() => db.select(db.habitCheckIns).get());
+      expect(checkIns!.where((c) => c.habitId == id), isEmpty);
     } finally {
       await closeApp(tester);
     }
