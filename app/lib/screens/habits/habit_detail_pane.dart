@@ -25,6 +25,7 @@ import 'habit_anchor_candidates.dart';
 import 'habit_copy.dart';
 import 'habit_flash_banner.dart';
 import 'habit_routes.dart';
+import 'habit_row.dart';
 import 'habit_sheets.dart';
 
 /// Banners already shown this session, so one shows once. Memory only.
@@ -446,6 +447,11 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
             ),
           ),
         ),
+        if (habit != null)
+          HabitTodayCard(
+            habit: habit,
+            today: habitDateFromDayKey(_today)!,
+          ),
         const Divider(),
         _FieldRow(
           rowKey: const Key('habit_row_checkin'),

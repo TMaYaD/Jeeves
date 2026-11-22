@@ -15,6 +15,9 @@ import '../../widgets/state_surfaces.dart';
 import 'habit_copy.dart';
 import 'habit_detail_pane.dart';
 import 'habit_routes.dart';
+import 'habit_row.dart';
+
+export 'habit_row.dart' show habitAnchorSummary;
 
 /// The Habits shell route.
 class HabitsScreen extends ConsumerWidget {
@@ -101,21 +104,21 @@ class _HabitList extends ConsumerWidget {
               ),
             if (note != null) _Note(note, key: const Key('habits_today_note')),
             for (final habit in active)
-              _HabitRow(
+              HabitRow(
                 habit: habit,
                 state: HabitState.active,
                 selected: habit.id == selectedHabitId,
               ),
             if (paused.isNotEmpty) const _SectionHeader('Paused'),
             for (final habit in paused)
-              _HabitRow(
+              HabitRow(
                 habit: habit,
                 state: HabitState.paused,
                 selected: habit.id == selectedHabitId,
               ),
             if (archived.isNotEmpty) const _SectionHeader('Archived'),
             for (final habit in archived)
-              _HabitRow(
+              HabitRow(
                 habit: habit,
                 state: HabitState.archived,
                 selected: habit.id == selectedHabitId,
@@ -167,53 +170,4 @@ class _SectionHeader extends StatelessWidget {
       style: Theme.of(context).textTheme.labelSmall,
     ),
   );
-}
-
-class _HabitRow extends StatelessWidget {
-  const _HabitRow({
-    required this.habit,
-    required this.state,
-    required this.selected,
-  });
-
-  final Habit habit;
-  final HabitState state;
-  final bool selected;
-
-  @override
-  Widget build(BuildContext context) {
-    final inactive = state != HabitState.active;
-    final scheme = Theme.of(context).colorScheme;
-    return ListTile(
-      key: Key('habit_row_${habit.id}'),
-      selected: selected,
-      title: Text(
-        habit.title,
-        style: inactive ? TextStyle(color: scheme.onSurfaceVariant) : null,
-      ),
-      subtitle: habitAnchorSummary(habit) == null
-          ? null
-          : Text(habitAnchorSummary(habit)!),
-      onTap: () => openHabitDetail(context, habit.id),
-    );
-  }
-}
-
-/// A one-line description of where [habit] sits in the day, or null.
-String? habitAnchorSummary(Habit habit) {
-  switch (HabitAnchorKind.tryParse(habit.anchorKind)) {
-    case HabitAnchorKind.partOfDay:
-      return habit.anchorPartOfDay;
-    case HabitAnchorKind.clockTime:
-      return habit.anchorClockTime == null
-          ? null
-          : 'At ${habit.anchorClockTime}';
-    case HabitAnchorKind.afterHabit:
-      return 'After another Habit';
-    case HabitAnchorKind.beforeHabit:
-      return 'Before another Habit';
-    case HabitAnchorKind.none:
-    case null:
-      return null;
-  }
 }

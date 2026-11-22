@@ -54,6 +54,41 @@ void main() {
           firstCommitment: commitment,
         );
 
+    group('first Check-in of a day', () {
+      test('adds only when the day has none, and a second call adds nothing',
+          () async {
+        final habitId = await createHabit();
+        final first = await db.habitDao.addFirstCheckInOfDay(
+            habitId: habitId,
+            userId: _userId,
+            countsForDay: '2026-11-18',
+            now: _now);
+        final second = await db.habitDao.addFirstCheckInOfDay(
+            habitId: habitId,
+            userId: _userId,
+            countsForDay: '2026-11-18',
+            now: _now);
+        final both = await Future.wait([
+          db.habitDao.addFirstCheckInOfDay(
+              habitId: habitId,
+              userId: _userId,
+              countsForDay: '2026-11-19',
+              now: _now),
+          db.habitDao.addFirstCheckInOfDay(
+              habitId: habitId,
+              userId: _userId,
+              countsForDay: '2026-11-19',
+              now: _now),
+        ]);
+
+        expect(first, isNotNull);
+        expect(second, isNull);
+        expect(both.where((id) => id != null), hasLength(1));
+        expect(await db.habitDao.checkInsFor(habitId, '2026-11-18', '2026-11-19'),
+            hasLength(2));
+      });
+    });
+
     group('history reads', () {
       test('habitHistory gathers commitments, periods and Check-ins', () async {
         final habitId = await createHabit();

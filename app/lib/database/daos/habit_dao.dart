@@ -512,6 +512,43 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
     return checkInId;
   }
 
+  /// Adds a Check-in only when the Habit has none counted for [countsForDay]
+  /// yet, and returns its id, or null when one already exists.
+  ///
+  /// The check and the insert share one transaction, so two quick taps on the
+  /// list mark cannot both add the day's first Check-in.
+  Future<String?> addFirstCheckInOfDay({
+    required String habitId,
+    required String userId,
+    required String countsForDay,
+    required DateTime now,
+    double? measuredAmount,
+  }) async {
+    final day = _validatedDay(countsForDay, 'countsForDay');
+    final amount = _validatedAmount(measuredAmount);
+    final instant = _storedInstant(now);
+    final checkInId = uuid.v4();
+    final added = await attachedDatabase.capturing(() async {
+      await _requireHabit(habitId, userId);
+      final existing = await (select(habitCheckIns)
+            ..where((c) => c.habitId.equals(habitId) & c.countsForDay.equals(day))
+            ..limit(1))
+          .get();
+      if (existing.isNotEmpty) return false;
+      await _requireAmountMatches(habitId, day, amount);
+      await into(habitCheckIns).insert(HabitCheckInsCompanion.insert(
+            id: Value(checkInId),
+            userId: userId,
+            habitId: habitId,
+            countsForDay: day,
+            checkedInAt: encodeInstant(instant)!,
+            measuredAmount: Value(amount),
+          ));
+      return true;
+    });
+    return added ? checkInId : null;
+  }
+
   /// Changes how much a Check-in says was done.
   ///
   /// The Check-in keeps its day and its time; only the amount moves. The new
