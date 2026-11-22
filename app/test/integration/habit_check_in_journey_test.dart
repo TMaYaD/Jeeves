@@ -199,12 +199,14 @@ void main() {
     );
     await openApp(tester);
     try {
-      await tester.runAsync(() async {
-        final actions = container.read(habitCheckInsProvider.notifier);
-        await actions.checkIn(id);
-        await actions.checkIn(id);
-      });
-      await _settle(tester);
+      // One write per runAsync, with the live streams settled in between: two
+      // back-to-back writes inside one runAsync never completed while the
+      // list's Drift streams were refreshing.
+      final actions = container.read(habitCheckInsProvider.notifier);
+      for (var i = 0; i < 2; i++) {
+        await tester.runAsync(() => actions.checkIn(id));
+        await _settle(tester);
+      }
       expect(inRow(id, '2 of 3 this week'), findsOneWidget);
       await tapMark(tester, id);
       expect(inRow(id, '1 of 3 this week'), findsOneWidget);
@@ -258,7 +260,11 @@ void main() {
         findsOneWidget,
       );
       expect(
-        find.bySemanticsLabel('Checked in today. Tap to undo'),
+        find.byWidgetPredicate(
+          (w) =>
+              w is Semantics &&
+              w.properties.label == 'Checked in today. Tap to undo',
+        ),
         findsOneWidget,
       );
       await tester.tap(find.byKey(Key('habit_mark_${id}_today')));
@@ -355,7 +361,7 @@ void main() {
 
         await tester.tap(find.byTooltip('Change this value'));
         await _settle(tester);
-        await tester.tap(find.byTooltip('Less').last);
+        await tester.tap(find.byTooltip('Less').first);
         await _settle(tester);
         expect(sheetTotal(tester), '1');
         expect(inRow(id, '1 of 8 glasses'), findsOneWidget);

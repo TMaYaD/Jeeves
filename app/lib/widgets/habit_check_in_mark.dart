@@ -75,7 +75,8 @@ class HabitCheckInMark extends StatelessWidget {
     };
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: _isTappable ? onTap : null,
+      // A resting mark still takes the tap, so it never opens the row behind it.
+      onTap: _isTappable ? onTap : () {},
       child: SizedBox(
         width: 48,
         height: 48,
