@@ -373,10 +373,6 @@ String habitCheckInCountMark(int count) => '$count×';
 String habitDayAmountText(double total, double target) =>
     '${habitAmountText(total)} of ${habitAmountText(target)}';
 
-/// An amount without a trailing ".0".
-String habitAmountText(double amount) => amount == amount.roundToDouble()
-    ? amount.round().toString()
-    : amount.toString();
 
 /// The state words of a day's screen-reader label.
 String habitDayStateWords(String state) => switch (state) {
@@ -403,7 +399,7 @@ const habitDayToday = 'today';
 // ---- Stats block and history strip on the detail ----
 
 /// The streak label under the main number.
-String habitStreakLabel(HabitUnitKind kind) => switch (kind) {
+String habitStatsStreakLabel(HabitUnitKind kind) => switch (kind) {
   HabitUnitKind.day => 'day streak',
   HabitUnitKind.week => 'week streak',
   HabitUnitKind.month => 'month streak',

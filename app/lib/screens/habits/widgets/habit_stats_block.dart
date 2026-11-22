@@ -40,7 +40,7 @@ class HabitStatsBlock extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      habitStreakLabel(kind),
+                      habitStatsStreakLabel(kind),
                       key: const Key('habit_stat_streak_label'),
                       style: theme.textTheme.titleSmall,
                     ),
