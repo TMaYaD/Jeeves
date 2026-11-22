@@ -98,7 +98,8 @@ class _HabitDaySheetState extends ConsumerState<HabitDaySheet> {
               ),
               const SizedBox(height: 4),
               Text(line, style: theme.textTheme.bodyMedium),
-              if (inactive != null) ...[
+              if (inactive != null ||
+                  (!mark.counted && (entries.isNotEmpty || measurable))) ...[
                 const SizedBox(height: 8),
                 Text(habitDaySheetPausedLine, style: theme.textTheme.bodySmall),
               ] else if (entries.isEmpty && !measurable) ...[
@@ -151,9 +152,14 @@ class _HabitDaySheetState extends ConsumerState<HabitDaySheet> {
                           ? () => setState(() => _newAmount = amount - 1)
                           : null,
                     ),
-                    Text(
-                      '${habitAmountText(amount)}${unit == null ? '' : ' $unit'}',
-                      key: const Key('habit_day_new_amount'),
+                    TextButton(
+                      key: const Key('habit_day_new_amount_button'),
+                      onPressed: () => _enterAmount(amount),
+                      child: Text(
+                        '${habitAmountText(amount)}'
+                        '${unit == null ? '' : ' $unit'}',
+                        key: const Key('habit_day_new_amount'),
+                      ),
                     ),
                     IconButton(
                       tooltip: habitDaySheetAmountIncrease,
@@ -187,6 +193,14 @@ class _HabitDaySheetState extends ConsumerState<HabitDaySheet> {
     );
   }
 
+  Future<void> _enterAmount(double current) async {
+    final value = await showDialog<double>(
+      context: context,
+      builder: (_) => _ChangeAmountDialog(initial: current),
+    );
+    if (value != null) setState(() => _newAmount = value);
+  }
+
   Future<void> _change(String checkInId, double? current) async {
     final value = await showDialog<double>(
       context: context,
@@ -215,7 +229,10 @@ class _ChangeAmountDialog extends StatefulWidget {
 
 class _ChangeAmountDialogState extends State<_ChangeAmountDialog> {
   late final TextEditingController _controller = TextEditingController(
-    text: habitAmountText(widget.initial),
+    // Plain digits: the grouped display text would not parse back.
+    text: widget.initial == widget.initial.roundToDouble()
+        ? widget.initial.round().toString()
+        : widget.initial.toString(),
   );
 
   @override

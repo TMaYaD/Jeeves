@@ -75,7 +75,9 @@ class _HabitCalendarScreenState extends ConsumerState<HabitCalendarScreen> {
         ),
       ),
       body: history == null
-          ? const Center(child: CircularProgressIndicator())
+          ? (ref.watch(habitHistoriesProvider).hasValue
+                ? const Center(child: Text(habitCalendarNoHabit))
+                : const Center(child: CircularProgressIndicator()))
           : _showYear
           ? _YearView(
               history: history,
@@ -255,6 +257,7 @@ class _YearMonthTile extends ConsumerWidget {
       button: true,
       enabled: enabled,
       label: '$name ${month.year}',
+      onTap: enabled ? () => onTap(month) : null,
       child: ExcludeSemantics(
         child: InkWell(
           onTap: enabled ? () => onTap(month) : null,

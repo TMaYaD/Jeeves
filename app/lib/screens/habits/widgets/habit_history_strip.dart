@@ -58,7 +58,7 @@ class HabitHistoryStrip extends ConsumerWidget {
         switch (mark.state) {
           case HabitDayState.done || HabitDayState.partial:
             checkInDays++;
-            dueDays++;
+            if (mark.counted) dueDays++;
           case HabitDayState.missed || HabitDayState.openToday:
             dueDays++;
           default:

@@ -392,6 +392,54 @@ void main() {
     }
   });
 
+  testWidgets('an unknown Habit says so once the histories have loaded', (
+    tester,
+  ) async {
+    habitId = 'no-such-habit';
+    await openCalendar(tester);
+    try {
+      expect(find.text('This Habit is not here any more.'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+    } finally {
+      await closeApp(tester);
+    }
+  });
+
+  testWidgets('a measurable day takes an amount typed in, and the field '
+      'starts as plain digits', (tester) async {
+    final semantics = tester.ensureSemantics();
+    await openCalendar(tester);
+    try {
+      await tapCell(tester, '12 November');
+      await tester.tap(find.byKey(const Key('habit_day_new_amount_button')));
+      await _settle(tester, 2);
+      await tester.enterText(
+        find.byKey(const Key('habit_day_change_field')),
+        '1500',
+      );
+      await tester.tap(find.byKey(const Key('habit_day_change_save')));
+      await _settle(tester, 2);
+      expect(find.text('1,500 glasses'), findsOneWidget);
+
+      // Reopened untouched, the field holds 1500 and Done still closes it.
+      await tester.tap(find.byKey(const Key('habit_day_new_amount_button')));
+      await _settle(tester, 2);
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('habit_day_change_field')))
+            .controller!
+            .text,
+        '1500',
+      );
+      await tester.tap(find.byKey(const Key('habit_day_change_save')));
+      await _settle(tester, 2);
+      expect(find.byKey(const Key('habit_day_change_field')), findsNothing);
+    } finally {
+      await closeApp(tester);
+      semantics.dispose();
+    }
+  });
+
   testWidgets('a binary day is one tap to add; after the change to a '
       'measurable Habit, Add asks for an amount', (tester) async {
     habitId = await createBinaryHabit('Read', '2026-10-01');
