@@ -161,13 +161,22 @@ Map<String, HabitProgress> habitProgressForDay(
   if (day == null) return const {};
   final progressById = {
     for (final history in histories)
-      history.habit.id: computeHabitProgress(history, day),
+      if (!_createdAfter(history.habit, dayKey))
+        history.habit.id: computeHabitProgress(history, day),
   };
   final forDay = habitsForToday(progressById);
   return {
     for (final entry in progressById.entries)
       if (forDay.contains(entry.key)) entry.key: entry.value,
   };
+}
+
+/// Whether [habit] was created on a local day after [dayKey]. A Habit whose
+/// creation instant cannot be read is not excluded.
+bool _createdAfter(Habit habit, String dayKey) {
+  final createdAt = DateTime.tryParse(habit.createdAt);
+  if (createdAt == null) return false;
+  return habitDayKey(createdAt.toLocal()).compareTo(dayKey) > 0;
 }
 
 /// [habitProgressForDay], live.

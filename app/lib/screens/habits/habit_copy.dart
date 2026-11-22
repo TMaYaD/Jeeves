@@ -293,6 +293,8 @@ String habitsTodayMoreLine(int hiddenCount) =>
 
 const habitShutdownStepTitle = 'Habits';
 const habitShutdownAddLabel = 'Add';
+const habitShutdownLoadErrorText = 'Could not load your Habits.';
+const habitShutdownRetryLabel = 'Try again';
 const habitShutdownForwardLabelHabitsOnly = 'Close the day';
 
 const _habitShutdownLines = [

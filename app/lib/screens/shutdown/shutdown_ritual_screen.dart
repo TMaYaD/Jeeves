@@ -108,8 +108,32 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
     // The habit step needs the closing day and every Habit's history. Watch
     // both from the start so they are loaded by the time the step is reached.
     final closingDayAsync = ref.watch(shutdownClosingDayProvider);
-    final habitsLoaded = ref.watch(habitHistoriesProvider).hasValue;
-    final habitsReady = habitsLoaded && closingDayAsync.hasValue;
+    final histories = ref.watch(habitHistoriesProvider);
+    final habitsReady = histories.hasValue && closingDayAsync.hasValue;
+    if (!habitsReady && (histories.hasError || closingDayAsync.hasError)) {
+      return CeremonyPopScope(
+        onBack: widget.habitsOnly ? null : () => notifier.goToStep(kShutdownReviewStep),
+        child: Scaffold(
+          body: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(habitShutdownLoadErrorText,
+                    key: Key('shutdown_habit_load_error')),
+                TextButton(
+                  key: const Key('shutdown_habit_load_retry'),
+                  onPressed: () {
+                    ref.invalidate(habitHistoriesProvider);
+                    ref.invalidate(shutdownClosingDayProvider);
+                  },
+                  child: const Text(habitShutdownRetryLabel),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
     final liveOpenHabits = ref.watch(shutdownOpenHabitsProvider);
     final closingDay = closingDayAsync.value;
     ref.watch(shutdownHabitCheckInsProvider);
@@ -303,8 +327,8 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
               ceremonyId: _ceremonyId,
               accentColor: _accent,
               onBack: () => context.go(kCeremonyExitRoute),
-              onSkip: () => _closeAfterHabitsOnly(notifier),
-              onNext: () => _closeAfterHabitsOnly(notifier),
+              onSkip: () => _closeAfterHabitsOnly(notifier, closingDay),
+              onNext: () => _closeAfterHabitsOnly(notifier, closingDay),
               hasMoreItems: _anyHabitUntouched(habits, made),
               nextLabel: habitShutdownForwardLabelHabitsOnly,
             ),
@@ -318,11 +342,12 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
 
   /// Closes the session and leaves for the inbox; when something turns out to
   /// be unfinished, the full ritual starts instead.
-  Future<void> _closeAfterHabitsOnly(EveningShutdownNotifier notifier) async {
+  Future<void> _closeAfterHabitsOnly(
+      EveningShutdownNotifier notifier, String closingDay) async {
     if (_closingAfterHabitsOnly) return;
     _closingAfterHabitsOnly = true;
     try {
-      final closed = await notifier.closeAfterHabitsOnly();
+      final closed = await notifier.closeAfterHabitsOnly(closingDay);
       if (!mounted) return;
       context.go(closed ? '/inbox' : '/shutdown');
     } finally {

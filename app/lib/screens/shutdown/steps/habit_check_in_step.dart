@@ -126,6 +126,9 @@ class _MeasurableRow extends ConsumerStatefulWidget {
 class _MeasurableRowState extends ConsumerState<_MeasurableRow> {
   int _stepperAmount = 1;
 
+  /// An Add is being written; a second one waits so no entry is dropped.
+  bool _adding = false;
+
   @override
   Widget build(BuildContext context) {
     final habitId = widget.open.habit.id;
@@ -159,13 +162,23 @@ class _MeasurableRowState extends ConsumerState<_MeasurableRow> {
               const Spacer(),
               FilledButton(
                 key: Key('shutdown_habit_add_$habitId'),
-                onPressed: () async {
-                  final amount = _stepperAmount;
-                  setState(() => _stepperAmount = 1);
-                  await ref
-                      .read(shutdownHabitCheckInsProvider.notifier)
-                      .addAmount(habitId, widget.closingDay, amount.toDouble());
-                },
+                onPressed: _adding
+                    ? null
+                    : () async {
+                        final amount = _stepperAmount;
+                        setState(() {
+                          _stepperAmount = 1;
+                          _adding = true;
+                        });
+                        try {
+                          await ref
+                              .read(shutdownHabitCheckInsProvider.notifier)
+                              .addAmount(habitId, widget.closingDay,
+                                  amount.toDouble());
+                        } finally {
+                          if (mounted) setState(() => _adding = false);
+                        }
+                      },
                 child: const Text(habitShutdownAddLabel),
               ),
             ],

@@ -80,6 +80,10 @@ void main() {
         .openSession(userId: _userId, taskIds: ['t1'], now: startedAt);
   }
 
+  Future<void> finishWriteTask() => (db.update(db.todos)
+        ..where((t) => t.id.equals('t1')))
+      .write(TodosCompanion(doneAt: Value(DateTime.utc(2026, 11, 18, 22).toIso8601String())));
+
   const everyDay = HabitCommitmentDraft(repeatKind: HabitRepeatKind.everyDay);
 
   test('a session started 21:00 yesterday closes yesterday after midnight',
@@ -158,5 +162,55 @@ void main() {
         shutdownOpenHabitsProvider, (list) => list.isNotEmpty);
 
     expect([for (final o in open) o.habit.id], [stretch]);
+  });
+
+  test('a weekly Habit created after the closing day is not open on it',
+      () async {
+    final weekly = await createHabit(
+        'Run',
+        const HabitCommitmentDraft(
+            repeatKind: HabitRepeatKind.timesPerWeek, timesPerPeriod: 3),
+        at: DateTime(2026, 11, 19, 0, 10));
+    await openSessionStartedAt(DateTime(2026, 11, 18, 21));
+    await settled(shutdownClosingDayProvider, (v) => v.hasValue);
+
+    final open = await settled(
+        shutdownOpenHabitsProvider, (list) => list.isNotEmpty);
+
+    expect([for (final o in open) o.habit.id], isNot(contains(weekly)));
+  });
+
+  test('closing after habits only closes nothing when the session changed',
+      () async {
+    await openSessionStartedAt(DateTime(2026, 11, 18, 21));
+    await finishWriteTask();
+    final notifier = container.read(eveningShutdownProvider.notifier);
+
+    expect(await notifier.closeAfterHabitsOnly('2026-11-17'), isFalse);
+    expect(await db.focusSessionDao.getActiveSession(), isNotNull);
+
+    expect(await notifier.closeAfterHabitsOnly('2026-11-18'), isTrue);
+    expect(await db.focusSessionDao.getActiveSession(), isNull);
+  });
+
+  test('a different session starts with its Habits step owed again',
+      () async {
+    await openSessionStartedAt(DateTime(2026, 11, 18, 21));
+    await finishWriteTask();
+    final notifier = container.read(eveningShutdownProvider.notifier);
+    await notifier.markStarted();
+    notifier.finishHabitsStep();
+    expect(container.read(eveningShutdownProvider).habitsStepDone, isTrue);
+
+    await notifier.markStarted();
+    expect(container.read(eveningShutdownProvider).habitsStepDone, isTrue);
+
+    await db.focusSessionDao.closeSessionIfNothingToDispose(
+        sessionId: (await db.focusSessionDao.getActiveSession())!.id);
+    await db.focusSessionDao.openSession(
+        userId: _userId, taskIds: ['t1'], now: DateTime(2026, 11, 19, 8));
+    await notifier.markStarted();
+
+    expect(container.read(eveningShutdownProvider).habitsStepDone, isFalse);
   });
 }

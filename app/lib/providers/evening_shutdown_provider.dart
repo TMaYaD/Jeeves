@@ -289,7 +289,8 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
     final session = await _db.focusSessionDao.getActiveSession();
     if (!ref.mounted || session == null) return;
     if (state.startedSessionId == session.id) return;
-    state = state.copyWith(startedSessionId: session.id);
+    // A different session is a new performance, so its Habits step is owed.
+    state = state.copyWith(startedSessionId: session.id, habitsStepDone: false);
   }
 
   // ---- Step navigation -------------------------------------------------------
@@ -307,9 +308,17 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
   /// done. Returns whether it closed: false when something on the Review
   /// surface is unfinished after all, in which case nothing was written and the
   /// full ritual is the way on (the same refusal the all-done shortcut has).
-  Future<bool> closeAfterHabitsOnly() async {
+  ///
+  /// [displayedClosingDay] is the day the ritual showed. When the open session
+  /// now closes a different day, the session changed under the screen: nothing
+  /// is closed and false is returned, so the user is not shown one day's Habits
+  /// and closed out of another's.
+  Future<bool> closeAfterHabitsOnly(String displayedClosingDay) async {
     final session = await _db.focusSessionDao.getActiveSession();
     if (session == null) return true;
+    final activeClosingDay =
+        shutdownClosingDayOf(session, ref.read(clockProvider)());
+    if (activeClosingDay != displayedClosingDay) return false;
     return _db.focusSessionDao
         .closeSessionIfNothingToDispose(sessionId: session.id);
   }

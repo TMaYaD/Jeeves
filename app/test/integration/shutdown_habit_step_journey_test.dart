@@ -239,17 +239,19 @@ void main() {
       sessionStart: evening, clock: evening, body: (clock) {
     testWidgets('the flow goes from Resolve Unfinished to Close Day, "of 2"',
         (tester) async {
-      await db.habitDao.addCheckIn(
-          habitId: stretchId,
-          userId: _userId,
-          countsForDay: '2026-11-18',
-          now: evening.toUtc());
-      await db.habitDao.addCheckIn(
-          habitId: waterId,
-          userId: _userId,
-          countsForDay: '2026-11-18',
-          measuredAmount: 8,
-          now: evening.toUtc());
+      await tester.runAsync(() async {
+        await db.habitDao.addCheckIn(
+            habitId: stretchId,
+            userId: _userId,
+            countsForDay: '2026-11-18',
+            now: evening.toUtc());
+        await db.habitDao.addCheckIn(
+            habitId: waterId,
+            userId: _userId,
+            countsForDay: '2026-11-18',
+            measuredAmount: 8,
+            now: evening.toUtc());
+      });
       await mount(tester, clock);
       expect(find.text('Step 1 of 2'), findsOneWidget);
 
