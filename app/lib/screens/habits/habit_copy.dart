@@ -261,3 +261,30 @@ String habitOfferSubLine({required String sourceTitle, String? offeredUnit}) =>
 
 /// The entry sheet card's title.
 String habitOfferFollowsLine(String title) => '$title follows, sir.';
+
+// --- Daily Planning: the read-only habits card ---------------------------
+
+const habitsTodayHeader = 'Habits today';
+
+const habitsTodayFooter = 'Not part of the plan and not counted in capacity.';
+
+/// How many Habits the card shows before "and n more".
+const habitsTodayCardLimit = 8;
+
+String habitsTodayDoneCount(int done, int total) => '$done of $total done';
+
+/// "42 days", "1 day", "0 days" for a day-based Habit; "1 of 3 this week"
+/// for N a week or month.
+String habitPlanningNumber(HabitProgress progress, HabitCommitment? commitment) {
+  final period = habitPeriodLine(progress, commitment);
+  if (period != null) return period;
+  final days = progress.currentStreak;
+  return '$days ${days == 1 ? 'day' : 'days'}';
+}
+
+String habitsTodayAllDoneLine(int total) => 'All $total have their Check-in';
+
+String habitsTodayLongestStreakLine(int days) => 'longest streak $days';
+
+String habitsTodayMoreLine(int hiddenCount) =>
+    'and $hiddenCount more · shown in Habits';
