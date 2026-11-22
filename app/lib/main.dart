@@ -16,6 +16,7 @@ import 'providers/nudge_action_outbox.dart';
 import 'providers/onboarding_provider.dart';
 import 'providers/sync_lifecycle_provider.dart';
 import 'providers/sync_stack_provider.dart';
+import 'providers/tags_provider.dart' show labelTagTypeFoldProvider;
 import 'providers/vault_sync_provider.dart';
 import 'router.dart';
 import 'screens/store_blocked/store_blocked_copy.dart';
@@ -178,6 +179,8 @@ class JeevesApp extends ConsumerWidget {
     ref.watch(domainStoreRebuildProvider);
     // Runs once after the v4 upgrade, after the replay above (issue #238).
     ref.watch(timeContextTagConversionProvider);
+    // Retypes Labels an earlier sync cutover stored under the retired type.
+    ref.watch(labelTagTypeFoldProvider);
 
     // Eagerly materialise [authTokenProvider] so its async build() runs at
     // startup and restores the persisted session from secure storage.  The

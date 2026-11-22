@@ -330,11 +330,23 @@ void main() {
     });
 
     test('reads back as a date', () {
-      expect(habitDateFromDayKey('2026-11-05'), DateTime(2026, 11, 5));
+      expect(habitDateFromDayKey('2026-11-05'), DateTime.utc(2026, 11, 5));
       expect(habitDateFromDayKey('2026-11-31'), isNull);
       expect(habitDateFromDayKey('2026-13-01'), isNull);
       expect(habitDateFromDayKey('not a day'), isNull);
       expect(habitDateFromDayKey('2026-+1-+2'), isNull);
+    });
+
+    test('reads a day a time zone skipped, as a UTC calendar day', () {
+      // Pacific/Apia skipped 2011-12-30 entirely; a local DateTime for it
+      // rolls over, so the key used to be rejected there.
+      final day = habitDateFromDayKey('2011-12-30');
+      expect(day, DateTime.utc(2011, 12, 30));
+      expect(day!.isUtc, isTrue);
+      expect(
+        effectiveStartOf(commitment(id: 'c', chosenOn: '2011-12-30')),
+        DateTime.utc(2011, 12, 30),
+      );
     });
   });
 
@@ -342,7 +354,7 @@ void main() {
     test('is the chosen day for the daily kinds', () {
       expect(
         effectiveStartOf(commitment(id: 'c', chosenOn: '2026-11-18')),
-        DateTime(2026, 11, 18),
+        DateTime.utc(2026, 11, 18),
       );
       expect(
         effectiveStartOf(commitment(
@@ -350,7 +362,7 @@ void main() {
             repeatKind: HabitRepeatKind.chosenWeekdays,
             chosenOn: '2026-11-18',
             chosenWeekdays: [3])),
-        DateTime(2026, 11, 18),
+        DateTime.utc(2026, 11, 18),
       );
       expect(
         effectiveStartOf(commitment(
@@ -358,7 +370,7 @@ void main() {
             repeatKind: HabitRepeatKind.everyNDays,
             chosenOn: '2026-11-18',
             intervalDays: 3)),
-        DateTime(2026, 11, 18),
+        DateTime.utc(2026, 11, 18),
       );
     });
 
@@ -369,7 +381,7 @@ void main() {
             repeatKind: HabitRepeatKind.timesPerWeek,
             chosenOn: '2026-11-18',
             timesPerPeriod: 3)),
-        DateTime(2026, 11, 16),
+        DateTime.utc(2026, 11, 16),
       );
     });
 
@@ -380,7 +392,7 @@ void main() {
             repeatKind: HabitRepeatKind.timesPerWeek,
             chosenOn: '2026-11-22',
             timesPerPeriod: 3)),
-        DateTime(2026, 11, 16),
+        DateTime.utc(2026, 11, 16),
       );
     });
 
@@ -391,7 +403,7 @@ void main() {
             repeatKind: HabitRepeatKind.timesPerMonth,
             chosenOn: '2026-11-18',
             timesPerPeriod: 10)),
-        DateTime(2026, 11, 1),
+        DateTime.utc(2026, 11, 1),
       );
     });
 
@@ -402,7 +414,7 @@ void main() {
             repeatKind: HabitRepeatKind.timesPerMonth,
             chosenOn: '2026-11-01',
             timesPerPeriod: 10)),
-        DateTime(2026, 11, 1),
+        DateTime.utc(2026, 11, 1),
       );
       expect(
         effectiveStartOf(commitment(
@@ -410,7 +422,7 @@ void main() {
             repeatKind: HabitRepeatKind.timesPerMonth,
             chosenOn: '2026-03-01',
             timesPerPeriod: 10)),
-        DateTime(2026, 3, 1),
+        DateTime.utc(2026, 3, 1),
       );
     });
 
@@ -421,7 +433,7 @@ void main() {
             repeatKind: HabitRepeatKind.timesPerMonth,
             chosenOn: '2026-11-30',
             timesPerPeriod: 10)),
-        DateTime(2026, 11, 1),
+        DateTime.utc(2026, 11, 1),
       );
     });
   });
@@ -579,7 +591,7 @@ void main() {
       expect(commitmentInForceOn(commitments, '2026-11-25'), monthly);
       // The Habit began with the weekly rule, so days before it have none.
       expect(commitmentInForceOn(commitments, '2026-11-10'), isNull);
-      expect(effectiveStartsOf(commitments)['c2'], DateTime(2026, 11, 23));
+      expect(effectiveStartsOf(commitments)['c2'], DateTime.utc(2026, 11, 23));
     });
 
     test('a day before the first commitment has none', () {

@@ -349,12 +349,40 @@ class OutcomeBypassDecisions extends Table {
 // tags
 // ---------------------------------------------------------------------------
 
+/// The `tags.type` value that backs a Label.
+///
+/// **`'context'` is the stored value, and it stays `'context'`.** The value
+/// predates the name "Label" — these are the `@` rows the app used to show as
+/// "Tags" — and it is what every released build already reads as its Label
+/// surface. Folding the retired `'label'` value into this one therefore costs
+/// only the few rows the sync cutover minted, and no wire change
+/// (docs/SYNC.md).
+const String labelTagType = 'context';
+
+/// The retired `tags.type` value: what the sync cutover minted Labels as,
+/// before they were folded into [labelTagType].
+///
+/// A row still carrying it is retyped on arrival, so no build after this one
+/// writes it.
+const String retiredLabelTagType = 'label';
+
+/// Every `tags.type` value that names a Label: the current one and the retired
+/// one.
+///
+/// A reader that looks for a Label has to accept both, because a peer on an
+/// older build can still send the retired value.
+const Set<String> labelTagTypes = {labelTagType, retiredLabelTagType};
+
 class Tags extends Table {
   TextColumn get id => text().clientDefault(() => uuid.v4())();
   TextColumn get name => text().withLength(max: 100)();
   TextColumn get color => text().nullable()();
 
-  /// GTD discriminator: context | project | area | label | person
+  /// GTD discriminator: context | project | area | person
+  ///
+  /// **`'context'` backs Label**, and it is the only value that does: the
+  /// retired `'label'` value is retyped to it on arrival
+  /// (`TagDao.retypeRetiredLabelTags`), never stored by a current build.
   TextColumn get type => text()
       .withDefault(const Constant('context'))
       .clientDefault(() => 'context')();

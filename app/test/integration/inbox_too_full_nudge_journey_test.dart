@@ -216,9 +216,11 @@ void main() {
       }
 
       Future<void> tapSkip() async {
-        // The footer can sit below the fold on the test surface.
+        // The footer sits below the fold, past the Make it a Habit button, so
+        // the lazy list has not built it until it is scrolled to.
         final skip = find.text('Skip', skipOffstage: false);
-        await tester.ensureVisible(skip);
+        await tester.scrollUntilVisible(skip, 200,
+            scrollable: find.byType(Scrollable).last);
         await tester.pump();
         await tester.tap(skip);
         await _flush(tester);

@@ -148,11 +148,11 @@ A remote change is always projected on arrival. `DomainProjector.project`
 (`sync/domain_projector.dart`) gives the reason for each.
 ## The vault: a folder of Markdown pages
 
-The vault is the first plugin behind the host ([sync-plugins](proposals/sync-plugins.md)). It carries the device's merged state to a folder of pages a person can read, grep and edit, and brings back what they changed. It needs no account and no server: a file syncer of the person's choosing carries the folder between devices.
+The vault is the first plugin behind the host ([sync-plugins](proposals/sync-plugins.md)). It carries the device's merged state to a folder of pages a person can read and edit, and brings back their changes. It needs no account and no server: a file syncer of the person's choosing carries the folder between devices.
 
-**It is a carrier, like any plugin.** It turns a page into changes and writes the host's merged state back as a page. It never chooses between two values and never writes a value the host did not give it; the one thing it authors is a clock for a hand edit, minted with `SyncHost.mintClock()`. It reads merged state through `SyncHost.mergedEntity` rather than comparing clocks itself.
+**It is a carrier, like any plugin.** It turns a page into changes and writes the host's merged state back as a page. It never chooses between two values and never writes a value the host did not give it; the one thing it authors is a clock for a hand edit, minted with `SyncHost.mintClock()`.
 
-**What is on a page.** One page per Outcome (`Outcomes/`), one sheet per FocusSession (`Sessions/`), one page per Capture (`Inbox/`). A sheet's name carries the session's UTC date and its id, so two sittings on one day never collide. A page's identity is the `id` in its frontmatter, never its path. **What a person can edit is what a page shows**: an Outcome's title, intent, due date and notes, its Actions as a checklist, a Capture's clarification stamp, and the Labels and Area the page shows. The rest of a page is the app's to write.
+**What is on a page.** One page per Outcome (`Outcomes/`), one sheet per FocusSession (`Sessions/`), one per Capture (`Inbox/`). A sheet's name carries the session's UTC date and its id, so sittings never collide. A page's identity is the `id` in its frontmatter, never its path. **What a person can edit is what a page shows**: an Outcome's title, intent, due date and notes, its Actions as a checklist, a Capture's clarification stamp, and the Labels and Area the page shows. The rest of a page is the app's to write.
 
 **A page is a pure function of merged state**: the same state always renders the same bytes, in the same order and in UTC, so two devices in the same state write the same file and a file syncer never sees a conflict between them. The readable part is frontmatter, notes, and a final `## Actions` heading that is always written; everything between the frontmatter and that heading is the notes, byte for byte.
 
@@ -184,17 +184,20 @@ int, bool and null pass through as JSON natives. A column that changes its Dart
 type changes its encoding, and that is a protocol change.
 
 **Entity ids.** Normal collections keep client-random UUIDs. Two kinds are
-deterministic, and must be: `user_preferences` derives its id from
+deterministic: `user_preferences` derives its id from
 `(workspace, key)`, and junctions derive theirs from their pair. The rule is in
-`app/lib/sync/ids.dart`, and the Tag collection is named there explicitly as one
+`app/lib/sync/ids.dart`, and the Tag collection is named there as one
 that must *not* derive — a Tag's op-log identity is its random `id`, while
 `(name, type)` is only its user-facing identity, which is why duplicates are
-representable and folded rather than prevented
+representable and folded, not prevented
 ([ADR-0043](adr/0043-tag-duplicates-are-representable-and-folded.md)).
+
+**One stored value for Label.** Label is `type='context'`; the reconciler
+retypes any `'label'` Tag to it before folding.
 
 **One Project per Outcome.** Each Outcome–Project link is its own entity, so two
 Devices assigning different Projects while apart leave two live links that
-last-write-wins never compares. The reconciler's third pass keeps the link with
+last-write-wins never compares. The one-Project pass keeps the link with
 the greatest clock (ties: smaller tag id) and unassigns the rest by tombstone;
 the winner is not re-asserted, so a later assignment elsewhere still beats it.
 
