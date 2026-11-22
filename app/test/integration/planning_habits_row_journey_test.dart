@@ -55,7 +55,9 @@ void main() {
           userId: _userId,
           title: title,
           today: mon,
-          now: now.subtract(Duration(days: 5, milliseconds: seedCount++)),
+          now: now
+              .subtract(const Duration(days: 5))
+              .add(Duration(milliseconds: seedCount++)),
           firstCommitment: commitment,
         ));
     if (estimateMinutes != null) {
