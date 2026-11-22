@@ -171,6 +171,20 @@ void main() {
         _logStart.add(const Duration(minutes: 30)));
   });
 
+  test('the cooldown after a long Break lasts as long as that Break did', () {
+    final state = _derive([
+      _sprint('s1', 0, endMinute: 25),
+      _sprint('s2', 30, endMinute: 55),
+      _sprint('s3', 60, endMinute: 85),
+      _sprint('s4', 90, endMinute: 115),
+      _sprint('s5', 130),
+    ], 131);
+    expect(state.lastBreakDurationMinutes, 15);
+    final shortBreak =
+        _derive([_sprint('s1', 0, endMinute: 25), _sprint('s2', 30)], 31);
+    expect(shortBreak.lastBreakDurationMinutes, 5);
+  });
+
   test('the timer reads no Sprint state from device-only storage', () {
     final source =
         File('lib/providers/sprint_timer_provider.dart').readAsStringSync();

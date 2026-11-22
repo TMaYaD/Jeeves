@@ -81,6 +81,10 @@ class SprintTimerState {
   // Timestamp of the most recent break completion (null if none this session).
   final DateTime? lastBreakEndedAt;
 
+  /// Length of the Break that `lastBreakEndedAt` closed. The cooldown lasts
+  /// that long: a long Break is not forgotten after a short Break's worth.
+  final int lastBreakDurationMinutes;
+
   const SprintTimerState({
     this.phase = SprintPhase.idle,
     this.activeTaskId,
@@ -96,6 +100,7 @@ class SprintTimerState {
     this.isLongBreak = false,
     this.longBreakSprintCount = 0,
     this.lastBreakEndedAt,
+    this.lastBreakDurationMinutes = 3,
   });
 
   bool get isActive => phase != SprintPhase.idle;
@@ -127,7 +132,7 @@ class SprintTimerState {
   bool get isPostBreakCooldown {
     if (lastBreakEndedAt == null) return false;
     return DateTime.now().difference(lastBreakEndedAt!) <
-        Duration(minutes: currentBreakDurationMinutes);
+        Duration(minutes: lastBreakDurationMinutes);
   }
 
   SprintTimerState copyWith({
@@ -145,6 +150,7 @@ class SprintTimerState {
     bool? isLongBreak,
     int? longBreakSprintCount,
     DateTime? lastBreakEndedAt,
+    int? lastBreakDurationMinutes,
   }) =>
       SprintTimerState(
         phase: phase ?? this.phase,
@@ -164,6 +170,8 @@ class SprintTimerState {
         longBreakSprintCount:
             longBreakSprintCount ?? this.longBreakSprintCount,
         lastBreakEndedAt: lastBreakEndedAt ?? this.lastBreakEndedAt,
+        lastBreakDurationMinutes:
+            lastBreakDurationMinutes ?? this.lastBreakDurationMinutes,
       );
 }
 
@@ -212,11 +220,25 @@ SprintTimerState deriveSprintTimerState({
   final latest = sprints.isEmpty ? null : sprints.last;
   final lastBreakEndedAt =
       sprints.length >= 2 ? latest!.startedAtUtc.toLocal() : null;
+  // The Break that ended when the latest Sprint began was the one after the
+  // Sprint before it; the cooldown lasts as long as that Break did.
+  final lastBreakDurationMinutes = sprints.length >= 2 &&
+          longBreakDecision(
+            sprints: sprints,
+            sprintId: sprints[sprints.length - 2].id,
+            sprintDurationMinutes: sprintMinutesSetting,
+            shortBreakDurationMinutes: breakMinutesSetting,
+            longBreakDurationMinutes: longBreakMinutesSetting,
+            sprintsBeforeLongBreak: sprintsBeforeLongBreakSetting,
+          ).isLong
+      ? longBreakMinutesSetting
+      : breakMinutesSetting;
   if (activeLog == null) {
     return SprintTimerState(
       sprintDurationMinutes: sprintMinutesSetting,
       currentBreakDurationMinutes: breakMinutesSetting,
       lastBreakEndedAt: lastBreakEndedAt,
+      lastBreakDurationMinutes: lastBreakDurationMinutes,
     );
   }
 
@@ -285,6 +307,7 @@ SprintTimerState deriveSprintTimerState({
         isLongBreak: isLongBreak,
         longBreakSprintCount: longBreakSprintCount,
         lastBreakEndedAt: lastBreakEndedAt,
+        lastBreakDurationMinutes: lastBreakDurationMinutes,
       );
 
   if (latestOnAction != null && latestOnAction.isRunning) {
@@ -542,10 +565,9 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
       await _reload();
       // The Break that follows may be the long one, and its length is the
       // one the countdown runs on — the reload has already derived it.
-      await _scheduleEndNotification(
+      await _scheduleBreakEnd(
         endedAt.add(Duration(minutes: state.currentBreakDurationMinutes)),
-        isFocus: false,
-        breakDurationMinutes: state.currentBreakDurationMinutes,
+        state.currentBreakDurationMinutes,
       );
     } finally {
       if (state.isProcessing) state = state.copyWith(isProcessing: false);
@@ -609,6 +631,7 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
       HapticFeedback.heavyImpact();
     }
     state = next;
+    _reconcileBreakNotification(next);
     final counting = next.isActive && !(next.isOvertime && next.overtime >= next.total);
     if (counting) {
       _ticker ??= Timer.periodic(const Duration(seconds: 1), (_) => _recompute());
@@ -648,7 +671,37 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
     }
   }
 
+  /// The Break-end reminder as last scheduled, so a change to the Break's
+  /// length (a setting edited mid-Break) can replace it and a plain
+  /// one-second tick cannot.
+  DateTime? _scheduledBreakEndAt;
+  int? _scheduledBreakMinutes;
+
+  void _reconcileBreakNotification(SprintTimerState next) {
+    if (_scheduledBreakEndAt == null) return;
+    if (next.phase != SprintPhase.break_) return;
+    final endAt = DateTime.now().add(next.remaining);
+    final moved = endAt.difference(_scheduledBreakEndAt!).abs() >
+        const Duration(seconds: 2);
+    if (!moved && next.currentBreakDurationMinutes == _scheduledBreakMinutes) {
+      return;
+    }
+    unawaited(_scheduleBreakEnd(endAt, next.currentBreakDurationMinutes));
+  }
+
+  Future<void> _scheduleBreakEnd(DateTime endAt, int minutes) async {
+    _scheduledBreakEndAt = endAt;
+    _scheduledBreakMinutes = minutes;
+    await _scheduleEndNotification(
+      endAt,
+      isFocus: false,
+      breakDurationMinutes: minutes,
+    );
+  }
+
   Future<void> _cancelSprintNotifications() async {
+    _scheduledBreakEndAt = null;
+    _scheduledBreakMinutes = null;
     final svc = ref.read(notificationServiceProvider);
     await svc.cancelSprintNotifications();
   }

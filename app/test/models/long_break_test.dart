@@ -344,4 +344,15 @@ void main() {
   test('an unknown Sprint reads as short', () {
     expect(_isLong(_fourSprints(), sprintId: 'nope'), isFalse);
   });
+
+  test('an earlier Sprint that still covers the interval keeps the run', () {
+    // A runs 0-80, B 10-20, C 40-60: A covers 20-40, so there is no gap before
+    // C, and the run holds all three.
+    final sprints = [
+      _sprint('a', Duration.zero, end: const Duration(minutes: 80)),
+      _sprint('b', const Duration(minutes: 10), end: const Duration(minutes: 20)),
+      _sprint('c', const Duration(minutes: 40), end: const Duration(minutes: 60)),
+    ];
+    expect(_decision(sprints).sprintCount, 3);
+  });
 }

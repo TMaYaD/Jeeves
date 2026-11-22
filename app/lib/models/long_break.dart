@@ -78,13 +78,27 @@ LongBreakDecision longBreakDecision({
   // run of its own.
   var runStartedAtUtc = sprint.startedAtUtc;
   var sprintCount = 1;
+  // Completed Sprints from different devices can overlap, so the gap before a
+  // Sprint is measured from the latest end among every Sprint that started
+  // earlier, not only the one just before it.
+  final latestEarlierEndedAtUtc = List<DateTime?>.filled(index, null);
+  DateTime? latestEndSoFar;
+  var endMissing = false;
+  for (var i = 0; i < index; i++) {
+    final end = sprints[i].endedAtUtc;
+    if (end == null) {
+      endMissing = true;
+    } else if (latestEndSoFar == null || end.isAfter(latestEndSoFar)) {
+      latestEndSoFar = end;
+    }
+    latestEarlierEndedAtUtc[i] = endMissing ? null : latestEndSoFar;
+  }
   for (var i = index - 1; i >= 0; i--) {
-    final previous = sprints[i];
-    final previousEndedAtUtc = previous.endedAtUtc;
-    if (previousEndedAtUtc == null) break;
-    final gap = sprints[i + 1].startedAtUtc.difference(previousEndedAtUtc);
+    final coveredUntilUtc = latestEarlierEndedAtUtc[i];
+    if (coveredUntilUtc == null) break;
+    final gap = sprints[i + 1].startedAtUtc.difference(coveredUntilUtc);
     if (gap >= Duration(minutes: longBreakDurationMinutes)) break;
-    runStartedAtUtc = previous.startedAtUtc;
+    runStartedAtUtc = sprints[i].startedAtUtc;
     sprintCount++;
   }
 
