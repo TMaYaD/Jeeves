@@ -146,3 +146,31 @@ final habitStackChainsProvider = Provider<List<List<Habit>>>((ref) {
   final active = ref.watch(_activeHabitsProvider).value;
   return active == null ? const [] : habitStackChains(active);
 });
+
+/// The Habits that are for [dayKey]: active on that day and either done or
+/// not yet done, by Habit id.
+///
+/// The same judgement as [habitsForTodayProvider], for any day. The day's
+/// state comes from the Habit's history alone, so a Habit paused or archived
+/// on [dayKey] is absent, and a Habit created after it never appears.
+final habitProgressOnDayProvider =
+    Provider.family<Map<String, HabitProgress>, String>((ref, dayKey) {
+  final day = parseHabitDay(dayKey);
+  final histories = ref.watch(habitHistoriesProvider).value;
+  if (day == null || histories == null) return const {};
+  final progressById = {
+    for (final history in histories)
+      history.habit.id: computeHabitProgress(history, day),
+  };
+  final forDay = habitsForToday(progressById);
+  return {
+    for (final entry in progressById.entries)
+      if (forDay.contains(entry.key)) entry.key: entry.value,
+  };
+});
+
+/// The ids of the Habits that are for [dayKey] (see
+/// [habitProgressOnDayProvider]). For today it equals [habitsForTodayProvider].
+final habitsForDayProvider = Provider.family<Set<String>, String>(
+  (ref, dayKey) => ref.watch(habitProgressOnDayProvider(dayKey)).keys.toSet(),
+);

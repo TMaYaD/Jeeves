@@ -21,8 +21,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../database/daos/focus_session_dao.dart' show SessionSettlement;
 import '../database/gtd_database.dart';
+import '../models/habit_commitment.dart' show habitDayKey;
 import '../models/routing_kind.dart';
 import '../utils/snapshot_nav.dart';
+import 'clock_provider.dart';
 import 'database_provider.dart';
 import 'focus_session_planning_provider.dart'
     show activeSessionSettlementsProvider, planningToday;
@@ -59,6 +61,21 @@ class ShutdownSessionDateNotifier extends Notifier<String> {
 
   void reset() => state = planningToday();
 }
+
+/// The local calendar day (`yyyy-MM-dd`) Evening Shutdown is closing: the day
+/// the open FocusSession started, or today when no session is open.
+///
+/// After midnight that is yesterday, which is what "the day being closed"
+/// means to the user. A session left open for several days closes, and counts
+/// Check-ins for, the day it started (`CONTEXT.md`: a session is the day's plan
+/// only if it started on that calendar day).
+final shutdownClosingDayProvider = FutureProvider.autoDispose<String>((ref) async {
+  final session =
+      await ref.watch(databaseProvider).focusSessionDao.getActiveSession();
+  final startedAt =
+      session == null ? null : DateTime.tryParse(session.startedAt);
+  return habitDayKey((startedAt ?? ref.read(clockProvider)()).toLocal());
+});
 
 // ---------------------------------------------------------------------------
 // Stream providers — backed by the active focus session
