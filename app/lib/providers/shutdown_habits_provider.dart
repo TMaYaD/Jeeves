@@ -5,6 +5,8 @@ library;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/gtd_database.dart' show Habit;
+import '../models/habit_stack.dart' show habitStackChains;
+import 'habit_check_ins_provider.dart';
 import '../models/habit_progress.dart';
 import 'evening_shutdown_provider.dart';
 import 'habit_progress_provider.dart';
@@ -31,26 +33,77 @@ final shutdownOpenHabitsProvider =
   final histories = ref.watch(habitHistoriesProvider).value ?? const [];
   final habitsById = {for (final h in histories) h.habit.id: h.habit};
 
-  // Stack order comes from the stacks of today's active Habits. A Habit that
-  // was active on the closing day but has been paused since is not in them;
-  // it goes last, oldest first.
-  final ordered = <Habit>[
-    for (final chain in ref.watch(habitStackChainsProvider))
-      for (final habit in chain)
-        if (progressById.containsKey(habit.id)) habit,
+  // Stack order of the Habits that are for the closing day. This does not read
+  // today's stacks (habitStackChainsProvider): the ritual must not depend on
+  // today's day key, which re-arms a midnight timer.
+  final ordered = [
+    for (final chain in habitStackChains([
+      for (final id in progressById.keys)
+        if (habitsById[id] != null) habitsById[id]!,
+    ]))
+      ...chain,
   ];
-  final orderedIds = {for (final habit in ordered) habit.id};
-  final leftover = [
-    for (final id in progressById.keys)
-      if (!orderedIds.contains(id) && habitsById[id] != null) habitsById[id]!,
-  ]..sort((a, b) {
-      final byCreation = a.createdAt.compareTo(b.createdAt);
-      return byCreation != 0 ? byCreation : a.id.compareTo(b.id);
-    });
 
   return [
-    for (final habit in [...ordered, ...leftover])
+    for (final habit in ordered)
       if (progressById[habit.id]!.todayState == HabitTodayState.notYet)
         ShutdownOpenHabit(habit: habit, progress: progressById[habit.id]!),
   ];
 });
+
+/// The Check-ins the habit step made in this performance, by Habit id.
+///
+/// A Habit with no entry (or an empty list) has had nothing from this step.
+/// Only Check-ins made here can be taken back here, so a toggle off never
+/// removes one the user made earlier in the day.
+final shutdownHabitCheckInsProvider = NotifierProvider.autoDispose<
+    ShutdownHabitCheckIns, Map<String, List<String>>>(
+  ShutdownHabitCheckIns.new,
+);
+
+class ShutdownHabitCheckIns extends Notifier<Map<String, List<String>>> {
+  final _busyHabitIds = <String>{};
+
+  @override
+  Map<String, List<String>> build() => const {};
+
+  /// Checks a binary Habit in for [closingDay], or takes this step's Check-in
+  /// back when it already made one.
+  Future<void> toggleBinary(String habitId, String closingDay) async {
+    if (!_busyHabitIds.add(habitId)) return;
+    final actions = ref.read(habitCheckInsProvider.notifier);
+    try {
+      final made = state[habitId] ?? const <String>[];
+      if (made.isEmpty) {
+        final id = await actions.checkIn(habitId, countsForDay: closingDay);
+        if (ref.mounted) state = {...state, habitId: [id]};
+      } else {
+        for (final id in made) {
+          await actions.undo(id);
+        }
+        if (ref.mounted) state = {...state, habitId: const []};
+      }
+    } finally {
+      _busyHabitIds.remove(habitId);
+    }
+  }
+
+  /// Adds [amount] to a measurable Habit for [closingDay]. Each entry adds.
+  Future<void> addAmount(
+      String habitId, String closingDay, double amount) async {
+    if (!_busyHabitIds.add(habitId)) return;
+    final actions = ref.read(habitCheckInsProvider.notifier);
+    try {
+      final id = await actions.checkIn(habitId,
+          amount: amount, countsForDay: closingDay);
+      if (ref.mounted) {
+        state = {
+          ...state,
+          habitId: [...?state[habitId], id],
+        };
+      }
+    } finally {
+      _busyHabitIds.remove(habitId);
+    }
+  }
+}

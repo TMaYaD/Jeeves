@@ -43,8 +43,15 @@ export '../database/daos/focus_session_dao.dart' show SessionSettlement;
 
 const _kShutdownCompletedDateKey = 'shutdown_ritual_completed_date';
 
+/// The ritual's step indexes. The habit step is not an index of its own: it is
+/// shown in place of Close Day while [EveningShutdownState.habitsStepDone] is
+/// false and the closing day has open Habits, so it never moves Close Day.
+const int kShutdownReviewStep = 0;
+const int kShutdownResolveStep = 1;
+const int kShutdownCloseDayStep = 2;
+
 /// Total number of shutdown ritual steps (0-indexed max).
-const int _kShutdownMaxStep = 2;
+const int _kShutdownMaxStep = kShutdownCloseDayStep;
 
 // ---------------------------------------------------------------------------
 // Session date cache
@@ -211,9 +218,15 @@ class EveningShutdownState {
     this.dispositions = const {},
     this.unfinishedNav = const SnapshotNav<Todo>(),
     this.startedSessionId,
+    this.habitsStepDone = false,
   });
 
   final int currentStep;
+
+  /// Whether the user has passed the habit step in this performance. Until
+  /// then, reaching [kShutdownCloseDayStep] shows the habit step first when
+  /// the closing day has open Habits.
+  final bool habitsStepDone;
 
   /// The id of the FocusSession that was open when the user started this
   /// performance, or null before it is started. Evening Shutdown has no intro,
@@ -236,9 +249,11 @@ class EveningShutdownState {
     Map<String, String>? dispositions,
     SnapshotNav<Todo>? unfinishedNav,
     String? startedSessionId,
+    bool? habitsStepDone,
   }) =>
       EveningShutdownState(
         startedSessionId: startedSessionId ?? this.startedSessionId,
+        habitsStepDone: habitsStepDone ?? this.habitsStepDone,
         currentStep: currentStep ?? this.currentStep,
         dispositions: dispositions ?? this.dispositions,
         unfinishedNav: unfinishedNav ?? this.unfinishedNav,
@@ -281,6 +296,11 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
 
   void goToStep(int step) {
     state = state.copyWith(currentStep: step.clamp(0, _kShutdownMaxStep));
+  }
+
+  /// Leaves the habit step for Close Day.
+  void finishHabitsStep() {
+    state = state.copyWith(habitsStepDone: true);
   }
 
   // ---- Unfinished snapshot navigation ----------------------------------------
