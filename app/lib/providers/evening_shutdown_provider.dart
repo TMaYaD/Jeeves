@@ -79,10 +79,15 @@ class ShutdownSessionDateNotifier extends Notifier<String> {
 final shutdownClosingDayProvider = FutureProvider.autoDispose<String>((ref) async {
   final session =
       await ref.watch(databaseProvider).focusSessionDao.getActiveSession();
-  final startedAt =
-      session == null ? null : DateTime.tryParse(session.startedAt);
-  return habitDayKey((startedAt ?? ref.read(clockProvider)()).toLocal());
+  return shutdownClosingDayOf(session, ref.read(clockProvider)());
 });
+
+/// The closing day for [session] (see [shutdownClosingDayProvider]); [now]
+/// stands in when there is no session or its start cannot be read.
+String shutdownClosingDayOf(FocusSession? session, DateTime now) {
+  final startedAt = session == null ? null : DateTime.tryParse(session.startedAt);
+  return habitDayKey((startedAt ?? now).toLocal());
+}
 
 // ---------------------------------------------------------------------------
 // Stream providers — backed by the active focus session
@@ -296,6 +301,17 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
 
   void goToStep(int step) {
     state = state.copyWith(currentStep: step.clamp(0, _kShutdownMaxStep));
+  }
+
+  /// Closes the session after the habits-only ritual, when every Outcome is
+  /// done. Returns whether it closed: false when something on the Review
+  /// surface is unfinished after all, in which case nothing was written and the
+  /// full ritual is the way on (the same refusal the all-done shortcut has).
+  Future<bool> closeAfterHabitsOnly() async {
+    final session = await _db.focusSessionDao.getActiveSession();
+    if (session == null) return true;
+    return _db.focusSessionDao
+        .closeSessionIfNothingToDispose(sessionId: session.id);
   }
 
   /// Leaves the habit step for Close Day.

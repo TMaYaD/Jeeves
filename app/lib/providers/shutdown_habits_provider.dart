@@ -4,7 +4,7 @@ library;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../database/gtd_database.dart' show Habit;
+import '../database/gtd_database.dart' show GtdDatabase, Habit;
 import '../models/habit_stack.dart' show habitStackChains;
 import 'habit_check_ins_provider.dart';
 import '../models/habit_progress.dart';
@@ -21,21 +21,18 @@ class ShutdownOpenHabit {
   final HabitProgress progress;
 }
 
-/// The Habits for the closing day that are not done on it, in stack order.
+/// The Habits for [closingDay] that are not done on it, in stack order. Pure.
 ///
 /// A measurable Habit below its target is open (it has Check-ins but is not
-/// done), so the user can top it up. Empty while the closing day is loading.
-final shutdownOpenHabitsProvider =
-    Provider.autoDispose<List<ShutdownOpenHabit>>((ref) {
-  final closingDay = ref.watch(shutdownClosingDayProvider).value;
-  if (closingDay == null) return const [];
-  final progressById = ref.watch(habitProgressOnDayProvider(closingDay));
-  final histories = ref.watch(habitHistoriesProvider).value ?? const [];
+/// done), so the user can top it up. Stack order is the order of the Habits
+/// that are for the closing day, not today's stacks: the ritual must not
+/// depend on today's day key, which re-arms a midnight timer.
+List<ShutdownOpenHabit> shutdownOpenHabits(
+  List<HabitHistory> histories,
+  String closingDay,
+) {
+  final progressById = habitProgressForDay(histories, closingDay);
   final habitsById = {for (final h in histories) h.habit.id: h.habit};
-
-  // Stack order of the Habits that are for the closing day. This does not read
-  // today's stacks (habitStackChainsProvider): the ritual must not depend on
-  // today's day key, which re-arms a midnight timer.
   final ordered = [
     for (final chain in habitStackChains([
       for (final id in progressById.keys)
@@ -43,13 +40,36 @@ final shutdownOpenHabitsProvider =
     ]))
       ...chain,
   ];
-
   return [
     for (final habit in ordered)
       if (progressById[habit.id]!.todayState == HabitTodayState.notYet)
         ShutdownOpenHabit(habit: habit, progress: progressById[habit.id]!),
   ];
+}
+
+/// [shutdownOpenHabits] for the day being closed, live. Empty while the
+/// closing day or the Habits are loading.
+final shutdownOpenHabitsProvider =
+    Provider.autoDispose<List<ShutdownOpenHabit>>((ref) {
+  final closingDay = ref.watch(shutdownClosingDayProvider).value;
+  final histories = ref.watch(habitHistoriesProvider).value;
+  if (closingDay == null || histories == null) return const [];
+  return shutdownOpenHabits(histories, closingDay);
 });
+
+/// The open Habits for the day being closed, read once from the database.
+///
+/// For a caller that is not watching the providers above (the Now screen
+/// deciding where Evening Shutdown starts). A one-shot read, not a stream,
+/// so it settles on any event loop.
+Future<List<ShutdownOpenHabit>> readShutdownOpenHabits(
+  GtdDatabase db,
+  DateTime now,
+) async {
+  final session = await db.focusSessionDao.getActiveSession();
+  final histories = await db.habitDao.getHabitHistories();
+  return shutdownOpenHabits(histories, shutdownClosingDayOf(session, now));
+}
 
 /// The Check-ins the habit step made in this performance, by Habit id.
 ///
