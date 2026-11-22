@@ -11,7 +11,7 @@ import 'package:jeeves/screens/batch_break_screen.dart';
 
 class _FixedFocusSettings extends FocusSettingsNotifier {
   @override
-  FocusSettings build() => const FocusSettings(breakDurationMinutes: 2);
+  FocusSettings build() => const FocusSettings(shortBreakDurationMinutes: 2);
 }
 
 /// The screen reads the wall clock through [clockProvider], so a test moves
