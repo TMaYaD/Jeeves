@@ -716,7 +716,9 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
       // over, and do not record it.
       if (scheduled) {
         try {
-          await ref.read(notificationServiceProvider).cancelSprintNotifications();
+          await ref
+              .read(notificationServiceProvider)
+              .cancelBreakEndNotification();
         } catch (error) {
           debugPrint('Stale Break reminder not cancelled: $error');
         }

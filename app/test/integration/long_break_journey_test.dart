@@ -77,6 +77,10 @@ class _GatedBreakNotifications extends RecordingNotificationService {
 
   @override
   Future<void> cancelSprintNotifications() async => events.add('cancel');
+
+  @override
+  Future<void> cancelBreakEndNotification() async =>
+      events.add('cancel-break');
 }
 
 void main() {
@@ -341,8 +345,9 @@ void main() {
     await tester.runAsync(() => Future<void>.delayed(Duration.zero));
 
     expect(notifications.events, contains('scheduled:5'));
-    expect(notifications.events.last, 'cancel',
-        reason: 'the reminder that landed after the skip is cancelled');
+    expect(notifications.events.last, 'cancel-break',
+        reason: 'the Break reminder that landed after the skip is cancelled '
+            'on its own, so the next Sprint-end reminder is not removed with it');
 
     await tester.pumpWidget(const SizedBox.shrink());
   });

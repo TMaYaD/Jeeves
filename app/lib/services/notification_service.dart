@@ -475,6 +475,12 @@ class NotificationService {
     await _plugin.cancel(id: _kBreakEndNotificationId);
   }
 
+  /// Cancels only the Break-end reminder, leaving a Sprint-end reminder that
+  /// was scheduled for the next Sprint in place.
+  Future<void> cancelBreakEndNotification() async {
+    await _plugin.cancel(id: _kBreakEndNotificationId);
+  }
+
   // ---------------------------------------------------------------------------
   // Focus session notification
   // ---------------------------------------------------------------------------
