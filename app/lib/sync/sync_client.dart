@@ -944,7 +944,11 @@ class SyncClient {
         // A duplicate result is still an acknowledgement: the server holds the op.
         await transport.postOps(workspaceId, [for (final row in chunk) row.envelope]);
       } on AuthorChainConflictException catch (conflict) {
-        await _recordOwnWritesVerdict(conflict);
+        // A refusal for a queue that was re-made mid-flight is stale: it names
+        // a position in the old queue, and raising on it could wipe the
+        // decision that re-made the queue. The next flush asks again.
+        if (queueGeneration != _outboxQueueGeneration) return FlushOutcome.retained;
+        await _recordOwnWritesVerdict(conflict, queueGeneration: queueGeneration);
         return FlushOutcome.retained;
       } on SyncTransportException catch (refusal) {
         if (refusal.code != genesisNotFirstCode) rethrow;
@@ -1132,7 +1136,32 @@ class SyncClient {
   /// device restored off an older local backup, so the detail names both. The
   /// response is identical either way — retain the outbox, re-number nothing —
   /// and un-wedging is an operator action that needs the user in the loop.
-  Future<void> _recordOwnWritesVerdict(AuthorChainConflictException conflict) async {
+  ///
+  /// Three outcomes raise `own_writes_rollback`: the server expects a position
+  /// at or below the acknowledged head (carries the repost position), beyond
+  /// anything this device authored, or more than one past the acknowledged head
+  /// (the last two carry none). Anything else raises nothing.
+  ///
+  /// **The verdict is one transaction with the generation check inside it.**
+  /// Keep-ours also runs in a transaction and bumps [_outboxQueueGeneration]
+  /// at its end, so the two serialize: a verdict either runs wholly before
+  /// keep-ours (which then finds the accusation changed and refuses) or wholly
+  /// after it (and sees the new generation and records nothing). A check made
+  /// before the reads would leave a window in which keep-ours lands between
+  /// the reads and the alarm write, and re-raising clears its decision.
+  Future<void> _recordOwnWritesVerdict(
+    AuthorChainConflictException conflict, {
+    required int queueGeneration,
+  }) async {
+    await _db.transaction(() async {
+      if (queueGeneration != _outboxQueueGeneration) return;
+      await _recordOwnWritesVerdictWithin(conflict);
+    });
+  }
+
+  Future<void> _recordOwnWritesVerdictWithin(
+    AuthorChainConflictException conflict,
+  ) async {
     final expected = conflict.expectedAuthorSeq;
     if (expected == null) {
       // The race-retry path resolves a raced insert without being able to name a
@@ -1167,6 +1196,27 @@ class SyncClient {
         detail: 'the server expects author_seq $expected, beyond the $authored '
             'this device has ever authored — something may be authoring under '
             "this device's key.",
+      );
+      return;
+    }
+    // Between the two: the server holds a position this device never sent, but
+    // this device has authored past it. A re-post of an op the server already
+    // holds is answered as a duplicate before the position check, so a refusal
+    // more than one past the acknowledged head means the server holds, under
+    // this device's key, an op this outbox never sent. Exactly one past
+    // (`acknowledged + 1`) stays silent: a flush that read its queue before a
+    // *keep ours* answer is refused at precisely the first unsent position, and
+    // the next flush settles it.
+    if (expected > acknowledged + 1) {
+      await _raiseAlarm(
+        IntegrityAlarmKind.ownWritesRollback,
+        authorMemberId: identity.memberId,
+        detail: 'the server expects author_seq $expected, past the '
+            '$acknowledged it has acknowledged from this device, and this '
+            'device never sent the positions in between — something may be '
+            "authoring under this device's key, or this device was restored "
+            'from an older local backup. The outbox is retained and nothing is '
+            're-numbered.',
       );
     }
   }
