@@ -992,7 +992,9 @@ class _FocusModeSettings extends ConsumerWidget {
   const _FocusModeSettings();
 
   static const _sprintOptions = [5, 10, 15, 20, 25, 30];
-  static const _breakOptions = [1, 2, 3, 5, 10];
+  static const _shortBreakOptions = [1, 2, 3, 5, 10];
+  static const _longBreakOptions = [10, 15, 20, 25, 30];
+  static const _sprintsBeforeLongBreakOptions = [2, 3, 4, 5, 6];
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1002,46 +1004,115 @@ class _FocusModeSettings extends ConsumerWidget {
     return Column(
       children: [
         ListTile(
+          key: const Key('focus_sprint_length_tile'),
           leading: const Icon(Icons.timer_outlined, color: Color(0xFF9CA3AF)),
           title: const Text(
-            'Sprint duration',
+            'Sprint length',
             style: TextStyle(
                 fontWeight: FontWeight.w500, color: Color(0xFF374151)),
           ),
-          subtitle: Text(
-            '${settings.sprintDurationMinutes} minutes',
-            style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+          subtitle: const Text(
+            'Each Sprint starts at this. You may stop early or run over.',
+            style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
           ),
+          trailing: _valueLabel('${settings.sprintDurationMinutes}m',
+              const Key('focus_sprint_length_value')),
           onTap: () => _pickDuration(
             context,
-            title: 'Sprint duration',
+            title: 'Sprint length',
             options: _sprintOptions,
             current: settings.sprintDurationMinutes,
             onPicked: notifier.setSprintDurationMinutes,
           ),
         ),
         ListTile(
+          key: const Key('focus_short_break_tile'),
           leading: const Icon(Icons.self_improvement, color: Color(0xFF9CA3AF)),
           title: const Text(
-            'Break duration',
+            'Short break',
             style: TextStyle(
                 fontWeight: FontWeight.w500, color: Color(0xFF374151)),
           ),
-          subtitle: Text(
-            '${settings.breakDurationMinutes} minutes',
-            style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+          subtitle: const Text(
+            'After a Sprint.',
+            style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
           ),
+          trailing: _valueLabel('${settings.shortBreakDurationMinutes}m',
+              const Key('focus_short_break_value')),
           onTap: () => _pickDuration(
             context,
-            title: 'Break duration',
-            options: _breakOptions,
-            current: settings.breakDurationMinutes,
-            onPicked: notifier.setBreakDurationMinutes,
+            title: 'Short break',
+            options: _shortBreakOptions,
+            current: settings.shortBreakDurationMinutes,
+            onPicked: notifier.setShortBreakDurationMinutes,
+          ),
+        ),
+        ListTile(
+          key: const Key('focus_long_break_tile'),
+          leading: const Icon(Icons.self_improvement, color: Color(0xFF9CA3AF)),
+          title: const Text(
+            'Long break',
+            style: TextStyle(
+                fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+          ),
+          subtitle: const Text(
+            'After a run of Sprints.',
+            style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+          ),
+          trailing: _valueLabel('${settings.longBreakDurationMinutes}m',
+              const Key('focus_long_break_value')),
+          onTap: () => _pickDuration(
+            context,
+            title: 'Long break',
+            options: _longBreakOptions,
+            current: settings.longBreakDurationMinutes,
+            onPicked: notifier.setLongBreakDurationMinutes,
+          ),
+        ),
+        ListTile(
+          key: const Key('focus_sprints_before_long_break_tile'),
+          leading: const Icon(Icons.repeat, color: Color(0xFF9CA3AF)),
+          title: const Text(
+            'Sprints before a long break',
+            style: TextStyle(
+                fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+          ),
+          subtitle: const Text(
+            'The count runs across Outcomes and Actions.',
+            style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+          ),
+          trailing: _valueLabel('${settings.sprintsBeforeLongBreak}',
+              const Key('focus_sprints_before_long_break_value')),
+          onTap: () => _pickDuration(
+            context,
+            title: 'Sprints before a long break',
+            options: _sprintsBeforeLongBreakOptions,
+            current: settings.sprintsBeforeLongBreak,
+            onPicked: notifier.setSprintsBeforeLongBreak,
+            unit: 'sprints',
+          ),
+        ),
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
+          child: Text(
+            'The count starts over after a long break, or after a gap '
+            'with no Sprint as long as a long break.',
+            style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
           ),
         ),
       ],
     );
   }
+
+  /// The setting's value, on the right of its row.
+  static Widget _valueLabel(String value, Key key) => Text(
+        value,
+        key: key,
+        style: const TextStyle(
+          fontWeight: FontWeight.w500,
+          color: Color(0xFF374151),
+        ),
+      );
 
   Future<void> _pickDuration(
     BuildContext context, {
@@ -1049,6 +1120,7 @@ class _FocusModeSettings extends ConsumerWidget {
     required List<int> options,
     required int current,
     required Future<void> Function(int) onPicked,
+    String unit = 'minutes',
   }) async {
     final picked = await showDialog<int>(
       context: context,
@@ -1058,7 +1130,7 @@ class _FocusModeSettings extends ConsumerWidget {
             .map((m) => SimpleDialogOption(
                   onPressed: () => Navigator.pop(ctx, m),
                   child: Text(
-                    '$m minutes',
+                    '$m $unit',
                     style: TextStyle(
                       fontWeight: m == current
                           ? FontWeight.w700

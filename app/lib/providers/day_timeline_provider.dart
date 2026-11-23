@@ -111,7 +111,8 @@ final dayTimelineSettingsProvider = Provider<DayTimelineSettings>((ref) {
   return DayTimelineSettings(
     defaultEstimateMinutes: ref.watch(
         focusSessionPlanningSettingsProvider.select((s) => s.defaultTimeEstimate)),
-    chunkUnitMinutes: focus.sprintDurationMinutes + focus.breakDurationMinutes,
+    chunkUnitMinutes:
+        focus.sprintDurationMinutes + focus.shortBreakDurationMinutes,
   );
 });
 

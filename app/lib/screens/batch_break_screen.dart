@@ -28,7 +28,7 @@ class _BatchBreakScreenState extends ConsumerState<BatchBreakScreen> {
   void initState() {
     super.initState();
     final now = ref.read(clockProvider)().toUtc();
-    final minutes = ref.read(focusSettingsProvider).breakDurationMinutes;
+    final minutes = ref.read(focusSettingsProvider).shortBreakDurationMinutes;
     _breakEndsAtUtc = now.add(Duration(minutes: minutes));
     _remaining = _breakEndsAtUtc.difference(now);
     _tick = Timer.periodic(const Duration(seconds: 1), (_) => _update());
