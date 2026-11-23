@@ -11,6 +11,7 @@ import 'database/store_refusal_error.dart';
 import 'database/store_schema.dart';
 import 'providers/auth_provider.dart';
 import 'providers/database_provider.dart';
+import 'providers/habit_check_in_outbox.dart';
 import 'providers/time_context_provider.dart';
 import 'providers/nudge_action_outbox.dart';
 import 'providers/onboarding_provider.dart';
@@ -25,6 +26,8 @@ import 'screens/store_blocked/store_too_new_copy.dart';
 import 'screens/store_blocked/store_unreadable_copy.dart';
 import 'services/due_date_notifications.dart';
 import 'services/follow_up_notifications.dart';
+import 'services/habit_notification_response.dart';
+import 'services/habit_notifications.dart';
 import 'services/legacy_sprint_prefs_cleanup.dart';
 import 'services/notification_background_entry_point.dart';
 import 'services/notification_service.dart';
@@ -127,7 +130,7 @@ void _handleNotificationResponse(
   required LocalStoreVersions storeVersions,
 }) {
   if (storeVersions.refusal != null) return;
-  unawaited(handleRitualNotificationResponse(
+  unawaited(handleNotificationResponse(
     response,
     service: NotificationService.instance,
     navigate: appRouter.go,
@@ -205,6 +208,12 @@ class JeevesApp extends ConsumerWidget {
     ref.watch(dueDateNotificationReconcilerProvider);
     // The same for Waiting For follow-up dates (09:00 on the date).
     ref.watch(followUpNotificationReconcilerProvider);
+    // Keeps a notification armed for each Habit whose anchor is a clock
+    // time, on each day it is for. Nothing else reads it.
+    ref.watch(habitNotificationReconcilerProvider);
+    // Writes the Check-ins a "Check in" tap on a Habit's notification
+    // recorded, possibly in a background isolate.
+    ref.watch(habitCheckInOutboxDrainerProvider);
     // Keeps the Ritual notifications equal to the projection of the Nudge
     // queue over the coming week. Nothing else reads it.
     ref.watch(nudgeNotificationSchedulerProvider);

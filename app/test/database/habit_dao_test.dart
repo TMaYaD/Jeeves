@@ -946,6 +946,33 @@ void main() {
         expect(checkIns.every((c) => c.countsForDay == '2026-11-18'), isTrue);
       });
 
+      test('a Check-in that is given its id is written once', () async {
+        final habitId = await createHabit();
+
+        final first = await db.habitDao.addCheckIn(
+          habitId: habitId,
+          userId: _userId,
+          countsForDay: '2026-11-18',
+          now: _now,
+          checkInId: 'check-in-1',
+        );
+        expect(first, 'check-in-1');
+
+        // The same Check-in again: the row is there, so nothing is written.
+        final again = await db.habitDao.addCheckIn(
+          habitId: habitId,
+          userId: _userId,
+          countsForDay: '2026-11-18',
+          now: _now,
+          checkInId: 'check-in-1',
+        );
+        expect(again, 'check-in-1');
+
+        final checkIns =
+            await db.habitDao.checkInsFor(habitId, '2026-11-18', '2026-11-18');
+        expect(checkIns.map((c) => c.id), ['check-in-1']);
+      });
+
       test('checks in on a day that is past', () async {
         final habitId = await createHabit(today: '2026-11-18');
 

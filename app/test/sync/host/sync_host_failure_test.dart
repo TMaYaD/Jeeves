@@ -16,6 +16,7 @@ import 'package:jeeves/sync/host/sync_host_service.dart';
 import 'package:jeeves/sync/merge_strategy.dart';
 import 'package:jeeves/sync/sync_database.dart';
 
+import '../harness/resolution_columns.dart';
 import 'host_harness.dart';
 
 const String _outcomeA = '3f2d1c4e-5a6b-4c8d-9e0f-1a2b3c4d5e6f';
@@ -101,7 +102,8 @@ void main() {
     expect(merged.map((r) => r.read<String>('entity_id')), ['p1', 'p3']);
   });
 
-  test('a v9 sync store upgrades to v10 and keeps every merge-state row', () async {
+  test('a v9 sync store upgrades through v10 and keeps every merge-state row',
+      () async {
     final directory = Directory.systemTemp.createTempSync('sync-v9-');
     addTearDown(() => directory.deleteSync(recursive: true));
     final file = File('${directory.path}/sync.sqlite');
@@ -109,6 +111,10 @@ void main() {
     final seed = SyncDatabase(NativeDatabase(file));
     await seed.customStatement('DROP TABLE change_sequence');
     await seed.customStatement('DROP TABLE plugin_cursors');
+    // A v9 store predates the decision columns, and opening it at the current
+    // schema runs every later step: v14 and v15 add columns, so the fixture
+    // has to take them away too.
+    await dropColumnsAddedAfter(seed, 9);
     await seed.customStatement(
         "INSERT INTO reduced_fields (collection, entity_id, field, value_json) "
         "VALUES ('todos', 't1', 'title', '\"Ship it\"')");
@@ -137,13 +143,17 @@ void main() {
         hasLength(1));
   });
 
-  test('a v11 sync store upgrades to v12 and keeps every row', () async {
+  test('a v11 sync store upgrades through v12 and keeps every row', () async {
     final directory = Directory.systemTemp.createTempSync('sync-v11-');
     addTearDown(() => directory.deleteSync(recursive: true));
     final file = File('${directory.path}/sync.sqlite');
 
     final seed = SyncDatabase(NativeDatabase(file));
     await seed.customStatement('DROP TABLE unauthored_changes');
+    // A v11 store predates the decision columns, and opening it at the current
+    // schema runs every later step: v14 and v15 add columns, so the fixture
+    // has to take them away too.
+    await dropColumnsAddedAfter(seed, 11);
     await seed.into(seed.opLog).insert(
           OpLogCompanion.insert(
             seq: 1,

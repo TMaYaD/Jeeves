@@ -1,10 +1,11 @@
 /// What happened to your data, in plain language.
 ///
 /// Reachable only when there is something to report, and it says so and stops.
-/// **No buttons of any kind**: there are no alarm resolutions yet (#575), and a
-/// control that did nothing would be worse than none — the whole reason this
+/// **A condition offers the decisions its kind has, and nothing else**: a
+/// button that did nothing would be worse than none — the whole reason this
 /// screen exists is that the previous surface, a permanently red icon, was a
-/// signal the user could not act on.
+/// signal the user could not act on. There is no dismiss and no retry: a
+/// condition is settled by a decision, and silence is not a decision.
 ///
 /// Voice and vocabulary are `sync_health_copy.dart`'s, and both are asserted by
 /// test. Nothing here composes a sentence of its own.
@@ -15,6 +16,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers/auth_provider.dart';
 import '../../providers/sync_health_detail_provider.dart';
+import '../../sync/alarm_resolution.dart';
 import '../../sync/sync_condition_class.dart';
 import '../../sync/sync_health_detail.dart';
 import '../../widgets/app_title_bar/app_title_bar.dart';
@@ -144,49 +146,176 @@ String sentenceForCondition(SyncHealthCondition condition) =>
 Key conditionRowKey(SyncHealthCondition condition) =>
     ValueKey('${condition.workspaceId}/${condition.source.name}/${condition.rowId}');
 
-/// One condition: a sentence, when it happened, and nothing to press.
+/// The words on the button that settles a condition.
+///
+/// The copy-side twin of [sentenceForCondition], and the same rule: the screen
+/// picks which of the copy file's lookups applies and composes nothing.
+String resolutionLabelForCondition(
+  SyncHealthCondition condition,
+  AlarmResolution resolution,
+) =>
+    switch (condition.source) {
+      SyncConditionSource.standingCondition =>
+        resolutionLabelForAlarmCode(condition.code, resolution),
+      SyncConditionSource.refusedItem => syncHealthRejectRefusedItemLabel,
+    };
+
+/// One condition: a sentence, when it happened, and the decisions it may be
+/// given.
 ///
 /// Every machine string — the stored code, the member id, the row id, the
 /// engine's own `detail` — lives inside the expandable, so the collapsed screen
 /// carries none of it (#584 AC-4).
-class _ConditionRow extends StatelessWidget {
+///
+/// **The buttons sit below the tile, not inside it.** The tile's own touch is
+/// the expander, and a button nested in it would be competing with the expander
+/// for the same touch — so the decisions are a sibling of the tile, under the
+/// sentence they belong to.
+class _ConditionRow extends ConsumerStatefulWidget {
   const _ConditionRow({super.key, required this.condition});
   final SyncHealthCondition condition;
 
   @override
+  ConsumerState<_ConditionRow> createState() => _ConditionRowState();
+}
+
+class _ConditionRowState extends ConsumerState<_ConditionRow> {
+  /// The decision whose call is running, if any.
+  ///
+  /// One at a time: the button that is running is disabled, and the row is
+  /// left showing what it is doing rather than what it could do.
+  AlarmResolution? _running;
+
+  /// The failure of the last decision, if it could not be finished.
+  ///
+  /// **A decision that fails is not a decision.** The button is re-enabled and
+  /// the row says so, because a user who tapped a button and saw nothing
+  /// happen cannot tell whether their answer was recorded — and the condition
+  /// is still standing, so there is something left for them to do.
+  String? _failure;
+
+  Future<void> _resolve(AlarmResolution resolution) async {
+    setState(() {
+      _running = resolution;
+      _failure = null;
+    });
+    try {
+      await ref.read(syncAlarmResolverProvider)(widget.condition, resolution);
+    } on Object catch (error) {
+      // The reason belongs in the log, not on the page: the user can act on
+      // "it did not happen" and on nothing else.
+      debugPrint('sync health: recording a decision failed — $error');
+      if (mounted) {
+        setState(() => _failure = syncHealthResolutionFailedSentence);
+      }
+    } finally {
+      // Re-enabled even when the call failed: the condition is still standing,
+      // and the user is owed the chance to try again.
+      if (mounted) setState(() => _running = null);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Theme(
-      // Flat, like the task-detail history section: an expander is the only tap
-      // target on this screen and it should not read as a card.
-      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-      child: ExpansionTile(
-        tilePadding: const EdgeInsets.symmetric(horizontal: 16),
-        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-        title: Text(
-          sentenceForCondition(condition),
-          style: const TextStyle(fontSize: 14, color: Color(0xFF374151)),
-        ),
-        subtitle: Padding(
-          padding: const EdgeInsets.only(top: 4),
-          child: Text(
-            _whenLine(condition),
-            style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
-          ),
-        ),
-        children: [
-          Align(
-            alignment: Alignment.centerLeft,
-            child: SelectableText(
-              _technicalDetail(condition),
-              style: const TextStyle(
-                fontSize: 11,
-                color: Color(0xFF9CA3AF),
-                fontFamily: 'monospace',
+    final condition = widget.condition;
+    return Column(
+      // Stretched, so the expander keeps the full width of the screen rather
+      // than shrinking to the length of its own sentence.
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Theme(
+          // Flat, like the task-detail history section: an expander is the only
+          // tap target on this screen and it should not read as a card.
+          data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+          child: ExpansionTile(
+            tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+            childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            title: Text(
+              sentenceForCondition(condition),
+              style: const TextStyle(fontSize: 14, color: Color(0xFF374151)),
+            ),
+            subtitle: Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                _whenLine(condition),
+                style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
               ),
             ),
+            children: [
+              Align(
+                alignment: Alignment.centerLeft,
+                child: SelectableText(
+                  _technicalDetail(condition),
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: Color(0xFF9CA3AF),
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
+        ),
+        if (condition.resolutionInFlight)
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Two pixels, the thinnest thing the design system has, and the
+                // blue of the Syncing indicator: a decision in flight is a
+                // transient state, and amber is spent on the calm one.
+                SizedBox(
+                  height: 2,
+                  child: LinearProgressIndicator(
+                    minHeight: 2,
+                    color: Color(0xFF2563EB),
+                    backgroundColor: Color(0xFFE5E7EB),
+                  ),
+                ),
+                SizedBox(height: 6),
+                Text(
+                  syncHealthResolutionInFlightSentence,
+                  style: TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+                ),
+              ],
+            ),
+          )
+        else if (condition.resolutions.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 0, 16, 12),
+            child: Wrap(
+              spacing: 4,
+              children: [
+                for (final resolution in condition.resolutions)
+                  TextButton(
+                    onPressed: _running == resolution
+                        ? null
+                        : () => _resolve(resolution),
+                    style: TextButton.styleFrom(
+                      foregroundColor: const Color(0xFF2563EB),
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                    ),
+                    child: Text(
+                      resolutionLabelForCondition(condition, resolution),
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        // Below the buttons, in the same plain voice as everything else on this
+        // screen: what the user needs to know is that their answer did not take
+        // effect, and that they can try again.
+        if (_failure != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: Text(
+              _failure!,
+              style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+            ),
+          ),
+      ],
     );
   }
 }
