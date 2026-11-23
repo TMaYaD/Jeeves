@@ -489,6 +489,58 @@ void main() {
       expect(payload.day, entry.day);
       expect(payload.atMillis, entry.fireAt.millisecondsSinceEpoch);
       expect(payload.action, HabitNotificationAction.checkIn);
+      expect(payload.signature,
+          habitNotificationSignature(entry.title, entry.body));
+    });
+
+    test('a stack that names other Habits has another payload', () {
+      final withFollower = [
+        HabitHistory(
+          habit: habit(id: 'h1', title: 'Stretch'),
+          commitments: [commitment(habitId: 'h1')],
+        ),
+        HabitHistory(
+          habit: habit(
+              id: 'h2',
+              title: 'Water',
+              anchorKind: 'after_habit',
+              anchorClockTime: null,
+              anchorHabitId: 'h1'),
+          commitments: [
+            commitment(
+              habitId: 'h2',
+              repeatKind: HabitRepeatKind.chosenWeekdays,
+              chosenWeekdays: [1, 3, 5],
+            ),
+          ],
+        ),
+      ];
+      final withoutFollower = [
+        withFollower.first,
+        HabitHistory(
+          habit: withFollower[1].habit,
+          commitments: [
+            commitment(
+              habitId: 'h2',
+              repeatKind: HabitRepeatKind.chosenWeekdays,
+              chosenWeekdays: [2, 4, 6],
+            ),
+          ],
+        ),
+      ];
+
+      // Friday the 20th: the follower is due in one plan and not in the
+      // other, so the two notifications say different things.
+      PlannedHabitNotification friday(List<PlannedHabitNotification> planned) =>
+          planned.firstWhere((e) => e.day == '2026-11-20');
+
+      final named = friday(planOf(withFollower).upcoming);
+      final alone = friday(planOf(withoutFollower).upcoming);
+
+      expect(named.namedHabitIds, ['h1', 'h2']);
+      expect(alone.namedHabitIds, ['h1']);
+      expect(named.payload, isNot(alone.payload));
+      expect(named.signature, isNot(alone.signature));
     });
 
     test('a payload that is not a habit payload reads as nothing', () {

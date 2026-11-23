@@ -9,7 +9,9 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:timezone/timezone.dart' as tz;
 
 import '../database/daos/habit_dao.dart' show HabitAnchorKind;
@@ -18,8 +20,13 @@ import '../models/habit_commitment.dart';
 import '../models/habit_days.dart';
 import '../models/habit_progress.dart';
 import '../models/habit_stack.dart';
+import '../providers/clock_provider.dart';
+import '../providers/database_provider.dart';
+import '../providers/habit_progress_provider.dart' show habitTodayProvider;
 import 'due_date_notifications.dart' show dueDateNotificationId;
-import 'notification_service.dart' show NotificationService;
+import 'notification_ids.dart' show fnv1a32;
+import 'notification_service.dart'
+    show NotificationService, notificationServiceProvider;
 
 /// The payload prefix of a habit notification. Distinct from `outcome:`
 /// (due dates), `nudge:` (Rituals) and `focus` (sprints).
@@ -76,6 +83,7 @@ class PlannedHabitNotification {
     required this.title,
     required this.body,
     required this.action,
+    required this.signature,
     required this.payload,
   });
 
@@ -106,6 +114,9 @@ class PlannedHabitNotification {
   /// The button the notification carries.
   final HabitNotificationAction action;
 
+  /// The signature of the notification's wording.
+  final String signature;
+
   /// The payload the OS hands back on a tap.
   final String payload;
 
@@ -122,7 +133,7 @@ class PlannedHabitNotification {
 
 /// The payload of a habit notification:
 /// `habit:` followed by the first named Habit's id, then `|stack=`, `|day=`,
-/// `|at=` and `|action=` fields.
+/// `|at=`, `|action=` and `|sig=` fields.
 class HabitNotificationPayload {
   const HabitNotificationPayload({
     required this.habitId,
@@ -130,6 +141,7 @@ class HabitNotificationPayload {
     required this.day,
     required this.atMillis,
     required this.action,
+    required this.signature,
   });
 
   /// The first Habit the notification names — the one a body tap opens.
@@ -146,6 +158,9 @@ class HabitNotificationPayload {
 
   /// The button the notification carries.
   final HabitNotificationAction action;
+
+  /// The signature of the notification's wording.
+  final String signature;
 }
 
 /// The payload for a habit notification.
@@ -155,12 +170,24 @@ String habitNotificationPayload({
   required String day,
   required DateTime fireAt,
   required HabitNotificationAction action,
+  required String signature,
 }) =>
     '$kHabitNotificationPayloadPrefix$firstHabitId'
     '|stack=$clockTimeHabitId'
     '|day=$day'
     '|at=${fireAt.millisecondsSinceEpoch}'
-    '|action=${habitNotificationActionToken(action)}';
+    '|action=${habitNotificationActionToken(action)}'
+    '|sig=$signature';
+
+/// A short, stable signature of a notification's wording.
+///
+/// The wording is not in the payload — a Habit's title is the user's own
+/// text and may hold anything — so the payload carries a signature of it
+/// instead. The reconciler compares payloads to see whether the alarm it
+/// holds still says what it should: a stack that no longer names the same
+/// Habits, or a target that moved, has to be re-armed with new wording.
+String habitNotificationSignature(String title, String body) =>
+    fnv1a32('$title\u0000$body').toRadixString(16);
 
 /// The payload of a habit notification, or null when [payload] is not one.
 HabitNotificationPayload? parseHabitNotificationPayload(String? payload) {
@@ -192,6 +219,7 @@ HabitNotificationPayload? parseHabitNotificationPayload(String? payload) {
     day: day,
     atMillis: atMillis,
     action: habitNotificationActionFromToken(field('action')),
+    signature: field('sig') ?? '',
   );
 }
 
@@ -296,7 +324,6 @@ HabitNotificationPlan planHabitNotifications({
         dayKey: dayKey,
         today: today,
         location: location,
-        now: now,
       );
       if (planned == null) continue;
       if (day == today && !planned.fireAt.isAfter(now)) {
@@ -325,7 +352,6 @@ PlannedHabitNotification? _planChain({
   required String dayKey,
   required DateTime today,
   required tz.Location location,
-  required DateTime now,
 }) {
   // Only the stack's clock-time Habit carries a time: an after- or
   // before-Habit anchor, a part of the day and no anchor at all never notify
@@ -362,6 +388,9 @@ PlannedHabitNotification? _planChain({
   final action = _actionFor(first, commitment);
   final fireAt = tz.TZDateTime(
       location, day.year, day.month, day.day, time.hour, time.minute);
+  final title = _titleFor(named);
+  final body = _bodyFor(first, commitment);
+  final signature = habitNotificationSignature(title, body);
 
   return PlannedHabitNotification(
     id: habitNotificationId(clockTimeHabit.id, dayKey),
@@ -370,15 +399,17 @@ PlannedHabitNotification? _planChain({
     clockTimeHabitId: clockTimeHabit.id,
     day: dayKey,
     fireAt: fireAt,
-    title: _titleFor(named),
-    body: _bodyFor(first, commitment),
+    title: title,
+    body: body,
     action: action,
+    signature: signature,
     payload: habitNotificationPayload(
       firstHabitId: first.id,
       clockTimeHabitId: clockTimeHabit.id,
       day: dayKey,
       fireAt: fireAt,
       action: action,
+      signature: signature,
     ),
   );
 }
@@ -652,3 +683,24 @@ class HabitNotificationReconciler {
     _rescheduleAll = false;
   }
 }
+
+
+/// Null on web, where the notification stack is not initialised.
+///
+/// The plan follows the Habit histories, so the notifications follow every
+/// write: a Habit that is checked in, paused, archived, restored or edited
+/// changes what is pending. Watching [habitTodayProvider] re-plans the plan
+/// at midnight, and the reconciler re-plans it on resume, after re-reading
+/// the device's time zone.
+final habitNotificationReconcilerProvider =
+    Provider<HabitNotificationReconciler?>((ref) {
+  if (kIsWeb) return null;
+  ref.watch(habitTodayProvider);
+  final reconciler = HabitNotificationReconciler(
+    notifications: ref.watch(notificationServiceProvider),
+    histories: ref.watch(databaseProvider).habitDao.watchHabitHistories(),
+    now: () => ref.read(clockProvider)(),
+  )..start();
+  ref.onDispose(reconciler.dispose);
+  return reconciler;
+});
