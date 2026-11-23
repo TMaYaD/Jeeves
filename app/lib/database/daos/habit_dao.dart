@@ -485,8 +485,55 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
   /// is not a day, for an amount that is not more than zero, for an amount on
   /// a binary Habit's day, and for a missing amount on a measurable one.
   ///
+  /// **A Check-in may be given its id.** A Check-in recorded from a
+  /// notification is written by the main isolate some time after the tap, and
+  /// the id the tap minted travels with it: a row with that id is already
+  /// there, and the call writes nothing and returns it.
+  ///
   /// Returns the Check-in's id.
   Future<String> addCheckIn({
+    required String habitId,
+    required String userId,
+    required String countsForDay,
+    required DateTime now,
+    double? measuredAmount,
+    String? checkInId,
+  }) async {
+    final day = _validatedDay(countsForDay, 'countsForDay');
+    final amount = _validatedAmount(measuredAmount);
+    final instant = _storedInstant(now);
+    final id = checkInId ?? uuid.v4();
+    await attachedDatabase.capturing(() async {
+      await _requireHabit(habitId, userId);
+      await _requireAmountMatches(habitId, day, amount);
+      // A Check-in that is already there is the same Check-in: a drain that
+      // crashed between writing the row and removing the outbox entry must
+      // not write a second one.
+      if (checkInId != null) {
+        final existing = await (select(habitCheckIns)
+              ..where((c) => c.id.equals(checkInId))
+              ..limit(1))
+            .get();
+        if (existing.isNotEmpty) return;
+      }
+      await into(habitCheckIns).insert(HabitCheckInsCompanion.insert(
+            id: Value(id),
+            userId: userId,
+            habitId: habitId,
+            countsForDay: day,
+            checkedInAt: encodeInstant(instant)!,
+            measuredAmount: Value(amount),
+          ));
+    });
+    return id;
+  }
+
+  /// Adds a Check-in only when the Habit has none counted for [countsForDay]
+  /// yet, and returns its id, or null when one already exists.
+  ///
+  /// The check and the insert share one transaction, so two quick taps on the
+  /// list mark cannot both add the day's first Check-in.
+  Future<String?> addFirstCheckInOfDay({
     required String habitId,
     required String userId,
     required String countsForDay,
@@ -497,8 +544,13 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
     final amount = _validatedAmount(measuredAmount);
     final instant = _storedInstant(now);
     final checkInId = uuid.v4();
-    await attachedDatabase.capturing(() async {
+    final added = await attachedDatabase.capturing(() async {
       await _requireHabit(habitId, userId);
+      final existing = await (select(habitCheckIns)
+            ..where((c) => c.habitId.equals(habitId) & c.countsForDay.equals(day))
+            ..limit(1))
+          .get();
+      if (existing.isNotEmpty) return false;
       await _requireAmountMatches(habitId, day, amount);
       await into(habitCheckIns).insert(HabitCheckInsCompanion.insert(
             id: Value(checkInId),
@@ -508,8 +560,9 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
             checkedInAt: encodeInstant(instant)!,
             measuredAmount: Value(amount),
           ));
+      return true;
     });
-    return checkInId;
+    return added ? checkInId : null;
   }
 
   /// Changes how much a Check-in says was done.

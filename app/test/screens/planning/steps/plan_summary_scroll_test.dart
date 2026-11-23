@@ -30,6 +30,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
+import 'package:jeeves/providers/habit_progress_provider.dart';
 import 'package:jeeves/screens/planning/steps/plan_summary_step.dart';
 
 import '../../../test_helpers.dart';
@@ -82,6 +83,11 @@ List<Todo> _manyTodos(int n) => [
 Widget _harness(GtdDatabase db, List<Todo> todos) {
   return ProviderScope(
     overrides: [
+      // The Habits row watches live Drift streams; none of these tests are
+      // about Habits, so keep it empty rather than leave a stream timer.
+      activeHabitProgressProvider.overrideWithValue(const {}),
+      habitsForTodayProvider.overrideWithValue(const {}),
+      habitStackChainsProvider.overrideWithValue(const []),
       databaseProvider.overrideWithValue(db),
       _testTodosProvider.overrideWith((_) => todos),
       // Up Next: next-action todos minus anything already reviewed.

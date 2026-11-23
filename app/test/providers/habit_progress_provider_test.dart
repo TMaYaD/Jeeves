@@ -158,4 +158,27 @@ void main() {
     expect(resumed.read(habitTodayProvider), '2026-11-19');
     resumed.dispose();
   });
+
+  test('habitTodayEntriesProvider lists today\'s Check-ins oldest first with '
+      'the commitment in force', () async {
+    final habit = await createHabit('Run', HabitRepeatKind.timesPerWeek,
+        timesPerPeriod: 3, at: DateTime(2026, 11, 10, 8));
+    Future<String> add(String day, DateTime at) => db.habitDao.addCheckIn(
+        habitId: habit, userId: _userId, countsForDay: day, now: at.toUtc());
+    final later = await add('2026-11-18', DateTime(2026, 11, 18, 9, 30));
+    final earlier = await add('2026-11-18', DateTime(2026, 11, 18, 7, 5));
+    await add('2026-11-17', DateTime(2026, 11, 17, 8));
+
+    final entries = await settled(habitTodayEntriesProvider(habit),
+        (e) => e != null && e.checkIns.length == 2);
+
+    expect([for (final c in entries!.checkIns) c.id], [earlier, later]);
+    expect(entries.commitment?.timesPerPeriod, 3);
+  });
+
+  test('habitTodayEntriesProvider is null for an unknown Habit', () async {
+    await createHabit('Run', HabitRepeatKind.everyDay);
+    await settled(habitHistoriesProvider, (h) => h.hasValue);
+    expect(container.read(habitTodayEntriesProvider('nope')), isNull);
+  });
 }

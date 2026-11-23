@@ -14,6 +14,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
+import 'package:jeeves/providers/habit_progress_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/screens/planning/steps/plan_summary_step.dart';
 import 'package:jeeves/widgets/outcome_peek_sheet.dart';
@@ -50,6 +51,11 @@ Widget _harness(GtdDatabase db) {
   final everything = [..._upNext, ..._offUpNext.map((c) => c.todo)];
   return ProviderScope(
     overrides: [
+      // The Habits row watches live Drift streams; none of these tests are
+      // about Habits, so keep it empty rather than leave a stream timer.
+      activeHabitProgressProvider.overrideWithValue(const {}),
+      habitsForTodayProvider.overrideWithValue(const {}),
+      habitStackChainsProvider.overrideWithValue(const []),
       databaseProvider.overrideWithValue(db),
       // The peek watches its Outcome live; a real Drift watch hangs
       // pumpAndSettle (TESTING.md), so each row's peek streams are stubbed.
@@ -194,6 +200,11 @@ void main() {
     var reads = 0;
     await tester.pumpWidget(ProviderScope(
       overrides: [
+      // The Habits row watches live Drift streams; none of these tests are
+      // about Habits, so keep it empty rather than leave a stream timer.
+      activeHabitProgressProvider.overrideWithValue(const {}),
+      habitsForTodayProvider.overrideWithValue(const {}),
+      habitStackChainsProvider.overrideWithValue(const []),
         databaseProvider.overrideWithValue(db),
         nextForFocusSessionPlanningProvider
             .overrideWith((_) => Stream.value(_upNext)),

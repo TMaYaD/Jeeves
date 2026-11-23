@@ -10,8 +10,8 @@ import 'dart:async';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import '../database/store_schema.dart';
+import 'habit_notification_response.dart';
 import 'notification_service.dart';
-import 'ritual_notification_response_handler.dart';
 
 /// The callback the plugin calls when the user taps an action button on a
 /// notification while the app is not running.
@@ -46,7 +46,7 @@ Future<void> handleBackgroundNotificationAction(
     NotificationResponse response) async {
   final storeVersions = await readLocalStoreVersions();
   if (storeVersions.refusal != null) return;
-  await handleRitualNotificationResponse(
+  await handleNotificationResponse(
     response,
     service: NotificationService.instance,
     navigate: _noNavigation,

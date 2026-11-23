@@ -47,6 +47,18 @@ class HabitCheckInActions extends Notifier<void> {
         );
   }
 
+  /// Adds today's first Check-in of a binary Habit and returns its id, or
+  /// returns null when today already has one (a second tap in a stale frame).
+  Future<String?> checkInFirstOfToday(String habitId) {
+    final now = ref.read(clockProvider)();
+    return ref.read(databaseProvider).habitDao.addFirstCheckInOfDay(
+          habitId: habitId,
+          userId: ref.read(currentUserIdProvider),
+          countsForDay: habitCheckInDay(now: now),
+          now: now.toUtc(),
+        );
+  }
+
   /// Takes back the Check-in [checkInId] returned by [checkIn].
   Future<void> undo(String checkInId) => remove(checkInId);
 
@@ -65,5 +77,22 @@ class HabitCheckInActions extends Notifier<void> {
           checkInId: checkInId,
           userId: ref.read(currentUserIdProvider),
         );
+  }
+
+  /// Removes the latest Check-in counted for today and returns its id, or
+  /// returns null when there is none.
+  ///
+  /// Today is the clock day, as for [checkIn]. The latest is the one with the
+  /// greatest `checkedInAt`, then the greatest id.
+  Future<String?> removeLatestOfToday(String habitId) async {
+    final today = habitDayKey(ref.read(clockProvider)());
+    final todays = await ref
+        .read(databaseProvider)
+        .habitDao
+        .checkInsFor(habitId, today, today);
+    if (todays.isEmpty) return null;
+    final latestId = todays.last.id;
+    await remove(latestId);
+    return latestId;
   }
 }

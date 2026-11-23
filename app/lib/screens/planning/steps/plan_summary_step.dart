@@ -10,6 +10,7 @@ import '../../../widgets/capacity_bar.dart';
 import '../../../widgets/meta_chip.dart';
 import '../../../widgets/outcome_row.dart';
 import '../../../widgets/outcome_peek_sheet.dart';
+import 'plan_habits_row.dart';
 
 class PlanSummaryStep extends ConsumerStatefulWidget {
   const PlanSummaryStep({super.key});
@@ -195,6 +196,9 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
               physics: const ClampingScrollPhysics(),
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
               children: [
+                // Read-only; outside the capacity block and its maths.
+                if (!searching) const PlanHabitsRow(),
+
                 if (searching)
                   ..._searchResults(
                     matchingPending,
