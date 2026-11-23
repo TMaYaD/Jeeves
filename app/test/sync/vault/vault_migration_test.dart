@@ -16,6 +16,8 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/sync/sync_database.dart';
 
+import '../harness/resolution_columns.dart';
+
 void main() {
   test('an upgrade from the previous version keeps every row and adds the table',
       () async {
@@ -65,6 +67,8 @@ void main() {
     // without the vault's table. The version is set back after the store is
     // opened, so the downgrade is never read as an upgrade in progress.
     await current.customStatement('DROP TABLE vault_page_bases');
+    // The decision columns came after the vault; a v12 store has none of them.
+    await dropColumnsAddedAfter(current, 12);
     await current.customStatement('PRAGMA user_version = 12');
     await closeCurrent();
 
@@ -123,9 +127,14 @@ void main() {
     expect(tombstones, hasLength(1));
     expect(tombstones.single.read<String>('entity_id'), 'outcome-2');
 
-    // And the store is at the current version now.
+    // And the store is at the current version now. The version is named by
+    // the store itself, so the assertion says "the upgrade ran to the tip
+    // this build supports" and stays true as the tip moves on.
     final version = await upgraded.customSelect('PRAGMA user_version').get();
-    expect(version.single.read<int>('user_version'), 13);
+    expect(
+      version.single.read<int>('user_version'),
+      SyncDatabase.supportedSchemaVersion,
+    );
 
     await closeUpgraded();
   });

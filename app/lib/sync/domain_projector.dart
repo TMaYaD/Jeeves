@@ -172,6 +172,8 @@ class DomainProjector {
   /// written in the same transaction as the domain rows it describes and is
   /// deleted only after its merge committed, and neither can happen while this
   /// transaction holds the writer.
+  Future<Set<AffectedEntity>> entitiesAwaitingMerge() => _entitiesAwaitingMerge();
+
   Future<Set<AffectedEntity>> _entitiesAwaitingMerge() async {
     final rows = await domain
         .customSelect('SELECT change_json FROM pending_changes')

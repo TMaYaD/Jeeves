@@ -20,6 +20,7 @@ import 'package:jeeves/sync/merge_strategy.dart';
 import 'package:jeeves/sync/sync_database.dart';
 
 import '../harness/reduced_state.dart';
+import '../harness/resolution_columns.dart';
 import 'host_harness.dart';
 import 'pre_host_rows.dart';
 
@@ -479,7 +480,7 @@ void main() {
     });
   });
 
-  test('a v10 sync store upgrades to v11 and keeps every merge-state row',
+  test('a v10 sync store upgrades through v11 and keeps every merge-state row',
       () async {
     final directory = Directory.systemTemp.createTempSync('sync-v10-');
     addTearDown(() => directory.deleteSync(recursive: true));
@@ -487,6 +488,10 @@ void main() {
 
     final seed = SyncDatabase(NativeDatabase(file));
     await seed.customStatement('DROP TABLE merge_state_seeding');
+    // A v10 store predates the decision columns, and opening it at the current
+    // schema runs every later step: v14 and v15 add columns, so the fixture
+    // has to take them away too.
+    await dropColumnsAddedAfter(seed, 10);
     await seed.customStatement(
         "INSERT INTO reduced_fields (collection, entity_id, field, value_json) "
         "VALUES ('todos', 't1', 'title', '\"Ship it\"')");
