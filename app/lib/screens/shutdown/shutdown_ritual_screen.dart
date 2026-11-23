@@ -112,7 +112,11 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
     final habitsReady = histories.hasValue && closingDayAsync.hasValue;
     if (!habitsReady && (histories.hasError || closingDayAsync.hasError)) {
       return CeremonyPopScope(
-        onBack: widget.habitsOnly ? null : () => notifier.goToStep(kShutdownReviewStep),
+        // From Review (or habits-only) there is nowhere earlier to go back to,
+        // so Back must exit the ceremony rather than re-enter this screen.
+        onBack: widget.habitsOnly || step == kShutdownReviewStep
+            ? null
+            : () => notifier.goToStep(kShutdownReviewStep),
         child: Scaffold(
           body: Center(
             child: Column(
