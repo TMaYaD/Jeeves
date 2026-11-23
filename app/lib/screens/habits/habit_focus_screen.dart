@@ -35,6 +35,7 @@ class _HabitFocusScreenState extends ConsumerState<HabitFocusScreen>
   late final AnimationController _pulseCtrl;
   bool _stopping = false;
   Future<void>? _beginFuture;
+  bool _startRejected = false;
 
   @override
   void initState() {
@@ -58,8 +59,18 @@ class _HabitFocusScreenState extends ConsumerState<HabitFocusScreen>
     } on StateError {
       // A Habit with no estimate, or one that is not active today, has no
       // Focus Mode: there is nothing to show.
-      if (mounted && context.canPop()) context.pop();
+      _leaveAfterRejectedStart();
+    } on ArgumentError {
+      // A Habit that is not there, or belongs to someone else.
+      _leaveAfterRejectedStart();
     }
+  }
+
+  /// A rejected start opened no Focus: there is nothing to stop, so Stop and
+  /// system back must not wait on it, and the screen goes.
+  void _leaveAfterRejectedStart() {
+    _startRejected = true;
+    if (mounted && context.canPop()) context.pop();
   }
 
   @override
@@ -75,18 +86,28 @@ class _HabitFocusScreenState extends ConsumerState<HabitFocusScreen>
   Future<void> _stop() async {
     if (_stopping) return;
     _stopping = true;
+    // Everything the Stop needs from `ref` is taken before the first await:
+    // the screen can be disposed while the start settles, and the Stop must
+    // still close the Focus that start opened.
+    final notifier = ref.read(habitFocusProvider.notifier);
+    final clock = ref.read(clockProvider);
+    final habit = ref.read(habitByIdProvider(widget.habitId)).value;
     // A Stop while the Focus is still starting waits for the start to settle,
     // so it closes the Focus instead of racing ahead of it.
     await _beginFuture;
-    final clock = ref.read(clockProvider);
-    final habit = ref.read(habitByIdProvider(widget.habitId)).value;
-    final startedAt = ref
-        .read(habitFocusRecordsProvider(widget.habitId))
-        .value
-        ?.openLog
-        ?.startedAt;
+    if (_startRejected) {
+      _stopping = false;
+      return;
+    }
+    final startedAt = mounted
+        ? ref
+            .read(habitFocusRecordsProvider(widget.habitId))
+            .value
+            ?.openLog
+            ?.startedAt
+        : null;
     try {
-      await ref.read(habitFocusProvider.notifier).stop();
+      await notifier.stop();
     } catch (_) {
       // The Focus is still open: release the latch so Stop can be tried again.
       _stopping = false;

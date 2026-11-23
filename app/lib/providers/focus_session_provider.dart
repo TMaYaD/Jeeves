@@ -85,25 +85,30 @@ class FocusModeNotifier extends Notifier<FocusModeState> {
     final now = DateTime.now();
 
     // One thing at a time: a Focus on a Habit does not run beside an Outcome.
-    await db.habitFocusDao.closeHabitFocus(
-      userId: ref.read(currentUserIdProvider),
-      now: now,
-    );
-
-    final session = await db.focusSessionDao.getActiveSession();
-    if (session != null) {
-      await db.focusSessionDao.setCurrentTask(
-        sessionId: session.id,
-        taskId: todoId,
-        now: now,
-      );
-    } else {
-      await db.timeLogDao.openLog(
-        taskId: todoId,
+    // Closing it and opening the Outcome engagement is one transaction, so a
+    // Habit start that overlaps this one either commits first (and is closed
+    // here) or commits after (and closes this engagement): never both open.
+    await db.capturing(() async {
+      await db.habitFocusDao.closeHabitFocus(
         userId: ref.read(currentUserIdProvider),
         now: now,
       );
-    }
+
+      final session = await db.focusSessionDao.getActiveSession();
+      if (session != null) {
+        await db.focusSessionDao.setCurrentTask(
+          sessionId: session.id,
+          taskId: todoId,
+          now: now,
+        );
+      } else {
+        await db.timeLogDao.openLog(
+          taskId: todoId,
+          userId: ref.read(currentUserIdProvider),
+          now: now,
+        );
+      }
+    });
     state = FocusModeState(
       activeTodoId: todoId,
       sessionStart: now,
