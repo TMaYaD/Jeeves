@@ -944,6 +944,10 @@ class SyncClient {
         // A duplicate result is still an acknowledgement: the server holds the op.
         await transport.postOps(workspaceId, [for (final row in chunk) row.envelope]);
       } on AuthorChainConflictException catch (conflict) {
+        // A refusal for a queue that was re-made mid-flight is stale: it names
+        // a position in the old queue, and raising on it could wipe the
+        // decision that re-made the queue. The next flush asks again.
+        if (queueGeneration != _outboxQueueGeneration) return FlushOutcome.retained;
         await _recordOwnWritesVerdict(conflict);
         return FlushOutcome.retained;
       } on SyncTransportException catch (refusal) {
