@@ -91,7 +91,6 @@ class _HabitFocusScreenState extends ConsumerState<HabitFocusScreen>
     // still close the Focus that start opened.
     final notifier = ref.read(habitFocusProvider.notifier);
     final clock = ref.read(clockProvider);
-    final habit = ref.read(habitByIdProvider(widget.habitId)).value;
     // A Stop while the Focus is still starting waits for the start to settle,
     // so it closes the Focus instead of racing ahead of it.
     await _beginFuture;
@@ -113,6 +112,12 @@ class _HabitFocusScreenState extends ConsumerState<HabitFocusScreen>
       _stopping = false;
       rethrow;
     }
+    if (!mounted) return;
+    // Read once the start has settled: a Habit that was still loading when
+    // Stop was pressed must not skip the check-in sheet.
+    final habit = await ref
+        .read(habitByIdProvider(widget.habitId).future)
+        .then((h) => h, onError: (_) => null);
     if (!mounted) return;
     if (habit != null) {
       final started =

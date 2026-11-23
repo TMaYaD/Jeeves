@@ -147,6 +147,25 @@ void main() {
       expect(await db.habitFocusDao.openHabitTimeLog(_userId), isNotNull);
     });
 
+    test('opening a Focus clears a session pointer to the ended Outcome',
+        () async {
+      final habit = await createHabit();
+      await db.todoDao.insertOutcome(
+          id: 'outcome-1', title: 'Write', userId: _userId, now: _t0);
+      final sessionId = await db.focusSessionDao
+          .openSession(userId: _userId, taskIds: ['outcome-1'], now: _t0);
+      await db.focusSessionDao
+          .setCurrentTask(sessionId: sessionId, taskId: 'outcome-1', now: _t0);
+      await db.habitFocusDao.openHabitFocus(
+          habitId: habit,
+          userId: _userId,
+          plannedSprintMinutes: 25,
+          now: _t0.add(const Duration(minutes: 5)));
+      final session = await db.focusSessionDao.getActiveSession();
+      expect(session!.currentTaskId, isNull);
+      expect((await db.select(db.timeLogs).get()).single.endedAt, isNotNull);
+    });
+
     test('a rejected Habit leaves an Outcome engagement running', () async {
       final noEstimate = await createHabit(estimate: null);
       await db.todoDao.insertOutcome(

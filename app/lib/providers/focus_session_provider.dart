@@ -182,6 +182,13 @@ class FocusModeNotifier extends Notifier<FocusModeState> {
     }
     state = const FocusModeState();
   }
+
+  /// Clears the in-memory engagement only. The store was already settled by
+  /// another writer (a Habit Focus start), so nothing is written here: a later
+  /// Outcome engagement that committed in the meantime must not be closed.
+  void resetState() {
+    state = const FocusModeState();
+  }
 }
 
 final focusModeProvider =

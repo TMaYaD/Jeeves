@@ -88,9 +88,9 @@ class HabitFocusNotifier extends Notifier<SprintTimerState> {
         plannedSprintMinutes: _sprintMinutes,
         now: ref.read(clockProvider)(),
       );
-      // The store is settled; clear the Outcome Focus state that mirrors it
-      // (and a session's pointer to the task whose log just ended).
-      await ref.read(focusModeProvider.notifier).endFocus();
+      // The store is settled, the Outcome log and a session's pointer
+      // included; only the in-memory state that mirrors it is left to clear.
+      ref.read(focusModeProvider.notifier).resetState();
       await _reload();
     } finally {
       if (!_disposed && state.isProcessing) {

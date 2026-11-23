@@ -9,8 +9,7 @@
 ///
 /// **One thing at a time.** The DAO keeps at most one open Focus per user:
 /// [openHabitFocus] closes a previous one first. An open Outcome engagement is
-/// ended by the caller (`HabitFocusNotifier`), because that is Engagement
-/// code and this DAO knows nothing of it.
+/// ended in the same transaction, together with a session's pointer to it.
 library;
 
 import 'package:drift/drift.dart';
@@ -81,6 +80,16 @@ class HabitFocusDao extends DatabaseAccessor<GtdDatabase>
           .get();
       for (final taskId in {for (final log in openOutcomeLogs) log.taskId}) {
         await attachedDatabase.timeLogDao.closeLog(taskId: taskId, now: instant);
+      }
+      // A session's pointer to the task whose log just ended goes with it, in
+      // this same transaction: nothing after the commit touches the store.
+      final session = await attachedDatabase.focusSessionDao.getActiveSession();
+      if (session != null && session.currentTaskId != null) {
+        await attachedDatabase.focusSessionDao.setCurrentTask(
+          sessionId: session.id,
+          taskId: null,
+          now: instant,
+        );
       }
       await _closeOpenFocus(userId, stamp);
       await into(habitTimeLogs).insert(HabitTimeLogsCompanion.insert(
