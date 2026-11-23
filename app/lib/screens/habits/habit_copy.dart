@@ -430,8 +430,9 @@ List<String> habitRateTileLabels(HabitUnitKind kind, List<int> lengths) {
 
 /// The strip's one screen-reader label.
 String habitHistoryStripLabel(int checkInDays, int dueDays) =>
-    'Check-ins over the last five months: $checkInDays on $dueDays due days. '
-    'Open the calendar';
+    'Check-ins over the last five months: $checkInDays '
+    '${checkInDays == 1 ? 'day' : 'days'} with Check-ins; '
+    '$dueDays due ${dueDays == 1 ? 'day' : 'days'}. Open the calendar';
 
 // ---- Past-day sheet ----
 
