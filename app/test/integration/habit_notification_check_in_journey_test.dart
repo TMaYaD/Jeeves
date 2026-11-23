@@ -142,8 +142,9 @@ void main() {
     );
   }
 
-  Future<int> drain() =>
-      drainHabitCheckInOutbox(dao: db.habitDao, userId: _userId);
+  /// The drain as the app runs it: for whoever the device is signed in as.
+  Future<int> drain() => drainHabitCheckInOutbox(
+      dao: db.habitDao, userId: container.read(currentUserIdProvider));
 
   Future<List<HabitCheckIn>> checkInsOf(String habitId) async {
     final histories = await db.habitDao.watchHabitHistories().first;
@@ -160,6 +161,13 @@ void main() {
         .getKeys()
         .where((k) => k.startsWith(kHabitCheckInOutboxKeyPrefix))
         .toList();
+  }
+
+  /// Lets the drain the drainer provider runs — which nobody awaits — finish.
+  Future<void> settleOutbox() async {
+    for (var i = 0; i < 20; i++) {
+      await pumpEventQueue();
+    }
   }
 
   test('a tap becomes one Check-in with that id, day and instant', () async {
@@ -257,7 +265,7 @@ void main() {
     );
     addTearDown(app.dispose);
     app.read(habitCheckInOutboxDrainerProvider);
-    await pumpEventQueue();
+    await settleOutbox();
 
     // Nothing was written, and nothing was lost: the entry is still out
     // there, waiting for the user it belongs to.
@@ -266,8 +274,7 @@ void main() {
 
     // The session is restored: the account's id arrives.
     restore.complete('access-token');
-    await pumpEventQueue();
-    await pumpEventQueue();
+    await settleOutbox();
 
     // The Check-in is written, once, for the account.
     final checkIns = await checkInsOf(id);
