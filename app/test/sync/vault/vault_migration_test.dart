@@ -127,9 +127,14 @@ void main() {
     expect(tombstones, hasLength(1));
     expect(tombstones.single.read<String>('entity_id'), 'outcome-2');
 
-    // And the store is at the current version now.
+    // And the store is at the current version now. The version is named by
+    // the store itself, so the assertion says "the upgrade ran to the tip
+    // this build supports" and stays true as the tip moves on.
     final version = await upgraded.customSelect('PRAGMA user_version').get();
-    expect(version.single.read<int>('user_version'), 13);
+    expect(
+      version.single.read<int>('user_version'),
+      SyncDatabase.supportedSchemaVersion,
+    );
 
     await closeUpgraded();
   });
