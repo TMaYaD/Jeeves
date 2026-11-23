@@ -116,7 +116,9 @@ final appRouter = GoRouter(
     ),
     GoRoute(
       path: '/shutdown',
-      builder: (context, state) => const ShutdownRitualScreen(),
+      builder: (context, state) => ShutdownRitualScreen(
+        habitsOnly: state.uri.queryParameters['habitsOnly'] == '1',
+      ),
     ),
     GoRoute(
       path: '/settings',

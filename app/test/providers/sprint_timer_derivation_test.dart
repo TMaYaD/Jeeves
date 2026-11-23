@@ -48,13 +48,19 @@ SprintTimerState _derive(
   TimeLog? log,
   int nowSecond = 0,
   String? suppressed,
+  int sprintMinutes = 25,
+  int breakMinutes = 5,
+  int longBreakMinutes = 15,
+  int sprintsBeforeLongBreak = 4,
 }) =>
     deriveSprintTimerState(
       sprints: sprints,
       activeLog: log ?? _log(),
       activeTask: null,
-      sprintMinutesSetting: 25,
-      breakMinutesSetting: 5,
+      sprintMinutesSetting: sprintMinutes,
+      breakMinutesSetting: breakMinutes,
+      longBreakMinutesSetting: longBreakMinutes,
+      sprintsBeforeLongBreakSetting: sprintsBeforeLongBreak,
       now: _logStart.add(Duration(minutes: nowMinute, seconds: nowSecond)),
       suppressedSprintId: suppressed,
     );
@@ -67,6 +73,8 @@ void main() {
       activeTask: null,
       sprintMinutesSetting: 25,
       breakMinutesSetting: 5,
+      longBreakMinutesSetting: 15,
+      sprintsBeforeLongBreakSetting: 4,
       now: _logStart,
     );
     expect(state.phase, SprintPhase.idle);
@@ -163,10 +171,109 @@ void main() {
         _logStart.add(const Duration(minutes: 30)));
   });
 
+  test('the cooldown after a long Break lasts as long as that Break did', () {
+    final state = _derive([
+      _sprint('s1', 0, endMinute: 25),
+      _sprint('s2', 30, endMinute: 55),
+      _sprint('s3', 60, endMinute: 85),
+      _sprint('s4', 90, endMinute: 115),
+      _sprint('s5', 130),
+    ], 131);
+    expect(state.lastBreakDurationMinutes, 15);
+    final shortBreak =
+        _derive([_sprint('s1', 0, endMinute: 25), _sprint('s2', 30)], 31);
+    expect(shortBreak.lastBreakDurationMinutes, 5);
+  });
+
   test('the timer reads no Sprint state from device-only storage', () {
     final source =
         File('lib/providers/sprint_timer_provider.dart').readAsStringSync();
     expect(source, isNot(contains('shared_preferences')));
     expect(source, isNot(contains('SharedPreferences')));
+  });
+
+  group('the long Break (issue #911)', () {
+    // The settings here are a 25-minute Sprint and a 5-minute short Break, so
+    // the budget before the long Break is 4 x 30 = 120 minutes.
+
+    test('the Break after the fourth Sprint in a row is the long one', () {
+      final state = _derive([
+        _sprint('s1', 0, endMinute: 25),
+        _sprint('s2', 30, endMinute: 55),
+        _sprint('s3', 60, endMinute: 85),
+        _sprint('s4', 90, endMinute: 115),
+      ], 116);
+      expect(state.phase, SprintPhase.break_);
+      expect(state.isLongBreak, isTrue);
+      expect(state.currentBreakDurationMinutes, 15);
+      expect(state.remaining, const Duration(minutes: 14));
+    });
+
+    test('the Breaks after the first three Sprints are the short one', () {
+      final state = _derive([
+        _sprint('s1', 0, endMinute: 25),
+        _sprint('s2', 30, endMinute: 55),
+        _sprint('s3', 60, endMinute: 85),
+      ], 86);
+      expect(state.isLongBreak, isFalse);
+      expect(state.currentBreakDurationMinutes, 5);
+      expect(state.remaining, const Duration(minutes: 4));
+    });
+
+    test('Sprints that run over bring the long Break after fewer Sprints',
+        () {
+      final state = _derive([
+        _sprint('s1', 0, endMinute: 25),
+        // The second and third Sprints ran 15 minutes over each.
+        _sprint('s2', 30, endMinute: 70),
+        _sprint('s3', 75, endMinute: 115),
+      ], 116);
+      expect(state.isLongBreak, isTrue,
+          reason: '115 minutes of Sprint plus the short Break is the budget');
+    });
+
+    test('a gap shorter than the long Break does not restart the count', () {
+      final state = _derive([
+        _sprint('s1', 0, endMinute: 25),
+        _sprint('s2', 30, endMinute: 55),
+        _sprint('s3', 60, endMinute: 85),
+        // A 14-minute gap: shorter than the 15-minute long Break.
+        _sprint('s4', 99, endMinute: 124),
+      ], 125);
+      expect(state.isLongBreak, isTrue);
+    });
+
+    test('a gap of exactly the long Break restarts the count', () {
+      final state = _derive([
+        _sprint('s1', 0, endMinute: 25),
+        _sprint('s2', 30, endMinute: 55),
+        _sprint('s3', 60, endMinute: 85),
+        // A 15-minute gap: the long Break, taken to its end.
+        _sprint('s4', 100, endMinute: 125),
+      ], 126);
+      expect(state.isLongBreak, isFalse,
+          reason: 'the count restarted at the fourth Sprint');
+    });
+
+    test('the long Break lasts as long as the setting says', () {
+      final state = _derive([
+        _sprint('s1', 0, endMinute: 25),
+        _sprint('s2', 30, endMinute: 55),
+        _sprint('s3', 60, endMinute: 85),
+        _sprint('s4', 90, endMinute: 115),
+      ], 116, longBreakMinutes: 30);
+      expect(state.isLongBreak, isTrue);
+      expect(state.currentBreakDurationMinutes, 30);
+      expect(state.remaining, const Duration(minutes: 29));
+    });
+
+    test('fewer Sprints before a long Break makes it come sooner', () {
+      final state = _derive([
+        _sprint('s1', 0, endMinute: 25),
+        _sprint('s2', 30, endMinute: 55),
+      ], 56, sprintsBeforeLongBreak: 2);
+      expect(state.isLongBreak, isTrue,
+          reason: '2 x 30 minutes is the budget at this setting');
+    });
   });
 }

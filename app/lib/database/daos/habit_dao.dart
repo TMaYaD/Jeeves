@@ -1003,23 +1003,27 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
     return customSelect(
       'SELECT id FROM habits ORDER BY created_at, id',
       readsFrom: {habits, habitCommitments, habitCheckIns, habitInactivePeriods},
-    ).watch().asyncMap((_) => transaction(() async {
-          // One snapshot for the Habit list and every history, so a write
-          // cannot land between two of the reads.
-          final histories = <HabitHistory>[];
-          final habitRows = await (select(habits)
-                ..orderBy([
-                  (h) => OrderingTerm.asc(h.createdAt),
-                  (h) => OrderingTerm.asc(h.id),
-                ]))
-              .get();
-          for (final habit in habitRows) {
-            final history = await _habitHistoryInTransaction(habit.id);
-            if (history != null) histories.add(history);
-          }
-          return histories;
-        }));
+    ).watch().asyncMap((_) => getHabitHistories());
   }
+
+  /// Every Habit with its full history, oldest Habit first. A one-shot read of
+  /// what [watchHabitHistories] emits.
+  Future<List<HabitHistory>> getHabitHistories() => transaction(() async {
+        // One snapshot for the Habit list and every history, so a write
+        // cannot land between two of the reads.
+        final histories = <HabitHistory>[];
+        final habitRows = await (select(habits)
+              ..orderBy([
+                (h) => OrderingTerm.asc(h.createdAt),
+                (h) => OrderingTerm.asc(h.id),
+              ]))
+            .get();
+        for (final habit in habitRows) {
+          final history = await _habitHistoryInTransaction(habit.id);
+          if (history != null) histories.add(history);
+        }
+        return histories;
+      });
 
   /// The state of a Habit on [day].
   ///

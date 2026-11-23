@@ -10,6 +10,8 @@ import '../providers/focus_session_planning_provider.dart';
 import '../providers/focus_session_provider.dart';
 import '../providers/focus_settings_provider.dart';
 import '../providers/timeboxed_limit_provider.dart';
+import '../providers/shutdown_habits_provider.dart'
+    show readShutdownOpenHabits;
 import '../providers/sprint_timer_provider.dart'
     show sprintTimerProvider;
 import '../models/day_timeline.dart';
@@ -271,6 +273,15 @@ class FocusScreen extends ConsumerWidget {
         reviewSurface != null && reviewSurface.every((t) => t.doneAt != null);
     if (allDone) {
       final db = ref.read(databaseProvider);
+      // Habits still open for the day being closed keep the session open: the
+      // habit step is asked first, alone, and it closes the session after.
+      final openHabits =
+          await readShutdownOpenHabits(db, ref.read(clockProvider)());
+      if (!context.mounted) return;
+      if (openHabits.isNotEmpty) {
+        context.go('/shutdown?habitsOnly=1');
+        return;
+      }
       // The list on screen may belong to an earlier moment (a new session
       // paired with the empty list from before it opened), so the close
       // re-reads this session's Review surface and refuses if anything is

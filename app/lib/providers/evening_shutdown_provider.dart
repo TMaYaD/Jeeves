@@ -21,8 +21,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../database/daos/focus_session_dao.dart' show SessionSettlement;
 import '../database/gtd_database.dart';
+import '../models/habit_commitment.dart' show habitDayKey;
 import '../models/routing_kind.dart';
 import '../utils/snapshot_nav.dart';
+import 'clock_provider.dart';
 import 'database_provider.dart';
 import 'focus_session_planning_provider.dart'
     show activeSessionSettlementsProvider, planningToday;
@@ -41,8 +43,15 @@ export '../database/daos/focus_session_dao.dart' show SessionSettlement;
 
 const _kShutdownCompletedDateKey = 'shutdown_ritual_completed_date';
 
+/// The ritual's step indexes. The habit step is not an index of its own: it is
+/// shown in place of Close Day while [EveningShutdownState.habitsStepDone] is
+/// false and the closing day has open Habits, so it never moves Close Day.
+const int kShutdownReviewStep = 0;
+const int kShutdownResolveStep = 1;
+const int kShutdownCloseDayStep = 2;
+
 /// Total number of shutdown ritual steps (0-indexed max).
-const int _kShutdownMaxStep = 2;
+const int _kShutdownMaxStep = kShutdownCloseDayStep;
 
 // ---------------------------------------------------------------------------
 // Session date cache
@@ -58,6 +67,26 @@ class ShutdownSessionDateNotifier extends Notifier<String> {
   String build() => planningToday();
 
   void reset() => state = planningToday();
+}
+
+/// The local calendar day (`yyyy-MM-dd`) Evening Shutdown is closing: the day
+/// the open FocusSession started, or today when no session is open.
+///
+/// After midnight that is yesterday, which is what "the day being closed"
+/// means to the user. A session left open for several days closes, and counts
+/// Check-ins for, the day it started (`CONTEXT.md`: a session is the day's plan
+/// only if it started on that calendar day).
+final shutdownClosingDayProvider = FutureProvider.autoDispose<String>((ref) async {
+  final session =
+      await ref.watch(databaseProvider).focusSessionDao.getActiveSession();
+  return shutdownClosingDayOf(session, ref.read(clockProvider)());
+});
+
+/// The closing day for [session] (see [shutdownClosingDayProvider]); [now]
+/// stands in when there is no session or its start cannot be read.
+String shutdownClosingDayOf(FocusSession? session, DateTime now) {
+  final startedAt = session == null ? null : DateTime.tryParse(session.startedAt);
+  return habitDayKey((startedAt ?? now).toLocal());
 }
 
 // ---------------------------------------------------------------------------
@@ -194,9 +223,15 @@ class EveningShutdownState {
     this.dispositions = const {},
     this.unfinishedNav = const SnapshotNav<Todo>(),
     this.startedSessionId,
+    this.habitsStepDone = false,
   });
 
   final int currentStep;
+
+  /// Whether the user has passed the habit step in this performance. Until
+  /// then, reaching [kShutdownCloseDayStep] shows the habit step first when
+  /// the closing day has open Habits.
+  final bool habitsStepDone;
 
   /// The id of the FocusSession that was open when the user started this
   /// performance, or null before it is started. Evening Shutdown has no intro,
@@ -219,9 +254,11 @@ class EveningShutdownState {
     Map<String, String>? dispositions,
     SnapshotNav<Todo>? unfinishedNav,
     String? startedSessionId,
+    bool? habitsStepDone,
   }) =>
       EveningShutdownState(
         startedSessionId: startedSessionId ?? this.startedSessionId,
+        habitsStepDone: habitsStepDone ?? this.habitsStepDone,
         currentStep: currentStep ?? this.currentStep,
         dispositions: dispositions ?? this.dispositions,
         unfinishedNav: unfinishedNav ?? this.unfinishedNav,
@@ -252,7 +289,8 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
     final session = await _db.focusSessionDao.getActiveSession();
     if (!ref.mounted || session == null) return;
     if (state.startedSessionId == session.id) return;
-    state = state.copyWith(startedSessionId: session.id);
+    // A different session is a new performance, so its Habits step is owed.
+    state = state.copyWith(startedSessionId: session.id, habitsStepDone: false);
   }
 
   // ---- Step navigation -------------------------------------------------------
@@ -264,6 +302,30 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
 
   void goToStep(int step) {
     state = state.copyWith(currentStep: step.clamp(0, _kShutdownMaxStep));
+  }
+
+  /// Closes the session after the habits-only ritual, when every Outcome is
+  /// done. Returns whether it closed: false when something on the Review
+  /// surface is unfinished after all, in which case nothing was written and the
+  /// full ritual is the way on (the same refusal the all-done shortcut has).
+  ///
+  /// [displayedClosingDay] is the day the ritual showed. When the open session
+  /// now closes a different day, the session changed under the screen: nothing
+  /// is closed and false is returned, so the user is not shown one day's Habits
+  /// and closed out of another's.
+  Future<bool> closeAfterHabitsOnly(String displayedClosingDay) async {
+    final session = await _db.focusSessionDao.getActiveSession();
+    if (session == null) return true;
+    final activeClosingDay =
+        shutdownClosingDayOf(session, ref.read(clockProvider)());
+    if (activeClosingDay != displayedClosingDay) return false;
+    return _db.focusSessionDao
+        .closeSessionIfNothingToDispose(sessionId: session.id);
+  }
+
+  /// Leaves the habit step for Close Day.
+  void finishHabitsStep() {
+    state = state.copyWith(habitsStepDone: true);
   }
 
   // ---- Unfinished snapshot navigation ----------------------------------------
