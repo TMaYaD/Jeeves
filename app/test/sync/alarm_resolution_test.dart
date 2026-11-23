@@ -306,6 +306,60 @@ void main() {
       expect(unauthed.entityId, 't1');
     });
 
+    test('a v13 sync store upgrades through v15 and keeps every row', () async {
+      final directory = Directory.systemTemp.createTempSync('sync-v13-');
+      addTearDown(() => directory.deleteSync(recursive: true));
+      final file = File('${directory.path}/sync.sqlite');
+
+      final seed = SyncDatabase(NativeDatabase(file));
+      // A v13 store is the one a device on the base writes today: it holds
+      // the vault's table and none of the decision columns.
+      await dropColumnsAddedAfter(seed, 13);
+      await seed.customStatement(
+        'INSERT INTO integrity_alarms (workspace_id, kind, detail, '
+        'occurrence_count, first_detected_at, last_detected_at) '
+        "VALUES ('workspace-1', 'own_writes_rollback', 'the server lost a write', "
+        "1, '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z')",
+      );
+      await seed.customStatement(
+        'INSERT INTO quarantined_ops (workspace_id, reason, detail, envelope, '
+        "detected_at) VALUES ('workspace-1', 'bad_signature', 'forged', X'', "
+        "'2026-08-01T00:00:00.000Z')",
+      );
+      await seed.customStatement('PRAGMA user_version = 13');
+      await seed.close();
+
+      final upgraded = SyncDatabase(NativeDatabase(file));
+      addTearDown(upgraded.close);
+      expect(upgraded.schemaVersion, 15);
+
+      final alarm = await upgraded.select(upgraded.integrityAlarms).getSingle();
+      expect(alarm.kind, IntegrityAlarmKind.ownWritesRollback.code);
+      expect(alarm.detail, 'the server lost a write');
+      expect(
+        alarm.resolution,
+        isNull,
+        reason: 'nothing was decided before the decision existed',
+      );
+      expect(alarm.resolutionDecidedAt, isNull);
+      expect(alarm.repostFromAuthorSeq, isNull);
+
+      final quarantine = await upgraded.select(upgraded.quarantinedOps).getSingle();
+      expect(quarantine.reason, SyncRejectionReason.badSignature.code);
+      expect(quarantine.detail, 'forged');
+      expect(quarantine.resolution, isNull);
+      expect(quarantine.resolutionDecidedAt, isNull);
+      expect(quarantine.resolutionProjectedAt, isNull);
+
+      // The table the vault brought at v13 is still there: the upgrade past
+      // it adds columns, it does not rebuild the store.
+      final tables = (await upgraded
+              .customSelect("SELECT name FROM sqlite_master WHERE type = 'table'")
+              .get())
+          .map((r) => r.read<String>('name'));
+      expect(tables, contains('vault_page_bases'));
+    });
+
     test('a v14 sync store upgrades through v15 and keeps its decisions', () async {
       final directory = Directory.systemTemp.createTempSync('sync-v14-');
       addTearDown(() => directory.deleteSync(recursive: true));
