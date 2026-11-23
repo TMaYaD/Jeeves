@@ -63,6 +63,12 @@ class _HabitFocusScreenState extends ConsumerState<HabitFocusScreen>
     } on ArgumentError {
       // A Habit that is not there, or belongs to someone else.
       _leaveAfterRejectedStart();
+    } catch (error, stackTrace) {
+      // Any other failure (a database error) may land after the Focus was
+      // opened, so the start is not "rejected": Stop must still run and close
+      // whatever is open in the store. Swallowed here so `_beginFuture` never
+      // rejects, which would trap Stop's latch and leave the screen unclosable.
+      debugPrint('Habit Focus start failed: $error\n$stackTrace');
     }
   }
 
