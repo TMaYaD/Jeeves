@@ -485,6 +485,11 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
   /// is not a day, for an amount that is not more than zero, for an amount on
   /// a binary Habit's day, and for a missing amount on a measurable one.
   ///
+  /// **A Check-in may be given its id.** A Check-in recorded from a
+  /// notification is written by the main isolate some time after the tap, and
+  /// the id the tap minted travels with it: a row with that id is already
+  /// there, and the call writes nothing and returns it.
+  ///
   /// Returns the Check-in's id.
   Future<String> addCheckIn({
     required String habitId,
@@ -492,16 +497,27 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
     required String countsForDay,
     required DateTime now,
     double? measuredAmount,
+    String? checkInId,
   }) async {
     final day = _validatedDay(countsForDay, 'countsForDay');
     final amount = _validatedAmount(measuredAmount);
     final instant = _storedInstant(now);
-    final checkInId = uuid.v4();
+    final id = checkInId ?? uuid.v4();
     await attachedDatabase.capturing(() async {
       await _requireHabit(habitId, userId);
       await _requireAmountMatches(habitId, day, amount);
+      // A Check-in that is already there is the same Check-in: a drain that
+      // crashed between writing the row and removing the outbox entry must
+      // not write a second one.
+      if (checkInId != null) {
+        final existing = await (select(habitCheckIns)
+              ..where((c) => c.id.equals(checkInId))
+              ..limit(1))
+            .get();
+        if (existing.isNotEmpty) return;
+      }
       await into(habitCheckIns).insert(HabitCheckInsCompanion.insert(
-            id: Value(checkInId),
+            id: Value(id),
             userId: userId,
             habitId: habitId,
             countsForDay: day,
@@ -509,7 +525,7 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
             measuredAmount: Value(amount),
           ));
     });
-    return checkInId;
+    return id;
   }
 
   /// Adds a Check-in only when the Habit has none counted for [countsForDay]

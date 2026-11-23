@@ -23,6 +23,11 @@ import 'follow_up_notifications.dart'
     show
         followUpFireAtMillisFromNotificationPayload,
         followUpOutcomeIdFromNotificationPayload;
+import 'habit_notifications.dart'
+    show
+        HabitNotificationAction,
+        HabitNotificationsOnDevice,
+        kHabitNotificationPayloadPrefix;
 
 // Stable notification IDs.
 const _kFocusSessionPlanningNotificationId = 0;
@@ -45,9 +50,14 @@ const kPeriodicReviewActionOpen = 'periodic_review_open';
 const kPeriodicReviewActionSnooze = 'periodic_review_snooze';
 const kPeriodicReviewActionSkip = 'periodic_review_skip_today';
 
+/// The action id of a Habit's "Check in" button, and the iOS category that
+/// carries it.
+const kNotificationActionHabitCheckIn = 'habit_check_in';
+
 const _kFocusId = 1001;
 const _kDueDateChannelId = 'due_dates';
 const _kFollowUpChannelId = 'follow_ups';
+const _kHabitChannelId = 'habit_notifications';
 
 class NotificationService {
   NotificationService._();
@@ -117,6 +127,17 @@ class NotificationService {
                 kPeriodicReviewActionSnooze, 'Snooze'),
             DarwinNotificationAction.plain(
                 kPeriodicReviewActionSkip, 'Skip this week'),
+          ],
+        ),
+        // The "Check in" button of a Habit's notification. iOS shows an
+        // action button only for a registered category, so a habit
+        // notification without this entry carries no button at all.
+        DarwinNotificationCategory(
+          kNotificationActionHabitCheckIn,
+          actions: [
+            // Plain: the Check in runs without opening the app.
+            DarwinNotificationAction.plain(
+                kNotificationActionHabitCheckIn, 'Check in'),
           ],
         ),
       ],
@@ -314,6 +335,97 @@ class NotificationService {
     if (info.identifier == tz.local.name) return false;
     tz.setLocalLocation(tz.getLocation(info.identifier));
     return true;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Habit notifications — a Habit whose anchor is a clock time, at that time.
+  // ---------------------------------------------------------------------------
+
+  /// Schedules one habit notification at [fireAt].
+  ///
+  /// [id] decides what it replaces: scheduling again under the same id moves
+  /// the alarm. The instant is passed as an absolute one, so it does not
+  /// depend on the zone the OS happens to be in.
+  Future<void> scheduleHabitNotification({
+    required int id,
+    required String title,
+    required String body,
+    required DateTime fireAt,
+    required String payload,
+    HabitNotificationAction action = HabitNotificationAction.none,
+  }) async {
+    final canExact = await canScheduleExactRitualNotifications();
+    final offersCheckIn = action == HabitNotificationAction.checkIn;
+    await _plugin.zonedSchedule(
+      id: id,
+      title: title,
+      body: body,
+      payload: payload,
+      scheduledDate: ritualAlarmScheduledDate(fireAt),
+      notificationDetails: NotificationDetails(
+        android: AndroidNotificationDetails(
+          _kHabitChannelId,
+          'Habits',
+          channelDescription: 'Habits that are due at a time of day',
+          importance: Importance.high,
+          priority: Priority.high,
+          actions: [
+            if (offersCheckIn)
+              // The Check in runs without opening the app: the button stays
+              // in the shade and the notification goes.
+              AndroidNotificationAction(kNotificationActionHabitCheckIn,
+                  'Check in',
+                  showsUserInterface: false, cancelNotification: true),
+          ],
+        ),
+        iOS: DarwinNotificationDetails(
+          categoryIdentifier:
+              offersCheckIn ? kNotificationActionHabitCheckIn : null,
+        ),
+      ),
+      // Exact when the OS already permits it, so a notification lands at the
+      // Habit's clock time; otherwise Android may deliver it late.
+      androidScheduleMode: ritualAndroidScheduleMode(canExact: canExact),
+    );
+  }
+
+  /// The habit notifications the OS holds, recognised by their payload:
+  /// `pending` are still scheduled to fire; `pendingPayloads` maps a pending
+  /// id to the payload it carries; `delivered` already fired and sit in the
+  /// tray. The queries are sequential, so an alarm that fires between them
+  /// appears in both sets.
+  Future<HabitNotificationsOnDevice> habitNotificationsOnDevice() async {
+    final pending = <int>{};
+    final pendingPayloads = <int, String>{};
+    for (final request in await _plugin.pendingNotificationRequests()) {
+      final payload = request.payload;
+      if (payload == null ||
+          !payload.startsWith(kHabitNotificationPayloadPrefix)) {
+        continue;
+      }
+      pending.add(request.id);
+      pendingPayloads[request.id] = payload;
+    }
+    final delivered = <int>{};
+    final android = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    for (final shown
+        in await android?.getActiveNotifications() ?? const <ActiveNotification>[]) {
+      final id = shown.id;
+      if (id == null) continue;
+      // Android reports no payload for active notifications (iOS/macOS only),
+      // so recognise ours by channel, or by payload where one is present.
+      if (shown.channelId == _kHabitChannelId ||
+          (shown.payload?.startsWith(kHabitNotificationPayloadPrefix) ??
+              false)) {
+        delivered.add(id);
+      }
+    }
+    return (
+      pending: pending,
+      pendingPayloads: pendingPayloads,
+      delivered: delivered
+    );
   }
 
   // ---------------------------------------------------------------------------
