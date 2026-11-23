@@ -432,11 +432,33 @@ void main() {
         '1500',
       );
       await tester.tap(find.byKey(const Key('habit_day_change_save')));
-      await _settle(tester, 2);
+      await _settle(tester, 5);
       expect(find.byKey(const Key('habit_day_change_field')), findsNothing);
     } finally {
       await closeApp(tester);
       semantics.dispose();
+    }
+  });
+
+  testWidgets('a pasted Infinity is not accepted as an amount', (
+    tester,
+  ) async {
+    await openCalendar(tester);
+    try {
+      await tapCell(tester, '12 November');
+      await tester.tap(find.byKey(const Key('habit_day_new_amount_button')));
+      await _settle(tester, 2);
+      await tester.enterText(
+        find.byKey(const Key('habit_day_change_field')),
+        'Infinity',
+      );
+      await tester.tap(find.byKey(const Key('habit_day_change_save')));
+      await _settle(tester, 2);
+      // The dialog stays open and the sheet still renders.
+      expect(find.byKey(const Key('habit_day_change_field')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    } finally {
+      await closeApp(tester);
     }
   });
 

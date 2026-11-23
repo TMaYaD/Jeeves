@@ -259,7 +259,9 @@ class _ChangeAmountDialogState extends State<_ChangeAmountDialog> {
         key: const Key('habit_day_change_save'),
         onPressed: () {
           final parsed = double.tryParse(_controller.text.trim());
-          if (parsed != null && parsed > 0) Navigator.of(context).pop(parsed);
+          if (parsed != null && parsed.isFinite && parsed > 0) {
+            Navigator.of(context).pop(parsed);
+          }
         },
         child: const Text(habitDaySheetDone),
       ),
