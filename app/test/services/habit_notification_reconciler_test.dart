@@ -95,6 +95,7 @@ class FakeOsNotifications extends NotificationService {
     required String body,
     required DateTime fireAt,
     required String payload,
+    HabitNotificationAction action = HabitNotificationAction.none,
   }) async {
     if (refused.contains(id)) {
       throw StateError('The OS refused notification $id.');

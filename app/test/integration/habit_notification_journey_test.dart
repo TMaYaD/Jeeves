@@ -1,7 +1,7 @@
 /// Journey: a Habit's clock time drives a notification on the days it is for,
 /// through the real database and the real write paths.
 ///
-/// The OS is replaced by [FakeOsNotifications], which keeps its pending set in
+/// The OS is replaced by [FakeHabitNotifications], which keeps its pending set in
 /// memory — so these tests prove what the app hands to the notification
 /// service, not Android's alarm delivery.
 library;
@@ -24,65 +24,6 @@ import '../test_helpers.dart';
 
 const _userId = 'local';
 
-/// The OS, stood in for: keeps its pending set and its tray in memory.
-class FakeOsNotifications extends NotificationService {
-  FakeOsNotifications() : super.forTesting();
-
-  /// The alarms the OS holds, by notification id.
-  final pending = <int, String>{};
-
-  /// The notifications that already fired and sit in the tray.
-  final delivered = <int>{};
-
-  /// The titles the OS was given, by notification id.
-  final titles = <int, String>{};
-
-  /// The device's time zone, read on the next resume.
-  String? deviceZone;
-
-  @override
-  Future<void> scheduleHabitNotification({
-    required int id,
-    required String title,
-    required String body,
-    required DateTime fireAt,
-    required String payload,
-  }) async {
-    pending[id] = payload;
-    titles[id] = title;
-  }
-
-  @override
-  Future<void> cancelReminder(int id) async {
-    pending.remove(id);
-    delivered.remove(id);
-  }
-
-  @override
-  Future<HabitNotificationsOnDevice> habitNotificationsOnDevice() async => (
-        pending: pending.keys.toSet(),
-        pendingPayloads: Map.of(pending),
-        delivered: delivered.toSet(),
-      );
-
-  @override
-  Future<bool> refreshLocalTimezone() async {
-    final zone = deviceZone;
-    if (zone == null || zone == tz.local.name) return false;
-    tz.setLocalLocation(tz.getLocation(zone));
-    return true;
-  }
-}
-
-/// The days the OS holds a notification for, soonest first.
-extension on FakeOsNotifications {
-  List<String> get days => [
-        for (final payload in pending.values)
-          parseHabitNotificationPayload(payload)!.day,
-      ]..sort();
-
-}
-
 void main() {
   setUpAll(() {
     configureSqliteForTests();
@@ -92,7 +33,7 @@ void main() {
 
   late tz.Location kolkata;
   late GtdDatabase db;
-  late FakeOsNotifications os;
+  late FakeHabitNotifications os;
   late ProviderContainer container;
   // Friday 20 November 2026, 06:30 local — before the 07:00 a clock-time
   // Habit notifies at.
@@ -102,7 +43,7 @@ void main() {
     kolkata = tz.getLocation('Asia/Kolkata');
     tz.setLocalLocation(kolkata);
     db = GtdDatabase(NativeDatabase.memory());
-    os = FakeOsNotifications()..deviceZone = 'Asia/Kolkata';
+    os = FakeHabitNotifications()..deviceZone = 'Asia/Kolkata';
     container = ProviderContainer(
       overrides: [
         databaseProvider.overrideWithValue(db),

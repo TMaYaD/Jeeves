@@ -24,7 +24,10 @@ import 'follow_up_notifications.dart'
         followUpFireAtMillisFromNotificationPayload,
         followUpOutcomeIdFromNotificationPayload;
 import 'habit_notifications.dart'
-    show HabitNotificationsOnDevice, kHabitNotificationPayloadPrefix;
+    show
+        HabitNotificationAction,
+        HabitNotificationsOnDevice,
+        kHabitNotificationPayloadPrefix;
 
 // Stable notification IDs.
 const _kFocusSessionPlanningNotificationId = 0;
@@ -46,6 +49,10 @@ const kShutdownNotificationActionSkip = 'shutdown_skip_today';
 const kPeriodicReviewActionOpen = 'periodic_review_open';
 const kPeriodicReviewActionSnooze = 'periodic_review_snooze';
 const kPeriodicReviewActionSkip = 'periodic_review_skip_today';
+
+/// The action id of a Habit's "Check in" button, and the iOS category that
+/// carries it.
+const kNotificationActionHabitCheckIn = 'habit_check_in';
 
 const _kFocusId = 1001;
 const _kDueDateChannelId = 'due_dates';
@@ -334,23 +341,36 @@ class NotificationService {
     required String body,
     required DateTime fireAt,
     required String payload,
+    HabitNotificationAction action = HabitNotificationAction.none,
   }) async {
     final canExact = await canScheduleExactRitualNotifications();
+    final offersCheckIn = action == HabitNotificationAction.checkIn;
     await _plugin.zonedSchedule(
       id: id,
       title: title,
       body: body,
       payload: payload,
       scheduledDate: ritualAlarmScheduledDate(fireAt),
-      notificationDetails: const NotificationDetails(
+      notificationDetails: NotificationDetails(
         android: AndroidNotificationDetails(
           _kHabitChannelId,
           'Habits',
           channelDescription: 'Habits that are due at a time of day',
           importance: Importance.high,
           priority: Priority.high,
+          actions: [
+            if (offersCheckIn)
+              // The Check in runs without opening the app: the button stays
+              // in the shade and the notification goes.
+              AndroidNotificationAction(kNotificationActionHabitCheckIn,
+                  'Check in',
+                  showsUserInterface: false, cancelNotification: true),
+          ],
         ),
-        iOS: DarwinNotificationDetails(),
+        iOS: DarwinNotificationDetails(
+          categoryIdentifier:
+              offersCheckIn ? kNotificationActionHabitCheckIn : null,
+        ),
       ),
       // Exact when the OS already permits it, so a notification lands at the
       // Habit's clock time; otherwise Android may deliver it late.

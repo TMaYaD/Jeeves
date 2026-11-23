@@ -673,6 +673,7 @@ class HabitNotificationReconciler {
           body: entry.body,
           fireAt: entry.fireAt,
           payload: entry.payload,
+          action: entry.action,
         );
       } catch (e) {
         // One refused alarm does not stop the rest: the next reconciliation
