@@ -20,7 +20,7 @@ library;
 import 'dart:async';
 
 import 'package:drift/drift.dart' show OrderingTerm, TableUpdateQuery;
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -680,14 +680,32 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
   DateTime? _scheduledBreakEndAt;
   int? _scheduledBreakMinutes;
 
+  /// True from the first attempt to schedule this Break's reminder until the
+  /// Break is cancelled, so an attempt that failed is retried rather than
+  /// mistaken for a Break that never wanted one.
+  bool _breakReminderWanted = false;
+  DateTime? _breakReminderRetryNotBefore;
+  @visibleForTesting
+  static Duration breakReminderRetryDelay = const Duration(seconds: 15);
+
   void _reconcileBreakNotification(SprintTimerState next) {
-    if (_scheduledBreakEndAt == null || _breakScheduleInFlight) return;
+    if (!_breakReminderWanted || _breakScheduleInFlight) return;
     if (next.phase != SprintPhase.break_) return;
     final endAt = DateTime.now().add(next.remaining);
-    final moved = endAt.difference(_scheduledBreakEndAt!).abs() >
-        const Duration(seconds: 2);
-    if (!moved && next.currentBreakDurationMinutes == _scheduledBreakMinutes) {
-      return;
+    final plannedEndAt = _scheduledBreakEndAt;
+    if (plannedEndAt == null) {
+      // The last attempt failed, so nothing is known to be in place.
+      final retryNotBefore = _breakReminderRetryNotBefore;
+      if (retryNotBefore != null && DateTime.now().isBefore(retryNotBefore)) {
+        return;
+      }
+    } else {
+      final moved =
+          endAt.difference(plannedEndAt).abs() > const Duration(seconds: 2);
+      if (!moved &&
+          next.currentBreakDurationMinutes == _scheduledBreakMinutes) {
+        return;
+      }
     }
     unawaited(_scheduleBreakEnd(endAt, next.currentBreakDurationMinutes));
   }
@@ -699,6 +717,7 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
 
   Future<void> _scheduleBreakEnd(DateTime endAt, int minutes) async {
     final generation = _breakNotificationGeneration;
+    _breakReminderWanted = true;
     _breakScheduleInFlight = true;
     final bool scheduled;
     try {
@@ -730,11 +749,22 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
     if (scheduled) {
       _scheduledBreakEndAt = endAt;
       _scheduledBreakMinutes = minutes;
+      _breakReminderRetryNotBefore = null;
+    } else {
+      // A failed replacement may already have cancelled the reminder it was
+      // replacing, so the old record cannot be trusted either: forget it and
+      // let the next tick try again once the retry delay has passed.
+      _scheduledBreakEndAt = null;
+      _scheduledBreakMinutes = null;
+      _breakReminderRetryNotBefore =
+          DateTime.now().add(breakReminderRetryDelay);
     }
   }
 
   Future<void> _cancelSprintNotifications() async {
     _breakNotificationGeneration++;
+    _breakReminderWanted = false;
+    _breakReminderRetryNotBefore = null;
     _scheduledBreakEndAt = null;
     _scheduledBreakMinutes = null;
     final svc = ref.read(notificationServiceProvider);

@@ -83,6 +83,34 @@ class _GatedBreakNotifications extends RecordingNotificationService {
       events.add('cancel-break');
 }
 
+/// The first Break reminder fails to schedule; later ones succeed.
+class _FlakyBreakNotifications extends RecordingNotificationService {
+  final events = <String>[];
+  int _breakCalls = 0;
+
+  @override
+  Future<void> scheduleSprintEndNotification({
+    required DateTime endTime,
+    required String taskTitle,
+  }) async {}
+
+  @override
+  Future<void> scheduleBreakEndNotification({
+    required DateTime endTime,
+    required int durationMinutes,
+  }) async {
+    _breakCalls++;
+    if (_breakCalls == 1) throw StateError('platform refused');
+    events.add('scheduled:$durationMinutes');
+  }
+
+  @override
+  Future<void> cancelSprintNotifications() async {}
+
+  @override
+  Future<void> cancelBreakEndNotification() async {}
+}
+
 void main() {
   setUpAll(() {
     configureSqliteForTests();
@@ -348,6 +376,47 @@ void main() {
     expect(notifications.events.last, 'cancel-break',
         reason: 'the Break reminder that landed after the skip is cancelled '
             'on its own, so the next Sprint-end reminder is not removed with it');
+
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('a Break reminder that failed to schedule is tried again',
+      (tester) async {
+    SprintTimerNotifier.breakReminderRetryDelay = Duration.zero;
+    addTearDown(() =>
+        SprintTimerNotifier.breakReminderRetryDelay =
+            const Duration(seconds: 15));
+    final notifications = _FlakyBreakNotifications();
+    final todo = await tester.runAsync(() => insertFocusTodo(db, id: 'o1'));
+
+    await tester.pumpWidget(focusHarness(
+      db,
+      todo: todo!,
+      sprintTimer: SprintTimerNotifier.new,
+      overrides: [
+        focusSettingsProvider.overrideWith(_MutableFocusSettings.new),
+        notificationServiceProvider.overrideWithValue(notifications),
+      ],
+    ));
+    await pumpFocusFrames(tester, 5);
+    final container =
+        ProviderScope.containerOf(tester.element(find.byType(ActiveFocusScreen)));
+    final timer = container.read(sprintTimerProvider.notifier);
+
+    await tester.runAsync(() async {
+      await db.timeLogDao
+          .openLog(taskId: 'o1', userId: focusUserId, now: DateTime.now());
+      await timer.startSprint(todo);
+      await timer.completeSprint();
+    });
+    expect(container.read(sprintTimerProvider).phase, SprintPhase.break_);
+    expect(notifications.events, isEmpty, reason: 'the first attempt failed');
+
+    await tester.pump(const Duration(seconds: 2));
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+
+    expect(notifications.events, ['scheduled:3'],
+        reason: 'the next tick retries the reminder that failed');
 
     await tester.pumpWidget(const SizedBox.shrink());
   });
