@@ -4,7 +4,7 @@
 
 Jeeves is offline-first. Local writes go to the embedded SQLite store immediately, and are replicated between devices by the **op log** — signed ops over the minimal sync server — as soon as the device is enrolled and reachable ([ADR-0026](./adr/0026-minimal-sync-server.md), [ADR-0034](./adr/0034-sync-starts-at-enrolment.md)). Replication runs through the **sync host**, which owns the merge state; the op log and the **vault** are plugins behind it, and one plugin runs at a time (#914). There is one replication engine on the device, and no second (#595). Habit tables have no codec: not on the wire or in the export.
 
-This document is about **merge**: how two devices that wrote concurrently end up agreeing, with the focus on the `user_preferences` synced key-value store, whose keys are the ones where blanket last-write-wins is sometimes the wrong answer.
+This document is about **merge**: how two devices that wrote concurrently end up agreeing, with the focus on the `user_preferences` synced key-value store, where blanket last-write-wins is sometimes wrong.
 
 For where this sits in the system see [ARCHITECTURE.md § The sync spine](./ARCHITECTURE.md#the-sync-spine); for the vocabulary, [CONTEXT.md § Sync](../CONTEXT.md#sync).
 
@@ -215,7 +215,7 @@ authors nothing: its tombstone would drop an assignment a peer had just made.
 
 `SyncHealth.clean` is a derived getter over queue depth, unresolved alarms and
 quarantine count — never a stored status, so a wedged device cannot report itself
-healthy by writing down that it is.
+healthy by writing it down.
 
 ## Refusals
 
@@ -232,6 +232,25 @@ per-User key-exchange subkey, so there is nothing to wrap the new epoch key to.
 The ceremony refuses before authoring anything rather than publishing a rotation
 that would strand the Service mid-stream. Revoking the Service is the way
 through.
+
+## Alarm resolutions
+
+| Kind | Class | Resolution | What the decision does on the device |
+|---|---|---|---|
+| `author_chain_gap` | actionable | **Take upstream** (one-time) | The held changes of that device reach this device's own records, and their rows are stamped. The rows stay eligible for normal chain release, so if the missing change arrives later the log heals and the apply is a no-op. The alarm is settled only once the change has reached the records — a failure there leaves the accusation standing and the decision on offer, and the work is kept until it has: a later pull puts it on screen even after the chain release has re-admitted the row. `op_log` is not touched. Also settles that device's `author_chain_fork`. |
+| `own_writes_rollback` (server lost writes it had acknowledged) | actionable | **Keep ours** | Marks this device's own outbox rows from the position the server expects as unsent, so the next flush re-sends the same signed bytes. Nothing is re-numbered or re-signed. The alarm is *decided* at once and *resolved* when the re-send is acknowledged — every row from that position onwards sent. An answer about an accusation that has changed since it was asked is refused: nothing is queued and the new accusation stays open. |
+| `own_writes_rollback` (server holds a position this device never wrote) | actionable | none — #974 | Needs a new device key or re-enrolment. |
+| `own_writes_divergence` | reported | **Keep ours** (no upload) | Ours is already on the log. Records that the other copy is refused for good. |
+| `author_chain_fork` | reported | **Reject permanently** | Stamps every continuation proven against the head, including every claimant at the position the accusation names. If no undecided held change of that device remains, the `author_chain_gap` alarm they were holding open resolves too. |
+| `signature_invalid`, `aead_failure`, `plaintext_at_encrypted_epoch`, `no_live_grant`, `prev_author_hash_mismatch`, `author_chain_rewrite`, `duplicate_op_id_divergence` | reported | **Reject permanently** | Stamps the refused bytes as final. No state changes; the bytes stay. |
+| Refused change with no alarm kind (codec and certificate reasons) | reported | **Reject permanently**, per row | Same, on that one row. |
+| `own_write_refused_permanently` | actionable | none — #647 | Needs the outbox to drain past an op that can never be posted. |
+| `epoch_key_set_unpublishable` | actionable | none — #661 | Needs an in-app way to rotate keys again. |
+| `author_stream_reordered`, `stale_prefix_served`, `control_chain_fork`, `author_chain_slot_collision` | reported | none — #656, #657, #658, #659 | The app already settled these; they should resolve themselves. |
+| `prune_attestation_divergence` | reported | none — #660 | No mechanism exists to contest a compactor's attestation. |
+| Unknown code, self-healing refusal | — | none | Listed (unknown) or hidden (self-healing), as the classification says. |
+
+Decisions are recorded; bytes are kept.
 
 ## What is asserted, and where
 

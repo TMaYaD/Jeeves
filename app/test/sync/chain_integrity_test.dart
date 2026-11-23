@@ -12,26 +12,52 @@
 @TestOn('!browser')
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:drift/drift.dart' show OrderingTerm;
+import 'package:drift/drift.dart'
+    show OrderingTerm, QueryExecutor, QueryInterceptor, Value;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jeeves/providers/sync_status_provider.dart';
+import 'package:jeeves/sync/alarm_resolution.dart';
 import 'package:jeeves/sync/chain_verifier.dart';
+import 'package:jeeves/sync/collection_codecs.dart';
+import 'package:jeeves/sync/domain_projector.dart';
+import 'package:jeeves/sync/enrolment_state.dart';
 import 'package:jeeves/sync/envelope.dart';
 import 'package:jeeves/sync/hlc.dart';
+import 'package:jeeves/sync/host/merge_state.dart';
 import 'package:jeeves/sync/ids.dart';
+import 'package:jeeves/sync/prune_payload.dart';
 import 'package:jeeves/sync/sync_database.dart';
 import 'package:jeeves/sync/sync_transport.dart';
 import 'package:sqlite3/common.dart' show SqliteException;
 import 'package:uuid/uuid.dart';
 
 import 'harness/author_fixture.dart';
+import 'harness/reduced_state.dart';
 import 'harness/sim_device.dart';
 import 'harness/sim_workspace.dart';
 
 const String _harnessCollection = 'harness_docs';
 const Uuid _uuid = Uuid();
+
+/// The `todos` entity ids the projection case uses.
+///
+/// `harness_docs` has no domain row — projection is collection-generic, and an
+/// op for a collection this build does not know reduces without becoming a
+/// row — so "the change never reached the domain store" is only visible over a
+/// collection that *does* have one.
+///
+/// An entity id travels as a canonical lowercase UUID, so these are minted
+/// rather than spelled.
+String _todoId(String name) =>
+    _uuid.v5(Namespace.url.value, 'jeeves://chain-integrity-todo/$name');
+
+/// The `user_id` the `todos` rows carry. The domain store has no `users` table
+/// and no foreign key on it, so this is a plain column.
+const String _todoUserId = 'sim-user';
 
 extension _Alarms on SimDevice {
   /// The device's alarms by kind. Every case here involves one author, so kind
@@ -70,6 +96,80 @@ extension _Alarms on SimDevice {
   }
 }
 
+/// Runs a refusal's arrival in the middle of the next write to the accusation
+/// table.
+///
+/// A receive that lands while an answer is being recorded cannot be scheduled
+/// from outside the client: the statements it makes are the ones the client
+/// itself would make, in the same transaction, and the client's receive path
+/// cannot be interleaved with its own transaction from a test. So the arrival
+/// is injected at the statement level — at the settlement, which is the first
+/// write to the accusation table — and it runs inside that transaction, which
+/// is what "arriving during the resolution" means for the client.
+class _ArrivalDuringResolution extends QueryInterceptor {
+  /// The arrival to run, or null when there is none armed.
+  Future<void> Function(QueryExecutor executor)? arrival;
+
+  bool _fired = false;
+
+  @override
+  Future<int> runUpdate(
+    QueryExecutor executor,
+    String statement,
+    List<Object?> args,
+  ) async {
+    final run = arrival;
+    if (run != null && !_fired && _writesToAccusations(statement)) {
+      _fired = true;
+      arrival = null;
+      await run(executor);
+    }
+    return super.runUpdate(executor, statement, args);
+  }
+
+  /// Whether this statement writes to the accusation table.
+  bool _writesToAccusations(String statement) {
+    final text = statement.toLowerCase();
+    return text.startsWith('update') && text.contains('integrity_alarms');
+  }
+}
+
+/// A projector that fails the first time it is asked to project, and works
+/// afterwards.
+///
+/// The failure a real projection can have — a storage fault, a codec that
+/// cannot read — and the one an answer has to survive: the change is applied
+/// to the reduced state but never reaches the domain store, so the User never
+/// sees it.
+class _FailingOnceProjector extends DomainProjector {
+  _FailingOnceProjector(DomainProjector inner)
+      : _inner = inner,
+        super(
+          registry: inner.registry,
+          domain: inner.domain,
+          chunkEntityCount: inner.chunkEntityCount,
+        );
+
+  final DomainProjector _inner;
+
+  bool _failed = false;
+
+  @override
+  Future<Set<String>> project(
+    Iterable<AffectedEntity> affected, {
+    bool leaveEntitiesAwaitingMerge = false,
+  }) async {
+    if (!_failed) {
+      _failed = true;
+      throw StateError('the projection failed');
+    }
+    return _inner.project(
+      affected,
+      leaveEntitiesAwaitingMerge: leaveEntitiesAwaitingMerge,
+    );
+  }
+}
+
 /// One content op from [author], carrying `{field: value}` on a shared entity.
 Future<Uint8List> _op(
   SimWorkspace workspace,
@@ -98,8 +198,47 @@ Future<Uint8List> _op(
 String _docId(SimWorkspace workspace) =>
     preferenceEntityId(workspace.workspaceId, 'chain-integrity-doc');
 
+/// A `todos` op from [author], so what applies has a *domain row* and not only
+/// reduced state — which is what the projection case has to observe.
+Future<Uint8List> _todoOp(
+  SimWorkspace workspace,
+  AuthorFixture author,
+  String todoId,
+  String title,
+) async {
+  workspace.clock.advance(10);
+  return author.nextEnvelope(
+    workspace.workspaceId,
+    payloadJson: jsonEncode({
+      'collection': todosCollection,
+      'id': todoId,
+      'fields': {
+        'title': {'v': title},
+        'created_at': {'v': encodeInstant(workspace.clock.asDateTime)},
+        'user_id': {'v': _todoUserId},
+      },
+      'hlc': [workspace.clock.nowMs, 0, memberIdToHex(author.memberId)],
+    }),
+  );
+}
+
+/// The titles on this device's `todos` rows, in name order.
+Future<List<Object?>> _todoTitles(SimDevice device) async =>
+    (await domainRows(device.domain, 'todos'))
+        .map((row) => row['title'])
+        .toList()
+      ..sort();
+
 Future<Map<String, Object?>?> _doc(SimDevice device, SimWorkspace workspace) =>
     device.registry.register(_harnessCollection).readEntity(_docId(workspace));
+
+/// This device's own envelope at [authorSeq] — the bytes it signed.
+Future<Uint8List> _outboxEnvelope(SimDevice device, int authorSeq) async {
+  final row = await (device.database.select(device.database.outbox)
+        ..where((r) => r.authorSeq.equals(authorSeq)))
+      .getSingle();
+  return row.envelope;
+}
 
 void main() {
   /// The peer's first *content* op sits at this position in its own chain.
@@ -113,9 +252,13 @@ void main() {
   late SimDevice a;
   late AuthorFixture peer;
   late SyncTransport peerSession;
+  late _ArrivalDuringResolution arrival;
 
   setUp(() async {
-    workspace = await SimWorkspace.create();
+    // Installed disarmed: only the case that needs an arrival mid-resolution
+    // arms it, and it arms it for one statement.
+    arrival = _ArrivalDuringResolution();
+    workspace = await SimWorkspace.create(aSyncStoreInterceptor: arrival);
     a = workspace.a;
     peer = await AuthorFixture.create(
       seed: Uint8List.fromList(List<int>.generate(32, (index) => index + 91)),
@@ -832,6 +975,1270 @@ void main() {
         (await a.client.quarantined()).single.reason,
         SyncRejectionReason.badSignature.code,
       );
+    });
+  });
+
+  // --- Resolutions: the user answers an alarm -------------------------------
+
+  group('resolutions', () {
+    /// The device's own op, tampered with, refused by the fail-closed rule.
+    ///
+    /// The signature covers `header || body`, so the receive path refuses it
+    /// outright — an accusation raised against a forgery, and the refusal it is
+    /// filed under. The bytes are returned so a test can say they are still the
+    /// bytes.
+    Future<
+        ({
+          IntegrityAlarmRow alarm,
+          QuarantineRow row,
+          Uint8List tampered,
+          List<Uint8List> authored,
+        })> plantTamperedEnvelope() async {
+      await a.authorLocal(workspace, 'mine');
+      await a.sync();
+      final authored = await a.client.authoredEnvelopes();
+      final tampered = Uint8List.fromList(authored.last);
+      tampered[headerLengthBytes + 8] ^= 0x01;
+      workspace.server.injectUnchecked(workspace.workspaceId, tampered);
+      await a.sync();
+      final alarm =
+          (await a.alarmsByKind())[IntegrityAlarmKind.signatureInvalid.code]!;
+      final row = (await a.client.quarantined()).single;
+      return (alarm: alarm, row: row, tampered: tampered, authored: authored);
+    }
+
+    test('rejecting a refused change for good settles the alarm and keeps the bytes',
+        () async {
+      final planted = await plantTamperedEnvelope();
+      expect(planted.alarm.resolution, isNull);
+      expect(planted.alarm.resolvedAt, isNull);
+
+      await a.client.resolveAlarm(
+        planted.alarm.id,
+        AlarmResolution.rejectedPermanently,
+      );
+
+      final settled =
+          (await a.alarmsByKind())[IntegrityAlarmKind.signatureInvalid.code]!;
+      expect(settled.resolution, AlarmResolution.rejectedPermanently.code);
+      expect(settled.resolutionDecidedAt, isNotNull);
+      expect(settled.resolvedAt, isNotNull);
+
+      // Nothing is deleted, and the bytes are the evidence they always were.
+      final rows = await a.client.quarantined();
+      expect(rows.length, 1);
+      expect(rows.single.id, planted.row.id);
+      expect(sameBytes(rows.single.envelope, planted.tampered), isTrue);
+      expect(rows.single.releasedAt, isNull);
+      // The decision is recorded on the refused change too: that row is the
+      // durable history, and the alarm only says what the answer is now.
+      expect(rows.single.resolution, AlarmResolution.rejectedPermanently.code);
+      expect(rows.single.resolutionDecidedAt, isNotNull);
+
+      final health = await a.client.health();
+      expect(health.clean, isTrue);
+      expect(health.hasSomethingToReport, isFalse);
+      expect(health.actionableAlarmCount, 0);
+      expect(health.unresolvedAlarmCount, 0);
+      expect(health.reportableQuarantineCount, 0);
+    });
+
+    test('a re-serve of the same bytes raises nothing again', () async {
+      final planted = await plantTamperedEnvelope();
+      await a.client.resolveAlarm(
+        planted.alarm.id,
+        AlarmResolution.rejectedPermanently,
+      );
+
+      await a.client.resetCursorForReplay();
+      await a.sync();
+
+      final after =
+          (await a.alarmsByKind())[IntegrityAlarmKind.signatureInvalid.code]!;
+      expect(after.resolvedAt, isNotNull);
+      expect(after.resolution, AlarmResolution.rejectedPermanently.code);
+      expect(
+        (await a.client.quarantined()).length,
+        1,
+        reason: 'the same bytes are still one refusal, not two',
+      );
+    });
+
+    test('a second, different forgery stands the accusation again', () async {
+      final planted = await plantTamperedEnvelope();
+      await a.client.resolveAlarm(
+        planted.alarm.id,
+        AlarmResolution.rejectedPermanently,
+      );
+
+      // A different forgery of the same op: a new accusation, not the old one.
+      final second = Uint8List.fromList(planted.authored.last);
+      second[headerLengthBytes + 8] ^= 0x02;
+      workspace.server.injectUnchecked(workspace.workspaceId, second);
+      await a.sync();
+
+      final after =
+          (await a.alarmsByKind())[IntegrityAlarmKind.signatureInvalid.code]!;
+      expect(after.resolvedAt, isNull);
+      expect(after.resolution, isNull);
+      expect(after.resolutionDecidedAt, isNull);
+
+      // The settled refusal stays settled; the new one is a new question.
+      final rows = await a.client.quarantined();
+      expect(rows.length, 2);
+      expect(
+        rows
+            .where((row) =>
+                row.resolution == AlarmResolution.rejectedPermanently.code)
+            .length,
+        1,
+      );
+      expect(rows.where((row) => row.resolution == null).length, 1);
+    });
+
+    test('a refusal that arrives while the answer is recorded does not close '
+        'the accusation', () async {
+      final planted = await plantTamperedEnvelope();
+      final alarm = planted.alarm;
+
+      // Another forgery arrives while the answer is being recorded: a new
+      // refusal, and the accusation stands again.
+      final second = Uint8List.fromList(planted.authored.last);
+      second[headerLengthBytes + 8] ^= 0x02;
+      arrival.arrival = (executor) async {
+        final store = SyncDatabase(executor);
+        await store.into(store.quarantinedOps).insert(
+              QuarantinedOpsCompanion.insert(
+                workspaceId: workspace.workspaceId,
+                reason: SyncRejectionReason.badSignature.code,
+                detail: 'another forgery, arriving while the answer is recorded',
+                envelope: second,
+                detectedAt: DateTime.utc(2026, 1, 1),
+                authorMemberId: Value(alarm.authorMemberId),
+              ),
+            );
+        // The re-raise a receive would have made: the accusation grows, and
+        // the answer the User gave was about the smaller one.
+        await (store.update(store.integrityAlarms)
+              ..where((row) => row.id.equals(alarm.id)))
+            .write(IntegrityAlarmsCompanion(
+          occurrenceCount: Value(alarm.occurrenceCount + 1),
+          resolvedAt: const Value(null),
+          resolution: const Value(null),
+          resolutionDecidedAt: const Value(null),
+        ));
+      };
+
+      await a.client.resolveAlarm(
+        alarm.id,
+        AlarmResolution.rejectedPermanently,
+      );
+
+      // The accusation stands: the refusal that arrived was never shown to
+      // the User, so their answer cannot close it.
+      final after =
+          (await a.alarmsByKind())[IntegrityAlarmKind.signatureInvalid.code]!;
+      expect(after.resolvedAt, isNull);
+      expect(after.resolution, isNull);
+      expect(after.resolutionDecidedAt, isNull);
+      expect(after.occurrenceCount, alarm.occurrenceCount + 1);
+      final health = await a.client.health();
+      expect(
+        health.unresolvedAlarmCount,
+        1,
+        reason: 'the accusation still stands',
+      );
+      expect(
+        health.reportableQuarantineCount,
+        1,
+        reason: 'the refusal that arrived is still to be answered',
+      );
+
+      // The refusal that arrived is the open question; the one the User
+      // answered keeps the answer.
+      final rows = await a.client.quarantined();
+      expect(rows.length, 2);
+      expect(
+        rows.where((row) => row.resolution == null).length,
+        1,
+        reason: 'the refusal that arrived is undecided',
+      );
+    });
+
+    test('rejecting a fork for good settles it and the gap it held open',
+        () async {
+      // The forged-claimant scenario: two envelopes claim the peer's position
+      // 5, the forgery is quarantined first, and the genuine continuation is
+      // released when its predecessor lands. The forgery is what is left.
+      final first = await _op(workspace, peer, 'one');
+      await peerSession.postOps(workspace.workspaceId, [first]);
+      await a.sync();
+
+      final genuineSecond = await _op(workspace, peer, 'two');
+      final genuineThird = await _op(workspace, peer, 'three');
+
+      peer.nextAuthorSeq = firstPeerContentAuthorSeq + 2;
+      peer.lastEnvelopeHash =
+          Uint8List.fromList(List<int>.filled(prevAuthorHashBytes, 0x7f));
+      final forgedThird = await _op(workspace, peer, 'forged');
+
+      workspace.server.injectUnchecked(workspace.workspaceId, forgedThird);
+      await a.sync();
+      workspace.server.injectUnchecked(workspace.workspaceId, genuineThird);
+      await a.sync();
+      workspace.server.injectUnchecked(workspace.workspaceId, genuineSecond);
+      await a.sync();
+
+      final forgedRow = (await a.client.quarantined())
+          .singleWhere((row) => sameBytes(row.envelope, forgedThird));
+      final fork =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainFork.code]!;
+      expect(fork.resolvedAt, isNull);
+      expect(
+        (await a.client.health()).degraded,
+        isTrue,
+        reason: 'the gap the forgery holds open is actionable',
+      );
+
+      await a.client.resolveAlarm(fork.id, AlarmResolution.rejectedPermanently);
+
+      final alarms = await a.alarmsByKind();
+      final settledFork = alarms[IntegrityAlarmKind.authorChainFork.code]!;
+      expect(settledFork.resolution, AlarmResolution.rejectedPermanently.code);
+      expect(settledFork.resolvedAt, isNotNull);
+      // The gap alarm stood because the forged row was still waiting; with the
+      // row answered there is nothing left to wait for.
+      final settledGap = alarms[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(settledGap.resolution, AlarmResolution.rejectedPermanently.code);
+      expect(settledGap.resolvedAt, isNotNull);
+
+      // The forgery is still there, still refused, and now answered.
+      final rows = await a.client.quarantined();
+      final settled = rows.singleWhere((row) => sameBytes(row.envelope, forgedThird));
+      expect(settled.id, forgedRow.id);
+      expect(settled.releasedAt, isNull);
+      expect(settled.resolution, AlarmResolution.rejectedPermanently.code);
+      expect(
+        (await a.client.health()).degraded,
+        isFalse,
+        reason: 'nothing actionable is left standing',
+      );
+    });
+
+    /// The fork-at-the-head recipe: the release scan proves a mismatch at
+    /// head + 1, and the head does not move.
+    ///
+    /// The peer's head is at 3. A claimant at 5 arrives before its predecessor
+    /// at 4, so it is held as a gap; the predecessor lands, the head moves to
+    /// 4, and the scan finds that the claimant does not chain to it — a fork
+    /// raised at head + 1, with the head left where it was.
+    ///
+    /// With [alsoHeld], a further claimant is held above the named one: a gap
+    /// of its own, which the fork's answer is not about.
+    Future<Uint8List> forkAtTheHead({
+      bool alsoHeld = false,
+      bool samePosition = false,
+    }) async {
+      final first = await _op(workspace, peer, 'one');
+      await peerSession.postOps(workspace.workspaceId, [first]);
+      await a.sync();
+
+      // A claimant two positions above the head, chained to a hash that will
+      // never be the head's.
+      peer.nextAuthorSeq = firstPeerContentAuthorSeq + 2;
+      peer.lastEnvelopeHash =
+          Uint8List.fromList(List<int>.filled(prevAuthorHashBytes, 0x7f));
+      final claimant = await _op(workspace, peer, 'forged');
+      workspace.server.injectUnchecked(workspace.workspaceId, claimant);
+      await a.sync();
+
+      if (alsoHeld) {
+        peer.nextAuthorSeq = firstPeerContentAuthorSeq + (samePosition ? 2 : 3);
+        peer.lastEnvelopeHash =
+            Uint8List.fromList(List<int>.filled(prevAuthorHashBytes, 0x7e));
+        final further = await _op(workspace, peer, 'also forged');
+        workspace.server.injectUnchecked(workspace.workspaceId, further);
+        await a.sync();
+      }
+
+      // The predecessor lands, chained to the head as it stands.
+      peer.nextAuthorSeq = firstPeerContentAuthorSeq + 1;
+      peer.lastEnvelopeHash = envelopeHash(first);
+      final predecessor = await _op(workspace, peer, 'two');
+      workspace.server.injectUnchecked(workspace.workspaceId, predecessor);
+      await a.sync();
+
+      return claimant;
+    }
+
+    test('a fork at the head names the claimant it could not release',
+        () async {
+      final claimant = await forkAtTheHead();
+
+      final fork =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainFork.code]!;
+      expect(fork.resolvedAt, isNull);
+      final row = (await a.client.quarantined())
+          .singleWhere((r) => sameBytes(r.envelope, claimant));
+      expect(
+        fork.quarantineOpRowId,
+        row.id,
+        reason: 'the accusation names the claimant it could not release',
+      );
+      expect(
+        row.authorSeq,
+        firstPeerContentAuthorSeq + 2,
+        reason: 'and the claimant is one position above the head',
+      );
+
+      await a.client.resolveAlarm(fork.id, AlarmResolution.rejectedPermanently);
+
+      // The claimant is answered, so the gap it held open is answered too.
+      final answered = (await a.client.quarantined())
+          .singleWhere((r) => sameBytes(r.envelope, claimant));
+      expect(answered.resolution, AlarmResolution.rejectedPermanently.code);
+      expect(answered.resolutionDecidedAt, isNotNull);
+
+      final alarms = await a.alarmsByKind();
+      final settledFork = alarms[IntegrityAlarmKind.authorChainFork.code]!;
+      expect(settledFork.resolution, AlarmResolution.rejectedPermanently.code);
+      expect(settledFork.resolvedAt, isNotNull);
+      final settledGap = alarms[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(settledGap.resolution, AlarmResolution.rejectedPermanently.code);
+      expect(settledGap.resolvedAt, isNotNull);
+      expect((await a.client.health()).clean, isTrue);
+    });
+
+    test('rejecting a fork answers both mismatching claimants at the head',
+        () async {
+      await forkAtTheHead(alsoHeld: true, samePosition: true);
+      final fork =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainFork.code]!;
+      final claimants = (await a.client.quarantined())
+          .where((row) => row.authorSeq == firstPeerContentAuthorSeq + 2)
+          .toList();
+      expect(claimants, hasLength(2));
+      expect(fork.occurrenceCount, greaterThanOrEqualTo(2));
+
+      await a.client.resolveAlarm(fork.id, AlarmResolution.rejectedPermanently);
+
+      final answered = (await a.client.quarantined())
+          .where((row) => row.authorSeq == firstPeerContentAuthorSeq + 2)
+          .toList();
+      // Both original claimants are still there, and both are answered.
+      expect(
+        answered.map((row) => row.id).toSet(),
+        claimants.map((row) => row.id).toSet(),
+        reason: 'neither claimant was deleted',
+      );
+      expect(answered.every((row) =>
+          row.resolution == AlarmResolution.rejectedPermanently.code), isTrue,
+          reason: 'both claimants were proven incompatible with the head');
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(gap.resolvedAt, isNotNull);
+      expect((await a.client.health()).actionableAlarmCount, 0);
+    });
+
+    test('rejecting a fork leaves an unrelated future gap undecided', () async {
+      final claimant = await forkAtTheHead(alsoHeld: true);
+
+      final fork =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainFork.code]!;
+      await a.client.resolveAlarm(fork.id, AlarmResolution.rejectedPermanently);
+
+      // The claimant the accusation named is answered ...
+      final answered = (await a.client.quarantined())
+          .singleWhere((r) => sameBytes(r.envelope, claimant));
+      expect(answered.resolution, AlarmResolution.rejectedPermanently.code);
+
+      // ... and the gap above it is not: the answer was about the claimant,
+      // and the gap it holds open is a question of its own.
+      final further = (await a.client.quarantined())
+          .singleWhere((r) => r.authorSeq == firstPeerContentAuthorSeq + 3);
+      expect(further.resolution, isNull);
+      expect(further.releasedAt, isNull);
+
+      final alarms = await a.alarmsByKind();
+      expect(alarms[IntegrityAlarmKind.authorChainFork.code]!.resolvedAt,
+          isNotNull);
+      final gap = alarms[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(gap.resolvedAt, isNull);
+      expect(gap.resolution, isNull);
+      expect((await a.client.health()).actionableAlarmCount, 1);
+    });
+
+    test('keeping ours on a divergence settles the other copy', () async {
+      await a.authorLocal(workspace, 'mine');
+      await a.sync();
+      final authored = await a.client.authoredEnvelopes();
+      final nextAuthorSeq = authored.length + 1;
+
+      // A different envelope at a position this device has authored but not yet
+      // pulled back — the copy that lost, and the one our answer is about.
+      await a.authorLocal(workspace, 'local');
+      final substitute = await a.identity.signer.buildEnvelope(
+        OpHeader(
+          workspaceId: workspace.workspaceId,
+          opClass: opClassContent,
+          opId: _uuid.v4(),
+          authorMemberId: a.identity.memberId,
+          authorKeyId: a.identity.keyId,
+          authorSeq: nextAuthorSeq,
+          prevAuthorHash: envelopeHash(authored.last),
+        ),
+        frameBody(Uint8List.fromList(utf8.encode(jsonEncode({
+          'collection': _harnessCollection,
+          'id': _docId(workspace),
+          'fields': {
+            'step': {'v': 'not what we wrote'},
+          },
+          'hlc': [workspace.clock.nowMs, 0, a.identity.memberIdHex],
+        })))),
+      );
+      workspace.server.injectUnchecked(workspace.workspaceId, substitute);
+      await a.client.pull();
+
+      final divergence =
+          (await a.alarmsByKind())[IntegrityAlarmKind.ownWritesDivergence.code]!;
+      final row = (await a.client.quarantined()).single;
+      expect(row.reason, SyncRejectionReason.ownWritesDivergence.code);
+
+      await a.client.resolveAlarm(divergence.id, AlarmResolution.keptOurs);
+
+      final settled =
+          (await a.alarmsByKind())[IntegrityAlarmKind.ownWritesDivergence.code]!;
+      expect(settled.resolution, AlarmResolution.keptOurs.code);
+      expect(settled.resolutionDecidedAt, isNotNull);
+      expect(settled.resolvedAt, isNotNull);
+      expect(
+        (await a.client.quarantined()).single.resolution,
+        AlarmResolution.keptOurs.code,
+      );
+      // Ours is what stands, and it stood all along.
+      expect(await _doc(a, workspace), {'step': 'local'});
+    });
+
+    test('a refusal with no alarm of its own is answered on the row',
+        () async {
+      final future = workspace.clock.nowMs + 3600000;
+      final refused = await peer.nextEnvelope(
+        workspace.workspaceId,
+        payloadJson: jsonEncode({
+          'collection': _harnessCollection,
+          'id': _docId(workspace),
+          'fields': {
+            'step': {'v': 'from the future'},
+          },
+          'hlc': [future, 0, memberIdToHex(peer.memberId)],
+        }),
+      );
+      final honest = await _op(workspace, peer, 'honest');
+      await peerSession.postOps(workspace.workspaceId, [refused, honest]);
+
+      await a.sync();
+
+      final row = (await a.client.quarantined()).single;
+      expect(row.reason, SyncRejectionReason.hlcInTheFuture.code);
+      expect(row.resolution, isNull);
+      expect((await a.client.health()).reportableQuarantineCount, 1);
+
+      await a.client.resolveRefusedItem(
+        row.id,
+        AlarmResolution.rejectedPermanently,
+      );
+
+      final settled = (await a.client.quarantined()).single;
+      expect(settled.resolution, AlarmResolution.rejectedPermanently.code);
+      expect(settled.resolutionDecidedAt, isNotNull);
+      expect(sameBytes(settled.envelope, refused), isTrue);
+      expect(settled.releasedAt, isNull);
+      expect((await a.client.health()).reportableQuarantineCount, 0);
+      // A decision the refusal does not offer is refused.
+      await expectLater(
+        a.client.resolveRefusedItem(row.id, AlarmResolution.keptOurs),
+        throwsA(isA<StateError>()),
+      );
+    });
+
+    test('a refusal that escalates to an alarm is answered on the alarm, not '
+        'on the row', () async {
+      await plantTamperedEnvelope();
+      final row = (await a.client.quarantined()).single;
+
+      // The decision is one the row could otherwise take: only the alarm guard
+      // stands in the way.
+      await expectLater(
+        a.client.resolveRefusedItem(row.id, AlarmResolution.rejectedPermanently),
+        throwsA(isA<StateError>()),
+      );
+
+      expect((await a.client.quarantined()).single.resolution, isNull);
+      expect(
+        (await a.alarmsByKind())[IntegrityAlarmKind.signatureInvalid.code]!
+            .resolvedAt,
+        isNull,
+      );
+    });
+
+    test('an answer about an accusation raised again since is refused',
+        () async {
+      final planted = await plantTamperedEnvelope();
+
+      await expectLater(
+        a.client.resolveAlarm(
+          planted.alarm.id,
+          AlarmResolution.rejectedPermanently,
+          expectedOccurrenceCount: planted.alarm.occurrenceCount + 1,
+        ),
+        throwsA(isA<StateError>()),
+      );
+
+      final alarm =
+          (await a.alarmsByKind())[IntegrityAlarmKind.signatureInvalid.code]!;
+      expect(alarm.resolution, isNull);
+      expect((await a.client.quarantined()).single.resolution, isNull);
+    });
+
+    test('a resolution the kind does not offer is refused outright', () async {
+      final planted = await plantTamperedEnvelope();
+
+      await expectLater(
+        a.client.resolveAlarm(planted.alarm.id, AlarmResolution.keptOurs),
+        throwsA(isA<StateError>()),
+      );
+
+      // Nothing was written.
+      final alarm =
+          (await a.alarmsByKind())[IntegrityAlarmKind.signatureInvalid.code]!;
+      expect(alarm.resolution, isNull);
+      expect(alarm.resolutionDecidedAt, isNull);
+      expect(alarm.resolvedAt, isNull);
+      expect((await a.client.quarantined()).single.resolution, isNull);
+    });
+
+    test("another Workspace's alarm is not this client's to answer", () async {
+      final planted = await plantTamperedEnvelope();
+      final preferences = await a.preferencesClient;
+
+      await expectLater(
+        preferences.resolveAlarm(
+          planted.alarm.id,
+          AlarmResolution.rejectedPermanently,
+        ),
+        throwsA(isA<StateError>()),
+      );
+      expect(
+        (await a.alarmsByKind())[IntegrityAlarmKind.signatureInvalid.code]!
+            .resolution,
+        isNull,
+      );
+    });
+
+    // --- Taking upstream: the User breaks the fail-closed rule on purpose ---
+
+    /// The withheld-change recipe: the peer's second content op never arrives,
+    /// so its third lands beyond the verified head and is held.
+    ///
+    /// Returns the transport seq of each of the three ops, in order.
+    Future<List<int>> withholdTheMiddleChange() async {
+      final first = await _op(workspace, peer, 'one');
+      final withheld = await _op(workspace, peer, 'two');
+      final third = await _op(workspace, peer, 'three');
+      final appended = await peerSession.postOps(
+        workspace.workspaceId,
+        [first, withheld, third],
+      );
+      workspace.server.omitSeqs.add(appended[1].seq);
+      await a.sync();
+      return [for (final op in appended) op.seq];
+    }
+
+    test('taking upstream applies the held change and settles the alarm',
+        () async {
+      await withholdTheMiddleChange();
+
+      // The later change is held, not applied, and it is the accusation.
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(gap.resolvedAt, isNull);
+      expect((await a.client.health()).actionableAlarmCount, 1);
+      expect(await _doc(a, workspace), {'step': 'one'});
+      final heldBefore = await a.client.quarantined();
+      expect(heldBefore.single.releasedAt, isNull);
+      final logBefore = await a.loggedOps();
+
+      await a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+
+      // The change is in the reduced state now.
+      expect(await _doc(a, workspace), {'step': 'three'});
+      final settled =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(settled.resolution, AlarmResolution.tookUpstream.code);
+      expect(settled.resolutionDecidedAt, isNotNull);
+      expect(settled.resolvedAt, isNotNull);
+      expect((await a.client.health()).clean, isTrue);
+
+      // The row is still held. The decision did not make the change verified,
+      // and the chain release still owns the row.
+      final heldAfter = await a.client.quarantined();
+      expect(heldAfter.single.id, heldBefore.single.id);
+      expect(heldAfter.single.releasedAt, isNull);
+      expect(heldAfter.single.resolution, AlarmResolution.tookUpstream.code);
+
+      // The log is unchanged: a change whose position was never verified is
+      // not written into the log.
+      final logAfter = await a.loggedOps();
+      expect(logAfter.length, logBefore.length);
+      expect(
+        logAfter.map((row) => row.seq).toList(),
+        logBefore.map((row) => row.seq).toList(),
+      );
+    });
+
+    test('a projection that fails leaves the accusation open for another answer',
+        () async {
+      // The same withheld change, over a collection with a domain row: the
+      // failure has to be visible where the User would see it.
+      final first = await _todoOp(workspace, peer, _todoId('one'), 'one');
+      final withheld = await _todoOp(workspace, peer, _todoId('two'), 'two');
+      final third = await _todoOp(workspace, peer, _todoId('three'), 'three');
+      final appended = await peerSession.postOps(
+        workspace.workspaceId,
+        [first, withheld, third],
+      );
+      workspace.server.omitSeqs.add(appended[1].seq);
+      await a.sync();
+
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(
+        await _todoTitles(a),
+        ['one'],
+        reason: 'the held change is not on screen yet',
+      );
+
+      // The projection fails: the change is reduced, but it never reaches the
+      // domain store, so the User never sees it.
+      final original = a.client.projector!;
+      a.client.projector = _FailingOnceProjector(original);
+      await expectLater(
+        a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream),
+        throwsA(isA<StateError>()),
+      );
+
+      // The change is not on screen.
+      expect(
+        await _todoTitles(a),
+        ['one'],
+        reason: 'the change never reached the domain store',
+      );
+
+      // The accusation stands: the answer is still on offer, and the work is
+      // still to be done.
+      final standing =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(standing.resolvedAt, isNull);
+      expect(standing.resolution, isNull);
+      expect(standing.resolutionDecidedAt, isNull);
+      expect((await a.client.health()).actionableAlarmCount, 1);
+
+      // The User answers again, and this time the projection works.
+      a.client.projector = original;
+      await a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+
+      expect(
+        await _todoTitles(a),
+        ['one', 'three'],
+        reason: 'the retry puts the change on screen',
+      );
+      final settled =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(settled.resolution, AlarmResolution.tookUpstream.code);
+      expect(settled.resolutionDecidedAt, isNotNull);
+      expect(settled.resolvedAt, isNotNull);
+      expect((await a.client.health()).clean, isTrue);
+    });
+
+    test('chain release preserves recovery after take upstream projection fails',
+        () async {
+      final first = await _todoOp(workspace, peer, _todoId('one'), 'one');
+      final withheld = await _todoOp(workspace, peer, _todoId('two'), 'two');
+      final third = await _todoOp(workspace, peer, _todoId('three'), 'three');
+      final appended = await peerSession.postOps(
+        workspace.workspaceId,
+        [first, withheld, third],
+      );
+      workspace.server.omitSeqs.add(appended[1].seq);
+      await a.sync();
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      final original = a.client.projector!;
+      a.client.projector = _FailingOnceProjector(original);
+      await expectLater(
+        a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream),
+        throwsA(isA<StateError>()),
+      );
+      expect(await _todoTitles(a), ['one']);
+
+      // The predecessor now heals the chain, but projecting the released
+      // changes fails too. The next pull must retain work to put on screen.
+      workspace.server.omitSeqs.remove(appended[1].seq);
+      await a.client.resetCursorForReplay();
+      a.client.projector = _FailingOnceProjector(original);
+      await expectLater(a.sync(), throwsA(isA<StateError>()));
+      expect((await a.client.quarantined()).single.releasedAt, isNotNull);
+      expect(await _todoTitles(a), ['one']);
+
+      a.client.projector = original;
+      await a.sync();
+      expect(await _todoTitles(a), ['one', 'three', 'two'],
+          reason: 'chain release must not discard unprojected resolution work');
+    });
+
+    test('a prune that settles the gap leaves the accusation standing while '
+        'the take upstream is unprojected', () async {
+      final first = await _todoOp(workspace, peer, _todoId('one'), 'one');
+      final withheld = await _todoOp(workspace, peer, _todoId('two'), 'two');
+      final third = await _todoOp(workspace, peer, _todoId('three'), 'three');
+      final appended = await peerSession.postOps(
+        workspace.workspaceId,
+        [first, withheld, third],
+      );
+      workspace.server.omitSeqs.add(appended[1].seq);
+      await a.sync();
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+
+      // The User answers with *take upstream*, and the projection fails: the
+      // change is reduced, but it never reaches the screen.
+      final original = a.client.projector!;
+      a.client.projector = _FailingOnceProjector(original);
+      await expectLater(
+        a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream),
+        throwsA(isA<StateError>()),
+      );
+      expect(await _todoTitles(a), ['one']);
+
+      // A prune from the compactor attests the held change's own bytes, which
+      // settles the claimant: the gap row is released by the attestation. The
+      // prune is put into the server's log without the server's own admission
+      // checks — the pairing compaction op is not what this case is about.
+      final held = (await a.client.quarantined()).single;
+      expect(held.authorSeq, firstPeerContentAuthorSeq + 2,
+          reason: 'the held change is the peer\'s third one');
+      await workspace.b.client.capturePrune(PrunePayload(
+        compactionOpId: const Uuid().v4(),
+        targets: [
+          PruneTarget(
+            seq: appended[2].seq,
+            authorMemberId: peer.memberId,
+            authorSeq: firstPeerContentAuthorSeq + 2,
+            envelopeHash: envelopeHash(held.envelope),
+          ),
+        ],
+      ));
+      final authored = await workspace.b.client.authoredEnvelopes();
+      workspace.server.injectUnchecked(workspace.workspaceId, authored.last);
+
+      // The prune arrives, and the batch projection fails again, so the
+      // outstanding work is still outstanding when the prune is processed.
+      a.client.projector = _FailingOnceProjector(original);
+      await expectLater(a.sync(), throwsA(isA<StateError>()));
+      // The prune released the held row; the projection of it is still owed.
+      final releasedHeld = (await a.client.quarantined())
+          .singleWhere((row) => row.id == held.id);
+      expect(releasedHeld.releasedAt, isNotNull,
+          reason: 'the prune is what released the claimant');
+      expect(releasedHeld.resolutionProjectedAt, isNull);
+
+      // The accusation stands: the settlement released the claimant, but the
+      // change is still not on the screen, so there is still work to be done
+      // and still something to ask about.
+      final standing =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(standing.resolvedAt, isNull,
+          reason: 'the take upstream has not reached the screen yet');
+      expect((await a.client.health()).actionableAlarmCount, 1);
+
+      // The next pull recovers the work the settlement did not finish.
+      a.client.projector = original;
+      await a.sync();
+      expect(await _todoTitles(a), ['one', 'three'],
+          reason: 'the recovery projects what the prune settled');
+      final settled =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(settled.resolvedAt, isNotNull);
+      expect((await a.client.health()).clean, isTrue);
+    });
+
+    test('a change that arrives after the decision is released, and heals the log',
+        () async {
+      final seqs = await withholdTheMiddleChange();
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      await a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+
+      // The missing change turns up, and the chain heals without asking again.
+      workspace.server.omitSeqs.remove(seqs[1]);
+      await a.client.resetCursorForReplay();
+      await a.sync();
+
+      final released = (await a.client.quarantined()).single;
+      expect(released.releasedAt, isNotNull);
+      // Nothing changed twice: the change that was taken upstream is the state.
+      expect(await _doc(a, workspace), {'step': 'three'});
+      final after =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(after.resolvedAt, isNotNull);
+    });
+
+    test('a rebuild from the log keeps a change that was taken upstream',
+        () async {
+      await withholdTheMiddleChange();
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      await a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+
+      // A rebuild wipes the merge state and replays the log — and the log does
+      // not hold this change, because it was never logged.
+      await a.client.rebuildFromOpLog();
+
+      expect(await _doc(a, workspace), {'step': 'three'});
+    });
+
+    test('a change the device sends after the decision stands the alarm again',
+        () async {
+      await withholdTheMiddleChange();
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      await a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+
+      // The peer's next change, held back as well: a new accusation, and a new
+      // question — the last answer was about the changes held then.
+      final fourth = await _op(workspace, peer, 'four');
+      workspace.server.injectUnchecked(workspace.workspaceId, fourth);
+      await a.sync();
+
+      final after =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(after.resolvedAt, isNull);
+      expect(after.resolution, isNull);
+      expect((await a.client.health()).actionableAlarmCount, 1);
+    });
+
+    test('a held change whose bytes were corrupted stays held, and the alarm stands',
+        () async {
+      await withholdTheMiddleChange();
+      final held = (await a.client.quarantined()).single;
+      // The stored bytes are corrupted after they were stored.
+      final corrupted = Uint8List.fromList(held.envelope);
+      corrupted[headerLengthBytes + 8] ^= 0x01;
+      await (a.database.update(a.database.quarantinedOps)
+            ..where((row) => row.id.equals(held.id)))
+          .write(QuarantinedOpsCompanion(envelope: Value(corrupted)));
+
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      // The answer says out loud that it could not be carried out.
+      await expectLater(
+        a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream),
+        throwsA(isA<StateError>()),
+      );
+
+      // The change could not be read, so it was not taken: the row stays
+      // undecided, and an undecided row keeps the accusation standing.
+      expect(await _doc(a, workspace), {'step': 'one'});
+      final after = (await a.client.quarantined()).single;
+      expect(after.id, held.id);
+      expect(after.resolution, isNull);
+      expect(after.releasedAt, isNull);
+      final stillStanding =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(stillStanding.resolvedAt, isNull);
+      expect(stillStanding.resolution, isNull);
+      expect((await a.client.health()).actionableAlarmCount, 1);
+    });
+
+    test('a held change whose header disagrees with its row is not applied',
+        () async {
+      await withholdTheMiddleChange();
+      final held = (await a.client.quarantined()).single;
+      // The row claims a position its own header does not hold.
+      await (a.database.update(a.database.quarantinedOps)
+            ..where((row) => row.id.equals(held.id)))
+          .write(QuarantinedOpsCompanion(authorSeq: Value(held.authorSeq! + 1)));
+
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      await expectLater(
+        a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream),
+        throwsA(isA<StateError>()),
+      );
+
+      expect(await _doc(a, workspace), {'step': 'one'});
+      final after = (await a.client.quarantined()).single;
+      expect(after.resolution, isNull);
+      final stillStanding =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(stillStanding.resolvedAt, isNull);
+      expect((await a.client.health()).actionableAlarmCount, 1);
+    });
+
+    test('a held change written for another Workspace is left undecided',
+        () async {
+      await peerSession.postOps(
+        workspace.workspaceId,
+        [await _op(workspace, peer, 'one')],
+      );
+      await a.sync();
+      final cursorBefore = await a.cursor();
+
+      // The peer signed this change for a different Workspace, far enough ahead
+      // of its chain here to be held as a gap. It is served at a position the
+      // cursor has already passed.
+      final otherWorkspaceId = _uuid.v4();
+      workspace.clock.advance(10);
+      final foreign = await peer.nextEnvelope(
+        otherWorkspaceId,
+        authorSeq: peer.nextAuthorSeq + 2,
+        advance: false,
+        payloadJson: jsonEncode({
+          'collection': _harnessCollection,
+          'id': _docId(workspace),
+          'fields': {
+            'step': {'v': 'foreign'},
+          },
+          'hlc': [workspace.clock.nowMs, 0, memberIdToHex(peer.memberId)],
+        }),
+      );
+      workspace.server.injectUnchecked(
+        workspace.workspaceId,
+        foreign,
+        atSeq: cursorBefore,
+      );
+      workspace.server.ignoreSinceParameter = true;
+      await a.sync();
+
+      final held = (await a.client.quarantined())
+          .where((row) => row.reason == SyncRejectionReason.authorChainGap.code)
+          .single;
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(gap.resolvedAt, isNull);
+
+      await expectLater(
+        a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream),
+        throwsA(isA<StateError>()),
+      );
+
+      expect(await _doc(a, workspace), {'step': 'one'});
+      final after = (await a.client.quarantined())
+          .singleWhere((row) => row.id == held.id);
+      expect(after.resolution, isNull);
+      final stillStanding =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(stillStanding.resolvedAt, isNull);
+      expect((await a.client.health()).actionableAlarmCount, 1);
+    });
+
+    // --- Keeping ours on a rollback: the upload is in flight ----------------
+
+    /// The rollback recipe: the server forgets a write it had acknowledged.
+    ///
+    /// Two writes are acknowledged, the server drops the last one, and this
+    /// device authors a third — so the flush is refused and the server says it
+    /// expects a position this device has already written past.
+    Future<IntegrityAlarmRow> rollTheServerBack() async {
+      await a.authorLocal(workspace, 'one');
+      await a.authorLocal(workspace, 'two');
+      await a.sync();
+      final ownSeqs = [
+        for (final row in await a.loggedOps())
+          if (row.authorMemberId == a.identity.memberId) row.seq,
+      ]..sort();
+      workspace.server.rollbackToSeq(ownSeqs.last - 1);
+      await a.authorLocal(workspace, 'three');
+      await a.sync();
+      return (await a.alarmsByKind())[IntegrityAlarmKind.ownWritesRollback.code]!;
+    }
+
+    /// The author positions the server holds under this device's key.
+    List<int> serverAuthorSeqs() => [
+          for (final op in workspace.server.storedOps)
+            if (op.workspaceId == workspace.workspaceId &&
+                op.header?.authorMemberId == a.identity.memberId)
+              op.header!.authorSeq,
+        ];
+
+    /// The outbox rows this device has yet to have acknowledged.
+    Future<List<int>> unsentAuthorSeqs() async {
+      final rows = await (a.database.select(a.database.outbox)
+            ..where((row) => row.sentAt.isNull()))
+          .get();
+      return [for (final row in rows) row.authorSeq]..sort();
+    }
+
+    test('keeping ours on a rollback re-sends this device\'s own writes',
+        () async {
+      final rollback = await rollTheServerBack();
+      expect(rollback.resolvedAt, isNull);
+      expect(
+        resolutionsOfferedForAlarmRow(rollback),
+        [AlarmResolution.keptOurs],
+        reason: 'the rollback knows the position to repost from',
+      );
+      final authoredBefore = await a.client.authoredEnvelopes();
+
+      await a.client.resolveAlarm(rollback.id, AlarmResolution.keptOurs);
+
+      // The decision is recorded; the accusation stands until the upload is
+      // acknowledged.
+      final decided =
+          (await a.alarmsByKind())[IntegrityAlarmKind.ownWritesRollback.code]!;
+      expect(decided.resolution, AlarmResolution.keptOurs.code);
+      expect(decided.resolutionDecidedAt, isNotNull);
+      expect(decided.resolvedAt, isNull);
+
+      // Two writes are queued again, so the device is busy rather than broken.
+      final unsent = await unsentAuthorSeqs();
+      expect(unsent.length, 2);
+      final health = await a.client.health();
+      expect(health.actionableAlarmCount, 0);
+      expect(health.unresolvedAlarmCount, 1);
+      expect(health.pendingOpCount, 2);
+      expect(
+        syncStatusFor(
+          enrolment: EnrolmentState.enrolled,
+          hasMemberCredential: true,
+          health: [health],
+        ),
+        SyncStatus.syncing,
+      );
+
+      final after = await a.sync();
+
+      // The server holds this device's writes again.
+      expect(serverAuthorSeqs(), containsAll(unsent));
+      final settled =
+          (await a.alarmsByKind())[IntegrityAlarmKind.ownWritesRollback.code]!;
+      expect(settled.resolvedAt, isNotNull);
+      expect(settled.resolution, AlarmResolution.keptOurs.code);
+      expect(after.clean, isTrue);
+      expect(
+        syncStatusFor(
+          enrolment: EnrolmentState.enrolled,
+          hasMemberCredential: true,
+          health: [after],
+        ),
+        SyncStatus.synced,
+      );
+
+      // The same signed bytes: nothing was rebuilt, re-signed or re-numbered.
+      final authoredAfter = await a.client.authoredEnvelopes();
+      expect(authoredAfter.length, authoredBefore.length);
+      for (var index = 0; index < authoredBefore.length; index++) {
+        expect(
+          sameBytes(authoredAfter[index], authoredBefore[index]),
+          isTrue,
+          reason: 'op $index is the bytes this device signed the first time',
+        );
+      }
+    });
+
+    test('a flush that read its queue before the answer does not settle it',
+        () async {
+      final rollback = await rollTheServerBack();
+      final from = rollback.repostFromAuthorSeq!;
+
+      // The server holds this device's write at the agreed position again — a
+      // restore, the same bytes this device signed. The queued write can go
+      // out, so the flush below is accepted.
+      final lost = await _outboxEnvelope(a, from);
+      workspace.server.injectUnchecked(workspace.workspaceId, lost);
+
+      // A flush is already running when the User answers: it read its queue
+      // before the answer, so it carries the queued write and not the re-send
+      // the answer asked for.
+      final gate = Completer<void>();
+      a.link.postGate = gate;
+      final flush = a.client.flushOutbox();
+      await a.link.postGateReached.future;
+
+      // The User answers while the flush is holding its batch. The gate is
+      // released and the flush joined on every path, so a failed answer leaves
+      // no upload waiting behind it — and is still the failure that is seen.
+      try {
+        await a.client.resolveAlarm(rollback.id, AlarmResolution.keptOurs);
+      } finally {
+        if (!gate.isCompleted) gate.complete();
+        a.link.postGate = null;
+        await flush;
+      }
+
+      // The decision is recorded, but the re-send has not been acknowledged:
+      // the flush never carried the bytes from the agreed position.
+      final decided =
+          (await a.alarmsByKind())[IntegrityAlarmKind.ownWritesRollback.code]!;
+      expect(decided.resolution, AlarmResolution.keptOurs.code);
+      expect(decided.resolvedAt, isNull);
+      expect(
+        await unsentAuthorSeqs(),
+        contains(from),
+        reason: 'the write from the agreed position is still queued',
+      );
+      // The acknowledgement the old flush brought back belongs to the old
+      // queue: the write it carried was re-queued with the rest, and the
+      // server may have lost it in the rollback the answer is about.
+      expect(
+        await unsentAuthorSeqs(),
+        [from, from + 1],
+        reason: 'a pre-answer acknowledgement does not count toward the re-send',
+      );
+
+      // The re-send goes out, and only then does the accusation close.
+      await a.client.flushOutbox();
+      final settled =
+          (await a.alarmsByKind())[IntegrityAlarmKind.ownWritesRollback.code]!;
+      expect(settled.resolvedAt, isNotNull);
+    });
+
+    test('a re-raise behind the settlement does not close the new accusation',
+        () async {
+      final rollback = await rollTheServerBack();
+      final from = rollback.repostFromAuthorSeq!;
+
+      await a.client.resolveAlarm(rollback.id, AlarmResolution.keptOurs);
+
+      // The re-send goes out, and the settlement that follows it is the moment
+      // the accusation is closed. A refusal that arrives in that window is a
+      // new accusation — the server forgot this device's writes again, and
+      // further back — and the answer the User gave was about the smaller one.
+      arrival.arrival = (executor) async {
+        final store = SyncDatabase(executor);
+        await (store.update(store.integrityAlarms)
+              ..where((row) => row.id.equals(rollback.id)))
+            .write(IntegrityAlarmsCompanion(
+          occurrenceCount: Value(rollback.occurrenceCount + 1),
+          resolvedAt: const Value(null),
+          resolution: const Value(null),
+          resolutionDecidedAt: const Value(null),
+          repostFromAuthorSeq: Value(from - 1),
+        ));
+      };
+
+      await a.client.flushOutbox();
+
+      // The new accusation stands: it is a question, and the answer to the
+      // older one cannot close it.
+      final after =
+          (await a.alarmsByKind())[IntegrityAlarmKind.ownWritesRollback.code]!;
+      expect(after.resolvedAt, isNull);
+      expect(after.resolution, isNull);
+      expect(after.resolutionDecidedAt, isNull);
+      expect(after.occurrenceCount, rollback.occurrenceCount + 1);
+      expect(after.repostFromAuthorSeq, from - 1);
+      expect((await a.client.health()).actionableAlarmCount, 1);
+    });
+
+    test('a re-raise before the answer is recorded leaves the new accusation '
+        'and the outbox alone', () async {
+      final rollback = await rollTheServerBack();
+      final from = rollback.repostFromAuthorSeq!;
+      final unsentBefore = await unsentAuthorSeqs();
+
+      // The server forgets this device's writes again while the User is
+      // answering: a new accusation, about a position further back, and the
+      // answer the User gave was about the smaller one. It lands on the first
+      // write to the accusation table — the moment the decision is stamped —
+      // which is inside the very transaction that records the answer.
+      arrival.arrival = (executor) async {
+        final store = SyncDatabase(executor);
+        await (store.update(store.integrityAlarms)
+              ..where((row) => row.id.equals(rollback.id)))
+            .write(IntegrityAlarmsCompanion(
+          occurrenceCount: Value(rollback.occurrenceCount + 1),
+          resolvedAt: const Value(null),
+          resolution: const Value(null),
+          resolutionDecidedAt: const Value(null),
+          repostFromAuthorSeq: Value(from - 1),
+        ));
+      };
+
+      await expectLater(
+        a.client.resolveAlarm(rollback.id, AlarmResolution.keptOurs),
+        throwsA(isA<StateError>()),
+        reason: 'the answer was about an accusation that no longer stands',
+      );
+
+      // The new accusation stands unanswered: it is a question, and the stale
+      // answer cannot close it.
+      final after =
+          (await a.alarmsByKind())[IntegrityAlarmKind.ownWritesRollback.code]!;
+      expect(after.resolvedAt, isNull);
+      expect(after.resolution, isNull);
+      expect(after.resolutionDecidedAt, isNull);
+      expect(after.occurrenceCount, rollback.occurrenceCount + 1);
+      expect(after.repostFromAuthorSeq, from - 1);
+
+      // And the outbox is untouched: a stale answer queues no range, so the
+      // writes the server expects are not re-sent on the old position.
+      expect(await unsentAuthorSeqs(), unsentBefore);
+      expect((await a.client.health()).actionableAlarmCount, 1);
+    });
+
+    test('a server holding a position this device never wrote offers no answer',
+        () async {
+      // The other half of the rollback verdict: the server holds a position
+      // under this device's key that this device never wrote. There is no
+      // agreed position to repost from, so there is nothing to offer — and no
+      // answer to refuse.
+      final ahead = await a.identity.signer.buildEnvelope(
+        OpHeader(
+          workspaceId: workspace.workspaceId,
+          opClass: opClassContent,
+          opId: _uuid.v4(),
+          authorMemberId: a.identity.memberId,
+          authorKeyId: a.identity.keyId,
+          authorSeq: 9,
+        ),
+        frameBody(Uint8List.fromList(utf8.encode('{"collection":"test"}'))),
+      );
+      workspace.server.injectUnchecked(workspace.workspaceId, ahead);
+      await a.sync();
+      await a.authorLocal(workspace, 'mine');
+      await peerSession.postOps(
+        workspace.workspaceId,
+        [await _op(workspace, peer, 'from the peer')],
+      );
+      await a.sync();
+
+      final rollback =
+          (await a.alarmsByKind())[IntegrityAlarmKind.ownWritesRollback.code]!;
+      expect(rollback.repostFromAuthorSeq, isNull);
+      expect(resolutionsOfferedForAlarmRow(rollback), isEmpty);
+      await expectLater(
+        a.client.resolveAlarm(rollback.id, AlarmResolution.keptOurs),
+        throwsA(isA<StateError>()),
+      );
+    });
+
+    test('a rollback again before the upload stands the alarm again', () async {
+      final rollback = await rollTheServerBack();
+      await a.client.resolveAlarm(rollback.id, AlarmResolution.keptOurs);
+
+      // The server forgets this device's writes again, before the re-send goes
+      // out. The refusal is a new accusation, and it takes the decision with
+      // it: the last answer was about the writes the server had then.
+      workspace.server.rollbackToSeq(0);
+      await a.sync();
+
+      final after =
+          (await a.alarmsByKind())[IntegrityAlarmKind.ownWritesRollback.code]!;
+      expect(after.resolution, isNull);
+      expect(after.resolutionDecidedAt, isNull);
+      expect(after.resolvedAt, isNull);
+      expect((await a.client.health()).actionableAlarmCount, 1);
     });
   });
 
