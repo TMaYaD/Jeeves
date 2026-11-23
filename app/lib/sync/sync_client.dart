@@ -1132,6 +1132,11 @@ class SyncClient {
   /// device restored off an older local backup, so the detail names both. The
   /// response is identical either way — retain the outbox, re-number nothing —
   /// and un-wedging is an operator action that needs the user in the loop.
+  ///
+  /// Three outcomes raise `own_writes_rollback`: the server expects a position
+  /// at or below the acknowledged head (carries the repost position), beyond
+  /// anything this device authored, or more than one past the acknowledged head
+  /// (the last two carry none). Anything else raises nothing.
   Future<void> _recordOwnWritesVerdict(AuthorChainConflictException conflict) async {
     final expected = conflict.expectedAuthorSeq;
     if (expected == null) {
@@ -1167,6 +1172,27 @@ class SyncClient {
         detail: 'the server expects author_seq $expected, beyond the $authored '
             'this device has ever authored — something may be authoring under '
             "this device's key.",
+      );
+      return;
+    }
+    // Between the two: the server holds a position this device never sent, but
+    // this device has authored past it. A re-post of an op the server already
+    // holds is answered as a duplicate before the position check, so a refusal
+    // more than one past the acknowledged head means the server holds, under
+    // this device's key, an op this outbox never sent. Exactly one past
+    // (`acknowledged + 1`) stays silent: a flush that read its queue before a
+    // *keep ours* answer is refused at precisely the first unsent position, and
+    // the next flush settles it.
+    if (expected > acknowledged + 1) {
+      await _raiseAlarm(
+        IntegrityAlarmKind.ownWritesRollback,
+        authorMemberId: identity.memberId,
+        detail: 'the server expects author_seq $expected, past the '
+            '$acknowledged it has acknowledged from this device, and this '
+            'device never sent the positions in between — something may be '
+            "authoring under this device's key, or this device was restored "
+            'from an older local backup. The outbox is retained and nothing is '
+            're-numbered.',
       );
     }
   }
