@@ -26,6 +26,13 @@ String habitFocusPath(String habitId) => '/habits/$habitId/focus';
 void openHabitFocus(BuildContext context, String habitId) =>
     context.push(habitFocusPath(habitId));
 
+/// Route of one Habit's Check-in calendar, a full screen on every width.
+String habitCalendarPath(String habitId) => '/habits/$habitId/calendar';
+
+/// Opens the Check-in calendar of [habitId].
+void openHabitCalendar(BuildContext context, String habitId) =>
+    context.push(habitCalendarPath(habitId));
+
 /// Opens the detail of [habitId] (or a new draft when null).
 ///
 /// [justCreated] shows the "new" banner once. [replace] swaps the current

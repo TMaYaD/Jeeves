@@ -27,6 +27,8 @@ import 'habit_flash_banner.dart';
 import 'habit_routes.dart';
 import 'habit_row.dart';
 import 'habit_sheets.dart';
+import 'widgets/habit_history_strip.dart';
+import 'widgets/habit_stats_block.dart';
 
 /// Banners already shown this session, so one shows once. Memory only.
 final Set<String> _seenFlashKeys = {};
@@ -455,6 +457,7 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
             habit: habit,
             today: habitDateFromDayKey(_today)!,
           ),
+        if (habit != null) ..._history(habit.id),
         const Divider(),
         _FieldRow(
           rowKey: const Key('habit_row_checkin'),
@@ -549,6 +552,19 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
         if (!isDraft) ..._actions(context, habit, state),
       ],
     );
+  }
+
+  /// The stats block, the five-month strip and the rate tiles.
+  List<Widget> _history(String habitId) {
+    final progress = ref.watch(habitProgressProvider(habitId));
+    if (progress == null) return const [];
+    return [
+      const SizedBox(height: 8),
+      HabitStatsBlock(progress: progress),
+      HabitHistoryStrip(habitId: habitId),
+      HabitRateTiles(progress: progress),
+      const SizedBox(height: 8),
+    ];
   }
 
   String _anchorText(HabitAnchorChoice anchor, Habit? target) {
