@@ -2,9 +2,9 @@
 
 <!-- This document describes the current state of the system. Rewrite sections when they become inaccurate. Do not append change logs. -->
 
-Jeeves is offline-first. Local writes go to the embedded SQLite store immediately, and are replicated between devices by the **op log** — signed ops over the minimal sync server — as soon as the device is enrolled and reachable ([ADR-0026](./adr/0026-minimal-sync-server.md), [ADR-0034](./adr/0034-sync-starts-at-enrolment.md)). Replication runs through the **sync host**, which owns the merge state; the op log and the **vault** are plugins behind it, and one plugin runs at a time (#914). There is one replication engine on the device, and no second (#595).
+Jeeves is offline-first. Local writes go to the embedded SQLite store immediately, and are replicated between devices by the **op log** — signed ops over the minimal sync server — as soon as the device is enrolled and reachable ([ADR-0026](./adr/0026-minimal-sync-server.md), [ADR-0034](./adr/0034-sync-starts-at-enrolment.md)). Replication runs through the **sync host**, which owns the merge state; the op log and the **vault** are plugins behind it, and one plugin runs at a time (#914). There is one replication engine on the device, and no second (#595). Habit tables have no codec: not on the wire or in the export.
 
-This document is about **merge**: how two devices that wrote concurrently end up agreeing, with the focus on the `user_preferences` synced key-value store, whose keys are the ones where blanket last-write-wins is sometimes the wrong answer.
+This document is about **merge**: how two devices that wrote concurrently end up agreeing, with the focus on the `user_preferences` synced key-value store, where blanket last-write-wins is sometimes wrong.
 
 For where this sits in the system see [ARCHITECTURE.md § The sync spine](./ARCHITECTURE.md#the-sync-spine); for the vocabulary, [CONTEXT.md § Sync](../CONTEXT.md#sync).
 
@@ -108,7 +108,7 @@ A stored end later than the next Sprint's start (closed late on an offline devic
 
 Bypassed Outcomes add three collections, `focus_session_planning_bypasses`, `focus_session_reschedules` (one row per session and Outcome, replaced by a later edit) and `outcome_bypass_decisions` (append-only), each registered in `collection_codecs.dart` and carried by the initial upload like any domain collection. Jeeves works without them leaving the device: they are ordinary local rows first.
 
-`focus_session_tasks.pinned_start_at` is the start time the user set on a Plan entry (an `instant`); it merges last-write-wins per field like `disposition`, and clearing it writes a null.
+`focus_session_tasks.pinned_start_at` is the start time the user set on a Plan entry; it merges last-write-wins per field like `disposition`, and clearing it writes a null. So do `batch_id` and `batch_suggestion_declined_at`.
 
 ### Device names
 
@@ -148,11 +148,11 @@ A remote change is always projected on arrival. `DomainProjector.project`
 (`sync/domain_projector.dart`) gives the reason for each.
 ## The vault: a folder of Markdown pages
 
-The vault is the first plugin behind the host ([sync-plugins](proposals/sync-plugins.md)). It carries the device's merged state to a folder of pages a person can read, grep and edit, and brings back what they changed. It needs no account and no server: a file syncer of the person's choosing carries the folder between devices.
+The vault is the first plugin behind the host ([sync-plugins](proposals/sync-plugins.md)). It carries the device's merged state to a folder of pages a person can read and edit, and brings back their changes. It needs no account and no server: a file syncer of the person's choosing carries the folder between devices.
 
-**It is a carrier, like any plugin.** It turns a page into changes and writes the host's merged state back as a page. It never chooses between two values and never writes a value the host did not give it; the one thing it authors is a clock for a hand edit, minted with `SyncHost.mintClock()`. It reads merged state through `SyncHost.mergedEntity` rather than comparing clocks itself.
+**It is a carrier, like any plugin.** It turns a page into changes and writes the host's merged state back as a page. It never chooses between two values and never writes a value the host did not give it; the one thing it authors is a clock for a hand edit, minted with `SyncHost.mintClock()`.
 
-**What is on a page.** One page per Outcome (`Outcomes/`), one sheet per FocusSession (`Sessions/`), one page per Capture (`Inbox/`). A sheet's name carries the session's UTC date and its id, so two sittings on one day never collide. A page's identity is the `id` in its frontmatter, never its path. **What a person can edit is what a page shows**: an Outcome's title, intent, due date and notes, its Actions as a checklist, a Capture's clarification stamp, and the Labels and Area the page shows. The rest of a page is the app's to write.
+**What is on a page.** One page per Outcome (`Outcomes/`), one sheet per FocusSession (`Sessions/`), one per Capture (`Inbox/`). A sheet's name carries the session's UTC date and its id, so sittings never collide. A page's identity is the `id` in its frontmatter, never its path. **What a person can edit is what a page shows**: an Outcome's title, intent, due date and notes, its Actions as a checklist, a Capture's clarification stamp, and the Labels and Area the page shows. The rest of a page is the app's to write.
 
 **A page is a pure function of merged state**: the same state always renders the same bytes, in the same order and in UTC, so two devices in the same state write the same file and a file syncer never sees a conflict between them. The readable part is frontmatter, notes, and a final `## Actions` heading that is always written; everything between the frontmatter and that heading is the notes, byte for byte.
 
@@ -184,17 +184,20 @@ int, bool and null pass through as JSON natives. A column that changes its Dart
 type changes its encoding, and that is a protocol change.
 
 **Entity ids.** Normal collections keep client-random UUIDs. Two kinds are
-deterministic, and must be: `user_preferences` derives its id from
+deterministic: `user_preferences` derives its id from
 `(workspace, key)`, and junctions derive theirs from their pair. The rule is in
-`app/lib/sync/ids.dart`, and the Tag collection is named there explicitly as one
+`app/lib/sync/ids.dart`, and the Tag collection is named there as one
 that must *not* derive — a Tag's op-log identity is its random `id`, while
 `(name, type)` is only its user-facing identity, which is why duplicates are
-representable and folded rather than prevented
+representable and folded, not prevented
 ([ADR-0043](adr/0043-tag-duplicates-are-representable-and-folded.md)).
+
+**One stored value for Label.** Label is `type='context'`; the reconciler
+retypes any `'label'` Tag to it before folding.
 
 **One Project per Outcome.** Each Outcome–Project link is its own entity, so two
 Devices assigning different Projects while apart leave two live links that
-last-write-wins never compares. The reconciler's third pass keeps the link with
+last-write-wins never compares. The one-Project pass keeps the link with
 the greatest clock (ties: smaller tag id) and unassigns the rest by tombstone;
 the winner is not re-asserted, so a later assignment elsewhere still beats it.
 
@@ -212,7 +215,7 @@ authors nothing: its tombstone would drop an assignment a peer had just made.
 
 `SyncHealth.clean` is a derived getter over queue depth, unresolved alarms and
 quarantine count — never a stored status, so a wedged device cannot report itself
-healthy by writing down that it is.
+healthy by writing it down.
 
 ## Refusals
 
@@ -247,7 +250,7 @@ through.
 | `prune_attestation_divergence` | reported | none — #660 | No mechanism exists to contest a compactor's attestation. |
 | Unknown code, self-healing refusal | — | none | Listed (unknown) or hidden (self-healing), as the classification says. |
 
-Decisions are stored on the refused change, the alarm, or both; bytes are kept.
+Decisions are recorded; bytes are kept.
 
 ## What is asserted, and where
 

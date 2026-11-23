@@ -61,8 +61,21 @@ class NotificationService {
 
   final _plugin = FlutterLocalNotificationsPlugin();
 
+  /// Registers the plugin's callbacks.
+  ///
+  /// [onNotificationResponse] is the foreground callback. It runs on the main
+  /// isolate, so it may be a closure that captures what it needs.
+  ///
+  /// [onBackgroundNotificationResponse] is the background callback. The plugin
+  /// starts a separate Flutter engine for it and calls it through a callback
+  /// handle, and **only a top-level or static function has one**: a closure
+  /// that captures anything has no handle, and the plugin asserts on it in
+  /// debug and dereferences a null handle in release, so the app never starts.
+  /// The function the app registers is
+  /// `notification_background_entry_point.dart`'s.
   static Future<void> initialize({
     void Function(NotificationResponse)? onNotificationResponse,
+    void Function(NotificationResponse)? onBackgroundNotificationResponse,
   }) async {
     tz_data.initializeTimeZones();
     // flutter_timezone 5.x returns TimezoneInfo; .identifier gives the IANA string.
@@ -111,7 +124,7 @@ class NotificationService {
     await instance._plugin.initialize(
       settings: InitializationSettings(android: android, iOS: iOS),
       onDidReceiveNotificationResponse: onNotificationResponse,
-      onDidReceiveBackgroundNotificationResponse: onNotificationResponse,
+      onDidReceiveBackgroundNotificationResponse: onBackgroundNotificationResponse,
     );
   }
 

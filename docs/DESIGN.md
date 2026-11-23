@@ -531,12 +531,13 @@ their reasons so that a new surface can reuse the same contract.
 | [`OutcomeRow`](../app/lib/widgets/outcome_row.dart) | Optional leading slot, title (normal, muted or struck), secondary line, metadata (default `OutcomeMetaLine`), optional trailing slot. Flat or framed with r12 border and h16/v12 padding. | Whole-row tap and long-press callbacks. No ink or chevron when no tap callback exists. |
 | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Banner (icon, text, tone), people chips, title, current Action, notes, optional metadata and actions. Absent Action and notes are omitted. | Injected `ProcessToHandlers` or resolution buttons. |
 | Outcome detail / [`OutcomeAttributeStrip`](../app/lib/widgets/outcome_attribute_strip.dart) | Title → editable attribute strip → contexts → people → Plan → notes. Strip uses the metadata order with shared attribute editors. | Each editable chip has an ancestor tap target; logged time stays read-only. |
+| [`HabitCheckInMark`](../app/lib/widgets/habit_check_in_mark.dart) | 28px circle in a 48px tap target, theme colours: `primary` ring (open), filled with `onPrimary` check (done), ring with `add` (measurable, below target), dashed `outline` ring with `remove` (not due), `outline` ring on `surfaceContainerHighest` with `pause` (paused). | Tap on open, done and add-amount; none when not due or paused. |
 
 Energy uses purple `#7C3AED` and `bolt_outlined`; estimate uses blue `#2563EB`
 and `timer_outlined`; logged time uses green `#16A34A` and
 `history_toggle_off_outlined`; due uses red `#DC2626` and `event_outlined`.
 `formatMinutesLabel` renders durations as `45m`, `2h` or `2h 5m`.
-`energyLevelLabel` preserves unknown values. `formatDueDateLabel` converts to
+`formatDueDateLabel` converts to
 local time and renders `MMM d, y` (for example, `Nov 9, 2026`).
 
 ### Surface inventory
@@ -554,11 +555,10 @@ Paths are under `app/lib/`; DPR means Daily Planning and ES means Evening Shutdo
 | ES settled — `screens/shutdown/steps/settled_review_step.dart` | Settlement icon, title, estimate vs actual, added-during-the-day tag | Framed `OutcomeRow` | None |
 | ES disposition — `screens/shutdown/steps/unfinished_tasks_step.dart` | Title, current Action, notes, estimate, logged, added-during-the-day tag | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Done (verdict sheet) / Roll over / Return to Next / Defer |
 | Weekly review — `screens/periodic_review/steps/list_review_step.dart` | Banner, people, title, current Action, notes | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Injected `ProcessToHandlers` |
-| Focus — `screens/focus_screen.dart` | Title, due, estimate, sprint hint, added-during-the-day tag | Flat `OutcomeRow`, trailing Start/status | Open detail; Start/Resume |
-| Focus carried-over — `screens/focus_screen.dart` | Muted title, estimate | Flat `OutcomeRow`, leading icon | None |
+| Focus — `screens/focus_screen.dart` | Title, due, estimate, sprint hint, added-during-the-day tag; carried-over: muted title, estimate | Flat `OutcomeRow`, trailing Start/status | Open detail; Start/Resume |
 | Search — `screens/search/widgets/search_result_tile.dart` | Title, snippet, match hint, status | Flat `OutcomeRow` | Capture → clarify; Outcome → detail |
-| GTD lists / Project — `screens/common/gtd_list_screen.dart` | Title, energy, estimate, due when set | Flat `OutcomeRow` | Open detail; long-press multi-selects |
-| Waiting For — `screens/waiting_for/waiting_for_screen.dart` | Title, energy, estimate, due when set | Flat `OutcomeRow`, grouped by person | Open detail; long-press multi-selects |
+| GTD lists / Project / Waiting For (grouped by person) — `screens/common/gtd_list_screen.dart` | Title, energy, estimate, due when set | Flat `OutcomeRow` | Open detail; long-press multi-selects |
+| Habit list and detail — `screens/habits/habits_screen.dart` | Title, anchor, state; notes, Check-in, Repeat, Area, Labels, energy, estimate | Detail beside the list from 840 px; theme colours | Edit in place; sheets with Done/Cancel; pause, archive, restore |
 | Linked Outcomes — `widgets/capture_outcomes_section.dart` | Title, next Action, contexts, Capture provenance count | Framed `OutcomeRow` | Unlink |
 
 ### Deliberate variations

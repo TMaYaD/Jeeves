@@ -12,6 +12,11 @@ import '../../sync/collection_codecs.dart';
 import '../../sync/ids.dart' show captureTagIdFor, todoTagIdFor;
 import '../../utils/tag_colors.dart';
 import '../gtd_database.dart';
+import 'focus_session_dao.dart' show FocusSessionDao;
+// `habit_tags` is the third junction that references `tags.id`: it holds a
+// Habit's Area and Labels. Its derived id lives with the Habit writes, in
+// `habit_dao.dart`.
+import 'habit_dao.dart' show habitTagIdFor;
 
 export '../../sync/ids.dart' show todoTagIdFor;
 
@@ -27,7 +32,7 @@ class TagWithCount {
   final int count;
 }
 
-@DriftAccessor(tables: [Tags, TodoTags, Todos, CaptureTags])
+@DriftAccessor(tables: [Tags, TodoTags, Todos, CaptureTags, HabitTags])
 class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   TagDao(super.db);
 
@@ -102,6 +107,35 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
           ..orderBy([(t) => OrderingTerm.asc(t.id)])
           ..limit(1))
         .getSingleOrNull();
+  }
+
+  /// The context tags of the open session's Plan Outcomes, keyed by Outcome id,
+  /// live (issue #407). Only tags of type `context` are returned, in name order;
+  /// an Outcome with none is absent. Reads the same open session as
+  /// [FocusSessionDao]'s Plan queries.
+  Stream<Map<String, List<({String id, String name})>>>
+      watchContextTagsForActiveSessionPlan() {
+    return customSelect(
+      'SELECT fst.task_id AS task_id, tags.id AS tag_id, tags.name AS tag_name '
+      'FROM focus_session_tasks fst '
+      'JOIN todo_tags tt ON tt.todo_id = fst.task_id '
+      'JOIN tags ON tags.id = tt.tag_id AND tags.type = \'context\' '
+      'WHERE fst.focus_session_id = (SELECT id FROM focus_sessions '
+      'WHERE ended_at IS NULL '
+      '${FocusSessionDao.openSessionWinnerFirstSql} LIMIT 1) '
+      'ORDER BY tags.name, tags.id',
+      variables: [],
+      readsFrom: {attachedDatabase.focusSessionTasks, attachedDatabase.focusSessions, todoTags, tags},
+    ).watch().map((rows) {
+      final byTask = <String, List<({String id, String name})>>{};
+      for (final row in rows) {
+        (byTask[row.read<String>('task_id')] ??= []).add((
+          id: row.read<String>('tag_id'),
+          name: row.read<String>('tag_name'),
+        ));
+      }
+      return byTask;
+    });
   }
 
   /// Stream of tags of [type] paired with their active-task count.
@@ -347,10 +381,10 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   /// Merge [sourceTagId] into [targetTagId] — the *user's* deliberate fold, as
   /// opposed to [foldDuplicateTags]' automatic one.
   ///
-  /// Repoints every `todo_tags` row **and** every `capture_tags` row that
-  /// references [sourceTagId] to [targetTagId] (an item holding both ends up
-  /// with exactly one link to the target), then deletes the source tag. Colour
-  /// and name of the target are kept.
+  /// Repoints every `todo_tags` row, every `capture_tags` row **and** every
+  /// `habit_tags` row that references [sourceTagId] to [targetTagId] (an item
+  /// holding both ends up with exactly one link to the target), then deletes
+  /// the source tag. Colour and name of the target are kept.
   ///
   /// Throws [ArgumentError] if [sourceTagId] equals [targetTagId] — a
   /// self-merge would silently delete the tag and strip every association — or
@@ -401,6 +435,11 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   /// tag. Does not stamp `last_clarified_at`: removing an entry from a
   /// management list is not thinking about each Outcome. Returns without
   /// writing when [tagId] is unknown.
+  ///
+  /// A Habit's `habit_tags` row goes too, and **without a tombstone**: the
+  /// habit tables are local until Habits sync, so there is no op to author and
+  /// no peer to tell. The row would otherwise sit on as an orphan pointing at
+  /// a tag that is gone — invisible to the read, but still a row.
   Future<void> deleteTag(String tagId) {
     return attachedDatabase.capturing(() async {
       final existing = await (select(tags)..where((t) => t.id.equals(tagId)))
@@ -413,6 +452,7 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
           .get();
       await (delete(todoTags)..where((tt) => tt.tagId.equals(tagId))).go();
       await (delete(captureTags)..where((ct) => ct.tagId.equals(tagId))).go();
+      await (delete(habitTags)..where((ht) => ht.tagId.equals(tagId))).go();
       for (final row in todoJunctions) {
         _tombstoneTodoTag(row.todoId, tagId);
       }
@@ -465,6 +505,44 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
     return {for (final r in rows) r.read<String>('tag_id')};
   }
 
+  /// Retype every Tag still carrying the retired `'label'` type to `'context'`.
+  ///
+  /// Labels used to be stored under two `tags.type` values: `'context'` — the
+  /// `@` rows every released build already shows as its Labels — and `'label'`,
+  /// what the sync cutover minted surplus Areas as, which no surface showed.
+  /// One value backs Labels now, and this is what folds the other into it.
+  ///
+  /// **The tag id does not change**, so every link to the Tag stays exactly
+  /// where it was: an Outcome's assignment (`todo_tags`) and a Capture's tag
+  /// hint (`capture_tags`) both reference the tag by id. Only the `type` field
+  /// is written.
+  ///
+  /// **It travels as an op**, so a peer's copy is retyped too: the write goes
+  /// through [upsertTag], which describes the field change to the capture seam.
+  /// That is what lets two devices converge on one value — and it needs no wire
+  /// step, because a peer on an older build reads `'context'` as its Label
+  /// surface already (docs/SYNC.md).
+  ///
+  /// Idempotent: with no retired row it writes nothing and authors no op.
+  /// Returns the number of rows retyped.
+  Future<int> retypeRetiredLabelTags() {
+    return attachedDatabase.capturing(() async {
+      final retired = await (select(tags)
+            ..where((t) => t.type.equals(retiredLabelTagType))
+            ..orderBy([(t) => OrderingTerm.asc(t.id)]))
+          .get();
+      if (retired.isEmpty) return 0;
+      for (final tag in retired) {
+        await upsertTag(TagsCompanion(
+          id: Value(tag.id),
+          type: const Value(labelTagType),
+        ));
+      }
+      attachedDatabase.notifyTagsViewWrite();
+      return retired.length;
+    });
+  }
+
   /// Collapse every duplicate `(name, type)` group onto one surviving Tag.
   ///
   /// The fold pass of `DomainReconciler`. `(name, type)` is the user-facing
@@ -487,12 +565,18 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
   /// the peer's duplicate. References on the losers are repointed by
   /// [repointTagReferences]; the loser itself is tombstoned, never merely deleted.
   ///
+  /// With [userId] set, only that account's rows are grouped, so a same-name
+  /// row left on the device by another account is never folded into it. The
+  /// reconciler and the startup fold pass none: they fold the whole store.
+  ///
   /// Idempotent: with no duplicate group it authors nothing and writes nothing.
-  Future<void> foldDuplicateTags() {
+  Future<void> foldDuplicateTags({String? userId}) {
     return attachedDatabase.capturing(() async {
       final groups = await customSelect(
         'SELECT name, type, MIN(id) AS keep_id FROM tags '
+        '${userId == null ? '' : 'WHERE user_id = ? '}'
         'GROUP BY name, type HAVING COUNT(*) > 1',
+        variables: [if (userId != null) Variable<String>(userId)],
         readsFrom: {tags},
       ).get();
       if (groups.isEmpty) return;
@@ -503,6 +587,7 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
               ..where((t) =>
                   t.name.equals(group.read<String>('name')) &
                   t.type.equals(group.read<String>('type')) &
+                  (userId == null ? const Constant(true) : t.userId.equals(userId)) &
                   t.id.equals(keepId).not()))
             .get();
 
@@ -556,19 +641,29 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
     required String to,
   }) =>
       attachedDatabase.capturing(() async {
+        // The destination was chosen before this scope began. If it has gone
+        // since (merged away or deleted), moving references onto it would
+        // strand them again, so they stay where they are.
+        final destination = await (select(tags)..where((t) => t.id.equals(to)))
+            .getSingleOrNull();
+        if (destination == null) return;
         await _repointTagReferences(from: from, to: to);
         attachedDatabase.notifyTodosViewWrite(includeTodoTags: true);
         attachedDatabase.notifyCapturesViewWrite();
       });
 
-  /// Repoint **both** junction tables that reference `tags.id`.
+  /// Repoint **every** junction table that references `tags.id`.
   ///
-  /// `todo_tags` and `capture_tags` — both, because FK enforcement is off (#637)
-  /// so an orphaned junction row is not an error but a silently invisible Tag
-  /// assignment or tag hint. Each junction's identity is its pair, so the row
-  /// moves by inserting the derived id for `(parent, to)` and deleting the old
-  /// one; a `(parent, to)` row that already existed collapses under the primary
-  /// key via `INSERT OR REPLACE`.
+  /// `todo_tags`, `capture_tags` and `habit_tags` — all three, because FK
+  /// enforcement is off (#637) so an orphaned junction row is not an error but
+  /// a silently invisible Tag assignment, tag hint or Habit Label. Each
+  /// junction's identity is its pair, so the row moves by inserting the
+  /// derived id for `(parent, to)` and deleting the old one; a `(parent, to)`
+  /// row that already existed collapses under the primary key via
+  /// `INSERT OR REPLACE`.
+  ///
+  /// The `habit_tags` rows move **without an op**: the habit tables are local
+  /// until Habits sync, so there is nothing to author and no peer to tell.
   Future<void> _repointTagReferences({
     required String from,
     required String to,
@@ -611,6 +706,26 @@ class TagDao extends DatabaseAccessor<GtdDatabase> with _$TagDaoMixin {
         await (delete(captureTags)..where((ct) => ct.id.equals(row.id))).go();
       }
       _tombstoneCaptureTag(row.captureId, from);
+    }
+
+    // The Habit's Area and Labels. No op is authored: the habit tables are
+    // local until Habits sync.
+    final habitJunctions =
+        await (select(habitTags)..where((ht) => ht.tagId.equals(from))).get();
+    for (final row in habitJunctions) {
+      final movedId = habitTagIdFor(row.habitId, to);
+      await into(habitTags).insert(
+        HabitTagsCompanion.insert(
+          id: movedId,
+          habitId: row.habitId,
+          tagId: to,
+          userId: row.userId,
+        ),
+        mode: InsertMode.insertOrReplace,
+      );
+      if (row.id != movedId) {
+        await (delete(habitTags)..where((ht) => ht.id.equals(row.id))).go();
+      }
     }
   }
 

@@ -577,35 +577,3 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
     await svc.cancelSprintNotifications();
   }
 }
-
-// ---------------------------------------------------------------------------
-// Batching suggestion helpers
-// ---------------------------------------------------------------------------
-
-/// Returns micro-tasks from [todayTasks] that collectively fit in one sprint.
-///
-/// Micro-tasks have [Todo.timeEstimate] ≤ 15 min. Batching is suggested when
-/// 2+ micro-tasks fit within [sprintMinutes] (default 20).
-List<Todo> findBatchingCandidates(List<Todo> todayTasks,
-    {int sprintMinutes = 20}) {
-  final microTasks = todayTasks
-      .where((t) => t.timeEstimate != null && t.timeEstimate! <= 15)
-      .toList()
-    ..sort((a, b) => (a.timeEstimate ?? 0).compareTo(b.timeEstimate ?? 0));
-
-  if (microTasks.length < 2) return [];
-
-  // Greedy accumulation (smallest-first) — finds the largest subset that fits
-  // in one sprint rather than requiring *all* micro-tasks to fit.
-  var budget = 0;
-  final candidates = <Todo>[];
-  for (final task in microTasks) {
-    final est = task.timeEstimate ?? 0;
-    if (budget + est <= sprintMinutes) {
-      budget += est;
-      candidates.add(task);
-    }
-  }
-
-  return candidates.length >= 2 ? candidates : [];
-}
