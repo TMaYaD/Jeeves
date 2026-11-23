@@ -7,6 +7,9 @@
 /// Habit's time and names the stack's Habits that are still for that day.
 library;
 
+import 'dart:async';
+
+import 'package:flutter/widgets.dart';
 import 'package:timezone/timezone.dart' as tz;
 
 import '../database/daos/habit_dao.dart' show HabitAnchorKind;
@@ -16,6 +19,7 @@ import '../models/habit_days.dart';
 import '../models/habit_progress.dart';
 import '../models/habit_stack.dart';
 import 'due_date_notifications.dart' show dueDateNotificationId;
+import 'notification_service.dart' show NotificationService;
 
 /// The payload prefix of a habit notification. Distinct from `outcome:`
 /// (due dates), `nudge:` (Rituals) and `focus` (sprints).
@@ -502,4 +506,149 @@ bool _isInactiveOn(List<HabitInactivePeriod> periods, String dayKey) {
     if (endsBefore == null || dayKey.compareTo(endsBefore) < 0) return true;
   }
   return false;
+}
+
+// ---------------------------------------------------------------------------
+// The reconciler
+// ---------------------------------------------------------------------------
+
+/// What the OS holds for the habit notifications: `pending` are still
+/// scheduled; `pendingPayloads` maps a pending id to the payload it carries;
+/// `delivered` already fired and sit in the tray.
+typedef HabitNotificationsOnDevice = ({
+  Set<int> pending,
+  Map<int, String> pendingPayloads,
+  Set<int> delivered,
+});
+
+/// Keeps the OS's scheduled habit notifications equal to the plan.
+///
+/// The plan is derived from the Habit histories, so the reconciler watches
+/// them and re-plans after every write: a Habit that is checked in, paused,
+/// archived, restored or edited changes what should be pending.
+///
+/// One reconciliation runs at a time.
+class HabitNotificationReconciler {
+  HabitNotificationReconciler({
+    required this.notifications,
+    required this.histories,
+    tz.Location Function()? location,
+    DateTime Function()? now,
+  })  : _location = location ?? (() => tz.local),
+        _now = now ?? DateTime.now;
+
+  /// The OS boundary.
+  final NotificationService notifications;
+
+  /// The Habit histories the plan is made from.
+  final Stream<List<HabitHistory>> histories;
+
+  final tz.Location Function() _location;
+  final DateTime Function() _now;
+
+  List<HabitHistory> _latest = const [];
+  bool _rescheduleAll = false;
+  Future<void> _queue = Future.value();
+  StreamSubscription<List<HabitHistory>>? _subscription;
+  AppLifecycleListener? _lifecycleListener;
+
+  /// Starts listening. [listenToLifecycle] registers the timezone re-check on
+  /// app resume; it needs a bound widgets binding.
+  void start({bool listenToLifecycle = true}) {
+    _subscription = histories.listen((latest) {
+      _latest = latest;
+      _enqueue(() => _reconcile());
+    });
+    if (listenToLifecycle) {
+      _lifecycleListener = AppLifecycleListener(onResume: onResumed);
+    }
+  }
+
+  /// Re-reads the device timezone; if it changed, every notification is
+  /// re-scheduled at its wall-clock time in the new zone.
+  Future<void> onResumed() => _enqueue(() async {
+        final changed = await notifications.refreshLocalTimezone();
+        _rescheduleAll = changed;
+        await _reconcile();
+      });
+
+  /// Completes once every reconciliation queued so far has finished.
+  Future<void> settled() => _queue;
+
+  void dispose() {
+    _subscription?.cancel();
+    _lifecycleListener?.dispose();
+  }
+
+  Future<void> _enqueue(Future<void> Function() job) {
+    _queue = _queue.then((_) => job()).catchError((Object e, StackTrace s) {
+      debugPrint('Habit notification reconcile failed: $e\n$s');
+    });
+    return _queue;
+  }
+
+  Future<void> _reconcile() async {
+    // Ask the OS what is actually pending and delivered; never infer delivery
+    // from the clock, since an inexact alarm can fire minutes late.
+    final onDevice = await notifications.habitNotificationsOnDevice();
+    // Plan only after the awaited device query: it can take long enough for
+    // an alarm to fire meanwhile. Planning earlier would call that alarm
+    // still-future, cancel its fresh tray entry and re-schedule a passed time.
+    final plan = planHabitNotifications(
+      histories: _latest,
+      now: _now(),
+      location: _location(),
+    );
+    final desiredIds = {for (final entry in plan.upcoming) entry.id};
+    // A notification whose time has passed is kept: it may be on its way, and
+    // cancelling it would lose it.
+    final keepIds = <int>{...desiredIds, ...plan.passedToday.map((e) => e.id)};
+    final passedFireTimes = <(int, int)>{
+      for (final entry in plan.passedToday)
+        (entry.id, entry.fireAt.millisecondsSinceEpoch),
+    };
+
+    // A pending alarm the plan no longer wants is obsolete (the Habit was
+    // checked in, paused, archived, or its time moved) — unless it is
+    // unchanged and merely late: the Habit is still for that day, the time
+    // has passed, and the instant recorded in the alarm equals the one
+    // planned today. Android may deliver such an alarm minutes late, so it
+    // must survive.
+    for (final id in onDevice.pending.difference(desiredIds)) {
+      final recorded =
+          parseHabitNotificationPayload(onDevice.pendingPayloads[id])?.atMillis;
+      final unchangedAwaitingDelivery = recorded != null &&
+          passedFireTimes.contains((id, recorded));
+      if (!unchangedAwaitingDelivery) {
+        await notifications.cancelReminder(id);
+      }
+    }
+    // A delivered notification stays in the tray while its Habit is still
+    // for that day, and goes once it is not (checked in, paused, archived,
+    // time edited): the stale entry goes.
+    for (final id in onDevice.delivered.difference(keepIds)) {
+      await notifications.cancelReminder(id);
+    }
+    for (final entry in plan.upcoming) {
+      final pendingPayload = onDevice.pendingPayloads[entry.id];
+      // Skip only when the OS still holds this exact alarm: it may have
+      // dropped it (app data cleared by a task killer, channel deleted) while
+      // we ran.
+      if (!_rescheduleAll && pendingPayload == entry.payload) continue;
+      try {
+        await notifications.scheduleHabitNotification(
+          id: entry.id,
+          title: entry.title,
+          body: entry.body,
+          fireAt: entry.fireAt,
+          payload: entry.payload,
+        );
+      } catch (e) {
+        // One refused alarm does not stop the rest: the next reconciliation
+        // tries again.
+        debugPrint('Habit notification $entry.id was not scheduled: $e');
+      }
+    }
+    _rescheduleAll = false;
+  }
 }
