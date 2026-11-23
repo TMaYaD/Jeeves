@@ -6,6 +6,8 @@
 /// [NotificationService]) and the router are substituted.
 library;
 
+import 'dart:async';
+
 import 'package:drift/native.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -18,6 +20,7 @@ import 'package:jeeves/database/daos/habit_dao.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/habit_commitment.dart';
 import 'package:jeeves/models/habit_progress.dart';
+import 'package:jeeves/providers/auth_provider.dart';
 import 'package:jeeves/providers/clock_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/habit_check_in_outbox.dart';
@@ -28,6 +31,27 @@ import 'package:jeeves/services/notification_service.dart';
 import '../test_helpers.dart';
 
 const _userId = 'local';
+
+/// The account a signed-in device holds its Habits under.
+const _accountId = 'acct-1';
+
+/// A session restore that has not answered yet, and then answers with the
+/// account — the production [AuthNotifier]'s shape, with the server left out.
+class _PendingRestore extends AuthNotifier {
+  _PendingRestore(this._restore);
+
+  final Completer<String?> _restore;
+
+  @override
+  Future<String?> build() async {
+    // Suspended first, as the production arm is: it writes the user id only
+    // after `restore()` has answered, and a write before the first await
+    // trips Riverpod's "no modifying other providers while building" assert.
+    final token = await _restore.future;
+    ref.read(currentUserIdProvider.notifier).setUserId(_accountId);
+    return token;
+  }
+}
 
 void main() {
   setUpAll(() {
@@ -75,9 +99,10 @@ void main() {
   Future<String> createHabit({
     required String title,
     HabitCommitmentDraft commitment = defaultNewHabitCommitment,
+    String userId = _userId,
   }) async {
     final id = await db.habitDao.createHabit(
-      userId: _userId,
+      userId: userId,
       title: title,
       today: '2026-11-20',
       now: now,
@@ -85,7 +110,7 @@ void main() {
     );
     await db.habitDao.setAnchor(
       habitId: id,
-      userId: _userId,
+      userId: userId,
       today: '2026-11-20',
       now: now,
       kind: HabitAnchorKind.clockTime,
@@ -127,6 +152,14 @@ void main() {
       throw StateError('No Habit $habitId');
     });
     return history.checkIns;
+  }
+
+  Future<List<String>> outboxKeys() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs
+        .getKeys()
+        .where((k) => k.startsWith(kHabitCheckInOutboxKeyPrefix))
+        .toList();
   }
 
   test('a tap becomes one Check-in with that id, day and instant', () async {
@@ -203,5 +236,62 @@ void main() {
 
     expect(os.days, isNot(contains('2026-11-20')));
     expect(os.days, contains('2026-11-21'));
+  });
+
+  test('a Check in waits for the session, then is written for the account',
+      () async {
+    // A Habit of a signed-in account: its row carries the account's id, not
+    // the 'local' placeholder the device starts on.
+    final id = await createHabit(title: 'Stretch', userId: _accountId);
+    await tapCheckIn(id);
+
+    // The drainer is read while the stored session is still being restored —
+    // the cold start's order: the app reads its providers, and the account's
+    // id only arrives once the restore has answered.
+    final restore = Completer<String?>();
+    final app = ProviderContainer(
+      overrides: [
+        databaseProvider.overrideWithValue(db),
+        authTokenProvider.overrideWith(() => _PendingRestore(restore)),
+      ],
+    );
+    addTearDown(app.dispose);
+    app.read(habitCheckInOutboxDrainerProvider);
+    await pumpEventQueue();
+
+    // Nothing was written, and nothing was lost: the entry is still out
+    // there, waiting for the user it belongs to.
+    expect(await checkInsOf(id), isEmpty);
+    expect(await outboxKeys(), hasLength(1));
+
+    // The session is restored: the account's id arrives.
+    restore.complete('access-token');
+    await pumpEventQueue();
+    await pumpEventQueue();
+
+    // The Check-in is written, once, for the account.
+    final checkIns = await checkInsOf(id);
+    expect(checkIns, hasLength(1));
+    expect(checkIns.single.countsForDay, '2026-11-20');
+    expect(checkIns.single.checkedInAt, '2026-11-20T01:00:00.000Z');
+    expect(await outboxKeys(), isEmpty);
+  });
+
+  test('a Check in for another user is kept, not dropped', () async {
+    // The Habit belongs to the account; the drain runs as the 'local'
+    // placeholder, so the write is refused as another user's.
+    final id = await createHabit(title: 'Stretch', userId: _accountId);
+    await tapCheckIn(id);
+
+    expect(await drain(), 0);
+    expect(await checkInsOf(id), isEmpty);
+    // The entry waits: a Check-in is not lost to a fault that may pass.
+    expect(await outboxKeys(), hasLength(1));
+
+    // The account's id arrives, and the entry is written.
+    container.read(currentUserIdProvider.notifier).setUserId(_accountId);
+    expect(await drain(), 1);
+    expect(await checkInsOf(id), hasLength(1));
+    expect(await outboxKeys(), isEmpty);
   });
 }

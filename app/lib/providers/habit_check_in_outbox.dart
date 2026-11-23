@@ -116,10 +116,17 @@ Future<void> appendHabitCheckIn(PendingHabitCheckIn entry) async {
 /// Writes every outboxed Check-in through the Habit DAO, oldest first, and
 /// removes each entry once it is written. Returns how many were written.
 ///
-/// An entry the DAO refuses — the Habit became measurable since the tap, or
-/// it is gone — is dropped with a [debugPrint], so it cannot wedge the
-/// outbox. Entries appended while this runs are untouched and picked up next
-/// time.
+/// **An entry is removed only when it can never be written.** Two facts about
+/// the Habit settle that, and neither of them changes: the Habit is gone, and
+/// the Habit has become measured against a target, so its Check-in needs an
+/// amount the notification did not carry. Every other failure — a database
+/// error, or a Habit that belongs to another user because the session has
+/// not been restored yet — leaves the entry for the next drain, so a Check-in
+/// is not lost to a fault that may pass.
+///
+/// An entry that cannot be read at all is dropped, so one bad entry cannot
+/// wedge the outbox. Entries appended while this runs are untouched and
+/// picked up next time.
 Future<int> drainHabitCheckInOutbox({
   required HabitDao dao,
   required String userId,
@@ -136,28 +143,72 @@ Future<int> drainHabitCheckInOutbox({
   var applied = 0;
   for (final key in keys) {
     final entry = PendingHabitCheckIn.tryParse(prefs.getString(key) ?? '');
-    if (entry != null) {
-      try {
-        await dao.addCheckIn(
-          habitId: entry.habitId,
-          userId: userId,
-          countsForDay: entry.countsForDay,
-          now: entry.at,
-          checkInId: entry.checkInId,
-        );
-        applied++;
-      } catch (e) {
-        debugPrint('A habit Check-in from a notification was not written: $e');
-      }
+    if (entry == null) {
+      await prefs.remove(key); // an unreadable entry is dropped, not retried
+      continue;
     }
-    await prefs.remove(key); // an unreadable entry is dropped, not retried
+    final outcome = await _writeCheckIn(dao, userId, entry);
+    if (outcome == _CheckInOutcome.retryLater) continue;
+    if (outcome == _CheckInOutcome.written) applied++;
+    await prefs.remove(key);
   }
   return applied;
+}
+
+/// What one outboxed Check-in needs from the drain.
+enum _CheckInOutcome {
+  /// The Check-in is in the database.
+  written,
+
+  /// The Check-in can never be written: the Habit is gone, or it has become
+  /// measured against a target. The entry is dropped.
+  neverWritable,
+
+  /// The Check-in could not be written now, but may be later: a database
+  /// error, or a Habit that belongs to another user. The entry waits.
+  retryLater,
+}
+
+/// Writes one outboxed Check-in, and says whether the entry may go.
+Future<_CheckInOutcome> _writeCheckIn(
+  HabitDao dao,
+  String userId,
+  PendingHabitCheckIn entry,
+) async {
+  try {
+    // A Habit that is not there cannot be checked in to, now or later.
+    final habit = await dao.habitById(entry.habitId);
+    if (habit == null) return _CheckInOutcome.neverWritable;
+    // A Habit that belongs to another user is what a drain sees before the
+    // stored session has been restored: the entry waits for the right user.
+    if (habit.userId != userId) return _CheckInOutcome.retryLater;
+    await dao.addCheckIn(
+      habitId: entry.habitId,
+      userId: userId,
+      countsForDay: entry.countsForDay,
+      now: entry.at,
+      checkInId: entry.checkInId,
+    );
+    return _CheckInOutcome.written;
+  } on ArgumentError {
+    // The Habit became measured against a target since the tap, so its
+    // Check-in needs an amount the notification did not carry.
+    return _CheckInOutcome.neverWritable;
+  } catch (e) {
+    debugPrint('A habit Check-in from a notification was not written: $e');
+    return _CheckInOutcome.retryLater;
+  }
 }
 
 /// Keeps the outbox drained for the life of the app. Read once from the app
 /// root. Drains on every app resume and right after a foreground notification
 /// response.
+///
+/// **The drain waits for the stored session.** `'local'` is the pre-auth
+/// placeholder, so a drain that ran before the restore would write as
+/// `'local'` and every Habit of a signed-in account would refuse it as
+/// another user's — and the Check-in would be lost. The drain runs once the
+/// session has been restored, and again whenever that changes.
 final habitCheckInOutboxDrainerProvider = Provider<void>((ref) {
   var running = false;
   var rerunRequested = false;
@@ -172,6 +223,9 @@ final habitCheckInOutboxDrainerProvider = Provider<void>((ref) {
       do {
         rerunRequested = false;
         if (!ref.mounted) return;
+        // The session has to be restored first: until it is, the user id is
+        // the 'local' placeholder and the account's Habits refuse the write.
+        if (!ref.read(authSessionRestoredProvider)) return;
         await drainHabitCheckInOutbox(
           dao: ref.read(databaseProvider).habitDao,
           userId: ref.read(currentUserIdProvider),
@@ -191,7 +245,11 @@ final habitCheckInOutboxDrainerProvider = Provider<void>((ref) {
     habitCheckInOutboxChanged.removeListener(onOutboxChanged);
   });
 
-  unawaited(run());
+  // The drain runs once the session has been restored, and again when it
+  // changes: a sign-in replaces the account the outbox is written for.
+  ref.listen(authSessionRestoredProvider, (_, restored) {
+    if (restored) unawaited(run());
+  }, fireImmediately: true);
 });
 
 class _ResumeObserver with WidgetsBindingObserver {

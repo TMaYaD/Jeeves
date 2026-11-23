@@ -119,16 +119,6 @@ class PlannedHabitNotification {
 
   /// The payload the OS hands back on a tap.
   final String payload;
-
-  /// Whether this entry is the same notification as [other]: the same stack,
-  /// day, wording and button.
-  bool sameAs(PlannedHabitNotification other) =>
-      namedHabitIds.join(',') == other.namedHabitIds.join(',') &&
-      day == other.day &&
-      title == other.title &&
-      body == other.body &&
-      action == other.action &&
-      fireAt.isAtSameMomentAs(other.fireAt);
 }
 
 /// The payload of a habit notification:
@@ -678,7 +668,7 @@ class HabitNotificationReconciler {
       } catch (e) {
         // One refused alarm does not stop the rest: the next reconciliation
         // tries again.
-        debugPrint('Habit notification $entry.id was not scheduled: $e');
+        debugPrint('Habit notification ${entry.id} was not scheduled: $e');
       }
     }
     _rescheduleAll = false;

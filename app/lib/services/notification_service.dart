@@ -129,6 +129,17 @@ class NotificationService {
                 kPeriodicReviewActionSkip, 'Skip this week'),
           ],
         ),
+        // The "Check in" button of a Habit's notification. iOS shows an
+        // action button only for a registered category, so a habit
+        // notification without this entry carries no button at all.
+        DarwinNotificationCategory(
+          kNotificationActionHabitCheckIn,
+          actions: [
+            // Plain: the Check in runs without opening the app.
+            DarwinNotificationAction.plain(
+                kNotificationActionHabitCheckIn, 'Check in'),
+          ],
+        ),
       ],
     );
     await instance._plugin.initialize(

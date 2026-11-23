@@ -30,6 +30,21 @@ class CurrentUserIdNotifier extends Notifier<String> {
   void reset() => state = 'local';
 }
 
+/// Whether the stored session has been restored on this device.
+///
+/// **`'local'` is a placeholder, not an account.** Until the restore has
+/// run, [currentUserIdProvider] says nothing about which account the device
+/// holds, so anything that writes as a particular user waits for this. A
+/// write made before the restore names `'local'`, and every row of a
+/// signed-in account refuses it as another user's.
+final authSessionRestoredProvider = Provider<bool>((ref) {
+  final auth = ref.watch(authTokenProvider);
+  // `AsyncLoading` is the restore still running. `AsyncData` and
+  // `AsyncError` are both a settled answer: the device is signed in, or it
+  // is signed out, or the restore failed and the device stays `'local'`.
+  return auth is! AsyncLoading;
+});
+
 // ---------------------------------------------------------------------------
 // Auth token provider
 // ---------------------------------------------------------------------------
