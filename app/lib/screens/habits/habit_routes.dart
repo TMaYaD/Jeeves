@@ -17,6 +17,13 @@ const habitNewPath = '/habits/new';
 /// Route of one Habit's detail on a phone.
 String habitDetailPath(String habitId) => '/habits/$habitId';
 
+/// Route of one Habit's Check-in calendar, a full screen on every width.
+String habitCalendarPath(String habitId) => '/habits/$habitId/calendar';
+
+/// Opens the Check-in calendar of [habitId].
+void openHabitCalendar(BuildContext context, String habitId) =>
+    context.push(habitCalendarPath(habitId));
+
 /// Opens the detail of [habitId] (or a new draft when null).
 ///
 /// [justCreated] shows the "new" banner once. [replace] swaps the current
