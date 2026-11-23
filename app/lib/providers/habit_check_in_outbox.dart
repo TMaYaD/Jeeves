@@ -207,8 +207,8 @@ Future<_CheckInOutcome> _writeCheckIn(
 /// **The drain waits for the stored session.** `'local'` is the pre-auth
 /// placeholder, so a drain that ran before the restore would write as
 /// `'local'` and every Habit of a signed-in account would refuse it as
-/// another user's — and the Check-in would be lost. The drain runs once the
-/// session has been restored, and again whenever that changes.
+/// another user's — and the Check-in would be lost. The drain waits for the
+/// restore, and runs again when the account changes.
 final habitCheckInOutboxDrainerProvider = Provider<void>((ref) {
   var running = false;
   var rerunRequested = false;
@@ -225,7 +225,8 @@ final habitCheckInOutboxDrainerProvider = Provider<void>((ref) {
         if (!ref.mounted) return;
         // The session has to be restored first: until it is, the user id is
         // the 'local' placeholder and the account's Habits refuse the write.
-        if (!ref.read(authSessionRestoredProvider)) return;
+        await _awaitRestoredSession(ref);
+        if (!ref.mounted) return;
         await drainHabitCheckInOutbox(
           dao: ref.read(databaseProvider).habitDao,
           userId: ref.read(currentUserIdProvider),
@@ -245,12 +246,27 @@ final habitCheckInOutboxDrainerProvider = Provider<void>((ref) {
     habitCheckInOutboxChanged.removeListener(onOutboxChanged);
   });
 
-  // The drain runs once the session has been restored, and again when it
+  // The drain runs once the session is there, and again when the account
   // changes: a sign-in replaces the account the outbox is written for.
-  ref.listen(authSessionRestoredProvider, (_, restored) {
-    if (restored) unawaited(run());
-  }, fireImmediately: true);
+  ref.listen(currentUserIdProvider, (_, _) => unawaited(run()),
+      fireImmediately: true);
 });
+
+/// Waits for the stored session to be restored.
+///
+/// The device starts on the `'local'` placeholder, which is not an account:
+/// a write made before the restore names no account, and the rows of a
+/// signed-in account refuse it. A restore that fails leaves the device
+/// signed out, and the drain then runs as `'local'` — where an entry it
+/// cannot write waits for the next drain rather than being lost.
+Future<void> _awaitRestoredSession(Ref ref) async {
+  try {
+    await ref.read(authTokenProvider.future);
+  } catch (_) {
+    // The restore failed. The device keeps the placeholder, and the drain
+    // runs for it.
+  }
+}
 
 class _ResumeObserver with WidgetsBindingObserver {
   _ResumeObserver(this._onResumed);
