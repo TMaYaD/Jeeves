@@ -43,6 +43,7 @@ class HabitFocusNotifier extends Notifier<SprintTimerState> {
 
   HabitTimeLog? _openLog;
   List<HabitSprint> _sprints = const [];
+  int _reloadGeneration = 0;
   Habit? _habit;
 
   @override
@@ -65,6 +66,10 @@ class HabitFocusNotifier extends Notifier<SprintTimerState> {
       ref.read(focusSettingsProvider).sprintDurationMinutes;
   int get _breakMinutes =>
       ref.read(focusSettingsProvider).shortBreakDurationMinutes;
+  int get _longBreakMinutes =>
+      ref.read(focusSettingsProvider).longBreakDurationMinutes;
+  int get _sprintsBeforeLongBreak =>
+      ref.read(focusSettingsProvider).sprintsBeforeLongBreak;
   String get _userId => ref.read(currentUserIdProvider);
 
   /// Starts a Focus on [habitId], or adopts the one already open on it.
@@ -113,13 +118,20 @@ class HabitFocusNotifier extends Notifier<SprintTimerState> {
   /// Starts the next Sprint of the open Focus.
   Future<void> startSprint() async {
     if (!state.isActive || state.isProcessing) return;
-    await _awaitSyncedSettings();
-    await ref.read(databaseProvider).habitFocusDao.startHabitSprint(
-          userId: _userId,
-          plannedSprintMinutes: _sprintMinutes,
-          now: ref.read(clockProvider)(),
-        );
-    await _reload();
+    state = state.copyWith(isProcessing: true);
+    try {
+      await _awaitSyncedSettings();
+      await ref.read(databaseProvider).habitFocusDao.startHabitSprint(
+            userId: _userId,
+            plannedSprintMinutes: _sprintMinutes,
+            now: ref.read(clockProvider)(),
+          );
+      await _reload();
+    } finally {
+      if (!_disposed && state.isProcessing) {
+        state = state.copyWith(isProcessing: false);
+      }
+    }
   }
 
   /// Stops: ends the running Sprint and the open log.
@@ -150,6 +162,7 @@ class HabitFocusNotifier extends Notifier<SprintTimerState> {
 
   Future<void> _reload() async {
     if (_disposed) return;
+    final generation = ++_reloadGeneration;
     final db = ref.read(databaseProvider);
     final log = await db.habitFocusDao.openHabitTimeLog(_userId);
     var sprints = const <HabitSprint>[];
@@ -160,7 +173,8 @@ class HabitFocusNotifier extends Notifier<SprintTimerState> {
           ? _habit
           : await db.habitDao.habitById(log.habitId);
     }
-    if (_disposed) return;
+    // A newer reload started meanwhile: its result is the later read.
+    if (_disposed || generation != _reloadGeneration) return;
     _openLog = log;
     _sprints = sprints;
     _habit = habit;
@@ -175,6 +189,8 @@ class HabitFocusNotifier extends Notifier<SprintTimerState> {
       sprints: _sprints,
       sprintMinutesSetting: _openLog == null ? 20 : _sprintMinutes,
       breakMinutesSetting: _openLog == null ? 3 : _breakMinutes,
+      longBreakMinutesSetting: _longBreakMinutes,
+      sprintsBeforeLongBreakSetting: _sprintsBeforeLongBreak,
       estimateMinutes: _habit?.timeEstimateMinutes,
       now: ref.read(clockProvider)(),
       habitTitle: _habit?.title,

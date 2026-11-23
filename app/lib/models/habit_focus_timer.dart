@@ -6,7 +6,9 @@
 /// Outcome function: the two clocks never share a record.
 library;
 
+import '../database/daos/sprint_dao.dart' show SprintRecord;
 import '../database/gtd_database.dart';
+import 'long_break.dart';
 import '../providers/sprint_timer_provider.dart'
     show SprintPhase, SprintTimerState;
 
@@ -27,7 +29,8 @@ int _sprintsInEstimate(int? estimateMinutes, int sprintMinutes) {
 /// * The latest Sprint of the log is running: focus, or focus overtime once
 ///   `started_at + planned length` has passed.
 /// * The latest Sprint ended: break, or break overtime once
-///   `ended_at + break length` has passed.
+///   `ended_at + break length` has passed. The Break is the long one when
+///   `longBreakDecision` says so over the log's own Sprints, as for an Outcome.
 /// * An open log with no Sprint yet: idle, naming Sprint 1.
 ///
 /// [sprints] are the Sprints of [openLog], oldest first. `activeTaskId` and
@@ -38,6 +41,8 @@ SprintTimerState deriveHabitSprintTimerState({
   required List<HabitSprint> sprints,
   required int sprintMinutesSetting,
   required int breakMinutesSetting,
+  required int longBreakMinutesSetting,
+  required int sprintsBeforeLongBreakSetting,
   required int? estimateMinutes,
   required DateTime now,
   String? habitTitle,
@@ -64,6 +69,37 @@ SprintTimerState deriveHabitSprintTimerState({
       ? DateTime.parse(latest!.startedAt).toUtc().toLocal()
       : null;
 
+  // Which Break follows the latest Sprint: the long one when the run of the
+  // log's Sprints has spent its budget (issue #911), the short one otherwise.
+  // A running Sprint has no Break after it yet and reads short.
+  final longBreak = latest == null || latest.endedAt == null
+      ? null
+      : longBreakDecision(
+          sprints: [
+            for (final s in inLog)
+              SprintRecord(
+                id: s.id,
+                userId: s.userId,
+                actionId: s.habitId,
+                startedAtUtc: DateTime.parse(s.startedAt).toUtc(),
+                endedAtUtc: s.endedAt == null
+                    ? null
+                    : DateTime.parse(s.endedAt!).toUtc(),
+                storedEndedAtUtc: s.endedAt == null
+                    ? null
+                    : DateTime.parse(s.endedAt!).toUtc(),
+                plannedDurationMinutes: s.plannedDurationMinutes,
+              ),
+          ],
+          sprintId: latest.id,
+          sprintDurationMinutes: sprintMinutesSetting,
+          shortBreakDurationMinutes: breakMinutesSetting,
+          longBreakDurationMinutes: longBreakMinutesSetting,
+          sprintsBeforeLongBreak: sprintsBeforeLongBreakSetting,
+        );
+  final isLongBreak = longBreak?.isLong ?? false;
+  final breakMinutes = isLongBreak ? longBreakMinutesSetting : breakMinutesSetting;
+
   SprintTimerState build({
     required SprintPhase phase,
     required int sprintNumber,
@@ -82,7 +118,9 @@ SprintTimerState deriveHabitSprintTimerState({
       total: total,
       overtime: overtime,
       sprintDurationMinutes: sprintMinutes,
-      currentBreakDurationMinutes: breakMinutesSetting,
+      currentBreakDurationMinutes: breakMinutes,
+      isLongBreak: isLongBreak,
+      longBreakSprintCount: isLongBreak ? longBreak!.sprintCount : 0,
       lastBreakDurationMinutes: breakMinutesSetting,
       lastBreakEndedAt: lastBreakEndedAt,
     );
@@ -111,7 +149,7 @@ SprintTimerState deriveHabitSprintTimerState({
 
   if (latest != null && latest.endedAt != null) {
     final endedAtUtc = DateTime.parse(latest.endedAt!).toUtc();
-    final total = Duration(minutes: breakMinutesSetting);
+    final total = Duration(minutes: breakMinutes);
     final breakEndsAtUtc = endedAtUtc.add(total);
     if (nowUtc.isBefore(breakEndsAtUtc)) {
       return build(

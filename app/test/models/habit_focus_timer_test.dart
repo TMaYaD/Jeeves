@@ -35,6 +35,8 @@ void main() {
         sprints: sprints,
         sprintMinutesSetting: 25,
         breakMinutesSetting: 5,
+        longBreakMinutesSetting: 15,
+        sprintsBeforeLongBreakSetting: 4,
         estimateMinutes: estimate,
         now: now,
         habitTitle: 'Meditate',
@@ -98,5 +100,30 @@ void main() {
         now: s2Start.add(const Duration(minutes: 1)));
     expect(state.phase, SprintPhase.focus);
     expect(state.sprintNumber, 2);
+  });
+
+  test('the break after the fourth sprint is the long one', () {
+    final sprints = <HabitSprint>[];
+    var end = _start;
+    for (var n = 0; n < 4; n++) {
+      final start = n == 0 ? _start : end.add(const Duration(minutes: 5));
+      end = start.add(const Duration(minutes: 25));
+      sprints.add(_sprint('s$n', start, end: end));
+    }
+    final state =
+        derive(sprints: sprints, now: end.add(const Duration(minutes: 10)));
+    expect(state.phase, SprintPhase.break_);
+    expect(state.isLongBreak, isTrue);
+    expect(state.total, const Duration(minutes: 15));
+    expect(state.remaining, const Duration(minutes: 5));
+  });
+
+  test('the break after the first sprint stays short', () {
+    final end = _start.add(const Duration(minutes: 25));
+    final state = derive(
+        sprints: [_sprint('s1', _start, end: end)],
+        now: end.add(const Duration(minutes: 1)));
+    expect(state.isLongBreak, isFalse);
+    expect(state.total, const Duration(minutes: 5));
   });
 }
