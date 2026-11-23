@@ -288,3 +288,52 @@ String habitsTodayLongestStreakLine(int days) => 'longest streak $days';
 
 String habitsTodayMoreLine(int hiddenCount) =>
     'and $hiddenCount more · shown in Habits';
+
+// ---- Evening Shutdown: the habit step ---------------------------------------
+
+const habitShutdownStepTitle = 'Habits';
+const habitShutdownAddLabel = 'Add';
+const habitShutdownLoadErrorText = 'Could not load your Habits.';
+const habitShutdownRetryLabel = 'Try again';
+const habitShutdownForwardLabelHabitsOnly = 'Close the day';
+
+const _habitShutdownLines = [
+  'A few routines are still open, sir.',
+  'Before the lamps go out: these have no mark yet.',
+  'Shall we settle the day\'s habits?',
+];
+
+/// The Jeeves line above the open Habits. [closingDay] rotates the pool.
+String habitShutdownLine(String closingDay) {
+  final seed = closingDay.codeUnits.fold<int>(0, (sum, unit) => sum + unit);
+  return _habitShutdownLines[seed % _habitShutdownLines.length];
+}
+
+const _longWeekdayNames = [
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+  'Sunday',
+];
+const _longMonthNames = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
+
+/// "Closing Tuesday, 18 November": names the day when it is not today.
+String habitShutdownClosingDayLine(DateTime day) =>
+    'Closing ${_longWeekdayNames[day.weekday - 1]}, '
+    '${day.day} ${_longMonthNames[day.month - 1]}';

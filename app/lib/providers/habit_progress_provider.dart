@@ -146,3 +146,48 @@ final habitStackChainsProvider = Provider<List<List<Habit>>>((ref) {
   final active = ref.watch(_activeHabitsProvider).value;
   return active == null ? const [] : habitStackChains(active);
 });
+
+/// The Habits that are for [dayKey] (active on it and either done or not yet
+/// done), with their progress on it, by Habit id. Pure.
+///
+/// The same judgement as [habitsForTodayProvider], for any day. The day's state
+/// comes from the Habit's history alone, so a Habit paused or archived on
+/// [dayKey] is absent, and a Habit created after it never appears.
+Map<String, HabitProgress> habitProgressForDay(
+  List<HabitHistory> histories,
+  String dayKey,
+) {
+  final day = parseHabitDay(dayKey);
+  if (day == null) return const {};
+  final progressById = {
+    for (final history in histories)
+      if (!_createdAfter(history.habit, dayKey))
+        history.habit.id: computeHabitProgress(history, day),
+  };
+  final forDay = habitsForToday(progressById);
+  return {
+    for (final entry in progressById.entries)
+      if (forDay.contains(entry.key)) entry.key: entry.value,
+  };
+}
+
+/// Whether [habit] was created on a local day after [dayKey]. A Habit whose
+/// creation instant cannot be read is not excluded.
+bool _createdAfter(Habit habit, String dayKey) {
+  final createdAt = DateTime.tryParse(habit.createdAt);
+  if (createdAt == null) return false;
+  return habitDayKey(createdAt.toLocal()).compareTo(dayKey) > 0;
+}
+
+/// [habitProgressForDay], live.
+final habitProgressOnDayProvider =
+    Provider.family<Map<String, HabitProgress>, String>((ref, dayKey) {
+  final histories = ref.watch(habitHistoriesProvider).value;
+  return histories == null ? const {} : habitProgressForDay(histories, dayKey);
+});
+
+/// The ids of the Habits that are for [dayKey] (see
+/// [habitProgressOnDayProvider]). For today it equals [habitsForTodayProvider].
+final habitsForDayProvider = Provider.family<Set<String>, String>(
+  (ref, dayKey) => ref.watch(habitProgressOnDayProvider(dayKey)).keys.toSet(),
+);

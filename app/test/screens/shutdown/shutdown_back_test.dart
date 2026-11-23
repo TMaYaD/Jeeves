@@ -9,13 +9,16 @@ import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/habit_progress.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/evening_shutdown_provider.dart';
+import 'package:jeeves/providers/habit_progress_provider.dart';
 import 'package:jeeves/screens/shutdown/shutdown_ritual_screen.dart';
 
 import '../../helpers/settle.dart';
@@ -34,9 +37,10 @@ Future<void> _insertTodo(GtdDatabase db, String id) async {
   ));
 }
 
-(Widget, ProviderContainer) _app(GtdDatabase db) {
+(Widget, ProviderContainer) _app(GtdDatabase db,
+    {List<Override> extraOverrides = const []}) {
   final container = ProviderContainer(
-    overrides: [databaseProvider.overrideWithValue(db)],
+    overrides: [databaseProvider.overrideWithValue(db), ...extraOverrides],
   );
   final router = GoRouter(
     initialLocation: '/shutdown',
@@ -111,6 +115,31 @@ void main() {
       expect(state.currentStep, 1,
           reason: 'no step change while the cursor can retreat');
       expect(find.byType(ShutdownRitualScreen), findsOneWidget);
+
+      await _dispose(tester);
+    });
+
+    testWidgets(
+        'system back on the habit load-error screen at Review exits to the '
+        'execution home instead of re-showing the error', (tester) async {
+      await _insertTodo(db, 't1');
+      await db.focusSessionDao.openSession(userId: _userId, taskIds: ['t1']);
+
+      final (widget, container) = _app(db, extraOverrides: [
+        habitHistoriesProvider
+            .overrideWith((ref) => Stream<List<HabitHistory>>.error('boom')),
+      ]);
+      addTearDown(container.dispose);
+      await tester.pumpWidget(widget);
+      await _settle(tester);
+
+      expect(find.byKey(const Key('shutdown_habit_load_error')), findsOneWidget);
+
+      await tester.binding.handlePopRoute();
+      await _settle(tester);
+
+      expect(find.text('execution home'), findsOneWidget);
+      expect(find.byKey(const Key('shutdown_habit_load_error')), findsNothing);
 
       await _dispose(tester);
     });
