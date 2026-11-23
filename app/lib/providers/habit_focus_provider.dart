@@ -63,7 +63,8 @@ class HabitFocusNotifier extends Notifier<SprintTimerState> {
 
   int get _sprintMinutes =>
       ref.read(focusSettingsProvider).sprintDurationMinutes;
-  int get _breakMinutes => ref.read(focusSettingsProvider).breakDurationMinutes;
+  int get _breakMinutes =>
+      ref.read(focusSettingsProvider).shortBreakDurationMinutes;
   String get _userId => ref.read(currentUserIdProvider);
 
   /// Starts a Focus on [habitId], or adopts the one already open on it.

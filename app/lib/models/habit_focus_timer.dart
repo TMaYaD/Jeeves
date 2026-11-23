@@ -45,7 +45,8 @@ SprintTimerState deriveHabitSprintTimerState({
   if (openLog == null) {
     return SprintTimerState(
       sprintDurationMinutes: sprintMinutesSetting,
-      breakDurationMinutes: breakMinutesSetting,
+      currentBreakDurationMinutes: breakMinutesSetting,
+      lastBreakDurationMinutes: breakMinutesSetting,
     );
   }
 
@@ -81,7 +82,8 @@ SprintTimerState deriveHabitSprintTimerState({
       total: total,
       overtime: overtime,
       sprintDurationMinutes: sprintMinutes,
-      breakDurationMinutes: breakMinutesSetting,
+      currentBreakDurationMinutes: breakMinutesSetting,
+      lastBreakDurationMinutes: breakMinutesSetting,
       lastBreakEndedAt: lastBreakEndedAt,
     );
   }
