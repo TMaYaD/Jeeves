@@ -948,7 +948,7 @@ class SyncClient {
         // a position in the old queue, and raising on it could wipe the
         // decision that re-made the queue. The next flush asks again.
         if (queueGeneration != _outboxQueueGeneration) return FlushOutcome.retained;
-        await _recordOwnWritesVerdict(conflict);
+        await _recordOwnWritesVerdict(conflict, queueGeneration: queueGeneration);
         return FlushOutcome.retained;
       } on SyncTransportException catch (refusal) {
         if (refusal.code != genesisNotFirstCode) rethrow;
@@ -1141,7 +1141,27 @@ class SyncClient {
   /// at or below the acknowledged head (carries the repost position), beyond
   /// anything this device authored, or more than one past the acknowledged head
   /// (the last two carry none). Anything else raises nothing.
-  Future<void> _recordOwnWritesVerdict(AuthorChainConflictException conflict) async {
+  ///
+  /// **The verdict is one transaction with the generation check inside it.**
+  /// Keep-ours also runs in a transaction and bumps [_outboxQueueGeneration]
+  /// at its end, so the two serialize: a verdict either runs wholly before
+  /// keep-ours (which then finds the accusation changed and refuses) or wholly
+  /// after it (and sees the new generation and records nothing). A check made
+  /// before the reads would leave a window in which keep-ours lands between
+  /// the reads and the alarm write, and re-raising clears its decision.
+  Future<void> _recordOwnWritesVerdict(
+    AuthorChainConflictException conflict, {
+    required int queueGeneration,
+  }) async {
+    await _db.transaction(() async {
+      if (queueGeneration != _outboxQueueGeneration) return;
+      await _recordOwnWritesVerdictWithin(conflict);
+    });
+  }
+
+  Future<void> _recordOwnWritesVerdictWithin(
+    AuthorChainConflictException conflict,
+  ) async {
     final expected = conflict.expectedAuthorSeq;
     if (expected == null) {
       // The race-retry path resolves a raced insert without being able to name a
