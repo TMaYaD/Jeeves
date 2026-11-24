@@ -21,6 +21,7 @@ import 'package:jeeves/providers/sprint_timer_provider.dart'
     show sprintTimerProvider;
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
+import 'package:jeeves/providers/time_window_provider.dart';
 import 'package:jeeves/screens/task_detail/task_detail_screen.dart';
 import 'package:jeeves/sync/collection_codecs.dart' show todosCollection;
 import 'package:jeeves/sync/domain_op_capture.dart'
@@ -140,6 +141,10 @@ Future<void> _seedRunningSprint(GtdDatabase db, String taskId) async {
           .overrideWith((_) => Stream.value(capturedFrom)),
       currentActionProvider(todoId)
           .overrideWith((_) => currentActionStream ?? Stream.value(null)),
+      // The Time context chip reads the named windows of the Outcomes' current
+      // Actions, so the detail screen watches one more live row stream. It is
+      // stubbed like the others above, for the same reason.
+      currentTimeWindowsProvider.overrideWith((_) => Stream.value(const {})),
       plannedActionsProvider(todoId)
           .overrideWith((_) => plannedActionsStream ?? Stream.value([])),
       terminatedActionsProvider(todoId).overrideWith(
