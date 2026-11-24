@@ -238,6 +238,12 @@ class DomainProjector {
     if (collections.contains(userPreferencesCollection)) {
       domain.notifyUserPreferencesViewWrite();
     }
+    if (collections.contains(placesCollection)) {
+      domain.notifyPlacesViewWrite();
+    }
+    if (collections.contains(timeWindowsCollection)) {
+      domain.notifyTimeWindowsViewWrite();
+    }
   }
 
   Future<bool> _upsert(

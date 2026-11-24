@@ -690,6 +690,26 @@ class Actions extends Table {
   /// copied to a successor.
   BoolColumn get timeboxed => boolean().nullable()();
 
+  /// The Place this Action is at (issue #239): a `places.id`.
+  ///
+  /// NULL = no place. **No SQL foreign key**: the log has none, and a
+  /// reference to a place that no longer exists must be representable — it
+  /// reads as "no place" rather than hiding the Action.
+  ///
+  /// One column carries both kinds of place, a named one and a one-time pin,
+  /// so last-write-wins on a single field keeps "at most one place per Action"
+  /// true even when two devices disagree.
+  TextColumn get placeId => text().named('place_id').nullable()();
+
+  /// The time window this Action is gated by (issue #239): a
+  /// `time_windows.id`.
+  ///
+  /// NULL = no window. Like [placeId], no SQL foreign key, and like
+  /// `time_context` it belongs to this Action row and is never copied to a
+  /// successor. A named window and a Time context are exclusive: setting one
+  /// clears the other.
+  TextColumn get timeWindowId => text().named('time_window_id').nullable()();
+
   DateTimeColumn get createdAt => dateTime()();
 
   /// Client-stamped; a superseded row's timestamp is read from here.
@@ -697,6 +717,98 @@ class Actions extends Table {
 
   /// Completion timestamp; non-null once the Action is `done`.
   DateTimeColumn get doneAt => dateTime().nullable()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {id};
+}
+
+// ---------------------------------------------------------------------------
+// places  (issue #239)
+// ---------------------------------------------------------------------------
+
+/// One row per named place **or** one-time pin.
+///
+/// A place is a point plus an area: the point is the centre, the radius is
+/// how far the area reaches. **Both kinds live in this table**, distinguished
+/// by [kind]: a `named` place is listed for the user to choose, a `pin` is a
+/// one-off the user dropped on the map and belongs to the one Action that
+/// points at it.
+///
+/// The point is stored in microdegrees (degrees × 1 000 000) rather than as a
+/// float, because the wire format carries no float (ADR-0026): an integer
+/// rounds the same way on every device.
+class Places extends Table {
+  /// The longest name a row holds.
+  static const int maxNameLength = 100;
+
+  TextColumn get id => text().clientDefault(() => uuid.v4())();
+  TextColumn get userId => text()();
+
+  /// `named` | `pin`.
+  ///
+  /// A pin is not listed anywhere: it belongs to the one Action that points
+  /// at it, and it goes when that reference moves away.
+  TextColumn get kind => text()();
+
+  /// The name the user gave the place. Required for a `named` place, optional
+  /// for a pin, which may carry a short name of its own.
+  ///
+  /// At most [maxNameLength] characters. The column carries no length
+  /// constraint of its own — it is nullable, and a nullable column's length is
+  /// enforced where the row is written, not by the store.
+  TextColumn get name => text().nullable()();
+
+  /// Degrees × 1 000 000, rounded (−90 000 000 … 90 000 000).
+  IntColumn get latitudeMicrodegrees => integer()();
+
+  /// Degrees × 1 000 000, rounded (−180 000 000 … 180 000 000).
+  IntColumn get longitudeMicrodegrees => integer()();
+
+  /// How far the area reaches, in metres. 50 … 2000; a new place takes 150.
+  IntColumn get radiusMeters => integer()();
+
+  DateTimeColumn get createdAt => dateTime()();
+
+  /// Null while the place has never been edited.
+  DateTimeColumn get updatedAt => dateTime().nullable()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {id};
+}
+
+// ---------------------------------------------------------------------------
+// time_windows  (issue #239)
+// ---------------------------------------------------------------------------
+
+/// One row per named time window.
+///
+/// A window is a set of hours, one entry per day of the week, with days that
+/// have no hours simply absent. The hours are stored as canonical JSON — the
+/// same fixed-key-order spelling `TimeContext` uses — so two devices that
+/// build the same hours write the same bytes.
+///
+/// A window may run past midnight and belongs to the day it starts: Monday
+/// 22:00–02:00 is open Monday 22:00 through Tuesday 02:00.
+class TimeWindows extends Table {
+  /// The longest name a row holds.
+  static const int maxNameLength = 100;
+
+  TextColumn get id => text().clientDefault(() => uuid.v4())();
+  TextColumn get userId => text()();
+
+  /// The name the user gave the window.
+  ///
+  /// The limit is a literal here on purpose, and it must stay equal to
+  /// [maxNameLength] — see [Todos.title] for why the two are kept apart.
+  TextColumn get name => text().withLength(max: 100)();
+
+  /// The hours, as canonical JSON (see `models/time_window_hours.dart`).
+  TextColumn get hours => text()();
+
+  DateTimeColumn get createdAt => dateTime()();
+
+  /// Null while the window has never been edited.
+  DateTimeColumn get updatedAt => dateTime().nullable()();
 
   @override
   Set<Column<Object>> get primaryKey => {id};

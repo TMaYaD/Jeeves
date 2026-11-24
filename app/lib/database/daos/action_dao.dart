@@ -64,6 +64,11 @@
 /// (docs/proposals/blockers-and-contexts.md). The value lives on the Action row
 /// and no primitive copies it onto a successor.
 ///
+/// **The Place and the named time window are the third** (issue #239):
+/// attaching either does not stamp `last_clarified_at` either — a gate on the
+/// Action is not a thought about its Outcome. Both live on the Action row, and
+/// no primitive copies them onto a successor.
+///
 /// What primitives *do* still mirror onto `todos` is Action **metadata**
 /// (`energy_level` / `time_estimate`), which is a separate mechanism with a
 /// live reader: the per-field D2 COALESCE fallback. See
@@ -81,10 +86,14 @@ library;
 import 'package:drift/drift.dart';
 import '../../utils/uuid.dart';
 
+import '../../models/action_place_and_time_window.dart';
+import '../../models/place_area.dart';
 import '../../models/time_context.dart';
+import '../../models/time_window_hours.dart';
 import '../../models/timeboxed.dart';
 import '../../sync/collection_codecs.dart';
 import '../gtd_database.dart';
+import 'place_dao.dart' show namedPlaceKind, pinPlaceKind;
 import 'sprint_dao.dart' show SprintDao;
 import 'time_log_dao.dart' show TimeLogDao;
 
@@ -101,13 +110,19 @@ typedef ActionWriteEffect = ({bool changed, bool stamped, bool logChanged});
 const ActionWriteEffect _noEffect =
     (changed: false, stamped: false, logChanged: false);
 
+/// What an Action's Place write changed (issue #239): [changed] iff the
+/// `actions` row was written, [placesChanged] iff a one-time pin row went with
+/// it — a pin belongs to the one Action that points at it, so a reference that
+/// moves away takes the pin with it.
+typedef ActionPlaceWriteEffect = ({bool changed, bool placesChanged});
+
 /// One row of an Outcome's history (ADR-0001 story 8, issue #478): a terminated
 /// [Action] with the minutes logged against *that* Action, derived at read time
 /// from `time_logs` ([TimeLogDao.totalMinutesSubqueryForAction]) rather than
 /// stored anywhere.
 typedef TerminatedAction = ({Action action, int loggedMinutes});
 
-@DriftAccessor(tables: [Actions, Todos, TimeLogs])
+@DriftAccessor(tables: [Actions, Todos, TimeLogs, Places, TimeWindows])
 class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   ActionDao(super.db);
 
@@ -227,6 +242,10 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   }
 
   /// Transaction-body variant of [setTimeContext]; returns whether it wrote.
+  ///
+  /// A named time window and a TimeContext are exclusive (issue #239): setting
+  /// a TimeContext clears the window in the same write, so an Action is gated
+  /// by one time and not two.
   Future<bool> applySetTimeContext(
     String actionId,
     TimeContext? value, {
@@ -236,17 +255,256 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         .getSingleOrNull();
     if (row == null) return false;
     final encoded = value?.encode();
-    if (row.timeContext == encoded) return false;
+    final setsContext = value != null;
+    // Setting a TimeContext clears the window, so a row that already holds
+    // that TimeContext *and* a window is not settled yet.
+    final settled = row.timeContext == encoded &&
+        (!setsContext || row.timeWindowId == null);
+    if (settled) return false;
     await (update(actions)..where((a) => a.id.equals(actionId))).write(
       ActionsCompanion(
         timeContext: Value(encoded),
+        timeWindowId: setsContext ? const Value(null) : const Value.absent(),
         updatedAt: Value(ts),
       ),
     );
     _captureAction(actionId, {
       'time_context': encoded,
+      if (setsContext) 'time_window_id': null,
       'updated_at': encodeInstant(ts),
     });
+    return true;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Place and time window (issue #239).
+  //
+  // An Action carries at most one Place — a named one, or a one-time pin — and
+  // at most one time: a named time window, or the one-time TimeContext. The
+  // two are exclusive, and setting one clears the other in the same write.
+  //
+  // Like [setTimeContext], attaching one does not stamp `last_clarified_at`:
+  // a gate on the Action is not a thought about its Outcome.
+  // ---------------------------------------------------------------------------
+
+  /// Set ([placeId]) or clear (null) the named Place of the Action [actionId].
+  ///
+  /// The Place must exist and be a named one: a one-time pin is set with
+  /// [setPin], and a Place that does not exist is refused rather than stored
+  /// as a reference to nothing.
+  ///
+  /// Returns whether the row was written. A no-op — the Action is gone, or it
+  /// already carries that Place — writes nothing.
+  ///
+  /// A one-time pin the Action stops pointing at goes with the reference: the
+  /// pin row is deleted and tombstoned in the same transaction, so no device
+  /// keeps a pin nobody points at. A named Place is left alone — it belongs
+  /// to the user's list.
+  Future<bool> setNamedPlace(
+    String actionId,
+    String? placeId, {
+    DateTime? now,
+  }) async {
+    final ts = (now ?? DateTime.now()).toUtc();
+    final effect = await attachedDatabase.capturing(
+      () => applySetNamedPlace(actionId, placeId, ts: ts),
+    );
+    if (effect.changed) {
+      attachedDatabase.notifyActionsViewWrite();
+      attachedDatabase.notifyTodosViewWrite();
+    }
+    if (effect.placesChanged) attachedDatabase.notifyPlacesViewWrite();
+    return effect.changed;
+  }
+
+  /// Transaction-body variant of [setNamedPlace].
+  Future<ActionPlaceWriteEffect> applySetNamedPlace(
+    String actionId,
+    String? placeId, {
+    required DateTime ts,
+  }) async {
+    final row = await (select(actions)..where((a) => a.id.equals(actionId)))
+        .getSingleOrNull();
+    if (row == null) return (changed: false, placesChanged: false);
+    if (placeId != null) {
+      final place = await (select(places)..where((p) => p.id.equals(placeId)))
+          .getSingleOrNull();
+      if (place == null || place.kind != namedPlaceKind) {
+        return (changed: false, placesChanged: false);
+      }
+    }
+    if (row.placeId == placeId) return (changed: false, placesChanged: false);
+    await (update(actions)..where((a) => a.id.equals(actionId))).write(
+      ActionsCompanion(
+        placeId: Value(placeId),
+        updatedAt: Value(ts),
+      ),
+    );
+    _captureAction(actionId, {
+      'place_id': placeId,
+      'updated_at': encodeInstant(ts),
+    });
+    final placesChanged = await _dropPinIfAny(row.placeId);
+    return (changed: true, placesChanged: placesChanged);
+  }
+
+  /// Sets a one-time pin — a Place of the Action's own — and points the Action
+  /// at it. Returns the pin's id, or null when the write is refused.
+  ///
+  /// The pin is a `places` row of kind `pin`, never listed anywhere: it belongs
+  /// to this one Action and goes when the reference moves away. [name] is
+  /// optional; an over-long one is refused.
+  ///
+  /// A pin replaces whatever Place the Action carried, and only a pin is
+  /// dropped for it — a named Place belongs to the user's list and stays in it.
+  Future<String?> setPin(
+    String actionId,
+    PlaceArea area, {
+    String? name,
+    DateTime? now,
+  }) async {
+    final ts = (now ?? DateTime.now()).toUtc();
+    final trimmed = name?.trim();
+    if (trimmed != null && trimmed.length > Places.maxNameLength) {
+      return null;
+    }
+    final pinName = (trimmed == null || trimmed.isEmpty) ? null : trimmed;
+    final effect = await attachedDatabase.capturing(() async {
+      final row = await (select(actions)..where((a) => a.id.equals(actionId)))
+          .getSingleOrNull();
+      if (row == null) {
+        return (pinId: null, changed: false, placesChanged: false);
+      }
+      final pinId = uuid.v4();
+      await into(places).insert(
+        PlacesCompanion(
+          id: Value(pinId),
+          userId: Value(row.userId),
+          kind: const Value(pinPlaceKind),
+          name: Value(pinName),
+          latitudeMicrodegrees: Value(area.latitudeMicrodegrees),
+          longitudeMicrodegrees: Value(area.longitudeMicrodegrees),
+          radiusMeters: Value(area.radiusMeters),
+          createdAt: Value(ts),
+        ),
+      );
+      // Creation asserts the whole row, so a peer that has never seen the pin
+      // can build it.
+      attachedDatabase.opCapture.write(
+        collection: placesCollection,
+        entityId: pinId,
+        fields: {
+          'user_id': row.userId,
+          'kind': pinPlaceKind,
+          'name': pinName,
+          'latitude_microdegrees': area.latitudeMicrodegrees,
+          'longitude_microdegrees': area.longitudeMicrodegrees,
+          'radius_meters': area.radiusMeters,
+          'created_at': encodeInstant(ts),
+        },
+      );
+      await (update(actions)..where((a) => a.id.equals(actionId))).write(
+        ActionsCompanion(
+          placeId: Value(pinId),
+          updatedAt: Value(ts),
+        ),
+      );
+      _captureAction(actionId, {
+        'place_id': pinId,
+        'updated_at': encodeInstant(ts),
+      });
+      await _dropPinIfAny(row.placeId);
+      return (pinId: pinId, changed: true, placesChanged: true);
+    });
+    if (effect.changed) {
+      attachedDatabase.notifyActionsViewWrite();
+      attachedDatabase.notifyTodosViewWrite();
+      attachedDatabase.notifyPlacesViewWrite();
+    }
+    return effect.pinId;
+  }
+
+  /// Set ([windowId]) or clear (null) the time window of the Action [actionId].
+  ///
+  /// A named window and a TimeContext are exclusive: setting a window clears
+  /// the TimeContext in the same write, so an Action is gated by one time and
+  /// not two. Clearing the window leaves the TimeContext alone — there was
+  /// none.
+  ///
+  /// The window must exist; one that does not is refused rather than stored as
+  /// a reference to nothing.
+  ///
+  /// Returns whether the row was written. A no-op — the Action is gone, or it
+  /// already carries that window — writes nothing.
+  Future<bool> setTimeWindow(
+    String actionId,
+    String? windowId, {
+    DateTime? now,
+  }) async {
+    final ts = (now ?? DateTime.now()).toUtc();
+    final changed = await attachedDatabase.capturing(
+      () => applySetTimeWindow(actionId, windowId, ts: ts),
+    );
+    if (changed) {
+      attachedDatabase.notifyActionsViewWrite();
+      attachedDatabase.notifyTodosViewWrite();
+    }
+    return changed;
+  }
+
+  /// Transaction-body variant of [setTimeWindow].
+  Future<bool> applySetTimeWindow(
+    String actionId,
+    String? windowId, {
+    required DateTime ts,
+  }) async {
+    final row = await (select(actions)..where((a) => a.id.equals(actionId)))
+        .getSingleOrNull();
+    if (row == null) return false;
+    if (windowId != null) {
+      final window =
+          await (select(timeWindows)..where((w) => w.id.equals(windowId)))
+              .getSingleOrNull();
+      if (window == null) return false;
+    }
+    // Setting a window clears the TimeContext, so a row that already holds
+    // that window *and* a TimeContext is not settled yet.
+    final settled = row.timeWindowId == windowId &&
+        (windowId == null || row.timeContext == null);
+    if (settled) return false;
+    await (update(actions)..where((a) => a.id.equals(actionId))).write(
+      ActionsCompanion(
+        timeWindowId: Value(windowId),
+        timeContext:
+            windowId == null ? const Value.absent() : const Value(null),
+        updatedAt: Value(ts),
+      ),
+    );
+    _captureAction(actionId, {
+      'time_window_id': windowId,
+      if (windowId != null) 'time_context': null,
+      'updated_at': encodeInstant(ts),
+    });
+    return true;
+  }
+
+  /// Deletes the one-time pin row [placeId] names, when it is a pin.
+  ///
+  /// A pin belongs to the one Action that points at it, so a reference that
+  /// moves away takes the pin with it. The row goes and a tombstone says so, so
+  /// a replayed create cannot bring it back.
+  ///
+  /// Returns whether a pin row was dropped.
+  Future<bool> _dropPinIfAny(String? placeId) async {
+    if (placeId == null) return false;
+    final place = await (select(places)..where((p) => p.id.equals(placeId)))
+        .getSingleOrNull();
+    if (place == null || place.kind != pinPlaceKind) return false;
+    await (delete(places)..where((p) => p.id.equals(placeId))).go();
+    attachedDatabase.opCapture.tombstone(
+      collection: placesCollection,
+      entityId: placeId,
+    );
     return true;
   }
 
@@ -559,6 +817,10 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   /// Outcomes with none — or whose stored value does not parse — are absent, so
   /// an unreadable value never gates anything. Multi-current races resolve by
   /// the same winner rule as every other read.
+  ///
+  /// An Outcome whose current Action carries a named time window is absent too
+  /// (issue #239): the window governs the Action's time, so the Time context
+  /// beside it is ignored.
   Stream<Map<String, TimeContext>> watchCurrentTimeContexts() {
     return (select(actions)..where((a) => a.role.equals('current')))
         .watch()
@@ -581,10 +843,78 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     final result = <String, TimeContext>{};
     for (final entry in byOutcome.entries) {
       final winner = _pickWinner(entry.value);
+      // A named window governs the Action's time (issue #239): when both are
+      // set — only possible after two devices edited while apart — the Time
+      // context is ignored until the next edit clears one of them.
+      if (winner?.timeWindowId != null) continue;
       final parsed = TimeContext.tryParse(winner?.timeContext);
       if (parsed != null) result[entry.key] = parsed;
     }
     return result;
+  }
+
+  /// The Place and the time window the Action [actionId] resolves to.
+  ///
+  /// Either half is null when the Action carries none, when the row it names
+  /// no longer exists, or when the stored value cannot be read. A reference
+  /// the app cannot make sense of never hides the Action: it reads as "no
+  /// place" and "no window".
+  ///
+  /// A window and a TimeContext can both be set — only after two devices
+  /// edited while apart — and the window governs: the TimeContext is ignored
+  /// on read (see [watchCurrentTimeContexts]) until the next edit clears one
+  /// of them.
+  Future<ActionPlaceAndTimeWindow> placeAndTimeWindowFor(
+    String actionId,
+  ) async {
+    final row = await (select(actions)..where((a) => a.id.equals(actionId)))
+        .getSingleOrNull();
+    if (row == null) return const (place: null, timeWindow: null);
+    return (
+      place: await _resolvedPlace(row.placeId),
+      timeWindow: await _resolvedTimeWindow(row.timeWindowId),
+    );
+  }
+
+  /// The Place the Action [actionId] resolves to, or null.
+  Future<ActionPlace?> placeFor(String actionId) async =>
+      (await placeAndTimeWindowFor(actionId)).place;
+
+  /// The time window the Action [actionId] resolves to, or null.
+  Future<ActionTimeWindow?> timeWindowFor(String actionId) async =>
+      (await placeAndTimeWindowFor(actionId)).timeWindow;
+
+  /// The Place row [placeId] names, resolved — or null when there is none, when
+  /// the row is gone, or when its point is off the globe.
+  Future<ActionPlace?> _resolvedPlace(String? placeId) async {
+    if (placeId == null) return null;
+    final row = await (select(places)..where((p) => p.id.equals(placeId)))
+        .getSingleOrNull();
+    if (row == null) return null;
+    final area = PlaceArea.fromStored(
+      latitudeMicrodegrees: row.latitudeMicrodegrees,
+      longitudeMicrodegrees: row.longitudeMicrodegrees,
+      radiusMeters: row.radiusMeters,
+    );
+    if (area == null) return null;
+    return (
+      id: row.id,
+      area: area,
+      name: row.name,
+      isPin: row.kind == pinPlaceKind,
+    );
+  }
+
+  /// The time window row [windowId] names, resolved — or null when there is
+  /// none, when the row is gone, or when its hours do not parse.
+  Future<ActionTimeWindow?> _resolvedTimeWindow(String? windowId) async {
+    if (windowId == null) return null;
+    final row = await (select(timeWindows)..where((w) => w.id.equals(windowId)))
+        .getSingleOrNull();
+    if (row == null) return null;
+    final hours = TimeWindowHours.tryParse(row.hours);
+    if (hours == null) return null;
+    return (id: row.id, hours: hours, name: row.name);
   }
 
   /// Whether each Outcome's current Action is Timeboxed (issue #923), keyed

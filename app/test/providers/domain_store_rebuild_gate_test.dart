@@ -142,7 +142,8 @@ void main() {
     return container;
   }
 
-  test('a v2 store re-projects once on the upgrade to v14', () async {
+  test('a v2 store re-projects once on the upgrade to the current version',
+      () async {
     await seedStoreAt(2);
     final container = containerOverDirectory();
 
@@ -157,7 +158,7 @@ void main() {
     final details = await db.opened;
     expect(details.hadUpgrade, isTrue);
     expect(details.versionBefore, 2);
-    expect(details.versionNow, 14);
+    expect(details.versionNow, GtdDatabase.supportedSchemaVersion);
   });
 
   test('`opened` completes on a launch that migrates nothing', () async {
@@ -165,7 +166,7 @@ void main() {
     // drift runs `beforeOpen` on *every* open, so the future always resolves. A
     // completer fed only by `onUpgrade` would hang here for ever, and the app
     // would never get past the gate.
-    await seedStoreAt(14);
+    await seedStoreAt(GtdDatabase.supportedSchemaVersion);
     final container = containerOverDirectory();
 
     final projected = await container.read(domainStoreRebuildProvider.future);
