@@ -25,6 +25,15 @@ import '../helpers/app_title_bar_test_helpers.dart';
 import '../helpers/fake_location_source.dart';
 import '../test_helpers.dart';
 
+
+/// Reads through a real-async turn: a Drift query awaited inside a
+/// `testWidgets` body would otherwise wait on a clock that never ticks
+/// (docs/TESTING.md).
+Future<T> _real<T>(WidgetTester tester, Future<T> Function() body) async {
+  final result = await tester.runAsync(body);
+  return result as T;
+}
+
 Future<void> _settle(WidgetTester tester) async {
   for (var i = 0; i < 6; i++) {
     await tester.runAsync(() => pumpEventQueue());
@@ -128,7 +137,8 @@ void main() {
     expect(location.permissionRequests, 1);
 
     // The Place is saved with the default area.
-    final places = await db.placeDao.watchNamedPlaces().first;
+    final places =
+        await _real(tester, () => db.placeDao.watchNamedPlaces().first);
     expect(places.single.name, 'Home');
     expect(places.single.radiusMeters, 150);
 
@@ -164,26 +174,30 @@ void main() {
   testWidgets('a Place is renamed, and deleting it detaches the Action that '
       'used it', (tester) async {
     // An Outcome whose current Action is at "Home".
-    final now = DateTime.now();
-    await db.into(db.todos).insert(TodosCompanion(
-          id: const Value('o1'),
-          title: const Value('Outcome o1'),
-          userId: const Value('local'),
-          intent: const Value('next'),
-          createdAt: Value(now),
-          updatedAt: Value(now),
-        ));
-    await seedCurrentAction(db,
-        outcomeId: 'o1', text: 'work on o1', userId: 'local');
-    final actionId = (await db.actionDao.getCurrentAction('o1'))!.id;
-    final placeId = await db.placeDao.createNamedPlace(
-      name: 'Home',
-      latitudeDegrees: 52.3702,
-      longitudeDegrees: 4.8952,
-      radiusMeters: 150,
-      userId: 'local',
-    );
-    await db.actionDao.setNamedPlace(actionId, placeId);
+    late String actionId;
+    late String placeId;
+    await _real(tester, () async {
+      final now = DateTime.now();
+      await db.into(db.todos).insert(TodosCompanion(
+            id: const Value('o1'),
+            title: const Value('Outcome o1'),
+            userId: const Value('local'),
+            intent: const Value('next'),
+            createdAt: Value(now),
+            updatedAt: Value(now),
+          ));
+      await seedCurrentAction(db,
+          outcomeId: 'o1', text: 'work on o1', userId: 'local');
+      actionId = (await db.actionDao.getCurrentAction('o1'))!.id;
+      placeId = (await db.placeDao.createNamedPlace(
+        name: 'Home',
+        latitudeDegrees: 52.3702,
+        longitudeDegrees: 4.8952,
+        radiusMeters: 150,
+        userId: 'local',
+      ))!;
+      await db.actionDao.setNamedPlace(actionId, placeId);
+    });
 
     await openManagePlaces(tester);
     expect(find.text('Home'), findsOneWidget);
@@ -215,9 +229,8 @@ void main() {
     await _settle(tester);
 
     // The Action has no Place any more.
-    expect(
-      (await db.actionDao.placeAndTimeWindowFor(actionId)).place,
-      isNull,
-    );
+    final resolved =
+        await _real(tester, () => db.actionDao.placeAndTimeWindowFor(actionId));
+    expect(resolved.place, isNull);
   });
 }

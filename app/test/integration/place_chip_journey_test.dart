@@ -27,6 +27,15 @@ import 'package:jeeves/services/notification_service.dart';
 import '../helpers/fake_location_source.dart';
 import '../test_helpers.dart';
 
+
+/// Reads through a real-async turn: a Drift query awaited inside a
+/// `testWidgets` body would otherwise wait on a clock that never ticks
+/// (docs/TESTING.md).
+Future<T> _real<T>(WidgetTester tester, Future<T> Function() body) async {
+  final result = await tester.runAsync(body);
+  return result as T;
+}
+
 Future<void> _settle(WidgetTester tester) async {
   for (var i = 0; i < 6; i++) {
     await tester.runAsync(() => pumpEventQueue());
@@ -114,7 +123,9 @@ void main() {
       role: 'current',
       createdAt: now,
     );
-    final homeId = (await db.placeDao.watchNamedPlaces().first).first.id;
+    final named =
+        await _real(tester, () => db.placeDao.watchNamedPlaces().first);
+    final homeId = named.first.id;
     final place = (
       id: homeId,
       area: PlaceArea.create(
@@ -211,7 +222,8 @@ void main() {
     expect(find.text('Post office on Mill St'), findsOneWidget);
 
     // The pin is not in the user's list of places.
-    final named = await db.placeDao.watchNamedPlaces().first;
+    final named =
+        await _real(tester, () => db.placeDao.watchNamedPlaces().first);
     expect(named.map((p) => p.name), ['Home', 'Office']);
 
     // Clear it: the chip is quiet again and the pin is gone.
@@ -220,9 +232,10 @@ void main() {
     await tester.tap(find.byKey(const Key('place_picker_clear')));
     await _settle(tester);
     expect(find.text('Place'), findsOneWidget);
-    final pins = await db.customSelect(
-      'SELECT id FROM places WHERE kind = \'pin\'',
-    ).get();
+    final pins = await _real(
+      tester,
+      () => db.customSelect("SELECT id FROM places WHERE kind = 'pin'").get(),
+    );
     expect(pins, isEmpty);
   });
 }
