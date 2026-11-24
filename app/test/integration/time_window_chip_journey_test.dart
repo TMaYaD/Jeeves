@@ -223,6 +223,8 @@ void main() {
     final actionId =
         (await _real(tester, () => db.actionDao.getCurrentAction('o1')))!.id;
     await _real(tester, () => db.actionDao.setTimeWindow(actionId, windowId));
+    // The chip reads the windows of the current Actions: let them arrive.
+    await _settle(tester);
 
     await openChip(tester);
     expect(find.byKey(const Key('time_context_clear')), findsOneWidget);

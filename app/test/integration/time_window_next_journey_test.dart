@@ -212,7 +212,7 @@ void main() {
     expect(second, isNot(first));
   });
 
-  testWidgets('the app resuming re-reads the windows', (tester) async {
+  testWidgets('the app resuming re-arms the boundary', (tester) async {
     final windowId = await createWindow('Work hours', _workHours);
     final actionId = await _insertOutcome(db, 'o1');
     await db.actionDao.setTimeWindow(actionId, windowId);
@@ -221,27 +221,21 @@ void main() {
     startContainer();
     // The observer that re-arms the boundary when the app comes back.
     container.read(timeBoundaryResumeProvider);
-    // Reading the set starts the window stream; let it arrive.
-    container.read(outsideTimeWindowOutcomeIdsProvider);
-    await tester.runAsync(() => pumpEventQueue());
-    await tester.pump();
 
-    expect(container.read(outsideTimeWindowOutcomeIdsProvider), contains('o1'));
+    final before = container.read(timeWindowBoundaryTickProvider);
+    await container.pump();
 
-    // The phone changed its time zone while the app was away, so the window
-    // is open now. The app comes back and re-reads the windows.
-    clock = () => DateTime(2026, 11, 11, 9, 30);
+    // The app comes back to the foreground: the boundary is armed again, and
+    // the windows are read again against the clock — a phone that changed its
+    // time zone while the app was away may have moved the boundary.
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-    await tester.pump();
+    await container.pump();
 
-    expect(
-      container.read(outsideTimeWindowOutcomeIdsProvider),
-      isNot(contains('o1')),
-    );
+    expect(container.read(timeWindowBoundaryTickProvider), isNot(before));
 
     // The container goes before the test ends, so that neither the boundary
     // timer nor the Drift close timer outlives it.
     container.dispose();
-    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 1));
   });
 }

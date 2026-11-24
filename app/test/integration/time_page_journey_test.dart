@@ -180,8 +180,8 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    // A name at the length the store allows: ninety-one characters.
-    final name = 'Opening hours ' * 7;
+    // A name at the length the store allows: ninety-seven characters.
+    final name = List.filled(7, 'Opening hours').join(' ');
     expect(name.length, lessThanOrEqualTo(100));
     final workId = await db.timeWindowDao.createTimeWindow(
       name: name,
