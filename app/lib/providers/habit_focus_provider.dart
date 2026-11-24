@@ -48,6 +48,7 @@ class HabitFocusNotifier extends Notifier<SprintTimerState> {
 
   @override
   SprintTimerState build() {
+    _disposed = false;
     ref.onDispose(() {
       _disposed = true;
       _ticker?.cancel();
@@ -84,17 +85,19 @@ class HabitFocusNotifier extends Notifier<SprintTimerState> {
   Future<void> start(String habitId) async {
     if (state.isProcessing) return;
     final db = ref.read(databaseProvider);
+    final userId = _userId;
     state = state.copyWith(isProcessing: true);
     try {
       await _reload();
       if (state.isActive && state.activeTaskId == habitId) return;
       await _awaitSyncedSettings();
+      if (_disposed || _userId != userId) return;
       // Validates the Habit first and ends any Outcome engagement still open
       // in the store in the same transaction: a Habit that is rejected leaves
       // the engagement running.
       await db.habitFocusDao.openHabitFocus(
         habitId: habitId,
-        userId: _userId,
+        userId: userId,
         plannedSprintMinutes: _sprintMinutes,
         now: ref.read(clockProvider)(),
       );
@@ -122,11 +125,15 @@ class HabitFocusNotifier extends Notifier<SprintTimerState> {
   /// Starts the next Sprint of the open Focus.
   Future<void> startSprint() async {
     if (!state.isActive || state.isProcessing) return;
+    final userId = _userId;
     state = state.copyWith(isProcessing: true);
     try {
       await _awaitSyncedSettings();
+      // The account may have changed while the settings synced: the Sprint
+      // belongs to the account the Focus was open under.
+      if (_disposed || _userId != userId) return;
       await ref.read(databaseProvider).habitFocusDao.startHabitSprint(
-            userId: _userId,
+            userId: userId,
             plannedSprintMinutes: _sprintMinutes,
             now: ref.read(clockProvider)(),
           );

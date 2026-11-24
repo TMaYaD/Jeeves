@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:drift/drift.dart' show Value, driftRuntimeOptions;
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -13,6 +15,7 @@ import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/focus_session_provider.dart';
 import 'package:jeeves/providers/habit_focus_provider.dart';
 import 'package:jeeves/providers/sprint_timer_provider.dart' show SprintPhase;
+import 'package:jeeves/providers/synced_preferences_provider.dart';
 
 import '../test_helpers.dart';
 
@@ -153,4 +156,43 @@ void main() {
     expect(await db.select(db.habitTimeLogs).get(), hasLength(1));
     expect(container.read(habitFocusProvider).phase, SprintPhase.focus);
   });
+
+  test('a Sprint is not started under another account after a settings wait',
+      () async {
+    final settingsGate = Completer<void>();
+    container.dispose();
+    container = ProviderContainer(overrides: [
+      databaseProvider.overrideWithValue(db),
+      clockProvider.overrideWithValue(() => now),
+      syncedPreferencesProvider.overrideWith(_GatedPreferences.new),
+    ]);
+    _GatedPreferences.gate = settingsGate;
+    final habit = await createHabit('Meditate');
+    final notifier = container.read(habitFocusProvider.notifier);
+    container.read(syncedPreferencesProvider);
+    settingsGate.complete();
+    await container.read(syncedPreferencesProvider.future);
+    await notifier.start(habit);
+
+    final nextGate = Completer<void>();
+    _GatedPreferences.gate = nextGate;
+    container.invalidate(syncedPreferencesProvider);
+    container.read(syncedPreferencesProvider);
+    final pending = notifier.startSprint();
+    container.read(currentUserIdProvider.notifier).setUserId('someone-else');
+    nextGate.complete();
+    await pending;
+
+    expect(await db.select(db.habitSprints).get(), hasLength(1));
+  });
+}
+
+class _GatedPreferences extends SyncedPreferencesNotifier {
+  static late Completer<void> gate;
+
+  @override
+  Future<SyncedPreferences> build() async {
+    await gate.future;
+    return const SyncedPreferences({});
+  }
 }
