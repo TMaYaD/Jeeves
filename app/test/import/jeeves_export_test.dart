@@ -96,6 +96,23 @@ Future<void> _seed(GtdDatabase db, {String userId = _userId}) async {
       clarifiedAt: Value(_utc(27, 9, 0, 0)),
       userId: Value(userId)));
 
+  // --- the named places and time windows an Action may point at ---
+  await db.into(db.places).insert(PlacesCompanion(
+      id: const Value('place-1'),
+      userId: Value(userId),
+      kind: const Value('named'),
+      name: const Value('Hardware store'),
+      latitudeMicrodegrees: const Value(52000000),
+      longitudeMicrodegrees: const Value(13000000),
+      radiusMeters: const Value(300),
+      createdAt: Value(_utc(28, 4, 0, 0))));
+  await db.into(db.timeWindows).insert(TimeWindowsCompanion(
+      id: const Value('tw-1'),
+      userId: Value(userId),
+      name: const Value('Store hours'),
+      hours: const Value('[{"day":1,"start":"11:00","end":"20:00"}]'),
+      createdAt: Value(_utc(28, 4, 1, 0))));
+
   // --- actions: a current and a planned, on the next Outcome ---
   await db.into(db.actions).insert(ActionsCompanion(
       id: const Value('act-current'),
@@ -105,6 +122,8 @@ Future<void> _seed(GtdDatabase db, {String userId = _userId}) async {
       role: const Value('current'),
       energyLevel: const Value('low'),
       timeEstimate: const Value(15),
+      placeId: const Value('place-1'),
+      timeWindowId: const Value('tw-1'),
       createdAt: Value(_utc(28, 5, 30, 0))));
   await db.into(db.actions).insert(ActionsCompanion(
       id: const Value('act-planned'),

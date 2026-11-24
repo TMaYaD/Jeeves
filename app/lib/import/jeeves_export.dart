@@ -123,6 +123,10 @@ const List<String> jeevesExportCollections = <String>[
   tagsCollection,
   todosCollection,
   capturesCollection,
+  // The places and the time windows an Action may point at (issue #239),
+  // before the Actions that point at them.
+  placesCollection,
+  timeWindowsCollection,
   actionsCollection,
   focusSessionsCollection,
   timeLogsCollection,
@@ -703,6 +707,8 @@ void _notifyAllViews(GtdDatabase db) {
   db.notifyTagsViewWrite();
   db.notifyTodosViewWrite(includeTodoTags: true);
   db.notifyCapturesViewWrite();
+  db.notifyPlacesViewWrite();
+  db.notifyTimeWindowsViewWrite();
   db.notifyActionsViewWrite();
   db.notifyTimeLogsViewWrite();
   db.notifySprintsViewWrite();

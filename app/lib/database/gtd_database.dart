@@ -43,7 +43,7 @@ export 'tables.dart';
 part 'gtd_database.g.dart';
 
 @DriftDatabase(
-  tables: [Todos, Tags, TodoTags, TimeLogs, Sprints, FocusSessions, FocusSessionTasks, FocusSessionDispositions, FocusSessionPlanningBypasses, FocusSessionReschedules, OutcomeBypassDecisions, UserPreferences, Captures, CaptureAttachments, CaptureOutcomes, CaptureTags, Actions, LocalMigrationMarkers, PendingChanges, DeviceClockIdentity, Habits, HabitCommitments, HabitCheckIns, HabitInactivePeriods, HabitTags],
+  tables: [Todos, Tags, TodoTags, TimeLogs, Sprints, FocusSessions, FocusSessionTasks, FocusSessionDispositions, FocusSessionPlanningBypasses, FocusSessionReschedules, OutcomeBypassDecisions, UserPreferences, Captures, CaptureAttachments, CaptureOutcomes, CaptureTags, Actions, Places, TimeWindows, LocalMigrationMarkers, PendingChanges, DeviceClockIdentity, Habits, HabitCommitments, HabitCheckIns, HabitInactivePeriods, HabitTags],
   daos: [TagDao, TodoDao, TimeLogDao, SprintDao, FocusSessionDao, CaptureDao, ActionDao, HabitDao],
 )
 class GtdDatabase extends _$GtdDatabase {
@@ -205,7 +205,7 @@ class GtdDatabase extends _$GtdDatabase {
   /// build refuses it: opening it would relabel the file with a version it
   /// does not understand, and the newer build would then find a store it
   /// believes is old.
-  static const int supportedSchemaVersion = 14;
+  static const int supportedSchemaVersion = 15;
 
   /// Completes with the [OpeningDetails] of this store's one open.
   ///
@@ -487,6 +487,40 @@ class GtdDatabase extends _$GtdDatabase {
                   focusSessionTasks, focusSessionTasks.batchSuggestionDeclinedAt);
             }
           }
+          // v15 (issue #239): the named places and the named time windows, and
+          // the two references an Action holds to them. Purely additive — two
+          // new tables and two nullable columns, no existing row or column
+          // touched, nothing backfilled (there were no places or windows
+          // before this build, so there is nothing to backfill *from*).
+          //
+          // The tables are created only when missing, as v11 does for `sprints`
+          // and v13 for the Habit tables: a store that already carries one (a
+          // rebuilt fixture, a half-applied earlier attempt) must not fail the
+          // ladder on it.
+          if (from < 15) {
+            final tables = await m.database
+                .customSelect(
+                    "SELECT name FROM sqlite_master WHERE type='table'")
+                .get();
+            bool hasTable(String name) =>
+                tables.any((row) => row.read<String>('name') == name);
+            if (!hasTable('places')) await m.createTable(places);
+            if (!hasTable('time_windows')) await m.createTable(timeWindows);
+            // The two Action columns are nullable `ADD COLUMN`s, guarded on
+            // their absence like v7: every existing Action reads NULL (no
+            // place, no window), and nothing is lost.
+            final existing = await m.database
+                .customSelect('PRAGMA table_info(actions)')
+                .get();
+            bool has(String name) =>
+                existing.any((row) => row.read<String>('name') == name);
+            if (!has('place_id')) {
+              await m.addColumn(actions, actions.placeId);
+            }
+            if (!has('time_window_id')) {
+              await m.addColumn(actions, actions.timeWindowId);
+            }
+          }
         }),
       );
 
@@ -614,5 +648,18 @@ class GtdDatabase extends _$GtdDatabase {
   /// writes the same table without one, so it fires this instead.
   void notifyUserPreferencesViewWrite() => notifyUpdates({
         const TableUpdate('user_preferences'),
+      });
+
+  /// The [notifyTodosViewWrite] analogue for `places` (issue #239).
+  ///
+  /// Fired by the projector and the importer, which write through raw SQL, and
+  /// by the place DAO once it exists.
+  void notifyPlacesViewWrite() => notifyUpdates({
+        const TableUpdate('places'),
+      });
+
+  /// The [notifyTodosViewWrite] analogue for `time_windows` (issue #239).
+  void notifyTimeWindowsViewWrite() => notifyUpdates({
+        const TableUpdate('time_windows'),
       });
 }
