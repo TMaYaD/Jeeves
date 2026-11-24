@@ -130,7 +130,10 @@ class _TimeWindowEditorSheetState extends ConsumerState<_TimeWindowEditorSheet> 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
+        Wrap(
+          spacing: 8,
+          runSpacing: 4,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             TextButton(
               key: Key('${keyPrefix}_start'),
@@ -155,12 +158,9 @@ class _TimeWindowEditorSheetState extends ConsumerState<_TimeWindowEditorSheet> 
               child: Text(_clock(endMinute)),
             ),
             if (overnight)
-              const Padding(
-                padding: EdgeInsets.only(left: 8),
-                child: Text(
-                  'next day',
-                  style: TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
-                ),
+              const Text(
+                'next day',
+                style: TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
               ),
           ],
         ),

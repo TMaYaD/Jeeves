@@ -4,10 +4,16 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/daos/time_window_dao.dart';
+import '../database/gtd_database.dart' show TimeWindow;
 import '../models/action_place_and_time_window.dart';
 import 'clock_provider.dart';
 import 'database_provider.dart';
 import 'time_context_provider.dart';
+
+/// The user's named time windows, in name order.
+final timeWindowsProvider = StreamProvider<List<TimeWindow>>((ref) {
+  return ref.watch(databaseProvider).timeWindowDao.watchTimeWindows();
+});
 
 /// The user's named time windows, each with the number of current Actions of
 /// active Outcomes that use it (issue #55).

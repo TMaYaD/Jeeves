@@ -263,6 +263,32 @@ class TaskDetailNotifier {
     return present;
   }
 
+  /// Sets or clears (null) the named time window of the Action [actionId] the
+  /// editor was opened for. Returns whether the Outcome was still present.
+  ///
+  /// The write is dropped when that Action is no longer the Outcome's current
+  /// one, exactly as [setTimeContext] drops its own: an edit never lands on a
+  /// successor the user did not see. A named window and a Time context are
+  /// exclusive — the write clears the other (issue #239).
+  Future<bool> setTimeWindow(String? windowId,
+      {required String actionId}) async {
+    var wrote = false;
+    final present = await _ifOutcomePresent(() async {
+      final current = await _db.actionDao.getCurrentAction(_todoId);
+      if (current == null || current.id != actionId) return;
+      wrote = await _db.actionDao.applySetTimeWindow(
+        current.id,
+        windowId,
+        ts: DateTime.now().toUtc(),
+      );
+    });
+    if (wrote) {
+      _db.notifyActionsViewWrite();
+      _db.notifyTodosViewWrite();
+    }
+    return present;
+  }
+
   /// Sets the estimate and the Timeboxed switch of the Action the sheet was
   /// opened for, in one write (issue #923).
   ///

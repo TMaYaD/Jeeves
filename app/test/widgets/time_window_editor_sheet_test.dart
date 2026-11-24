@@ -55,6 +55,13 @@ void main() {
     expect(save.right, lessThanOrEqualTo(320.0));
     expect(save.width, greaterThan(0.0));
 
+    // With a day chosen, the From/To pair is on show — and still fits.
+    await tester.tap(find.byKey(const Key('time_window_day_1')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('time_window_start')), findsOneWidget);
+    expect(tester.takeException(), isNull,
+        reason: 'the hours row lays out clean at 320dp');
+
     // The day-by-day editor also fits at this width.
     await tester.tap(find.byKey(const Key('time_window_mode_different')));
     await tester.pumpAndSettle();
