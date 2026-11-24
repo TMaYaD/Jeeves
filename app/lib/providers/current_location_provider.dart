@@ -82,12 +82,18 @@ class CurrentLocationNotifier extends Notifier<CurrentLocation>
 
   /// Reads the location: a fresh fix first, the OS's last known position
   /// when the fix does not arrive, and nothing when neither is there.
+  ///
+  /// The position stream is opened only where the OS allows a read: without
+  /// the permission there is nothing to listen to, and asking for it would
+  /// only raise an error where there is no answer to give.
   Future<void> _startReading() async {
     final source = ref.read(locationSourceProvider);
     final point = await _readPoint(source);
     if (_disposed) return;
     state = point == null ? const LocationUnknown() : LocationKnown(point);
     await _subscription?.cancel();
+    if (_disposed) return;
+    if (!await _mayListen(source)) return;
     if (_disposed) return;
     _subscription = source.whileOpen().listen(
       (position) {
@@ -98,6 +104,17 @@ class CurrentLocationNotifier extends Notifier<CurrentLocation>
         // A stream that fails leaves Jeeves with the last position it had.
       },
     );
+  }
+
+  /// Whether the OS lets Jeeves listen for positions.
+  Future<bool> _mayListen(LocationSource source) async {
+    try {
+      final permission = await source.permission();
+      return permission == LocationPermission.whileInUse ||
+          permission == LocationPermission.always;
+    } on Object {
+      return false;
+    }
   }
 
   Future<GeoPoint?> _readPoint(LocationSource source) async {

@@ -84,6 +84,9 @@ void main() {
   setUp(() async {
     db = GtdDatabase(NativeDatabase.memory());
     location = FakeLocationSource();
+    // The user has allowed the location on this phone: Jeeves listens for
+    // positions while it is on screen.
+    location.permissionState = LocationPermission.whileInUse;
   });
 
   tearDown(() async {
