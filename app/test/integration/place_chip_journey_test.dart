@@ -132,8 +132,6 @@ void main() {
     final named =
         await _real(tester, () => db.placeDao.watchNamedPlaces().first);
     final homeId = named.first.id;
-    // The Action points at the Place the chip names.
-    await _real(tester, () => db.actionDao.setNamedPlace(action.id, homeId));
     final place = (
       id: homeId,
       area: PlaceArea.create(
