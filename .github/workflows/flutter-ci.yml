@@ -247,7 +247,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: '17'
@@ -282,4 +282,34 @@ jobs:
       # avoids any signing/secret requirements: debug builds are signed by AGP's
       # auto-managed ~/.android/debug.keystore regardless of signingConfigs, so
       # the setup-android-signing action is intentionally not invoked here.
-      - run: flutter build apk --debug --flavor production --target-platform android-arm64
+      #
+      # The build also provisions the Android NDK that Flutter's default
+      # `ndkVersion` names, and the runner image does not carry that version, so
+      # every run fetches it from dl.google.com. A truncated download arrives as
+      # a corrupt archive ("Error reading Zip content from a SeekableByteChannel")
+      # and fails the job the way a fault in the project would. Only that
+      # failure is retried — the download starts over, so the corrupt archive is
+      # never reused — and every other failure fails on the first attempt, so a
+      # real build error is not paid for three times over.
+      - name: Build the debug APK
+        run: |
+          set -o pipefail
+          log="${RUNNER_TEMP:-/tmp}/gradle-build.log"
+          for attempt in 1 2 3; do
+            if flutter build apk --debug --flavor production --target-platform android-arm64 2>&1 | tee "$log"; then
+              exit 0
+            fi
+            if ! grep -qF "Error reading Zip content" "$log"; then
+              exit 1
+            fi
+            echo "::warning::The Android SDK download was corrupt (attempt ${attempt} of 3); discarding it and retrying."
+            if [ -n "${ANDROID_HOME:-}" ]; then
+              rm -rf "${ANDROID_HOME}/.temp"
+              for ndk_directory in "${ANDROID_HOME}/ndk"/*/; do
+                if [ ! -f "${ndk_directory}source.properties" ]; then
+                  rm -rf "${ndk_directory}"
+                fi
+              done
+            fi
+          done
+          exit 1
