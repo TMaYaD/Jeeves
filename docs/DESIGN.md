@@ -394,6 +394,7 @@ Settings → Manage lists the user's named time windows beside the label, projec
 | Editor | A name, and the hours of each day: the same on chosen days, or day by day. An end before the start is the next day, and is labelled so. |
 | Save and Delete | Save stays disabled until the name and the hours are acceptable. Delete asks how many actions lose the window, and the window goes. |
 | Chip | The Time context chip reads the window's name, and its sheet offers the user's windows beside the one-time time. Picking a window attaches it; a one-time time replaces it. |
+| Time page | A drawer page, in the Waiting For idiom: one group per named window, its hours in the header, then a "One-time" group. Each row says "On Next", or when its time opens — the glyph and the words carry it, never a colour. |
 
 ### Ceremony back navigation
 System back inside a ceremony mirrors the footer Back affordance — it invokes
@@ -568,6 +569,7 @@ Paths are under `app/lib/`; DPR means Daily Planning and ES means Evening Shutdo
 | Focus — `screens/focus_screen.dart` | Title, due, estimate, sprint hint, added-during-the-day tag; carried-over: muted title, estimate | Flat `OutcomeRow`, trailing Start/status | Open detail; Start/Resume |
 | Search — `screens/search/widgets/search_result_tile.dart` | Title, snippet, match hint, status | Flat `OutcomeRow` | Capture → clarify; Outcome → detail |
 | GTD lists / Project / Waiting For (grouped by person) — `screens/common/gtd_list_screen.dart` | Title, energy, estimate, due when set | Flat `OutcomeRow` | Open detail; long-press multi-selects |
+| Time page — `screens/time_page/time_page_screen.dart` | Title, marker (On Next, or when the time opens) | Grouped `OutcomeRow`, one group per named window then one-time | Open detail; long-press multi-selects |
 | Habit list and detail — `screens/habits/habits_screen.dart` | Title, anchor, state; notes, Check-in, Repeat, Area, Labels, energy, estimate | Detail beside the list from 840 px; theme colours | Edit in place; sheets with Done/Cancel; pause, archive, restore |
 | Check-in calendar — `screens/habits/habit_calendar_screen.dart` | Month of day marks (done, partial, missed, not due, paused, before the Habit); "5 of 8", "2×", repeat-changed flag; legend | Round marks by shape, never colour; missed is never red; one painter for month, year and strip; phone layout on every width | Title opens the year; a day opens the day sheet: add, change, remove at once with no confirmation or undo |
 | Linked Outcomes — `widgets/capture_outcomes_section.dart` | Title, next Action, contexts, Capture provenance count | Framed `OutcomeRow` | Unlink |
