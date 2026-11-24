@@ -18,8 +18,8 @@ export '../database/gtd_database.dart' show Capture, Todo;
 /// ([outsideTimeContextOutcomeIdsProvider],
 /// [outsideTimeWindowOutcomeIdsProvider]); they come back on their own.
 ///
-/// Hiding is on Next only: Up Next and Add to Plan read the Time context set
-/// alone, so a named window never hides an Outcome there.
+/// Hiding is on Next only: Daily Planning's Up Next applies the rule of the
+/// day being planned, and Add to Plan reads the Time context set alone.
 final nextProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
   final tagIds = ref.watch(tagFilterProvider);

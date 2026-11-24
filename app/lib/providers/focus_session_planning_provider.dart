@@ -34,6 +34,7 @@ import 'nudge_triggers.dart' show lastAnchorBefore;
 import 'shutdown_settings_provider.dart' show shutdownSettingsProvider;
 import 'synced_preferences_provider.dart' show syncedPrefs;
 import 'time_context_provider.dart';
+import 'time_window_provider.dart';
 
 export '../database/gtd_database.dart' show Todo, FocusSession, Tag;
 export '../database/daos/focus_session_dao.dart' show SessionSettlement;
@@ -251,34 +252,77 @@ bool _energyFits(String? taskEnergy, String? dayEnergy) {
 /// [notInPlannedDay] holds the Outcome ids whose time does not open in that
 /// day: they stay out of Up Next. [opensLaterAt] holds the ids whose time
 /// opens later in that day, with the instant it opens.
+///
+/// A one-time Time context and a named time window are the same rule: each
+/// answers for itself, and the two maps never hold the same Outcome, because
+/// an Action carries one time at a time.
 final plannedDayTimeProvider =
     Provider<({Set<String> notInPlannedDay, Map<String, DateTime> opensLaterAt})>(
         (ref) {
   ref.watch(timeContextBoundaryTickProvider);
+  ref.watch(timeWindowBoundaryTickProvider);
   final now = ref.watch(clockProvider)();
   final shutdownTime =
       ref.watch(shutdownSettingsProvider.select((s) => s.shutdownTime));
   final contexts =
       ref.watch(currentTimeContextsProvider).value ?? const {};
+  final windows = ref.watch(currentTimeWindowsProvider).value ?? const {};
   final dayEnd = plannedDayEnd(now: now, shutdownTime: shutdownTime);
   final notInPlannedDay = <String>{};
   final opensLaterAt = <String, DateTime>{};
   for (final entry in contexts.entries) {
     final timeContext = entry.value;
-    final opens = firstOpenInPlannedDay(
+    _applyPlannedDay(
+      id: entry.key,
       isOpenAt: timeContext.isSatisfiedAt,
       nextTransitionAfter: timeContext.nextTransitionAfter,
       now: now,
       dayEnd: dayEnd,
+      notInPlannedDay: notInPlannedDay,
+      opensLaterAt: opensLaterAt,
     );
-    if (opens == null) {
-      notInPlannedDay.add(entry.key);
-    } else if (opens.isAfter(now)) {
-      opensLaterAt[entry.key] = opens;
-    }
+  }
+  for (final entry in windows.entries) {
+    final hours = entry.value.hours;
+    _applyPlannedDay(
+      id: entry.key,
+      isOpenAt: hours.isOpenAt,
+      nextTransitionAfter: hours.nextTransitionAfter,
+      now: now,
+      dayEnd: dayEnd,
+      notInPlannedDay: notInPlannedDay,
+      opensLaterAt: opensLaterAt,
+    );
   }
   return (notInPlannedDay: notInPlannedDay, opensLaterAt: opensLaterAt);
 });
+
+/// Puts one Outcome's time into the planned-day sets.
+///
+/// The time is open in the planned day when it is open now, or when it opens
+/// at some instant before the day ends. It is not in the planned day when it
+/// does not open there at all.
+void _applyPlannedDay({
+  required String id,
+  required bool Function(DateTime) isOpenAt,
+  required DateTime? Function(DateTime) nextTransitionAfter,
+  required DateTime now,
+  required DateTime dayEnd,
+  required Set<String> notInPlannedDay,
+  required Map<String, DateTime> opensLaterAt,
+}) {
+  final opens = firstOpenInPlannedDay(
+    isOpenAt: isOpenAt,
+    nextTransitionAfter: nextTransitionAfter,
+    now: now,
+    dayEnd: dayEnd,
+  );
+  if (opens == null) {
+    notInPlannedDay.add(id);
+  } else if (opens.isAfter(now)) {
+    opensLaterAt[id] = opens;
+  }
+}
 
 /// Next-action tasks not yet reviewed in today's planning session, filtered
 /// down to the ones whose energy requirement fits the user's self-reported

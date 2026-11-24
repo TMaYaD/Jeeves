@@ -2,7 +2,9 @@
 ///
 /// An Outcome whose current Action carries a named time window is off the Next
 /// List while the window is closed, and comes back on its own when the window
-/// opens. Up Next is untouched: hiding is on Next only.
+/// opens. Up Next applies the rule of the day being planned (#1077), so a
+/// window that does not open again that day takes the Outcome out of Up Next
+/// as well.
 library;
 
 import 'package:drift/drift.dart' show Value;
@@ -162,19 +164,27 @@ void main() {
     expect(await nextIds((ids) => !ids.contains('o1')), {'plain'});
   });
 
-  test('the Outcome stays in Up Next while its window is closed', () async {
+  test('the Outcome leaves Up Next when its window does not open again that '
+      'day', () async {
     final windowId = await createWindow('Work hours', _workHours);
     final actionId = await _insertOutcome(db, 'o1');
     await db.actionDao.setTimeWindow(actionId, windowId);
-    // Wednesday 17:00 — the window is closed.
+    await _insertOutcome(db, 'plain');
+    // Wednesday 17:00 — the window has just closed. It opens again on
+    // Thursday, which is outside the day being planned.
     clock = () => DateTime(2026, 11, 11, 17, 0);
     startContainer();
 
+    // The list is read once before the windows have loaded and once after, so
+    // the wait is for the settled list: 'plain' is on it and 'o1' is not.
     final upNext = await eventually<AsyncValue<List<Todo>>>(
       nextForFocusSessionPlanningProvider,
-      (v) => v.hasValue && v.value!.isNotEmpty,
+      (v) =>
+          v.hasValue &&
+          {for (final t in v.value!) t.id}.contains('plain') &&
+          !{for (final t in v.value!) t.id}.contains('o1'),
     );
-    expect(upNext.value!.map((t) => t.id), contains('o1'));
+    expect(upNext.value!.map((t) => t.id), isNot(contains('o1')));
   });
 
   test('a window the app cannot read never hides the Outcome', () async {
