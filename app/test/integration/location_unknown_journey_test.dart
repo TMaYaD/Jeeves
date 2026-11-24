@@ -10,7 +10,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/action_place_and_time_window.dart';
 import 'package:jeeves/models/place_area.dart';
 import 'package:jeeves/providers/current_location_provider.dart';

@@ -86,7 +86,7 @@ void main() {
 
   /// Opens the editor for a new Place. The action sits in the title bar on a
   /// wide surface and in its ⋮ menu on a narrow one.
-  Future<void> _tapAddPlace(WidgetTester tester) async {
+  Future<void> tapAddPlace(WidgetTester tester) async {
     final add =
         await findBarAction(tester, const Key('place_management_add'));
     await tester.tap(add);
@@ -114,7 +114,7 @@ void main() {
     expect(find.byType(PlaceManagementScreen), findsOneWidget);
 
     // The editor opens without asking for the location.
-    await _tapAddPlace(tester);
+    await tapAddPlace(tester);
     await _settle(tester);
     expect(find.byKey(const Key('place_editor_name')), findsOneWidget);
     expect(location.permissionRequests, 0);
@@ -133,7 +133,7 @@ void main() {
     expect(places.single.radiusMeters, 150);
 
     // A second Place asks nothing more.
-    await _tapAddPlace(tester);
+    await tapAddPlace(tester);
     await _settle(tester);
     await savePlace(tester, name: 'Office', coordinates: '52.0800, 4.3000');
     expect(location.permissionRequests, 1);
@@ -142,7 +142,7 @@ void main() {
 
   testWidgets('the area runs from 50 m to 2 km', (tester) async {
     await openManagePlaces(tester);
-    await _tapAddPlace(tester);
+    await tapAddPlace(tester);
     await _settle(tester);
     await tester.enterText(
         find.byKey(const Key('place_editor_name')), 'Home');
