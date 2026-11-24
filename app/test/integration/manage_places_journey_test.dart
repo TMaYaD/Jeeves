@@ -21,6 +21,7 @@ import 'package:jeeves/screens/place_management/place_management_screen.dart';
 import 'package:jeeves/screens/settings/settings_screen.dart';
 import 'package:jeeves/services/notification_service.dart';
 
+import '../helpers/app_title_bar_test_helpers.dart';
 import '../helpers/fake_location_source.dart';
 import '../test_helpers.dart';
 
@@ -83,6 +84,14 @@ void main() {
     await _settle(tester);
   }
 
+  /// Opens the editor for a new Place. The action sits in the title bar on a
+  /// wide surface and in its ⋮ menu on a narrow one.
+  Future<void> _tapAddPlace(WidgetTester tester) async {
+    final add =
+        await findBarAction(tester, const Key('place_management_add'));
+    await tester.tap(add);
+  }
+
   /// Fills the editor with a name and a point, and saves.
   Future<void> savePlace(
     WidgetTester tester, {
@@ -105,7 +114,7 @@ void main() {
     expect(find.byType(PlaceManagementScreen), findsOneWidget);
 
     // The editor opens without asking for the location.
-    await tester.tap(find.byKey(const Key('place_management_add')));
+    await _tapAddPlace(tester);
     await _settle(tester);
     expect(find.byKey(const Key('place_editor_name')), findsOneWidget);
     expect(location.permissionRequests, 0);
@@ -124,7 +133,7 @@ void main() {
     expect(places.single.radiusMeters, 150);
 
     // A second Place asks nothing more.
-    await tester.tap(find.byKey(const Key('place_management_add')));
+    await _tapAddPlace(tester);
     await _settle(tester);
     await savePlace(tester, name: 'Office', coordinates: '52.0800, 4.3000');
     expect(location.permissionRequests, 1);
@@ -133,7 +142,7 @@ void main() {
 
   testWidgets('the area runs from 50 m to 2 km', (tester) async {
     await openManagePlaces(tester);
-    await tester.tap(find.byKey(const Key('place_management_add')));
+    await _tapAddPlace(tester);
     await _settle(tester);
     await tester.enterText(
         find.byKey(const Key('place_editor_name')), 'Home');
@@ -179,7 +188,13 @@ void main() {
     await openManagePlaces(tester);
     expect(find.text('Home'), findsOneWidget);
     // The row says how many live Actions use the Place.
-    expect(find.text('1'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(Key('place_management_row_$placeId')),
+        matching: find.text('1'),
+      ),
+      findsOneWidget,
+    );
 
     // Rename it.
     await tester.tap(find.byKey(Key('place_management_row_$placeId')));
