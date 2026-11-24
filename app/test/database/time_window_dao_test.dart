@@ -129,9 +129,19 @@ void main() {
   test('delete removes the window and clears the reference on the two Actions '
       'that used it', () async {
     final id = await createStoreHours();
+    // A second window, with an Action of its own: the delete detaches the
+    // window it names and nothing else.
+    final otherId = await db.timeWindowDao.createTimeWindow(
+      name: 'Warehouse hours',
+      hours: <int, DayHours>{7: (startMinute: 9 * 60, endMinute: 12 * 60)},
+      userId: _userId,
+      now: _ts,
+    );
+    expect(otherId, isNotNull);
     await seedAction('a1', windowId: id);
     await seedAction('a2', windowId: id);
     await seedAction('a3');
+    await seedAction('a4', windowId: otherId);
     capture.clear();
 
     await db.timeWindowDao.deleteTimeWindow(id!, now: _ts);
@@ -143,6 +153,13 @@ void main() {
     expect(await windowIdOf('a1'), isNull);
     expect(await windowIdOf('a2'), isNull);
     expect(await windowIdOf('a3'), isNull);
+    // The other window's Action keeps its reference.
+    expect(await windowIdOf('a4'), otherId);
+    expect(
+      await (db.select(db.timeWindows)..where((w) => w.id.equals(otherId!)))
+          .get(),
+      hasLength(1),
+    );
 
     final windowOps = capture.forCollection(timeWindowsCollection);
     expect(windowOps, hasLength(1));
