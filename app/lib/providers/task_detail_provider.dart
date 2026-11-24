@@ -6,6 +6,7 @@ import '../database/daos/action_dao.dart' show TerminatedAction;
 import '../database/daos/capture_dao.dart' show CarvedOutcome;
 import '../database/gtd_database.dart';
 import '../models/action_draft.dart';
+import '../models/place_area.dart';
 import '../models/time_context.dart';
 import '../models/intent.dart';
 import '../models/routing_kind.dart';
@@ -358,6 +359,51 @@ class TaskDetailNotifier {
         clearTimeEstimate: clearEstimate,
         timeboxed: action != null ? timeboxed : null,
       );
+    });
+  }
+
+  /// Sets the named Place of the Action the sheet was opened for (issue #55).
+  ///
+  /// Guarded like [setTimeContext]: the write is dropped when that Action is
+  /// no longer the Outcome's current one, so an edit never lands on a
+  /// successor the user did not see.
+  ///
+  /// A one-time pin the Action stops pointing at goes with the reference; a
+  /// named Place belongs to the user's list and stays in it.
+  Future<bool> setNamedPlace({
+    required String actionId,
+    required String placeId,
+  }) async {
+    return _ifOutcomePresent(() async {
+      final current = await _db.actionDao.getCurrentAction(_todoId);
+      if (current == null || current.id != actionId) return;
+      await _db.actionDao.setNamedPlace(current.id, placeId);
+    });
+  }
+
+  /// Drops a one-time pin on the Action the sheet was opened for (issue #55).
+  ///
+  /// A pin belongs to this one Action: it is never listed anywhere, and it goes
+  /// when the Action stops pointing at it. The same guard as [setNamedPlace]
+  /// applies.
+  Future<bool> setPin({
+    required String actionId,
+    required PlaceArea area,
+    String? name,
+  }) async {
+    return _ifOutcomePresent(() async {
+      final current = await _db.actionDao.getCurrentAction(_todoId);
+      if (current == null || current.id != actionId) return;
+      await _db.actionDao.setPin(current.id, area, name: name);
+    });
+  }
+
+  /// Clears the Place of the Action the sheet was opened for (issue #55).
+  Future<bool> clearPlace({required String actionId}) async {
+    return _ifOutcomePresent(() async {
+      final current = await _db.actionDao.getCurrentAction(_todoId);
+      if (current == null || current.id != actionId) return;
+      await _db.actionDao.setNamedPlace(current.id, null);
     });
   }
 
