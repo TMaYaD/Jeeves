@@ -151,12 +151,21 @@ class PlaceDao extends DatabaseAccessor<GtdDatabase> with _$PlaceDaoMixin {
       // irrelevant here — the area is written only when the caller named one.
       PlaceArea? newPoint;
       if (movesPoint) {
-        newPoint = PlaceArea.create(
+        final candidate = PlaceArea.create(
           latitudeDegrees: latitudeDegrees!,
           longitudeDegrees: longitudeDegrees!,
           radiusMeters: radiusMeters ?? PlaceArea.defaultRadiusMeters,
         );
-        if (newPoint == null) return false;
+        if (candidate == null) return false;
+        // A point that did not move is no change at all: writing it would
+        // author an op for a value that stands still, and would quietly undo
+        // another device's move of the point if it synced first.
+        newPoint =
+            (candidate.latitudeMicrodegrees == current.latitudeMicrodegrees &&
+                    candidate.longitudeMicrodegrees ==
+                        current.longitudeMicrodegrees)
+                ? null
+                : candidate;
       }
 
       final ts = (now ?? DateTime.now()).toUtc();

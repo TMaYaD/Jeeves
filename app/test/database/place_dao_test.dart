@@ -102,6 +102,23 @@ void main() {
     expect(op.fields['name'], 'Bike shop');
   });
 
+  test('an unchanged point is not a change', () async {
+    final id = await createHardwareStore();
+    capture.clear();
+
+    // The stored coordinates, handed back: the point did not move, so
+    // nothing is written and no op is authored. A write here would also
+    // quietly undo another device's move of the point, if it synced first.
+    final written = await db.placeDao.updateNamedPlace(
+      placeId: id!,
+      latitudeDegrees: 52.3702,
+      longitudeDegrees: 4.8952,
+    );
+
+    expect(written, isFalse);
+    expect(capture.recorded, isEmpty);
+  });
+
   test('a pin row never appears in watchNamedPlaces', () async {
     await db.into(db.places).insert(PlacesCompanion(
           id: const Value('pin-1'),
