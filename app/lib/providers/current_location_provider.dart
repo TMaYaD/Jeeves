@@ -56,14 +56,28 @@ class CurrentLocationNotifier extends Notifier<CurrentLocation>
 
   @override
   CurrentLocation build() {
-    WidgetsBinding.instance.addObserver(this);
+    // A test that never builds a widget has no binding to watch. The
+    // location is then read once, and nothing hears of a resume.
+    final binding = _bindingOrNull();
+    if (binding != null) {
+      binding.addObserver(this);
+      ref.onDispose(() => binding.removeObserver(this));
+    }
     ref.onDispose(() {
       _disposed = true;
-      WidgetsBinding.instance.removeObserver(this);
       _subscription?.cancel();
     });
     _startReading();
     return const LocationPending();
+  }
+
+  /// The app's binding, when there is one.
+  static WidgetsBinding? _bindingOrNull() {
+    try {
+      return WidgetsBinding.instance;
+    } on FlutterError {
+      return null;
+    }
   }
 
   /// Reads the location: a fresh fix first, the OS's last known position
