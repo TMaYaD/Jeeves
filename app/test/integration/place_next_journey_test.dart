@@ -167,6 +167,14 @@ void main() {
     location.lastKnownPoint = _nearHome;
     startContainer();
 
+    // The fallback is what puts the user at Home, so the location has to be
+    // known before Next is checked: an unknown location leaves 'o1' on Next
+    // just as a known one does.
+    final known = await eventually<CurrentLocation>(
+      currentLocationProvider,
+      (v) => v is LocationKnown,
+    );
+    expect((known as LocationKnown).point, _nearHome);
     expect(await nextIds((ids) => ids.contains('o1')), {'o1'});
   });
 
@@ -237,6 +245,27 @@ void main() {
 
     expect(location.calls.contains('whileOpen'), isFalse,
         reason: 'no stream is opened behind a closed app');
+  });
+
+  test('the OS\'s cached position is not read after Jeeves goes off screen',
+      () async {
+    await seedOutcomeAtHome('o1');
+    // The fix is on its way and will not arrive.
+    location.freshFixGate = Completer<GeoPoint?>();
+    location.lastKnownPoint = _nearHome;
+    startContainer();
+    // Nothing watches the location until Jeeves does.
+    container!.read(currentLocationProvider);
+    await waitUntil(() => location.calls.contains('freshFix'));
+
+    // Jeeves goes off screen while the fix is still coming.
+    container!.read(currentLocationProvider.notifier).didChangeAppLifecycleState(
+        AppLifecycleState.paused);
+    location.freshFixGate!.complete(null);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    expect(location.calls.contains('lastKnown'), isFalse,
+        reason: 'the cached position is not read behind a closed app');
   });
 
   test('two resumes in a row open one stream, not two', () async {

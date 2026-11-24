@@ -32,12 +32,13 @@ class FakeLocationSource implements LocationSource {
   /// asked from one that refused once, and it never says "not asked".
   LocationPermission permissionState = LocationPermission.denied;
 
-  /// What `requestWhileUsing()` answers, and what the permission stands at
-  /// afterwards.
+  /// What `requestWhileUsing()` answers.
   ///
   /// Set it to [LocationPermission.deniedForever] to model a refusal for
   /// good: the OS shows no prompt, and the app's settings page is the only
-  /// way left to allow the location.
+  /// way left to allow the location. That refusal is only ever seen in the
+  /// result of the ask — the standing check answers "denied", as the plugin
+  /// does.
   LocationPermission requestResult = LocationPermission.whileInUse;
 
   /// The point a fresh fix returns. Null stands for a fix that does not
@@ -49,6 +50,14 @@ class FakeLocationSource implements LocationSource {
   /// Null means the fix answers at once. A gate lets a journey pause Jeeves
   /// while the fix is still on its way, which is where a read can go wrong.
   Completer<GeoPoint?>? freshFixGate;
+
+  /// A gate the permission request waits on, when the test says when the OS
+  /// answers.
+  ///
+  /// The OS's own prompt takes Jeeves off screen for a moment. A gate lets a
+  /// journey put the app off screen while the ask is still on its way, which
+  /// is where a read can start too late.
+  Completer<void>? requestGate;
 
   /// The point the OS's last known position returns. Null stands for a phone
   /// that has never had a fix.
@@ -79,7 +88,14 @@ class FakeLocationSource implements LocationSource {
   Future<LocationPermission> requestWhileUsing() async {
     calls.add('requestWhileUsing');
     permissionRequests++;
-    permissionState = requestResult;
+    final gate = requestGate;
+    if (gate != null) await gate.future;
+    // The refusal for good is only ever seen in the result of the ask. The
+    // standing check answers "denied", as the plugin does: it cannot say the
+    // OS will not ask again.
+    permissionState = requestResult == LocationPermission.deniedForever
+        ? LocationPermission.denied
+        : requestResult;
     return requestResult;
   }
 
@@ -127,12 +143,21 @@ class FakeAddressGeocoder implements AddressGeocoder {
   /// Every address the geocoder was asked about, in order.
   final calls = <String>[];
 
+  /// A gate the lookup waits on, when the test says when the geocoder
+  /// answers.
+  ///
+  /// A platform geocoder can take a moment. A gate lets a journey put a
+  /// choice of the user's own in front of it.
+  Completer<void>? lookupGate;
+
   @override
   bool get supportsAddressLookup => supportsLookup;
 
   @override
   Future<GeoPoint?> pointForAddress(String address) async {
     calls.add(address);
+    final gate = lookupGate;
+    if (gate != null) await gate.future;
     return points[address.trim().toLowerCase()];
   }
 }

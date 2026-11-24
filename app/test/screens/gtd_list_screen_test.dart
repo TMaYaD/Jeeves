@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:jeeves/widgets/outcome_multi_select.dart';
 import 'package:jeeves/widgets/outcome_row.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -121,5 +124,48 @@ void main() {
       expect(pushedRoute, 'x');
       expect(find.text('Detail'), findsOneWidget);
     });
+
+    testWidgets('a selection survives the list reloading', (tester) async {
+      final controller = StreamController<List<Todo>>.broadcast();
+      addTearDown(controller.close);
+      final trigger = NotifierProvider<_ReloadTrigger, int>(_ReloadTrigger.new);
+      final provider = StreamProvider<List<Todo>>((ref) {
+        ref.watch(trigger);
+        return controller.stream;
+      });
+
+      await tester.pumpWidget(ProviderScope(
+        child: MaterialApp(home: GtdListScreen(provider: provider)),
+      ));
+      controller.add([_todo('t1', 'First')]);
+      await tester.pumpAndSettle();
+
+      // The user selects the row.
+      await tester.longPress(find.text('First'));
+      await tester.pumpAndSettle();
+      expect(find.byType(OutcomeSelectionBar), findsOneWidget);
+
+      // The list reloads — the same row, and the list is reloading rather
+      // than resolved.
+      final container =
+          ProviderScope.containerOf(tester.element(find.byType(GtdListScreen)));
+      container.read(trigger.notifier).bump();
+      await tester.pump();
+      expect(container.read(provider).isLoading, isTrue);
+      controller.add([_todo('t1', 'First')]);
+      await tester.pumpAndSettle();
+
+      // The selection is still there: a list that is reloading still holds
+      // the rows it had.
+      expect(find.byType(OutcomeSelectionBar), findsOneWidget);
+    });
   });
+}
+
+/// Counts the reloads of the list under test.
+class _ReloadTrigger extends Notifier<int> {
+  @override
+  int build() => 0;
+
+  void bump() => state = state + 1;
 }

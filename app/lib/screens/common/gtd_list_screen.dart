@@ -74,7 +74,10 @@ class _GtdListScreenState extends ConsumerState<GtdListScreen> {
   @override
   Widget build(BuildContext context) {
     final asyncItems = ref.watch(widget.provider);
-    final items = asyncItems.asData?.value ?? const <Todo>[];
+    // The retained value, not the resolved one: a list that is reloading —
+    // because the location changed, say — still holds the rows it had, and
+    // the selection must survive that window.
+    final items = asyncItems.value ?? const <Todo>[];
     // The Place names are only read where the rows show them.
     final placeNames = widget.showPlaceName
         ? ref.watch(currentPlaceNamesProvider)

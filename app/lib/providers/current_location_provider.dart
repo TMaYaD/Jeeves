@@ -21,6 +21,17 @@ import 'location_source_provider.dart';
 /// instead.
 const Duration locationFreshFixTimeout = Duration(seconds: 10);
 
+/// Whether a location may be read while the app is in [state].
+///
+/// **A location is read only while Jeeves is on screen.** "Inactive" is still
+/// on screen: the OS's own permission dialog puts the app there, and the read
+/// that follows the user's "yes" has to happen. An unknown state is on screen
+/// too — nothing has said otherwise.
+bool locationReadAllowedIn(AppLifecycleState? state) =>
+    state != AppLifecycleState.paused &&
+    state != AppLifecycleState.detached &&
+    state != AppLifecycleState.hidden;
+
 /// What Jeeves knows about where the user is.
 sealed class CurrentLocation {
   const CurrentLocation();
@@ -99,7 +110,7 @@ class CurrentLocationNotifier extends Notifier<CurrentLocation>
   Future<void> _startReading() async {
     final generation = ++_generation;
     final source = ref.read(locationSourceProvider);
-    final point = await _readPoint(source);
+    final point = await _readPoint(source, generation);
     if (_disposed || generation != _generation) return;
     state = point == null ? const LocationUnknown() : LocationKnown(point);
     await _subscription?.cancel();
@@ -133,13 +144,16 @@ class CurrentLocationNotifier extends Notifier<CurrentLocation>
     }
   }
 
-  Future<GeoPoint?> _readPoint(LocationSource source) async {
+  Future<GeoPoint?> _readPoint(LocationSource source, int generation) async {
     try {
       final fresh = await source.freshFix(timeout: locationFreshFixTimeout);
       if (fresh != null) return fresh;
     } on Object {
       // A fix that fails is no fix.
     }
+    // Jeeves went off screen while the fix was on its way. The OS's cached
+    // position is not read behind a closed app.
+    if (_disposed || generation != _generation) return null;
     try {
       return await source.lastKnown();
     } on Object {
@@ -154,9 +168,7 @@ class CurrentLocationNotifier extends Notifier<CurrentLocation>
       _startReading();
       return;
     }
-    if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.detached ||
-        state == AppLifecycleState.hidden) {
+    if (!locationReadAllowedIn(state)) {
       // Nothing is read while Jeeves is off screen. The generation is bumped
       // so that a read still waiting for its fix gives up instead of opening
       // a stream behind a closed app.

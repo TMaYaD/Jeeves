@@ -175,6 +175,9 @@ void main() {
     await _settle(tester);
     expect(location.permissionRequests, 1);
     expect(settings.opens, 1);
+    // The refusal for good is only ever seen in the result of the ask: the
+    // OS's standing says "denied", as the plugin does.
+    expect(location.permissionState, LocationPermission.denied);
   });
 
   testWidgets('with the location allowed but no fix, there is no button',

@@ -13,6 +13,7 @@ import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/place_area.dart';
 import 'package:jeeves/models/time_context.dart';
 import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/providers/gtd_lists_provider.dart';
 import 'package:jeeves/providers/location_source_provider.dart';
 import 'package:jeeves/providers/place_page_provider.dart';
 import 'package:jeeves/services/location_source.dart';
@@ -75,8 +76,13 @@ void main() {
     addTearDown(sub.close);
     for (var i = 0; i < 800; i++) {
       final value = sub.read();
+      // The "On Next" marker is the Next list's own answer, so the Next list
+      // must have answered before a marker means anything: until it does,
+      // every row reads as not on Next.
+      final nextAnswered = container.read(nextProvider).hasValue;
       if (value.hasValue &&
           value.value!.isNotEmpty &&
+          nextAnswered &&
           (ready == null || ready(value.value!))) {
         return value.value!;
       }

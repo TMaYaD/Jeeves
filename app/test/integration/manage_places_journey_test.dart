@@ -5,6 +5,8 @@
 /// asks for the location — and the only time.
 library;
 
+import 'dart:async';
+
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -279,6 +281,94 @@ void main() {
     // The address went to the geocoder, and its point came back.
     expect(geocoder.calls, ['Mill Street, Amsterdam']);
     expect(coordinatesText(tester), '52.30000, 4.90000');
+  });
+
+  testWidgets('a coordinate that is not a point leaves the Place without '
+      'one', (tester) async {
+    location.permissionState = LocationPermission.whileInUse;
+    await openManagePlaces(tester);
+    await tapAddPlace(tester);
+    await _settle(tester);
+    await tester.enterText(find.byKey(const Key('place_editor_name')), 'Home');
+    await tester.enterText(
+        find.byKey(const Key('place_point_coordinates')), '52.3702, 4.8952');
+    await _settle(tester);
+
+    // The Place has a point, so it can be saved.
+    var save =
+        tester.widget<FilledButton>(find.byKey(const Key('place_editor_save')));
+    expect(save.onPressed, isNotNull);
+
+    // A pair that is not a point on the globe takes the point away: the
+    // field is the truth, and the Place cannot keep a point it has lost.
+    await tester.enterText(
+        find.byKey(const Key('place_point_coordinates')), 'NaN, 0');
+    await _settle(tester);
+    save =
+        tester.widget<FilledButton>(find.byKey(const Key('place_editor_save')));
+    expect(save.onPressed, isNull);
+    expect(find.byKey(const Key('place_point_message')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a coordinate the user typed wins over a lookup that lands '
+      'later', (tester) async {
+    geocoder.points['mill street, amsterdam'] = (
+      latitudeDegrees: 52.3000,
+      longitudeDegrees: 4.9000,
+    );
+    // The geocoder is still looking.
+    geocoder.lookupGate = Completer<void>();
+    await openManagePlaces(tester);
+    await tapAddPlace(tester);
+    await _settle(tester);
+
+    await tester.enterText(
+        find.byKey(const Key('place_point_address')), 'Mill Street, Amsterdam');
+    await tester.tap(find.byKey(const Key('place_point_find_address')));
+    await _settle(tester);
+
+    // The user types a coordinate of their own while the geocoder is away.
+    await tester.enterText(
+        find.byKey(const Key('place_point_coordinates')), '52.1000, 4.1000');
+    await _settle(tester);
+
+    // The lookup answers at last.
+    geocoder.lookupGate!.complete();
+    await _settle(tester);
+
+    // The user's own coordinate stands: a result that lands after it must
+    // not overwrite it. The field still holds what the user typed — the
+    // lookup's point would have replaced it with "52.30000, 4.90000".
+    expect(coordinatesText(tester), '52.1000, 4.1000');
+  });
+
+  testWidgets('the phone is not asked where the user is when Jeeves is off '
+      'screen', (tester) async {
+    // The OS's own prompt is still open.
+    location.requestGate = Completer<void>();
+    location.freshPoint = (
+      latitudeDegrees: 52.3702,
+      longitudeDegrees: 4.8952,
+    );
+    await openManagePlaces(tester);
+    await tapAddPlace(tester);
+    await _settle(tester);
+    await tester.enterText(find.byKey(const Key('place_editor_name')), 'Home');
+
+    await tester.tap(find.byKey(const Key('place_point_use_here')));
+    await _settle(tester);
+    // The ask is on its way.
+    expect(location.permissionRequests, 1);
+
+    // Jeeves goes off screen before the OS answers.
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    location.requestGate!.complete();
+    await _settle(tester);
+
+    // The phone was not asked where the user is, and nothing was read.
+    expect(location.calls.contains('freshFix'), isFalse);
+    expect(coordinatesText(tester), isEmpty);
   });
 
   testWidgets('a Place is renamed, and deleting it detaches the Action that '

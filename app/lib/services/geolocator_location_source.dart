@@ -85,13 +85,18 @@ class GeolocatorLocationSource implements LocationSource {
     if (!await _mayRead()) return null;
     try {
       final position = await geo.Geolocator.getCurrentPosition(
-        locationSettings: const geo.LocationSettings(
+        locationSettings: geo.LocationSettings(
           // geolocator's medium accuracy is Android's balanced power
           // accuracy: accurate enough to say "at the Place", cheap enough to
           // keep running while Jeeves is on screen.
           accuracy: geo.LocationAccuracy.medium,
+          // The deadline belongs to the plugin, not only to us. The plugin
+          // cancels the native request when its limit passes, so the phone
+          // stops sampling; our own timeout would only throw the answer
+          // away and leave the phone sampling until a fix arrived.
+          timeLimit: timeout,
         ),
-      ).timeout(timeout);
+      );
       return _point(position);
     } on Object {
       // A fix that does not arrive in time, or one the OS refuses, is "no fix".
