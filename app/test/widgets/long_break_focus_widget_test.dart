@@ -12,6 +12,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/sprint_timer_provider.dart';
 import 'package:jeeves/widgets/elapsed_timer_widget.dart';
+import 'package:jeeves/widgets/sprint_ring.dart' show RingPainter;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:timezone/data/latest_all.dart' as tz_data;
 
@@ -20,14 +21,12 @@ import '../test_helpers.dart';
 
 /// The colour of the hairline outside the ring, or null when it carries none.
 ///
-/// The ring's painter is private to the screen, so its public field is read
-/// dynamically — a private class with a public member.
+/// Read from the ring's public painter.
 Color? _hairline(WidgetTester tester) {
   for (final element in find.byType(CustomPaint).evaluate()) {
     final painter = (element.widget as CustomPaint).painter;
-    if (painter == null) continue;
-    if (painter.runtimeType.toString() != '_RingPainter') continue;
-    return (painter as dynamic).hairlineColor as Color?;
+    if (painter is! RingPainter) continue;
+    return painter.hairlineColor;
   }
   fail('the sprint ring painter is not in the tree');
 }
