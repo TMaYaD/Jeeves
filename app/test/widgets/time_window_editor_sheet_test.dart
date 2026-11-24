@@ -68,7 +68,7 @@ void main() {
     await tester.tap(find.byIcon(Icons.keyboard_outlined));
     await tester.pumpAndSettle();
     final fields = find.descendant(
-      of: find.byType(TimePicker),
+      of: find.byType(TimePickerDialog),
       matching: find.byType(TextFormField),
     );
     await tester.enterText(fields.at(0), hour);
