@@ -51,7 +51,7 @@ From a checkout, ship a source tree and run one command, as one locked step:
 ```sh
 # a commit
 git -C "$(git rev-parse --show-toplevel)" archive --format=tar HEAD \
-  | ssh <builder> jeeves-build -- 'flutter test test/path_test.dart'
+  | ssh <builder> "jeeves-build -- 'flutter test test/path_test.dart'"
 
 # the working tree, uncommitted and untracked files included (index untouched)
 top=$(git rev-parse --show-toplevel) && idx=$(mktemp -u) \
@@ -59,8 +59,14 @@ top=$(git rev-parse --show-toplevel) && idx=$(mktemp -u) \
   && GIT_INDEX_FILE=$idx git -C "$top" add -A \
   && tree=$(GIT_INDEX_FILE=$idx git -C "$top" write-tree) && rm -f "$idx" \
   && git -C "$top" archive --format=tar "$tree" \
-  | ssh <builder> jeeves-build -- 'flutter analyze'
+  | ssh <builder> "jeeves-build -- 'flutter pub get && flutter analyze'"
 ```
+
+Quote the command twice, as above. `ssh` joins its arguments into one string
+and the remote shell parses it again, so one layer of quotes is lost on the
+way: with only `'…'`, a compound command such as `a && b` runs just `a`
+under `jeeves-build`, and `b` runs afterwards in the login directory, outside
+the lock.
 
 `jeeves-build` holds one lock for sync *and* build, so concurrent callers
 queue instead of overwriting each other's source mid-build. It rsyncs into
