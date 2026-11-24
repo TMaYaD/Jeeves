@@ -22,6 +22,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../database/daos/focus_session_dao.dart' show SessionSettlement;
 import '../database/gtd_database.dart';
 import '../models/action_draft.dart';
+import '../models/planned_day.dart';
 import '../models/routing_kind.dart';
 import '../services/clarification_service.dart';
 import '../utils/snapshot_nav.dart';
@@ -241,6 +242,44 @@ bool _energyFits(String? taskEnergy, String? dayEnergy) {
   return task <= day;
 }
 
+/// The day being planned, and when each Outcome's time opens inside it.
+///
+/// The planned day runs from now to today's Evening Shutdown time, or to the
+/// next midnight when the planning runs after that time. An Outcome whose time
+/// opens inside that day can be picked, even though it cannot be done yet.
+///
+/// [notInPlannedDay] holds the Outcome ids whose time does not open in that
+/// day: they stay out of Up Next. [opensLaterAt] holds the ids whose time
+/// opens later in that day, with the instant it opens.
+final plannedDayTimeProvider =
+    Provider<({Set<String> notInPlannedDay, Map<String, DateTime> opensLaterAt})>(
+        (ref) {
+  ref.watch(timeContextBoundaryTickProvider);
+  final now = ref.watch(clockProvider)();
+  final shutdownTime =
+      ref.watch(shutdownSettingsProvider.select((s) => s.shutdownTime));
+  final contexts =
+      ref.watch(currentTimeContextsProvider).value ?? const {};
+  final dayEnd = plannedDayEnd(now: now, shutdownTime: shutdownTime);
+  final notInPlannedDay = <String>{};
+  final opensLaterAt = <String, DateTime>{};
+  for (final entry in contexts.entries) {
+    final timeContext = entry.value;
+    final opens = firstOpenInPlannedDay(
+      isOpenAt: timeContext.isSatisfiedAt,
+      nextTransitionAfter: timeContext.nextTransitionAfter,
+      now: now,
+      dayEnd: dayEnd,
+    );
+    if (opens == null) {
+      notInPlannedDay.add(entry.key);
+    } else if (opens.isAfter(now)) {
+      opensLaterAt[entry.key] = opens;
+    }
+  }
+  return (notInPlannedDay: notInPlannedDay, opensLaterAt: opensLaterAt);
+});
+
 /// Next-action tasks not yet reviewed in today's planning session, filtered
 /// down to the ones whose energy requirement fits the user's self-reported
 /// day-energy. Reactive: changing [FocusSessionPlanningState.energyLevel]
@@ -249,6 +288,10 @@ bool _energyFits(String? taskEnergy, String? dayEnergy) {
 ///
 /// A null day-energy (Energy step not yet visited) means no filtering at
 /// all; tasks with no energy tag are never filtered out.
+///
+/// An Outcome whose time opens in the day being planned is in the list, even
+/// when it is not open yet: only one whose time does not open in that day is
+/// left out (see [plannedDayTimeProvider]).
 final nextForFocusSessionPlanningProvider =
     StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
@@ -258,11 +301,11 @@ final nextForFocusSessionPlanningProvider =
     ...planningState.pendingSelectedTaskIds,
   };
   final dayEnergy = planningState.energyLevel;
-  final outsideTimeContext = ref.watch(outsideTimeContextOutcomeIdsProvider);
+  final notInPlannedDay = ref.watch(plannedDayTimeProvider).notInPlannedDay;
   return db.todoDao.watchNext().map((all) => all
       .where((t) =>
           !reviewed.contains(t.id) &&
-          !outsideTimeContext.contains(t.id) &&
+          !notInPlannedDay.contains(t.id) &&
           _energyFits(t.energyLevel, dayEnergy))
       .toList());
 });
@@ -272,7 +315,11 @@ enum OffUpNextReason {
   someday('Someday'),
   waitingFor('Waiting For'),
   aboveEnergy('Above today\'s energy'),
-  outsideTimeContext('Outside its time context');
+  outsideTimeContext('Outside its time context'),
+  /// The Outcome's time does not open in the day being planned, so it is not
+  /// in Up Next. Daily Planning's search says so in its own words; Add to Plan
+  /// keeps [outsideTimeContext], whose rule is the one it applies.
+  notOpenBeforeShutdown('Not open before Evening Shutdown');
 
   const OffUpNextReason(this.label);
   final String label;
@@ -291,8 +338,9 @@ final _allNextPoolProvider = StreamProvider.autoDispose<List<Todo>>((ref) {
 });
 
 /// Outcomes the plan-building search can offer that are not in Up Next:
-/// Someday/Maybe, Waiting-For-only, and Next Outcomes hidden by today's
-/// energy. Already-selected and already-reviewed Outcomes are left out.
+/// Someday/Maybe, Waiting-For-only, Next Outcomes whose time does not open in
+/// the day being planned, and Next Outcomes hidden by today's energy.
+/// Already-selected and already-reviewed Outcomes are left out.
 ///
 /// Only watch this while a search is active. It is a plain [Provider] over two
 /// auto-disposed streams, with a not-yet-loaded stream counting as empty, so
@@ -307,7 +355,7 @@ final offUpNextForFocusSessionPlanningProvider =
   final dayEnergy = planningState.energyLevel;
   final pool = ref.watch(_offUpNextPoolProvider).value ?? const [];
   final nextAll = ref.watch(_allNextPoolProvider).value ?? const [];
-  final outsideTimeContext = ref.watch(outsideTimeContextOutcomeIdsProvider);
+  final notInPlannedDay = ref.watch(plannedDayTimeProvider).notInPlannedDay;
   return [
     for (final t in pool)
       if (!taken.contains(t.id))
@@ -317,16 +365,16 @@ final offUpNextForFocusSessionPlanningProvider =
               ? OffUpNextReason.someday
               : OffUpNextReason.waitingFor,
         ),
-    // Outside-its-time-context wins over above-energy, so an Outcome is listed
-    // once.
+    // Not-open-before-Evening-Shutdown wins over above-energy, so an Outcome
+    // is listed once.
     for (final t in nextAll)
       if (!taken.contains(t.id) &&
-          (outsideTimeContext.contains(t.id) ||
+          (notInPlannedDay.contains(t.id) ||
               !_energyFits(t.energyLevel, dayEnergy)))
         (
           todo: t,
-          reason: outsideTimeContext.contains(t.id)
-              ? OffUpNextReason.outsideTimeContext
+          reason: notInPlannedDay.contains(t.id)
+              ? OffUpNextReason.notOpenBeforeShutdown
               : OffUpNextReason.aboveEnergy,
         ),
   ];

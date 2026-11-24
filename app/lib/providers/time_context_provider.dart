@@ -53,8 +53,8 @@ final timeContextBoundaryTickProvider = Provider<int>((ref) {
 });
 
 /// Outcome ids whose current Action's TimeContext is not satisfied right now.
-/// The Next List and Daily Planning's Up Next hide these; every other surface
-/// ignores this set (the Outcome stays on Next, only the surfaces hide it).
+/// The Next List and Add to Plan hide these; every other surface ignores this
+/// set (the Outcome stays on Next, only the surfaces hide it).
 final outsideTimeContextOutcomeIdsProvider = Provider<Set<String>>((ref) {
   ref.watch(timeContextBoundaryTickProvider);
   final now = ref.watch(clockProvider)();
