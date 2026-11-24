@@ -302,5 +302,31 @@ void main() {
 
       expect(untilMidnight.describe(), 'Mon 09:00\u201324:00');
     });
+
+    test('days that are not neighbours read as separate groups', () {
+      // Monday and Wednesday share their hours, but Tuesday is closed: the
+      // range "Mon\u2013Wed" would say otherwise.
+      final store = TimeWindowHours.create({
+        1: (startMinute: 9 * 60, endMinute: 17 * 60),
+        3: (startMinute: 9 * 60, endMinute: 17 * 60),
+      })!;
+
+      expect(
+        store.describe(),
+        'Mon 09:00\u201317:00 \u00b7 Wed 09:00\u201317:00',
+      );
+    });
+
+    test('a Monday and a Sunday are not every day', () {
+      final week = TimeWindowHours.create({
+        1: (startMinute: 9 * 60, endMinute: 17 * 60),
+        7: (startMinute: 9 * 60, endMinute: 17 * 60),
+      })!;
+
+      expect(
+        week.describe(),
+        'Mon 09:00\u201317:00 \u00b7 Sun 09:00\u201317:00',
+      );
+    });
   });
 }

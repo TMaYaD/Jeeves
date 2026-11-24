@@ -158,8 +158,10 @@ class TimeWindowHours {
   /// A short description of the hours, e.g. `Mon–Fri 09:00–17:00` or
   /// `Mon–Fri 11:00–20:00 · Sat 10:00–14:00`.
   ///
-  /// Days that share hours are grouped; a window that runs past midnight shows
-  /// its end clock as it is — the editor is where "next day" is spelled out.
+  /// Days that share hours are grouped, but only neighbours: Monday and
+  /// Wednesday with the same hours are two groups, because Tuesday is closed
+  /// between them. A window that runs past midnight shows its end clock as it
+  /// is — the editor is where "next day" is spelled out.
   String describe() {
     final groups = <String>[];
     final numbers = days;
@@ -168,6 +170,7 @@ class TimeWindowHours {
       final hours = _byDay[numbers[index]]!;
       var last = index;
       while (last + 1 < numbers.length &&
+          numbers[last + 1] == numbers[last] + 1 &&
           _sameHours(_byDay[numbers[last + 1]]!, hours)) {
         last++;
       }
