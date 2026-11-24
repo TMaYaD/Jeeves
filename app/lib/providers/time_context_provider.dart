@@ -30,27 +30,46 @@ Duration boundaryTimerDelay(DateTime now, DateTime next) {
   return delay > maxBoundaryTimerDelay ? maxBoundaryTimerDelay : delay;
 }
 
-/// A coarse signal that advances whenever a TimeContext flips between
-/// satisfied and unsatisfied. Arms one [Timer] at the earliest
+/// A coarse signal that advances whenever a TimeContext may have flipped
+/// between satisfied and unsatisfied. Arms one [Timer] at the earliest
 /// [TimeContext.nextTransitionAfter] over [currentTimeContextsProvider] and
 /// re-arms on every rebuild — the same shape as `nudgeBoundaryTickProvider`.
 ///
+/// The signal counts the re-reads rather than naming the next boundary. The
+/// same instant can be the next boundary twice over: a phone that changed its
+/// time zone while the app was away can leave a Time context's opening and its
+/// closing on one instant. Riverpod only wakes a dependent when the value it
+/// watches changes — it filters equal values — so a signal that repeated
+/// would leave the set of hidden Outcomes as it was.
+///
 /// The gate below evaluates against the clock on every rebuild, so a late timer
 /// (app backgrounded) only delays the refresh; it never shows wrong data.
-final timeContextBoundaryTickProvider = Provider<int>((ref) {
-  final now = ref.watch(clockProvider)();
-  final contexts =
-      ref.watch(currentTimeContextsProvider).value ?? const {};
-  DateTime? next;
-  for (final tc in contexts.values) {
-    final t = tc.nextTransitionAfter(now);
-    if (t != null && (next == null || t.isBefore(next))) next = t;
+final timeContextBoundaryTickProvider =
+    NotifierProvider<TimeContextBoundaryTick, int>(TimeContextBoundaryTick.new);
+
+class TimeContextBoundaryTick extends Notifier<int> {
+  /// How many times the Time contexts have been read. It only grows, so every
+  /// re-read is a new value and every dependent re-reads them with it.
+  int _reads = 0;
+
+  @override
+  int build() {
+    final now = ref.watch(clockProvider)();
+    final contexts =
+        ref.watch(currentTimeContextsProvider).value ?? const {};
+    DateTime? next;
+    for (final tc in contexts.values) {
+      final t = tc.nextTransitionAfter(now);
+      if (t != null && (next == null || t.isBefore(next))) next = t;
+    }
+    if (next != null) {
+      final timer = Timer(boundaryTimerDelay(now, next), ref.invalidateSelf);
+      ref.onDispose(timer.cancel);
+    }
+    _reads++;
+    return _reads;
   }
-  if (next == null) return 0;
-  final timer = Timer(boundaryTimerDelay(now, next), ref.invalidateSelf);
-  ref.onDispose(timer.cancel);
-  return next.millisecondsSinceEpoch ~/ 1000;
-});
+}
 
 /// Outcome ids whose current Action's TimeContext is not satisfied right now.
 /// The Next List and Add to Plan hide these; every other surface ignores this

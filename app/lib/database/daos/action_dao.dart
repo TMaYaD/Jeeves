@@ -122,6 +122,11 @@ typedef ActionPlaceWriteEffect = ({bool changed, bool placesChanged});
 /// stored anywhere.
 typedef TerminatedAction = ({Action action, int loggedMinutes});
 
+/// A current Action together with the time window row it points at, joined so
+/// one query answers both (issue #55). The window is null when the Action
+/// carries none, or names a window that no longer exists.
+typedef _ActionWithWindow = ({Action action, TimeWindow? window});
+
 @DriftAccessor(tables: [Actions, Todos, TimeLogs, Places, TimeWindows])
 class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   ActionDao(super.db);
@@ -483,6 +488,39 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     _captureAction(actionId, {
       'time_window_id': windowId,
       if (windowId != null) 'time_context': null,
+      'updated_at': encodeInstant(ts),
+    });
+    return true;
+  }
+
+  /// Clears both time gates of the Action [actionId] — the named window and
+  /// the one-time TimeContext — in one write.
+  ///
+  /// The two are exclusive when either is *set*, but the row can carry both:
+  /// the sheet's Clear says "this Action has no time", so it takes both away,
+  /// and it takes them in one write so that a peer never sees one without the
+  /// other.
+  ///
+  /// Returns whether the row was written. A no-op — the Action is gone, or it
+  /// carries no time at all — writes nothing.
+  Future<bool> applyClearTime(
+    String actionId, {
+    required DateTime ts,
+  }) async {
+    final row = await (select(actions)..where((a) => a.id.equals(actionId)))
+        .getSingleOrNull();
+    if (row == null) return false;
+    if (row.timeWindowId == null && row.timeContext == null) return false;
+    await (update(actions)..where((a) => a.id.equals(actionId))).write(
+      ActionsCompanion(
+        timeWindowId: const Value(null),
+        timeContext: const Value(null),
+        updatedAt: Value(ts),
+      ),
+    );
+    _captureAction(actionId, {
+      'time_window_id': null,
+      'time_context': null,
       'updated_at': encodeInstant(ts),
     });
     return true;
@@ -851,6 +889,44 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
       if (parsed != null) result[entry.key] = parsed;
     }
     return result;
+  }
+
+  /// The named time window of each Outcome's current Action, keyed by Outcome
+  /// id (issue #55).
+  ///
+  /// Outcomes with none are absent, and so are the ones whose window row is
+  /// gone or whose hours do not parse: a window the app cannot read never
+  /// hides an Outcome. Multi-current races resolve by the same winner rule as
+  /// every other read.
+  ///
+  /// Re-emits when a window is edited or deleted as well as when an Action
+  /// changes: the hours a window names are part of the answer.
+  Stream<Map<String, ActionTimeWindow>> watchCurrentTimeWindows() {
+    final query = select(actions).join([
+      leftOuterJoin(timeWindows, timeWindows.id.equalsExp(actions.timeWindowId)),
+    ])
+      ..where(actions.role.equals('current'));
+    return query.watch().map((rows) {
+      final byOutcome = <String, List<_ActionWithWindow>>{};
+      for (final row in rows) {
+        final action = row.readTable(actions);
+        final window = row.readTableOrNull(timeWindows);
+        (byOutcome[action.outcomeId] ??= [])
+            .add((action: action, window: window));
+      }
+      final result = <String, ActionTimeWindow>{};
+      for (final entry in byOutcome.entries) {
+        final ordered = [...entry.value]
+          ..sort((a, b) => _winnerFirst(a.action, b.action));
+        final winner = ordered.first;
+        final window = winner.window;
+        if (winner.action.timeWindowId == null || window == null) continue;
+        final hours = TimeWindowHours.tryParse(window.hours);
+        if (hours == null) continue;
+        result[entry.key] = (id: window.id, hours: hours, name: window.name);
+      }
+      return result;
+    });
   }
 
   /// The Place and the time window the Action [actionId] resolves to.

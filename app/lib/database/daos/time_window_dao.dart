@@ -25,7 +25,11 @@ import '../gtd_database.dart';
 
 part 'time_window_dao.g.dart';
 
-@DriftAccessor(tables: [TimeWindows, Actions])
+/// A named time window with the number of current Actions of active Outcomes
+/// that use it (issue #55).
+typedef TimeWindowWithCount = ({TimeWindow window, int useCount});
+
+@DriftAccessor(tables: [TimeWindows, Actions, Todos])
 class TimeWindowDao extends DatabaseAccessor<GtdDatabase>
     with _$TimeWindowDaoMixin {
   TimeWindowDao(super.db);
@@ -35,6 +39,42 @@ class TimeWindowDao extends DatabaseAccessor<GtdDatabase>
     return (select(timeWindows)
           ..orderBy([(w) => OrderingTerm.asc(w.name)]))
         .watch();
+  }
+
+  /// The user's named time windows with the number of current Actions of
+  /// active Outcomes that use each, in name order.
+  ///
+  /// A window that no Action uses counts zero; an Action whose Outcome is
+  /// done or trashed does not count, because the user is not acting on it.
+  Stream<List<TimeWindowWithCount>> watchTimeWindowsWithUseCount() {
+    final query = select(timeWindows).join([
+      leftOuterJoin(
+        actions,
+        actions.timeWindowId.equalsExp(timeWindows.id) &
+            actions.role.equals('current'),
+      ),
+      leftOuterJoin(
+        todos,
+        todos.id.equalsExp(actions.outcomeId) &
+            todos.doneAt.isNull() &
+            todos.intent.equals('trash').not(),
+      ),
+    ]);
+    return query.watch().map((rows) {
+      final byId = <String, TimeWindowWithCount>{};
+      for (final row in rows) {
+        final window = row.readTable(timeWindows);
+        final todo = row.readTableOrNull(todos);
+        final existing = byId[window.id];
+        byId[window.id] = (
+          window: window,
+          useCount: (existing?.useCount ?? 0) + (todo == null ? 0 : 1),
+        );
+      }
+      final list = byId.values.toList()
+        ..sort((a, b) => a.window.name.compareTo(b.window.name));
+      return list;
+    });
   }
 
   /// Creates a named time window and returns its id, or null when the write

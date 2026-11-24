@@ -170,4 +170,163 @@ void main() {
       expect(night.isOpenAt(DateTime(2026, 11, 10, 22, 0)), isFalse);
     });
   });
+
+  group('nextTransitionAfter', () {
+    final work = TimeWindowHours.create({
+      for (var day = 1; day <= 5; day++)
+        day: (startMinute: 9 * 60, endMinute: 17 * 60),
+    })!;
+
+    test('a weekday window opens at its start and closes at its end', () {
+      // Monday 08:00 — closed; the window opens at 09:00.
+      expect(
+        work.nextTransitionAfter(DateTime(2026, 11, 9, 8, 0)),
+        DateTime(2026, 11, 9, 9, 0),
+      );
+      // Monday 12:00 — open; it closes at 17:00.
+      expect(
+        work.nextTransitionAfter(DateTime(2026, 11, 9, 12, 0)),
+        DateTime(2026, 11, 9, 17, 0),
+      );
+      // Monday 17:00 exactly — closed; it opens again on Tuesday.
+      expect(
+        work.nextTransitionAfter(DateTime(2026, 11, 9, 17, 0)),
+        DateTime(2026, 11, 10, 9, 0),
+      );
+    });
+
+    test('the end of the week wraps to Monday', () {
+      expect(
+        work.nextTransitionAfter(DateTime(2026, 11, 13, 18, 0)),
+        DateTime(2026, 11, 16, 9, 0),
+      );
+    });
+
+    test('a day with no hours is closed and never opens', () {
+      // Saturday has no hours: the window stays closed until Monday.
+      expect(
+        work.nextTransitionAfter(DateTime(2026, 11, 14, 10, 0)),
+        DateTime(2026, 11, 16, 9, 0),
+      );
+    });
+
+    test('an overnight window opens on its day and closes the next morning', () {
+      final night = TimeWindowHours.create({
+        1: (startMinute: 22 * 60, endMinute: 2 * 60),
+      })!;
+
+      // Monday 20:00 — closed; it opens at 22:00.
+      expect(
+        night.nextTransitionAfter(DateTime(2026, 11, 9, 20, 0)),
+        DateTime(2026, 11, 9, 22, 0),
+      );
+      // Monday 23:00 — open; it closes on Tuesday at 02:00.
+      expect(
+        night.nextTransitionAfter(DateTime(2026, 11, 9, 23, 0)),
+        DateTime(2026, 11, 10, 2, 0),
+      );
+      // Tuesday 01:00 — still open; the close is an hour away.
+      expect(
+        night.nextTransitionAfter(DateTime(2026, 11, 10, 1, 0)),
+        DateTime(2026, 11, 10, 2, 0),
+      );
+      // Tuesday 02:00 — closed; it opens again next Monday.
+      expect(
+        night.nextTransitionAfter(DateTime(2026, 11, 10, 2, 0)),
+        DateTime(2026, 11, 16, 22, 0),
+      );
+    });
+
+    test('a boundary that does not change the open state is not a transition',
+        () {
+      // Every day is open all day, so no hour boundary flips anything.
+      final allDay = TimeWindowHours.create({
+        for (var day = 1; day <= 7; day++)
+          day: (startMinute: 0, endMinute: 24 * 60),
+      })!;
+      expect(allDay.nextTransitionAfter(DateTime(2026, 11, 9, 12, 0)), isNull);
+    });
+
+    test('a window that ends at midnight closes at the next midnight', () {
+      final untilMidnight = TimeWindowHours.create({
+        1: (startMinute: 9 * 60, endMinute: 24 * 60),
+      })!;
+      expect(
+        untilMidnight.nextTransitionAfter(DateTime(2026, 11, 9, 12, 0)),
+        DateTime(2026, 11, 10, 0, 0),
+      );
+    });
+  });
+
+  group('describe', () {
+    test('a run of days with the same hours reads as a range', () {
+      final work = TimeWindowHours.create({
+        for (var day = 1; day <= 5; day++)
+          day: (startMinute: 9 * 60, endMinute: 17 * 60),
+      })!;
+
+      expect(work.describe(), 'Mon\u2013Fri 09:00\u201317:00');
+    });
+
+    test('days with different hours read as separate groups', () {
+      final store = TimeWindowHours.create({
+        for (var day = 1; day <= 5; day++)
+          day: (startMinute: 11 * 60, endMinute: 20 * 60),
+        6: (startMinute: 10 * 60, endMinute: 14 * 60),
+      })!;
+
+      expect(store.describe(), 'Mon\u2013Fri 11:00\u201320:00 \u00b7 Sat 10:00\u201314:00');
+    });
+
+    test('one day reads by name', () {
+      final monday = TimeWindowHours.create({
+        1: (startMinute: 22 * 60, endMinute: 2 * 60),
+      })!;
+
+      expect(monday.describe(), 'Mon 22:00\u201302:00');
+    });
+
+    test('every day reads as Every day', () {
+      final all = TimeWindowHours.create({
+        for (var day = 1; day <= 7; day++)
+          day: (startMinute: 9 * 60, endMinute: 17 * 60),
+      })!;
+
+      expect(all.describe(), 'Every day 09:00\u201317:00');
+    });
+
+    test('a window that ends at midnight says so', () {
+      final untilMidnight = TimeWindowHours.create({
+        1: (startMinute: 9 * 60, endMinute: 24 * 60),
+      })!;
+
+      expect(untilMidnight.describe(), 'Mon 09:00\u201324:00');
+    });
+
+    test('days that are not neighbours read as separate groups', () {
+      // Monday and Wednesday share their hours, but Tuesday is closed: the
+      // range "Mon\u2013Wed" would say otherwise.
+      final store = TimeWindowHours.create({
+        1: (startMinute: 9 * 60, endMinute: 17 * 60),
+        3: (startMinute: 9 * 60, endMinute: 17 * 60),
+      })!;
+
+      expect(
+        store.describe(),
+        'Mon 09:00\u201317:00 \u00b7 Wed 09:00\u201317:00',
+      );
+    });
+
+    test('a Monday and a Sunday are not every day', () {
+      final week = TimeWindowHours.create({
+        1: (startMinute: 9 * 60, endMinute: 17 * 60),
+        7: (startMinute: 9 * 60, endMinute: 17 * 60),
+      })!;
+
+      expect(
+        week.describe(),
+        'Mon 09:00\u201317:00 \u00b7 Sun 09:00\u201317:00',
+      );
+    });
+  });
 }
