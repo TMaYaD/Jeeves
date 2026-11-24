@@ -192,6 +192,47 @@ void main() {
     expect(windows, hasLength(1));
   });
 
+  testWidgets('Delete is disabled while a write is running', (tester) async {
+    final window = await windowNamed('Store hours', {
+      1: (startMinute: 9 * 60, endMinute: 17 * 60),
+    });
+
+    await tester.pumpWidget(harness(window: window));
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester
+          .widget<TextButton>(find.byKey(const Key('time_window_delete')))
+          .onPressed,
+      isNotNull,
+      reason: 'Delete works when no write is running',
+    );
+
+    // The write is called directly, so that it is still running when the
+    // Delete control is looked at. A Delete beside a running write would
+    // open its confirmation on the same navigator, and the save's own pop
+    // would take the dialog instead of the sheet.
+    final save = tester.widget<FilledButton>(
+      find.byKey(const Key('time_window_save')),
+    );
+    save.onPressed!();
+    await tester.pump();
+
+    expect(
+      find.byKey(const Key('time_window_delete')),
+      findsOneWidget,
+      reason: 'the sheet is still open while the write runs',
+    );
+    expect(
+      tester
+          .widget<TextButton>(find.byKey(const Key('time_window_delete')))
+          .onPressed,
+      isNull,
+      reason: 'Delete must not run beside a write in progress',
+    );
+  });
+
   testWidgets('switching to the same hours applies them to every day',
       (tester) async {
     final window = await windowNamed('Store hours', {

@@ -55,8 +55,10 @@ class _TimeWindowEditorSheetState extends ConsumerState<_TimeWindowEditorSheet> 
   late _HoursMode _mode;
   final Map<int, DayHours> _hours = {};
 
-  /// Whether a write is running. The Save control is disabled while it is,
-  /// so a second tap cannot write a second window.
+  /// Whether a write is running. The Save and Delete controls are disabled
+  /// while it is: a second Save would write a second window, and a Delete
+  /// would open its confirmation beside the running write, where the save's
+  /// own pop would take the dialog instead of the sheet.
   bool _saving = false;
 
   @override
@@ -413,7 +415,7 @@ class _TimeWindowEditorSheetState extends ConsumerState<_TimeWindowEditorSheet> 
                   if (widget.window != null)
                     TextButton(
                       key: const Key('time_window_delete'),
-                      onPressed: _confirmDelete,
+                      onPressed: _saving ? null : _confirmDelete,
                       child: const Text('Delete'),
                     ),
                   const Spacer(),
