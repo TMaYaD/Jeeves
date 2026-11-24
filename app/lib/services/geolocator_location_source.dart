@@ -73,21 +73,33 @@ class GeolocatorLocationSource implements LocationSource {
     }
   }
 
+  /// The positions while Jeeves is on screen.
+  ///
+  /// The stream opens lazily and **only when the OS allows a read**: a phone
+  /// without the permission, or a platform with no location plugin, has
+  /// nothing to listen to, and asking the plugin for one would only raise an
+  /// error where there is no answer to give.
   @override
   Stream<GeoPoint> whileOpen() {
-    try {
-      return geo.Geolocator.getPositionStream(
+    return Stream<GeoPoint>.multi((controller) async {
+      if (!await _mayRead()) return;
+      final subscription = geo.Geolocator.getPositionStream(
         locationSettings: const geo.LocationSettings(
           // Medium accuracy is Android's balanced power accuracy.
           accuracy: geo.LocationAccuracy.medium,
           // The filter keeps a still user from waking the app every few metres.
           distanceFilter: 25,
         ),
-      ).map(_point);
-    } on Object {
-      // A platform with no location plugin has no stream to give.
-      return const Stream<GeoPoint>.empty();
-    }
+      ).listen(
+        (position) {
+          if (!controller.isClosed) controller.add(_point(position));
+        },
+        onError: (Object error, StackTrace stackTrace) {
+          if (!controller.isClosed) controller.addError(error, stackTrace);
+        },
+      );
+      controller.onCancel = subscription.cancel;
+    });
   }
 
   /// Whether the OS allows a read at all. Without permission there is nothing
