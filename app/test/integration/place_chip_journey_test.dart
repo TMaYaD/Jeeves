@@ -126,11 +126,14 @@ void main() {
       userId: 'local',
       actionText: 'work on o1',
       role: 'current',
+      placeId: 'p1',
       createdAt: now,
     );
     final named =
         await _real(tester, () => db.placeDao.watchNamedPlaces().first);
     final homeId = named.first.id;
+    // The Action points at the Place the chip names.
+    await _real(tester, () => db.actionDao.setNamedPlace(action.id, homeId));
     final place = (
       id: homeId,
       area: PlaceArea.create(

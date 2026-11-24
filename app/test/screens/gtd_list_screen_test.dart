@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:jeeves/providers/inbox_provider.dart';
+import 'package:jeeves/providers/place_gate_provider.dart';
 import 'package:jeeves/screens/common/gtd_list_screen.dart';
 import 'package:jeeves/providers/gtd_lists_provider.dart';
 import 'package:jeeves/screens/next/next_screen.dart';
@@ -51,6 +52,9 @@ void main() {
             nextProvider.overrideWith((_) => Stream.value([])),
             somedayMaybeProvider.overrideWith((_) => Stream.value([])),
             inboxItemsProvider.overrideWith((_) => Stream.value([])),
+            // The Next screen reads the places for the rows and for the calm
+            // line about not knowing where the user is.
+            currentPlacesProvider.overrideWith((_) => Stream.value(const {})),
           ],
           child: MaterialApp(home: entry.$1),
         ));
