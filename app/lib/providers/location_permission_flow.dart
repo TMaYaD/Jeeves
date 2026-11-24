@@ -47,7 +47,12 @@ Future<void> _markAsked() async {
 ///
 /// Returns whether the OS was asked. Nothing happens when the web has no
 /// permission to ask for, when Jeeves has asked before, or when the OS has
-/// already answered the user on its own.
+/// already granted the location.
+///
+/// **Jeeves keeps its own record of the ask**, because the OS cannot keep one
+/// for it: Android's location plugin answers "denied" for a phone that was
+/// never asked as well as for one that refused once, so the OS's standing
+/// never says "Jeeves has not asked yet".
 Future<bool> askForLocationAfterFirstSave(
   BuildContext context,
   LocationSource source,
@@ -56,10 +61,9 @@ Future<bool> askForLocationAfterFirstSave(
   if (!source.supportsPermissionPrompt) return false;
   if (await hasAskedForLocation()) return false;
 
-  // The OS's own answer counts as asked: if the user has already been asked
-  // outside Jeeves — or refused there — Jeeves does not ask them again.
+  // The user has already allowed the location: there is nothing to ask for.
   final permission = await source.permission();
-  if (permission != LocationPermission.notAsked) {
+  if (permission.isGranted) {
     await _markAsked();
     return false;
   }
@@ -87,9 +91,13 @@ Future<bool> askForLocationAfterFirstSave(
       ],
     ),
   );
+
+  // The user has been asked, whatever they answered: the explanation does
+  // not come back at the next save. The OS itself is only asked when the
+  // user said yes.
+  await _markAsked();
   if (accepted != true) return false;
 
   await source.requestWhileUsing();
-  await _markAsked();
   return true;
 }

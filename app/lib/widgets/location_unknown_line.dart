@@ -6,9 +6,9 @@
 /// whether it can be done here. No dialog, no snackbar, and never a line per
 /// Outcome.
 ///
-/// Where the OS has refused the location and will not ask again, the line
-/// carries a button that opens the app's settings — the only way left for the
-/// user to allow it.
+/// Where the OS has refused the location, the line carries a button that asks
+/// again — or, where the OS will not ask again, opens the app's settings,
+/// which is the only way left for the user to allow it.
 library;
 
 import 'dart:math';
@@ -36,11 +36,22 @@ final _random = Random();
 /// The line above the Next list. Renders nothing when the location is known,
 /// when Jeeves is still working it out, or when no Outcome on Next carries a
 /// Place.
-class LocationUnknownLine extends ConsumerWidget {
+class LocationUnknownLine extends ConsumerStatefulWidget {
   const LocationUnknownLine({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<LocationUnknownLine> createState() =>
+      _LocationUnknownLineState();
+}
+
+class _LocationUnknownLineState extends ConsumerState<LocationUnknownLine> {
+  /// The line, picked once: a line that changed its wording on every rebuild
+  /// would read as if Jeeves kept changing its mind.
+  late final String _line =
+      locationUnknownPool[_random.nextInt(locationUnknownPool.length)];
+
+  @override
+  Widget build(BuildContext context) {
     final location = ref.watch(currentLocationProvider);
     if (location is! LocationUnknown) return const SizedBox.shrink();
 
@@ -53,6 +64,14 @@ class LocationUnknownLine extends ConsumerWidget {
     if (!hasPlacedOutcome) return const SizedBox.shrink();
 
     final source = ref.watch(locationSourceProvider);
+    // The button is for a refused permission. With the permission granted and
+    // no fix to show, allowing it again would do nothing.
+    final permission = ref.watch(locationPermissionProvider);
+    final mayAsk = permission.maybeWhen(
+      data: (value) => !value.isGranted,
+      orElse: () => false,
+    );
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
       child: Row(
@@ -60,15 +79,15 @@ class LocationUnknownLine extends ConsumerWidget {
         children: [
           Expanded(
             child: Text(
-              locationUnknownPool[_random.nextInt(locationUnknownPool.length)],
+              _line,
               key: const Key('location_unknown_line'),
               style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
             ),
           ),
-          if (source.supportsPermissionPrompt)
+          if (source.supportsPermissionPrompt && mayAsk)
             TextButton(
               key: const Key('location_unknown_allow'),
-              onPressed: () => _allowLocation(context, ref),
+              onPressed: _allowLocation,
               child: const Text('Allow location'),
             ),
         ],
@@ -78,13 +97,18 @@ class LocationUnknownLine extends ConsumerWidget {
 
   /// Asks the OS again. When the OS has refused for good it will not show its
   /// prompt again, so the app's settings page is opened instead.
-  Future<void> _allowLocation(BuildContext context, WidgetRef ref) async {
+  Future<void> _allowLocation() async {
     final source = ref.read(locationSourceProvider);
-    final permission = await source.permission();
-    if (permission == LocationPermission.deniedForever) {
+    final result = await source.requestWhileUsing();
+    if (!mounted) return;
+    // The refusal for good is only ever seen here, in the result of the ask.
+    if (result == LocationPermission.deniedForever) {
       await ref.read(appSettingsOpenerProvider).openSettings();
       return;
     }
-    await source.requestWhileUsing();
+    // The permission may have been granted: let Jeeves read the location
+    // again rather than wait for the next resume.
+    ref.invalidate(currentLocationProvider);
+    ref.invalidate(locationPermissionProvider);
   }
 }

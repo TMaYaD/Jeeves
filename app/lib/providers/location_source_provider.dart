@@ -23,3 +23,13 @@ final addressGeocoderProvider = Provider<AddressGeocoder>((ref) {
   if (kIsWeb) return const WebAddressGeocoder();
   return const GeocodingAddressGeocoder();
 });
+
+/// What the OS says about the location permission, as it stands now.
+///
+/// The answer is the OS's standing, not its history — see
+/// [LocationSource.permission]. It says whether the location is allowed; it
+/// does not say whether the OS will prompt again, and it does not say whether
+/// Jeeves has asked before.
+final locationPermissionProvider = FutureProvider<LocationPermission>((ref) {
+  return ref.watch(locationSourceProvider).permission();
+});

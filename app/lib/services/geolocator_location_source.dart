@@ -9,6 +9,8 @@
 /// everything, and there is no geocoder there either.
 library;
 
+import 'dart:async';
+
 import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 
@@ -38,6 +40,30 @@ class GeolocatorLocationSource implements LocationSource {
     } on Object {
       return LocationPermission.notAsked;
     }
+  }
+
+  /// The plugin's own permission, as Jeeves's.
+  ///
+  /// **The plugin cannot say whether it was ever asked.** Its Android
+  /// `checkPermission` answers "denied" for a phone that was never asked as
+  /// well as for one that refused once, and it never answers "denied for
+  /// good" — only the result of a request can. So "denied" here means "not
+  /// granted, and asking may still work", and the refusal for good is read
+  /// off the result of [requestWhileUsing].
+  static LocationPermission _map(geo.LocationPermission permission) {
+    if (permission == geo.LocationPermission.denied) {
+      return LocationPermission.denied;
+    }
+    if (permission == geo.LocationPermission.deniedForever) {
+      return LocationPermission.deniedForever;
+    }
+    if (permission == geo.LocationPermission.whileInUse) {
+      return LocationPermission.whileInUse;
+    }
+    if (permission == geo.LocationPermission.always) {
+      return LocationPermission.always;
+    }
+    return LocationPermission.notAsked;
   }
 
   @override
@@ -79,11 +105,22 @@ class GeolocatorLocationSource implements LocationSource {
   /// without the permission, or a platform with no location plugin, has
   /// nothing to listen to, and asking the plugin for one would only raise an
   /// error where there is no answer to give.
+  ///
+  /// The cancel is wired **before** the permission is asked, so a caller that
+  /// gives up while the plugin is still being asked does not leave the
+  /// plugin's stream running behind Jeeves's back.
   @override
   Stream<GeoPoint> whileOpen() {
     return Stream<GeoPoint>.multi((controller) async {
+      StreamSubscription<geo.Position>? subscription;
+      var cancelled = false;
+      controller.onCancel = () {
+        cancelled = true;
+        return subscription?.cancel();
+      };
       if (!await _mayRead()) return;
-      final subscription = geo.Geolocator.getPositionStream(
+      if (cancelled || controller.isClosed) return;
+      subscription = geo.Geolocator.getPositionStream(
         locationSettings: const geo.LocationSettings(
           // Medium accuracy is Android's balanced power accuracy.
           accuracy: geo.LocationAccuracy.medium,
@@ -98,7 +135,11 @@ class GeolocatorLocationSource implements LocationSource {
           if (!controller.isClosed) controller.addError(error, stackTrace);
         },
       );
-      controller.onCancel = subscription.cancel;
+      // The caller gave up while the plugin was being asked.
+      if (cancelled) {
+        await subscription.cancel();
+        return;
+      }
     });
   }
 
@@ -108,25 +149,6 @@ class GeolocatorLocationSource implements LocationSource {
     final permission = await this.permission();
     return permission == LocationPermission.whileInUse ||
         permission == LocationPermission.always;
-  }
-
-  /// The plugin's own permission, as Jeeves's. Anything the plugin cannot
-  /// make sense of reads as "not asked", which is the state in which asking is
-  /// still allowed.
-  static LocationPermission _map(geo.LocationPermission permission) {
-    if (permission == geo.LocationPermission.denied) {
-      return LocationPermission.denied;
-    }
-    if (permission == geo.LocationPermission.deniedForever) {
-      return LocationPermission.deniedForever;
-    }
-    if (permission == geo.LocationPermission.whileInUse) {
-      return LocationPermission.whileInUse;
-    }
-    if (permission == geo.LocationPermission.always) {
-      return LocationPermission.always;
-    }
-    return LocationPermission.notAsked;
   }
 
   static GeoPoint _point(geo.Position position) => (
@@ -168,6 +190,9 @@ class GeocodingAddressGeocoder implements AddressGeocoder {
   const GeocodingAddressGeocoder();
 
   @override
+  bool get supportsAddressLookup => true;
+
+  @override
   Future<GeoPoint?> pointForAddress(String address) async {
     final trimmed = address.trim();
     if (trimmed.isEmpty) return null;
@@ -190,6 +215,9 @@ class GeocodingAddressGeocoder implements AddressGeocoder {
 /// The web's geocoder: none. The web has no address search.
 class WebAddressGeocoder implements AddressGeocoder {
   const WebAddressGeocoder();
+
+  @override
+  bool get supportsAddressLookup => false;
 
   @override
   Future<GeoPoint?> pointForAddress(String address) async => null;

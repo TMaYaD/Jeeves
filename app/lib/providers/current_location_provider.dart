@@ -54,6 +54,15 @@ class CurrentLocationNotifier extends Notifier<CurrentLocation>
   StreamSubscription<GeoPoint>? _subscription;
   bool _disposed = false;
 
+  /// Counts the reads that have been started, so a read that is still waiting
+  /// for its fix can tell that it is no longer the one Jeeves wants.
+  ///
+  /// A read is not instant: the fresh fix may take ten seconds. If Jeeves is
+  /// paused while it waits, that read must not go on to open a stream behind
+  /// a closed app. The generation is bumped on every stop and on every new
+  /// start, and a read that finds its generation stale gives up.
+  int _generation = 0;
+
   @override
   CurrentLocation build() {
     // A test that never builds a widget has no binding to watch. The
@@ -65,6 +74,7 @@ class CurrentLocationNotifier extends Notifier<CurrentLocation>
     }
     ref.onDispose(() {
       _disposed = true;
+      _generation++;
       _subscription?.cancel();
     });
     _startReading();
@@ -87,15 +97,16 @@ class CurrentLocationNotifier extends Notifier<CurrentLocation>
   /// the permission there is nothing to listen to, and asking for it would
   /// only raise an error where there is no answer to give.
   Future<void> _startReading() async {
+    final generation = ++_generation;
     final source = ref.read(locationSourceProvider);
     final point = await _readPoint(source);
-    if (_disposed) return;
+    if (_disposed || generation != _generation) return;
     state = point == null ? const LocationUnknown() : LocationKnown(point);
     await _subscription?.cancel();
-    if (_disposed) return;
+    if (_disposed || generation != _generation) return;
     if (!await _mayListen(source)) return;
-    if (_disposed) return;
-    _subscription = source.whileOpen().listen(
+    if (_disposed || generation != _generation) return;
+    final subscription = source.whileOpen().listen(
       (position) {
         if (_disposed) return;
         state = LocationKnown(position);
@@ -104,14 +115,19 @@ class CurrentLocationNotifier extends Notifier<CurrentLocation>
         // A stream that fails leaves Jeeves with the last position it had.
       },
     );
+    // A second resume, or a pause, came while the stream was opening.
+    if (_disposed || generation != _generation) {
+      await subscription.cancel();
+      return;
+    }
+    _subscription = subscription;
   }
 
   /// Whether the OS lets Jeeves listen for positions.
   Future<bool> _mayListen(LocationSource source) async {
     try {
       final permission = await source.permission();
-      return permission == LocationPermission.whileInUse ||
-          permission == LocationPermission.always;
+      return permission.isGranted;
     } on Object {
       return false;
     }
@@ -141,7 +157,10 @@ class CurrentLocationNotifier extends Notifier<CurrentLocation>
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached ||
         state == AppLifecycleState.hidden) {
-      // Nothing is read while Jeeves is off screen.
+      // Nothing is read while Jeeves is off screen. The generation is bumped
+      // so that a read still waiting for its fix gives up instead of opening
+      // a stream behind a closed app.
+      _generation++;
       _subscription?.cancel();
       _subscription = null;
     }

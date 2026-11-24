@@ -14,14 +14,28 @@ library;
 typedef GeoPoint = ({double latitudeDegrees, double longitudeDegrees});
 
 /// What the OS says about location permission.
+///
+/// **The OS reports its standing, not its history.** Android's location
+/// plugin answers "denied" for a phone that was never asked as well as for
+/// one that refused once, and it never answers "denied for good" at all —
+/// only the result of a request can say that. So nothing may read
+/// [notAsked] as "Jeeves has not asked yet", and nothing may read
+/// [permission] as "the OS will not ask again".
 enum LocationPermission {
-  /// The OS has not been asked yet.
+  /// The OS has not been asked yet, and says so.
+  ///
+  /// Android's location plugin never says this; [denied] covers it there.
   notAsked,
 
-  /// Refused. The OS may still show its prompt.
+  /// Not granted. The OS may still show its prompt.
+  ///
+  /// This covers a phone that was never asked and a phone that refused once:
+  /// the plugin cannot tell the two apart.
   denied,
 
   /// Refused for good: the OS will not show its prompt again.
+  ///
+  /// Only the result of a request can say this.
   deniedForever,
 
   /// Allowed while the app is on screen.
@@ -30,8 +44,8 @@ enum LocationPermission {
   /// Allowed always.
   always;
 
-  /// Whether the OS may still be asked.
-  bool get canAskAgain => this == notAsked || this == denied;
+  /// Whether the OS has granted the location.
+  bool get isGranted => this == whileInUse || this == always;
 }
 
 /// Where Jeeves reads the user's location from.
@@ -41,10 +55,18 @@ abstract class LocationSource {
   bool get supportsPermissionPrompt;
 
   /// What the OS currently says. Never asks.
+  ///
+  /// This is the OS's standing, not its history: it says whether the location
+  /// is allowed, and — on a platform that can say it — whether asking again
+  /// might still work. It does not say whether Jeeves has asked before; that
+  /// record is Jeeves's own.
   Future<LocationPermission> permission();
 
   /// Asks the OS for "while using" permission and answers what it granted.
   /// Only an explicit tap by the user may call this.
+  ///
+  /// The result is the only place a refusal "for good" can be seen: a
+  /// standing check never says it.
   Future<LocationPermission> requestWhileUsing();
 
   /// The OS's last known position, however old. Null when there is none.
@@ -65,6 +87,10 @@ abstract class LocationSource {
 /// The platform geocoder sends the address the user typed to Google, which is
 /// why the address is a personal-data touch (issue #55).
 abstract class AddressGeocoder {
+  /// Whether this platform can look an address up at all. False on the web,
+  /// where there is no geocoder.
+  bool get supportsAddressLookup;
+
   /// The point for [address], or null when the geocoder does not know it or
   /// does not answer.
   Future<GeoPoint?> pointForAddress(String address);

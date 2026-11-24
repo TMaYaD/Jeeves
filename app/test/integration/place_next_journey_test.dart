@@ -9,6 +9,8 @@
 /// Jeeves reads it only while it is on screen.
 library;
 
+import 'dart:async';
+
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter/widgets.dart';
@@ -215,5 +217,64 @@ void main() {
       (v) => v.hasValue && v.value!.isNotEmpty,
     );
     expect(upNext.value!.map((t) => t.id), contains('o1'));
+  });
+
+  test('a read still waiting for its fix gives up when Jeeves goes off '
+      'screen', () async {
+    await seedOutcomeAtHome('o1');
+    // The fix is on its way and has not arrived.
+    location.freshFixGate = Completer<GeoPoint?>();
+    startContainer();
+    // Nothing watches the location until Jeeves does.
+    container!.read(currentLocationProvider);
+    await waitUntil(() => location.calls.contains('freshFix'));
+
+    // Jeeves goes off screen while the fix is still coming.
+    container!.read(currentLocationProvider.notifier).didChangeAppLifecycleState(
+        AppLifecycleState.paused);
+    location.freshFixGate!.complete(_nearHome);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    expect(location.calls.contains('whileOpen'), isFalse,
+        reason: 'no stream is opened behind a closed app');
+  });
+
+  test('two resumes in a row open one stream, not two', () async {
+    await seedOutcomeAtHome('o1');
+    location.freshFixGate = Completer<GeoPoint?>();
+    startContainer();
+    // Nothing watches the location until Jeeves does.
+    container!.read(currentLocationProvider);
+    await waitUntil(() => location.calls.contains('freshFix'));
+
+    final notifier = container!.read(currentLocationProvider.notifier);
+    notifier.didChangeAppLifecycleState(AppLifecycleState.paused);
+    notifier.didChangeAppLifecycleState(AppLifecycleState.resumed);
+    notifier.didChangeAppLifecycleState(AppLifecycleState.resumed);
+    location.freshFixGate!.complete(_nearHome);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    expect(location.calls.where((call) => call == 'whileOpen').length, 1,
+        reason: 'one stream, not one per resume');
+  });
+
+  test('the position stream stops when Jeeves goes off screen', () async {
+    await seedOutcomeAtHome('o1');
+    location.freshPoint = _nearHome;
+    startContainer();
+    await nextIds((ids) => ids.contains('o1'));
+    await waitUntil(() => location.calls.contains('whileOpen'));
+
+    final notifier = container!.read(currentLocationProvider.notifier);
+    notifier.didChangeAppLifecycleState(AppLifecycleState.paused);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    // The user moves; Jeeves is off screen and hears nothing.
+    location.moveTo(_elsewhere);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(
+      container!.read(currentLocationProvider),
+      isA<LocationKnown>().having((known) => known.point, 'point', _nearHome),
+    );
   });
 }
