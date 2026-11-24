@@ -170,4 +170,91 @@ void main() {
       expect(night.isOpenAt(DateTime(2026, 11, 10, 22, 0)), isFalse);
     });
   });
+
+  group('nextTransitionAfter', () {
+    final work = TimeWindowHours.create({
+      for (var day = 1; day <= 5; day++)
+        day: (startMinute: 9 * 60, endMinute: 17 * 60),
+    })!;
+
+    test('a weekday window opens at its start and closes at its end', () {
+      // Monday 08:00 — closed; the window opens at 09:00.
+      expect(
+        work.nextTransitionAfter(DateTime(2026, 11, 9, 8, 0)),
+        DateTime(2026, 11, 9, 9, 0),
+      );
+      // Monday 12:00 — open; it closes at 17:00.
+      expect(
+        work.nextTransitionAfter(DateTime(2026, 11, 9, 12, 0)),
+        DateTime(2026, 11, 9, 17, 0),
+      );
+      // Monday 17:00 exactly — closed; it opens again on Tuesday.
+      expect(
+        work.nextTransitionAfter(DateTime(2026, 11, 9, 17, 0)),
+        DateTime(2026, 11, 10, 9, 0),
+      );
+    });
+
+    test('the end of the week wraps to Monday', () {
+      expect(
+        work.nextTransitionAfter(DateTime(2026, 11, 13, 18, 0)),
+        DateTime(2026, 11, 16, 9, 0),
+      );
+    });
+
+    test('a day with no hours is closed and never opens', () {
+      // Saturday has no hours: the window stays closed until Monday.
+      expect(
+        work.nextTransitionAfter(DateTime(2026, 11, 14, 10, 0)),
+        DateTime(2026, 11, 16, 9, 0),
+      );
+    });
+
+    test('an overnight window opens on its day and closes the next morning', () {
+      final night = TimeWindowHours.create({
+        1: (startMinute: 22 * 60, endMinute: 2 * 60),
+      })!;
+
+      // Monday 20:00 — closed; it opens at 22:00.
+      expect(
+        night.nextTransitionAfter(DateTime(2026, 11, 9, 20, 0)),
+        DateTime(2026, 11, 9, 22, 0),
+      );
+      // Monday 23:00 — open; it closes on Tuesday at 02:00.
+      expect(
+        night.nextTransitionAfter(DateTime(2026, 11, 9, 23, 0)),
+        DateTime(2026, 11, 10, 2, 0),
+      );
+      // Tuesday 01:00 — still open; the close is an hour away.
+      expect(
+        night.nextTransitionAfter(DateTime(2026, 11, 10, 1, 0)),
+        DateTime(2026, 11, 10, 2, 0),
+      );
+      // Tuesday 02:00 — closed; it opens again next Monday.
+      expect(
+        night.nextTransitionAfter(DateTime(2026, 11, 10, 2, 0)),
+        DateTime(2026, 11, 16, 22, 0),
+      );
+    });
+
+    test('a boundary that does not change the open state is not a transition',
+        () {
+      // Every day is open all day, so no hour boundary flips anything.
+      final allDay = TimeWindowHours.create({
+        for (var day = 1; day <= 7; day++)
+          day: (startMinute: 0, endMinute: 24 * 60),
+      })!;
+      expect(allDay.nextTransitionAfter(DateTime(2026, 11, 9, 12, 0)), isNull);
+    });
+
+    test('a window that ends at midnight closes at the next midnight', () {
+      final untilMidnight = TimeWindowHours.create({
+        1: (startMinute: 9 * 60, endMinute: 24 * 60),
+      })!;
+      expect(
+        untilMidnight.nextTransitionAfter(DateTime(2026, 11, 9, 12, 0)),
+        DateTime(2026, 11, 10, 0, 0),
+      );
+    });
+  });
 }

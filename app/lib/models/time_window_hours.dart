@@ -153,6 +153,38 @@ class TimeWindowHours {
   static int _previousWeekday(DateTime local) =>
       DateTime(local.year, local.month, local.day - 1).weekday;
 
+  /// The next local instant after [now] at which the window flips between open
+  /// and closed, or null when it cannot flip again.
+  ///
+  /// Every hour boundary is a candidate, and a candidate counts only when the
+  /// open state really differs across it — two overlapping days can meet at a
+  /// boundary without the window closing there.
+  ///
+  /// A day that opens at 09:00 and closes at 17:00 flips twice; an overnight
+  /// day (22:00–02:00) opens on its own day and closes the next morning.
+  DateTime? nextTransitionAfter(DateTime now) {
+    final local = now.toLocal();
+    DateTime? best;
+    for (var offset = -1; offset <= 8; offset++) {
+      final day = DateTime(local.year, local.month, local.day + offset);
+      final hours = _byDay[day.weekday];
+      if (hours == null) continue;
+      final start = DateTime(day.year, day.month, day.day, 0, hours.startMinute);
+      // An end at or before the start belongs to the next day.
+      final end = hours.endMinute > hours.startMinute
+          ? DateTime(day.year, day.month, day.day, 0, hours.endMinute)
+          : DateTime(day.year, day.month, day.day + 1, 0, hours.endMinute);
+      for (final candidate in [start, end]) {
+        if (!candidate.isAfter(local)) continue;
+        if (best != null && !candidate.isBefore(best)) continue;
+        final before = candidate.subtract(const Duration(minutes: 1));
+        if (isOpenAt(candidate) == isOpenAt(before)) continue;
+        best = candidate;
+      }
+    }
+    return best;
+  }
+
   @override
   bool operator ==(Object other) =>
       other is TimeWindowHours && other.encode() == encode();

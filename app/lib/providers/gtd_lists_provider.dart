@@ -4,6 +4,7 @@ import '../database/gtd_database.dart';
 import 'database_provider.dart';
 import 'tag_filter_provider.dart';
 import 'time_context_provider.dart';
+import 'time_window_provider.dart';
 
 export '../database/gtd_database.dart' show Capture, Todo;
 
@@ -12,12 +13,20 @@ export '../database/gtd_database.dart' show Capture, Todo;
 /// Automatically filtered by the active context tag set from
 /// [tagFilterProvider] (AND semantics when multiple tags are selected).
 ///
-/// Outcomes whose current Action's TimeContext is not satisfied right now are
-/// hidden ([outsideTimeContextOutcomeIdsProvider]); they come back on their own.
+/// Outcomes whose current Action's TimeContext is not satisfied right now, or
+/// whose current Action's named time window is closed right now, are hidden
+/// ([outsideTimeContextOutcomeIdsProvider],
+/// [outsideTimeWindowOutcomeIdsProvider]); they come back on their own.
+///
+/// Hiding is on Next only: Up Next and Add to Plan read the Time context set
+/// alone, so a named window never hides an Outcome there.
 final nextProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
   final tagIds = ref.watch(tagFilterProvider);
-  final outside = ref.watch(outsideTimeContextOutcomeIdsProvider);
+  final outside = {
+    ...ref.watch(outsideTimeContextOutcomeIdsProvider),
+    ...ref.watch(outsideTimeWindowOutcomeIdsProvider),
+  };
   return db.todoDao.watchNext(tagIds: tagIds).map((all) => outside.isEmpty
       ? all
       : all.where((t) => !outside.contains(t.id)).toList());
