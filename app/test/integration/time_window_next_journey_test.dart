@@ -7,6 +7,7 @@ library;
 
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
+import 'package:flutter/widgets.dart' show AppLifecycleState;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show ProviderListenable;
 import 'package:flutter_test/flutter_test.dart';
@@ -189,5 +190,58 @@ void main() {
     db.notifyTimeWindowsViewWrite();
 
     expect(await nextIds((ids) => ids.contains('o1')), {'o1'});
+  });
+
+  test('the boundary signal advances on every re-read, even when the next '
+      'boundary is the same instant', () async {
+    final windowId = await createWindow('Work hours', _workHours);
+    final actionId = await _insertOutcome(db, 'o1');
+    await db.actionDao.setTimeWindow(actionId, windowId);
+    clock = () => DateTime(2026, 11, 11, 17, 0);
+    startContainer();
+
+    final first = container.read(timeWindowBoundaryTickProvider);
+    container.invalidate(timeWindowBoundaryTickProvider);
+    await container.pump();
+    final second = container.read(timeWindowBoundaryTickProvider);
+
+    // The next boundary is the same instant as before — the clock did not
+    // move — but the signal has to change: Riverpod only wakes a dependent
+    // when the value it watches changes, and a signal that repeated would
+    // leave the set of hidden Outcomes as it was.
+    expect(second, isNot(first));
+  });
+
+  testWidgets('the app resuming re-reads the windows', (tester) async {
+    final windowId = await createWindow('Work hours', _workHours);
+    final actionId = await _insertOutcome(db, 'o1');
+    await db.actionDao.setTimeWindow(actionId, windowId);
+    // Wednesday 17:00 — the window has just closed.
+    clock = () => DateTime(2026, 11, 11, 17, 0);
+    startContainer();
+    // The observer that re-arms the boundary when the app comes back.
+    container.read(timeBoundaryResumeProvider);
+    // Reading the set starts the window stream; let it arrive.
+    container.read(outsideTimeWindowOutcomeIdsProvider);
+    await tester.runAsync(() => pumpEventQueue());
+    await tester.pump();
+
+    expect(container.read(outsideTimeWindowOutcomeIdsProvider), contains('o1'));
+
+    // The phone changed its time zone while the app was away, so the window
+    // is open now. The app comes back and re-reads the windows.
+    clock = () => DateTime(2026, 11, 11, 9, 30);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+
+    expect(
+      container.read(outsideTimeWindowOutcomeIdsProvider),
+      isNot(contains('o1')),
+    );
+
+    // The container goes before the test ends, so that neither the boundary
+    // timer nor the Drift close timer outlives it.
+    container.dispose();
+    await tester.pump();
   });
 }
