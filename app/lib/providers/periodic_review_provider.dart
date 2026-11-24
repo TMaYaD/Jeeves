@@ -340,13 +340,11 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
       final todos = _uncovered(await _db.todoDao.getNextExcludingPersonTagged())
           .where((todo) => !bypassedIds.contains(todo.id))
           .toList();
-      // Batched current-Action lookup so the card renders the concrete
-      // commitment without one DAO call per item.
-      final actionTexts = await _db.actionDao
-          .getCurrentActionTexts({for (final t in todos) t.id});
+      // No current-Action lookup here: the step's card reads the current
+      // Actions live, so the Action's text and the time beside it always
+      // come from one Action (issue #1073).
       state = state.copyWith(
         nextNav: state.nextNav.withItems(todos),
-        actionTexts: {...state.actionTexts, ...actionTexts},
       );
     } catch (e) {
       state = state.copyWith(nextLoadError: e.toString());

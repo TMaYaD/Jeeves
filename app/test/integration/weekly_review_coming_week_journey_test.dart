@@ -39,6 +39,7 @@ Future<String> _insertOutcome(
   required String id,
   required String title,
   required DateTime createdAt,
+  String? actionText,
 }) async {
   await db.into(db.todos).insert(TodosCompanion(
         id: Value(id),
@@ -51,7 +52,7 @@ Future<String> _insertOutcome(
   await seedCurrentAction(
     db,
     outcomeId: id,
-    text: 'work on $title',
+    text: actionText ?? 'work on $title',
     userId: _userId,
     createdAt: createdAt,
   );
@@ -179,6 +180,79 @@ void main() {
     await _pumpUntilFound(tester, find.text('Plan the summer'));
     expect(find.text('Plan the summer'), findsOneWidget);
     expect(find.byKey(const Key('coming-week-time')), findsNothing);
+  });
+
+  testWidgets('the card\'s Action text and its time line describe the same '
+      'Action', (tester) async {
+    final db = GtdDatabase(NativeDatabase.memory());
+    addTearDown(db.close);
+    await tester.binding.setSurfaceSize(const Size(800, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    // The current Action, with a named window of its own.
+    final danceWindow = await db.timeWindowDao.createTimeWindow(
+      name: 'Dance class',
+      hours: {
+        3: (startMinute: 16 * 60, endMinute: 20 * 60),
+      },
+      userId: _userId,
+    );
+    // The successor: a planned Action with a window of its own.
+    final gymWindow = await db.timeWindowDao.createTimeWindow(
+      name: 'Gym',
+      hours: {
+        4: (startMinute: 9 * 60, endMinute: 10 * 60),
+      },
+      userId: _userId,
+    );
+    final currentAction = await _insertOutcome(
+      db,
+      id: 'dance',
+      title: 'Dance class',
+      actionText: 'Book the class',
+      createdAt: DateTime(2026, 11, 1, 9),
+    );
+    await db.actionDao.setTimeWindow(currentAction, danceWindow);
+    await db.actionDao.addPlannedAction('dance', 'Attend the class');
+    final planned = (await db.actionDao.getPlannedActions('dance')).single;
+    await db.actionDao.setTimeWindow(planned.id, gymWindow);
+
+    final container = ProviderContainer(overrides: [
+      databaseProvider.overrideWithValue(db),
+      notificationServiceProvider
+          .overrideWithValue(StubPeriodicReviewNotificationService()),
+      clockProvider.overrideWith((ref) => () => _now),
+    ]);
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: container,
+      child: const MaterialApp(home: PeriodicReviewScreen()),
+    ));
+    await settleWithRealAsync(tester);
+
+    await tester.runAsync(() async {
+      await container
+          .read(periodicReviewProvider.notifier)
+          .goToStep(PeriodicReviewNotifier.kStepNext);
+    });
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    await _pumpUntilFound(tester, find.text('Book the class'));
+    expect(find.text('Dance class · Wed 16:00–20:00'), findsOneWidget);
+
+    // The current Action is replaced while the review is open — the planned
+    // Action is promoted. The card must show the successor's words beside the
+    // successor's time: never the retired Action's words beside the
+    // successor's time.
+    await tester.runAsync(() async {
+      await db.actionDao.supersedeAndPromote(planned.id);
+    });
+    await _pumpUntilFound(tester, find.text('Attend the class'));
+
+    expect(find.text('Book the class'), findsNothing);
+    expect(find.text('Gym · Thu 09:00–10:00'), findsOneWidget);
   });
 }
 
