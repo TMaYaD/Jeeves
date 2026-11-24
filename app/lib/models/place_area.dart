@@ -69,12 +69,10 @@ class PlaceArea {
     }
     final latitude = toMicrodegrees(latitudeDegrees);
     final longitude = toMicrodegrees(longitudeDegrees);
-    if (latitude < -90 * _microdegreesPerDegree ||
-        latitude > 90 * _microdegreesPerDegree) {
-      return null;
-    }
-    if (longitude < -180 * _microdegreesPerDegree ||
-        longitude > 180 * _microdegreesPerDegree) {
+    if (!isPointOnGlobe(
+      latitudeMicrodegrees: latitude,
+      longitudeMicrodegrees: longitude,
+    )) {
       return null;
     }
     final radius = radiusMeters ?? defaultRadiusMeters;
@@ -86,6 +84,20 @@ class PlaceArea {
     );
   }
 
+  /// Whether the point, in microdegrees, lies on the globe: a latitude within
+  /// ±90° and a longitude within ±180°.
+  ///
+  /// The one rule for "is this a point at all". A write refuses a point that
+  /// fails it, and a stored point that fails it reads as no place.
+  static bool isPointOnGlobe({
+    required int latitudeMicrodegrees,
+    required int longitudeMicrodegrees,
+  }) =>
+      latitudeMicrodegrees >= -90 * _microdegreesPerDegree &&
+      latitudeMicrodegrees <= 90 * _microdegreesPerDegree &&
+      longitudeMicrodegrees >= -180 * _microdegreesPerDegree &&
+      longitudeMicrodegrees <= 180 * _microdegreesPerDegree;
+
   /// Reads a stored area. A stored radius outside the accepted range is
   /// clamped into it — a tolerant reader, because a radius the app cannot
   /// make sense of should still leave the Place usable. A stored point off the
@@ -95,12 +107,10 @@ class PlaceArea {
     required int longitudeMicrodegrees,
     required int radiusMeters,
   }) {
-    if (latitudeMicrodegrees < -90 * _microdegreesPerDegree ||
-        latitudeMicrodegrees > 90 * _microdegreesPerDegree) {
-      return null;
-    }
-    if (longitudeMicrodegrees < -180 * _microdegreesPerDegree ||
-        longitudeMicrodegrees > 180 * _microdegreesPerDegree) {
+    if (!isPointOnGlobe(
+      latitudeMicrodegrees: latitudeMicrodegrees,
+      longitudeMicrodegrees: longitudeMicrodegrees,
+    )) {
       return null;
     }
     return PlaceArea._(

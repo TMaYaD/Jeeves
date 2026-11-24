@@ -55,6 +55,7 @@ import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:drift/drift.dart';
 
 import '../database/gtd_database.dart';
+import '../models/place_area.dart';
 import '../models/time_window_hours.dart';
 import '../sync/collection_codecs.dart';
 import 'import_progress.dart';
@@ -559,17 +560,50 @@ String _recordName(_PendingRow row) => '${row.codec.collection}/${row.id}';
 
 /// The reason this row's values are refused, or null when they are accepted.
 ///
-/// The store's own constraints catch a value a column will not hold, but a
-/// window's hours are free text: the column takes any string, and the app
-/// cannot read one that is not a valid set of hours. Such a window is dead —
-/// here, and on every other device the import syncs it to — so the hours are
-/// checked with the same rule the DAO applies, and the record is named and
-/// set aside rather than written.
+/// The store's own constraints catch a value a column will not hold, but two
+/// columns take a value the app cannot use. A window's hours are free text:
+/// the column takes any string, and the app cannot read one that is not a
+/// valid set of hours. A place's point is an integer that may lie off the
+/// globe: the column takes any integer, and the app cannot read a point that
+/// is not a point. Either record is dead — here, and on every other device
+/// the import syncs it to — so both are checked with the same rule the DAO
+/// applies, and the record is named and set aside rather than written.
 String? _refusedValue(CollectionCodec codec, Map<String, Object?> fields) {
-  if (codec.collection != timeWindowsCollection) return null;
-  final hours = fields['hours'];
-  if (hours is String && TimeWindowHours.tryParse(hours) != null) return null;
-  return 'The time window hours are not a readable set of hours: "$hours".';
+  switch (codec.collection) {
+    case timeWindowsCollection:
+      final hours = fields['hours'];
+      if (hours is String && TimeWindowHours.tryParse(hours) != null) {
+        return null;
+      }
+      return 'The time window hours are not a readable set of hours: "$hours".';
+    case placesCollection:
+      final latitude = _asStoredMicrodegrees(fields['latitude_microdegrees']);
+      final longitude = _asStoredMicrodegrees(fields['longitude_microdegrees']);
+      // A coordinate the file does not carry as a number is left to the
+      // store, whose own constraint refuses the column it cannot hold.
+      if (latitude == null || longitude == null) return null;
+      if (PlaceArea.isPointOnGlobe(
+        latitudeMicrodegrees: latitude,
+        longitudeMicrodegrees: longitude,
+      )) {
+        return null;
+      }
+      return 'The place point is off the globe: '
+          'latitude $latitude, longitude $longitude.';
+    default:
+      return null;
+  }
+}
+
+/// The coordinate as the integer the row would hold, or null when the file
+/// carries something that is not a number.
+int? _asStoredMicrodegrees(Object? value) {
+  if (value is int) return value;
+  if (value is double) {
+    if (!value.isFinite) return null;
+    return value.toInt();
+  }
+  return null;
 }
 
 /// A failure reason a user can read: what went wrong, without the noise.

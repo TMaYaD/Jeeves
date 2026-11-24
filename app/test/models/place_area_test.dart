@@ -189,4 +189,47 @@ void main() {
       );
     });
   });
+
+  group('isPointOnGlobe', () {
+    test('accepts a point on the globe', () {
+      expect(
+        PlaceArea.isPointOnGlobe(
+          latitudeMicrodegrees: 52000000,
+          longitudeMicrodegrees: 13000000,
+        ),
+        isTrue,
+      );
+      expect(
+        PlaceArea.isPointOnGlobe(
+          latitudeMicrodegrees: 90000000,
+          longitudeMicrodegrees: 180000000,
+        ),
+        isTrue,
+      );
+      expect(
+        PlaceArea.isPointOnGlobe(
+          latitudeMicrodegrees: -90000000,
+          longitudeMicrodegrees: -180000000,
+        ),
+        isTrue,
+      );
+    });
+
+    test('refuses a point off the globe', () {
+      expect(
+        PlaceArea.isPointOnGlobe(
+          latitudeMicrodegrees: 91000000,
+          longitudeMicrodegrees: 13000000,
+        ),
+        isFalse,
+      );
+      expect(
+        PlaceArea.isPointOnGlobe(
+          latitudeMicrodegrees: 52000000,
+          longitudeMicrodegrees: 181000000,
+        ),
+        isFalse,
+      );
+    });
+  });
 }

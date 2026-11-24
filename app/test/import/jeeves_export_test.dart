@@ -1079,6 +1079,86 @@ void main() {
       expect(recorder.keys, contains('time_windows/tw-good'));
     });
 
+    test('a place whose point is off the globe is named, and not written',
+        () async {
+      // The store would take any integer in the coordinate columns, but a
+      // point off the globe is not a place: the app cannot read it, so the
+      // Action that points at it would silently lose its place — here, and
+      // on every other device the import syncs it to. The DAO refuses such
+      // a point on a write, and the import refuses it the same way.
+      final content = jsonEncode({
+        jeevesExportEnvelopeKey: jeevesExportVersion,
+        jeevesExportCollectionsKey: {
+          'places': [
+            {
+              'id': 'place-good',
+              'name': 'Hardware store',
+              'kind': 'named',
+              'latitude_microdegrees': 52000000,
+              'longitude_microdegrees': 13000000,
+              'radius_meters': 300,
+              'created_at': '2026-07-28T05:00:00.000Z',
+              'user_id': _userId,
+            },
+            {
+              'id': 'place-off-globe',
+              'name': 'Nowhere',
+              'kind': 'named',
+              'latitude_microdegrees': 91000000,
+              'longitude_microdegrees': 13000000,
+              'radius_meters': 300,
+              'created_at': '2026-07-28T05:00:00.000Z',
+              'user_id': _userId,
+            },
+            {
+              'id': 'place-off-globe-longitude',
+              'name': 'Nowhere else',
+              'kind': 'named',
+              'latitude_microdegrees': 52000000,
+              'longitude_microdegrees': 181000000,
+              'radius_meters': 300,
+              'created_at': '2026-07-28T05:00:00.000Z',
+              'user_id': _userId,
+            },
+          ],
+        },
+      });
+
+      final recorder = RecordingDomainOpCapture();
+      final db = _openInMemory(recorder: recorder);
+      addTearDown(db.close);
+
+      final result = await importJeevesExport(
+        content: content,
+        userId: _userId,
+        db: db,
+      );
+
+      // The readable place landed; the two off the globe did not.
+      final places = await db.select(db.places).get();
+      expect([for (final place in places) place.id], ['place-good']);
+
+      // And each was named, with the reason.
+      expect(result.failedRecords, hasLength(2));
+      expect(
+        [for (final failure in result.failedRecords) failure.record],
+        containsAll([
+          'places/place-off-globe',
+          'places/place-off-globe-longitude',
+        ]),
+      );
+      for (final failure in result.failedRecords) {
+        expect(failure.reason, contains('point'),
+            reason: 'the reason must point at the value that was refused');
+      }
+
+      // And they are not on the op log: a record this device did not keep
+      // is never asserted to the other devices.
+      expect(recorder.keys, isNot(contains('places/place-off-globe')));
+      expect(recorder.keys, isNot(contains('places/place-off-globe-longitude')));
+      expect(recorder.keys, contains('places/place-good'));
+    });
+
     test('the failures reach the user through the import surface', () async {
       // The whole point is that the user is told. Drive the real entry point
       // and the real notifier: the import finishes, and what it left out
