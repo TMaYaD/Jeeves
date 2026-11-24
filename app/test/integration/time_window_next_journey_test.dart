@@ -200,7 +200,22 @@ void main() {
     clock = () => DateTime(2026, 11, 11, 17, 0);
     startContainer();
 
+    // The windows have to be loaded before the baseline is taken: the tick
+    // rebuilds when the feed delivers, and every rebuild is a new value. A
+    // baseline taken before the delivery would move on its own, and the
+    // assertion below would pass even if the invalidation did nothing.
+    await eventually(currentTimeWindowsProvider, (v) => v.hasValue);
+    expect(container.read(currentTimeWindowsProvider).hasValue, isTrue,
+        reason: 'the windows of the current Actions have been read');
+    await container.pump();
+
     final first = container.read(timeWindowBoundaryTickProvider);
+    // The signal has settled on the loaded windows: nothing else may move it
+    // between the baseline and the assertion.
+    await container.pump();
+    expect(container.read(timeWindowBoundaryTickProvider), first,
+        reason: 'the signal has settled on the loaded windows');
+
     container.invalidate(timeWindowBoundaryTickProvider);
     await container.pump();
     final second = container.read(timeWindowBoundaryTickProvider);
@@ -222,8 +237,26 @@ void main() {
     // The observer that re-arms the boundary when the app comes back.
     container.read(timeBoundaryResumeProvider);
 
+    // The baseline is taken once the windows have been read: the tick
+    // rebuilds when the feed delivers, and that rebuild is a new value. A
+    // baseline taken before the delivery would move on its own, and the
+    // assertion below would pass even if the resume did nothing.
+    final windows = container.listen(currentTimeWindowsProvider, (_, _) {});
+    addTearDown(windows.close);
+    for (var i = 0; i < 6; i++) {
+      await tester.runAsync(() => pumpEventQueue());
+      await tester.pump();
+      if (container.read(currentTimeWindowsProvider).hasValue) break;
+    }
+    expect(container.read(currentTimeWindowsProvider).hasValue, isTrue,
+        reason: 'the windows of the current Actions have been read');
+
     final before = container.read(timeWindowBoundaryTickProvider);
+    // The signal has settled on the loaded windows: nothing else may move it
+    // between the baseline and the assertion.
     await container.pump();
+    expect(container.read(timeWindowBoundaryTickProvider), before,
+        reason: 'the signal has settled on the loaded windows');
 
     // The app comes back to the foreground: the boundary is armed again, and
     // the windows are read again against the clock — a phone that changed its
