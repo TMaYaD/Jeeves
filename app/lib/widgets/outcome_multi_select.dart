@@ -38,7 +38,6 @@ Widget selectableOutcomeRow({
     timeEstimateMinutes: todo.timeEstimate,
     dueDate: todo.dueDate,
     placeName: placeName,
-    secondary: secondary,
     leading: selectionActive
         ? Checkbox(value: selected, onChanged: (_) => onToggle())
         : null,
