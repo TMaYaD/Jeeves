@@ -55,6 +55,10 @@ class _TimeWindowEditorSheetState extends ConsumerState<_TimeWindowEditorSheet> 
   late _HoursMode _mode;
   final Map<int, DayHours> _hours = {};
 
+  /// Whether a write is running. The Save control is disabled while it is,
+  /// so a second tap cannot write a second window.
+  bool _saving = false;
+
   @override
   void initState() {
     super.initState();
@@ -107,11 +111,14 @@ class _TimeWindowEditorSheetState extends ConsumerState<_TimeWindowEditorSheet> 
     required int initialMinute,
     required void Function(int minute) onPicked,
   }) async {
+    // An end of 24:00 (the end of the day) is a valid value but not a
+    // TimeOfDay, whose hour is 0–23: the picker opens on 23:59.
+    final initial = initialMinute.clamp(0, 24 * 60 - 1);
     final picked = await showTimePicker(
       context: context,
       initialTime: TimeOfDay(
-        hour: initialMinute ~/ 60,
-        minute: initialMinute % 60,
+        hour: initial ~/ 60,
+        minute: initial % 60,
       ),
     );
     if (picked == null) return;
@@ -137,14 +144,13 @@ class _TimeWindowEditorSheetState extends ConsumerState<_TimeWindowEditorSheet> 
           children: [
             TextButton(
               key: Key('${keyPrefix}_start'),
+              // The end stays where the user put it: moving the start of an
+              // overnight window must not turn it into a daytime one, and an
+              // end at or before the new start belongs to the next day, which
+              // the row says out loud.
               onPressed: () => _pickTime(
                 initialMinute: startMinute,
-                onPicked: (picked) => onChanged(
-                  picked,
-                  endMinute > picked
-                      ? endMinute
-                      : (picked + 60).clamp(0, 24 * 60).toInt(),
-                ),
+                onPicked: (picked) => onChanged(picked, endMinute),
               ),
               child: Text(_clock(startMinute)),
             ),
@@ -185,25 +191,37 @@ class _TimeWindowEditorSheetState extends ConsumerState<_TimeWindowEditorSheet> 
   }
 
   Future<void> _save() async {
+    // One write at a time: a second tap while the first is running would
+    // write a second window.
+    if (_saving) return;
     final value = _value;
     if (value == null) return;
+    _saving = true;
+    if (mounted) setState(() {});
     final db = ref.read(databaseProvider);
     final userId = ref.read(currentUserIdProvider);
     final existing = widget.window;
     String? id;
-    if (existing == null) {
-      id = await db.timeWindowDao.createTimeWindow(
-        name: _name.text.trim(),
-        hours: Map.of(_hours),
-        userId: userId,
-      );
-    } else {
-      id = existing.id;
-      await db.timeWindowDao.updateTimeWindow(
-        windowId: existing.id,
-        name: _name.text.trim(),
-        hours: Map.of(_hours),
-      );
+    try {
+      if (existing == null) {
+        id = await db.timeWindowDao.createTimeWindow(
+          name: _name.text.trim(),
+          hours: Map.of(_hours),
+          userId: userId,
+        );
+      } else {
+        id = existing.id;
+        await db.timeWindowDao.updateTimeWindow(
+          windowId: existing.id,
+          name: _name.text.trim(),
+          hours: Map.of(_hours),
+        );
+      }
+    } on Object {
+      // The write did not land: let the user try again.
+      _saving = false;
+      if (mounted) setState(() {});
+      rethrow;
     }
     if (!mounted) return;
     Navigator.pop(context, id);
@@ -289,8 +307,23 @@ class _TimeWindowEditorSheetState extends ConsumerState<_TimeWindowEditorSheet> 
                   ),
                 ],
                 selected: {_mode},
-                onSelectionChanged: (selection) =>
-                    setState(() => _mode = selection.first),
+                onSelectionChanged: (selection) {
+                  final mode = selection.first;
+                  setState(() {
+                    _mode = mode;
+                    // The "same hours" editor shows one pair for every chosen
+                    // day, so every chosen day takes that pair: what the sheet
+                    // shows is what Save writes.
+                    if (mode == _HoursMode.same) {
+                      final shared = _sharedHours;
+                      if (shared != null) {
+                        for (final day in _hours.keys.toList()) {
+                          _hours[day] = shared;
+                        }
+                      }
+                    }
+                  });
+                },
               ),
               const SizedBox(height: 16),
               if (_mode == _HoursMode.same) ...[
@@ -386,7 +419,7 @@ class _TimeWindowEditorSheetState extends ConsumerState<_TimeWindowEditorSheet> 
                   const Spacer(),
                   FilledButton(
                     key: const Key('time_window_save'),
-                    onPressed: value == null ? null : _save,
+                    onPressed: (value == null || _saving) ? null : _save,
                     child: const Text('Save'),
                   ),
                 ],
