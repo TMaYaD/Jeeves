@@ -1,0 +1,251 @@
+/// DAO for the Places — the named places and the one-time pins (issue #239).
+///
+/// A Place is a point plus an area (see `models/place_area.dart`). The named
+/// ones are the user's own list; a one-time pin belongs to the single Action
+/// that points at it and is never listed anywhere.
+///
+/// Every write runs inside [GtdDatabase.capturing] and describes its effect to
+/// the op log, so a Place made on one device reaches the others.
+///
+/// **There is no SQL foreign key from `actions.place_id` to `places.id`** — the
+/// log has none, and a reference to a Place that no longer exists has to stay
+/// representable (a dangling reference reads as "no place"; it never hides
+/// anything). So the delete path detaches by hand: every Action that points
+/// at the Place gets `place_id = null` and an op saying so, and only then does
+/// the row go — with a tombstone, so a replayed create cannot bring it back.
+library;
+
+import 'package:drift/drift.dart';
+
+import '../../models/place_area.dart';
+import '../../sync/collection_codecs.dart';
+import '../../utils/uuid.dart';
+import '../gtd_database.dart';
+
+part 'place_dao.g.dart';
+
+/// The `kind` a user-named Place carries.
+const String namedPlaceKind = 'named';
+
+/// The `kind` a one-time pin carries.
+const String pinPlaceKind = 'pin';
+
+@DriftAccessor(tables: [Places, Actions])
+class PlaceDao extends DatabaseAccessor<GtdDatabase> with _$PlaceDaoMixin {
+  PlaceDao(super.db);
+
+  /// The user's named places, in name order.
+  ///
+  /// A one-time pin is never in this list: it belongs to the one Action that
+  /// points at it, and it goes when that reference moves away.
+  Stream<List<Place>> watchNamedPlaces() {
+    return (select(places)
+          ..where((p) => p.kind.equals(namedPlaceKind))
+          ..orderBy([(p) => OrderingTerm.asc(p.name)]))
+        .watch();
+  }
+
+  /// Creates a named Place and returns its id, or null when the write is
+  /// refused.
+  ///
+  /// Refused: a blank name, a name longer than [Places.maxNameLength], a
+  /// point off the globe, or a radius outside [PlaceArea.minRadiusMeters] …
+  /// [PlaceArea.maxRadiusMeters]. A refused write stores nothing and authors
+  /// no op.
+  Future<String?> createNamedPlace({
+    required String name,
+    required double latitudeDegrees,
+    required double longitudeDegrees,
+    int? radiusMeters,
+    required String userId,
+    DateTime? now,
+  }) {
+    final trimmed = name.trim();
+    if (!_isAcceptableName(trimmed)) return Future.value(null);
+    final area = PlaceArea.create(
+      latitudeDegrees: latitudeDegrees,
+      longitudeDegrees: longitudeDegrees,
+      radiusMeters: radiusMeters,
+    );
+    if (area == null) return Future.value(null);
+    final ts = (now ?? DateTime.now()).toUtc();
+    return attachedDatabase.capturing(() async {
+      final id = uuid.v4();
+      await into(places).insert(
+        PlacesCompanion(
+          id: Value(id),
+          userId: Value(userId),
+          kind: const Value(namedPlaceKind),
+          name: Value(trimmed),
+          latitudeMicrodegrees: Value(area.latitudeMicrodegrees),
+          longitudeMicrodegrees: Value(area.longitudeMicrodegrees),
+          radiusMeters: Value(area.radiusMeters),
+          createdAt: Value(ts),
+        ),
+      );
+      // Creation asserts the full field set, so a peer that has never seen
+      // the Place can build the whole row.
+      attachedDatabase.opCapture.write(
+        collection: placesCollection,
+        entityId: id,
+        fields: {
+          'user_id': userId,
+          'kind': namedPlaceKind,
+          'name': trimmed,
+          'latitude_microdegrees': area.latitudeMicrodegrees,
+          'longitude_microdegrees': area.longitudeMicrodegrees,
+          'radius_meters': area.radiusMeters,
+          'created_at': encodeInstant(ts),
+        },
+      );
+      return id;
+    }).then((id) {
+      attachedDatabase.notifyPlacesViewWrite();
+      return id;
+    });
+  }
+
+  /// Updates a named Place: any of its name, its point and its radius.
+  ///
+  /// Returns whether the row was written. A refused update — a blank or
+  /// over-long name, a point off the globe, a radius outside the accepted
+  /// range, half a point — writes nothing and authors no op. So does an
+  /// update of a Place that does not exist, and an update whose values did
+  /// not change.
+  ///
+  /// **The point is a unit**: move it by giving both coordinates; one on its
+  /// own is refused. The radius is the area around the point and moves on
+  /// its own.
+  ///
+  /// Only the fields the caller actually named are written and asserted, so
+  /// an edit of one field never carries a stale value of another.
+  Future<bool> updateNamedPlace({
+    required String placeId,
+    String? name,
+    double? latitudeDegrees,
+    double? longitudeDegrees,
+    int? radiusMeters,
+    DateTime? now,
+  }) {
+    final trimmedName = name?.trim();
+    if (name != null && !_isAcceptableName(trimmedName!)) {
+      return Future.value(false);
+    }
+    final movesPoint = latitudeDegrees != null || longitudeDegrees != null;
+    if (movesPoint && (latitudeDegrees == null || longitudeDegrees == null)) {
+      return Future.value(false);
+    }
+    return attachedDatabase.capturing(() async {
+      final current =
+          await (select(places)..where((p) => p.id.equals(placeId)))
+              .getSingleOrNull();
+      if (current == null) return false;
+
+      if (radiusMeters != null &&
+          (radiusMeters < PlaceArea.minRadiusMeters ||
+              radiusMeters > PlaceArea.maxRadiusMeters)) {
+        return false;
+      }
+
+      // The new point, validated by the model. The radius it is built with is
+      // irrelevant here — the area is written only when the caller named one.
+      PlaceArea? newPoint;
+      if (movesPoint) {
+        newPoint = PlaceArea.create(
+          latitudeDegrees: latitudeDegrees!,
+          longitudeDegrees: longitudeDegrees!,
+          radiusMeters: radiusMeters ?? PlaceArea.defaultRadiusMeters,
+        );
+        if (newPoint == null) return false;
+      }
+
+      final ts = (now ?? DateTime.now()).toUtc();
+      final newName =
+          (trimmedName != null && trimmedName != current.name) ? trimmedName : null;
+      final newRadius = (radiusMeters != null && radiusMeters != current.radiusMeters)
+          ? radiusMeters
+          : null;
+      if (newName == null && newPoint == null && newRadius == null) return false;
+
+      final fields = <String, Object?>{};
+      if (newName != null) fields['name'] = newName;
+      if (newPoint != null) {
+        fields['latitude_microdegrees'] = newPoint.latitudeMicrodegrees;
+        fields['longitude_microdegrees'] = newPoint.longitudeMicrodegrees;
+      }
+      if (newRadius != null) fields['radius_meters'] = newRadius;
+      fields['updated_at'] = encodeInstant(ts);
+
+      await (update(places)..where((p) => p.id.equals(placeId))).write(
+        PlacesCompanion(
+          name: newName == null ? const Value.absent() : Value(newName),
+          latitudeMicrodegrees: newPoint == null
+              ? const Value.absent()
+              : Value(newPoint.latitudeMicrodegrees),
+          longitudeMicrodegrees: newPoint == null
+              ? const Value.absent()
+              : Value(newPoint.longitudeMicrodegrees),
+          radiusMeters:
+              newRadius == null ? const Value.absent() : Value(newRadius),
+          updatedAt: Value(ts),
+        ),
+      );
+      attachedDatabase.opCapture.write(
+        collection: placesCollection,
+        entityId: placeId,
+        fields: fields,
+      );
+      return true;
+    }).then((written) {
+      if (written) attachedDatabase.notifyPlacesViewWrite();
+      return written;
+    });
+  }
+
+  /// Deletes the Place with [placeId] — a named place or a one-time pin — and
+  /// detaches it from every Action that used it.
+  ///
+  /// The detach is by hand: every Action that points at this Place gets
+  /// `place_id = null` and an op saying so, and only then does the row go,
+  /// with a tombstone. A Place that does not exist writes nothing.
+  Future<void> deletePlace(String placeId, {DateTime? now}) async {
+    final ts = (now ?? DateTime.now()).toUtc();
+    var detached = 0;
+    var deleted = false;
+    await attachedDatabase.capturing(() async {
+      final existing =
+          await (select(places)..where((p) => p.id.equals(placeId)))
+              .getSingleOrNull();
+      if (existing == null) return;
+      final attached =
+          await (select(actions)..where((a) => a.placeId.equals(placeId))).get();
+      for (final action in attached) {
+        await (update(actions)..where((a) => a.id.equals(action.id))).write(
+          ActionsCompanion(
+            placeId: const Value(null),
+            updatedAt: Value(ts),
+          ),
+        );
+        attachedDatabase.opCapture.write(
+          collection: actionsCollection,
+          entityId: action.id,
+          fields: {'place_id': null, 'updated_at': encodeInstant(ts)},
+        );
+      }
+      detached = attached.length;
+      await (delete(places)..where((p) => p.id.equals(placeId))).go();
+      attachedDatabase.opCapture.tombstone(
+        collection: placesCollection,
+        entityId: placeId,
+      );
+      deleted = true;
+    });
+    if (detached > 0) attachedDatabase.notifyActionsViewWrite();
+    if (deleted) attachedDatabase.notifyPlacesViewWrite();
+  }
+
+  /// Whether a name may be stored: not blank, and at most
+  /// [Places.maxNameLength] characters.
+  static bool _isAcceptableName(String trimmed) =>
+      trimmed.isNotEmpty && trimmed.length <= Places.maxNameLength;
+}

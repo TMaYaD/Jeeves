@@ -28,10 +28,12 @@ import 'daos/action_dao.dart';
 import 'daos/capture_dao.dart';
 import 'daos/focus_session_dao.dart';
 import 'daos/habit_dao.dart';
+import 'daos/place_dao.dart';
 import 'daos/search_dao.dart';
 import 'daos/tag_dao.dart';
 import 'daos/sprint_dao.dart';
 import 'daos/time_log_dao.dart';
+import 'daos/time_window_dao.dart';
 import 'daos/todo_dao.dart';
 import 'daos/user_preferences_dao.dart';
 import '../sync/domain_op_capture.dart';
@@ -44,7 +46,7 @@ part 'gtd_database.g.dart';
 
 @DriftDatabase(
   tables: [Todos, Tags, TodoTags, TimeLogs, Sprints, FocusSessions, FocusSessionTasks, FocusSessionDispositions, FocusSessionPlanningBypasses, FocusSessionReschedules, OutcomeBypassDecisions, UserPreferences, Captures, CaptureAttachments, CaptureOutcomes, CaptureTags, Actions, Places, TimeWindows, LocalMigrationMarkers, PendingChanges, DeviceClockIdentity, Habits, HabitCommitments, HabitCheckIns, HabitInactivePeriods, HabitTags],
-  daos: [TagDao, TodoDao, TimeLogDao, SprintDao, FocusSessionDao, CaptureDao, ActionDao, HabitDao],
+  daos: [TagDao, TodoDao, TimeLogDao, SprintDao, FocusSessionDao, CaptureDao, ActionDao, HabitDao, PlaceDao, TimeWindowDao],
 )
 class GtdDatabase extends _$GtdDatabase {
   GtdDatabase(super.executor, {this.opCapture = const NoopDomainOpCapture()});
