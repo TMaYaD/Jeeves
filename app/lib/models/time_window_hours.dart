@@ -153,6 +153,46 @@ class TimeWindowHours {
   static int _previousWeekday(DateTime local) =>
       DateTime(local.year, local.month, local.day - 1).weekday;
 
+  static const _dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+  /// A short description of the hours, e.g. `Mon–Fri 09:00–17:00` or
+  /// `Mon–Fri 11:00–20:00 · Sat 10:00–14:00`.
+  ///
+  /// Days that share hours are grouped; a window that runs past midnight shows
+  /// its end clock as it is — the editor is where "next day" is spelled out.
+  String describe() {
+    final groups = <String>[];
+    final numbers = days;
+    var index = 0;
+    while (index < numbers.length) {
+      final hours = _byDay[numbers[index]]!;
+      var last = index;
+      while (last + 1 < numbers.length &&
+          _sameHours(_byDay[numbers[last + 1]]!, hours)) {
+        last++;
+      }
+      groups.add(
+        '${_dayLabel(numbers[index], numbers[last])} ${_hoursLabel(hours)}',
+      );
+      index = last + 1;
+    }
+    return groups.join(' · ');
+  }
+
+  /// The days of one group, as they read: one day by name, a run of days as a
+  /// range, and the whole week as "Every day".
+  static String _dayLabel(int first, int last) {
+    if (first == 1 && last == 7) return 'Every day';
+    if (first == last) return _dayNames[first - 1];
+    return '${_dayNames[first - 1]}–${_dayNames[last - 1]}';
+  }
+
+  static String _hoursLabel(DayHours hours) =>
+      '${_clock(hours.startMinute)}–${_clock(hours.endMinute)}';
+
+  static bool _sameHours(DayHours a, DayHours b) =>
+      a.startMinute == b.startMinute && a.endMinute == b.endMinute;
+
   /// The next local instant after [now] at which the window flips between open
   /// and closed, or null when it cannot flip again.
   ///

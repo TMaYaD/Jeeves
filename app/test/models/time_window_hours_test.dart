@@ -257,4 +257,50 @@ void main() {
       );
     });
   });
+
+  group('describe', () {
+    test('a run of days with the same hours reads as a range', () {
+      final work = TimeWindowHours.create({
+        for (var day = 1; day <= 5; day++)
+          day: (startMinute: 9 * 60, endMinute: 17 * 60),
+      })!;
+
+      expect(work.describe(), 'Mon\u2013Fri 09:00\u201317:00');
+    });
+
+    test('days with different hours read as separate groups', () {
+      final store = TimeWindowHours.create({
+        for (var day = 1; day <= 5; day++)
+          day: (startMinute: 11 * 60, endMinute: 20 * 60),
+        6: (startMinute: 10 * 60, endMinute: 14 * 60),
+      })!;
+
+      expect(store.describe(), 'Mon\u2013Fri 11:00\u201320:00 \u00b7 Sat 10:00\u201314:00');
+    });
+
+    test('one day reads by name', () {
+      final monday = TimeWindowHours.create({
+        1: (startMinute: 22 * 60, endMinute: 2 * 60),
+      })!;
+
+      expect(monday.describe(), 'Mon 22:00\u201302:00');
+    });
+
+    test('every day reads as Every day', () {
+      final all = TimeWindowHours.create({
+        for (var day = 1; day <= 7; day++)
+          day: (startMinute: 9 * 60, endMinute: 17 * 60),
+      })!;
+
+      expect(all.describe(), 'Every day 09:00\u201317:00');
+    });
+
+    test('a window that ends at midnight says so', () {
+      final untilMidnight = TimeWindowHours.create({
+        1: (startMinute: 9 * 60, endMinute: 24 * 60),
+      })!;
+
+      expect(untilMidnight.describe(), 'Mon 09:00\u201324:00');
+    });
+  });
 }
