@@ -299,7 +299,7 @@ jobs:
             if flutter build apk --debug --flavor production --target-platform android-arm64 2>&1 | tee "$log"; then
               exit 0
             fi
-            if ! grep -qE "Error reading Zip content|sdkmanager" "$log"; then
+            if ! grep -qF "Error reading Zip content" "$log"; then
               exit 1
             fi
             echo "::warning::The Android SDK download was corrupt (attempt ${attempt} of 3); discarding it and retrying."
