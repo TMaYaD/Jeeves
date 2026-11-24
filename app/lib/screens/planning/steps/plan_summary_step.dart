@@ -108,6 +108,11 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
           .select((s) => s.defaultTimeEstimate),
     );
 
+    // When each Outcome's time opens in the day being planned, so an Up Next
+    // row can say when its window opens.
+    final opensLaterAt =
+        ref.watch(plannedDayTimeProvider.select((t) => t.opensLaterAt));
+
     // Split the capacity into real-estimate minutes and default-counted
     // minutes so the bar can render them as two segments. The summary total is
     // their sum, exactly as before.
@@ -204,6 +209,7 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
                     matchingPending,
                     matchingSkipped,
                     offUpNext,
+                    opensLaterAt,
                   ),
 
                 // Today's tasks (selected)
@@ -228,6 +234,7 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
                   const SizedBox(height: 8),
                   ...pendingTasks.map((t) => _planOutcomeRow(
                         todo: t,
+                        opensAt: opensLaterAt[t.id],
                         onSelect: () => _handleSelect(t),
                         onSkip: () => _handleSkip(t),
                         selectionMode: _selectionMode,
@@ -283,6 +290,7 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
     List<Todo> pending,
     List<Todo> skipped,
     List<OffUpNextCandidate> offUpNext,
+    Map<String, DateTime> opensLaterAt,
   ) {
     final upNextCount = pending.length + skipped.length;
     return [
@@ -291,6 +299,7 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
         const SizedBox(height: 8),
         ...pending.map((t) => _planOutcomeRow(
               todo: t,
+              opensAt: opensLaterAt[t.id],
               onSelect: () => _handleSelect(t),
               onSkip: () => _handleSkip(t),
               onPeek: () => OutcomePeekSheet.show(context, t),
@@ -499,6 +508,10 @@ class _MultiSelectActionBar extends StatelessWidget {
 /// checkbox-toggle wiring. This is why the peek is gated at the call site
 /// rather than by threading [selectionMode] here — [selectionMode] stays purely
 /// a Pending-card rendering flag.
+///
+/// [opensAt] — the instant the Outcome's time opens in the day being planned,
+/// when that is later than now. The row then says when its window opens, so a
+/// reader knows it cannot be done yet. Only Up Next rows carry it.
 Widget _planOutcomeRow({
   required Todo todo,
   bool isSelected = false,
@@ -512,6 +525,7 @@ Widget _planOutcomeRow({
   VoidCallback? onTapInSelectionMode,
   VoidCallback? onPeek,
   OffUpNextReason? offUpNextReason,
+  DateTime? opensAt,
 }) {
   return OutcomeRow(
     title: todo.title,
@@ -539,6 +553,12 @@ Widget _planOutcomeRow({
       spacing: 8,
       runSpacing: 8,
       children: [
+        if (opensAt != null)
+          MetaChip(
+            icon: Icons.schedule,
+            label: 'from ${_formatClockTime(opensAt)}',
+            color: const Color(0xFF6B7280),
+          ),
         if (offUpNextReason != null)
           MetaChip(
             icon: Icons.inbox_outlined,
@@ -593,6 +613,14 @@ Widget _planOutcomeRow({
             ),
           ),
   );
+}
+
+/// The clock of an instant on the wall, zero-padded and 24-hour: `09:05`.
+String _formatClockTime(DateTime time) {
+  final local = time.toLocal();
+  final hour = local.hour.toString().padLeft(2, '0');
+  final minute = local.minute.toString().padLeft(2, '0');
+  return '$hour:$minute';
 }
 
 class _SearchField extends StatelessWidget {

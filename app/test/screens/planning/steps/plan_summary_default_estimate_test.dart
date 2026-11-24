@@ -75,6 +75,13 @@ Future<ProviderContainer> _pumpStep(
       habitsForTodayProvider.overrideWithValue(const {}),
       habitStackChainsProvider.overrideWithValue(const []),
     databaseProvider.overrideWithValue(db),
+    // The step reads when each Outcome's time opens; that provider watches
+    // drift's Time contexts, so stub it rather than hold a live watch
+    // (TESTING.md).
+    plannedDayTimeProvider.overrideWithValue((
+      notInPlannedDay: const <String>{},
+      opensLaterAt: const <String, DateTime>{},
+    )),
     notificationServiceProvider.overrideWithValue(_StubNotificationService()),
     _testTodosProvider.overrideWith((_) => todos),
     nextForFocusSessionPlanningProvider.overrideWith((ref) {
