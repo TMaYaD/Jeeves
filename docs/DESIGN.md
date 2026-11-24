@@ -385,6 +385,15 @@ tags only — Recolour. Merge targets are the same kind only. Merge and delete
 confirm in a dialog that says what happens to the Outcomes and that it cannot
 be undone.
 
+### Named time windows
+Settings → Manage lists the user's named time windows beside the label, project and people lists.
+
+| Element | Contract |
+|---|---|
+| Manage list | One row per window: its name, its hours in words ("Mon–Fri 09:00–17:00"), and the number of actions using it. The title bar's New action makes one; tapping a row edits it. An empty list says so in Jeeves's voice, from a pool. |
+| Editor | A name, and the hours of each day: the same on chosen days, or day by day. An end before the start is the next day, and is labelled so. |
+| Save and Delete | Save stays disabled until the name and the hours are acceptable. Delete asks how many actions lose the window, and the window goes. |
+
 ### Ceremony back navigation
 System back inside a ceremony mirrors the footer Back affordance — it invokes
 the exact callback the active step's footer renders, retreating the per-item
