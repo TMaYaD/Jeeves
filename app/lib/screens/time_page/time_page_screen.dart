@@ -137,13 +137,18 @@ class _GroupHeader extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
       child: Row(
         children: [
-          Text(
-            title,
-            style: const TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              color: Color(0xFF9CA3AF),
-              letterSpacing: 0.5,
+          // A window name may be a hundred characters long, so the title
+          // wraps within the header instead of pushing the hours off the
+          // screen.
+          Flexible(
+            child: Text(
+              title,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF9CA3AF),
+                letterSpacing: 0.5,
+              ),
             ),
           ),
           if (hours != null) ...[

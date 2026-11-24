@@ -173,4 +173,47 @@ void main() {
       await tester.pumpAndSettle();
     }
   }, timeout: const Timeout(Duration(seconds: 120)));
+
+  testWidgets('a long window name lays out in the group header', (tester) async {
+    tester.view.physicalSize = const Size(320, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    // A name at the length the store allows: ninety-one characters.
+    final name = 'Opening hours ' * 7;
+    expect(name.length, lessThanOrEqualTo(100));
+    final workId = await db.timeWindowDao.createTimeWindow(
+      name: name,
+      hours: _workHours,
+      userId: _userId,
+    );
+    expect(workId, isNotNull);
+    final workAction = await _seedOutcome(db, 'o1');
+    await db.actionDao.setTimeWindow(workAction, workId);
+
+    final router = GoRouter(
+      initialLocation: '/time',
+      routes: [
+        GoRoute(path: '/time', builder: (_, _) => const TimePageScreen()),
+      ],
+    );
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    try {
+      await _settle(tester);
+
+      expect(find.text(name), findsOneWidget);
+      expect(tester.takeException(), isNull,
+          reason: 'the group header lays out clean at 320dp');
+    } finally {
+      container.dispose();
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+    }
+  }, timeout: const Timeout(Duration(seconds: 120)));
 }
