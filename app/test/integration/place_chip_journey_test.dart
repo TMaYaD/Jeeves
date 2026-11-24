@@ -14,9 +14,13 @@ import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/place_area.dart';
 import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/providers/place_gate_provider.dart';
+import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/providers/location_source_provider.dart';
 import 'package:jeeves/screens/task_detail/task_detail_screen.dart';
+import 'package:jeeves/widgets/outcome_peek_sheet.dart';
 import 'package:jeeves/widgets/place_chip.dart';
 import 'package:jeeves/services/notification_service.dart';
 
@@ -91,6 +95,74 @@ void main() {
     );
     await _settle(tester);
   }
+
+  testWidgets('the Daily Planning peek carries the same chip', (tester) async {
+    final now = DateTime.now();
+    final todo = Todo(
+      id: 'o1',
+      title: 'Outcome o1',
+      doneAt: null,
+      createdAt: now,
+      intent: 'next',
+      userId: 'local',
+    );
+    final action = Action(
+      id: 'a1',
+      outcomeId: 'o1',
+      userId: 'local',
+      actionText: 'work on o1',
+      role: 'current',
+      createdAt: now,
+    );
+    final homeId = (await db.placeDao.watchNamedPlaces().first).first.id;
+    final place = (
+      id: homeId,
+      area: PlaceArea.create(
+        latitudeDegrees: 52.3702,
+        longitudeDegrees: 4.8952,
+        radiusMeters: 150,
+      )!,
+      name: 'Home',
+      isPin: false,
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          databaseProvider.overrideWithValue(db),
+          locationSourceProvider.overrideWithValue(location),
+          notificationServiceProvider
+              .overrideWithValue(StubNotificationService()),
+          taskDetailTodoProvider('o1')
+              .overrideWith((_) => Stream.value(todo)),
+          taskTagsProvider('o1').overrideWith((_) => Stream.value([])),
+          currentActionProvider('o1').overrideWith((_) => Stream.value(action)),
+          plannedActionsProvider('o1').overrideWith((_) => Stream.value([])),
+          currentPlacesProvider
+              .overrideWith((_) => Stream.value({'o1': place})),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => Center(
+                child: ElevatedButton(
+                  onPressed: () => OutcomePeekSheet.show(context, todo),
+                  child: const Text('open'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await _settle(tester);
+    await tester.tap(find.text('open'));
+    await _settle(tester);
+
+    // The chip reads the Place, exactly as it does on the detail.
+    expect(find.byKey(const Key('place_chip')), findsOneWidget);
+    expect(find.text('Home'), findsOneWidget);
+  });
 
   testWidgets('the chip picks a Place, replaces it, drops a pin and clears it',
       (tester) async {
