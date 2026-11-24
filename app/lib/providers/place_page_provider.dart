@@ -7,8 +7,8 @@ library;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../database/gtd_database.dart';
 import 'database_provider.dart';
+import 'gtd_lists_provider.dart';
 import 'place_gate_provider.dart';
 import 'tag_filter_provider.dart';
 
@@ -19,6 +19,10 @@ typedef PlacePageGroup = ({
 });
 
 /// A row on the place page: an Outcome, and where it stands.
+///
+/// [isOnNext] says whether the Outcome is on the Next list right now. An
+/// Outcome the user is standing at but whose time is closed is not on Next,
+/// so it is not marked as on Next.
 typedef PlacePageRow = ({
   Todo todo,
   bool isOnNext,
@@ -29,14 +33,20 @@ final placePageGroupsProvider = StreamProvider<List<PlacePageGroup>>((ref) {
   final db = ref.watch(databaseProvider);
   final tagIds = ref.watch(tagFilterProvider);
   final places = ref.watch(currentPlacesProvider).value ?? const {};
-  final away = ref.watch(awayFromPlaceOutcomeIdsProvider);
+  // "On Next" is the Next list's own answer, not a second guess at it: an
+  // Outcome that the user is standing at but whose time is closed is not on
+  // Next, and the marker must not say it is.
+  final onNext = {
+    for (final todo in ref.watch(nextProvider).value ?? const <Todo>[])
+      todo.id,
+  };
   return db.todoDao.watchNext(tagIds: tagIds).map((todos) {
     final named = <String, ({String name, List<PlacePageRow> rows})>{};
     final pins = <PlacePageRow>[];
     for (final todo in todos) {
       final place = places[todo.id];
       if (place == null) continue;
-      final row = (todo: todo, isOnNext: !away.contains(todo.id));
+      final row = (todo: todo, isOnNext: onNext.contains(todo.id));
       if (place.isPin) {
         pins.add(row);
         continue;

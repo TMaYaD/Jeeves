@@ -47,11 +47,13 @@ void main() {
 
   late GtdDatabase db;
   late FakeLocationSource location;
+  late FakeAddressGeocoder geocoder;
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
     db = GtdDatabase(NativeDatabase.memory());
     location = FakeLocationSource();
+    geocoder = FakeAddressGeocoder();
   });
 
   tearDown(() async {
@@ -75,6 +77,7 @@ void main() {
       nudgeBoundaryTickProvider.overrideWithValue(0),
       databaseProvider.overrideWithValue(db),
       locationSourceProvider.overrideWithValue(location),
+      addressGeocoderProvider.overrideWithValue(geocoder),
       notificationServiceProvider
           .overrideWithValue(StubNotificationService()),
     ]);
@@ -102,6 +105,12 @@ void main() {
     await tester.tap(add);
   }
 
+  /// The text in the point field.
+  String coordinatesText(WidgetTester tester) => tester
+      .widget<TextField>(find.byKey(const Key('place_point_coordinates')))
+      .controller!
+      .text;
+
   /// Fills the editor with a name and a point, and saves.
   Future<void> savePlace(
     WidgetTester tester, {
@@ -112,7 +121,6 @@ void main() {
         find.byKey(const Key('place_editor_name')), name);
     await tester.enterText(
         find.byKey(const Key('place_point_coordinates')), coordinates);
-    await tester.tap(find.byKey(const Key('place_point_apply_coordinates')));
     await _settle(tester);
     await tester.tap(find.byKey(const Key('place_editor_save')));
     await _settle(tester);
@@ -159,7 +167,6 @@ void main() {
         find.byKey(const Key('place_editor_name')), 'Home');
     await tester.enterText(
         find.byKey(const Key('place_point_coordinates')), '52.3702, 4.8952');
-    await tester.tap(find.byKey(const Key('place_point_apply_coordinates')));
     await _settle(tester);
 
     // The slider ends at 50 m and at 2 km, and nowhere outside that.
@@ -170,6 +177,108 @@ void main() {
     await tester.drag(slider, const Offset(1000, 0));
     await _settle(tester);
     expect(find.text('2000 m'), findsOneWidget);
+  });
+
+  testWidgets('typed coordinates become the point, and the Place saves with '
+      'them', (tester) async {
+    // The location was already allowed on this phone, so saving asks
+    // nothing.
+    location.permissionState = LocationPermission.whileInUse;
+    await openManagePlaces(tester);
+    await tapAddPlace(tester);
+    await _settle(tester);
+    await tester.enterText(find.byKey(const Key('place_editor_name')), 'Home');
+    await tester.enterText(
+        find.byKey(const Key('place_point_coordinates')), '52.3702, 4.8952');
+    await _settle(tester);
+
+    // The typed pair is the point: no separate step stands between the field
+    // and the Place.
+    final save =
+        tester.widget<FilledButton>(find.byKey(const Key('place_editor_save')));
+    expect(save.onPressed, isNotNull);
+    await tester.tap(find.byKey(const Key('place_editor_save')));
+    await _settle(tester);
+
+    final places =
+        await _real(tester, () => db.placeDao.watchNamedPlaces().first);
+    expect(places.single.name, 'Home');
+    expect(places.single.latitudeMicrodegrees, 52370200);
+    expect(places.single.longitudeMicrodegrees, 4895200);
+  });
+
+  testWidgets('editing a Place writes the new point', (tester) async {
+    // The location was already allowed on this phone, so saving asks
+    // nothing.
+    location.permissionState = LocationPermission.whileInUse;
+    await openManagePlaces(tester);
+    await tapAddPlace(tester);
+    await _settle(tester);
+    await savePlace(tester, name: 'Home', coordinates: '52.3702, 4.8952');
+    final placeId = (await _real(
+      tester,
+      () => db.placeDao.watchNamedPlaces().first,
+    ))
+        .single
+        .id;
+
+    // Open it again and move the point.
+    await tester.tap(find.byKey(Key('place_management_row_$placeId')));
+    await _settle(tester);
+    expect(coordinatesText(tester), '52.37020, 4.89520');
+    await tester.enterText(
+        find.byKey(const Key('place_point_coordinates')), '52.1000, 4.1000');
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('place_editor_save')));
+    await _settle(tester);
+
+    final places =
+        await _real(tester, () => db.placeDao.watchNamedPlaces().first);
+    expect(places.single.latitudeMicrodegrees, 52100000);
+    expect(places.single.longitudeMicrodegrees, 4100000);
+  });
+
+  testWidgets('"Use where I am" asks the OS and takes the phone\'s fix',
+      (tester) async {
+    location.freshPoint = (
+      latitudeDegrees: 52.3702,
+      longitudeDegrees: 4.8952,
+    );
+    await openManagePlaces(tester);
+    await tapAddPlace(tester);
+    await _settle(tester);
+    await tester.enterText(find.byKey(const Key('place_editor_name')), 'Home');
+
+    await tester.tap(find.byKey(const Key('place_point_use_here')));
+    await _settle(tester);
+
+    // The user tapped it, so it may ask for their own location.
+    expect(location.permissionRequests, 1);
+    // The point the phone gave is shown.
+    expect(coordinatesText(tester), '52.37020, 4.89520');
+    final save =
+        tester.widget<FilledButton>(find.byKey(const Key('place_editor_save')));
+    expect(save.onPressed, isNotNull);
+  });
+
+  testWidgets('an address is looked up and becomes the point',
+      (tester) async {
+    geocoder.points['mill street, amsterdam'] = (
+      latitudeDegrees: 52.3000,
+      longitudeDegrees: 4.9000,
+    );
+    await openManagePlaces(tester);
+    await tapAddPlace(tester);
+    await _settle(tester);
+
+    await tester.enterText(
+        find.byKey(const Key('place_point_address')), 'Mill Street, Amsterdam');
+    await tester.tap(find.byKey(const Key('place_point_find_address')));
+    await _settle(tester);
+
+    // The address went to the geocoder, and its point came back.
+    expect(geocoder.calls, ['Mill Street, Amsterdam']);
+    expect(coordinatesText(tester), '52.30000, 4.90000');
   });
 
   testWidgets('a Place is renamed, and deleting it detaches the Action that '

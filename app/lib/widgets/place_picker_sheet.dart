@@ -70,14 +70,19 @@ class _PlacePickerSheetState extends ConsumerState<PlacePickerSheet> {
   Future<void> _dropPin() async {
     final pin = await showPlacePinSheet(context);
     if (pin == null || !mounted) return;
-    await ref.read(taskDetailNotifierProvider(widget.outcomeId)).setPin(
+    final dropped = await ref.read(taskDetailNotifierProvider(widget.outcomeId)).setPin(
           actionId: widget.actionId,
           area: pin.area,
           name: pin.name,
         );
     if (!mounted) return;
-    // A pin is a Place too: the first one saved may ask for the location.
-    await askForLocationAfterFirstSave(context, ref.read(locationSourceProvider));
+    // A pin is a Place too: the first one saved may ask for the location. A
+    // pin that was not written — the Action is no longer the current one —
+    // is no Place saved, so it asks nothing.
+    if (dropped) {
+      await askForLocationAfterFirstSave(
+          context, ref.read(locationSourceProvider));
+    }
     if (!mounted) return;
     Navigator.pop(context);
   }

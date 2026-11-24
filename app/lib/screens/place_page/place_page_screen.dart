@@ -2,66 +2,117 @@
 ///
 /// This is where an Outcome hidden because the user is somewhere else can be
 /// found. It is a list and nothing more: no map, no errands, no route.
+///
+/// The list follows the same multi-select convention as the other grouped
+/// lists: a tap opens the Outcome, a long-press enters the mode, and the bar
+/// above the list carries the bulk actions.
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../providers/place_page_provider.dart';
 import '../../widgets/async_list.dart';
-import '../../widgets/outcome_row.dart';
+import '../../widgets/outcome_multi_select.dart';
 
 /// The list of every Outcome with a Place.
-class PlacePageScreen extends ConsumerWidget {
+class PlacePageScreen extends ConsumerStatefulWidget {
   const PlacePageScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<PlacePageScreen> createState() => _PlacePageScreenState();
+}
+
+class _PlacePageScreenState extends ConsumerState<PlacePageScreen> {
+  /// Selection is by Outcome id: an Outcome with two Places would appear under
+  /// both, show checked in both, and count once.
+  Set<String> _selectedIds = {};
+
+  void _toggle(String id) {
+    HapticFeedback.selectionClick();
+    setState(() {
+      final next = {..._selectedIds};
+      if (!next.remove(id)) next.add(id);
+      _selectedIds = next;
+    });
+  }
+
+  // Also runs after an awaited bulk write; the screen may be gone by then.
+  void _clear() {
+    if (!mounted) return;
+    setState(() => _selectedIds = {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final groups = ref.watch(placePageGroupsProvider);
-    return Scaffold(
-      body: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: AsyncList<PlacePageGroup>(
-                asyncValue: groups,
-                emptyIcon: Icons.place_outlined,
-                emptyTitle: 'Nothing at a place',
-                emptySubtitle:
-                    'Outcomes you give a place to are listed here.',
-                dataBuilder: (context, entries) => CustomScrollView(
-                  slivers: [
-                    for (final entry in entries) ...[
-                      SliverToBoxAdapter(
-                        child: _SectionHeader(name: entry.label),
-                      ),
-                      SliverList(
-                        delegate: SliverChildBuilderDelegate(
-                          (_, i) {
-                            final row = entry.rows[i];
-                            return OutcomeRow(
-                              key: Key('place_page_row_${row.todo.id}'),
-                              title: row.todo.title,
-                              energyLevel: row.todo.energyLevel,
-                              timeEstimateMinutes: row.todo.timeEstimate,
-                              dueDate: row.todo.dueDate,
-                              secondary: PlaceMarker(isOnNext: row.isOnNext),
-                              onTap: () =>
-                                  context.push('/task/${row.todo.id}'),
-                            );
-                          },
-                          childCount: entry.rows.length,
+    final visibleIds = {
+      for (final group in groups.value ?? const <PlacePageGroup>[])
+        for (final row in group.rows)
+          row.todo.id,
+    };
+    _selectedIds = _selectedIds.intersection(visibleIds);
+    final selectionActive = _selectedIds.isNotEmpty;
+
+    return PopScope(
+      canPop: !selectionActive,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _clear();
+      },
+      child: Scaffold(
+        body: SafeArea(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (selectionActive)
+                OutcomeSelectionBar(
+                  selectedIds: _selectedIds,
+                  allIds: visibleIds,
+                  onClear: _clear,
+                  onSelectAll: () => setState(() => _selectedIds = visibleIds),
+                ),
+              Expanded(
+                child: AsyncList<PlacePageGroup>(
+                  asyncValue: groups,
+                  emptyIcon: Icons.place_outlined,
+                  emptyTitle: 'Nothing at a place',
+                  emptySubtitle:
+                      'Outcomes you give a place to are listed here.',
+                  dataBuilder: (context, entries) => CustomScrollView(
+                    slivers: [
+                      for (final entry in entries) ...[
+                        SliverToBoxAdapter(
+                          child: _SectionHeader(name: entry.label),
                         ),
-                      ),
+                        SliverList(
+                          delegate: SliverChildBuilderDelegate(
+                            (_, i) {
+                              final row = entry.rows[i];
+                              return selectableOutcomeRow(
+                                key: Key('place_page_row_${row.todo.id}'),
+                                todo: row.todo,
+                                selectionActive: selectionActive,
+                                selected: _selectedIds.contains(row.todo.id),
+                                onOpen: () =>
+                                    context.push('/task/${row.todo.id}'),
+                                onToggle: () => _toggle(row.todo.id),
+                                onEnterSelection: () => _toggle(row.todo.id),
+                                secondary: PlaceMarker(isOnNext: row.isOnNext),
+                              );
+                            },
+                            childCount: entry.rows.length,
+                          ),
+                        ),
+                      ],
+                      const SliverToBoxAdapter(child: SizedBox(height: 24)),
                     ],
-                    const SliverToBoxAdapter(child: SizedBox(height: 24)),
-                  ],
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -75,7 +126,7 @@ class PlacePageScreen extends ConsumerWidget {
 class PlaceMarker extends StatelessWidget {
   const PlaceMarker({super.key, required this.isOnNext});
 
-  /// Whether the Outcome is on Next — the user is at its Place.
+  /// Whether the Outcome is on the Next list right now.
   final bool isOnNext;
 
   @override

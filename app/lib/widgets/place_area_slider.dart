@@ -17,10 +17,13 @@ const int placeAreaSteps =
     (PlaceArea.maxRadiusMeters - PlaceArea.minRadiusMeters) ~/ placeAreaStepMeters;
 
 /// The radius nearest to [meters] that the slider can show.
+///
+/// To the nearest step, not to the one below: a radius of 175 m is nearer
+/// 200 m than 150 m, and the slider says so.
 int nearestPlaceAreaStep(int meters) {
-  final steps = (meters - PlaceArea.minRadiusMeters) ~/ placeAreaStepMeters;
-  return PlaceArea.minRadiusMeters +
-      steps.clamp(0, placeAreaSteps) * placeAreaStepMeters;
+  final offset = (meters - PlaceArea.minRadiusMeters) / placeAreaStepMeters;
+  final steps = offset.round().clamp(0, placeAreaSteps);
+  return PlaceArea.minRadiusMeters + steps * placeAreaStepMeters;
 }
 
 /// The slider for a Place's area.
@@ -31,14 +34,19 @@ class PlaceAreaSlider extends StatelessWidget {
     required this.onChanged,
   });
 
-  /// The radius the slider shows, in metres.
+  /// The radius the Place has, in metres.
+  ///
+  /// The handle sits at the step nearest it, because the slider runs in
+  /// steps; the text says the radius itself, so a radius that came from
+  /// another device is neither hidden nor rewritten.
   final int radiusMeters;
 
-  /// Called with the new radius, in metres.
+  /// Called with the new radius, in metres, when the user moves the handle.
   final ValueChanged<int> onChanged;
 
   @override
   Widget build(BuildContext context) {
+    final step = nearestPlaceAreaStep(radiusMeters);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -54,11 +62,11 @@ class PlaceAreaSlider extends StatelessWidget {
         ),
         Slider(
           key: const Key('place_area_slider'),
-          value: radiusMeters.toDouble(),
+          value: step.toDouble(),
           min: PlaceArea.minRadiusMeters.toDouble(),
           max: PlaceArea.maxRadiusMeters.toDouble(),
           divisions: placeAreaSteps,
-          label: '$radiusMeters m',
+          label: '$step m',
           onChanged: (value) => onChanged(value.round()),
         ),
       ],

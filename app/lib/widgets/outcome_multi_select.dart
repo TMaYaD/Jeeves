@@ -20,6 +20,7 @@ import 'project_picker.dart';
 /// [secondary] is the line under the title, for a surface that has something
 /// to say about the row.
 Widget selectableOutcomeRow({
+  Key? key,
   required Todo todo,
   required bool selectionActive,
   required bool selected,
@@ -30,12 +31,14 @@ Widget selectableOutcomeRow({
   Widget? secondary,
 }) {
   return OutcomeRow(
+    key: key,
     title: todo.title,
     secondary: secondary,
     energyLevel: todo.energyLevel,
     timeEstimateMinutes: todo.timeEstimate,
     dueDate: todo.dueDate,
     placeName: placeName,
+    secondary: secondary,
     leading: selectionActive
         ? Checkbox(value: selected, onChanged: (_) => onToggle())
         : null,

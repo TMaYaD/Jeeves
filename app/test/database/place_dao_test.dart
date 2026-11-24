@@ -241,4 +241,70 @@ void main() {
     expect(op.fields['longitude_microdegrees'], 4100000);
     expect(op.fields['radius_meters'], 300);
   });
+
+  test('the use count and the place gate read the same Action', () async {
+    final id = await createHardwareStore();
+    // An Outcome whose current Action points at the Place.
+    await seedAction('a1', placeId: id);
+    // A second, live Outcome with no Place at all.
+    await db.into(db.todos).insert(TodosCompanion(
+          id: const Value('todo-a2'),
+          title: const Value('outcome a2'),
+          userId: const Value(_userId),
+          createdAt: Value(_ts),
+          updatedAt: Value(_ts),
+        ));
+    await db.into(db.actions).insert(ActionsCompanion(
+          id: const Value('a2'),
+          outcomeId: const Value('todo-a2'),
+          userId: const Value(_userId),
+          actionText: const Value('action a2'),
+          role: const Value('current'),
+          createdAt: Value(_ts),
+        ));
+
+    final listed = await db.placeDao.watchNamedPlacesWithUseCount().first;
+    expect(listed.single.useCount, 1);
+
+    final current = await db.actionDao.watchCurrentPlaces().first;
+    expect(current.keys, ['todo-a1']);
+    expect(current['todo-a1']!.id, id);
+  });
+
+  test('a conflict leaves one current Action, and the count follows it',
+      () async {
+    final id = await createHardwareStore();
+    final other = await db.placeDao.createNamedPlace(
+      name: 'Bike shop',
+      latitudeDegrees: 52.1,
+      longitudeDegrees: 4.1,
+      userId: _userId,
+      now: _ts,
+    );
+    // Two current Actions for one Outcome, as a sync conflict can leave
+    // behind: one points at the hardware store, one at the bike shop.
+    await seedAction('a1', placeId: id);
+    await db.into(db.actions).insert(ActionsCompanion(
+          id: const Value('a2'),
+          outcomeId: const Value('todo-a1'),
+          userId: const Value(_userId),
+          actionText: const Value('action a1 again'),
+          role: const Value('current'),
+          placeId: Value(other),
+          // Written later, so it wins.
+          createdAt: Value(_ts),
+          updatedAt: Value(_ts.add(const Duration(minutes: 5))),
+        ));
+
+    // The gate reads the winner, which points at the bike shop.
+    final current = await db.actionDao.watchCurrentPlaces().first;
+    expect(current['todo-a1']!.id, other);
+
+    // The count agrees with the gate: the hardware store is not used, and the
+    // bike shop is used once.
+    final listed = await db.placeDao.watchNamedPlacesWithUseCount().first;
+    final byName = {for (final row in listed) row.name: row.useCount};
+    expect(byName['Hardware store'], 0);
+    expect(byName['Bike shop'], 1);
+  });
 }

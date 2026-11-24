@@ -3,6 +3,8 @@
 /// Each row names a Place, its area and how many live Actions use it.
 library;
 
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -17,12 +19,31 @@ const placesEmptyPool = <String>[
   'The place list is empty, sir.',
 ];
 
+final _placesEmptyRandom = Random();
+
+/// Draws Jeeves's line for an empty list of places. Pass [seed] in tests for
+/// a deterministic draw; null in production so each visit draws afresh.
+String placesEmptyLine({int? seed}) {
+  final rng = seed == null ? _placesEmptyRandom : Random(seed);
+  return placesEmptyPool[rng.nextInt(placesEmptyPool.length)];
+}
+
 /// The list of the user's named places.
-class PlaceManagementScreen extends ConsumerWidget {
+class PlaceManagementScreen extends ConsumerStatefulWidget {
   const PlaceManagementScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<PlaceManagementScreen> createState() =>
+      _PlaceManagementScreenState();
+}
+
+class _PlaceManagementScreenState extends ConsumerState<PlaceManagementScreen> {
+  /// The line for an empty list, drawn once: a line that changed on every
+  /// rebuild would read as if Jeeves kept changing its mind.
+  late final String _emptyLine = placesEmptyLine();
+
+  @override
+  Widget build(BuildContext context) {
     final places = ref.watch(namedPlacesWithUseCountProvider);
     return Scaffold(
       appBar: AppTitleBar(
@@ -45,7 +66,7 @@ class PlaceManagementScreen extends ConsumerWidget {
           if (rows.isEmpty) {
             return Center(
               child: Text(
-                placesEmptyPool.first,
+                _emptyLine,
                 key: const Key('place_management_empty'),
                 style: const TextStyle(color: Color(0xFF9CA3AF)),
               ),

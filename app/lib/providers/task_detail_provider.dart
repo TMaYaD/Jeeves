@@ -370,41 +370,53 @@ class TaskDetailNotifier {
   ///
   /// A one-time pin the Action stops pointing at goes with the reference; a
   /// named Place belongs to the user's list and stays in it.
+  /// Sets the named Place on the Action the sheet was opened for (issue #55).
+  ///
+  /// Returns whether the Place was written: a write that the guard drops —
+  /// the Action that was current when the sheet opened is no longer current —
+  /// writes nothing and says so.
   Future<bool> setNamedPlace({
     required String actionId,
     required String placeId,
   }) async {
-    return _ifOutcomePresent(() async {
+    var written = false;
+    final outcomePresent = await _ifOutcomePresent(() async {
       final current = await _db.actionDao.getCurrentAction(_todoId);
       if (current == null || current.id != actionId) return;
-      await _db.actionDao.setNamedPlace(current.id, placeId);
+      written = await _db.actionDao.setNamedPlace(current.id, placeId);
     });
+    return outcomePresent && written;
   }
 
   /// Drops a one-time pin on the Action the sheet was opened for (issue #55).
   ///
   /// A pin belongs to this one Action: it is never listed anywhere, and it goes
   /// when the Action stops pointing at it. The same guard as [setNamedPlace]
-  /// applies.
+  /// applies, and the answer says whether the pin was actually dropped.
   Future<bool> setPin({
     required String actionId,
     required PlaceArea area,
     String? name,
   }) async {
-    return _ifOutcomePresent(() async {
+    var written = false;
+    final outcomePresent = await _ifOutcomePresent(() async {
       final current = await _db.actionDao.getCurrentAction(_todoId);
       if (current == null || current.id != actionId) return;
-      await _db.actionDao.setPin(current.id, area, name: name);
+      final pinId = await _db.actionDao.setPin(current.id, area, name: name);
+      written = pinId != null;
     });
+    return outcomePresent && written;
   }
 
   /// Clears the Place of the Action the sheet was opened for (issue #55).
   Future<bool> clearPlace({required String actionId}) async {
-    return _ifOutcomePresent(() async {
+    var written = false;
+    final outcomePresent = await _ifOutcomePresent(() async {
       final current = await _db.actionDao.getCurrentAction(_todoId);
       if (current == null || current.id != actionId) return;
-      await _db.actionDao.setNamedPlace(current.id, null);
+      written = await _db.actionDao.setNamedPlace(current.id, null);
     });
+    return outcomePresent && written;
   }
 
   Future<bool> setDueDate(DateTime date) =>

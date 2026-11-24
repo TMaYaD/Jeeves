@@ -49,6 +49,11 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
       TextEditingController(text: widget.place?.name ?? '');
 
   GeoPoint? _point;
+  /// The radius the Place has, in metres.
+  ///
+  /// Kept exactly as it is stored: a radius that came from another device is
+  /// not rewritten to the step the slider happens to sit at unless the user
+  /// moves the slider.
   late int _radiusMeters = widget.place?.area.radiusMeters ??
       PlaceArea.defaultRadiusMeters;
   bool _saving = false;
@@ -63,9 +68,6 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
         longitudeDegrees: place.area.longitudeDegrees,
       );
     }
-    // The slider runs in steps of 50 m, so a radius stored from elsewhere is
-    // shown at the step nearest it.
-    _radiusMeters = nearestPlaceAreaStep(_radiusMeters);
   }
 
   @override
@@ -87,6 +89,7 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
     final userId = ref.read(currentUserIdProvider);
     final place = widget.place;
     String? placeId;
+    var saved = false;
     if (place == null) {
       placeId = await db.placeDao.createNamedPlace(
         name: _name.text,
@@ -95,9 +98,10 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
         radiusMeters: _radiusMeters,
         userId: userId,
       );
+      saved = placeId != null;
     } else {
       placeId = place.id;
-      await db.placeDao.updateNamedPlace(
+      saved = await db.placeDao.updateNamedPlace(
         placeId: place.id,
         name: _name.text,
         latitudeDegrees: point.latitudeDegrees,
@@ -112,8 +116,11 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
     }
     // The first saved Place is the first time Jeeves may ask for the
     // location — and the only time outside "Use where I am". The ask happens
-    // before the sheet closes, so its own dialog has a live context.
-    await askForLocationAfterFirstSave(context, source);
+    // before the sheet closes, so its own dialog has a live context. A Place
+    // that was not written is no Place saved, so it asks nothing.
+    if (saved) {
+      await askForLocationAfterFirstSave(context, source);
+    }
     if (!mounted) return;
     Navigator.pop(context, placeId);
   }
@@ -192,6 +199,16 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
                 initialPoint: _point,
                 onChanged: (point) => setState(() => _point = point),
               ),
+              if (_point == null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    'Set a point to save this place.',
+                    key: const Key('place_editor_no_point'),
+                    style: const TextStyle(
+                        fontSize: 12, color: Color(0xFF6B7280)),
+                  ),
+                ),
               const SizedBox(height: 16),
               PlaceAreaSlider(
                 radiusMeters: _radiusMeters,

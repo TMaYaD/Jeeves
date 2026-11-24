@@ -11,6 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/place_area.dart';
+import 'package:jeeves/models/time_context.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/location_source_provider.dart';
 import 'package:jeeves/providers/place_page_provider.dart';
@@ -67,12 +68,18 @@ void main() {
     await db.close();
   });
 
-  Future<List<PlacePageGroup>> groups() async {
+  Future<List<PlacePageGroup>> groups({
+    bool Function(List<PlacePageGroup>)? ready,
+  }) async {
     final sub = container.listen(placePageGroupsProvider, (_, _) {});
     addTearDown(sub.close);
     for (var i = 0; i < 800; i++) {
       final value = sub.read();
-      if (value.hasValue && value.value!.isNotEmpty) return value.value!;
+      if (value.hasValue &&
+          value.value!.isNotEmpty &&
+          (ready == null || ready(value.value!))) {
+        return value.value!;
+      }
       await Future<void>.delayed(const Duration(milliseconds: 10));
     }
     return sub.read().value ?? const [];
@@ -146,5 +153,42 @@ void main() {
 
     final listed = await groups();
     expect(listed.map((g) => g.label), ['Home', 'Pins']);
+  });
+
+  test('an Outcome at the Place but outside its time is not marked on Next',
+      () async {
+    final actionId = await _insertOutcome(db, 'timed');
+    final homeId = await db.placeDao.createNamedPlace(
+      name: 'Home',
+      latitudeDegrees: _home.latitudeDegrees,
+      longitudeDegrees: _home.longitudeDegrees,
+      radiusMeters: 150,
+      userId: _userId,
+    );
+    await db.actionDao.setNamedPlace(actionId, homeId);
+    // The user is standing at Home.
+    location.freshPoint = _home;
+    // The Action's time context is a day that is not today.
+    final today = DateTime.now().weekday;
+    await db.actionDao.setTimeContext(
+      actionId,
+      TimeContext.create(days: {today == 7 ? 1 : 7})!,
+    );
+
+    container = ProviderContainer(overrides: [
+      databaseProvider.overrideWithValue(db),
+      locationSourceProvider.overrideWithValue(location),
+      notificationServiceProvider.overrideWithValue(StubNotificationService()),
+    ]);
+
+    final listed = await groups(
+      ready: (groups) =>
+          groups.single.rows.isNotEmpty && !groups.single.rows.single.isOnNext,
+    );
+    final row = listed.single.rows.single;
+    expect(row.todo.id, 'timed');
+    // The user is at the Place, but the Outcome is not on Next: its time is
+    // closed.
+    expect(row.isOnNext, isFalse);
   });
 }

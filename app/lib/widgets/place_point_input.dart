@@ -15,6 +15,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../models/place_area.dart';
 import '../providers/location_source_provider.dart';
 import '../services/location_source.dart';
 
@@ -63,61 +64,85 @@ class _PlacePointInputState extends ConsumerState<PlacePointInput> {
       '${point.latitudeDegrees.toStringAsFixed(5)}, '
       '${point.longitudeDegrees.toStringAsFixed(5)}';
 
-  void _setPoint(GeoPoint? point) {
+  /// Takes a point that came from somewhere else — the phone's own location,
+  /// or an address the geocoder knew — and shows it in the field.
+  void _takePoint(GeoPoint point) {
     setState(() {
       _point = point;
       _message = null;
-      if (point == null) {
-        _coordinates.clear();
-      } else {
-        _coordinates.text = _formatPoint(point);
-      }
+      _coordinates.text = _formatPoint(point);
     });
     widget.onChanged(point);
   }
 
-  /// Reads the "latitude, longitude" field. A pair that is not two numbers,
-  /// or a point off the globe, is refused.
-  void _applyCoordinates() {
-    final parts = _coordinates.text.split(',');
-    if (parts.length != 2) {
-      setState(() => _message = 'Give a latitude and a longitude, separated '
-          'by a comma.');
-      return;
-    }
+  /// The typed pair, or null when it is not a point on the globe.
+  static GeoPoint? _parseCoordinates(String text) {
+    final parts = text.split(',');
+    if (parts.length != 2) return null;
     final latitude = double.tryParse(parts[0].trim());
     final longitude = double.tryParse(parts[1].trim());
-    if (latitude == null || longitude == null) {
-      setState(() => _message = 'Give a latitude and a longitude, separated '
-          'by a comma.');
+    if (latitude == null || longitude == null) return null;
+    if (!PlaceArea.isPointOnGlobe(
+      latitudeMicrodegrees: PlaceArea.toMicrodegrees(latitude),
+      longitudeMicrodegrees: PlaceArea.toMicrodegrees(longitude),
+    )) {
+      return null;
+    }
+    return (latitudeDegrees: latitude, longitudeDegrees: longitude);
+  }
+
+  /// The typed pair becomes the point as soon as it is one.
+  ///
+  /// **The field is the truth.** A pair that is not a point leaves the Place
+  /// without a point, so the surface that holds it cannot quietly save the
+  /// point it had before.
+  void _onCoordinatesChanged(String text) {
+    final point = _parseCoordinates(text);
+    final had = _point;
+    setState(() {
+      _message = (text.trim().isEmpty || point != null)
+          ? null
+          : 'Give a latitude and a longitude, separated by a comma.';
+      _point = point;
+    });
+    if (point != null) {
+      widget.onChanged(point);
       return;
     }
-    if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
-      setState(() => _message = 'That point is not on the globe.');
-      return;
+    if (had != null) {
+      // The typed pair is not a point: the Place has none until it is right
+      // again.
+      widget.onChanged(null);
     }
-    _setPoint((latitudeDegrees: latitude, longitudeDegrees: longitude));
   }
 
   /// The phone's own location. The tap is the user asking for it, so this is
   /// the one place outside the first save where permission may be asked.
+  ///
+  /// The OS is asked whenever the location is not already allowed: the OS
+  /// cannot say whether it was ever asked, so the standing check says only
+  /// that the location is not allowed yet.
   Future<void> _useWhereIAm() async {
     final source = ref.read(locationSourceProvider);
     var permission = await source.permission();
-    if (permission == LocationPermission.notAsked) {
+    if (!permission.isGranted) {
       permission = await source.requestWhileUsing();
     }
-    if (permission != LocationPermission.whileInUse &&
-        permission != LocationPermission.always) {
-      setState(() => _message = 'The phone will not say where you are.');
+    if (!mounted) return;
+    if (!permission.isGranted) {
+      setState(() => _message = permission == LocationPermission.deniedForever
+          ? 'The phone will not ask again. Allow the location in the app\'s '
+              'settings.'
+          : 'The phone will not say where you are.');
       return;
     }
     final point = await source.freshFix(timeout: const Duration(seconds: 10));
+    if (!mounted) return;
     if (point == null) {
       setState(() => _message = 'The phone could not find you.');
       return;
     }
-    _setPoint(point);
+    _takePoint(point);
   }
 
   /// Looks the typed address up with the platform geocoder.
@@ -131,12 +156,13 @@ class _PlacePointInputState extends ConsumerState<PlacePointInput> {
       setState(() => _message = 'That address is not one I know.');
       return;
     }
-    _setPoint(point);
+    _takePoint(point);
   }
 
   @override
   Widget build(BuildContext context) {
     final source = ref.watch(locationSourceProvider);
+    final geocoder = ref.watch(addressGeocoderProvider);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -148,30 +174,32 @@ class _PlacePointInputState extends ConsumerState<PlacePointInput> {
             label: const Text('Use where I am'),
           ),
         if (source.supportsPermissionPrompt) const SizedBox(height: 12),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: TextField(
-                key: const Key('place_point_address'),
-                controller: _address,
-                decoration: const InputDecoration(
-                  isDense: true,
-                  labelText: 'Address',
-                  hintText: 'Street and town',
+        if (geocoder.supportsAddressLookup) ...[
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: TextField(
+                  key: const Key('place_point_address'),
+                  controller: _address,
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    labelText: 'Address',
+                    hintText: 'Street and town',
+                  ),
+                  onSubmitted: (_) => _findAddress(),
                 ),
-                onSubmitted: (_) => _findAddress(),
               ),
-            ),
-            const SizedBox(width: 8),
-            TextButton(
-              key: const Key('place_point_find_address'),
-              onPressed: source.supportsPermissionPrompt ? _findAddress : null,
-              child: const Text('Find'),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
+              const SizedBox(width: 8),
+              TextButton(
+                key: const Key('place_point_find_address'),
+                onPressed: _findAddress,
+                child: const Text('Find'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+        ],
         TextField(
           key: const Key('place_point_coordinates'),
           controller: _coordinates,
@@ -180,16 +208,7 @@ class _PlacePointInputState extends ConsumerState<PlacePointInput> {
             labelText: 'Latitude, longitude',
             hintText: '52.37020, 4.89520',
           ),
-          onSubmitted: (_) => _applyCoordinates(),
-        ),
-        const SizedBox(height: 8),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: TextButton(
-            key: const Key('place_point_apply_coordinates'),
-            onPressed: _applyCoordinates,
-            child: const Text('Set this point'),
-          ),
+          onChanged: _onCoordinatesChanged,
         ),
         if (_message != null)
           Padding(

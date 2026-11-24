@@ -253,15 +253,18 @@ class PlaceDao extends DatabaseAccessor<GtdDatabase> with _$PlaceDaoMixin {
     if (deleted) attachedDatabase.notifyPlacesViewWrite();
   }
 
-  /// The user's named places, each with the number of live Actions that use
+  /// The user's named places, each with the number of live Outcomes that use
   /// it, most recently used first (issue #55).
   ///
   /// "Most recently used" is the newest write to an Action that points at the
   /// Place: a Place does not itself remember being chosen. A Place no live
   /// Action uses sorts after the ones in use, by name.
   ///
-  /// The count is of current Actions of Outcomes that are not done — the same
-  /// "live" the rest of the app counts by.
+  /// The count is of Outcomes that are not done whose **winning** current
+  /// Action points at the Place — the same Action the place gate reads, so
+  /// the count and the gate never disagree. An Outcome with two current
+  /// Actions, as a sync conflict can leave behind, counts once, for the one
+  /// that wins.
   Stream<List<NamedPlaceWithUse>> watchNamedPlacesWithUseCount() {
     return customSelect(
       'SELECT places.id AS id, places.name AS name, '
@@ -271,6 +274,13 @@ class PlaceDao extends DatabaseAccessor<GtdDatabase> with _$PlaceDaoMixin {
       'COUNT(t.id) AS use_count '
       'FROM places '
       'LEFT JOIN actions a ON a.place_id = places.id AND a.role = \'current\' '
+      'AND a.id = ('
+      'SELECT mca.id FROM actions mca '
+      'WHERE mca.outcome_id = a.outcome_id AND mca.role = \'current\' '
+      // The same rule [_winnerFirst] applies, spelled for the subquery's
+      // alias: greatest COALESCE(updated_at, created_at), then smallest id.
+      'ORDER BY COALESCE(mca.updated_at, mca.created_at) DESC, mca.id ASC '
+      'LIMIT 1) '
       'LEFT JOIN todos t ON t.id = a.outcome_id AND t.done_at IS NULL '
       'WHERE places.kind = ? '
       'GROUP BY places.id '
@@ -305,11 +315,12 @@ class PlaceDao extends DatabaseAccessor<GtdDatabase> with _$PlaceDaoMixin {
       trimmed.isNotEmpty && trimmed.length <= Places.maxNameLength;
 }
 
-/// A named Place with the number of live Actions that use it.
+/// A named Place with the number of live Outcomes that use it.
 ///
-/// "Use" means a current Action of an Outcome that is not done carries the
-/// Place. A Place nobody uses is still in the list — the user made it, and
-/// deleting it is their call.
+/// "Use" means the winning current Action of an Outcome that is not done
+/// carries the Place — the same Action the place gate reads. A Place nobody
+/// uses is still in the list — the user made it, and deleting it is their
+/// call.
 typedef NamedPlaceWithUse = ({
   String id,
   String name,

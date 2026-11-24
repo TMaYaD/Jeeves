@@ -14,6 +14,7 @@ import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/place_gate_provider.dart';
 import 'package:jeeves/providers/places_provider.dart';
 import 'package:jeeves/widgets/place_editor_sheet.dart';
+import 'package:jeeves/widgets/place_pin_sheet.dart';
 import 'package:jeeves/widgets/place_picker_sheet.dart';
 
 import '../test_helpers.dart';
@@ -72,6 +73,27 @@ void main() {
     await tester.pump();
 
     expect(find.byKey(const Key('place_picker_search')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('the pin sheet lays out at 320 dp', (tester) async {
+    tester.view.physicalSize = const Size(320, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: const MaterialApp(
+          home: Scaffold(body: PlacePinSheet()),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byKey(const Key('place_pin_name')), findsOneWidget);
+    expect(find.byKey(const Key('place_point_coordinates')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }
