@@ -55,6 +55,7 @@ import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:drift/drift.dart';
 
 import '../database/gtd_database.dart';
+import '../models/time_window_hours.dart';
 import '../sync/collection_codecs.dart';
 import 'import_progress.dart';
 import 'nirvana_local_import.dart' show ImportFailure, ImportResult;
@@ -517,6 +518,17 @@ Future<_RecordOutcome> _takeRecord(
   List<ImportFailure> failures,
 ) async {
   final fields = _importFields(row.codec, row.raw, userId);
+  // A value the app cannot read is refused before the row is written and
+  // before the op is authored: a record this device did not keep must not
+  // be asserted to the other devices either.
+  final refusal = _refusedValue(row.codec, fields);
+  if (refusal != null) {
+    failures.add(ImportFailure(
+      record: _recordName(row),
+      reason: refusal,
+    ));
+    return _RecordOutcome.failed;
+  }
   try {
     // Author the op only if the local row was actually persisted. When
     // [_writeRow] cannot locate the row (an unresolvable junction key),
@@ -544,6 +556,21 @@ Future<_RecordOutcome> _takeRecord(
 
 /// How a record is named in a failure report: its collection and its id.
 String _recordName(_PendingRow row) => '${row.codec.collection}/${row.id}';
+
+/// The reason this row's values are refused, or null when they are accepted.
+///
+/// The store's own constraints catch a value a column will not hold, but a
+/// window's hours are free text: the column takes any string, and the app
+/// cannot read one that is not a valid set of hours. Such a window is dead —
+/// here, and on every other device the import syncs it to — so the hours are
+/// checked with the same rule the DAO applies, and the record is named and
+/// set aside rather than written.
+String? _refusedValue(CollectionCodec codec, Map<String, Object?> fields) {
+  if (codec.collection != timeWindowsCollection) return null;
+  final hours = fields['hours'];
+  if (hours is String && TimeWindowHours.tryParse(hours) != null) return null;
+  return 'The time window hours are not a readable set of hours: "$hours".';
+}
 
 /// A failure reason a user can read: what went wrong, without the noise.
 String _describeFailure(Object error) {

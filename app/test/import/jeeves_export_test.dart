@@ -1024,6 +1024,61 @@ void main() {
       expect(recorder.keys, contains('todos/todo-good'));
     });
 
+    test('a time window whose hours the app cannot read is named, and not '
+        'written', () async {
+      // The store would take any text in the hours column, but the app
+      // cannot read hours that are not a valid set of hours: the window
+      // would be dead here, and dead on every other device the import
+      // syncs it to. The DAO refuses such hours on a write, and the import
+      // refuses them the same way.
+      final content = jsonEncode({
+        jeevesExportEnvelopeKey: jeevesExportVersion,
+        jeevesExportCollectionsKey: {
+          'time_windows': [
+            {
+              'id': 'tw-good',
+              'name': 'Store hours',
+              'hours': '[{"day":1,"start":"11:00","end":"20:00"}]',
+              'created_at': '2026-07-28T05:00:00.000Z',
+              'user_id': _userId,
+            },
+            {
+              'id': 'tw-bad',
+              'name': 'Broken hours',
+              'hours': '[{"day":1,"start":"25:00","end":"26:00"}]',
+              'created_at': '2026-07-28T05:00:00.000Z',
+              'user_id': _userId,
+            },
+          ],
+        },
+      });
+
+      final recorder = RecordingDomainOpCapture();
+      final db = _openInMemory(recorder: recorder);
+      addTearDown(db.close);
+
+      final result = await importJeevesExport(
+        content: content,
+        userId: _userId,
+        db: db,
+      );
+
+      // The readable window landed; the unreadable one did not.
+      final windows = await db.select(db.timeWindows).get();
+      expect([for (final window in windows) window.id], ['tw-good']);
+
+      // And it was named, with the reason.
+      expect(result.failedRecords, hasLength(1));
+      expect(result.failedRecords.single.record, 'time_windows/tw-bad');
+      expect(result.failedRecords.single.reason, contains('hours'),
+          reason: 'the reason must point at the value that was refused');
+
+      // And it is not on the op log: a record this device did not keep is
+      // never asserted to the other devices.
+      expect(recorder.keys, isNot(contains('time_windows/tw-bad')));
+      expect(recorder.keys, contains('time_windows/tw-good'));
+    });
+
     test('the failures reach the user through the import surface', () async {
       // The whole point is that the user is told. Drive the real entry point
       // and the real notifier: the import finishes, and what it left out
