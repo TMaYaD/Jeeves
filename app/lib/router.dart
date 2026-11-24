@@ -20,9 +20,11 @@ import 'screens/periodic_review/periodic_review_screen.dart';
 import 'screens/planning/focus_session_planning_screen.dart';
 import 'screens/settings/settings_screen.dart';
 import 'screens/tag_management/tag_management_screen.dart';
+import 'screens/time_window_management/time_window_management_screen.dart';
 import 'screens/someday_maybe/someday_maybe_screen.dart';
 import 'screens/sync_health/sync_health_screen.dart';
 import 'screens/task_detail/task_detail_screen.dart';
+import 'screens/time_page/time_page_screen.dart';
 import 'screens/trash/trash_screen.dart';
 import 'screens/waiting_for/waiting_for_screen.dart';
 import 'screens/active_focus_screen.dart';
@@ -127,6 +129,11 @@ final appRouter = GoRouter(
         path: kind.routePath,
         builder: (context, state) => TagManagementScreen(kind: kind),
       ),
+    // Outside the shell, like the other management lists.
+    GoRoute(
+      path: TimeWindowManagementScreen.routePath,
+      builder: (context, state) => const TimeWindowManagementScreen(),
+    ),
     // Outside the shell, like /settings: it is an account of what happened
     // rather than a place in the app. Nothing routes here on its own — the
     // drawer indicator pushes it, and only while there is something to report.
@@ -149,6 +156,10 @@ final appRouter = GoRouter(
           builder: (context, state) => const InboxScreen(),
         ),
         GoRoute(path: '/next', builder: (context, state) => const NextScreen()),
+        GoRoute(
+          path: '/time',
+          builder: (context, state) => const TimePageScreen(),
+        ),
         GoRoute(
           path: '/projects/:id',
           builder: (context, state) =>

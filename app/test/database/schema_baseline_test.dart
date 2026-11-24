@@ -82,16 +82,16 @@ void main() {
   setUpAll(configureSqliteForTests);
 
   group('schema version', () {
-    test('is 15 — fourteen onUpgrade steps behind the fresh baseline', () async {
+    test('is 16 — fifteen onUpgrade steps behind the fresh baseline', () async {
       final db = _openInMemory();
       addTearDown(db.close);
-      expect(db.schemaVersion, 15);
+      expect(db.schemaVersion, 16);
       // A fresh file runs onCreate at the current version, not the ladder.
       expect(
         await db.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        15,
+        16,
       );
     });
   });
@@ -302,7 +302,7 @@ void main() {
       await seed.customStatement('PRAGMA user_version = 1');
       await seed.close();
 
-      // Open 2: Drift sees user_version=1 and schemaVersion=15, so it runs the
+      // Open 2: Drift sees user_version=1 and schemaVersion=16, so it runs the
       // whole ladder — the v2 drop asserted here, and the v3 `tags` recreate the
       // group below owns.
       final upgraded = GtdDatabase(
@@ -314,7 +314,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        15,
+        16,
       );
       expect(await _columnNames(upgraded, 'todos'),
           isNot(contains('time_spent_minutes')),
@@ -441,7 +441,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        15,
+        16,
       );
       expect(await _uniqueConstraintIndexes(upgraded, 'tags'), isEmpty,
           reason: 'v3 drops UNIQUE (name, type)');
@@ -501,7 +501,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        15,
+        16,
       );
       expect(await _objects(upgraded, 'table'), contains('capture_attachments'));
       expect(await _rows(upgraded, 'captures'), hasLength(1));
@@ -606,7 +606,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        15,
+        16,
       );
       expect(await _columnNames(upgraded, 'todos'), isNot(contains('clarified')),
           reason: 'v5 drops the dead flag');
@@ -707,7 +707,7 @@ void main() {
           await upgraded.customSelect('PRAGMA user_version').getSingle().then(
                 (r) => r.read<int>('user_version'),
               ),
-          15,
+          16,
         );
         expect(await _rows(upgraded, 'todos'), todosBefore);
         expect(await _rows(upgraded, 'captures'), capturesBefore);
@@ -1277,7 +1277,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        15,
+        16,
       );
 
       for (final entry in habitTables.entries) {
@@ -1410,7 +1410,153 @@ void main() {
     });
   });
 
-  group('v15 onUpgrade adds the Habit Focus tables', () {
+  group('v15 onUpgrade adds the places and the time windows', () {
+    /// The two tables issue #239 adds, with their exact column sets. Written
+    /// out rather than derived from the declarations: the point of the
+    /// assertion is that the *stored* shape is the agreed one, and a fixture
+    /// generated from the same declaration would agree with any mistake in it.
+    const placeTables = <String, Set<String>>{
+      'places': {
+        'id',
+        'user_id',
+        'kind',
+        'name',
+        'latitude_microdegrees',
+        'longitude_microdegrees',
+        'radius_meters',
+        'created_at',
+        'updated_at',
+      },
+      'time_windows': {
+        'id',
+        'user_id',
+        'name',
+        'hours',
+        'created_at',
+        'updated_at',
+      },
+    };
+
+    test('creates the two tables, adds the two Action columns and keeps '
+        'every existing row', () async {
+      final raw = sqlite3.openInMemory();
+      addTearDown(raw.close);
+
+      final seed = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      var seedClosed = false;
+      Future<void> closeSeed() async {
+        if (seedClosed) return;
+        seedClosed = true;
+        await seed.close();
+      }
+
+      addTearDown(closeSeed);
+
+      // A v14 store: neither table existed, and the Action carried no
+      // reference to a place or a window.
+      await seed.customStatement('DROP TABLE places');
+      await seed.customStatement('DROP TABLE time_windows');
+      final createSql = (await seed
+              .customSelect("SELECT sql FROM sqlite_master "
+                  "WHERE type = 'table' AND name = 'actions'")
+              .getSingle())
+          .read<String>('sql');
+      final v14Sql = createSql
+          .replaceFirst(
+              RegExp(r',\s*"?place_id"?\s+TEXT\s+NULL', caseSensitive: false), '')
+          .replaceFirst(RegExp(r',\s*"?time_window_id"?\s+TEXT\s+NULL',
+              caseSensitive: false), '');
+      expect(v14Sql, isNot(contains('place_id')),
+          reason: 'the fixture is only a v14 store without the columns');
+      expect(v14Sql, isNot(contains('time_window_id')),
+          reason: 'the fixture is only a v14 store without the columns');
+      await seed.customStatement('DROP TABLE actions');
+      await seed.customStatement(v14Sql);
+
+      final createdAt = '2026-11-24T09:00:00.000Z';
+      const timeContext = '{"days":[1,2,3,4,5],"start":"09:00","end":"17:00"}';
+      await seed.customStatement(
+        'INSERT INTO todos (id, title, user_id, created_at, intent) '
+        "VALUES ('t1', 'Ship it', 'u1', ?, 'next')",
+        [createdAt],
+      );
+      await seed.customStatement(
+        'INSERT INTO actions (id, outcome_id, user_id, text, role, '
+        'time_context, created_at) '
+        "VALUES ('a1', 't1', 'u1', 'Call Bob', 'current', ?, ?)",
+        [timeContext, createdAt],
+      );
+      await seed.customStatement('PRAGMA user_version = 14');
+      await closeSeed();
+
+      final upgraded = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      addTearDown(upgraded.close);
+      final fresh = GtdDatabase(NativeDatabase.memory());
+      addTearDown(fresh.close);
+
+      expect(
+        await upgraded.customSelect('PRAGMA user_version').getSingle().then(
+              (r) => r.read<int>('user_version'),
+            ),
+        16,
+      );
+
+      for (final entry in placeTables.entries) {
+        expect(await _objects(upgraded, 'table'), contains(entry.key),
+            reason: 'the migration creates ${entry.key}');
+        expect(await _columnNames(upgraded, entry.key), entry.value,
+            reason: 'the columns of ${entry.key} are the declared ones');
+        expect(await _rows(upgraded, entry.key), isEmpty,
+            reason: '${entry.key} holds no row — nothing is backfilled');
+      }
+
+      expect(await _columnNames(upgraded, 'actions'),
+          await _columnNames(fresh, 'actions'),
+          reason: 'the upgraded store matches a fresh one');
+
+      // The Action from before the columns existed is still there, keeps its
+      // Time context, and reads as having no place and no window.
+      final actions = await upgraded.select(upgraded.actions).get();
+      expect(actions, hasLength(1));
+      expect(actions.single.id, 'a1');
+      expect(actions.single.actionText, 'Call Bob');
+      expect(actions.single.role, 'current');
+      expect(actions.single.timeContext, timeContext);
+      expect(actions.single.placeId, isNull,
+          reason: 'an existing Action is at no place');
+      expect(actions.single.timeWindowId, isNull,
+          reason: 'an existing Action is gated by no window');
+    });
+
+    test('a store that already carries the tables and the columns upgrades '
+        'without failing', () async {
+      final raw = sqlite3.openInMemory();
+      addTearDown(raw.close);
+
+      final seed = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      await seed.customStatement('SELECT 1');
+      await seed.customStatement('PRAGMA user_version = 14');
+      await seed.close();
+
+      final upgraded = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      addTearDown(upgraded.close);
+
+      expect(await _objects(upgraded, 'table'),
+          containsAll(['places', 'time_windows']));
+      expect(await _columnNames(upgraded, 'actions'),
+          containsAll(['place_id', 'time_window_id']));
+    });
+  });
+
+  group('v16 onUpgrade adds the Habit Focus tables', () {
     test('creates both tables with their exact columns and keeps every row',
         () async {
       final raw = sqlite3.openInMemory();
@@ -1428,7 +1574,7 @@ void main() {
 
       addTearDown(closeSeed);
 
-      // A v14 store: the two tables did not exist.
+      // A v15 store: the two tables did not exist.
       await seed.customStatement('DROP TABLE habit_sprints');
       await seed.customStatement('DROP TABLE habit_time_logs');
       await seed.customStatement(
@@ -1440,7 +1586,7 @@ void main() {
         "updated_at) VALUES ('h1', 'u1', 'Meditate', 'none', "
         "'2026-11-18T09:00:00.000Z', '2026-11-18T09:00:00.000Z')",
       );
-      await seed.customStatement('PRAGMA user_version = 14');
+      await seed.customStatement('PRAGMA user_version = 15');
       await closeSeed();
 
       final upgraded = GtdDatabase(
@@ -1452,7 +1598,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        15,
+        16,
       );
       expect(await _columnNames(upgraded, 'habit_time_logs'),
           {'id', 'user_id', 'habit_id', 'started_at', 'ended_at'});

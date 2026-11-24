@@ -1,0 +1,84 @@
+name: Builder CI
+
+# Proves infra/builder is portable: a bare ubuntu:24.04 container on a GitHub
+# runner (a different machine, network and region from anyone's builder),
+# provisioned as an arbitrary non-default user, must come out able to build
+# the app through jeeves-build. The playbook reads app/.fvmrc and the
+# app's compileSdk, so a bump of either re-runs this too.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "infra/builder/**"
+      - "app/.fvmrc"
+      - "app/android/app/build.gradle.kts"
+      - ".github/workflows/builder-ci.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "infra/builder/**"
+      - "app/.fvmrc"
+      - "app/android/app/build.gradle.kts"
+      - ".github/workflows/builder-ci.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: builder-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  provision:
+    name: Provision a bare machine
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    container: ubuntu:24.04
+
+    steps:
+      # Only what a fresh machine reached over SSH would already have:
+      # python3, sudo, and a user who is not root and not named after anyone.
+      - name: Bare machine with an unprivileged sudo user
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            sudo python3 python3-venv git ca-certificates
+          useradd -m -s /bin/bash ci-builder
+          echo 'ci-builder ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/ci-builder
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Controller (ansible-core)
+        run: |
+          python3 -m venv /opt/ansible
+          /opt/ansible/bin/pip install -q ansible-core
+          chown -R ci-builder: "$GITHUB_WORKSPACE"
+
+      # A container cannot swapon, so swap is switched off here; everything
+      # else runs with the defaults a real machine gets.
+      - name: Provision
+        run: |
+          sudo -u ci-builder -H /opt/ansible/bin/ansible-playbook \
+            -i localhost, -c local -e builder_hosts=all -e builder_swapfile_size= \
+            infra/builder/playbook.yml
+
+      - name: Re-run changes nothing
+        run: |
+          sudo -u ci-builder -H /opt/ansible/bin/ansible-playbook \
+            -i localhost, -c local -e builder_hosts=all -e builder_swapfile_size= \
+            infra/builder/playbook.yml | tee /tmp/second.log
+          grep -Eq 'changed=0 +unreachable=0 +failed=0' /tmp/second.log
+
+      - name: Android toolchain is complete
+        run: |
+          sudo -u ci-builder -H bash -lc 'flutter doctor -v' | tee /tmp/doctor.log
+          grep -q '\[✓\] Android toolchain' /tmp/doctor.log
+
+      - name: The repo builds through jeeves-build
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          sudo -u ci-builder -H bash -c \
+            'git -C "$PWD" archive --format=tar HEAD | jeeves-build --wait 60 -- \
+              "flutter pub get && dart run build_runner build --delete-conflicting-outputs && flutter analyze"'

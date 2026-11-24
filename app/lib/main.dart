@@ -13,6 +13,7 @@ import 'providers/auth_provider.dart';
 import 'providers/database_provider.dart';
 import 'providers/habit_check_in_outbox.dart';
 import 'providers/time_context_provider.dart';
+import 'providers/time_window_provider.dart';
 import 'providers/nudge_action_outbox.dart';
 import 'providers/onboarding_provider.dart';
 import 'providers/sync_lifecycle_provider.dart';
@@ -224,6 +225,10 @@ class JeevesApp extends ConsumerWidget {
     // it, and without this watch the vault would only run while a screen that
     // reads it was open.
     ref.watch(vaultPluginProvider);
+    // Re-arms the time boundary when the app comes back to the foreground, so
+    // a time zone change while the app was away applies on return. Nothing
+    // else reads it.
+    ref.watch(timeBoundaryResumeProvider);
     return MaterialApp.router(
       title: 'Jeeves',
       theme: _jeevesTheme,

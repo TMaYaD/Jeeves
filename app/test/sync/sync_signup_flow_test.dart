@@ -67,6 +67,8 @@ const Map<String, Set<String>> _tables = {
   'outcome_bypass_decisions': {},
   'time_logs': {},
   'sprints': {},
+  'places': {},
+  'time_windows': {},
   'user_preferences': {},
 };
 

@@ -385,6 +385,17 @@ tags only — Recolour. Merge targets are the same kind only. Merge and delete
 confirm in a dialog that says what happens to the Outcomes and that it cannot
 be undone.
 
+### Named time windows
+Settings → Manage lists the user's named time windows beside the label, project and people lists.
+
+| Element | Contract |
+|---|---|
+| Manage list | One row per window: its name, its hours in words ("Mon–Fri 09:00–17:00"), and the number of actions using it. The title bar's New action makes one; tapping a row edits it. An empty list says so in Jeeves's voice, from a pool. |
+| Editor | A name, and the hours of each day: the same on chosen days, or day by day. An end before the start is the next day, and is labelled so. |
+| Save and Delete | Save stays disabled until the name and the hours are acceptable. Delete asks how many actions lose the window, and the window goes. |
+| Chip | The Time context chip reads the window's name, and its sheet offers the user's windows beside the one-time time. Picking a window attaches it; a one-time time replaces it. |
+| Time page | A drawer page, in the Waiting For idiom: one group per named window, its hours in the header, then a "One-time" group. Each row says "On Next", or when its time opens — the glyph and the words carry it, never a colour. |
+
 ### Ceremony back navigation
 System back inside a ceremony mirrors the footer Back affordance — it invokes
 the exact callback the active step's footer renders, retreating the per-item
@@ -417,7 +428,7 @@ A Plan entry's suggested time, tall as its estimate, no sprint blocks; a chunked
 | Sprint count | The tile's detail line ends with the Outcome's Sprints and their time: "2 sprints · 46m". A running Sprint counts the time since it started. A short tile has one line and no detail line of its own, so the count joins the time there. |
 
 ### Outcome peek sheet
-On the Daily Planning Plan Summary step, a plain **tap** on any card (Today's Plan, Up Next, or Skipped) opens the **Outcome peek** — a bottom sheet (`OutcomePeekSheet`, `app/lib/widgets/outcome_peek_sheet.dart`) that reads as a viewer and edits in place. Title and notes are borderless fields saved on focus loss and flushed on dismissal; energy, time estimate and due date are tappable chips; below them sit the context tags, the Waiting For people and the Plan. The sheet reuses the Task Detail editors (`outcome_attribute_editors.dart`, `outcome_plan_section.dart`) and writes through `TaskDetailNotifier`, so stamping and the deleted-Outcome guard behave as on the detail screen. The **Time context** chip (`time_context_sheet.dart`, also at the end of the Task Detail attribute strip) shows the current Action's time predicate or a quiet `Time context`; it opens a sheet with a From date, seven day chips and a Between range, a Save that is disabled while the value is invalid, and `Clear time context`. Time logged stays read-only, summed from `time_logs`. Status changes and project assignment are deliberately not offered, and Areas and Labels have no editor in the app yet.
+On the Daily Planning Plan Summary step, a plain **tap** on any card (Today's Plan, Up Next, or Skipped) opens the **Outcome peek** — a bottom sheet (`OutcomePeekSheet`, `app/lib/widgets/outcome_peek_sheet.dart`) that reads as a viewer and edits in place. Title and notes are borderless fields saved on focus loss and flushed on dismissal; energy, time estimate and due date are tappable chips; below them sit the context tags, the Waiting For people and the Plan. The sheet reuses the Task Detail editors (`outcome_attribute_editors.dart`, `outcome_plan_section.dart`) and writes through `TaskDetailNotifier`, so stamping and the deleted-Outcome guard behave as on the detail screen. The **Time context** chip (`time_context_sheet.dart`, also at the end of the Task Detail attribute strip) shows the current Action's time — a named window's name, or a quiet `Time context`; it opens a sheet offering the user's named windows beside the one-time From date, day chips and Between range, with a Save that is disabled while the value is invalid and `Clear time context`. Time logged stays read-only, summed from `time_logs`. Status changes and project assignment are deliberately not offered, and Areas and Labels have no editor in the app yet.
 
 Opening, editing or dismissing never selects, skips or otherwise touches the pick-up state, and an unedited open writes nothing. An edit can change what Up Next shows — a higher energy than the day's level, or a delegate on an Outcome with no current Action, drops it from the pool — without changing any selection. The modal sits over the never-unmounted list, so scroll and selection are preserved.
 
@@ -558,6 +569,7 @@ Paths are under `app/lib/`; DPR means Daily Planning and ES means Evening Shutdo
 | Focus — `screens/focus_screen.dart` | Title, due, estimate, sprint hint, added-during-the-day tag; carried-over: muted title, estimate | Flat `OutcomeRow`, trailing Start/status | Open detail; Start/Resume |
 | Search — `screens/search/widgets/search_result_tile.dart` | Title, snippet, match hint, status | Flat `OutcomeRow` | Capture → clarify; Outcome → detail |
 | GTD lists / Project / Waiting For (grouped by person) — `screens/common/gtd_list_screen.dart` | Title, energy, estimate, due when set | Flat `OutcomeRow` | Open detail; long-press multi-selects |
+| Time page — `screens/time_page/time_page_screen.dart` | Title, marker (On Next, or when the time opens) | Grouped `OutcomeRow`, one group per named window then one-time | Open detail; long-press multi-selects |
 | Habit list and detail — `screens/habits/habits_screen.dart` | Title, anchor, state; notes, Check-in, Repeat, Area, Labels, energy, estimate | Detail beside the list from 840 px; theme colours | Edit in place; sheets with Done/Cancel; pause, archive, restore |
 | Check-in calendar — `screens/habits/habit_calendar_screen.dart` | Month of day marks (done, partial, missed, not due, paused, before the Habit); "5 of 8", "2×", repeat-changed flag; legend | Round marks by shape, never colour; missed is never red; one painter for month, year and strip; phone layout on every width | Title opens the year; a day opens the day sheet: add, change, remove at once with no confirmation or undo |
 | Linked Outcomes — `widgets/capture_outcomes_section.dart` | Title, next Action, contexts, Capture provenance count | Framed `OutcomeRow` | Unlink |

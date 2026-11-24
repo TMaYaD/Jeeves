@@ -96,6 +96,23 @@ Future<void> _seed(GtdDatabase db, {String userId = _userId}) async {
       clarifiedAt: Value(_utc(27, 9, 0, 0)),
       userId: Value(userId)));
 
+  // --- the named places and time windows an Action may point at ---
+  await db.into(db.places).insert(PlacesCompanion(
+      id: const Value('place-1'),
+      userId: Value(userId),
+      kind: const Value('named'),
+      name: const Value('Hardware store'),
+      latitudeMicrodegrees: const Value(52000000),
+      longitudeMicrodegrees: const Value(13000000),
+      radiusMeters: const Value(300),
+      createdAt: Value(_utc(28, 4, 0, 0))));
+  await db.into(db.timeWindows).insert(TimeWindowsCompanion(
+      id: const Value('tw-1'),
+      userId: Value(userId),
+      name: const Value('Store hours'),
+      hours: const Value('[{"day":1,"start":"11:00","end":"20:00"}]'),
+      createdAt: Value(_utc(28, 4, 1, 0))));
+
   // --- actions: a current and a planned, on the next Outcome ---
   await db.into(db.actions).insert(ActionsCompanion(
       id: const Value('act-current'),
@@ -105,6 +122,8 @@ Future<void> _seed(GtdDatabase db, {String userId = _userId}) async {
       role: const Value('current'),
       energyLevel: const Value('low'),
       timeEstimate: const Value(15),
+      placeId: const Value('place-1'),
+      timeWindowId: const Value('tw-1'),
       createdAt: Value(_utc(28, 5, 30, 0))));
   await db.into(db.actions).insert(ActionsCompanion(
       id: const Value('act-planned'),
@@ -1003,6 +1022,141 @@ void main() {
       // did not keep is never asserted to the other devices.
       expect(recorder.keys, isNot(contains('todos/todo-bad')));
       expect(recorder.keys, contains('todos/todo-good'));
+    });
+
+    test('a time window whose hours the app cannot read is named, and not '
+        'written', () async {
+      // The store would take any text in the hours column, but the app
+      // cannot read hours that are not a valid set of hours: the window
+      // would be dead here, and dead on every other device the import
+      // syncs it to. The DAO refuses such hours on a write, and the import
+      // refuses them the same way.
+      final content = jsonEncode({
+        jeevesExportEnvelopeKey: jeevesExportVersion,
+        jeevesExportCollectionsKey: {
+          'time_windows': [
+            {
+              'id': 'tw-good',
+              'name': 'Store hours',
+              'hours': '[{"day":1,"start":"11:00","end":"20:00"}]',
+              'created_at': '2026-07-28T05:00:00.000Z',
+              'user_id': _userId,
+            },
+            {
+              'id': 'tw-bad',
+              'name': 'Broken hours',
+              'hours': '[{"day":1,"start":"25:00","end":"26:00"}]',
+              'created_at': '2026-07-28T05:00:00.000Z',
+              'user_id': _userId,
+            },
+          ],
+        },
+      });
+
+      final recorder = RecordingDomainOpCapture();
+      final db = _openInMemory(recorder: recorder);
+      addTearDown(db.close);
+
+      final result = await importJeevesExport(
+        content: content,
+        userId: _userId,
+        db: db,
+      );
+
+      // The readable window landed; the unreadable one did not.
+      final windows = await db.select(db.timeWindows).get();
+      expect([for (final window in windows) window.id], ['tw-good']);
+
+      // And it was named, with the reason.
+      expect(result.failedRecords, hasLength(1));
+      expect(result.failedRecords.single.record, 'time_windows/tw-bad');
+      expect(result.failedRecords.single.reason, contains('hours'),
+          reason: 'the reason must point at the value that was refused');
+
+      // And it is not on the op log: a record this device did not keep is
+      // never asserted to the other devices.
+      expect(recorder.keys, isNot(contains('time_windows/tw-bad')));
+      expect(recorder.keys, contains('time_windows/tw-good'));
+    });
+
+    test('a place whose point is off the globe is named, and not written',
+        () async {
+      // The store would take any integer in the coordinate columns, but a
+      // point off the globe is not a place: the app cannot read it, so the
+      // Action that points at it would silently lose its place — here, and
+      // on every other device the import syncs it to. The DAO refuses such
+      // a point on a write, and the import refuses it the same way.
+      final content = jsonEncode({
+        jeevesExportEnvelopeKey: jeevesExportVersion,
+        jeevesExportCollectionsKey: {
+          'places': [
+            {
+              'id': 'place-good',
+              'name': 'Hardware store',
+              'kind': 'named',
+              'latitude_microdegrees': 52000000,
+              'longitude_microdegrees': 13000000,
+              'radius_meters': 300,
+              'created_at': '2026-07-28T05:00:00.000Z',
+              'user_id': _userId,
+            },
+            {
+              'id': 'place-off-globe',
+              'name': 'Nowhere',
+              'kind': 'named',
+              'latitude_microdegrees': 91000000,
+              'longitude_microdegrees': 13000000,
+              'radius_meters': 300,
+              'created_at': '2026-07-28T05:00:00.000Z',
+              'user_id': _userId,
+            },
+            {
+              'id': 'place-off-globe-longitude',
+              'name': 'Nowhere else',
+              'kind': 'named',
+              'latitude_microdegrees': 52000000,
+              'longitude_microdegrees': 181000000,
+              'radius_meters': 300,
+              'created_at': '2026-07-28T05:00:00.000Z',
+              'user_id': _userId,
+            },
+          ],
+        },
+      });
+
+      final recorder = RecordingDomainOpCapture();
+      final db = _openInMemory(recorder: recorder);
+      addTearDown(db.close);
+
+      final result = await importJeevesExport(
+        content: content,
+        userId: _userId,
+        db: db,
+      );
+
+      // The readable place landed; the two off the globe did not.
+      final places = await db.select(db.places).get();
+      expect([for (final place in places) place.id], ['place-good']);
+
+      // And each was named, with the reason.
+      expect(result.failedRecords, hasLength(2));
+      expect(
+        [for (final failure in result.failedRecords) failure.record],
+        containsAll([
+          'places/place-off-globe',
+          'places/place-off-globe-longitude',
+        ]),
+      );
+      for (final failure in result.failedRecords) {
+        expect(failure.reason, contains('point'),
+            reason: 'the reason must point at the value that was refused');
+      }
+
+      // And they are not on the op log: a record this device did not keep
+      // is never asserted to the other devices.
+      expect(recorder.keys, isNot(contains('places/place-off-globe')));
+      expect(recorder.keys, isNot(contains('places/place-off-globe-longitude')));
+      expect(recorder.keys, contains('places/place-good'));
     });
 
     test('the failures reach the user through the import surface', () async {

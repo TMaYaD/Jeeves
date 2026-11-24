@@ -2223,6 +2223,141 @@ void main() {
       );
     });
 
+    // --- A server only slightly ahead of this device -------------------------
+
+    /// The server holds one write under this device's key that this device never
+    /// sent, at the next position, and this device then authors [localWrites]
+    /// writes of its own. The refusal that follows names a position this device
+    /// has authored but not yet sent.
+    Future<IntegrityAlarmRow?> serverHoldsOneWriteThisDeviceNeverSent({
+      int localWrites = 1,
+    }) async {
+      await a.sync();
+      final authored = await a.client.authoredEnvelopes();
+      final unsent = await a.identity.signer.buildEnvelope(
+        OpHeader(
+          workspaceId: workspace.workspaceId,
+          opClass: opClassContent,
+          opId: _uuid.v4(),
+          authorMemberId: a.identity.memberId,
+          authorKeyId: a.identity.keyId,
+          authorSeq: authored.length + 1,
+          prevAuthorHash: envelopeHash(authored.last),
+        ),
+        frameBody(Uint8List.fromList(utf8.encode(jsonEncode({
+          'collection': _harnessCollection,
+          'id': _docId(workspace),
+          'fields': {
+            'step': {'v': 'written elsewhere'},
+          },
+          'hlc': [workspace.clock.nowMs, 0, a.identity.memberIdHex],
+        })))),
+      );
+      workspace.server.injectUnchecked(workspace.workspaceId, unsent);
+      for (var write = 0; write < localWrites; write++) {
+        await a.authorLocal(workspace, 'mine $write');
+      }
+      await a.sync();
+      return (await a.alarmsByKind())[IntegrityAlarmKind.ownWritesRollback.code];
+    }
+
+    test('a server one write ahead of this device raises the rollback alarm',
+        () async {
+      final rollback = await serverHoldsOneWriteThisDeviceNeverSent();
+
+      expect(rollback, isNotNull);
+      expect(rollback!.resolvedAt, isNull);
+      expect(rollback.authorMemberId, a.identity.memberId);
+      expect(rollback.repostFromAuthorSeq, isNull);
+      final health = await a.client.health();
+      expect(health.pendingOpCount, 1);
+      expect(health.clean, isFalse);
+      expect(health.actionableAlarmCount, greaterThan(0));
+      expect(await unsentAuthorSeqs(), hasLength(1));
+    });
+
+    test(
+        'a server ahead by less than this device\'s unsent writes offers what '
+        'the server-ahead case offers', () async {
+      final rollback =
+          await serverHoldsOneWriteThisDeviceNeverSent(localWrites: 2);
+      expect(rollback, isNotNull);
+      expect(rollback!.repostFromAuthorSeq, isNull);
+      final offered = resolutionsOfferedForAlarmRow(rollback);
+
+      // Now push the same device far ahead, the way the server-ahead case does.
+      final far = await a.identity.signer.buildEnvelope(
+        OpHeader(
+          workspaceId: workspace.workspaceId,
+          opClass: opClassContent,
+          opId: _uuid.v4(),
+          authorMemberId: a.identity.memberId,
+          authorKeyId: a.identity.keyId,
+          authorSeq: 40,
+        ),
+        frameBody(Uint8List.fromList(utf8.encode('{"collection":"test"}'))),
+      );
+      workspace.server.injectUnchecked(workspace.workspaceId, far);
+      await a.sync();
+
+      final farRow =
+          (await a.alarmsByKind())[IntegrityAlarmKind.ownWritesRollback.code]!;
+      expect(farRow.detail, contains('authoring under'));
+      expect(farRow.repostFromAuthorSeq, isNull);
+      expect(resolutionsOfferedForAlarmRow(farRow), offered);
+    });
+
+    test('a lost response is not a rollback', () async {
+      await a.authorLocal(workspace, 'one');
+      a.link.dropPostResponse = true;
+      await expectLater(a.sync(), throwsA(isA<SyncTransportException>()));
+      await a.authorLocal(workspace, 'two');
+      await a.sync();
+
+      expect(
+        (await a.alarmsByKind())[IntegrityAlarmKind.ownWritesRollback.code],
+        isNull,
+      );
+      final health = await a.client.health();
+      expect(health.pendingOpCount, 0);
+      expect(health.clean, isTrue);
+    });
+
+    test('a refusal at exactly the next unsent position raises nothing',
+        () async {
+      final rollback = await rollTheServerBack();
+      final repostFrom = rollback.repostFromAuthorSeq;
+
+      // A flush reads its queue, and is held at the gate.
+      final gate = Completer<void>();
+      a.link.postGate = gate;
+      final flush = a.client.flushOutbox();
+      await a.link.postGateReached.future;
+
+      // The User answers while it is held: the older rows go back to unsent, so
+      // the held flush (which carries only the newest) is refused at exactly the
+      // first unsent position. The server is not given the lost write back.
+      try {
+        await a.client.resolveAlarm(rollback.id, AlarmResolution.keptOurs);
+      } finally {
+        if (!gate.isCompleted) gate.complete();
+        a.link.postGate = null;
+        await flush;
+      }
+
+      final after =
+          (await a.alarmsByKind())[IntegrityAlarmKind.ownWritesRollback.code]!;
+      expect(after.resolution, AlarmResolution.keptOurs.code);
+      expect(after.repostFromAuthorSeq, repostFrom);
+      expect(after.resolvedAt, isNull);
+
+      await a.sync();
+      final settled =
+          (await a.alarmsByKind())[IntegrityAlarmKind.ownWritesRollback.code]!;
+      expect(settled.resolvedAt, isNotNull);
+      expect((await a.client.health()).clean, isTrue);
+    });
+
     test('a rollback again before the upload stands the alarm again', () async {
       final rollback = await rollTheServerBack();
       await a.client.resolveAlarm(rollback.id, AlarmResolution.keptOurs);

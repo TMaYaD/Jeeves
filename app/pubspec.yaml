@@ -72,7 +72,7 @@ dependencies:
   flutter_secure_storage: ^11.2.0
 
   # Brand / SVG
-  flutter_svg: ^2.4.0
+  flutter_svg: ^2.5.0
 
   # Utilities
   # `DeepCollectionEquality` for op-payload field values, which are arbitrarily
@@ -83,7 +83,7 @@ dependencies:
   # The browser's user agent, for the web device name
   # (lib/services/platform_device_name_web.dart). Already in the graph as a
   # transitive dependency, so declaring it downloads nothing new.
-  web: ^1.1.1
+  web: ^1.1.2
   uuid: ^4.6.0
   intl: ^0.20.3
   flutter_markdown_plus: ^1.0.12

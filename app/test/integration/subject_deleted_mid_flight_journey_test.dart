@@ -24,6 +24,7 @@ import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/inbox_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
+import 'package:jeeves/providers/time_window_provider.dart';
 import 'package:jeeves/screens/task_detail/task_detail_screen.dart';
 import 'package:jeeves/widgets/tag_list.dart' show TagList;
 import 'package:jeeves/widgets/tag_text.dart' show TagText;
@@ -110,6 +111,8 @@ void main() {
               .overrideWith((_) => Stream.value([])),
           currentActionProvider('o1')
               .overrideWith((_) => Stream.value(seeded.current)),
+          currentTimeWindowsProvider
+              .overrideWith((_) => Stream.value(const {})),
           plannedActionsProvider('o1')
               .overrideWith((_) => Stream.value(seeded.planned)),
           terminatedActionsProvider('o1')

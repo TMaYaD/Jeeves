@@ -25,6 +25,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -45,6 +46,7 @@ import 'package:jeeves/sync/ids.dart';
 import 'package:jeeves/sync/sync_client.dart';
 import 'package:jeeves/sync/sync_health.dart';
 import 'package:jeeves/sync/sync_health_detail.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../sync/harness/sim_device.dart';
 import '../../sync/harness/sim_workspace.dart';
@@ -454,6 +456,60 @@ void main() {
       expect(after!.refusals, before!.refusals);
       expect(after.alarms, before.alarms);
       expect(after.envelopes, before.envelopes);
+    });
+  });
+
+  group('a server slightly ahead of this device is an error, and is named as one',
+      () {
+    late SimWorkspace workspace;
+    late DeviceReport report;
+
+    setUp(() async {
+      workspace = await SimWorkspace.create(deviceCount: 1);
+      final a = workspace.a;
+      await a.sync();
+      final authored = await a.client.authoredEnvelopes();
+      // A write under this device's key at its next position that this device
+      // never sent, then one local write covering that position.
+      final unsent = await a.identity.signer.buildEnvelope(
+        OpHeader(
+          workspaceId: workspace.workspaceId,
+          opClass: opClassContent,
+          opId: const Uuid().v4(),
+          authorMemberId: a.identity.memberId,
+          authorKeyId: a.identity.keyId,
+          authorSeq: authored.length + 1,
+          prevAuthorHash: envelopeHash(authored.last),
+        ),
+        frameBody(Uint8List.fromList(utf8.encode(jsonEncode({
+          'collection': _collection,
+          'id': _entityId,
+          'fields': {
+            'step': {'v': 'written elsewhere'},
+          },
+          'hlc': [workspace.clock.nowMs, 0, a.identity.memberIdHex],
+        })))),
+      );
+      workspace.server.injectUnchecked(workspace.workspaceId, unsent);
+      await a.authorLocal('mine');
+      await a.sync();
+      report = await _reportFor(a);
+    });
+
+    tearDown(() async => workspace.close());
+
+    testWidgets('the rollback sits under Needs attention', (tester) async {
+      expect(report.indication.status, SyncStatus.error);
+
+      await tester.pumpWidget(_screenOver(report, userId: workspace.userId));
+      await tester.pumpAndSettle();
+
+      expect(find.text(syncHealthNeedsAttentionHeading), findsOneWidget);
+      expect(
+        find.text(sentenceForAlarmCode(IntegrityAlarmKind.ownWritesRollback.code)),
+        findsWidgets,
+      );
+      expect(find.text(syncHealthAllHandledExplanation), findsNothing);
     });
   });
 
