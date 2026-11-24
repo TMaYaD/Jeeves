@@ -200,16 +200,16 @@ class _TimeContextSheetState extends ConsumerState<_TimeContextSheet> {
     await widget.notifier.setTimeContext(value, actionId: widget.actionId);
   }
 
-  /// Clears whichever time the Action carries: a named window or the one-time
-  /// Time context.
+  /// Clears every kind of time the Action carries: the named window and the
+  /// one-time Time context.
+  ///
+  /// Both go in one write, and the write does not care which of them the
+  /// Action carried when the sheet opened: the time on the Action now is the
+  /// time the user is clearing, whatever a peer did to it while the sheet was
+  /// open.
   Future<void> _clear() async {
-    final hasWindow = widget.window != null;
     Navigator.pop(context);
-    if (hasWindow) {
-      await widget.notifier.setTimeWindow(null, actionId: widget.actionId);
-    } else {
-      await widget.notifier.setTimeContext(null, actionId: widget.actionId);
-    }
+    await widget.notifier.clearTime(actionId: widget.actionId);
   }
 
   /// Attaches the named window and closes the sheet. A window and a one-time

@@ -16,6 +16,7 @@ import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/time_context.dart';
 import 'package:jeeves/models/time_window_hours.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/nudge_clock_provider.dart';
@@ -212,6 +213,36 @@ void main() {
       rows.where((a) => a.timeWindowId != null),
       isEmpty,
     );
+  });
+
+  testWidgets('Clear takes away every kind of time on the Action',
+      (tester) async {
+    await tester.pumpWidget(harness());
+    await _settle(tester);
+
+    final actionId =
+        (await _real(tester, () => db.actionDao.getCurrentAction('o1')))!.id;
+    await _real(tester, () => db.actionDao.setTimeWindow(actionId, windowId));
+
+    await openChip(tester);
+    expect(find.byKey(const Key('time_context_clear')), findsOneWidget);
+
+    // While the sheet is open, the Action's time is replaced by a one-time
+    // time — a peer did it, or another surface did.
+    await _real(
+      tester,
+      () => db.actionDao.setTimeContext(
+        actionId,
+        TimeContext.create(fromDate: DateTime(2026, 11, 30)),
+      ),
+    );
+
+    await tester.tap(find.byKey(const Key('time_context_clear')));
+    await _settle(tester);
+
+    final action = await _real(tester, () => db.select(db.actions).getSingle());
+    expect(action.timeWindowId, isNull);
+    expect(action.timeContext, isNull);
   });
 
   testWidgets('the sheet lays out at 320dp', (tester) async {

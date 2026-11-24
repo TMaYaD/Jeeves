@@ -493,6 +493,39 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     return true;
   }
 
+  /// Clears both time gates of the Action [actionId] — the named window and
+  /// the one-time TimeContext — in one write.
+  ///
+  /// The two are exclusive when either is *set*, but the row can carry both:
+  /// the sheet's Clear says "this Action has no time", so it takes both away,
+  /// and it takes them in one write so that a peer never sees one without the
+  /// other.
+  ///
+  /// Returns whether the row was written. A no-op — the Action is gone, or it
+  /// carries no time at all — writes nothing.
+  Future<bool> applyClearTime(
+    String actionId, {
+    required DateTime ts,
+  }) async {
+    final row = await (select(actions)..where((a) => a.id.equals(actionId)))
+        .getSingleOrNull();
+    if (row == null) return false;
+    if (row.timeWindowId == null && row.timeContext == null) return false;
+    await (update(actions)..where((a) => a.id.equals(actionId))).write(
+      ActionsCompanion(
+        timeWindowId: const Value(null),
+        timeContext: const Value(null),
+        updatedAt: Value(ts),
+      ),
+    );
+    _captureAction(actionId, {
+      'time_window_id': null,
+      'time_context': null,
+      'updated_at': encodeInstant(ts),
+    });
+    return true;
+  }
+
   /// Deletes the one-time pin row [placeId] names, when it is a pin.
   ///
   /// A pin belongs to the one Action that points at it, so a reference that

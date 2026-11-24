@@ -289,6 +289,29 @@ class TaskDetailNotifier {
     return present;
   }
 
+  /// Clears every kind of time on the Action [actionId] the editor was opened
+  /// for: the named window and the one-time Time context, in one write.
+  ///
+  /// The write is dropped when that Action is no longer the Outcome's current
+  /// one, exactly as [setTimeContext] and [setTimeWindow] drop theirs: an
+  /// edit never lands on a successor the user did not see.
+  Future<bool> clearTime({required String actionId}) async {
+    var wrote = false;
+    final present = await _ifOutcomePresent(() async {
+      final current = await _db.actionDao.getCurrentAction(_todoId);
+      if (current == null || current.id != actionId) return;
+      wrote = await _db.actionDao.applyClearTime(
+        current.id,
+        ts: DateTime.now().toUtc(),
+      );
+    });
+    if (wrote) {
+      _db.notifyActionsViewWrite();
+      _db.notifyTodosViewWrite();
+    }
+    return present;
+  }
+
   /// Sets the estimate and the Timeboxed switch of the Action the sheet was
   /// opened for, in one write (issue #923).
   ///
