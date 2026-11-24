@@ -26,6 +26,7 @@ Widget selectableOutcomeRow({
   required VoidCallback onOpen,
   required VoidCallback onToggle,
   required VoidCallback? onEnterSelection,
+  String? placeName,
   Widget? secondary,
 }) {
   return OutcomeRow(
@@ -34,6 +35,7 @@ Widget selectableOutcomeRow({
     energyLevel: todo.energyLevel,
     timeEstimateMinutes: todo.timeEstimate,
     dueDate: todo.dueDate,
+    placeName: placeName,
     leading: selectionActive
         ? Checkbox(value: selected, onChanged: (_) => onToggle())
         : null,
