@@ -199,6 +199,15 @@ void main() {
     await _settle(tester);
     await tester.tap(find.byKey(const Key('place_pin_save')));
     await _settle(tester);
+    // Dropping a pin is saving a Place: the first one saved may ask for the
+    // location.
+    if (find
+        .byKey(const Key('location_permission_allow'))
+        .evaluate()
+        .isNotEmpty) {
+      await tester.tap(find.byKey(const Key('location_permission_allow')));
+      await _settle(tester);
+    }
     expect(find.text('Post office on Mill St'), findsOneWidget);
 
     // The pin is not in the user's list of places.
