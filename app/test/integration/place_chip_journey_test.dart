@@ -91,14 +91,19 @@ void main() {
         ),
       ],
     );
+    // The container is the test's own: a ProviderScope that owns it would
+    // dispose the live store watch while the tree unmounts, and the pending
+    // timer that follows would fail the test.
+    final container = ProviderContainer(overrides: [
+      databaseProvider.overrideWithValue(db),
+      locationSourceProvider.overrideWithValue(location),
+      notificationServiceProvider
+          .overrideWithValue(StubNotificationService()),
+    ]);
+    addTearDown(container.dispose);
     await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          databaseProvider.overrideWithValue(db),
-          locationSourceProvider.overrideWithValue(location),
-          notificationServiceProvider
-              .overrideWithValue(StubNotificationService()),
-        ],
+      UncontrolledProviderScope(
+        container: container,
         child: MaterialApp.router(routerConfig: router),
       ),
     );
@@ -137,21 +142,21 @@ void main() {
       isPin: false,
     );
 
+    final container = ProviderContainer(overrides: [
+      databaseProvider.overrideWithValue(db),
+      locationSourceProvider.overrideWithValue(location),
+      notificationServiceProvider
+          .overrideWithValue(StubNotificationService()),
+      taskDetailTodoProvider('o1').overrideWith((_) => Stream.value(todo)),
+      taskTagsProvider('o1').overrideWith((_) => Stream.value([])),
+      currentActionProvider('o1').overrideWith((_) => Stream.value(action)),
+      plannedActionsProvider('o1').overrideWith((_) => Stream.value([])),
+      currentPlacesProvider.overrideWith((_) => Stream.value({'o1': place})),
+    ]);
+    addTearDown(container.dispose);
     await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          databaseProvider.overrideWithValue(db),
-          locationSourceProvider.overrideWithValue(location),
-          notificationServiceProvider
-              .overrideWithValue(StubNotificationService()),
-          taskDetailTodoProvider('o1')
-              .overrideWith((_) => Stream.value(todo)),
-          taskTagsProvider('o1').overrideWith((_) => Stream.value([])),
-          currentActionProvider('o1').overrideWith((_) => Stream.value(action)),
-          plannedActionsProvider('o1').overrideWith((_) => Stream.value([])),
-          currentPlacesProvider
-              .overrideWith((_) => Stream.value({'o1': place})),
-        ],
+      UncontrolledProviderScope(
+        container: container,
         child: MaterialApp(
           home: Scaffold(
             body: Builder(

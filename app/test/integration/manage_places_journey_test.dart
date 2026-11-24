@@ -19,6 +19,7 @@ import 'package:jeeves/providers/location_source_provider.dart';
 import 'package:jeeves/providers/nudge_clock_provider.dart';
 import 'package:jeeves/screens/place_management/place_management_screen.dart';
 import 'package:jeeves/screens/settings/settings_screen.dart';
+import 'package:jeeves/services/location_source.dart';
 import 'package:jeeves/services/notification_service.dart';
 
 import '../helpers/app_title_bar_test_helpers.dart';
@@ -198,6 +199,10 @@ void main() {
       ))!;
       await db.actionDao.setNamedPlace(actionId, placeId);
     });
+
+    // The location was already granted on this device, so saving a Place
+    // asks nothing and the editor closes on its own.
+    location.permissionState = LocationPermission.whileInUse;
 
     await openManagePlaces(tester);
     expect(find.text('Home'), findsOneWidget);
