@@ -110,7 +110,7 @@ Bypassed Outcomes add three collections, `focus_session_planning_bypasses`, `foc
 
 `focus_session_tasks.pinned_start_at` is the start time the user set on a Plan entry; it merges last-write-wins per field like `disposition`, and clearing it writes a null. So do `batch_id` and `batch_suggestion_declined_at`.
 
-`places` and `time_windows` sync like Tags: last-write-wins per field, no fold.
+`places` and `time_windows` merge last-write-wins per field and do not fold; Tags fold by name.
 
 ### Device names
 
