@@ -233,6 +233,24 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ),
             onTap: () => context.push(TimeWindowManagementScreen.routePath),
           ),
+          ListTile(
+            key: const Key('manage_places_tile'),
+            leading: Icon(
+              Icons.place_outlined,
+              color: const Color(0xFF9CA3AF),
+            ),
+            title: Text(
+              'Places',
+              style: const TextStyle(
+                  fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+            ),
+            subtitle: Text(
+              'Name the places you go, and how far they reach.',
+              style:
+                  const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+            ),
+            onTap: () => context.push('/manage/places'),
+          ),
           const Divider(height: 1, color: Color(0xFFF3F4F6)),
           _sectionHeader('IMPORT'),
           ListTile(
