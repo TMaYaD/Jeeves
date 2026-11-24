@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:jeeves/database/daos/habit_dao.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/habit_commitment.dart';
+import 'package:jeeves/providers/auth_provider.dart' show currentUserIdProvider;
 import 'package:jeeves/providers/clock_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/focus_session_provider.dart';
@@ -110,6 +111,19 @@ void main() {
     expect((await db.select(db.timeLogs).get()).single.endedAt, isNotNull);
     expect(container.read(focusModeProvider).activeTodoId, isNull);
     expect(container.read(habitFocusProvider).isActive, isTrue);
+  });
+
+  test('a change of signed-in account drops the previous account\'s Focus',
+      () async {
+    final habit = await createHabit('Meditate');
+    await container.read(habitFocusProvider.notifier).start(habit);
+    expect(container.read(habitFocusProvider).isActive, isTrue);
+
+    container.read(currentUserIdProvider.notifier).setUserId('someone-else');
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    expect(container.read(habitFocusProvider).isActive, isFalse);
+    expect(container.read(habitFocusProvider).activeTaskTitle, isNull);
   });
 
   test('starting an Outcome while a Habit is in Focus closes the habit log',

@@ -53,6 +53,10 @@ class HabitFocusNotifier extends Notifier<SprintTimerState> {
       _ticker?.cancel();
       _tableUpdates?.cancel();
     });
+    // Watched so an account change rebuilds the notifier: the disposal above
+    // cancels the ticker and subscription, and the previous account's Habit,
+    // Sprint state and open log are dropped.
+    ref.watch(currentUserIdProvider);
     final db = ref.read(databaseProvider);
     _tableUpdates = db
         .tableUpdates(
