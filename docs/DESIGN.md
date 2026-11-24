@@ -537,7 +537,7 @@ their reasons so that a new surface can reuse the same contract.
 
 | Representation | Fields and layout | Interaction contract |
 |---|---|---|
-| `OutcomeMetaLine` | Read-only chips, ordered energy · estimate · time logged · due. Unset attributes omitted; the caller supplies the attributes it shows. | No gestures; the containing surface owns the tap target. |
+| `OutcomeMetaLine` | Read-only chips, ordered energy · estimate · time logged · due · place. Unset attributes omitted; the caller supplies the attributes it shows. The place chip is grey-blue and rides the Next list's rows only. | No gestures; the containing surface owns the tap target. |
 | [`AddedDuringTheDayTag`](../app/lib/widgets/added_during_the_day_tag.dart) | Text tag `Added during the day`, marking an Outcome added to the Plan during Execution rather than chosen in Planning. Last item in the row's meta line. 12sp medium `#4B5563` on `#F3F4F6`, 4px radius, no icon; the text carries the state, not colour. Shown on the Now screen's Plan list and on the Evening Shutdown unfinished-Outcome card and Settled rows. | No gestures; the containing surface owns the tap target. |
 | [`OutcomeRow`](../app/lib/widgets/outcome_row.dart) | Optional leading slot, title (normal, muted or struck), secondary line, metadata (default `OutcomeMetaLine`), optional trailing slot. Flat or framed with r12 border and h16/v12 padding. | Whole-row tap and long-press callbacks. No ink or chevron when no tap callback exists. |
 | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Banner (icon, text, tone), people chips, title, current Action, notes, optional metadata and actions. Absent Action and notes are omitted. | Injected `ProcessToHandlers` or resolution buttons. |
@@ -571,7 +571,7 @@ Paths are under `app/lib/`; DPR means Daily Planning and ES means Evening Shutdo
 | Weekly review — `screens/periodic_review/steps/list_review_step.dart` | Banner, people, title, current Action, notes | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Injected `ProcessToHandlers` |
 | Focus — `screens/focus_screen.dart` | Title, due, estimate, sprint hint, added-during-the-day tag; carried-over: muted title, estimate | Flat `OutcomeRow`, trailing Start/status | Open detail; Start/Resume |
 | Search — `screens/search/widgets/search_result_tile.dart` | Title, snippet, match hint, status | Flat `OutcomeRow` | Capture → clarify; Outcome → detail |
-| GTD lists / Project / Waiting For (grouped by person) — `screens/common/gtd_list_screen.dart` | Title, energy, estimate, due when set | Flat `OutcomeRow` | Open detail; long-press multi-selects |
+| GTD lists / Project / Waiting For (grouped by person) — `screens/common/gtd_list_screen.dart` | Title, energy, estimate, due when set; Next adds the Place name | Flat `OutcomeRow` | Open detail; long-press multi-selects |
 | Time page — `screens/time_page/time_page_screen.dart` | Title, marker (On Next, or when the time opens) | Grouped `OutcomeRow`, one group per named window then one-time | Open detail; long-press multi-selects |
 | Places — `screens/place_page/place_page_screen.dart` | Place name, Outcome, and a marker: "On Next" or "Elsewhere" | Grouped by Place in name order, then the pins; flat `OutcomeRow` | Open detail |
 | Location-unknown line — [`location_unknown_line.dart`](../app/lib/widgets/location_unknown_line.dart) | One calm line from a pool, and "Allow location" where the OS will ask again | Above the Next list, only when an Outcome on Next has a Place | Ask again, or open the app's settings |
