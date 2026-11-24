@@ -85,6 +85,38 @@ void main() {
         isNull,
       );
     });
+
+    test('refuses a point whose scaling overflows', () {
+      // A huge but finite degree value: scaling it to microdegrees overflows
+      // to infinity, and rounding an infinite value throws. Such a point is
+      // far off the globe, so it is refused like any other — and refusing it
+      // means returning null, not throwing.
+      expect(
+        PlaceArea.create(
+          latitudeDegrees: 1e308,
+          longitudeDegrees: centreLongitude,
+        ),
+        isNull,
+      );
+      expect(
+        PlaceArea.create(
+          latitudeDegrees: centreLatitude,
+          longitudeDegrees: 1e308,
+        ),
+        isNull,
+      );
+    });
+
+    test('accepts a point just past a pole that rounds into range', () {
+      // 90.0000001° rounds to 90.000000°, which is on the globe: the
+      // rounding is what decides, and it must not turn into a refusal.
+      final area = PlaceArea.create(
+        latitudeDegrees: 90.0000001,
+        longitudeDegrees: centreLongitude,
+      );
+      expect(area, isNotNull);
+      expect(area!.latitudeMicrodegrees, 90000000);
+    });
   });
 
   group('microdegrees', () {

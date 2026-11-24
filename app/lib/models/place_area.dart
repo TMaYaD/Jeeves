@@ -40,8 +40,15 @@ class PlaceArea {
 
   /// Degrees to microdegrees. Rounds, never truncates: a truncated degree
   /// loses up to 0.1 m of the point.
+  ///
+  /// A degree value so large that scaling it overflows is not a point at all;
+  /// [create] refuses it before it reaches this rounding.
   static int toMicrodegrees(double degrees) =>
       (degrees * _microdegreesPerDegree).round();
+
+  /// Whether scaling [degrees] to microdegrees overflows to infinity.
+  static bool _overflowsWhenScaled(double degrees) =>
+      (degrees * _microdegreesPerDegree).isInfinite;
 
   /// Builds a Place's area, or returns null when the value is invalid: a
   /// point off the globe, or a radius outside [minRadiusMeters] and
@@ -52,6 +59,14 @@ class PlaceArea {
     int? radiusMeters,
   }) {
     if (!latitudeDegrees.isFinite || !longitudeDegrees.isFinite) return null;
+    // A huge but finite degree value overflows when it is scaled, and
+    // rounding an infinite value throws. Such a point is far off the globe
+    // and the range checks below refuse it anyway, so refuse it before it
+    // is rounded.
+    if (_overflowsWhenScaled(latitudeDegrees) ||
+        _overflowsWhenScaled(longitudeDegrees)) {
+      return null;
+    }
     final latitude = toMicrodegrees(latitudeDegrees);
     final longitude = toMicrodegrees(longitudeDegrees);
     if (latitude < -90 * _microdegreesPerDegree ||
