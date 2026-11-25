@@ -76,6 +76,13 @@ Widget _harness(GtdDatabase db, List<Todo> todos) {
       habitsForTodayProvider.overrideWithValue(const {}),
       habitStackChainsProvider.overrideWithValue(const []),
       databaseProvider.overrideWithValue(db),
+      // The step reads when each Outcome's time opens; that provider watches
+      // drift's Time contexts, so stub it rather than hold a live watch
+      // (TESTING.md).
+      plannedDayTimeProvider.overrideWithValue((
+        notInPlannedDay: const <String>{},
+        opensLaterAt: const <String, DateTime>{},
+      )),
       // The peek watches its Outcome live; a real Drift watch hangs
       // pumpAndSettle (TESTING.md), so each row's streams are stubbed.
       for (final t in todos) ...[
