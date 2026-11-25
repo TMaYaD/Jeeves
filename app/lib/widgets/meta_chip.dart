@@ -27,6 +27,10 @@ String formatDueDateLabel(DateTime dueDate) =>
 
 /// Read-only Outcome attributes in energy, estimate, logged, due order.
 /// Omit an attribute by leaving its value null; zero is a present duration.
+///
+/// [placeName] is the name of the Place the Outcome's current Action is at.
+/// It comes last, and only where the surface asks for it: the Next list
+/// shows it (issue #55), every other surface leaves it out.
 class OutcomeMetaLine extends StatelessWidget {
   const OutcomeMetaLine({
     super.key,
@@ -34,6 +38,7 @@ class OutcomeMetaLine extends StatelessWidget {
     this.timeEstimateMinutes,
     this.timeLoggedMinutes,
     this.dueDate,
+    this.placeName,
     this.muted = false,
     this.timeboxed = false,
   });
@@ -42,6 +47,9 @@ class OutcomeMetaLine extends StatelessWidget {
   final int? timeEstimateMinutes;
   final int? timeLoggedMinutes;
   final DateTime? dueDate;
+
+  /// The name of the Place the Outcome is at, when the surface shows it.
+  final String? placeName;
   final bool muted;
 
   /// Whether the estimate is a limit rather than a guess (issue #923). The
@@ -80,6 +88,12 @@ class OutcomeMetaLine extends StatelessWidget {
           icon: Icons.event_outlined,
           label: formatDueDateLabel(dueDate!),
           color: muted ? const Color(0xFFBDBDBD) : const Color(0xFFDC2626),
+        ),
+      if (placeName != null)
+        MetaChip(
+          icon: Icons.place_outlined,
+          label: placeName!,
+          color: muted ? const Color(0xFFBDBDBD) : const Color(0xFF6B7280),
         ),
     ],
   );
@@ -126,12 +140,19 @@ class MetaChip extends StatelessWidget {
         children: [
           Icon(icon, size: 14, color: color),
           const SizedBox(width: 4),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 12,
-              color: color,
-              fontWeight: FontWeight.w500,
+          // The label takes the width the chip has left. A row hands its
+          // non-flex children unbounded width, so a long label — a Place name
+          // the user wrote — would push the chip past the row it sits in.
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 12,
+                color: color,
+                fontWeight: FontWeight.w500,
+              ),
             ),
           ),
           if (trailing != null) ...[

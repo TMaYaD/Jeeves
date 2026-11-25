@@ -20,6 +20,12 @@ class PlaceArea {
   /// Degrees × 1 000 000: the unit coordinates travel in.
   static const int _microdegreesPerDegree = 1000000;
 
+  /// The latitude of the Place's point, in degrees.
+  double get latitudeDegrees => latitudeMicrodegrees / _microdegreesPerDegree;
+
+  /// The longitude of the Place's point, in degrees.
+  double get longitudeDegrees => longitudeMicrodegrees / _microdegreesPerDegree;
+
   /// The mean radius of the earth, for the distance between two points.
   static const double _earthRadiusMeters = 6371000;
 

@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/gtd_database.dart';
 import 'database_provider.dart';
+import 'place_gate_provider.dart';
 import 'tag_filter_provider.dart';
 import 'time_context_provider.dart';
 import 'time_window_provider.dart';
@@ -18,6 +19,10 @@ export '../database/gtd_database.dart' show Capture, Todo;
 /// ([outsideTimeContextOutcomeIdsProvider],
 /// [outsideTimeWindowOutcomeIdsProvider]); they come back on their own.
 ///
+/// Outcomes whose current Action is at a Place the user is not at are hidden
+/// too ([awayFromPlaceOutcomeIdsProvider]); they come back when the user
+/// arrives. With no location, nothing is hidden by place.
+///
 /// Hiding is on Next only: Daily Planning's Up Next applies the rule of the
 /// day being planned, and Add to Plan reads the Time context set alone.
 final nextProvider = StreamProvider<List<Todo>>((ref) {
@@ -27,9 +32,14 @@ final nextProvider = StreamProvider<List<Todo>>((ref) {
     ...ref.watch(outsideTimeContextOutcomeIdsProvider),
     ...ref.watch(outsideTimeWindowOutcomeIdsProvider),
   };
-  return db.todoDao.watchNext(tagIds: tagIds).map((all) => outside.isEmpty
-      ? all
-      : all.where((t) => !outside.contains(t.id)).toList());
+  final away = ref.watch(awayFromPlaceOutcomeIdsProvider);
+  return db.todoDao.watchNext(tagIds: tagIds).map((all) =>
+      away.isEmpty && outside.isEmpty
+          ? all
+          : all
+              .where((t) => !outside.contains(t.id) && !away.contains(t.id))
+              .toList());
+
 });
 
 /// Stream of waiting-for todos (todos with at least one person-typed tag).

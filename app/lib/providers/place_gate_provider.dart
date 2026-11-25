@@ -1,0 +1,67 @@
+/// The rule that hides an Outcome from Next while the user is at another
+/// Place (issue #55).
+///
+/// Hiding is on Next only. Up Next and Add to Plan keep using the Time
+/// context set alone: a Place never hides an Outcome there.
+library;
+
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../models/action_place_and_time_window.dart';
+import 'current_location_provider.dart';
+import 'database_provider.dart';
+
+/// The Place each Outcome's current Action carries, keyed by Outcome id.
+final currentPlacesProvider =
+    StreamProvider<Map<String, ActionPlace>>((ref) {
+  return ref.watch(databaseProvider).actionDao.watchCurrentPlaces();
+});
+
+/// Outcome ids whose current Action is at a Place the user is not at.
+///
+/// Empty when the location is unknown: with no fix, nothing is hidden by
+/// place. An Outcome whose Place's area holds the point stays on Next.
+final awayFromPlaceOutcomeIdsProvider = Provider<Set<String>>((ref) {
+  final location = ref.watch(currentLocationProvider);
+  final places = ref.watch(currentPlacesProvider).value ?? const {};
+  return awayOutcomeIds(places: places, location: location);
+});
+
+/// The name to show for a Place: the Place's own name, or "Pin" for a one-time
+/// pin that has none.
+String placeDisplayName(ActionPlace place) {
+  final name = place.name?.trim();
+  if (name == null || name.isEmpty) return 'Pin';
+  return name;
+}
+
+/// The name to show for the Place each Outcome carries, keyed by Outcome id.
+final currentPlaceNamesProvider = Provider<Map<String, String>>((ref) {
+  final places = ref.watch(currentPlacesProvider).value ?? const {};
+  return {
+    for (final entry in places.entries)
+      entry.key: placeDisplayName(entry.value),
+  };
+});
+
+/// The away rule, as a pure function of the places and the location.
+///
+/// An Outcome is away when the area of its Place does not hold the point.
+/// The point's accuracy is ignored: inside is [PlaceArea.containsPoint].
+Set<String> awayOutcomeIds({
+  required Map<String, ActionPlace> places,
+  required CurrentLocation location,
+}) {
+  switch (location) {
+    case LocationPending():
+    case LocationUnknown():
+      return const <String>{};
+    case LocationKnown(:final point):
+      return {
+        for (final entry in places.entries)
+          if (!entry.value.area.containsPoint(
+              point.latitudeDegrees, point.longitudeDegrees))
+            entry.key,
+      };
+  }
+}

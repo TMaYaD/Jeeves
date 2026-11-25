@@ -1,5 +1,7 @@
 package loonyb.`in`.jeeves
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.view.WindowManager
@@ -42,6 +44,33 @@ class MainActivity : FlutterFragmentActivity() {
                 }
             }
 
+        // The app's own settings page, asked for by
+        // lib/services/app_settings_opener.dart. The OS stops showing its
+        // location prompt after two refusals; when it has, this is the only
+        // way left for the user to allow the location themselves.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, APP_SETTINGS_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "openAppSettings" -> {
+                        // A device that refuses the intent is a device without
+                        // a settings page: the Dart side carries on without it.
+                        val opened = try {
+                            startActivity(
+                                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                    data = Uri.fromParts("package", packageName, null)
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                            )
+                            true
+                        } catch (error: Exception) {
+                            false
+                        }
+                        result.success(opened)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
         // The name the platform gives this device, asked for by
         // lib/services/platform_device_name.dart. The OS device name is what
         // the user calls the phone ("Galaxy S23", or whatever they renamed it
@@ -79,5 +108,6 @@ class MainActivity : FlutterFragmentActivity() {
     private companion object {
         const val SECURE_SCREEN_CHANNEL = "jeeves/secure_screen"
         const val DEVICE_NAME_CHANNEL = "jeeves/device_name"
+        const val APP_SETTINGS_CHANNEL = "jeeves/app_settings"
     }
 }

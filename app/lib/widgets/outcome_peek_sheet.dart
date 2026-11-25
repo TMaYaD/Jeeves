@@ -25,6 +25,7 @@ import '../models/timeboxed.dart';
 import '../providers/database_provider.dart';
 import '../providers/task_detail_provider.dart';
 import 'outcome_attribute_strip.dart';
+import 'place_chip.dart';
 import 'outcome_attribute_editors.dart';
 import 'time_context_sheet.dart';
 import 'outcome_plan_section.dart';
@@ -266,6 +267,7 @@ class _OutcomePeekSheetState extends ConsumerState<OutcomePeekSheet> {
                             dueDate: dueDate,
                             timeContextChip:
                                 TimeContextChip(outcomeId: widget.todo.id),
+                            placeChip: PlaceChip(outcomeId: widget.todo.id),
                             onEnergyTap: () => showOutcomeEnergyLevelSheet(
                               context,
                               onSet: (level) => _notifier.setEnergyLevel(level).ignore(),

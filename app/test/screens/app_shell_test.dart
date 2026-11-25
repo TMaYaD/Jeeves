@@ -124,6 +124,10 @@ Widget _buildShellOnly({
                     builder: (_, _) => const Scaffold(body: Text('Time body')),
                   ),
                   GoRoute(
+                    path: '/places',
+                    builder: (_, _) => const Scaffold(body: Text('Places body')),
+                  ),
+                  GoRoute(
                     path: '/projects/:id',
                     builder: (_, state) => Scaffold(
                         body: Text('Project body ${state.pathParameters['id']}')),

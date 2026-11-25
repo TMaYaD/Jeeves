@@ -16,6 +16,7 @@ class OutcomeRow extends StatelessWidget {
     this.timeEstimateMinutes,
     this.timeLoggedMinutes,
     this.dueDate,
+    this.placeName,
     this.muted = false,
     this.struck = false,
     this.framed = false,
@@ -35,6 +36,9 @@ class OutcomeRow extends StatelessWidget {
   final int? timeEstimateMinutes;
   final int? timeLoggedMinutes;
   final DateTime? dueDate;
+
+  /// The name of the Place the Outcome is at, when the surface shows it.
+  final String? placeName;
   final bool muted;
   final bool struck;
   final bool framed;
@@ -51,7 +55,8 @@ class OutcomeRow extends StatelessWidget {
         energyLevel != null ||
         timeEstimateMinutes != null ||
         timeLoggedMinutes != null ||
-        dueDate != null;
+        dueDate != null ||
+        placeName != null;
     final end =
         trailing ??
         (onTap == null
@@ -104,6 +109,7 @@ class OutcomeRow extends StatelessWidget {
                   timeEstimateMinutes: timeEstimateMinutes,
                   timeLoggedMinutes: timeLoggedMinutes,
                   dueDate: dueDate,
+                  placeName: placeName,
                 ),
           ],
         ],
