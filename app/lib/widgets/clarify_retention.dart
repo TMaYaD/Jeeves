@@ -19,6 +19,8 @@
 /// at all, so the absence is structural rather than a flag someone can flip.
 library;
 
+import '../models/place_choice.dart';
+
 /// One Capture's in-progress clarify draft, plus the row values it was typed
 /// against.
 ///
@@ -34,6 +36,7 @@ class RetainedClarifyDraft {
     this.energyLevel,
     this.timeEstimateMinutes,
     this.dueDate,
+    this.place,
   });
 
   /// What the user has typed. Untrimmed — it goes straight back into the
@@ -54,6 +57,14 @@ class RetainedClarifyDraft {
   final String? energyLevel;
   final int? timeEstimateMinutes;
   final DateTime? dueDate;
+
+  /// The Place the user chose for the Action this clarification will create,
+  /// or null when they chose none.
+  ///
+  /// Draft-only, like the effort attributes above: a Capture has no column
+  /// for a Place either, so there is no baseline and nothing to reconcile
+  /// against — it is simply carried across the unmount.
+  final ActionPlaceDraft? place;
 
   /// Whether the title has been edited since it was last reconciled.
   bool get titleIsDirty => title.trim() != baselineTitle;
@@ -106,6 +117,7 @@ class RetainedClarifyDraft {
       energyLevel: retained.energyLevel,
       timeEstimateMinutes: retained.timeEstimateMinutes,
       dueDate: retained.dueDate,
+      place: retained.place,
     );
   }
 }

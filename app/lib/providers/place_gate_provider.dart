@@ -8,6 +8,7 @@ library;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/action_place_and_time_window.dart';
+import '../models/place_choice.dart';
 import 'current_location_provider.dart';
 import 'database_provider.dart';
 
@@ -29,11 +30,10 @@ final awayFromPlaceOutcomeIdsProvider = Provider<Set<String>>((ref) {
 
 /// The name to show for a Place: the Place's own name, or "Pin" for a one-time
 /// pin that has none.
-String placeDisplayName(ActionPlace place) {
-  final name = place.name?.trim();
-  if (name == null || name.isEmpty) return 'Pin';
-  return name;
-}
+///
+/// The same rule the clarify card's Place chip goes by, so the two surfaces
+/// never name the same Place differently.
+String placeDisplayName(ActionPlace place) => placeNameLabel(place.name);
 
 /// The name to show for the Place each Outcome carries, keyed by Outcome id.
 final currentPlaceNamesProvider = Provider<Map<String, String>>((ref) {

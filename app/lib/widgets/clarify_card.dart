@@ -44,16 +44,20 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/gtd_database.dart';
 import '../models/clarify_mode.dart';
+import '../models/place_choice.dart';
 import '../providers/auth_provider.dart';
 import '../providers/clarify_mode_provider.dart';
 import '../providers/database_provider.dart';
+import '../providers/location_permission_flow.dart';
+import '../providers/location_source_provider.dart';
 import '../providers/task_detail_provider.dart';
 import 'async_subject.dart';
 import 'capture_outcomes_section.dart';
 import 'clarify_retention.dart';
 import 'clarify_shared_widgets.dart';
-import 'meta_chip.dart' show formatDueDateLabel;
+import 'meta_chip.dart' show MetaChip, formatDueDateLabel;
 import 'context_tag_picker.dart';
+import 'place_picker_sheet.dart';
 import 'process_to_handlers.dart';
 import 'project_picker.dart';
 
@@ -257,6 +261,17 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   String? _energyLevel;
   int? _timeEstimate;
   DateTime? _dueDate;
+
+  /// The Place the user chose for the Action this clarification will create,
+  /// or null when they chose none.
+  ///
+  /// Draft-only, like the effort attributes above: a Capture has no column
+  /// for a Place, so it rides the draft into the Action the routing mints.
+  /// The chip that collects it shows on the Capture shape only — an Outcome
+  /// already carries its Place, and the n-m body mints no Action to carry
+  /// one.
+  ActionPlaceDraft? _place;
+
   bool _initialised = false;
   // Mirrors `_titleCtrl.text.trim().isEmpty` for build-time gating of the
   // routing buttons. Updated synchronously in `_onTextChanged` so the user
@@ -342,6 +357,9 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     _energyLevel = seed.energyLevel ?? energyLevel;
     _timeEstimate = seed.timeEstimateMinutes ?? timeEstimate;
     _dueDate = seed.dueDate ?? dueDate?.toLocal();
+    // The Place is draft-only: it comes from the retained draft or from
+    // nowhere. A Capture has no column to reconcile it against.
+    _place = seed.place;
     _baselineEnergy = _energyLevel;
     _baselineTimeEstimate = _timeEstimate;
     _baselineDueDate = _dueDate;
@@ -357,6 +375,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     energyLevel: _energyLevel,
     timeEstimateMinutes: _timeEstimate,
     dueDate: _dueDate,
+    place: _place,
   );
 
   /// Drops this Capture's retained draft when [action] was a verdict: the
@@ -824,6 +843,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     draftTagIds: _draftTagsSeeded ? _draftTagIds ?? const <String>{} : null,
     energyLevel: _energyLevel,
     timeEstimateMinutes: _timeEstimate,
+    place: _place,
   );
 
   Widget _buildBody(
@@ -1016,6 +1036,12 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
             ],
           ],
         ),
+        if (_isCapture) ...[
+          const SizedBox(height: 20),
+          const ClarifyFieldLabel('PLACE'),
+          const SizedBox(height: 8),
+          _placeChip(),
+        ],
         const SizedBox(height: 28),
 
         const ClarifyFieldLabel('PROCESS TO'),
@@ -1068,6 +1094,60 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
         ],
       ],
     );
+  }
+
+  /// The Place chip on the Capture shape: the Place the Action this
+  /// clarification will create happens at.
+  ///
+  /// Styled like the Outcome's Place chip — the same chip, one word apart —
+  /// and it reads the same way: a quiet "Place" while none is chosen, the
+  /// Place's own name once one is, and "Pin" for a one-time pin that carries
+  /// no name of its own.
+  ///
+  /// The chip is the target: [MetaChip] holds no gesture of its own, so the
+  /// [InkWell] around it is what the user taps.
+  Widget _placeChip() {
+    final place = _place;
+    return InkWell(
+      key: const Key('clarify_place_chip'),
+      borderRadius: BorderRadius.circular(4),
+      onTap: _choosePlace,
+      child: MetaChip(
+        icon: Icons.place_outlined,
+        label: place == null ? 'Place' : placeDraftLabel(place),
+        color: place == null
+            ? const Color(0xFF9CA3AF)
+            : const Color(0xFF4A5568),
+      ),
+    );
+  }
+
+  /// Opens the place picker and applies the choice to the draft.
+  ///
+  /// The picker writes nothing — it answers with the choice — so the chip is
+  /// what holds it until the Capture is routed and the Action is minted.
+  /// "Clear place" is on offer only when there is a Place to clear.
+  ///
+  /// A pin is a Place, so choosing one may ask for the location. The ask
+  /// happens here, while the card is mounted, rather than after the
+  /// clarification lands: the pin itself is only written when the Capture is
+  /// routed, and a user who has said no should not be asked again by a
+  /// surface that is no longer there.
+  Future<void> _choosePlace() async {
+    final choice = await showPlacePickerSheet(context, canClear: _place != null);
+    if (choice == null || !mounted) return;
+    switch (choice) {
+      case NamedPlaceDraft place:
+        setState(() => _place = place);
+      case PinDraft pin:
+        setState(() => _place = pin);
+        await askForLocationAfterFirstSave(
+          context,
+          ref.read(locationSourceProvider),
+        );
+      case ClearPlaceChoice():
+        setState(() => _place = null);
+    }
   }
 
   /// The n-m Capture body: the Capture read-only, the Outcomes it has yielded,

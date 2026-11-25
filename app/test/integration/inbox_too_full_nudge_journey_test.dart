@@ -26,6 +26,26 @@ import '../test_helpers.dart';
 
 // The banner pulses indefinitely; drain real database work without waiting
 // for animations to settle, or advancing the boundary timer's fake clock.
+/// Scrolls the routing bar into view and taps Next Action.
+///
+/// The card grew a field — the Place chip (#1078) — so on the test surface
+/// the routing button is no longer built until the lazy list is scrolled to
+/// it. Being built still is not enough to be tappable, so it is scrolled
+/// fully into view first.
+Future<void> _tapNextAction(WidgetTester tester) async {
+  final next = find.text('Next Action');
+  for (var i = 0; i < 15 && next.evaluate().isEmpty; i++) {
+    await tester.drag(find.byType(Scrollable).last, const Offset(0, -200));
+    await tester.pump(const Duration(milliseconds: 50));
+  }
+  expect(next, findsOneWidget,
+      reason: 'the Next Action button never came into view');
+  await tester.ensureVisible(next);
+  await tester.pump(const Duration(milliseconds: 50));
+  await tester.tap(next);
+  await _flush(tester);
+}
+
 Future<void> _flush(WidgetTester tester) async {
   for (var i = 0; i < 6; i++) {
     await tester.runAsync(() => pumpEventQueue());
@@ -158,7 +178,7 @@ void main() {
       expect(find.text('Capture c00'), findsOneWidget,
           reason: 'the oldest Capture comes first');
 
-      await tester.tap(find.text('Next Action'));
+      await _tapNextAction(tester);
       await _flush(tester);
       await tester.tap(find.text('Save'));
       await _flush(tester);
@@ -241,7 +261,7 @@ void main() {
 
       // After a verdict the sequence advances; one Back still leaves it.
       await openSequence();
-      await tester.tap(find.text('Next Action'));
+      await _tapNextAction(tester);
       await _flush(tester);
       await tester.tap(find.text('Save'));
       await _flush(tester);
@@ -270,7 +290,7 @@ void main() {
         final id = 'c${i.toString().padLeft(2, '0')}';
         expect(find.text('Capture $id'), findsOneWidget,
             reason: 'oldest first, one at a time');
-        await tester.tap(find.text('Next Action'));
+        await _tapNextAction(tester);
         await _flush(tester);
         await tester.tap(find.text('Save'));
         await _flush(tester);

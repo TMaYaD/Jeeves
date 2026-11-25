@@ -9,6 +9,8 @@ library;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/place_area.dart';
+import 'package:jeeves/models/place_choice.dart';
 import 'package:jeeves/widgets/process_to_handlers.dart';
 
 const _userId = 'local';
@@ -27,6 +29,7 @@ ClarifyDraft _assemble({
   Set<String>? draftTagIds,
   String? energyLevel,
   int? timeEstimateMinutes,
+  ActionPlaceDraft? place,
 }) =>
     ClarifyDraft.assemble(
       title: title,
@@ -36,6 +39,7 @@ ClarifyDraft _assemble({
       draftTagIds: draftTagIds,
       energyLevel: energyLevel,
       timeEstimateMinutes: timeEstimateMinutes,
+      place: place,
     );
 
 void main() {
@@ -72,6 +76,45 @@ void main() {
       // the blank test — otherwise ' ' routes and mints an Outcome named ' '.
       expect(_assemble(title: '\n\t ').title, '');
       expect(_assemble(title: '\n\t ').action, isNull);
+    });
+  });
+
+  group('ClarifyDraft.assemble — the Place', () {
+    test('a chosen Place rides the Action', () {
+      // The Place says where the step happens, so it belongs to the Action
+      // grain rather than to the Outcome.
+      final place = NamedPlaceDraft('p1', 'Hardware store');
+      final draft = _assemble(place: place);
+
+      expect(draft.action?.place, place);
+    });
+
+    test('a pin rides the Action too', () {
+      final area = PlaceArea.create(
+        latitudeDegrees: 52.3702,
+        longitudeDegrees: 4.8952,
+        radiusMeters: 150,
+      )!;
+      final place = PinDraft(area: area, name: 'Post office on Mill St');
+      final draft = _assemble(place: place);
+
+      expect(draft.action?.place, place);
+    });
+
+    test('no Place leaves the Action carrying none', () {
+      expect(_assemble().action?.place, isNull);
+    });
+
+    test('a blank title nulls the Action and the Place with it', () {
+      // The Place is not lost silently: the destinations that mint an Action
+      // are disabled while the title is blank, so a chosen Place can only be
+      // dropped alongside the whole draft.
+      final draft = _assemble(
+        title: '   ',
+        place: NamedPlaceDraft('p1', 'Hardware store'),
+      );
+
+      expect(draft.action, isNull);
     });
   });
 

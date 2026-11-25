@@ -78,3 +78,24 @@ final class PinDraft extends ActionPlaceDraft {
   @override
   String toString() => 'PinDraft(area: $area, name: $name)';
 }
+
+/// The label to show for a Place: the Place's own name, or "Pin" for a
+/// one-time pin that carries none.
+///
+/// The one rule both places that name a Place go by — the Outcome's Place
+/// chip and the clarify card's — so the two never disagree about what a
+/// pin reads as.
+String placeNameLabel(String? name) {
+  final trimmed = name?.trim();
+  if (trimmed == null || trimmed.isEmpty) return 'Pin';
+  return trimmed;
+}
+
+/// The label to show for the Place a user chose: a named Place by its name, a
+/// one-time pin by the short name it may carry, or "Pin" when it has none.
+String placeDraftLabel(ActionPlaceDraft place) => placeNameLabel(
+      switch (place) {
+        NamedPlaceDraft(:final name) => name,
+        PinDraft(:final name) => name,
+      },
+    );
