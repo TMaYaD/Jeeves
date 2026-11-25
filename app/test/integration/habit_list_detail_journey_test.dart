@@ -796,6 +796,11 @@ void main() {
       await _settle(tester);
       await tester.tap(find.text('High'));
       await _settle(tester);
+      // The Place row sits above Energy, so the estimate row is now below the
+      // fold on a phone. A tap on a row below the fold silently does nothing
+      // (docs/TESTING.md): scroll it into view first.
+      await tester.ensureVisible(find.byKey(const Key('habit_row_estimate')));
+      await tester.pump();
       await tester.tap(find.byKey(const Key('habit_row_estimate')));
       await _settle(tester);
       // The Outcome estimate sheet, without its Timeboxed switch.
