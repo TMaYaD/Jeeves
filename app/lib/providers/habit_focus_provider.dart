@@ -52,6 +52,7 @@ class HabitFocusNotifier extends Notifier<SprintTimerState> {
     ref.onDispose(() {
       _disposed = true;
       _ticker?.cancel();
+      _ticker = null;
       _tableUpdates?.cancel();
     });
     // Watched so an account change rebuilds the notifier: the disposal above

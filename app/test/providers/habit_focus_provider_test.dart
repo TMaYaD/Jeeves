@@ -129,6 +129,27 @@ void main() {
     expect(container.read(habitFocusProvider).activeTaskTitle, isNull);
   });
 
+  test('switching to an account with an open Habit Focus keeps the countdown ticking', () async {
+    final habitA = await createHabit('A');
+    final habitB = await createHabit('B');
+    await db.customStatement('UPDATE habits SET user_id = ? WHERE id = ?', ['second', habitB]);
+    await db.habitFocusDao.openHabitFocus(habitId: habitB, userId: 'second', plannedSprintMinutes: 20, now: now);
+    final subscription = container.listen(habitFocusProvider, (_, _) {});
+    addTearDown(subscription.close);
+    await container.read(habitFocusProvider.notifier).start(habitA);
+    final ready = Completer<void>();
+    final switched = container.listen(habitFocusProvider, (_, next) {
+      if (next.activeTaskId == habitB && !ready.isCompleted) ready.complete();
+    });
+    addTearDown(switched.close);
+    container.read(currentUserIdProvider.notifier).setUserId('second');
+    await ready.future;
+    final before = container.read(habitFocusProvider).remaining;
+    now = now.add(const Duration(seconds: 5));
+    await Future<void>.delayed(const Duration(milliseconds: 1200));
+    expect(container.read(habitFocusProvider).remaining, before - const Duration(seconds: 5));
+  });
+
   test('starting an Outcome while a Habit is in Focus closes the habit log',
       () async {
     final outcome = await createOutcome();
