@@ -28,8 +28,27 @@ void main() {
     expect(find.byType(GestureDetector), findsNothing);
   });
 
-  testWidgets('unset attributes are omitted', (tester) async {
+  testWidgets('a long Place name stays inside the row', (tester) async {
+    // A Place name is the user's own words, and can be longer than the row
+    // it sits in.
+    const longName = 'Kantoor van de Vereniging van Eigenaren en Beheerders';
     await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 320,
+            child: const OutcomeMetaLine(placeName: longName),
+          ),
+        ),
+      ),
+    );
+
+    // The chip must not overflow the row it sits in.
+    expect(tester.takeException(), isNull);
+    expect(find.text(longName), findsOneWidget);
+  });
+
+  testWidgets('unset attributes are omitted', (tester) async {    await tester.pumpWidget(
       const MaterialApp(home: Scaffold(body: OutcomeMetaLine())),
     );
     expect(find.byType(MetaChip), findsNothing);

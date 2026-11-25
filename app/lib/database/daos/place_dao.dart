@@ -253,8 +253,77 @@ class PlaceDao extends DatabaseAccessor<GtdDatabase> with _$PlaceDaoMixin {
     if (deleted) attachedDatabase.notifyPlacesViewWrite();
   }
 
+  /// The user's named places, each with the number of live Outcomes that use
+  /// it, most recently used first (issue #55).
+  ///
+  /// "Most recently used" is the newest write to an Action that points at the
+  /// Place: a Place does not itself remember being chosen. A Place no live
+  /// Action uses sorts after the ones in use, by name.
+  ///
+  /// The count is of Outcomes that are not done whose **winning** current
+  /// Action points at the Place — the same Action the place gate reads, so
+  /// the count and the gate never disagree. An Outcome with two current
+  /// Actions, as a sync conflict can leave behind, counts once, for the one
+  /// that wins.
+  Stream<List<NamedPlaceWithUse>> watchNamedPlacesWithUseCount() {
+    return customSelect(
+      'SELECT places.id AS id, places.name AS name, '
+      'places.latitude_microdegrees AS latitude_microdegrees, '
+      'places.longitude_microdegrees AS longitude_microdegrees, '
+      'places.radius_meters AS radius_meters, '
+      'COUNT(t.id) AS use_count '
+      'FROM places '
+      'LEFT JOIN actions a ON a.place_id = places.id AND a.role = \'current\' '
+      'AND a.id = ('
+      'SELECT mca.id FROM actions mca '
+      'WHERE mca.outcome_id = a.outcome_id AND mca.role = \'current\' '
+      // The same rule [_winnerFirst] applies, spelled for the subquery's
+      // alias: greatest COALESCE(updated_at, created_at), then smallest id.
+      'ORDER BY COALESCE(mca.updated_at, mca.created_at) DESC, mca.id ASC '
+      'LIMIT 1) '
+      'LEFT JOIN todos t ON t.id = a.outcome_id AND t.done_at IS NULL '
+      'WHERE places.kind = ? '
+      'GROUP BY places.id '
+      'ORDER BY MAX(CASE WHEN t.id IS NOT NULL '
+      'THEN COALESCE(a.updated_at, a.created_at) END) DESC, places.name',
+      variables: [Variable(namedPlaceKind)],
+      readsFrom: {places, actions, todos},
+    ).watch().map((rows) {
+      final result = <NamedPlaceWithUse>[];
+      for (final row in rows) {
+        final area = PlaceArea.fromStored(
+          latitudeMicrodegrees: row.read<int>('latitude_microdegrees'),
+          longitudeMicrodegrees: row.read<int>('longitude_microdegrees'),
+          radiusMeters: row.read<int>('radius_meters'),
+        );
+        // A stored point off the globe is not a place: the row is skipped.
+        if (area == null) continue;
+        result.add((
+          id: row.read<String>('id'),
+          name: row.read<String>('name'),
+          area: area,
+          useCount: row.read<int>('use_count'),
+        ));
+      }
+      return result;
+    });
+  }
+
   /// Whether a name may be stored: not blank, and at most
   /// [Places.maxNameLength] characters.
   static bool _isAcceptableName(String trimmed) =>
       trimmed.isNotEmpty && trimmed.length <= Places.maxNameLength;
 }
+
+/// A named Place with the number of live Outcomes that use it.
+///
+/// "Use" means the winning current Action of an Outcome that is not done
+/// carries the Place — the same Action the place gate reads. A Place nobody
+/// uses is still in the list — the user made it, and deleting it is their
+/// call.
+typedef NamedPlaceWithUse = ({
+  String id,
+  String name,
+  PlaceArea area,
+  int useCount,
+});

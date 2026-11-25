@@ -97,8 +97,8 @@ To build a hybrid productivity application that merges the rigid organizational 
 ### Epic 6: Contextual & Geofenced Surfacing
 **Goal:** Reduce cognitive load by hiding irrelevant tasks based on time and physical location.
 * **Time-Bound Surfacing (Time context and time window):** The current Action of an Outcome can carry a **Time context** (a from-date "after Nov 30", a weekly window "Tue/Thu 09:00–17:00" in local time, not crossing midnight, or both) or a **time window**: named hours the user makes once and attaches to many Actions, whose hours can differ by day, and a window past midnight belongs to the day it starts. While the time is unsatisfied the Outcome is hidden from the Next List and from Daily Planning's Up Next, and returns by itself when the time comes; every other surface (Waiting For, Someday/Maybe, Projects, search, Weekly Review, Today's Plan) is unchanged. A closed time window hides from Next alone. Windows are managed under Settings → Manage, chosen from the Time context chip on Outcome detail and the Daily Planning peek, and listed on the **time page**, which shows every Outcome carrying a time, hidden or not. A one-time from-date is also the optional **Follow up from** date on the Waiting For routing. A time belongs to the Action, is not inherited by a successor, and never sits beside a window. A context tag named for a time is a Time context.
-* **Geofenced Contexts:** Map physical locations to Contexts. App surfaces specific tasks when entering the GPS geofence.
-* **Errand Handoff:** Group location-tagged tasks. Provide a single export button to pass coordinates via URL scheme to native navigation apps (Google Maps/Waze) for route optimization. *(Note: Do not build native route planning.)*
+* **Places:** An Action may carry a Place — named or a one-time pin. It leaves Next while you are elsewhere; with no location nothing is hidden by place, and one calm line says so.
+* **Errand Handoff:** Group location-tagged tasks. One export button passes coordinates to navigation apps (Google Maps/Waze). *(No native route planning.)*
 
 ### Epic 7: Android OS Deep Integration
 **Goal:** Zero-friction capture in mobile environments.
@@ -122,7 +122,7 @@ To build a hybrid productivity application that merges the rigid organizational 
 * **Streak Tracking:** Current and best streak, 7/30/90-day rates. Rest days don't break streaks.
 * **Visualization:** Per-habit history; any past day can be corrected.
 * **From the Inbox:** Clarify a Capture into a Habit.
-* **GTD Integration:** Daily Planning summary (outside task capacity), Evening Shutdown, optional Focus Mode. Location surfacing comes with #46.
+* **GTD Integration:** Daily Planning summary (outside task capacity), Evening Shutdown, optional Focus Mode.
 
 ### Epic 10: Extended Capture Channels
 **Goal:** Meet users where they are with additional low-friction capture methods beyond the core app and Android OS integration.

@@ -21,6 +21,7 @@ import '../../widgets/async_subject.dart';
 import '../../widgets/meta_chip.dart';
 import '../../widgets/outcome_attribute_editors.dart';
 import '../../widgets/outcome_attribute_strip.dart';
+import '../../widgets/place_chip.dart';
 import '../../widgets/outcome_plan_section.dart';
 import '../../widgets/person_tag_picker.dart';
 import '../../widgets/project_picker.dart';
@@ -324,6 +325,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                         dueDate: todo.dueDate,
                         timeContextChip:
                             TimeContextChip(outcomeId: widget.todoId),
+                        placeChip: PlaceChip(outcomeId: widget.todoId),
                         onEnergyTap: () {
                           // Captured now so the open sheet keeps writing to
                           // the task it displays.
