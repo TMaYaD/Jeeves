@@ -20,6 +20,7 @@ import '../models/routing_kind.dart';
 import '../utils/snapshot_nav.dart';
 import 'bypassed_outcomes_provider.dart';
 import 'clarify_retention_provider.dart';
+import 'coming_week_time_provider.dart';
 import 'database_provider.dart';
 import 'clock_provider.dart';
 import 'periodic_review_ranker.dart';
@@ -331,6 +332,13 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
   }
 
   Future<void> loadNextSnapshot() async {
+    // The Next step's cards say when each Outcome's time opens in the coming
+    // week, and those lines read the clock when they are computed. Nothing
+    // else invalidates them, so a review built again — a second ceremony in
+    // the same session, or a step the user re-enters after midnight — would
+    // keep the week of the last build. Building the step recomputes them
+    // against the current clock (issue #1073).
+    ref.invalidate(comingWeekTimeLinesProvider);
     if (state.nextNav.isLoaded || _loadingNextSnapshot) return;
     _loadingNextSnapshot = true;
     state = state.copyWith(clearNextLoadError: true);
@@ -340,13 +348,11 @@ class PeriodicReviewNotifier extends Notifier<PeriodicReviewState> {
       final todos = _uncovered(await _db.todoDao.getNextExcludingPersonTagged())
           .where((todo) => !bypassedIds.contains(todo.id))
           .toList();
-      // Batched current-Action lookup so the card renders the concrete
-      // commitment without one DAO call per item.
-      final actionTexts = await _db.actionDao
-          .getCurrentActionTexts({for (final t in todos) t.id});
+      // No current-Action lookup here: the step's card reads the current
+      // Actions live, so the Action's text and the time beside it always
+      // come from one Action (issue #1073).
       state = state.copyWith(
         nextNav: state.nextNav.withItems(todos),
-        actionTexts: {...state.actionTexts, ...actionTexts},
       );
     } catch (e) {
       state = state.copyWith(nextLoadError: e.toString());

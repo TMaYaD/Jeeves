@@ -87,6 +87,7 @@ import 'package:drift/drift.dart';
 import '../../utils/uuid.dart';
 
 import '../../models/action_place_and_time_window.dart';
+import '../../models/current_action.dart';
 import '../../models/place_area.dart';
 import '../../models/time_context.dart';
 import '../../models/time_window_hours.dart';
@@ -860,35 +861,13 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   /// (issue #239): the window governs the Action's time, so the Time context
   /// beside it is ignored.
   Stream<Map<String, TimeContext>> watchCurrentTimeContexts() {
-    return (select(actions)..where((a) => a.role.equals('current')))
-        .watch()
-        .map(_timeContextsByOutcome);
+    return watchCurrentActions().map(_contextsOf);
   }
 
   /// One-shot sibling of [watchCurrentTimeContexts], for a surface that reads
   /// the Time contexts once when it opens and must not hold a live query.
   Future<Map<String, TimeContext>> getCurrentTimeContexts() async {
-    final rows =
-        await (select(actions)..where((a) => a.role.equals('current'))).get();
-    return _timeContextsByOutcome(rows);
-  }
-
-  Map<String, TimeContext> _timeContextsByOutcome(List<Action> rows) {
-    final byOutcome = <String, List<Action>>{};
-    for (final a in rows) {
-      (byOutcome[a.outcomeId] ??= []).add(a);
-    }
-    final result = <String, TimeContext>{};
-    for (final entry in byOutcome.entries) {
-      final winner = _pickWinner(entry.value);
-      // A named window governs the Action's time (issue #239): when both are
-      // set — only possible after two devices edited while apart — the Time
-      // context is ignored until the next edit clears one of them.
-      if (winner?.timeWindowId != null) continue;
-      final parsed = TimeContext.tryParse(winner?.timeContext);
-      if (parsed != null) result[entry.key] = parsed;
-    }
-    return result;
+    return _contextsOf(await getCurrentActions());
   }
 
   /// The named time window of each Outcome's current Action, keyed by Outcome
@@ -902,31 +881,101 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   /// Re-emits when a window is edited or deleted as well as when an Action
   /// changes: the hours a window names are part of the answer.
   Stream<Map<String, ActionTimeWindow>> watchCurrentTimeWindows() {
-    final query = select(actions).join([
+    return watchCurrentActions().map(_windowsOf);
+  }
+
+  /// The current Action of every Outcome, with the text it carries and the
+  /// time it governs, keyed by Outcome id (issue #1073).
+  ///
+  /// One read, so a surface that shows an Action's words and its time shows
+  /// one Action's: a time belongs to the Action and is not inherited by a
+  /// successor, so a card that paired one Action's text with another's time
+  /// would describe an Action that never existed.
+  ///
+  /// A named window governs the Action's time (issue #239): when both are set
+  /// — only possible after two devices edited while apart — the Time context
+  /// beside it is ignored until the next edit clears one of them.
+  ///
+  /// Re-emits when a window is edited or deleted as well as when an Action
+  /// changes: the hours a window names are part of the answer.
+  Stream<Map<String, CurrentAction>> watchCurrentActions() {
+    return _currentActionsQuery().watch().map(_currentActionsByOutcome);
+  }
+
+  /// One-shot sibling of [watchCurrentActions], for a surface that reads the
+  /// current Actions once and must not hold a live query.
+  Future<Map<String, CurrentAction>> getCurrentActions() async {
+    return _currentActionsByOutcome(await _currentActionsQuery().get());
+  }
+
+  JoinedSelectStatement _currentActionsQuery() {
+    return select(actions).join([
       leftOuterJoin(timeWindows, timeWindows.id.equalsExp(actions.timeWindowId)),
     ])
       ..where(actions.role.equals('current'));
-    return query.watch().map((rows) {
-      final byOutcome = <String, List<_ActionWithWindow>>{};
-      for (final row in rows) {
-        final action = row.readTable(actions);
-        final window = row.readTableOrNull(timeWindows);
-        (byOutcome[action.outcomeId] ??= [])
-            .add((action: action, window: window));
-      }
-      final result = <String, ActionTimeWindow>{};
-      for (final entry in byOutcome.entries) {
-        final ordered = [...entry.value]
-          ..sort((a, b) => _winnerFirst(a.action, b.action));
-        final winner = ordered.first;
-        final window = winner.window;
-        if (winner.action.timeWindowId == null || window == null) continue;
-        final hours = TimeWindowHours.tryParse(window.hours);
-        if (hours == null) continue;
-        result[entry.key] = (id: window.id, hours: hours, name: window.name);
-      }
-      return result;
-    });
+  }
+
+  Map<String, CurrentAction> _currentActionsByOutcome(List<TypedResult> rows) {
+    final byOutcome = <String, List<_ActionWithWindow>>{};
+    for (final row in rows) {
+      final action = row.readTable(actions);
+      final window = row.readTableOrNull(timeWindows);
+      (byOutcome[action.outcomeId] ??= [])
+          .add((action: action, window: window));
+    }
+    final result = <String, CurrentAction>{};
+    for (final entry in byOutcome.entries) {
+      final ordered = [...entry.value]
+        ..sort((a, b) => _winnerFirst(a.action, b.action));
+      final winner = ordered.first;
+      final action = winner.action;
+      final window = winner.window;
+      // A window the app cannot read — its row is gone, its hours do not
+      // parse — is no window: it never hides an Outcome.
+      final hours =
+          window == null ? null : TimeWindowHours.tryParse(window.hours);
+      final namedWindow =
+          action.timeWindowId == null || window == null || hours == null
+              ? null
+              : (id: window.id, hours: hours, name: window.name);
+      // The window governs the Action's time (issue #239): when both are set —
+      // only possible after two devices edited while apart — the Time context
+      // beside it is ignored until the next edit clears one of them. An
+      // unreadable window still governs: the Action names one.
+      final timeContext = action.timeWindowId != null
+          ? null
+          : TimeContext.tryParse(action.timeContext);
+      result[entry.key] = (
+        actionText: action.actionText,
+        timeWindow: namedWindow,
+        timeContext: timeContext,
+      );
+    }
+    return result;
+  }
+
+  /// The named windows of the current Actions, keyed by Outcome id.
+  static Map<String, ActionTimeWindow> _windowsOf(
+    Map<String, CurrentAction> actions,
+  ) {
+    final result = <String, ActionTimeWindow>{};
+    for (final entry in actions.entries) {
+      final window = entry.value.timeWindow;
+      if (window != null) result[entry.key] = window;
+    }
+    return result;
+  }
+
+  /// The Time contexts of the current Actions, keyed by Outcome id.
+  static Map<String, TimeContext> _contextsOf(
+    Map<String, CurrentAction> actions,
+  ) {
+    final result = <String, TimeContext>{};
+    for (final entry in actions.entries) {
+      final context = entry.value.timeContext;
+      if (context != null) result[entry.key] = context;
+    }
+    return result;
   }
 
   /// The Place each Outcome's current Action carries, keyed by Outcome id

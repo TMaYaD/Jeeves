@@ -76,6 +76,7 @@ class ListReviewStep<T extends Todo> extends ConsumerWidget {
     this.subtextFor,
     this.currentActionTextFor,
     this.personTagsFor,
+    this.metaFor,
   });
 
   /// Step's per-item cursor. Drives the loaded / empty / current-item
@@ -145,6 +146,11 @@ class ListReviewStep<T extends Todo> extends ConsumerWidget {
   /// the card defaults to no chips.
   final List<Tag> Function(T todo)? personTagsFor;
 
+  /// Optional widget rendered under the notes on the card — the Next step
+  /// passes the line that says when the Outcome's time opens in the coming
+  /// week. Steps that pass nothing leave the card as it is.
+  final Widget? Function(T todo)? metaFor;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     if (loadError != null) {
@@ -176,6 +182,7 @@ class ListReviewStep<T extends Todo> extends ConsumerWidget {
       banner: OutcomeReviewBanner(icon: Icons.refresh, text: headline),
       currentActionText: subtextFor?.call(todo),
       personTags: personTagsFor?.call(todo) ?? const [],
+      meta: metaFor?.call(todo),
       actions: ProcessToHandlers(
         subject: OutcomeSubject(
           todo,

@@ -568,7 +568,7 @@ Paths are under `app/lib/`; DPR means Daily Planning and ES means Evening Shutdo
 | DPR scheduled — `screens/planning/steps/scheduled_review_step.dart` | Title, due, estimate | Framed `OutcomeRow` | None |
 | ES settled — `screens/shutdown/steps/settled_review_step.dart` | Settlement icon, title, estimate vs actual, added-during-the-day tag | Framed `OutcomeRow` | None |
 | ES disposition — `screens/shutdown/steps/unfinished_tasks_step.dart` | Title, current Action, notes, estimate, logged, added-during-the-day tag | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Done (verdict sheet) / Roll over / Return to Next / Defer |
-| Weekly review — `screens/periodic_review/steps/list_review_step.dart` | Banner, people, title, current Action, notes | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Injected `ProcessToHandlers` |
+| Weekly review — `screens/periodic_review/steps/list_review_step.dart` | Banner, people, title, current Action, notes, coming-week time (Next step) | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Injected `ProcessToHandlers` |
 | Focus — `screens/focus_screen.dart` | Title, due, estimate, sprint hint, added-during-the-day tag; carried-over: muted title, estimate | Flat `OutcomeRow`, trailing Start/status | Open detail; Start/Resume |
 | Search — `screens/search/widgets/search_result_tile.dart` | Title, snippet, match hint, status | Flat `OutcomeRow` | Capture → clarify; Outcome → detail |
 | GTD lists / Project / Waiting For (grouped by person) — `screens/common/gtd_list_screen.dart` | Title, energy, estimate, due when set; Next adds the Place name | Flat `OutcomeRow` | Open detail; long-press multi-selects |
