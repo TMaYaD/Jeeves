@@ -83,6 +83,59 @@ Future<void> _settle(WidgetTester tester) async {
   }
 }
 
+/// The five named Places, in the order the page lists them.
+const _placeNames = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo'];
+
+/// Seeds the five named Places, each with an Outcome.
+Future<Map<String, String>> _seedPlaces(GtdDatabase db) async {
+  final ids = <String, String>{};
+  var offset = 0.0;
+  for (final name in _placeNames) {
+    final placeId = await db.placeDao.createNamedPlace(
+      name: name,
+      latitudeDegrees: _home.latitudeDegrees + offset,
+      longitudeDegrees: _home.longitudeDegrees,
+      radiusMeters: 150,
+      userId: _userId,
+    );
+    offset += 0.01;
+    expect(placeId, isNotNull, reason: 'the Place "$name" is saved');
+    final id = placeId!;
+    final actionId = await _insertOutcome(db, 'outcome-${name.toLowerCase()}');
+    await db.actionDao.setNamedPlace(actionId, id);
+    ids[name] = id;
+  }
+  return ids;
+}
+
+/// Whether the text is on the screen of the place page's list.
+///
+/// A header above the top of the list is off the screen, whether the list has
+/// built it or not.
+bool _onScreen(WidgetTester tester, Finder finder) {
+  if (finder.evaluate().isEmpty) return false;
+  final list = tester.getRect(find.byType(CustomScrollView));
+  return tester.getRect(finder).overlaps(list);
+}
+
+/// Whether the header is at the top of the list.
+bool _atTop(WidgetTester tester, String name) {
+  final header = find.text(name);
+  if (header.evaluate().isEmpty) return false;
+  final list = tester.getRect(find.byType(CustomScrollView));
+  return tester.getRect(header).top - list.top < 50;
+}
+
+/// Scrolls the list up until the header is on the screen.
+Future<void> _scrollUpTo(WidgetTester tester, Finder header) async {
+  for (var i = 0; i < 10; i++) {
+    if (_onScreen(tester, header)) return;
+    await tester.drag(find.byType(CustomScrollView), const Offset(0, 300));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+  }
+}
+
 void main() {
   setUpAll(configureSqliteForTests);
 
@@ -399,4 +452,82 @@ void main() {
       }
     });
   });
+
+  testWidgets('the page opens at the Place it is given', (tester) async {
+    final placeIds = await _seedPlaces(db);
+    container = ProviderContainer(overrides: [
+      databaseProvider.overrideWithValue(db),
+      locationSourceProvider.overrideWithValue(location),
+      notificationServiceProvider.overrideWithValue(StubNotificationService()),
+    ]);
+
+    final router = GoRouter(
+      initialLocation: '/places',
+      routes: [
+        GoRoute(path: '/places', builder: PlacePageScreen.buildRoute),
+      ],
+    );
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    try {
+      await _settle(tester);
+
+      // Without a Place, the page opens as it always did: at the first group,
+      // at the top of the list.
+      expect(_atTop(tester, 'Alpha'), isTrue);
+
+      // With one, the page opens at that Place: its group at the top, and the
+      // Places above it above the top of the list.
+      router.go('/places?place=${placeIds['Echo']}');
+      await _settle(tester);
+      expect(_atTop(tester, 'Echo'), isTrue);
+      expect(_onScreen(tester, find.text('Alpha')), isFalse);
+
+      // The Places above it are reached by scrolling up.
+      await _scrollUpTo(tester, find.text('Alpha'));
+      expect(_onScreen(tester, find.text('Alpha')), isTrue);
+    } finally {
+      // The widget tree goes with the test; the container is disposed by the
+      // tear-down, with the store.
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+    }
+  }, timeout: const Timeout(Duration(seconds: 120)));
+
+  testWidgets('a Place that is not on the page opens the first group',
+      (tester) async {
+    await _seedPlaces(db);
+    container = ProviderContainer(overrides: [
+      databaseProvider.overrideWithValue(db),
+      locationSourceProvider.overrideWithValue(location),
+      notificationServiceProvider.overrideWithValue(StubNotificationService()),
+    ]);
+
+    final router = GoRouter(
+      initialLocation: '/places?place=not-a-place',
+      routes: [
+        GoRoute(path: '/places', builder: PlacePageScreen.buildRoute),
+      ],
+    );
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    try {
+      await _settle(tester);
+
+      // The Place is not on the page, so the page opens as it always did: at
+      // the first group, at the top of the list.
+      expect(_atTop(tester, 'Alpha'), isTrue);
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+    }
+  }, timeout: const Timeout(Duration(seconds: 120)));
 }

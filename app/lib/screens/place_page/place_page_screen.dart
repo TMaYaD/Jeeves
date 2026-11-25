@@ -23,7 +23,21 @@ import '../../widgets/outcome_multi_select.dart';
 
 /// The list of every Outcome with a Place.
 class PlacePageScreen extends ConsumerStatefulWidget {
-  const PlacePageScreen({super.key});
+  const PlacePageScreen({super.key, this.focusPlaceId});
+
+  /// The Place the page opens at: that Place's section opens at the top of the
+  /// list, and the sections above it are reached by scrolling up.
+  ///
+  /// An id that is not on the page — or none at all — opens the page as it
+  /// opens without one.
+  final String? focusPlaceId;
+
+  /// The page, opened at the Place the query string names.
+  ///
+  /// The route and the journey test share this builder, so `?place=<id>` is
+  /// exercised where the page is driven rather than restated there.
+  static Widget buildRoute(BuildContext context, GoRouterState state) =>
+      PlacePageScreen(focusPlaceId: state.uri.queryParameters['place']);
 
   @override
   ConsumerState<PlacePageScreen> createState() => _PlacePageScreenState();
@@ -47,6 +61,27 @@ class _PlacePageScreenState extends ConsumerState<PlacePageScreen> {
   void _clear() {
     if (!mounted) return;
     setState(() => _selectedIds = {});
+  }
+
+  /// The key of a section's header sliver. It names the Place, so a section
+  /// keeps its identity as the list changes.
+  Key _sectionHeaderKey(String placeId) =>
+      ValueKey('place_page_header_$placeId');
+
+  /// The key of the header of the section the page opens at.
+  ///
+  /// Null when the page is not asked to open at a Place, and when the Place it
+  /// is asked for is not on the page: the page then opens at the top, as it
+  /// always did.
+  Key? _focusHeaderKey(List<PlacePageGroup> groups) {
+    final focusPlaceId = widget.focusPlaceId;
+    if (focusPlaceId == null) return null;
+    for (final group in groups) {
+      for (final place in group.places) {
+        if (place.placeId == focusPlaceId) return _sectionHeaderKey(focusPlaceId);
+      }
+    }
+    return null;
   }
 
   @override
@@ -97,6 +132,11 @@ class _PlacePageScreenState extends ConsumerState<PlacePageScreen> {
                   emptySubtitle:
                       'Outcomes you give a place to are listed here.',
                   dataBuilder: (context, entries) => CustomScrollView(
+                    // The section the page opens at is the scroll view's
+                    // centre, pinned at the top: what is above it sits above
+                    // the top, and the user reaches it by scrolling up.
+                    center: _focusHeaderKey(entries),
+                    anchor: 0,
                     slivers: [
                       for (final (index, entry) in entries.indexed) ...[
                         if (index > 0)
@@ -111,6 +151,7 @@ class _PlacePageScreenState extends ConsumerState<PlacePageScreen> {
                           ),
                         for (final place in entry.places) ...[
                           SliverToBoxAdapter(
+                            key: _sectionHeaderKey(place.placeId),
                             child: _SectionHeader(
                               name: place.label,
                               placeId: place.placeId,
