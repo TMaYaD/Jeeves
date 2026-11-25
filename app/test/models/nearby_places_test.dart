@@ -135,6 +135,20 @@ void main() {
       );
     });
 
+    test('two Places on opposite sides of the globe are never one group', () {
+      final areas = {
+        1: _at(82, 0),
+        2: _at(-82, 180),
+      };
+      expect(
+        _groupIndexes([1, 2], areas: areas, compare: (a, b) => a - b),
+        [
+          [1],
+          [2]
+        ],
+      );
+    });
+
     test('the groups and their members come out in the order given', () {
       // The far Place comes first by the order given, and stays first.
       final areas = {
@@ -215,6 +229,19 @@ void main() {
     test('the same point is no distance at all', () {
       final here = _at(52.3702, 4.8952);
       expect(here.distanceMetersTo(here), 0);
+    });
+
+    test('two points on opposite sides of the globe are a finite distance '
+        'apart', () {
+      // Half the way round the earth, whatever the latitude.
+      for (var latitude = -90; latitude <= 90; latitude++) {
+        final here = _at(latitude.toDouble(), 0);
+        final there = _at((-latitude).toDouble(), 180);
+        final meters = here.distanceMetersTo(there);
+        expect(meters.isFinite, isTrue, reason: 'at latitude $latitude');
+        expect(meters, closeTo(20015087, 20015087 * 0.001),
+            reason: 'at latitude $latitude');
+      }
     });
   });
 }
