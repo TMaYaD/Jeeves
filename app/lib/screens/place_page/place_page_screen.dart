@@ -1,4 +1,5 @@
-/// The place page: every Outcome with a Place, grouped by Place (issue #55).
+/// The place page: every Outcome with a Place, grouped by the Places that are
+/// near each other (issue #1090).
 ///
 /// This is where an Outcome hidden because the user is somewhere else can be
 /// found. It is a list and nothing more: no map, no errands, no route.
@@ -50,8 +51,9 @@ class _PlacePageScreenState extends ConsumerState<PlacePageScreen> {
     final groups = ref.watch(placePageGroupsProvider);
     final visibleIds = {
       for (final group in groups.value ?? const <PlacePageGroup>[])
-        for (final row in group.rows)
-          row.todo.id,
+        for (final place in group.places)
+          for (final row in place.rows)
+            row.todo.id,
     };
     _selectedIds = _selectedIds.intersection(visibleIds);
     final selectionActive = _selectedIds.isNotEmpty;
@@ -82,29 +84,44 @@ class _PlacePageScreenState extends ConsumerState<PlacePageScreen> {
                       'Outcomes you give a place to are listed here.',
                   dataBuilder: (context, entries) => CustomScrollView(
                     slivers: [
-                      for (final entry in entries) ...[
-                        SliverToBoxAdapter(
-                          child: _SectionHeader(name: entry.label),
-                        ),
-                        SliverList(
-                          delegate: SliverChildBuilderDelegate(
-                            (_, i) {
-                              final row = entry.rows[i];
-                              return selectableOutcomeRow(
-                                key: Key('place_page_row_${row.todo.id}'),
-                                todo: row.todo,
-                                selectionActive: selectionActive,
-                                selected: _selectedIds.contains(row.todo.id),
-                                onOpen: () =>
-                                    context.push('/task/${row.todo.id}'),
-                                onToggle: () => _toggle(row.todo.id),
-                                onEnterSelection: () => _toggle(row.todo.id),
-                                secondary: PlaceMarker(isOnNext: row.isOnNext),
-                              );
-                            },
-                            childCount: entry.rows.length,
+                      for (final (index, entry) in entries.indexed) ...[
+                        if (index > 0)
+                          const SliverToBoxAdapter(
+                            child: Divider(height: 24),
                           ),
-                        ),
+                        if (entry.places.length > 1)
+                          SliverToBoxAdapter(
+                            child: _NearbyGroupNote(
+                              firstPlaceId: entry.places.first.placeId,
+                            ),
+                          ),
+                        for (final place in entry.places) ...[
+                          SliverToBoxAdapter(
+                            child: _SectionHeader(
+                              name: place.label,
+                              placeId: place.placeId,
+                            ),
+                          ),
+                          SliverList(
+                            delegate: SliverChildBuilderDelegate(
+                              (_, i) {
+                                final row = place.rows[i];
+                                return selectableOutcomeRow(
+                                  key: Key('place_page_row_${row.todo.id}'),
+                                  todo: row.todo,
+                                  selectionActive: selectionActive,
+                                  selected: _selectedIds.contains(row.todo.id),
+                                  onOpen: () =>
+                                      context.push('/task/${row.todo.id}'),
+                                  onToggle: () => _toggle(row.todo.id),
+                                  onEnterSelection: () => _toggle(row.todo.id),
+                                  secondary: PlaceMarker(isOnNext: row.isOnNext),
+                                );
+                              },
+                              childCount: place.rows.length,
+                            ),
+                          ),
+                        ],
                       ],
                       const SliverToBoxAdapter(child: SizedBox(height: 24)),
                     ],
@@ -151,8 +168,11 @@ class PlaceMarker extends StatelessWidget {
 }
 
 class _SectionHeader extends StatelessWidget {
-  const _SectionHeader({required this.name});
+  const _SectionHeader({required this.name, required this.placeId});
   final String name;
+
+  /// The Place the header names.
+  final String placeId;
 
   @override
   Widget build(BuildContext context) {
@@ -160,9 +180,37 @@ class _SectionHeader extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
       child: Text(
         name,
+        key: Key('place_page_place_$placeId'),
         style: const TextStyle(
           fontSize: 13,
           fontWeight: FontWeight.w600,
+          color: Color(0xFF9CA3AF),
+          letterSpacing: 0.5,
+        ),
+      ),
+    );
+  }
+}
+
+/// The quiet line that opens a group of Places that are near each other.
+///
+/// It says what the group is, and nothing more: the words and the look are
+/// a stand-in for the design pass.
+class _NearbyGroupNote extends StatelessWidget {
+  const _NearbyGroupNote({required this.firstPlaceId});
+
+  /// The first Place of the group, which names the group in the key.
+  final String firstPlaceId;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+      child: Text(
+        'Near each other',
+        key: Key('place_page_nearby_group_$firstPlaceId'),
+        style: const TextStyle(
+          fontSize: 12,
           color: Color(0xFF9CA3AF),
           letterSpacing: 0.5,
         ),

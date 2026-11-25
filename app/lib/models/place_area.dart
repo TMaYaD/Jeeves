@@ -126,6 +126,17 @@ class PlaceArea {
     );
   }
 
+  /// The distance between this Place's point and another's, in metres.
+  ///
+  /// The points are compared; the areas are not. Two Places are near each
+  /// other when their points are close, whatever their areas say.
+  double distanceMetersTo(PlaceArea other) => _distanceMeters(
+        latitudeDegrees,
+        longitudeDegrees,
+        other.latitudeDegrees,
+        other.longitudeDegrees,
+      );
+
   /// Whether the point ([latitudeDegrees], [longitudeDegrees]) is inside this
   /// Place's area.
   bool containsPoint(double latitudeDegrees, double longitudeDegrees) {
@@ -149,12 +160,17 @@ class PlaceArea {
     const toRadians = pi / 180;
     final deltaLatitude = (latitude2 - latitude1) * toRadians;
     final deltaLongitude = (longitude2 - longitude1) * toRadians;
-    final a = sin(deltaLatitude / 2) * sin(deltaLatitude / 2) +
-        cos(latitude1 * toRadians) *
-            cos(latitude2 * toRadians) *
-            sin(deltaLongitude / 2) *
-            sin(deltaLongitude / 2);
-    final c = 2 * atan2(sqrt(a), sqrt(1 - a));
+    // The term is a number between 0 and 1, but rounding can push it a hair
+    // outside it for nearly opposite points. The square roots below need it
+    // inside: the root of a negative is NaN, and a NaN distance compares false
+    // against everything, so every caller reads it as no distance at all.
+    final haversineTerm = (sin(deltaLatitude / 2) * sin(deltaLatitude / 2) +
+            cos(latitude1 * toRadians) *
+                cos(latitude2 * toRadians) *
+                sin(deltaLongitude / 2) *
+                sin(deltaLongitude / 2))
+        .clamp(0.0, 1.0);
+    final c = 2 * atan2(sqrt(haversineTerm), sqrt(1 - haversineTerm));
     return _earthRadiusMeters * c;
   }
 
