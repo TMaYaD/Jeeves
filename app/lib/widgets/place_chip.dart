@@ -63,29 +63,45 @@ class _PlaceChipButton extends ConsumerStatefulWidget {
 
 class _PlaceChipButtonState extends ConsumerState<_PlaceChipButton> {
   Future<void> _choosePlace() async {
+    // The Action the choice belongs to: the one that was current when the
+    // picker opened. A successor that arrives while the picker is up is a
+    // different Action, and the guard in [TaskDetailNotifier] drops the choice
+    // rather than landing it on the successor the user never saw.
+    final outcomeId = widget.outcomeId;
+    final actionId = widget.actionId;
     // "Clear place" is on offer only when there is a Place to clear.
     final canClear =
-        ref.read(currentPlacesProvider).value?[widget.outcomeId] != null;
+        ref.read(currentPlacesProvider).value?[outcomeId] != null;
     final choice = await showPlacePickerSheet(context, canClear: canClear);
     if (choice == null || !mounted) return;
     switch (choice) {
       case NamedPlaceDraft(:final placeId):
-        await ref.read(taskDetailNotifierProvider(widget.outcomeId)).setNamedPlace(
-              actionId: widget.actionId,
+        await ref.read(taskDetailNotifierProvider(outcomeId)).setNamedPlace(
+              actionId: actionId,
               placeId: placeId,
             );
       case PinDraft(:final area, :final name):
-        await _dropPin(area: area, name: name);
+        await _dropPin(
+          outcomeId: outcomeId,
+          actionId: actionId,
+          area: area,
+          name: name,
+        );
       case ClearPlaceChoice():
         await ref
-            .read(taskDetailNotifierProvider(widget.outcomeId))
-            .clearPlace(actionId: widget.actionId);
+            .read(taskDetailNotifierProvider(outcomeId))
+            .clearPlace(actionId: actionId);
     }
   }
 
-  Future<void> _dropPin({required PlaceArea area, required String? name}) async {
-    final dropped = await ref.read(taskDetailNotifierProvider(widget.outcomeId)).setPin(
-          actionId: widget.actionId,
+  Future<void> _dropPin({
+    required String outcomeId,
+    required String actionId,
+    required PlaceArea area,
+    required String? name,
+  }) async {
+    final dropped = await ref.read(taskDetailNotifierProvider(outcomeId)).setPin(
+          actionId: actionId,
           area: area,
           name: name,
         );
