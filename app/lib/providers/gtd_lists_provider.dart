@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../database/gtd_database.dart';
 import 'database_provider.dart';
 import 'place_gate_provider.dart';
+import 'place_hours_provider.dart';
 import 'tag_filter_provider.dart';
 import 'time_context_provider.dart';
 import 'time_window_provider.dart';
@@ -19,6 +20,10 @@ export '../database/gtd_database.dart' show Capture, Todo;
 /// ([outsideTimeContextOutcomeIdsProvider],
 /// [outsideTimeWindowOutcomeIdsProvider]); they come back on their own.
 ///
+/// Outcomes whose current Action is at a Place that carries hours are hidden
+/// while those hours are closed ([outsidePlaceHoursOutcomeIdsProvider]); they
+/// come back when the Place opens.
+///
 /// Outcomes whose current Action is at a Place the user is not at are hidden
 /// too ([awayFromPlaceOutcomeIdsProvider]); they come back when the user
 /// arrives. With no location, nothing is hidden by place.
@@ -31,6 +36,7 @@ final nextProvider = StreamProvider<List<Todo>>((ref) {
   final outside = {
     ...ref.watch(outsideTimeContextOutcomeIdsProvider),
     ...ref.watch(outsideTimeWindowOutcomeIdsProvider),
+    ...ref.watch(outsidePlaceHoursOutcomeIdsProvider),
   };
   final away = ref.watch(awayFromPlaceOutcomeIdsProvider);
   return db.todoDao.watchNext(tagIds: tagIds).map((all) =>

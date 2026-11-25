@@ -8,6 +8,7 @@ import '../database/gtd_database.dart' show TimeWindow;
 import '../models/action_place_and_time_window.dart';
 import 'clock_provider.dart';
 import 'database_provider.dart';
+import 'place_hours_provider.dart';
 import 'time_context_provider.dart';
 
 /// The user's named time windows, in name order.
@@ -37,10 +38,11 @@ final currentTimeWindowsProvider =
 });
 
 /// A coarse signal that advances whenever a named window may have flipped
-/// between open and closed. Arms one [Timer] at the earliest
-/// [TimeWindowHours.nextTransitionAfter] over [currentTimeWindowsProvider] and
-/// re-arms on every rebuild — the same shape as the Time context's boundary
-/// tick.
+/// between open and closed, or a Place's hours may have opened or closed.
+/// Arms one [Timer] at the earliest [TimeWindowHours.nextTransitionAfter] over
+/// [currentTimeWindowsProvider] and the Place hours of
+/// [currentPlaceHoursProvider], and re-arms on every rebuild — the same shape
+/// as the Time context's boundary tick.
 ///
 /// The signal counts the re-reads rather than naming the next boundary. The
 /// same instant can be the next boundary twice over: a phone that changed its
@@ -63,9 +65,19 @@ class TimeWindowBoundaryTick extends Notifier<int> {
   int build() {
     final now = ref.watch(clockProvider)();
     final windows = ref.watch(currentTimeWindowsProvider).value ?? const {};
+    // The hours of a Place are read on the Place's own clock, so their
+    // transition is an instant on that clock.
+    final placeHours = ref.watch(currentPlaceHoursProvider);
     DateTime? next;
     for (final window in windows.values) {
       final t = window.hours.nextTransitionAfter(now);
+      if (t != null && (next == null || t.isBefore(next))) next = t;
+    }
+    for (final entry in placeHours.values) {
+      final t = entry.hours.hours.nextTransitionAfter(
+        now,
+        location: entry.hours.location,
+      );
       if (t != null && (next == null || t.isBefore(next))) next = t;
     }
     if (next != null) {

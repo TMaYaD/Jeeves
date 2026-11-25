@@ -1,0 +1,68 @@
+/// The hours a named Place gives the Outcomes at it (issue #1074).
+///
+/// A Place's hours are the Place's own — a named window's hours, or hours of
+/// its own — read on the Place's own clock. An Action's **own** time replaces
+/// them: a named window or a Time context is the time that Action follows,
+/// and the Place's hours do not apply to it.
+///
+/// Hiding is on Next only, and it does not read the location: an Outcome at a
+/// Place with hours leaves Next while those hours are closed, even while the
+/// user is standing at the Place.
+library;
+
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../models/action_place_and_time_window.dart';
+import 'clock_provider.dart';
+import 'database_provider.dart';
+import 'time_context_provider.dart';
+import 'time_window_provider.dart';
+
+/// The hours of the Place every current Action is at, keyed by Outcome id.
+///
+/// Straight from the store: an Outcome whose Place carries hours the app
+/// cannot read is absent, and a one-time pin is absent too — only a named
+/// Place carries hours.
+final placeHoursProvider =
+    StreamProvider<Map<String, ActionPlaceHours>>((ref) {
+  return ref.watch(databaseProvider).actionDao.watchCurrentPlaceHours();
+});
+
+/// The hours that apply to each Outcome, keyed by Outcome id.
+///
+/// The Place's hours, minus every Outcome whose current Action carries a time
+/// of its own: a named window or a Time context. An Action's own time
+/// replaces the Place's hours (decision D2), so those Outcomes do not carry
+/// Place hours at all — they are not hidden by the Place's opening times.
+final currentPlaceHoursProvider = Provider<Map<String, ActionPlaceHours>>((ref) {
+  final placeHours = ref.watch(placeHoursProvider).value ?? const {};
+  final windows = ref.watch(currentTimeWindowsProvider).value ?? const {};
+  final contexts = ref.watch(currentTimeContextsProvider).value ?? const {};
+  return {
+    for (final entry in placeHours.entries)
+      if (!windows.containsKey(entry.key) && !contexts.containsKey(entry.key))
+        entry.key: entry.value,
+  };
+});
+
+/// Outcome ids whose Place's hours are closed right now.
+///
+/// The Next List hides these; Up Next and every other surface ignore the set
+/// — a Place's hours hide an Outcome from Next only.
+///
+/// The gate does not read the location: the Place's hours hide the Outcome
+/// whether the user is at the Place or somewhere else. The hours are read on
+/// the Place's own clock.
+final outsidePlaceHoursOutcomeIdsProvider = Provider<Set<String>>((ref) {
+  ref.watch(timeWindowBoundaryTickProvider);
+  final now = ref.watch(clockProvider)();
+  final placeHours = ref.watch(currentPlaceHoursProvider);
+  return {
+    for (final entry in placeHours.entries)
+      if (!entry.value.hours.hours.isOpenAt(
+        now,
+        location: entry.value.hours.location,
+      ))
+        entry.key,
+  };
+});

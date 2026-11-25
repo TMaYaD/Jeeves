@@ -56,6 +56,15 @@ typedef PlaceHours = ({
   tz.Location? location,
 });
 
+/// The hours a Place gives an Action, and the Place they come from.
+///
+/// Only a named Place carries hours, and [placeName] is that Place's name.
+typedef ActionPlaceHours = ({
+  String placeId,
+  String placeName,
+  PlaceHours hours,
+});
+
 /// The hours a Place resolves to, or null when it has none the app can read.
 ///
 /// One rule, in one place:
