@@ -18,6 +18,10 @@
 ///   Weekly Review's snapshot loaders await them, and their migration cannot
 ///   run inside the fake zone, so the provider is built here and kept alive
 ///   for the scenario.
+/// * **The Next list is read in the real zone.** The list's own provider is
+///   read to show that an Outcome whose window is closed is off the Next
+///   list while the Weekly Review still shows it, and a listener is held
+///   while its first value arrives.
 library;
 
 import 'package:drift/drift.dart' show Value;
@@ -31,8 +35,11 @@ import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/time_context.dart';
 import 'package:jeeves/providers/clock_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/providers/gtd_lists_provider.dart';
 import 'package:jeeves/providers/periodic_review_provider.dart';
 import 'package:jeeves/providers/synced_preferences_provider.dart';
+import 'package:jeeves/providers/time_context_provider.dart';
+import 'package:jeeves/providers/time_window_provider.dart';
 import 'package:jeeves/screens/periodic_review/periodic_review_screen.dart';
 import 'package:jeeves/services/notification_service.dart';
 import 'package:jeeves/widgets/outcome_review_card.dart';
@@ -101,6 +108,34 @@ Future<void> _teardown(WidgetTester tester, _Scenario scenario) async {
   await tester.pumpWidget(const SizedBox.shrink());
   await tester.pump();
   await tester.runAsync(() => scenario.dispose());
+}
+
+/// The ids the Next list shows, read through the Next list's own provider.
+///
+/// The list filters on the named windows and the Time contexts, so those are
+/// loaded first: the list's first value would otherwise predate them and
+/// show every Outcome. A listener is held while each first value arrives — a
+/// `StreamProvider`'s future does not survive a bare `container.read`
+/// (docs/TESTING.md). Call this in the real async zone, where the list's
+/// watch can run.
+Future<Set<String>> _nextIds(ProviderContainer container) async {
+  final windows = container.listen(currentTimeWindowsProvider, (_, _) {});
+  final contexts = container.listen(currentTimeContextsProvider, (_, _) {});
+  try {
+    await container.read(currentTimeWindowsProvider.future);
+    await container.read(currentTimeContextsProvider.future);
+    final subscription = container.listen(nextProvider, (_, _) {});
+    try {
+      await container.read(nextProvider.future);
+      final value = container.read(nextProvider);
+      return {for (final todo in value.value ?? const <Todo>[]) todo.id};
+    } finally {
+      subscription.close();
+    }
+  } finally {
+    windows.close();
+    contexts.close();
+  }
 }
 
 /// An Outcome on Next with a current Action, created at [createdAt] so the
@@ -200,6 +235,15 @@ void main() {
         laterAction,
         TimeContext.create(fromDate: DateTime(2026, 12, 10)),
       );
+
+      // An Outcome with no time at all: it stays on the Next list, so the
+      // list is not empty for a reason of its own.
+      await _insertOutcome(
+        db,
+        id: 'plain',
+        title: 'Renew the car tax',
+        createdAt: DateTime(2026, 11, 1, 13),
+      );
     });
 
     try {
@@ -225,6 +269,18 @@ void main() {
         find.text('Dance class · Wed 16:00–20:00'),
       );
       expect(find.text('Dance class · Wed 16:00–20:00'), findsOneWidget);
+
+      // The Outcome is hidden from the Next list — its window is closed at the
+      // review's clock — and the Weekly Review still shows it, with the line
+      // that says when it opens (issue #1073). The Next list is otherwise
+      // working: it shows the Outcome that carries no time.
+      final nextIds =
+          (await tester.runAsync(() => _nextIds(scenario.container)))!;
+      expect(nextIds, contains('plain'),
+          reason: 'the Next list shows the Outcome that carries no time');
+      expect(nextIds, isNot(contains('dance')),
+          reason: 'a closed window hides the Outcome from the Next list');
+
       // The line is plain text: it names the day, it does not book it.
       await _expectNoTapTarget(tester);
       expect(find.text('Keep'), findsOneWidget);
