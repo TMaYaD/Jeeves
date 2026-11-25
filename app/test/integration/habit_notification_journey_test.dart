@@ -82,11 +82,14 @@ void main() {
       );
 
   /// A Habit with a clock time of 07:00 — the anchor is what makes it
-  /// notify. A null [clockTime] leaves the Habit without one.
+  /// notify. A null [clockTime] leaves the Habit without one. An
+  /// [estimateMinutes] makes it a binary Habit with an estimate, whose
+  /// notification carries a Start Focus button.
   Future<String> createHabit({
     required String title,
     String chosenOn = '2026-11-20',
     String? clockTime = '07:00',
+    int? estimateMinutes,
     HabitCommitmentDraft commitment = defaultNewHabitCommitment,
   }) async {
     final id = await db.habitDao.createHabit(
@@ -99,8 +102,25 @@ void main() {
     if (clockTime != null) {
       await setClockTime(id, clockTime, chosenOn: chosenOn);
     }
+    if (estimateMinutes != null) {
+      await db.habitDao.updateHabitDetails(
+        habitId: id,
+        userId: _userId,
+        title: title,
+        notes: null,
+        energyLevel: null,
+        timeEstimateMinutes: estimateMinutes,
+        now: now,
+      );
+    }
     return id;
   }
+
+  /// The id of the notification the OS holds for [habitId].
+  int notificationIdFor(String habitId) => os.pending.entries
+      .firstWhere((entry) =>
+          parseHabitNotificationPayload(entry.value)!.habitId == habitId)
+      .key;
 
   test('a Habit is notified only on the days it is due', () async {
     await createHabit(
@@ -113,6 +133,53 @@ void main() {
     await settle();
 
     expect(os.days, ['2026-11-20', '2026-11-23', '2026-11-25']);
+  });
+
+  test('a binary Habit with an estimate is scheduled with Start Focus',
+      () async {
+    final id = await createHabit(title: 'Stretch', estimateMinutes: 20);
+    await settle();
+
+    final notificationId = notificationIdFor(id);
+    expect(os.actions[notificationId], HabitNotificationAction.startFocus);
+    expect(os.buttons[notificationId], 'Start Focus');
+  });
+
+  test('a measurable Habit is scheduled with no button', () async {
+    final id = await createHabit(
+      title: 'Water',
+      commitment: const HabitCommitmentDraft(
+        repeatKind: HabitRepeatKind.everyDay,
+        unitLabel: 'glasses',
+        dailyTargetAmount: 8,
+      ),
+    );
+    await settle();
+
+    final notificationId = notificationIdFor(id);
+    expect(os.actions[notificationId], HabitNotificationAction.none);
+    expect(os.buttons[notificationId], isNull);
+  });
+
+  test('an alarm armed before the button existed gets the button', () async {
+    final id = await createHabit(title: 'Stretch', estimateMinutes: 20);
+    await settle();
+
+    final notificationId = notificationIdFor(id);
+    // The alarm an older build armed: Start Focus had no button then, and
+    // the payload said so. The rest of the payload is the same, so the
+    // reconciler re-arms it only because the button changed.
+    final armed = os.pending[notificationId]!;
+    os.pending[notificationId] =
+        armed.replaceFirst('|action=startfocus', '|action=focus');
+    expect(os.pending[notificationId], isNot(armed));
+    os.buttons.remove(notificationId);
+
+    await container.read(habitNotificationReconcilerProvider)?.onResumed();
+    await settle();
+
+    expect(os.pending[notificationId], contains('|action=startfocus'));
+    expect(os.buttons[notificationId], 'Start Focus');
   });
 
   test('an anchor that is not a clock time withdraws the notification',

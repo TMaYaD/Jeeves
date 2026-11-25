@@ -54,6 +54,42 @@ const kPeriodicReviewActionSkip = 'periodic_review_skip_today';
 /// carries it.
 const kNotificationActionHabitCheckIn = 'habit_check_in';
 
+/// The action id of a Habit's "Start Focus" button, and the iOS category that
+/// carries it.
+const kNotificationActionHabitStartFocus = 'habit_start_focus';
+
+/// The button a habit notification carries.
+///
+/// The action id is what the OS hands back when the button is tapped, so the
+/// notification's handler reads it to know which button was pressed.
+typedef HabitNotificationButton = ({
+  String actionId,
+  String label,
+  bool showsUserInterface,
+});
+
+/// The button a habit notification with [action] carries, or null when it
+/// carries none.
+///
+/// The iOS category is named after the button, as the Check in category is:
+/// iOS shows an action button only for a registered category.
+HabitNotificationButton? habitNotificationButton(HabitNotificationAction action) =>
+    switch (action) {
+      HabitNotificationAction.checkIn => const (
+          actionId: kNotificationActionHabitCheckIn,
+          label: 'Check in',
+          // The Check-in is recorded in the shade; the app does not open.
+          showsUserInterface: false,
+        ),
+      HabitNotificationAction.startFocus => const (
+          actionId: kNotificationActionHabitStartFocus,
+          label: 'Start Focus',
+          // Focus Mode needs the app: the tap opens it.
+          showsUserInterface: true,
+        ),
+      HabitNotificationAction.none => null,
+    };
+
 const _kFocusId = 1001;
 const _kDueDateChannelId = 'due_dates';
 const _kFollowUpChannelId = 'follow_ups';
@@ -138,6 +174,18 @@ class NotificationService {
             // Plain: the Check in runs without opening the app.
             DarwinNotificationAction.plain(
                 kNotificationActionHabitCheckIn, 'Check in'),
+          ],
+        ),
+        // The "Start Focus" button of a Habit's notification. Focus Mode
+        // needs the app, so the action is a foreground one.
+        DarwinNotificationCategory(
+          kNotificationActionHabitStartFocus,
+          actions: [
+            DarwinNotificationAction.plain(
+              kNotificationActionHabitStartFocus,
+              'Start Focus',
+              options: {DarwinNotificationActionOption.foreground},
+            ),
           ],
         ),
       ],
@@ -355,7 +403,7 @@ class NotificationService {
     HabitNotificationAction action = HabitNotificationAction.none,
   }) async {
     final canExact = await canScheduleExactRitualNotifications();
-    final offersCheckIn = action == HabitNotificationAction.checkIn;
+    final button = habitNotificationButton(action);
     await _plugin.zonedSchedule(
       id: id,
       title: title,
@@ -370,17 +418,20 @@ class NotificationService {
           importance: Importance.high,
           priority: Priority.high,
           actions: [
-            if (offersCheckIn)
-              // The Check in runs without opening the app: the button stays
-              // in the shade and the notification goes.
-              AndroidNotificationAction(kNotificationActionHabitCheckIn,
-                  'Check in',
-                  showsUserInterface: false, cancelNotification: true),
+            if (button != null)
+              // A Check in runs without opening the app: the button stays
+              // in the shade and the notification goes. A Start Focus opens
+              // the app, because Focus Mode needs it.
+              AndroidNotificationAction(
+                button.actionId,
+                button.label,
+                showsUserInterface: button.showsUserInterface,
+                cancelNotification: true,
+              ),
           ],
         ),
         iOS: DarwinNotificationDetails(
-          categoryIdentifier:
-              offersCheckIn ? kNotificationActionHabitCheckIn : null,
+          categoryIdentifier: button?.actionId,
         ),
       ),
       // Exact when the OS already permits it, so a notification lands at the

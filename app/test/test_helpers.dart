@@ -197,6 +197,10 @@ class FakeHabitNotifications extends NotificationService {
   /// The button the OS was given, by notification id.
   final actions = <int, HabitNotificationAction>{};
 
+  /// The labels of the buttons the OS was given, by notification id. A
+  /// notification with no button has no entry.
+  final buttons = <int, String>{};
+
   /// The device's time zone, read on the next resume.
   String? deviceZone;
 
@@ -212,6 +216,14 @@ class FakeHabitNotifications extends NotificationService {
     pending[id] = payload;
     titles[id] = title;
     actions[id] = action;
+    // The button is what the OS is given, so the fake asks the same mapping
+    // the service uses rather than recording the action alone.
+    final button = habitNotificationButton(action);
+    if (button == null) {
+      buttons.remove(id);
+    } else {
+      buttons[id] = button.label;
+    }
   }
 
   @override
@@ -219,6 +231,7 @@ class FakeHabitNotifications extends NotificationService {
     pending.remove(id);
     titles.remove(id);
     delivered.remove(id);
+    buttons.remove(id);
   }
 
   @override

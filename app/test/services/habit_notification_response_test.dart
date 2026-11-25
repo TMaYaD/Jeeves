@@ -1,5 +1,6 @@
 /// A tap on a Habit's notification: the "Check in" button records the
-/// Check-in in the outbox, and a body tap opens the Habit's detail.
+/// Check-in in the outbox, the "Start Focus" button opens Focus Mode on the
+/// Habit, and a body tap opens the Habit's detail.
 library;
 
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -7,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/providers/habit_check_in_outbox.dart';
+import 'package:jeeves/screens/habits/habit_routes.dart';
 import 'package:jeeves/services/habit_notifications.dart';
 import 'package:jeeves/services/habit_notification_response.dart';
 import 'package:jeeves/services/notification_service.dart';
@@ -26,12 +28,16 @@ void main() {
     routes.clear();
   });
 
-  String payloadFor(String habitId) => habitNotificationPayload(
+  String payloadFor(
+    String habitId, {
+    HabitNotificationAction action = HabitNotificationAction.checkIn,
+  }) =>
+      habitNotificationPayload(
         firstHabitId: habitId,
         clockTimeHabitId: habitId,
         day: '2026-11-20',
         fireAt: tappedAt,
-        action: HabitNotificationAction.checkIn,
+        action: action,
         signature: 'abcdef',
       );
 
@@ -39,6 +45,13 @@ void main() {
         notificationResponseType:
             NotificationResponseType.selectedNotificationAction,
         actionId: kNotificationActionHabitCheckIn,
+        payload: payload,
+      );
+
+  NotificationResponse startFocusTap(String payload) => NotificationResponse(
+        notificationResponseType:
+            NotificationResponseType.selectedNotificationAction,
+        actionId: kNotificationActionHabitStartFocus,
         payload: payload,
       );
 
@@ -88,6 +101,31 @@ void main() {
 
     expect(routes, ['/habits/h1']);
     expect(await outboxKeys(), isEmpty);
+  });
+
+  test('a Start Focus tap opens Focus Mode on the Habit', () async {
+    await handle(startFocusTap(payloadFor(
+      'h1',
+      action: HabitNotificationAction.startFocus,
+    )));
+
+    expect(routes, ['/habits/h1/focus']);
+  });
+
+  test('a Start Focus tap records no Check-in', () async {
+    await handle(startFocusTap(payloadFor(
+      'h1',
+      action: HabitNotificationAction.startFocus,
+    )));
+
+    expect(await outboxKeys(), isEmpty);
+  });
+
+  test('the routes the handler opens are the Habit screens’ own', () {
+    // The service may not import a screen, so it writes the paths itself.
+    // The tests above hold the handler to these two.
+    expect(habitDetailPath('h1'), '/habits/h1');
+    expect(habitFocusPath('h1'), '/habits/h1/focus');
   });
 
   test("a Habit's body tap never reaches the inbox", () async {

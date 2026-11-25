@@ -56,18 +56,27 @@ enum HabitNotificationAction {
 }
 
 /// The token a [HabitNotificationAction] travels as in a payload.
+///
+/// The token names the button the notification carries, so a change to the
+/// buttons is a change to the payload. That is what re-arms an alarm an older
+/// build armed: the reconciler compares payloads, and a payload that no
+/// longer matches the plan is scheduled again — so an alarm waiting with no
+/// button gets the button instead of waiting a week for its own time.
 String habitNotificationActionToken(HabitNotificationAction action) =>
     switch (action) {
       HabitNotificationAction.checkIn => 'checkin',
-      HabitNotificationAction.startFocus => 'focus',
+      HabitNotificationAction.startFocus => 'startfocus',
       HabitNotificationAction.none => 'none',
     };
 
 /// The action a payload token stands for.
+///
+/// `focus` is the token an older build armed: Start Focus had no button
+/// then, so it is read as the same action and the alarm is re-armed.
 HabitNotificationAction habitNotificationActionFromToken(String? token) =>
     switch (token) {
       'checkin' => HabitNotificationAction.checkIn,
-      'focus' => HabitNotificationAction.startFocus,
+      'startfocus' || 'focus' => HabitNotificationAction.startFocus,
       _ => HabitNotificationAction.none,
     };
 
