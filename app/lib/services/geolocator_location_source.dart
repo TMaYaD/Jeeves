@@ -1,9 +1,10 @@
 /// The real [LocationSource] and [AddressGeocoder]: the platform's own
-/// location, through geolocator and geocoding (issue #55).
+/// location, through geolocator and geocoding (issues #55 and #1092).
 ///
 /// A read never asks for permission. The plugin's permission prompt is only
-/// reached through [GeolocatorLocationSource.requestWhileUsing], which an
-/// explicit tap by the user calls.
+/// reached through [GeolocatorLocationSource.requestWhileUsing] and
+/// [GeolocatorLocationSource.requestAllTheTime], which an explicit tap by
+/// the user calls.
 ///
 /// The web never reads a location: [WebLocationSource] answers "unknown" to
 /// everything, and there is no geocoder there either.
@@ -35,6 +36,32 @@ class GeolocatorLocationSource implements LocationSource {
 
   @override
   Future<LocationPermission> requestWhileUsing() async {
+    // A phone that already allows the location is not asked again. The
+    // plugin's request asks for background as well once the manifest
+    // declares it, so asking here would put up the "all the time" prompt —
+    // and only the arrival switch may do that.
+    final current = await permission();
+    if (current.isGranted) return current;
+    try {
+      return _map(await geo.Geolocator.requestPermission());
+    } on Object {
+      return LocationPermission.notAsked;
+    }
+  }
+
+  @override
+  Future<LocationPermission> requestAllTheTime() async {
+    var status = await permission();
+    if (!status.isGranted) {
+      // The phone allows no location at all yet: the foreground ask comes
+      // first, and a refusal there ends it.
+      status = await requestWhileUsing();
+      if (!status.isGranted) return status;
+    }
+    if (status == LocationPermission.always) return status;
+    // The phone allows the location only while the app is open. Asking again
+    // now — with the background permission declared — is the ask for "all the
+    // time".
     try {
       return _map(await geo.Geolocator.requestPermission());
     } on Object {
@@ -175,6 +202,10 @@ class WebLocationSource implements LocationSource {
 
   @override
   Future<LocationPermission> requestWhileUsing() async =>
+      LocationPermission.notAsked;
+
+  @override
+  Future<LocationPermission> requestAllTheTime() async =>
       LocationPermission.notAsked;
 
   @override

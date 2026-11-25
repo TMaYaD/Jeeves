@@ -2,11 +2,13 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <!-- The user's own location, on their ask: "Use where I am" and the Place
-         gate on Next. Read while the app is on screen only; the location is
-         held in memory and never stored. Background location is a separate
-         permission and is not declared here. -->
+         gate on Next. Jeeves reads it while the app is on screen only; the
+         location is held in memory and never stored. The arrival switch asks
+         the phone for "all the time", so the OS may watch the Places the user
+         asked about; that location stays on the phone and is never synced. -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>
     <!-- Required for exact sprint/break end notifications that fire during Doze mode -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
     <!-- Read-only: today's events are drawn on the day timeline and never stored.

@@ -7,6 +7,9 @@
 /// The hours are optional: the Place takes them from one of the user's named
 /// time windows, or carries hours of its own. Either way they are read on the
 /// Place's own clock, which the user names in the Time zone row.
+/// A Place that already exists also carries the "Tell me when I arrive"
+/// switch (issue #1092). It is the one thing in Jeeves that may ask the phone
+/// for the location beyond the screen it is on.
 library;
 
 import 'package:flutter/material.dart';
@@ -16,6 +19,9 @@ import '../database/daos/place_dao.dart' show NamedPlaceWithUse;
 import '../database/gtd_database.dart';
 import '../models/place_area.dart';
 import '../models/time_window_hours.dart';
+import '../providers/app_settings_provider.dart';
+import '../providers/arrival_notification_settings.dart';
+import '../providers/arrival_permission_flow.dart';
 import '../providers/auth_provider.dart';
 import '../providers/database_provider.dart';
 import '../providers/location_permission_flow.dart';
@@ -108,6 +114,16 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
   /// Only then does Save write the hours: a Place whose hours nobody touched
   /// keeps the ones it has, and no op says otherwise.
   bool _hoursTouched = false;
+  /// What the OS says about the location, as of the last reading.
+  ///
+  /// The switch shows on only when the OS says "always", so the reading is
+  /// taken afresh each time the sheet opens: the user may have changed the
+  /// phone's settings while Jeeves was closed.
+  LocationPermission? _permission;
+
+  /// Whether the user has asked for the arrival switch and the phone did not
+  /// give it. The line that says how to allow it is shown then.
+  bool _arrivalAskDidNotTake = false;
 
   @override
   void initState() {
@@ -128,6 +144,7 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
         _hoursChoice = _PlaceHoursChoice.own;
       }
     }
+    _readPermission();
   }
 
   @override
@@ -213,6 +230,75 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
       _timeZone = chosen;
       _hoursTouched = true;
     });
+  }
+
+  /// Whether the arrival switch is on this Place.
+  ///
+  /// On means both things agree: the user asked for it, and the phone allows
+  /// the location at all times. A phone that has taken the permission away
+  /// leaves the switch off.
+  bool get _arrivalOn {
+    final place = widget.place;
+    if (place == null) return false;
+    if (!_arrivalPlaceIds.contains(place.id)) return false;
+    return _permission == LocationPermission.always;
+  }
+
+  /// Whether the arrival switch belongs on this Place at all.
+  ///
+  /// Only a Place that already exists carries it: a new Place is saved
+  /// first. And only where the phone has a permission to ask for.
+  bool get _canOfferArrival {
+    if (widget.place == null) return false;
+    return ref.watch(locationSourceProvider).supportsPermissionPrompt;
+  }
+
+  /// The ids of the Places whose arrival switch is on, on this device.
+  Set<String> get _arrivalPlaceIds =>
+      ref.watch(arrivalPlaceIdsProvider).asData?.value ?? const <String>{};
+
+  /// Whether the line that says how to allow the location is shown.
+  ///
+  /// It is shown when the switch is off and the phone has not allowed the
+  /// location: either the user asked and the phone said no, or the phone has
+  /// taken the permission away since.
+  bool get _showArrivalHint {
+    if (!_canOfferArrival || _arrivalOn) return false;
+    final place = widget.place!;
+    if (_arrivalPlaceIds.contains(place.id)) return true;
+    return _arrivalAskDidNotTake;
+  }
+
+  /// Reads what the OS says about the location, afresh.
+  Future<void> _readPermission() async {
+    final source = ref.read(locationSourceProvider);
+    final permission = await source.permission();
+    if (!mounted) return;
+    setState(() => _permission = permission);
+  }
+
+  /// The user moved the arrival switch.
+  Future<void> _onArrivalChanged(bool on) async {
+    final place = widget.place;
+    if (place == null) return;
+    if (!on) {
+      // The user turned it off: the Place stays, the switch goes.
+      await ref.read(arrivalPlaceIdsProvider.notifier).turnOff(place.id);
+      if (!mounted) return;
+      setState(() => _arrivalAskDidNotTake = false);
+      return;
+    }
+    // The user turned it on: the phone is asked, behind the explanation.
+    final turnedOn = await turnOnArrivalNotification(context, ref, place.id);
+    if (!mounted) return;
+    setState(() => _arrivalAskDidNotTake = !turnedOn);
+    await _readPermission();
+  }
+
+  /// Opens the app's own settings page, where the phone allows the location
+  /// at all times.
+  Future<void> _openAppSettings() async {
+    await ref.read(appSettingsOpenerProvider).openSettings();
   }
 
   Future<void> _save() async {
@@ -310,9 +396,10 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
     }
     if (!mounted) return;
     // The first saved Place is the first time Jeeves may ask for the
-    // location — and the only time outside "Use where I am". The ask happens
-    // before the sheet closes, so its own dialog has a live context. A Place
-    // that was not written is no Place saved, so it asks nothing.
+    // location while using — the only time outside "Use where I am"; the
+    // arrival switch asks for "all the time" instead. The ask happens before
+    // the sheet closes, so its own dialog has a live context. A Place that
+    // was not written is no Place saved, so it asks nothing.
     if (saved) {
       await askForLocationAfterFirstSave(context, source);
     }
@@ -352,6 +439,8 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
     if (confirmed != true || !mounted) return;
     final db = ref.read(databaseProvider);
     await db.placeDao.deletePlace(place.id);
+    // The Place is gone: its id must not come back with the next write.
+    await ref.read(arrivalPlaceIdsProvider.notifier).forget(place.id);
     if (!mounted) return;
     // A deleted Place is not a saved Place: the editor answers nothing.
     Navigator.pop(context);
@@ -550,6 +639,43 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
               const SizedBox(height: 16),
               _hoursSection(windows, phoneZone),
               const SizedBox(height: 8),
+              if (_canOfferArrival) ...[
+                SwitchListTile(
+                  key: const Key('place_arrival_switch'),
+                  value: _arrivalOn,
+                  onChanged: _onArrivalChanged,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Tell me when I arrive'),
+                ),
+                if (_showArrivalHint) ...[
+                  const SizedBox(height: 8),
+                  Text.rich(
+                    const TextSpan(
+                      style:
+                          TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+                      children: [
+                        TextSpan(
+                            text: 'To hear from me on arrival, allow location '),
+                        TextSpan(
+                          text: 'All the time',
+                          style: TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        TextSpan(
+                            text: ' for Jeeves in the phone\'s settings.'),
+                      ],
+                    ),
+                    key: const Key('place_arrival_settings_line'),
+                  ),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton(
+                      key: const Key('place_arrival_open_settings'),
+                      onPressed: _openAppSettings,
+                      child: const Text('Open settings'),
+                    ),
+                  ),
+                ],
+              ],
               Row(
                 // The Delete button gives up its room before the Save does:
                 // on a narrow phone its label shortens rather than the row
