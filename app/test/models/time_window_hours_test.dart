@@ -1,5 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jeeves/models/place_time_zone.dart';
 import 'package:jeeves/models/time_window_hours.dart';
+import 'package:timezone/timezone.dart' as tz;
 
 void main() {
   // 2026-11-09 is a Monday, 2026-11-14 a Saturday, 2026-11-15 a Sunday.
@@ -327,6 +329,165 @@ void main() {
         week.describe(),
         'Mon 09:00\u201317:00 \u00b7 Sun 09:00\u201317:00',
       );
+    });
+  });
+
+  group('isOpenAt on a time zone', () {
+    // A place in Berlin carries its own clock: its hours are read in
+    // Europe/Berlin, not on the phone's clock.
+    final berlin = placeTimeZoneLocation('Europe/Berlin')!;
+
+    final store = TimeWindowHours.create({
+      for (var day = 1; day <= 5; day++)
+        day: (startMinute: 11 * 60, endMinute: 20 * 60),
+    })!;
+
+    test('Mon-Fri 11:00-20:00 in Europe/Berlin opens at 10:00Z in winter',
+        () {
+      // Berlin is on winter time (UTC+1) in November, so 11:00 there is
+      // 10:00Z.
+      expect(
+        store.isOpenAt(DateTime.utc(2026, 11, 9, 10, 0), location: berlin),
+        isTrue,
+      );
+      expect(
+        store.isOpenAt(DateTime.utc(2026, 11, 9, 9, 59), location: berlin),
+        isFalse,
+      );
+      // 20:00 there is 19:00Z: the window closes on the hour.
+      expect(
+        store.isOpenAt(DateTime.utc(2026, 11, 9, 18, 59), location: berlin),
+        isTrue,
+      );
+      expect(
+        store.isOpenAt(DateTime.utc(2026, 11, 9, 19, 0), location: berlin),
+        isFalse,
+      );
+    });
+
+    test('the zone decides which clock the hours are read on', () {
+      // The same instant is 11:00 in Berlin and 10:00 in UTC.
+      expect(
+        store.isOpenAt(DateTime.utc(2026, 11, 9, 10, 0), location: berlin),
+        isTrue,
+      );
+      expect(
+        store.isOpenAt(DateTime.utc(2026, 11, 9, 10, 0), location: tz.UTC),
+        isFalse,
+      );
+    });
+
+    test('a day with no hours is closed in the place clock too', () {
+      // Saturday 2026-11-14 has no hours.
+      expect(
+        store.isOpenAt(DateTime.utc(2026, 11, 14, 12, 0), location: berlin),
+        isFalse,
+      );
+    });
+
+    test('an overnight window crosses midnight in the place clock', () {
+      final night = TimeWindowHours.create({
+        1: (startMinute: 22 * 60, endMinute: 2 * 60),
+      })!;
+
+      // 21:00Z is 22:00 in Berlin on Monday: the window opens.
+      expect(
+        night.isOpenAt(DateTime.utc(2026, 11, 9, 21, 0), location: berlin),
+        isTrue,
+      );
+      // 23:00Z is 00:00 in Berlin on Tuesday: Monday's window runs past
+      // midnight, so the place is still open.
+      expect(
+        night.isOpenAt(DateTime.utc(2026, 11, 9, 23, 0), location: berlin),
+        isTrue,
+      );
+      // 01:00Z is 02:00 in Berlin on Tuesday: the window has closed.
+      expect(
+        night.isOpenAt(DateTime.utc(2026, 11, 10, 1, 0), location: berlin),
+        isFalse,
+      );
+      // Tuesday carries no hours of its own.
+      expect(
+        night.isOpenAt(DateTime.utc(2026, 11, 10, 21, 0), location: berlin),
+        isFalse,
+      );
+    });
+  });
+
+  group('nextTransitionAfter on a time zone', () {
+    final berlin = placeTimeZoneLocation('Europe/Berlin')!;
+
+    final store = TimeWindowHours.create({
+      for (var day = 1; day <= 5; day++)
+        day: (startMinute: 11 * 60, endMinute: 20 * 60),
+    })!;
+
+    test('the transition is the instant of the place clock', () {
+      // Friday 2026-11-06, Berlin on winter time (UTC+1): the window closes
+      // at 20:00 there, which is 19:00Z.
+      final close = store.nextTransitionAfter(
+        DateTime.utc(2026, 11, 6, 12, 0),
+        location: berlin,
+      )!;
+      expect(close.isAtSameMomentAs(DateTime.utc(2026, 11, 6, 19, 0)), isTrue);
+      // The transition carries the place clock, so it can be formatted there.
+      expect(close, isA<tz.TZDateTime>());
+      expect((close as tz.TZDateTime).location.name, 'Europe/Berlin');
+    });
+
+    test('the transition follows the March daylight-saving change', () {
+      // Friday 2026-03-27: Berlin is still on winter time (UTC+1), so the
+      // window closes at 20:00 there, which is 19:00Z.
+      final winterClose = store.nextTransitionAfter(
+        DateTime.utc(2026, 3, 27, 12, 0),
+        location: berlin,
+      )!;
+      expect(
+        winterClose.isAtSameMomentAs(DateTime.utc(2026, 3, 27, 19, 0)),
+        isTrue,
+      );
+
+      // Monday 2026-03-30 is after the change: Berlin is on summer time
+      // (UTC+2), so the same 11:00 opening is 09:00Z.
+      final summerOpen = store.nextTransitionAfter(
+        DateTime.utc(2026, 3, 27, 19, 0),
+        location: berlin,
+      )!;
+      expect(
+        summerOpen.isAtSameMomentAs(DateTime.utc(2026, 3, 30, 9, 0)),
+        isTrue,
+      );
+
+      // And the same 20:00 close is 18:00Z.
+      final summerClose = store.nextTransitionAfter(
+        DateTime.utc(2026, 3, 30, 9, 0),
+        location: berlin,
+      )!;
+      expect(
+        summerClose.isAtSameMomentAs(DateTime.utc(2026, 3, 30, 18, 0)),
+        isTrue,
+      );
+    });
+
+    test('an overnight window transitions on the place clock', () {
+      final night = TimeWindowHours.create({
+        1: (startMinute: 22 * 60, endMinute: 2 * 60),
+      })!;
+
+      // Monday 2026-11-09, 20:00Z is 21:00 in Berlin: the window opens at
+      // 22:00 there, which is 21:00Z.
+      final open = night.nextTransitionAfter(
+        DateTime.utc(2026, 11, 9, 20, 0),
+        location: berlin,
+      )!;
+      expect(open.isAtSameMomentAs(DateTime.utc(2026, 11, 9, 21, 0)), isTrue);
+
+      // It closes at 02:00 on Tuesday in Berlin, which is 01:00Z.
+      final close = night.nextTransitionAfter(
+        DateTime.utc(2026, 11, 9, 21, 0),
+        location: berlin,
+      )!;
+      expect(close.isAtSameMomentAs(DateTime.utc(2026, 11, 10, 1, 0)), isTrue);
     });
   });
 }

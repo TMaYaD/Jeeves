@@ -6,11 +6,14 @@
 /// A window belongs to the day it **starts**: Monday 22:00–02:00 is open from
 /// Monday 22:00 until Tuesday 02:00. A day with no entry is closed.
 ///
-/// **Everything is local wall-clock time**: "open 11:00" means the clock where
-/// the user is when the value is evaluated.
+/// **Everything is wall-clock time**: "open 11:00" means the clock where the
+/// value is evaluated — the phone's clock, or the clock of the place the
+/// hours belong to when they are read on a time zone.
 library;
 
 import 'dart:convert';
+
+import 'package:timezone/timezone.dart' as tz;
 
 /// The hours of one ISO weekday (1 = Monday … 7 = Sunday): minutes after local
 /// midnight. [endMinute] may be 24:00 (the next midnight); when it is smaller
@@ -119,13 +122,16 @@ class TimeWindowHours {
     return create(hours);
   }
 
-  /// Whether the window is open at [now] (read in local time).
+  /// Whether the window is open at [now].
+  ///
+  /// The hours are read on the phone's clock, or on [location]'s clock when a
+  /// place carries its own hours and its own time zone.
   ///
   /// Today's entry governs the hours from midnight to midnight; an entry that
   /// runs past midnight keeps the window open into the next morning, and
   /// yesterday's entry opens it again after midnight.
-  bool isOpenAt(DateTime now) {
-    final local = now.toLocal();
+  bool isOpenAt(DateTime now, {tz.Location? location}) {
+    final local = _wallClock(now, location);
     final minuteOfDay = local.hour * 60 + local.minute;
 
     final today = _byDay[local.weekday];
@@ -149,9 +155,37 @@ class TimeWindowHours {
     return false;
   }
 
+  /// The clock [now] reads on: the phone's when [location] is null, the
+  /// place's own clock when it is not.
+  static DateTime _wallClock(DateTime now, tz.Location? location) =>
+      location == null ? now.toLocal() : tz.TZDateTime.from(now, location);
+
+  /// The wall-clock instant [minuteOfDay] past midnight of [day], on
+  /// [location]'s clock, or on the phone's when [location] is null.
+  static DateTime _wallAt(
+    DateTime day,
+    int minuteOfDay,
+    tz.Location? location,
+  ) {
+    if (location == null) {
+      return DateTime(day.year, day.month, day.day, 0, minuteOfDay);
+    }
+    return tz.TZDateTime(
+      location,
+      day.year,
+      day.month,
+      day.day,
+      0,
+      minuteOfDay,
+    );
+  }
+
   /// The ISO weekday of the calendar day before [local].
+  ///
+  /// Read on the UTC calendar: a calendar date has the same weekday in every
+  /// time zone, and UTC has no daylight-saving gap to shift the date.
   static int _previousWeekday(DateTime local) =>
-      DateTime(local.year, local.month, local.day - 1).weekday;
+      DateTime.utc(local.year, local.month, local.day - 1).weekday;
 
   static const _dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -196,8 +230,13 @@ class TimeWindowHours {
   static bool _sameHours(DayHours a, DayHours b) =>
       a.startMinute == b.startMinute && a.endMinute == b.endMinute;
 
-  /// The next local instant after [now] at which the window flips between open
+  /// The next instant after [now] at which the window flips between open
   /// and closed, or null when it cannot flip again.
+  ///
+  /// The hours are read on the phone's clock, or on [location]'s clock when a
+  /// place carries its own hours and its own time zone. The returned instant
+  /// is on that clock, so it is formatted there — never call `toLocal()` on
+  /// it before comparing instants.
   ///
   /// Every hour boundary is a candidate, and a candidate counts only when the
   /// open state really differs across it — two overlapping days can meet at a
@@ -205,23 +244,30 @@ class TimeWindowHours {
   ///
   /// A day that opens at 09:00 and closes at 17:00 flips twice; an overnight
   /// day (22:00–02:00) opens on its own day and closes the next morning.
-  DateTime? nextTransitionAfter(DateTime now) {
-    final local = now.toLocal();
+  DateTime? nextTransitionAfter(DateTime now, {tz.Location? location}) {
+    final local = _wallClock(now, location);
     DateTime? best;
     for (var offset = -1; offset <= 8; offset++) {
-      final day = DateTime(local.year, local.month, local.day + offset);
+      final day = DateTime.utc(local.year, local.month, local.day + offset);
       final hours = _byDay[day.weekday];
       if (hours == null) continue;
-      final start = DateTime(day.year, day.month, day.day, 0, hours.startMinute);
+      final start = _wallAt(day, hours.startMinute, location);
       // An end at or before the start belongs to the next day.
       final end = hours.endMinute > hours.startMinute
-          ? DateTime(day.year, day.month, day.day, 0, hours.endMinute)
-          : DateTime(day.year, day.month, day.day + 1, 0, hours.endMinute);
+          ? _wallAt(day, hours.endMinute, location)
+          : _wallAt(
+              DateTime.utc(day.year, day.month, day.day + 1),
+              hours.endMinute,
+              location,
+            );
       for (final candidate in [start, end]) {
         if (!candidate.isAfter(local)) continue;
         if (best != null && !candidate.isBefore(best)) continue;
         final before = candidate.subtract(const Duration(minutes: 1));
-        if (isOpenAt(candidate) == isOpenAt(before)) continue;
+        if (isOpenAt(candidate, location: location) ==
+            isOpenAt(before, location: location)) {
+          continue;
+        }
         best = candidate;
       }
     }
