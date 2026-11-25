@@ -279,4 +279,55 @@ void main() {
 
     expect(find.byKey(const Key('place_picker_clear')), findsNothing);
   });
+
+  testWidgets('the editor answers the name it saved, not one typed while the '
+      'save was in flight', (tester) async {
+    final answer = Completer<SavedPlace?>();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => ElevatedButton(
+                onPressed: () async {
+                  answer.complete(await showPlaceEditorSheet(context));
+              },
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    // The name field keeps the focus when the save starts, so the text can
+    // still be typed into it while the write runs.
+    await tester.showKeyboard(find.byKey(const Key('place_editor_name')));
+    tester.testTextInput.enterText('Bakery');
+    await tester.pumpAndSettle();
+    await tester.showKeyboard(
+        find.byKey(const Key('place_point_coordinates')));
+    tester.testTextInput.enterText('52.3702, 4.8952');
+    await tester.pumpAndSettle();
+    await tester.showKeyboard(find.byKey(const Key('place_editor_name')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('place_editor_save')));
+
+    // The write is in flight. The user keeps typing while it runs: the text
+    // goes in without a pump, so it lands before the write comes back.
+    tester.testTextInput.enterText('Cafe');
+    await _settle(tester);
+
+    // The Place was saved under the name it carried when the save began, and
+    // the editor answers that same name: the chip that shows it must not
+    // disagree with the store.
+    final saved =
+        await tester.runAsync(() => db.placeDao.watchNamedPlaces().first);
+    expect(saved!.single.name, 'Bakery');
+    expect((await answer.future)!.name, 'Bakery');
+  });
 }

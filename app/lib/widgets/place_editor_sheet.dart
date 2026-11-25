@@ -84,7 +84,11 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
 
   Future<void> _save() async {
     final point = _point;
-    if (point == null || _name.text.trim().isEmpty) return;
+    // The name this save writes, and answers with. Read before the first
+    // await: a name typed while the write is in flight must not change what
+    // was saved, nor what the caller is told was saved.
+    final name = _name.text.trim();
+    if (point == null || name.isEmpty) return;
     setState(() => _saving = true);
     // Read before the first await: this widget does not survive the write.
     final source = ref.read(locationSourceProvider);
@@ -95,7 +99,7 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
     var saved = false;
     if (place == null) {
       placeId = await db.placeDao.createNamedPlace(
-        name: _name.text,
+        name: name,
         latitudeDegrees: point.latitudeDegrees,
         longitudeDegrees: point.longitudeDegrees,
         radiusMeters: _radiusMeters,
@@ -106,7 +110,7 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
       placeId = place.id;
       saved = await db.placeDao.updateNamedPlace(
         placeId: place.id,
-        name: _name.text,
+        name: name,
         latitudeDegrees: point.latitudeDegrees,
         longitudeDegrees: point.longitudeDegrees,
         radiusMeters: _radiusMeters,
@@ -125,7 +129,7 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
       await askForLocationAfterFirstSave(context, source);
     }
     if (!mounted) return;
-    Navigator.pop(context, (id: placeId, name: _name.text.trim()));
+    Navigator.pop(context, (id: placeId, name: name));
   }
 
   Future<void> _delete() async {
