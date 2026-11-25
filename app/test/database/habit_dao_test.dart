@@ -1,12 +1,17 @@
+import 'dart:async';
+
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/daos/habit_dao.dart';
+import 'package:jeeves/database/daos/place_dao.dart' show pinPlaceKind;
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/habit_commitment.dart';
 import 'package:jeeves/models/habit_progress.dart' show HabitHistory;
-import 'package:jeeves/sync/collection_codecs.dart' show encodeInstant;
+import 'package:jeeves/models/place_area.dart';
+import 'package:jeeves/sync/collection_codecs.dart'
+    show encodeInstant, placesCollection;
 import 'package:jeeves/sync/domain_op_capture.dart';
 import '../test_helpers.dart';
 
@@ -1885,6 +1890,239 @@ void main() {
         final live =
             await db.habitDao.watchHabits('2026-11-18', archived: false).first;
         expect(live.map((h) => h.habit.id), [first]);
+      });
+    });
+
+    group("the Habit's Place", () {
+      /// The area a pin is dropped at.
+      final area = PlaceArea.create(
+        latitudeDegrees: 52.3702,
+        longitudeDegrees: 4.8952,
+        radiusMeters: 150,
+      )!;
+
+      /// A named Place of the user's own.
+      Future<String> namedPlace(String name) async {
+        final id = await db.placeDao.createNamedPlace(
+          name: name,
+          latitudeDegrees: 52.3702,
+          longitudeDegrees: 4.8952,
+          userId: _userId,
+          now: _now,
+        );
+        return id!;
+      }
+
+      /// The Place id the Habit row holds, read straight from the row.
+      Future<String?> placeIdOf(String habitId) async {
+        final row = await (db.select(db.habits)
+              ..where((h) => h.id.equals(habitId)))
+            .getSingle();
+        return row.placeId;
+      }
+
+      test('a named Place is set, replaced and cleared', () async {
+        final habitId = await createHabit();
+        final first = await namedPlace('Hardware store');
+        final second = await namedPlace('Bike shop');
+
+        expect(await db.habitDao.setNamedPlace(habitId, first, now: _now),
+            isTrue);
+        expect(await placeIdOf(habitId), first);
+
+        expect(await db.habitDao.setNamedPlace(habitId, second, now: _now),
+            isTrue);
+        expect(await placeIdOf(habitId), second);
+
+        expect(await db.habitDao.setNamedPlace(habitId, null, now: _now),
+            isTrue);
+        expect(await placeIdOf(habitId), isNull);
+      });
+
+      test('the Place the Habit already carries is not written again',
+          () async {
+        final habitId = await createHabit();
+        final placeId = await namedPlace('Hardware store');
+        await db.habitDao.setNamedPlace(habitId, placeId, now: _now);
+
+        expect(await db.habitDao.setNamedPlace(habitId, placeId, now: _now),
+            isFalse);
+      });
+
+      test('the Habit row authors no op — the habit tables are local',
+          () async {
+        final habitId = await createHabit();
+        final placeId = await namedPlace('Hardware store');
+        capture.clear();
+
+        await db.habitDao.setNamedPlace(habitId, placeId, now: _now);
+
+        expect(capture.recorded, isEmpty);
+      });
+
+      test('a pin is a Place row of its own, with one op', () async {
+        final habitId = await createHabit();
+        capture.clear();
+
+        final pinId = await db.habitDao.setPin(
+          habitId,
+          area,
+          name: '  Corner  ',
+          now: _now,
+        );
+
+        expect(pinId, isNotNull);
+        final place =
+            await (db.select(db.places)..where((p) => p.id.equals(pinId!)))
+                .getSingle();
+        expect(place.kind, pinPlaceKind);
+        expect(place.name, 'Corner');
+        expect(place.userId, _userId);
+        expect(place.latitudeMicrodegrees, area.latitudeMicrodegrees);
+        expect(place.radiusMeters, area.radiusMeters);
+        expect(await placeIdOf(habitId), pinId);
+        // The pin is a `places` row, so it syncs and the op says so. The Habit
+        // row itself authors none.
+        expect(capture.recorded, hasLength(1));
+        expect(capture.recorded.single.collection, placesCollection);
+        expect(capture.recorded.single.entityId, pinId);
+      });
+
+      test('replacing a pin deletes the old pin row and tombstones it',
+          () async {
+        final habitId = await createHabit();
+        final first = await db.habitDao.setPin(habitId, area, now: _now);
+        capture.clear();
+
+        final second = await db.habitDao.setPin(
+          habitId,
+          PlaceArea.create(latitudeDegrees: 52.0, longitudeDegrees: 0.5)!,
+          now: _now,
+        );
+
+        expect((await db.select(db.places).get()).map((p) => p.id), [second]);
+        expect(await placeIdOf(habitId), second);
+        final tombstoned = capture.recorded
+            .where((op) => op.tombstone)
+            .map((op) => '${op.collection}/${op.entityId}');
+        expect(tombstoned, contains('places/$first'));
+      });
+
+      test('clearing the Place takes the pin it pointed at with it', () async {
+        final habitId = await createHabit();
+        await db.habitDao.setPin(habitId, area, now: _now);
+
+        expect(await db.habitDao.setNamedPlace(habitId, null, now: _now),
+            isTrue);
+
+        expect(await db.select(db.places).get(), isEmpty);
+        expect(await placeIdOf(habitId), isNull);
+      });
+
+      test('a named Place replaces a pin, and the named Place stays in the '
+          'list', () async {
+        final habitId = await createHabit();
+        final placeId = await namedPlace('Hardware store');
+        await db.habitDao.setPin(habitId, area, now: _now);
+
+        expect(await db.habitDao.setNamedPlace(habitId, placeId, now: _now),
+            isTrue);
+
+        expect(await placeIdOf(habitId), placeId);
+        // The pin went with the reference; the named Place is the user's own
+        // and stays where it was.
+        final places = await db.select(db.places).get();
+        expect(places.map((p) => p.id), [placeId]);
+      });
+
+      test('a Place on a Habit that is not there writes nothing', () async {
+        expect(
+            await db.habitDao
+                .setNamedPlace('no-such-habit', 'some-place', now: _now),
+            isFalse);
+        expect(await db.habitDao.setPin('no-such-habit', area, now: _now),
+            isNull);
+
+        expect(await db.select(db.places).get(), isEmpty);
+        expect(capture.recorded, isEmpty);
+      });
+
+      test('a Place that does not exist is refused, and so is a pin', () async {
+        final habitId = await createHabit();
+
+        expect(
+            await db.habitDao
+                .setNamedPlace(habitId, 'no-such-place', now: _now),
+            isFalse);
+        expect(await placeIdOf(habitId), isNull);
+
+        final pinId = await db.habitDao.setPin(habitId, area, now: _now);
+        expect(await db.habitDao.setNamedPlace(habitId, pinId, now: _now),
+            isFalse);
+        expect(await placeIdOf(habitId), pinId,
+            reason: 'a refused write leaves the Habit as it was');
+      });
+
+      group('watchHabitPlaces', () {
+        test('gives the Place each Habit carries, keyed by Habit id', () async {
+          final habitId = await createHabit();
+          final placeId = await namedPlace('Hardware store');
+          await db.habitDao.setNamedPlace(habitId, placeId, now: _now);
+
+          final places = await db.habitDao.watchHabitPlaces().first;
+          expect(places.keys, [habitId]);
+          expect(places[habitId]!.id, placeId);
+          expect(places[habitId]!.name, 'Hardware store');
+          expect(places[habitId]!.isPin, isFalse);
+          expect(places[habitId]!.area.latitudeMicrodegrees, 52370200);
+          expect(places[habitId]!.area.radiusMeters, 150);
+        });
+
+        test('a Habit at no place is not in the map', () async {
+          await createHabit();
+
+          final places = await db.habitDao.watchHabitPlaces().first;
+          expect(places, isEmpty);
+        });
+
+        test('re-emits when the Place is renamed', () async {
+          final habitId = await createHabit();
+          final placeId = await namedPlace('Hardware store');
+          await db.habitDao.setNamedPlace(habitId, placeId, now: _now);
+
+          final names = <String?>[];
+          final firstSeen = Completer<void>();
+          final renamed = Completer<void>();
+          final subscription = db.habitDao.watchHabitPlaces().listen((places) {
+            final name = places[habitId]?.name;
+            names.add(name);
+            if (!firstSeen.isCompleted) firstSeen.complete();
+            if (name == 'Bike shop' && !renamed.isCompleted) renamed.complete();
+          });
+          addTearDown(subscription.cancel);
+
+          await firstSeen.future.timeout(const Duration(seconds: 10));
+          expect(names.first, 'Hardware store');
+
+          await db.placeDao
+              .updateNamedPlace(placeId: placeId, name: 'Bike shop');
+
+          await renamed.future.timeout(const Duration(seconds: 10));
+          expect(names.last, 'Bike shop');
+        });
+
+        test('omits a Habit whose Place is gone', () async {
+          final habitId = await createHabit();
+          final placeId = await namedPlace('Hardware store');
+          await db.habitDao.setNamedPlace(habitId, placeId, now: _now);
+
+          // The Place is deleted on another device and arrives as a
+          // tombstone: the Habit's id now points at nothing.
+          await db.customStatement("DELETE FROM places WHERE id = '$placeId'");
+
+          final places = await db.habitDao.watchHabitPlaces().first;
+          expect(places, isEmpty);
+        });
       });
     });
   });

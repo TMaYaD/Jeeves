@@ -29,11 +29,14 @@ library;
 import 'package:drift/drift.dart';
 import 'package:uuid/enums.dart' show Namespace;
 
+import '../../models/action_place_and_time_window.dart' show HabitPlace;
 import '../../models/habit_commitment.dart';
 import '../../models/habit_progress.dart' show HabitHistory;
+import '../../models/place_area.dart';
 import '../../sync/collection_codecs.dart' show encodeInstant;
 import '../../utils/uuid.dart';
 import '../gtd_database.dart';
+import 'place_dao.dart' show namedPlaceKind, pinPlaceKind;
 
 part 'habit_dao.g.dart';
 
@@ -254,6 +257,7 @@ const String _archivedKind = 'archived';
   HabitInactivePeriods,
   HabitTags,
   Tags,
+  Places,
 ])
 class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
   HabitDao(super.db);
@@ -872,6 +876,102 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
     });
   }
 
+  /// Set ([placeId]) or clear (null) the named Place of the Habit
+  /// [habitId] (issue #1075).
+  ///
+  /// The Place must exist and be a named one: a one-time pin is set with
+  /// [setPin], and a Place that does not exist is refused rather than stored
+  /// as a reference to nothing.
+  ///
+  /// Returns whether the row was written. A no-op — the Habit is gone, or it
+  /// already carries that Place — writes nothing.
+  ///
+  /// A one-time pin the Habit stops pointing at goes with the reference: the
+  /// pin row is deleted and tombstoned in the same transaction, so no device
+  /// keeps a pin nobody points at. A named Place is left alone — it belongs
+  /// to the user's list.
+  ///
+  /// **The Habit row authors no op**: the habit tables are device-local. The
+  /// pin the Habit drops does author one, because the pin is a `places` row
+  /// and a Place syncs.
+  Future<bool> setNamedPlace(
+    String habitId,
+    String? placeId, {
+    required DateTime now,
+  }) async {
+    final instant = _storedInstant(now);
+    final effect = await attachedDatabase.capturing(() async {
+      final row = await (select(habits)..where((h) => h.id.equals(habitId)))
+          .getSingleOrNull();
+      if (row == null) return (written: false, pinDropped: false);
+      if (placeId != null) {
+        final place = await (select(places)..where((p) => p.id.equals(placeId)))
+            .getSingleOrNull();
+        if (place == null || place.kind != namedPlaceKind) {
+          return (written: false, pinDropped: false);
+        }
+      }
+      if (row.placeId == placeId) return (written: false, pinDropped: false);
+      await (update(habits)..where((h) => h.id.equals(habitId))).write(
+        HabitsCompanion(
+          placeId: Value(placeId),
+          updatedAt: Value(encodeInstant(instant)),
+        ),
+      );
+      final pinDropped =
+          await attachedDatabase.placeDao.dropPinIfAny(row.placeId);
+      return (written: true, pinDropped: pinDropped);
+    });
+    if (effect.pinDropped) attachedDatabase.notifyPlacesViewWrite();
+    return effect.written;
+  }
+
+  /// Sets a one-time pin — a Place of the Habit's own — and points the Habit
+  /// at it (issue #1075). Returns the pin's id, or null when the write is
+  /// refused.
+  ///
+  /// The pin is a `places` row of kind `pin`, never listed anywhere: it
+  /// belongs to this one Habit and goes when the reference moves away.
+  /// [name] is optional; an over-long one is refused.
+  ///
+  /// A pin replaces whatever Place the Habit carried, and only a pin is
+  /// dropped for it — a named Place belongs to the user's list and stays in it.
+  ///
+  /// **The pin row authors an op**, because a Place syncs. The Habit row
+  /// itself authors none: the habit tables are device-local.
+  Future<String?> setPin(
+    String habitId,
+    PlaceArea area, {
+    String? name,
+    required DateTime now,
+  }) async {
+    final trimmed = name?.trim();
+    if (trimmed != null && trimmed.length > Places.maxNameLength) return null;
+    final pinName = (trimmed == null || trimmed.isEmpty) ? null : trimmed;
+    final instant = _storedInstant(now);
+    final pinId = await attachedDatabase.capturing(() async {
+      final row = await (select(habits)..where((h) => h.id.equals(habitId)))
+          .getSingleOrNull();
+      if (row == null) return null;
+      final newPinId = await attachedDatabase.placeDao.insertPin(
+        userId: row.userId,
+        area: area,
+        name: pinName,
+        ts: instant,
+      );
+      await (update(habits)..where((h) => h.id.equals(habitId))).write(
+        HabitsCompanion(
+          placeId: Value(newPinId),
+          updatedAt: Value(encodeInstant(instant)),
+        ),
+      );
+      await attachedDatabase.placeDao.dropPinIfAny(row.placeId);
+      return newPinId;
+    });
+    if (pinId != null) attachedDatabase.notifyPlacesViewWrite();
+    return pinId;
+  }
+
   // --- reads ----------------------------------------------------------------
 
   /// The Habit with [habitId], or null when there is none.
@@ -1079,6 +1179,46 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
           continue;
         }
         result.add(HabitWithState(habit: habit, state: state));
+      }
+      return result;
+    });
+  }
+
+  /// The Place each Habit carries, keyed by Habit id (issue #1075).
+  ///
+  /// A Habit that carries none is absent from the map, and so is one whose
+  /// Place no longer exists or whose stored point is off the globe: a
+  /// reference the app cannot read never hides the Habit — it reads as "no
+  /// place".
+  ///
+  /// Re-emits on a write to `places` as well as to `habits`: renaming a Place
+  /// changes what every Habit carrying it resolves to.
+  Stream<Map<String, HabitPlace>> watchHabitPlaces() {
+    return customSelect(
+      'SELECT habits.id AS habit_id, places.id AS place_id, '
+      'places.kind AS place_kind, places.name AS place_name, '
+      'places.latitude_microdegrees AS latitude_microdegrees, '
+      'places.longitude_microdegrees AS longitude_microdegrees, '
+      'places.radius_meters AS radius_meters '
+      'FROM habits INNER JOIN places ON places.id = habits.place_id',
+      readsFrom: {habits, places},
+    ).watch().map((rows) {
+      final result = <String, HabitPlace>{};
+      for (final row in rows) {
+        final area = PlaceArea.fromStored(
+          latitudeMicrodegrees: row.read<int>('latitude_microdegrees'),
+          longitudeMicrodegrees: row.read<int>('longitude_microdegrees'),
+          radiusMeters: row.read<int>('radius_meters'),
+        );
+        // A stored point off the globe is not a place: the row is skipped, so
+        // the Habit reads as carrying none.
+        if (area == null) continue;
+        result[row.read<String>('habit_id')] = (
+          id: row.read<String>('place_id'),
+          area: area,
+          name: row.readNullable<String>('place_name'),
+          isPin: row.read<String>('place_kind') == pinPlaceKind,
+        );
       }
       return result;
     });
