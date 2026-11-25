@@ -16,6 +16,8 @@
 /// - Stream providers expose live lists of tasks for each ritual step.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -268,6 +270,16 @@ final plannedDayTimeProvider =
       ref.watch(currentTimeContextsProvider).value ?? const {};
   final windows = ref.watch(currentTimeWindowsProvider).value ?? const {};
   final dayEnd = plannedDayEnd(now: now, shutdownTime: shutdownTime);
+  // The day being planned ends at [dayEnd], and then it changes: at the
+  // Evening Shutdown time it runs on to the next midnight, and at midnight it
+  // becomes the next day's shutdown time. Nothing else moves that end, so one
+  // timer there is enough. It is armed again on every rebuild, which keeps it
+  // right when the clock or the shutdown time changes. A Dart Timer does not
+  // count time the process was suspended, so a late timer only delays the
+  // refresh; the rule is read from the clock on every rebuild, so it never
+  // shows wrong data.
+  final dayEndTimer = Timer(dayEnd.difference(now), ref.invalidateSelf);
+  ref.onDispose(dayEndTimer.cancel);
   final notInPlannedDay = <String>{};
   final opensLaterAt = <String, DateTime>{};
   for (final entry in contexts.entries) {

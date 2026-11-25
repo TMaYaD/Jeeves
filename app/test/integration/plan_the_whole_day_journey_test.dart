@@ -286,6 +286,38 @@ void main() {
     expect(await settledUpNextIds(), {'later', 'plain'});
   });
 
+  test('the day being planned is recomputed when it ends, so a time that '
+      'opens after the Evening Shutdown time joins Up Next', () async {
+    await _insertOutcome(db, 'late');
+    await _setTime(
+      db,
+      'late',
+      TimeContext.create(
+          days: _everyDay, startMinute: 19 * 60, endMinute: 21 * 60),
+    );
+    await _insertOutcome(db, 'plain');
+
+    // Half a second before the Evening Shutdown time, the day being planned
+    // ends at 18:00, so a time that opens at 19:00 does not open in it.
+    clock = () => DateTime(2026, 11, 23, 17, 59, 59, 500);
+    await awaitContextsLoaded();
+    container.read(plannedDayTimeProvider);
+
+    final before = container.read(plannedDayTimeProvider);
+    expect(before.notInPlannedDay, {'late'});
+    expect(before.opensLaterAt, isEmpty);
+
+    // The Evening Shutdown time passes: the day being planned runs on to the
+    // next midnight, and the time opens inside it.
+    clock = () => DateTime(2026, 11, 23, 18, 0, 0, 10);
+    final after = await eventually(
+      plannedDayTimeProvider,
+      (v) => v.opensLaterAt.containsKey('late'),
+    );
+    expect(after.opensLaterAt['late'], DateTime(2026, 11, 23, 19));
+    expect(after.notInPlannedDay, isEmpty);
+  });
+
   test('an Outcome with no time is in Up Next with no mark', () async {
     await _seedScenario(db);
     await awaitContextsLoaded();
