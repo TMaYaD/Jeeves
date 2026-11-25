@@ -18,6 +18,7 @@ library;
 import 'package:drift/drift.dart';
 
 import '../../models/place_area.dart';
+import '../../models/time_window_hours.dart';
 import '../../sync/collection_codecs.dart';
 import '../../utils/uuid.dart';
 import '../gtd_database.dart';
@@ -30,7 +31,7 @@ const String namedPlaceKind = 'named';
 /// The `kind` a one-time pin carries.
 const String pinPlaceKind = 'pin';
 
-@DriftAccessor(tables: [Places, Actions])
+@DriftAccessor(tables: [Places, Actions, TimeWindows])
 class PlaceDao extends DatabaseAccessor<GtdDatabase> with _$PlaceDaoMixin {
   PlaceDao(super.db);
 
@@ -203,6 +204,87 @@ class PlaceDao extends DatabaseAccessor<GtdDatabase> with _$PlaceDaoMixin {
         collection: placesCollection,
         entityId: placeId,
         fields: fields,
+      );
+      return true;
+    }).then((written) {
+      if (written) attachedDatabase.notifyPlacesViewWrite();
+      return written;
+    });
+  }
+
+  /// Sets the hours a named Place carries, and the zone they are read on
+  /// (issue #1074).
+  ///
+  /// A Place has **one** source of hours: the named time window [timeWindowId]
+  /// names, or hours of its own ([hours]). The two are exclusive, and this
+  /// write refuses both at once. Passing neither clears the Place's hours —
+  /// the window, the own hours and the zone all go.
+  ///
+  /// The zone travels with the hours: [timeZone] is the IANA name the hours
+  /// are read on, and null reads them on the phone's clock. A Place with no
+  /// hours has no zone either, so a zone is only stored alongside hours.
+  ///
+  /// Refused: a one-time pin (only a named Place carries hours), a Place that
+  /// does not exist, both kinds of hours at once, and a [timeWindowId] that
+  /// names no time window. A refused write stores nothing and authors no op.
+  ///
+  /// Returns whether the row was written. A write that changes nothing writes
+  /// nothing and authors no op.
+  Future<bool> setPlaceHours({
+    required String placeId,
+    String? timeWindowId,
+    TimeWindowHours? hours,
+    String? timeZone,
+    DateTime? now,
+  }) {
+    return attachedDatabase.capturing(() async {
+      final current = await (select(places)..where((p) => p.id.equals(placeId)))
+          .getSingleOrNull();
+      if (current == null) return false;
+      // Only a named Place carries hours: a pin belongs to the one Action that
+      // points at it and is never listed, so it has no hours of its own.
+      if (current.kind != namedPlaceKind) return false;
+      // One source of hours: a window, or hours of the Place's own.
+      if (timeWindowId != null && hours != null) return false;
+      if (timeWindowId != null) {
+        final window = await (select(timeWindows)
+              ..where((w) => w.id.equals(timeWindowId)))
+            .getSingleOrNull();
+        if (window == null) return false;
+      }
+
+      final newHoursText = hours?.encode();
+      // The three fields travel together: no hours means no zone.
+      final newTimeZone =
+          (timeWindowId == null && hours == null) ? null : timeZone;
+      // A write that changes nothing writes nothing: an op for a value that
+      // stands still would undo another device's change if it synced first.
+      if (current.timeWindowId == timeWindowId &&
+          current.hours == newHoursText &&
+          current.timeZone == newTimeZone) {
+        return false;
+      }
+
+      final ts = (now ?? DateTime.now()).toUtc();
+      await (update(places)..where((p) => p.id.equals(placeId))).write(
+        PlacesCompanion(
+          timeWindowId: Value(timeWindowId),
+          hours: Value(newHoursText),
+          timeZone: Value(newTimeZone),
+          updatedAt: Value(ts),
+        ),
+      );
+      // One op, all three fields: a peer never sees a window and own hours
+      // side by side.
+      attachedDatabase.opCapture.write(
+        collection: placesCollection,
+        entityId: placeId,
+        fields: {
+          'time_window_id': timeWindowId,
+          'hours': newHoursText,
+          'time_zone': newTimeZone,
+          'updated_at': encodeInstant(ts),
+        },
       );
       return true;
     }).then((written) {

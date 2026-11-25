@@ -82,16 +82,16 @@ void main() {
   setUpAll(configureSqliteForTests);
 
   group('schema version', () {
-    test('is 16 — fifteen onUpgrade steps behind the fresh baseline', () async {
+    test('is 17 — sixteen onUpgrade steps behind the fresh baseline', () async {
       final db = _openInMemory();
       addTearDown(db.close);
-      expect(db.schemaVersion, 16);
+      expect(db.schemaVersion, 17);
       // A fresh file runs onCreate at the current version, not the ladder.
       expect(
         await db.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        16,
+        17,
       );
     });
   });
@@ -302,7 +302,7 @@ void main() {
       await seed.customStatement('PRAGMA user_version = 1');
       await seed.close();
 
-      // Open 2: Drift sees user_version=1 and schemaVersion=16, so it runs the
+      // Open 2: Drift sees user_version=1 and schemaVersion=17, so it runs the
       // whole ladder — the v2 drop asserted here, and the v3 `tags` recreate the
       // group below owns.
       final upgraded = GtdDatabase(
@@ -314,7 +314,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        16,
+        17,
       );
       expect(await _columnNames(upgraded, 'todos'),
           isNot(contains('time_spent_minutes')),
@@ -441,7 +441,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        16,
+        17,
       );
       expect(await _uniqueConstraintIndexes(upgraded, 'tags'), isEmpty,
           reason: 'v3 drops UNIQUE (name, type)');
@@ -501,7 +501,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        16,
+        17,
       );
       expect(await _objects(upgraded, 'table'), contains('capture_attachments'));
       expect(await _rows(upgraded, 'captures'), hasLength(1));
@@ -606,7 +606,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        16,
+        17,
       );
       expect(await _columnNames(upgraded, 'todos'), isNot(contains('clarified')),
           reason: 'v5 drops the dead flag');
@@ -707,7 +707,7 @@ void main() {
           await upgraded.customSelect('PRAGMA user_version').getSingle().then(
                 (r) => r.read<int>('user_version'),
               ),
-          16,
+          17,
         );
         expect(await _rows(upgraded, 'todos'), todosBefore);
         expect(await _rows(upgraded, 'captures'), capturesBefore);
@@ -1277,7 +1277,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        16,
+        17,
       );
 
       for (final entry in habitTables.entries) {
@@ -1415,6 +1415,8 @@ void main() {
     /// out rather than derived from the declarations: the point of the
     /// assertion is that the *stored* shape is the agreed one, and a fixture
     /// generated from the same declaration would agree with any mistake in it.
+    // `places` also carries the three columns v17 adds, because the store
+    // this group upgrades is brought all the way up.
     const placeTables = <String, Set<String>>{
       'places': {
         'id',
@@ -1426,6 +1428,9 @@ void main() {
         'radius_meters',
         'created_at',
         'updated_at',
+        'time_window_id',
+        'hours',
+        'time_zone',
       },
       'time_windows': {
         'id',
@@ -1502,7 +1507,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        16,
+        17,
       );
 
       for (final entry in placeTables.entries) {
@@ -1598,7 +1603,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        16,
+        17,
       );
       expect(await _columnNames(upgraded, 'habit_time_logs'),
           {'id', 'user_id', 'habit_id', 'started_at', 'ended_at'});
@@ -1624,6 +1629,102 @@ void main() {
             .read<String>('id'),
         'h1',
       );
+    });
+  });
+
+  group('v17 onUpgrade adds the hours a named place carries', () {
+    /// The three columns issue #1074 adds to `places`, with their exact
+    /// names. Written out rather than derived from the declarations: the
+    /// point of the assertion is that the *stored* shape is the agreed one.
+    const placeHoursColumns = ['time_window_id', 'hours', 'time_zone'];
+
+    test('adds the three columns and keeps every existing place', () async {
+      final raw = sqlite3.openInMemory();
+      addTearDown(raw.close);
+
+      final seed = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      var seedClosed = false;
+      Future<void> closeSeed() async {
+        if (seedClosed) return;
+        seedClosed = true;
+        await seed.close();
+      }
+
+      addTearDown(closeSeed);
+
+      // A place that was there before the columns existed.
+      await seed.into(seed.places).insert(PlacesCompanion(
+            id: const Value('p1'),
+            userId: const Value('u1'),
+            kind: const Value('named'),
+            name: const Value('Hardware store'),
+            latitudeMicrodegrees: const Value(52370200),
+            longitudeMicrodegrees: const Value(4895200),
+            radiusMeters: const Value(150),
+            createdAt: Value(DateTime.utc(2026, 11, 24, 9)),
+          ));
+
+      // Take the three columns away again, so the store is the shape a v16
+      // build left behind: the rows stay, the columns go.
+      for (final column in placeHoursColumns) {
+        await seed.customStatement('ALTER TABLE places DROP COLUMN $column');
+      }
+      expect(await _columnNames(seed, 'places'),
+          isNot(anyElement(isIn(placeHoursColumns))),
+          reason: 'the fixture is only a v16 store without the columns');
+      await seed.customStatement('PRAGMA user_version = 16');
+      await closeSeed();
+
+      final upgraded = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      addTearDown(upgraded.close);
+
+      expect(
+        await upgraded.customSelect('PRAGMA user_version').getSingle().then(
+              (r) => r.read<int>('user_version'),
+            ),
+        17,
+      );
+
+      expect(await _columnNames(upgraded, 'places'),
+          containsAll(placeHoursColumns));
+
+      // The place is still there, and it reads as carrying no hours.
+      final places = await upgraded.select(upgraded.places).get();
+      expect(places, hasLength(1));
+      expect(places.single.id, 'p1');
+      expect(places.single.name, 'Hardware store');
+      expect(places.single.timeWindowId, isNull,
+          reason: 'an existing place is at no window');
+      expect(places.single.hours, isNull,
+          reason: 'an existing place carries no hours of its own');
+      expect(places.single.timeZone, isNull,
+          reason: 'an existing place carries no zone');
+    });
+
+    test('a store that already carries the columns upgrades without failing',
+        () async {
+      final raw = sqlite3.openInMemory();
+      addTearDown(raw.close);
+
+      final seed = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      await seed.customStatement('SELECT 1');
+      await seed.customStatement('PRAGMA user_version = 16');
+      await seed.close();
+
+      final upgraded = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      addTearDown(upgraded.close);
+
+      expect(await _objects(upgraded, 'table'), contains('places'));
+      expect(await _columnNames(upgraded, 'places'),
+          containsAll(placeHoursColumns));
     });
   });
 }
