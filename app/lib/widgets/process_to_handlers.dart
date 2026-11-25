@@ -778,7 +778,9 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
   ///
   /// The dialog's phrase wins over the card's title mirror, but only the
   /// *phrase*: the effort attributes the card collected ride through, which a
-  /// bare `actionText ?? d.action?.text` would drop.
+  /// bare `actionText ?? d.action?.text` would drop. The Place rides too —
+  /// `copyWith` keeps it, so the Action the clarify writes carries the Place
+  /// the card collected.
   ActionDraft? _mergedAction(ClarifyDraft d, String? actionText) {
     if (actionText == null || actionText.isEmpty) return d.action;
     return d.action?.copyWith(text: actionText) ??
