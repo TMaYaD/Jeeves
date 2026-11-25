@@ -2124,6 +2124,91 @@ void main() {
           expect(places, isEmpty);
         });
       });
+
+      group('a Habit created with a Place', () {
+        test('a named Place is carried by the Habit from the start', () async {
+          final placeId = await namedPlace('Hardware store');
+          capture.clear();
+
+          final habitId = await db.habitDao.createHabit(
+            userId: _userId,
+            title: 'Read a book',
+            today: '2026-11-18',
+            now: _now,
+            firstCommitment: _everyDay,
+            placeId: placeId,
+          );
+
+          expect(await placeIdOf(habitId), placeId);
+          // The Habit row is device-local: it authors no op, and the named
+          // Place was written before this Habit was.
+          expect(capture.recorded, isEmpty);
+        });
+
+        test('a pin is a Place row of its own, written with the Habit',
+            () async {
+          capture.clear();
+
+          final habitId = await db.habitDao.createHabit(
+            userId: _userId,
+            title: 'Read a book',
+            today: '2026-11-18',
+            now: _now,
+            firstCommitment: _everyDay,
+            pinArea: area,
+            pinName: '  Corner  ',
+          );
+
+          final pins = await (db.select(db.places)
+                ..where((p) => p.kind.equals(pinPlaceKind)))
+              .get();
+          expect(pins, hasLength(1));
+          expect(pins.single.name, 'Corner');
+          expect(pins.single.userId, _userId);
+          expect(await placeIdOf(habitId), pins.single.id);
+          // The pin is a `places` row, so it syncs and the op says so. The
+          // Habit row itself authors none.
+          expect(capture.recorded, hasLength(1));
+          expect(capture.recorded.single.collection, placesCollection);
+          expect(capture.recorded.single.entityId, pins.single.id);
+        });
+
+        test('the pin is written in the Habit\'s transaction, so a rollback '
+            'takes it with it', () async {
+          await expectLater(
+            db.capturing(() async {
+              await db.habitDao.createHabit(
+                userId: _userId,
+                title: 'Read a book',
+                today: '2026-11-18',
+                now: _now,
+                firstCommitment: _everyDay,
+                pinArea: area,
+              );
+              throw StateError('the write fails');
+            }),
+            throwsStateError,
+          );
+
+          expect(await db.select(db.habits).get(), isEmpty);
+          expect(await db.select(db.places).get(), isEmpty);
+        });
+
+        test('a Place that cannot be written leaves the Habit with none',
+            () async {
+          final habitId = await db.habitDao.createHabit(
+            userId: _userId,
+            title: 'Read a book',
+            today: '2026-11-18',
+            now: _now,
+            firstCommitment: _everyDay,
+            placeId: 'no-such-place',
+          );
+
+          expect(await placeIdOf(habitId), isNull);
+          expect(await db.select(db.places).get(), isEmpty);
+        });
+      });
     });
   });
 }

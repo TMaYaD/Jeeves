@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../database/daos/habit_dao.dart';
 import '../models/habit_commitment.dart';
 import '../models/place_area.dart';
+import '../widgets/place_pin_sheet.dart' show PinChoice;
 import 'auth_provider.dart';
 import 'clock_provider.dart';
 import 'database_provider.dart';
@@ -25,6 +26,8 @@ class HabitDraftValues {
     required this.anchorHabitId,
     required this.areaTagId,
     required this.labelTagIds,
+    this.placeId,
+    this.pin,
   });
 
   final String title;
@@ -38,6 +41,12 @@ class HabitDraftValues {
   final String? anchorHabitId;
   final String? areaTagId;
   final List<String> labelTagIds;
+
+  /// The named Place the new Habit will carry, or null for none.
+  final String? placeId;
+
+  /// The one-time pin the new Habit will carry, written with it.
+  final PinChoice? pin;
 }
 
 /// The Habit screens' writes. Each reads the user and the clock when called.
@@ -67,6 +76,9 @@ class HabitActions {
         today: today,
         now: now,
         firstCommitment: draft.commitment,
+        placeId: draft.placeId,
+        pinArea: draft.pin?.area,
+        pinName: draft.pin?.name,
       );
       if (notes.isNotEmpty ||
           draft.energyLevel != null ||

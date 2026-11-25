@@ -13,8 +13,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../database/daos/habit_dao.dart';
+import '../../database/daos/place_dao.dart' show NamedPlaceWithUse;
 import '../../database/gtd_database.dart' show Habit, Tag;
-import '../../models/action_place_and_time_window.dart';
 import '../../models/habit_commitment.dart';
 import '../../models/place_choice.dart';
 import '../../providers/clock_provider.dart';
@@ -24,8 +24,10 @@ import '../../providers/habits_provider.dart';
 import '../../providers/location_permission_flow.dart';
 import '../../providers/location_source_provider.dart';
 import '../../providers/place_gate_provider.dart';
+import '../../providers/places_provider.dart';
 import '../../widgets/outcome_attribute_editors.dart';
 import '../../widgets/place_picker_sheet.dart';
+import '../../widgets/place_pin_sheet.dart' show PinChoice;
 import '../../widgets/project_picker.dart';
 import 'habit_anchor_candidates.dart';
 import 'habit_copy.dart';
@@ -65,6 +67,13 @@ class _Draft {
   HabitCommitmentDraft commitment = defaultNewHabitCommitment;
   HabitAnchorChoice anchor = const HabitAnchorChoice(HabitAnchorKind.none);
   Tag? area;
+
+  /// The Place the new Habit will carry: the id of a named Place, or a
+  /// one-time pin to write with the Habit.
+  ///
+  /// Only one of the two is ever set: a Habit carries at most one Place.
+  String? placeId;
+  PinChoice? pin;
 }
 
 /// The Habit's detail. [habitId] null is a new draft.
@@ -243,6 +252,8 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
           anchorHabitId: anchor.anchorHabitId,
           areaTagId: _draft.area?.id,
           labelTagIds: [for (final t in _draftLabels) t.id],
+          placeId: _draft.placeId,
+          pin: _draft.pin,
         ),
       );
     } catch (_) {
@@ -287,6 +298,10 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
   Widget _buildDraft(BuildContext context) {
     final labels = ref.watch(draftHabitLabelsProvider);
     _draftLabels = labels;
+    // The named Places, so the Place row of a draft can say which Place the
+    // user chose.
+    final namedPlaces =
+        ref.watch(namedPlacesWithUseCountProvider).value ?? const [];
     // A new Habit has no anchors yet, so no loop is possible: every active
     // Habit may be followed or preceded.
     final rows = ref.watch(habitListProvider).value ?? const [];
@@ -297,6 +312,7 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
       anchor: _draft.anchor,
       area: _draft.area,
       labels: labels,
+      placeValue: _draftPlaceValue(namedPlaces),
       energy: _draft.energyLevel,
       estimate: _draft.estimateMinutes,
       state: HabitState.active,
@@ -367,7 +383,7 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
         for (final t in tags)
           if (habitLabelTagTypes.contains(t.type)) t,
       ],
-      place: place,
+      placeValue: place == null ? 'None' : placeDisplayName(place),
       energy: habit.energyLevel,
       estimate: habit.timeEstimateMinutes,
       state: state,
@@ -403,7 +419,7 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
     required HabitAnchorChoice anchor,
     required Tag? area,
     required List<Tag> labels,
-    HabitPlace? place,
+    required String placeValue,
     required String? energy,
     required int? estimate,
     required HabitState state,
@@ -535,13 +551,12 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
           value: labels.isEmpty ? 'None' : labels.map((t) => t.name).join(', '),
           onTap: () => _editLabels(habit),
         ),
-        if (habit != null)
-          _FieldRow(
-            rowKey: const Key('habit_row_place'),
-            label: 'Place',
-            value: place == null ? 'None' : placeDisplayName(place),
-            onTap: () => _editPlace(habit),
-          ),
+        _FieldRow(
+          rowKey: const Key('habit_row_place'),
+          label: 'Place',
+          value: placeValue,
+          onTap: () => _editPlace(habit),
+        ),
         _FieldRow(
           rowKey: const Key('habit_row_energy'),
           label: 'Energy',
@@ -680,16 +695,40 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
 
   /// Opens the picker for the Habit's Place (issue #1075).
   ///
-  /// Only a saved Habit carries a Place here: a new Habit has none yet.
+  /// A new Habit holds the choice until it is written: the pin it takes is
+  /// written with the Habit, so backing out of the draft leaves no pin row
+  /// behind.
   Future<void> _editPlace(Habit? habit) async {
-    if (habit == null) return;
-    final canClear = ref.read(habitPlacesProvider).value?[habit.id] != null;
+    final canClear = habit == null
+        ? (_draft.placeId != null || _draft.pin != null)
+        : ref.read(habitPlacesProvider).value?[habit.id] != null;
     final choice = await showPlacePickerSheet(
       context,
       canClear: canClear,
       pinSubtitle: 'For this Habit alone',
+      ownerName: 'Habit',
     );
     if (choice == null || !mounted) return;
+    if (habit == null) {
+      setState(() {
+        switch (choice) {
+          case NamedPlaceDraft(:final placeId):
+            _draft.placeId = placeId;
+            _draft.pin = null;
+          case PinDraft(:final area, :final name):
+            _draft.pin = PinChoice(area: area, name: name);
+            _draft.placeId = null;
+          case ClearPlaceChoice():
+            _draft.placeId = null;
+            _draft.pin = null;
+        }
+      });
+      if (choice is PinDraft) {
+        await askForLocationAfterFirstSave(
+            context, ref.read(locationSourceProvider));
+      }
+      return;
+    }
     switch (choice) {
       case NamedPlaceDraft(:final placeId):
         await _habitActions.setNamedPlace(habit.id, placeId);
@@ -701,6 +740,23 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
       case ClearPlaceChoice():
         await _habitActions.clearPlace(habit.id);
     }
+  }
+
+  /// What the Place row reads for a new Habit: the chosen Place's name, or
+  /// "None".
+  String _draftPlaceValue(List<NamedPlaceWithUse> namedPlaces) {
+    final pin = _draft.pin;
+    if (pin != null) {
+      return placeDisplayName(
+        (id: '', area: pin.area, name: pin.name, isPin: true),
+      );
+    }
+    final placeId = _draft.placeId;
+    if (placeId == null) return 'None';
+    for (final place in namedPlaces) {
+      if (place.id == placeId) return place.name;
+    }
+    return 'None';
   }
 
   Future<void> _setEnergy(Habit? habit, String? level) async {

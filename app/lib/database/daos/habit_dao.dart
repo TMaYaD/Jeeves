@@ -270,6 +270,17 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
   /// no rule is not a Habit yet — so they are written together or not at all.
   /// The commitment is chosen on [today] and written at [now].
   ///
+  /// The Habit may carry a Place (issue #1075). [placeId] names one of the
+  /// user's named places; [pinArea] with [pinName] is a one-time pin, written
+  /// as a `places` row in the same transaction, so the Habit and the pin it
+  /// points at commit or roll back together. A pin is the only Place written
+  /// here: a Habit created with a pin has no named place, so [placeId] is
+  /// ignored when [pinArea] is given.
+  ///
+  /// A Place that cannot be written — a named place that is gone, a pin name
+  /// that is too long — is left out: the Habit is created without a Place
+  /// rather than not created at all.
+  ///
   /// Throws an [ArgumentError] for a name that is empty or longer than 500
   /// characters, and for a first commitment whose rule and target do not go
   /// together.
@@ -281,6 +292,9 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
     required String today,
     required DateTime now,
     required HabitCommitmentDraft firstCommitment,
+    String? placeId,
+    PlaceArea? pinArea,
+    String? pinName,
   }) async {
     final name = _validatedTitle(title);
     final instant = _storedInstant(now);
@@ -291,17 +305,68 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
       chosenOn: today,
       createdAt: instant,
     );
+    var wrotePin = false;
     await attachedDatabase.capturing(() async {
+      var place = await _namedPlaceId(placeId);
+      if (pinArea != null) {
+        final pinId = await _insertPin(
+          userId: userId,
+          area: pinArea,
+          name: pinName,
+          instant: instant,
+        );
+        if (pinId != null) {
+          place = pinId;
+          wrotePin = true;
+        }
+      }
       await into(habits).insert(HabitsCompanion.insert(
             id: Value(habitId),
             userId: userId,
             title: name,
             createdAt: encodeInstant(instant)!,
+            placeId: Value(place),
           ));
       await into(habitCommitments)
           .insert(_commitmentCompanion(commitment, userId));
     });
+    if (wrotePin) attachedDatabase.notifyPlacesViewWrite();
     return habitId;
+  }
+
+  /// The id of the named Place [placeId] names, or null when there is no such
+  /// named Place.
+  ///
+  /// A Place that is gone, or that is a one-time pin, is not a place a Habit
+  /// may carry: it reads as no place rather than as a reference to a pin.
+  Future<String?> _namedPlaceId(String? placeId) async {
+    if (placeId == null) return null;
+    final place = await (select(places)..where((p) => p.id.equals(placeId)))
+        .getSingleOrNull();
+    if (place == null || place.kind != namedPlaceKind) return null;
+    return place.id;
+  }
+
+  /// The one-time pin to write with a Habit, or null when the pin cannot be
+  /// written — a name that is too long is refused, as [setPin] refuses it.
+  ///
+  /// The pin is written in the caller's transaction, so it and the Habit that
+  /// points at it commit or roll back together.
+  Future<String?> _insertPin({
+    required String userId,
+    required PlaceArea area,
+    required String? name,
+    required DateTime instant,
+  }) async {
+    final trimmed = name?.trim();
+    final pinName = (trimmed == null || trimmed.isEmpty) ? null : trimmed;
+    if (pinName != null && pinName.length > Places.maxNameLength) return null;
+    return attachedDatabase.placeDao.insertPin(
+      userId: userId,
+      area: area,
+      name: pinName,
+      ts: instant,
+    );
   }
 
   /// Edits a Habit's name, notes, effort and estimate.
