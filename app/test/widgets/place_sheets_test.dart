@@ -18,9 +18,13 @@ import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/database/daos/place_dao.dart' show NamedPlaceWithUse;
 import 'package:jeeves/models/place_area.dart';
 import 'package:jeeves/models/place_choice.dart';
+import 'package:jeeves/models/time_window_hours.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/location_permission_flow.dart';
+import 'package:jeeves/providers/phone_time_zone_provider.dart';
+import 'package:jeeves/providers/place_gate_provider.dart';
 import 'package:jeeves/providers/places_provider.dart';
+import 'package:jeeves/providers/time_window_provider.dart';
 import 'package:jeeves/widgets/place_editor_sheet.dart';
 import 'package:jeeves/widgets/place_pin_sheet.dart';
 import 'package:jeeves/widgets/place_picker_sheet.dart';
@@ -71,7 +75,15 @@ void main() {
 
     await tester.pumpWidget(
       ProviderScope(
-        overrides: [databaseProvider.overrideWithValue(db)],
+        overrides: [
+          databaseProvider.overrideWithValue(db),
+          // The editor reads the user's time windows and the phone's own
+          // zone. A phone in a test has no timezone plugin, and a widget
+          // test has no store to read windows from.
+          timeWindowsProvider.overrideWith((_) => Stream.value(const [])),
+          phoneTimeZoneNameProvider
+              .overrideWith((ref) async => 'Europe/Amsterdam'),
+        ],
         child: const MaterialApp(
           home: Scaffold(body: PlaceEditorSheet()),
         ),
@@ -80,6 +92,64 @@ void main() {
     await tester.pump();
 
     expect(find.byKey(const Key('place_editor_name')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('the editor lays out at 320 dp with the hours section',
+      (tester) async {
+    tester.view.physicalSize = const Size(320, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final hours = TimeWindowHours.create({
+      1: (startMinute: 11 * 60, endMinute: 20 * 60),
+      2: (startMinute: 11 * 60, endMinute: 20 * 60),
+      3: (startMinute: 11 * 60, endMinute: 20 * 60),
+      4: (startMinute: 11 * 60, endMinute: 20 * 60),
+      5: (startMinute: 11 * 60, endMinute: 20 * 60),
+    })!;
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          databaseProvider.overrideWithValue(db),
+          // The editor reads the user's time windows and the phone's own
+          // zone. A phone in a test has no timezone plugin, and a widget
+          // test has no store to read windows from.
+          timeWindowsProvider.overrideWith((_) => Stream.value(const [])),
+          phoneTimeZoneNameProvider
+              .overrideWith((ref) async => 'Europe/Amsterdam'),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: PlaceEditorSheet(
+              place: (
+                id: 'p1',
+                name: 'Hardware store',
+                area: PlaceArea.create(
+                  latitudeDegrees: 52.3702,
+                  longitudeDegrees: 4.8952,
+                  radiusMeters: 150,
+                )!,
+                useCount: 0,
+                hours: (
+                  timeWindowId: null,
+                  ownHoursText: hours.encode(),
+                  timeZone: 'Europe/Berlin',
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // The hours and the zone are on show, and they fit.
+    expect(find.byKey(const Key('place_hours_own_label')), findsOneWidget);
+    expect(find.byKey(const Key('place_hours_zone_row')), findsOneWidget);
+    expect(find.text('Europe/Berlin'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

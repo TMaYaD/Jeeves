@@ -16,9 +16,11 @@ import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/time_window_hours.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/location_source_provider.dart';
 import 'package:jeeves/providers/nudge_clock_provider.dart';
+import 'package:jeeves/providers/phone_time_zone_provider.dart';
 import 'package:jeeves/screens/place_management/place_management_screen.dart';
 import 'package:jeeves/screens/settings/settings_screen.dart';
 import 'package:jeeves/services/location_source.dart';
@@ -82,6 +84,8 @@ void main() {
       addressGeocoderProvider.overrideWithValue(geocoder),
       notificationServiceProvider
           .overrideWithValue(StubNotificationService()),
+      // The phone's own zone: the phone in a test has no timezone plugin.
+      phoneTimeZoneNameProvider.overrideWith((ref) async => 'Europe/Amsterdam'),
     ]);
     addTearDown(container.dispose);
     await tester.pumpWidget(
@@ -125,6 +129,72 @@ void main() {
         find.byKey(const Key('place_point_coordinates')), coordinates);
     await _settle(tester);
     await tester.tap(find.byKey(const Key('place_editor_save')));
+    await _settle(tester);
+  }
+
+  /// Picks [hour]:[minute] in the time picker that is open, by typing them
+  /// in rather than by turning the dial.
+  ///
+  /// The picker reads a 12-hour clock: the hour is typed as the user reads
+  /// it, and the period is the one the picker opened on.
+  Future<void> pickTime(
+    WidgetTester tester,
+    String hour,
+    String minute,
+  ) async {
+    await tester.tap(find.byIcon(Icons.keyboard_outlined));
+    await tester.pumpAndSettle();
+    final fields = find.descendant(
+      of: find.byType(TimePickerDialog),
+      matching: find.byType(TextFormField),
+    );
+    await tester.enterText(fields.at(0), hour);
+    await tester.enterText(fields.at(1), minute);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+  }
+
+  /// Makes a named Place, and answers its id.
+  Future<String> makePlace(String name) async {
+    final id = await db.placeDao.createNamedPlace(
+      name: name,
+      latitudeDegrees: 52.3702,
+      longitudeDegrees: 4.8952,
+      radiusMeters: 150,
+      userId: 'local',
+    );
+    expect(id, isNotNull);
+    return id!;
+  }
+
+  /// Taps a control in the editor, bringing it into view first: the sheet is
+  /// taller than the test window.
+  Future<void> tapInEditor(WidgetTester tester, Finder finder) async {
+    await tester.ensureVisible(finder);
+    await tester.pumpAndSettle();
+    await tester.tap(finder);
+    await _settle(tester);
+  }
+
+  /// Gives the Place hours of its own: Monday to Friday, 11:00 to 20:00.
+  Future<void> setOwnHours(WidgetTester tester) async {
+    await tapInEditor(tester, find.byKey(const Key('place_hours_choice_own')));
+    // The hours sheet opens on its own: there are none to edit yet.
+    for (var day = 1; day <= 5; day++) {
+      await tester.tap(find.byKey(Key('time_window_day_$day')));
+      await tester.pumpAndSettle();
+    }
+    // 11:00 in the morning.
+    await tester.tap(find.byKey(const Key('time_window_start')));
+    await tester.pumpAndSettle();
+    await pickTime(tester, '11', '00');
+    // 20:00 in the evening: the picker opened on 17:00, so the period is
+    // already the evening's.
+    await tester.tap(find.byKey(const Key('time_window_end')));
+    await tester.pumpAndSettle();
+    await pickTime(tester, '8', '00');
+    await tester.tap(find.byKey(const Key('time_window_save')));
     await _settle(tester);
   }
 
@@ -436,5 +506,124 @@ void main() {
     final resolved =
         await _real(tester, () => db.actionDao.placeAndTimeWindowFor(actionId));
     expect(resolved.place, isNull);
+  });
+
+  testWidgets('a Place carries hours of its own, and Manage Places says so',
+      (tester) async {
+    // The location was already allowed on this phone, so saving a Place asks
+    // nothing.
+    location.permissionState = LocationPermission.whileInUse;
+    final placeId = await _real(tester, () => makePlace('Hardware store'));
+
+    await openManagePlaces(tester);
+    expect(find.text('150 m'), findsOneWidget);
+
+    await tester.tap(find.byKey(Key('place_management_row_$placeId')));
+    await _settle(tester);
+    await setOwnHours(tester);
+    await tapInEditor(tester, find.byKey(const Key('place_editor_save')));
+
+    // The hours are the Place's own, and no time window was made for them.
+    final place = await _real(tester, () => db.select(db.places).getSingle());
+    expect(place.timeWindowId, isNull);
+    expect(place.hours, isNotNull);
+    final windows =
+        await _real(tester, () => db.select(db.timeWindows).get());
+    expect(windows, isEmpty);
+  });
+
+  testWidgets('a Place takes the hours of a named time window',
+      (tester) async {
+    location.permissionState = LocationPermission.whileInUse;
+    late String placeId;
+    late String windowId;
+    await _real(tester, () async {
+      placeId = await makePlace('Hardware store');
+      windowId = (await db.timeWindowDao.createTimeWindow(
+        name: 'Store hours',
+        hours: {
+          1: (startMinute: 9 * 60, endMinute: 17 * 60),
+        },
+        userId: 'local',
+      ))!;
+    });
+
+    await openManagePlaces(tester);
+    await tester.tap(find.byKey(Key('place_management_row_$placeId')));
+    await _settle(tester);
+
+    await tapInEditor(
+        tester, find.byKey(const Key('place_hours_choice_window')));
+    await tapInEditor(
+        tester, find.byKey(const Key('place_hours_window_picker')));
+    await tester.tap(find.text('Store hours').last);
+    await _settle(tester);
+    await tapInEditor(tester, find.byKey(const Key('place_editor_save')));
+
+    final place = await _real(tester, () => db.select(db.places).getSingle());
+    expect(place.timeWindowId, windowId);
+  });
+
+  testWidgets('the zone the Place carries is named by the user and kept',
+      (tester) async {
+    location.permissionState = LocationPermission.whileInUse;
+    late String placeId;
+    await _real(tester, () async {
+      placeId = await makePlace('Hardware store');
+      await db.placeDao.setPlaceHours(
+        placeId: placeId,
+        hours: TimeWindowHours.create({
+          1: (startMinute: 11 * 60, endMinute: 20 * 60),
+          2: (startMinute: 11 * 60, endMinute: 20 * 60),
+          3: (startMinute: 11 * 60, endMinute: 20 * 60),
+          4: (startMinute: 11 * 60, endMinute: 20 * 60),
+          5: (startMinute: 11 * 60, endMinute: 20 * 60),
+        }),
+        timeZone: 'Europe/Amsterdam',
+      );
+    });
+
+    await openManagePlaces(tester);
+    await tester.tap(find.byKey(Key('place_management_row_$placeId')));
+    await _settle(tester);
+    expect(find.text('Europe/Amsterdam'), findsOneWidget);
+
+    await tapInEditor(tester, find.byKey(const Key('place_hours_zone_row')));
+    await tester.enterText(find.byKey(const Key('time_zone_search')), 'Berlin');
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('time_zone_option_Europe/Berlin')));
+    await _settle(tester);
+    await tapInEditor(tester, find.byKey(const Key('place_editor_save')));
+
+    final place = await _real(tester, () => db.select(db.places).getSingle());
+    expect(place.timeZone, 'Europe/Berlin');
+  });
+
+  testWidgets('"No hours" takes the hours off the Place', (tester) async {
+    location.permissionState = LocationPermission.whileInUse;
+    late String placeId;
+    await _real(tester, () async {
+      placeId = await makePlace('Hardware store');
+      await db.placeDao.setPlaceHours(
+        placeId: placeId,
+        hours: TimeWindowHours.create({
+          1: (startMinute: 11 * 60, endMinute: 20 * 60),
+        }),
+        timeZone: 'Europe/Amsterdam',
+      );
+    });
+
+    await openManagePlaces(tester);
+    await tester.tap(find.byKey(Key('place_management_row_$placeId')));
+    await _settle(tester);
+    await tapInEditor(tester, find.byKey(const Key('place_hours_choice_none')));
+    await tapInEditor(tester, find.byKey(const Key('place_editor_save')));
+
+    // The row says no hours, and the Place carries none.
+    expect(find.text('150 m'), findsOneWidget);
+    final place = await _real(tester, () => db.select(db.places).getSingle());
+    expect(place.timeWindowId, isNull);
+    expect(place.hours, isNull);
+    expect(place.timeZone, isNull);
   });
 }

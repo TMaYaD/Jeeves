@@ -353,6 +353,9 @@ class PlaceDao extends DatabaseAccessor<GtdDatabase> with _$PlaceDaoMixin {
       'places.latitude_microdegrees AS latitude_microdegrees, '
       'places.longitude_microdegrees AS longitude_microdegrees, '
       'places.radius_meters AS radius_meters, '
+      'places.time_window_id AS time_window_id, '
+      'places.hours AS own_hours_text, '
+      'places.time_zone AS time_zone, '
       'COUNT(t.id) AS use_count '
       'FROM places '
       'LEFT JOIN actions a ON a.place_id = places.id AND a.role = \'current\' '
@@ -385,6 +388,11 @@ class PlaceDao extends DatabaseAccessor<GtdDatabase> with _$PlaceDaoMixin {
           name: row.read<String>('name'),
           area: area,
           useCount: row.read<int>('use_count'),
+          hours: (
+            timeWindowId: row.read<String?>('time_window_id'),
+            ownHoursText: row.read<String?>('own_hours_text'),
+            timeZone: row.read<String?>('time_zone'),
+          ),
         ));
       }
       return result;
@@ -408,4 +416,17 @@ typedef NamedPlaceWithUse = ({
   String name,
   PlaceArea area,
   int useCount,
+  /// The hours the Place carries, as stored.
+  StoredPlaceHours hours,
+});
+
+/// The hours a named Place carries, as stored (issue #1074).
+///
+/// A Place has **one** source of hours: the window it names, or hours of its
+/// own. [timeZone] is the IANA name they are read on; null reads them on the
+/// phone's clock.
+typedef StoredPlaceHours = ({
+  String? timeWindowId,
+  String? ownHoursText,
+  String? timeZone,
 });

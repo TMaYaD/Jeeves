@@ -35,6 +35,23 @@ tz.Location? placeTimeZoneLocation(String name) {
   }
 }
 
+/// The names of every zone the tz database knows, in name order.
+///
+/// The picker for a place's zone shows this list. The database is loaded on
+/// first use, so the list is there without `NotificationService` having run.
+/// A database that will not load leaves the list empty: there is no zone to
+/// offer, and the hours are then read on the phone's clock.
+List<String> placeTimeZoneNames() {
+  if (!tz.timeZoneDatabase.isInitialized) {
+    try {
+      tz_data.initializeTimeZones();
+    } on tz.TimeZoneInitException {
+      return const [];
+    }
+  }
+  return tz.timeZoneDatabase.locations.keys.toList()..sort();
+}
+
 /// The city part of an IANA zone name: `America/New_York` reads as
 /// `New York`.
 ///

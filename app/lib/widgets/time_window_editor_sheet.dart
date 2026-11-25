@@ -28,11 +28,38 @@ Future<String?> showTimeWindowEditorSheet(
   );
 }
 
+/// Opens the editor for hours only — no name, no delete — and answers the
+/// hours the user set, or null when the user backed out.
+///
+/// The hours are **returned, not written**: a place carries hours of its own
+/// (issue #1074), and no time window is created for them.
+Future<TimeWindowHours?> showTimeWindowHoursSheet(
+  BuildContext context, {
+  TimeWindowHours? initial,
+}) {
+  return showModalBottomSheet<TimeWindowHours>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.white,
+    builder: (ctx) => _TimeWindowEditorSheet(
+      window: null,
+      useCount: 0,
+      hoursOnly: true,
+      initialHours: initial,
+    ),
+  );
+}
+
 /// How the hours are entered: the same on every chosen day, or day by day.
 enum _HoursMode { same, different }
 
 class _TimeWindowEditorSheet extends ConsumerStatefulWidget {
-  const _TimeWindowEditorSheet({required this.window, required this.useCount});
+  const _TimeWindowEditorSheet({
+    required this.window,
+    required this.useCount,
+    this.hoursOnly = false,
+    this.initialHours,
+  });
 
   /// The window being edited, or null for a new one.
   final TimeWindow? window;
@@ -40,6 +67,15 @@ class _TimeWindowEditorSheet extends ConsumerStatefulWidget {
   /// How many current Actions of active Outcomes use the window — the number
   /// a delete would take away.
   final int useCount;
+
+  /// Whether the sheet edits hours alone.
+  ///
+  /// In hours-only mode there is no name and no delete, and Save answers the
+  /// hours instead of writing a window.
+  final bool hoursOnly;
+
+  /// The hours the sheet opens on, in hours-only mode.
+  final TimeWindowHours? initialHours;
 
   @override
   ConsumerState<_TimeWindowEditorSheet> createState() =>
@@ -66,7 +102,11 @@ class _TimeWindowEditorSheetState extends ConsumerState<_TimeWindowEditorSheet> 
     super.initState();
     final window = widget.window;
     _name = TextEditingController(text: window?.name ?? '');
-    final parsed = window == null ? null : TimeWindowHours.tryParse(window.hours);
+    // In hours-only mode the sheet opens on the hours it was given: a place's
+    // own hours, not a window's.
+    final parsed = window == null
+        ? widget.initialHours
+        : TimeWindowHours.tryParse(window.hours);
     final days = parsed?.days ?? const <int>[];
     for (final day in days) {
       _hours[day] = parsed!.hoursForDay(day)!;
@@ -100,6 +140,10 @@ class _TimeWindowEditorSheetState extends ConsumerState<_TimeWindowEditorSheet> 
 
   /// The value the sheet would save, or null when it is not yet acceptable.
   TimeWindowHours? get _value {
+    if (widget.hoursOnly) {
+      // Hours alone need no name: a place's own hours are not a window.
+      return TimeWindowHours.create(Map.of(_hours));
+    }
     final name = _name.text.trim();
     if (name.isEmpty || name.length > TimeWindows.maxNameLength) return null;
     return TimeWindowHours.create(Map.of(_hours));
@@ -198,6 +242,16 @@ class _TimeWindowEditorSheetState extends ConsumerState<_TimeWindowEditorSheet> 
     if (_saving) return;
     final value = _value;
     if (value == null) return;
+    // Hours alone are not a window: the hours go back to the caller, which
+    // keeps them on the place they belong to.
+    if (widget.hoursOnly) {
+      // The write is running as far as the button is concerned: a second tap
+      // must not pop the sheet underneath this one.
+      setState(() => _saving = true);
+      if (!mounted) return;
+      Navigator.pop(context, value);
+      return;
+    }
     _saving = true;
     if (mounted) setState(() {});
     final db = ref.read(databaseProvider);
@@ -282,17 +336,23 @@ class _TimeWindowEditorSheetState extends ConsumerState<_TimeWindowEditorSheet> 
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                widget.window == null ? 'Time window' : 'Edit time window',
+                widget.hoursOnly
+                    ? 'Hours'
+                    : widget.window == null
+                        ? 'Time window'
+                        : 'Edit time window',
                 style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 16),
-              TextField(
-                key: const Key('time_window_name'),
-                controller: _name,
-                decoration: const InputDecoration(labelText: 'Name'),
-                onChanged: (_) => setState(() {}),
-              ),
-              const SizedBox(height: 16),
+              if (!widget.hoursOnly) ...[
+                TextField(
+                  key: const Key('time_window_name'),
+                  controller: _name,
+                  decoration: const InputDecoration(labelText: 'Name'),
+                  onChanged: (_) => setState(() {}),
+                ),
+                const SizedBox(height: 16),
+              ],
               SegmentedButton<_HoursMode>(
                 key: const Key('time_window_mode'),
                 segments: const [
@@ -401,7 +461,9 @@ class _TimeWindowEditorSheetState extends ConsumerState<_TimeWindowEditorSheet> 
                       ],
                     ),
                   ),
-              if (name.isNotEmpty && name.length > TimeWindows.maxNameLength)
+              if (!widget.hoursOnly &&
+                  name.isNotEmpty &&
+                  name.length > TimeWindows.maxNameLength)
                 const Padding(
                   padding: EdgeInsets.only(bottom: 4),
                   child: Text(
@@ -412,7 +474,7 @@ class _TimeWindowEditorSheetState extends ConsumerState<_TimeWindowEditorSheet> 
               const SizedBox(height: 12),
               Row(
                 children: [
-                  if (widget.window != null)
+                  if (widget.window != null && !widget.hoursOnly)
                     TextButton(
                       key: const Key('time_window_delete'),
                       onPressed: _saving ? null : _confirmDelete,
