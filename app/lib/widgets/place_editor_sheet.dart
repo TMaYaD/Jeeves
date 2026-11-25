@@ -17,15 +17,18 @@ import '../services/location_source.dart';
 import 'place_area_slider.dart';
 import 'place_point_input.dart';
 
-/// Opens the editor for a named Place and answers its id when it is saved.
+/// A named Place the editor saved: its id and the name it was saved under.
+typedef SavedPlace = ({String id, String name});
+
+/// Opens the editor for a named Place and answers the Place when it is saved.
 ///
 /// [place] is null for a new Place. The sheet is dismissed without an answer
 /// when the user backs out of it.
-Future<String?> showPlaceEditorSheet(
+Future<SavedPlace?> showPlaceEditorSheet(
   BuildContext context, {
   NamedPlaceWithUse? place,
 }) {
-  return showModalBottomSheet<String>(
+  return showModalBottomSheet<SavedPlace>(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.white,
@@ -122,7 +125,7 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
       await askForLocationAfterFirstSave(context, source);
     }
     if (!mounted) return;
-    Navigator.pop(context, placeId);
+    Navigator.pop(context, (id: placeId, name: _name.text.trim()));
   }
 
   Future<void> _delete() async {
@@ -158,7 +161,8 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
     final db = ref.read(databaseProvider);
     await db.placeDao.deletePlace(place.id);
     if (!mounted) return;
-    Navigator.pop(context, place.id);
+    // A deleted Place is not a saved Place: the editor answers nothing.
+    Navigator.pop(context);
   }
 
   @override

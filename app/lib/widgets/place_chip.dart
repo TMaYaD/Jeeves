@@ -7,6 +7,10 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../models/place_area.dart';
+import '../models/place_choice.dart';
+import '../providers/location_permission_flow.dart';
+import '../providers/location_source_provider.dart';
 import '../providers/place_gate_provider.dart';
 import '../providers/task_detail_provider.dart';
 import 'meta_chip.dart';
@@ -22,34 +26,12 @@ class PlaceChip extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final action = ref.watch(currentActionProvider(outcomeId)).asData?.value;
     if (action == null) return const SizedBox.shrink();
-    // The Action says whether it carries a Place at all. Where it does not,
-    // the chip stays quiet and reads nothing: the Place is named only where
-    // there is one to name.
-    if (action.placeId == null) {
-      return _PlaceChipButton(
-        outcomeId: outcomeId,
-        actionId: action.id,
-        label: 'Place',
-        isSet: false,
-      );
-    }
-    return _NamedPlaceChip(outcomeId: outcomeId, actionId: action.id);
-  }
-}
-
-/// The chip with the Place's name on it.
-class _NamedPlaceChip extends ConsumerWidget {
-  const _NamedPlaceChip({required this.outcomeId, required this.actionId});
-
-  final String outcomeId;
-  final String actionId;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
     final place = ref.watch(currentPlacesProvider).value?[outcomeId];
+    // Where the current Action carries no Place, the chip stays quiet and
+    // reads nothing: the Place is named only where there is one to name.
     return _PlaceChipButton(
       outcomeId: outcomeId,
-      actionId: actionId,
+      actionId: action.id,
       label: place == null ? 'Place' : placeDisplayName(place),
       isSet: place != null,
     );
@@ -57,7 +39,12 @@ class _NamedPlaceChip extends ConsumerWidget {
 }
 
 /// The chip itself: the label, and the picker behind it.
-class _PlaceChipButton extends StatelessWidget {
+///
+/// The picker answers with the choice the user made; the chip applies it to
+/// the Outcome's current Action. The write is guarded in
+/// [TaskDetailNotifier]: a choice made for an Action that is no longer the
+/// current one is dropped.
+class _PlaceChipButton extends ConsumerStatefulWidget {
   const _PlaceChipButton({
     required this.outcomeId,
     required this.actionId,
@@ -71,19 +58,55 @@ class _PlaceChipButton extends StatelessWidget {
   final bool isSet;
 
   @override
+  ConsumerState<_PlaceChipButton> createState() => _PlaceChipButtonState();
+}
+
+class _PlaceChipButtonState extends ConsumerState<_PlaceChipButton> {
+  Future<void> _choosePlace() async {
+    // "Clear place" is on offer only when there is a Place to clear.
+    final canClear =
+        ref.read(currentPlacesProvider).value?[widget.outcomeId] != null;
+    final choice = await showPlacePickerSheet(context, canClear: canClear);
+    if (choice == null || !mounted) return;
+    switch (choice) {
+      case NamedPlaceDraft(:final placeId):
+        await ref.read(taskDetailNotifierProvider(widget.outcomeId)).setNamedPlace(
+              actionId: widget.actionId,
+              placeId: placeId,
+            );
+      case PinDraft(:final area, :final name):
+        await _dropPin(area: area, name: name);
+      case ClearPlaceChoice():
+        await ref
+            .read(taskDetailNotifierProvider(widget.outcomeId))
+            .clearPlace(actionId: widget.actionId);
+    }
+  }
+
+  Future<void> _dropPin({required PlaceArea area, required String? name}) async {
+    final dropped = await ref.read(taskDetailNotifierProvider(widget.outcomeId)).setPin(
+          actionId: widget.actionId,
+          area: area,
+          name: name,
+        );
+    if (!dropped || !mounted) return;
+    // A pin is a Place too: the first one saved may ask for the location. A
+    // pin that was not written — the Action is no longer the current one —
+    // is no Place saved, so it asks nothing.
+    await askForLocationAfterFirstSave(
+        context, ref.read(locationSourceProvider));
+  }
+
+  @override
   Widget build(BuildContext context) {
     return InkWell(
       key: const Key('place_chip'),
       borderRadius: BorderRadius.circular(4),
-      onTap: () => showPlacePickerSheet(
-        context,
-        outcomeId: outcomeId,
-        actionId: actionId,
-      ),
+      onTap: _choosePlace,
       child: MetaChip(
         icon: Icons.place_outlined,
-        label: label,
-        color: isSet
+        label: widget.label,
+        color: widget.isSet
             ? const Color(0xFF4A5568)
             : const Color(0xFF9CA3AF),
       ),
