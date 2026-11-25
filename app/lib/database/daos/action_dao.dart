@@ -978,6 +978,55 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     return result;
   }
 
+  /// The Place each Outcome's current Action carries, keyed by Outcome id
+  /// (issue #55).
+  ///
+  /// The winning current Action decides, as everywhere else: a Place on a
+  /// losing current row does not count. A Place that no longer exists, or one
+  /// whose stored point is off the globe, is absent — a reference the app
+  /// cannot read never hides the Outcome.
+  ///
+  /// Re-emits on a write to `places` as well as to `actions`: renaming a
+  /// Place or moving its point changes what every Action carrying it
+  /// resolves to.
+  Stream<Map<String, ActionPlace>> watchCurrentPlaces() {
+    return customSelect(
+      'SELECT actions.outcome_id AS outcome_id, places.id AS place_id, '
+      'places.kind AS place_kind, places.name AS place_name, '
+      'places.latitude_microdegrees AS latitude_microdegrees, '
+      'places.longitude_microdegrees AS longitude_microdegrees, '
+      'places.radius_meters AS radius_meters '
+      'FROM actions INNER JOIN places ON places.id = actions.place_id '
+      "WHERE actions.role = 'current' AND actions.id = ("
+      'SELECT mca.id FROM actions mca '
+      'WHERE mca.outcome_id = actions.outcome_id AND mca.role = \'current\' '
+      // The same rule [_winnerFirst] applies, spelled for the subquery's
+      // alias: greatest COALESCE(updated_at, created_at), then smallest id.
+      'ORDER BY COALESCE(mca.updated_at, mca.created_at) DESC, mca.id ASC '
+      'LIMIT 1)',
+      readsFrom: {actions, places},
+    ).watch().map((rows) {
+      final result = <String, ActionPlace>{};
+      for (final row in rows) {
+        final area = PlaceArea.fromStored(
+          latitudeMicrodegrees: row.read<int>('latitude_microdegrees'),
+          longitudeMicrodegrees: row.read<int>('longitude_microdegrees'),
+          radiusMeters: row.read<int>('radius_meters'),
+        );
+        // A stored point off the globe is not a place: the row is skipped, so
+        // the Outcome reads as carrying none.
+        if (area == null) continue;
+        result[row.read<String>('outcome_id')] = (
+          id: row.read<String>('place_id'),
+          area: area,
+          name: row.readNullable<String>('place_name'),
+          isPin: row.read<String>('place_kind') == pinPlaceKind,
+        );
+      }
+      return result;
+    });
+  }
+
   /// The Place and the time window the Action [actionId] resolves to.
   ///
   /// Either half is null when the Action carries none, when the row it names

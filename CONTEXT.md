@@ -382,6 +382,7 @@ _Avoid_: Target, Quota
 #### Relationships
 
 - A Habit anchored after or before another Habit forms a stack: the stack gives order and the prompt only — each Habit's own repeat rule still decides whether it is due.
+- An estimated Habit can enter Focus Mode.
 
 #### Flagged ambiguities
 

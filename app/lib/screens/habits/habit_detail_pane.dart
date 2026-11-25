@@ -269,6 +269,9 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
         appBar: AppBar(
           leading: BackButton(onPressed: () => context.pop()),
           title: Text(_isDraft ? 'New Habit' : 'Habit'),
+          actions: [
+            if (!_isDraft) HabitFocusAppBarButton(habitId: widget.habitId!),
+          ],
         ),
         body: body,
       ),

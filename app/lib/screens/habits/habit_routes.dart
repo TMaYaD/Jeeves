@@ -17,6 +17,15 @@ const habitNewPath = '/habits/new';
 /// Route of one Habit's detail on a phone.
 String habitDetailPath(String habitId) => '/habits/$habitId';
 
+/// Route of one Habit's Focus Mode screen. It sits outside the shell, like the
+/// Outcome Focus screen.
+String habitFocusPath(String habitId) => '/habits/$habitId/focus';
+
+/// Opens Focus Mode on [habitId]. Every entry (the detail, "Right ho" and the
+/// reminder) calls this one function.
+void openHabitFocus(BuildContext context, String habitId) =>
+    context.push(habitFocusPath(habitId));
+
 /// Route of one Habit's Check-in calendar, a full screen on every width.
 String habitCalendarPath(String habitId) => '/habits/$habitId/calendar';
 

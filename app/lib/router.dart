@@ -11,11 +11,14 @@ import 'screens/done/done_screen.dart';
 import 'screens/enrolment/enrolment_ceremony_screen.dart';
 import 'screens/habits/habit_calendar_screen.dart';
 import 'screens/habits/habit_detail_pane.dart';
+import 'screens/habits/habit_focus_screen.dart';
 import 'screens/habits/habits_screen.dart';
 import 'screens/inbox/inbox_screen.dart';
 import 'screens/next/next_screen.dart';
 import 'screens/project/project_screen.dart';
 import 'screens/periodic_review/periodic_review_screen.dart';
+import 'screens/place_management/place_management_screen.dart';
+import 'screens/place_page/place_page_screen.dart';
 import 'screens/planning/focus_session_planning_screen.dart';
 import 'screens/settings/settings_screen.dart';
 import 'screens/tag_management/tag_management_screen.dart';
@@ -133,6 +136,11 @@ final appRouter = GoRouter(
       path: TimeWindowManagementScreen.routePath,
       builder: (context, state) => const TimeWindowManagementScreen(),
     ),
+    // Outside the shell too: the user's named places (issue #55).
+    GoRoute(
+      path: '/manage/places',
+      builder: (context, state) => const PlaceManagementScreen(),
+    ),
     // Outside the shell, like /settings: it is an account of what happened
     // rather than a place in the app. Nothing routes here on its own — the
     // drawer indicator pushes it, and only while there is something to report.
@@ -155,6 +163,11 @@ final appRouter = GoRouter(
           builder: (context, state) => const InboxScreen(),
         ),
         GoRoute(path: '/next', builder: (context, state) => const NextScreen()),
+        // Every Outcome with a Place, grouped by Place (issue #55).
+        GoRoute(
+          path: '/places',
+          builder: (context, state) => const PlacePageScreen(),
+        ),
         GoRoute(
           path: '/time',
           builder: (context, state) => const TimePageScreen(),
@@ -197,6 +210,11 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/habits/new',
       builder: (context, state) => const HabitDetailScreen(habitId: null),
+    ),
+    GoRoute(
+      path: '/habits/:id/focus',
+      builder: (context, state) =>
+          HabitFocusScreen(habitId: state.pathParameters['id']!),
     ),
     GoRoute(
       path: '/habits/:id/calendar',

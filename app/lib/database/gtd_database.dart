@@ -28,6 +28,7 @@ import 'daos/action_dao.dart';
 import 'daos/capture_dao.dart';
 import 'daos/focus_session_dao.dart';
 import 'daos/habit_dao.dart';
+import 'daos/habit_focus_dao.dart';
 import 'daos/place_dao.dart';
 import 'daos/search_dao.dart';
 import 'daos/tag_dao.dart';
@@ -45,8 +46,8 @@ export 'tables.dart';
 part 'gtd_database.g.dart';
 
 @DriftDatabase(
-  tables: [Todos, Tags, TodoTags, TimeLogs, Sprints, FocusSessions, FocusSessionTasks, FocusSessionDispositions, FocusSessionPlanningBypasses, FocusSessionReschedules, OutcomeBypassDecisions, UserPreferences, Captures, CaptureAttachments, CaptureOutcomes, CaptureTags, Actions, Places, TimeWindows, LocalMigrationMarkers, PendingChanges, DeviceClockIdentity, Habits, HabitCommitments, HabitCheckIns, HabitInactivePeriods, HabitTags],
-  daos: [TagDao, TodoDao, TimeLogDao, SprintDao, FocusSessionDao, CaptureDao, ActionDao, HabitDao, PlaceDao, TimeWindowDao],
+  tables: [Todos, Tags, TodoTags, TimeLogs, Sprints, FocusSessions, FocusSessionTasks, FocusSessionDispositions, FocusSessionPlanningBypasses, FocusSessionReschedules, OutcomeBypassDecisions, UserPreferences, Captures, CaptureAttachments, CaptureOutcomes, CaptureTags, Actions, Places, TimeWindows, LocalMigrationMarkers, PendingChanges, DeviceClockIdentity, Habits, HabitCommitments, HabitCheckIns, HabitInactivePeriods, HabitTags, HabitTimeLogs, HabitSprints],
+  daos: [TagDao, TodoDao, TimeLogDao, SprintDao, FocusSessionDao, CaptureDao, ActionDao, HabitDao, HabitFocusDao, PlaceDao, TimeWindowDao],
 )
 class GtdDatabase extends _$GtdDatabase {
   GtdDatabase(super.executor, {this.opCapture = const NoopDomainOpCapture()});
@@ -207,7 +208,7 @@ class GtdDatabase extends _$GtdDatabase {
   /// build refuses it: opening it would relabel the file with a version it
   /// does not understand, and the newer build would then find a store it
   /// believes is old.
-  static const int supportedSchemaVersion = 15;
+  static const int supportedSchemaVersion = 16;
 
   /// Completes with the [OpeningDetails] of this store's one open.
   ///
@@ -521,6 +522,28 @@ class GtdDatabase extends _$GtdDatabase {
             }
             if (!has('time_window_id')) {
               await m.addColumn(actions, actions.timeWindowId);
+            }
+          }
+          // v16 (issue #405): time spent on a Habit in Focus Mode. Purely
+          // additive — two new local tables and one index, no existing row or
+          // column touched, nothing backfilled. Each is created only when it is
+          // missing, as v13 does for the Habit tables.
+          if (from < 16) {
+            final tables = await m.database
+                .customSelect(
+                    "SELECT name FROM sqlite_master WHERE type='table'")
+                .get();
+            bool hasTable(String name) =>
+                tables.any((row) => row.read<String>('name') == name);
+            if (!hasTable('habit_time_logs')) await m.createTable(habitTimeLogs);
+            if (!hasTable('habit_sprints')) await m.createTable(habitSprints);
+            final indices = await m.database
+                .customSelect(
+                    "SELECT name FROM sqlite_master WHERE type='index'")
+                .get();
+            if (!indices.any((row) =>
+                row.read<String>('name') == 'idx_habit_time_logs_habit')) {
+              await m.createIndex(idxHabitTimeLogsHabit);
             }
           }
         }),

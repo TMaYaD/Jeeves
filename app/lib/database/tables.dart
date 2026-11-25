@@ -1056,3 +1056,60 @@ class HabitTags extends Table {
   @override
   Set<Column<Object>> get primaryKey => {habitId, tagId};
 }
+
+// ---------------------------------------------------------------------------
+// habit_time_logs / habit_sprints  (time spent on a Habit in Focus Mode — #405)
+// ---------------------------------------------------------------------------
+
+/// One row per Focus Mode run on a Habit, breaks included — what a TimeLog is
+/// for an Outcome, kept apart from it because a Habit is not an Outcome and
+/// does not join the plan.
+///
+/// **Device-local until Habits sync**: no codec, no op, not in the data export,
+/// the same as the Habit tables.
+///
+/// Instants are canonical ISO-8601 UTC text (`encodeInstant`). `ended_at` is
+/// null while the Focus runs.
+@TableIndex(name: 'idx_habit_time_logs_habit', columns: {#habitId})
+class HabitTimeLogs extends Table {
+  /// Client-random UUIDv4, minted by the writer.
+  TextColumn get id => text().clientDefault(() => uuid.v4())();
+  TextColumn get userId => text()();
+
+  /// The Habit the time was spent on.
+  TextColumn get habitId => text().references(Habits, #id)();
+
+  /// When the Focus started (an instant).
+  TextColumn get startedAt => text()();
+
+  /// When the Focus ended (an instant); null while it runs.
+  TextColumn get endedAt => text().nullable()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {id};
+}
+
+/// One row per Sprint run on a Habit: what a Sprint is for an Action. A break
+/// is the gap between two of them, as in [Sprints].
+///
+/// **Device-local until Habits sync**, like [HabitTimeLogs].
+class HabitSprints extends Table {
+  /// Client-random UUIDv4, minted by the writer.
+  TextColumn get id => text().clientDefault(() => uuid.v4())();
+  TextColumn get userId => text()();
+
+  /// The Habit the Sprint ran on.
+  TextColumn get habitId => text().references(Habits, #id)();
+
+  /// When the Sprint started (an instant).
+  TextColumn get startedAt => text()();
+
+  /// When the Sprint ended (an instant); null while it runs.
+  TextColumn get endedAt => text().nullable()();
+
+  /// The Sprint length that was set when it started, in minutes.
+  IntColumn get plannedDurationMinutes => integer()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {id};
+}
