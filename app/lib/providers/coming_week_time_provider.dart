@@ -12,6 +12,10 @@ import 'current_action_provider.dart';
 ///
 /// Read-time only. Nothing is stored and nothing syncs — the line is derived
 /// from the time the current Action carries.
+///
+/// Recomputed when the current Actions change, and when the Weekly Review
+/// builds its Next step again: the lines read the clock when they are
+/// computed, so a review built on another day shows that day's week.
 final comingWeekTimeLinesProvider = Provider<Map<String, String>>((ref) {
   final now = ref.watch(clockProvider)();
   // The current Actions, read once: the line describes the same Action the
