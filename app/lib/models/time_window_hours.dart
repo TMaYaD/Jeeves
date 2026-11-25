@@ -234,9 +234,13 @@ class TimeWindowHours {
   /// and closed, or null when it cannot flip again.
   ///
   /// The hours are read on the phone's clock, or on [location]'s clock when a
-  /// place carries its own hours and its own time zone. The returned instant
-  /// is on that clock, so it is formatted there — never call `toLocal()` on
-  /// it before comparing instants.
+  /// place carries its own hours and its own time zone.
+  ///
+  /// The returned instant carries that clock: a [tz.TZDateTime] on the place's
+  /// zone when [location] is set, and a local [DateTime] otherwise. Format it
+  /// there. Do not call `toLocal()` on it: that converts the instant to
+  /// `tz.local`, which is the phone's zone, so the wall-clock hour it shows
+  /// is the phone's hour and not the place's.
   ///
   /// Every hour boundary is a candidate, and a candidate counts only when the
   /// open state really differs across it — two overlapping days can meet at a

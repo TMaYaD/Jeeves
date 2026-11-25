@@ -432,7 +432,12 @@ void main() {
       expect(close.isAtSameMomentAs(DateTime.utc(2026, 11, 6, 19, 0)), isTrue);
       // The transition carries the place clock, so it can be formatted there.
       expect(close, isA<tz.TZDateTime>());
-      expect((close as tz.TZDateTime).location.name, 'Europe/Berlin');
+      final onPlaceClock = close as tz.TZDateTime;
+      expect(onPlaceClock.location.name, 'Europe/Berlin');
+      // It reads 20:00 on the place's own clock, which is the hour a caller
+      // shows the user.
+      expect(onPlaceClock.hour, 20);
+      expect(onPlaceClock.minute, 0);
     });
 
     test('the transition follows the March daylight-saving change', () {
@@ -488,6 +493,24 @@ void main() {
         location: berlin,
       )!;
       expect(close.isAtSameMomentAs(DateTime.utc(2026, 11, 10, 1, 0)), isTrue);
+    });
+
+    test('the transition reads on the place clock, not the phone clock', () {
+      // A caller that shows the hour must format the transition on the
+      // place's clock. `toLocal()` would move it to `tz.local` — the phone's
+      // zone — and show the phone's hour instead, so the place's own hour is
+      // what the transition carries.
+      final close = store.nextTransitionAfter(
+        DateTime.utc(2026, 11, 6, 12, 0),
+        location: berlin,
+      )!;
+
+      expect((close as tz.TZDateTime).hour, 20);
+
+      // `tz.local` is UTC until the app sets it to the device zone, which is
+      // what the app does at startup.
+      tz.setLocalLocation(tz.getLocation('UTC'));
+      expect(close.toLocal().hour, 19);
     });
   });
 }
