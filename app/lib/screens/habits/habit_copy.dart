@@ -262,6 +262,55 @@ String habitOfferSubLine({required String sourceTitle, String? offeredUnit}) =>
 /// The entry sheet card's title.
 String habitOfferFollowsLine(String title) => '$title follows, sir.';
 
+// --- Focus Mode on a Habit (canvas item 21) ---------------------------------
+
+const habitFocusOverline = 'HABIT · FOCUS MODE';
+const habitFocusNotInPlanChip = "Habit · not in Today's Plan";
+const habitFocusStartTooltip = 'Start Focus Mode on this Habit';
+const habitFocusResumeTooltip = 'Resume Focus Mode on this Habit';
+const habitFocusStopLabel = 'Stop';
+const habitFocusBreakLabel = 'Start a break';
+const habitFocusNextSprintLabel = 'Start next sprint';
+
+/// The estimate chip of the Focus screen: "10m", "1h 30m".
+String habitFocusEstimateChip(int minutes) => habitFocusMinutesLabel(minutes);
+
+/// "Focus · 20m" on the Today card; "Resume Focus · 20m" when a Focus is open.
+String habitFocusEntryLabel(int estimateMinutes, {required bool resume}) =>
+    '${resume ? 'Resume Focus' : 'Focus'} · '
+    '${habitFocusMinutesLabel(estimateMinutes)}';
+
+/// Minutes as the canvas writes them: "45m", "1h 30m", "2h".
+String habitFocusMinutesLabel(int minutes) {
+  if (minutes < 60) return '${minutes}m';
+  final hours = minutes ~/ 60;
+  final rest = minutes % 60;
+  return rest == 0 ? '${hours}h' : '${hours}h ${rest}m';
+}
+
+// --- "Add a check-in, sir?" at the end of a Focus (canvas item 21) ----------
+
+const habitFocusCheckInTitle = 'Add a check-in, sir?';
+const habitFocusCheckInYesLabel = 'Very good';
+const habitFocusCheckInNotNowLabel = 'Not now';
+
+/// The sheet's first line for a binary Habit.
+String habitFocusCheckInBinaryLine(String title, int minutesLogged) =>
+    '$title · ${minutesLogged}m logged to this Habit. '
+    'Nothing is added unless you say so.';
+
+/// The sheet's first line for a measurable Habit.
+String habitFocusCheckInMeasurableLine(String title, int minutesLogged) =>
+    '$title · ${minutesLogged}m logged to this Habit. '
+    'Say how far you got.';
+
+/// The stepper's label: "pages to add".
+String habitFocusCheckInStepperLabel(String? unitLabel) =>
+    '${unitLabel ?? 'Amount'} to add';
+
+/// "6 of 20 so far today".
+String habitFocusCheckInSoFarLine(double total, double target) =>
+    '${habitAmountText(total)} of ${habitAmountText(target)} so far today';
 
 // --- Daily Planning: the read-only habits card ---------------------------
 

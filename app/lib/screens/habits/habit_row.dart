@@ -9,6 +9,7 @@ import '../../database/daos/habit_dao.dart';
 import '../../database/gtd_database.dart' show Habit;
 import '../../models/habit_progress.dart';
 import '../../providers/habit_check_ins_provider.dart';
+import '../../providers/habit_focus_provider.dart';
 import '../../providers/habit_progress_provider.dart';
 import '../../providers/habit_stack_offer_provider.dart';
 import '../../widgets/habit_check_in_mark.dart';
@@ -43,15 +44,26 @@ Future<void> tapHabitMark(
   }
 }
 
-/// "Right ho": a binary Habit is checked in at once and becomes the new source
-/// of the offer (until #405, that includes one with an estimate); a measurable
-/// one opens its entry sheet, after closing a sheet that is open.
+/// "Right ho" — the one dispatch the list row and the entry sheet's card share.
+///
+/// A Habit with a time estimate opens Focus Mode: the offer is cleared, an open
+/// sheet is closed, and no Check-in is written (the estimate wins over a
+/// measurable Habit; its amount is asked at Stop). Without an estimate a
+/// binary Habit is checked in at once and becomes the new source of the offer;
+/// a measurable one opens its entry sheet, after closing a sheet that is open.
 Future<void> acceptHabitOffer(
   BuildContext context,
   WidgetRef ref,
   Habit offered, {
   bool closeSheet = false,
 }) async {
+  if (offered.timeEstimateMinutes != null) {
+    ref.read(habitStackOfferProvider.notifier).dismiss();
+    final navigator = Navigator.of(context);
+    if (closeSheet) navigator.pop();
+    openHabitFocus(navigator.context, offered.id);
+    return;
+  }
   final isMeasurable =
       ref.read(habitTodayEntriesProvider(offered.id))?.commitment?.isMeasurable ??
           false;
@@ -419,8 +431,55 @@ class HabitTodayCard extends ConsumerWidget {
               target: progress.targetAmount!.round(),
               done: progress.todayTotalAmount ?? 0,
             ),
+          HabitFocusEntryButton(habit: habit),
         ],
       ),
+    );
+  }
+}
+
+/// "Focus · 20m" (or "Resume Focus · 20m") on the Today card: opens Focus Mode
+/// on the Habit. Only a Habit with an estimate that is active today has one.
+class HabitFocusEntryButton extends ConsumerWidget {
+  const HabitFocusEntryButton({super.key, required this.habit});
+
+  final Habit habit;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final entry = ref.watch(habitFocusEntryProvider(habit.id));
+    final estimate = habit.timeEstimateMinutes;
+    if (entry == HabitFocusEntry.none || estimate == null) {
+      return const SizedBox.shrink();
+    }
+    return TextButton.icon(
+      key: const Key('habit_focus_entry'),
+      onPressed: () => openHabitFocus(context, habit.id),
+      icon: const Icon(Icons.timer_outlined, size: 18),
+      label: Text(habitFocusEntryLabel(estimate,
+          resume: entry == HabitFocusEntry.resume)),
+    );
+  }
+}
+
+/// The play button in the detail's app bar: "Start Focus Mode on this Habit",
+/// or "Resume" when a Focus is open on it.
+class HabitFocusAppBarButton extends ConsumerWidget {
+  const HabitFocusAppBarButton({super.key, required this.habitId});
+
+  final String habitId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final entry = ref.watch(habitFocusEntryProvider(habitId));
+    if (entry == HabitFocusEntry.none) return const SizedBox.shrink();
+    return IconButton(
+      key: const Key('habit_focus_start'),
+      icon: const Icon(Icons.play_arrow_rounded),
+      tooltip: entry == HabitFocusEntry.resume
+          ? habitFocusResumeTooltip
+          : habitFocusStartTooltip,
+      onPressed: () => openHabitFocus(context, habitId),
     );
   }
 }
