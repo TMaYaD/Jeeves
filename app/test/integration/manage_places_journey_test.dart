@@ -523,6 +523,9 @@ void main() {
     await setOwnHours(tester);
     await tapInEditor(tester, find.byKey(const Key('place_editor_save')));
 
+    // The row says the hours the Place carries.
+    expect(find.text('150 m · Mon–Fri 11:00–20:00'), findsOneWidget);
+
     // The hours are the Place's own, and no time window was made for them.
     final place = await _real(tester, () => db.select(db.places).getSingle());
     expect(place.timeWindowId, isNull);
@@ -560,6 +563,8 @@ void main() {
     await _settle(tester);
     await tapInEditor(tester, find.byKey(const Key('place_editor_save')));
 
+    // The row names the window the Place takes its hours from.
+    expect(find.text('150 m · Store hours'), findsOneWidget);
     final place = await _real(tester, () => db.select(db.places).getSingle());
     expect(place.timeWindowId, windowId);
   });
@@ -614,6 +619,8 @@ void main() {
     });
 
     await openManagePlaces(tester);
+    expect(find.text('150 m · Mon 11:00–20:00'), findsOneWidget);
+
     await tester.tap(find.byKey(Key('place_management_row_$placeId')));
     await _settle(tester);
     await tapInEditor(tester, find.byKey(const Key('place_hours_choice_none')));

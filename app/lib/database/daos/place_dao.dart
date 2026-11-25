@@ -17,6 +17,7 @@ library;
 
 import 'package:drift/drift.dart';
 
+import '../../models/action_place_and_time_window.dart';
 import '../../models/place_area.dart';
 import '../../models/time_window_hours.dart';
 import '../../sync/collection_codecs.dart';
@@ -347,6 +348,12 @@ class PlaceDao extends DatabaseAccessor<GtdDatabase> with _$PlaceDaoMixin {
   /// the count and the gate never disagree. An Outcome with two current
   /// Actions, as a sync conflict can leave behind, counts once, for the one
   /// that wins.
+  ///
+  /// A Place that carries hours says so in [NamedPlaceWithUse.hoursLabel]: the
+  /// name of the window it takes its hours from, or the short form of the
+  /// hours of its own. A Place whose hours the app cannot read has no label:
+  /// a value the app cannot read never hides anything, and it says nothing
+  /// either.
   Stream<List<NamedPlaceWithUse>> watchNamedPlacesWithUseCount() {
     return customSelect(
       'SELECT places.id AS id, places.name AS name, '
@@ -356,8 +363,11 @@ class PlaceDao extends DatabaseAccessor<GtdDatabase> with _$PlaceDaoMixin {
       'places.time_window_id AS time_window_id, '
       'places.hours AS own_hours_text, '
       'places.time_zone AS time_zone, '
+      'tw.name AS time_window_name, '
+      'tw.hours AS time_window_hours_text, '
       'COUNT(t.id) AS use_count '
       'FROM places '
+      'LEFT JOIN time_windows tw ON tw.id = places.time_window_id '
       'LEFT JOIN actions a ON a.place_id = places.id AND a.role = \'current\' '
       'AND a.id = ('
       'SELECT mca.id FROM actions mca '
@@ -372,7 +382,7 @@ class PlaceDao extends DatabaseAccessor<GtdDatabase> with _$PlaceDaoMixin {
       'ORDER BY MAX(CASE WHEN t.id IS NOT NULL '
       'THEN COALESCE(a.updated_at, a.created_at) END) DESC, places.name',
       variables: [Variable(namedPlaceKind)],
-      readsFrom: {places, actions, todos},
+      readsFrom: {places, actions, todos, timeWindows},
     ).watch().map((rows) {
       final result = <NamedPlaceWithUse>[];
       for (final row in rows) {
@@ -383,15 +393,30 @@ class PlaceDao extends DatabaseAccessor<GtdDatabase> with _$PlaceDaoMixin {
         );
         // A stored point off the globe is not a place: the row is skipped.
         if (area == null) continue;
+        final timeWindowId = row.read<String?>('time_window_id');
+        final ownHoursText = row.read<String?>('own_hours_text');
+        final timeZone = row.read<String?>('time_zone');
+        final resolved = resolvePlaceHours(
+          timeWindowId: timeWindowId,
+          timeWindowName: row.read<String?>('time_window_name'),
+          timeWindowHoursText: row.read<String?>('time_window_hours_text'),
+          ownHoursText: ownHoursText,
+          timeZoneName: timeZone,
+        );
         result.add((
           id: row.read<String>('id'),
           name: row.read<String>('name'),
           area: area,
           useCount: row.read<int>('use_count'),
+          // The window's name reads as the hours it gives; hours of the
+          // Place's own read as their short form.
+          hoursLabel: resolved == null
+              ? null
+              : (resolved.timeWindowName ?? resolved.hours.describe()),
           hours: (
-            timeWindowId: row.read<String?>('time_window_id'),
-            ownHoursText: row.read<String?>('own_hours_text'),
-            timeZone: row.read<String?>('time_zone'),
+            timeWindowId: timeWindowId,
+            ownHoursText: ownHoursText,
+            timeZone: timeZone,
           ),
         ));
       }
@@ -416,6 +441,11 @@ typedef NamedPlaceWithUse = ({
   String name,
   PlaceArea area,
   int useCount,
+  /// How the Place's hours read in the list: the name of the window it takes
+  /// its hours from, or the short form of the hours of its own.
+  ///
+  /// Null when the Place has no hours, or hours the app cannot read.
+  String? hoursLabel,
   /// The hours the Place carries, as stored.
   StoredPlaceHours hours,
 });

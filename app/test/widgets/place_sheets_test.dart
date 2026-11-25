@@ -133,6 +133,7 @@ void main() {
                   radiusMeters: 150,
                 )!,
                 useCount: 0,
+                hoursLabel: hours.describe(),
                 hours: (
                   timeWindowId: null,
                   ownHoursText: hours.encode(),
