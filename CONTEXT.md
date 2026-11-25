@@ -92,7 +92,7 @@ A Blocker whose unresolved world-state is "this Person has not yet acted." Refer
 _Avoid_: WaitingFor (as an entity name), Wait, PendingPerson
 
 **Context** *(time as TimeContext or a time window; place as a Place)*:
-A predicate over current world state ("is *now* a moment when this action is doable?") that attaches to an Action and gates its visibility. Distinct from a Blocker: a Blocker describes outside-the-user state relevant to the *outcome*; a Context gates *whether you can act*. **TimeContext** (UI: "Time context") is the one-time time predicate — from a date and/or in a weekly window ("after Nov 30"): unsatisfied, it hides the Outcome from the Next List and Up Next, which leaves it on Next. Detail in REQUIREMENTS.
+A predicate over current world state ("is *now* a moment when this action is doable?") that attaches to an Action and gates its visibility. Distinct from a Blocker: a Blocker describes outside-the-user state relevant to the *outcome*; a Context gates *whether you can act*. **TimeContext** (UI: "Time context") is the one-time time predicate — from a date and/or in a weekly window ("after Nov 30"): unsatisfied, it hides the Outcome from the Next List and leaves it on Next; Up Next shows what opens in the day being planned. Detail in REQUIREMENTS.
 _Avoid_: Constraint, Filter, Gate
 
 **Place**:

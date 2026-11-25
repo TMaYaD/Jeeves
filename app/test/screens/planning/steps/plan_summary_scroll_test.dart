@@ -89,6 +89,13 @@ Widget _harness(GtdDatabase db, List<Todo> todos) {
       habitsForTodayProvider.overrideWithValue(const {}),
       habitStackChainsProvider.overrideWithValue(const []),
       databaseProvider.overrideWithValue(db),
+      // The step reads when each Outcome's time opens; that provider watches
+      // drift's Time contexts, so stub it rather than hold a live watch
+      // (TESTING.md).
+      plannedDayTimeProvider.overrideWithValue((
+        notInPlannedDay: const <String>{},
+        opensLaterAt: const <String, DateTime>{},
+      )),
       _testTodosProvider.overrideWith((_) => todos),
       // Up Next: next-action todos minus anything already reviewed.
       nextForFocusSessionPlanningProvider.overrideWith((ref) {

@@ -79,8 +79,9 @@ class TimeWindowBoundaryTick extends Notifier<int> {
 
 /// Outcome ids whose current Action's named time window is closed right now.
 ///
-/// The Next List hides these; Up Next and every other surface ignore the set
-/// — a named window hides an Outcome from Next only.
+/// The Next List hides these. Daily Planning's Up Next applies its own rule —
+/// the day being planned — so a window that opens later today keeps the
+/// Outcome in Up Next.
 final outsideTimeWindowOutcomeIdsProvider = Provider<Set<String>>((ref) {
   ref.watch(timeWindowBoundaryTickProvider);
   final now = ref.watch(clockProvider)();

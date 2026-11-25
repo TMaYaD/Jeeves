@@ -1,10 +1,13 @@
 /// TimeContext journey (#238), over a real in-memory store.
 ///
 /// An Outcome's current Action carries a TimeContext. While it is unsatisfied
-/// the Outcome is off the Next List and Daily Planning's Up Next, still findable
-/// by the plan-building search ("Outside its time context"), and it comes back
-/// by itself when the time arrives. Provider plus real DB, no widgets: a live
-/// Drift `watch()` hangs under widget-test fake time (docs/TESTING.md).
+/// the Outcome is off the Next List, still findable by the plan-building search
+/// ("Not open before Evening Shutdown" when its time does not open in the day
+/// being planned), and it comes back by itself when the time arrives. Daily
+/// Planning's Up Next shows an Outcome whose time opens later in the day being
+/// planned — see `plan_the_whole_day_journey_test.dart`. Provider plus real DB,
+/// no widgets: a live Drift `watch()` hangs under widget-test fake time
+/// (docs/TESTING.md).
 library;
 
 import 'package:drift/drift.dart' show Value;
@@ -138,7 +141,7 @@ void main() {
       (c) => c.isNotEmpty,
     );
     expect({for (final c in offered) c.todo.id: c.reason},
-        {'o1': OffUpNextReason.outsideTimeContext});
+        {'o1': OffUpNextReason.notOpenBeforeShutdown});
 
     final notifier = container.read(focusSessionPlanningProvider.notifier);
     notifier.selectTask('o1');
