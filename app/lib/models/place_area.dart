@@ -126,6 +126,17 @@ class PlaceArea {
     );
   }
 
+  /// The distance between this Place's point and another's, in metres.
+  ///
+  /// The points are compared; the areas are not. Two Places are near each
+  /// other when their points are close, whatever their areas say.
+  double distanceMetersTo(PlaceArea other) => _distanceMeters(
+        latitudeDegrees,
+        longitudeDegrees,
+        other.latitudeDegrees,
+        other.longitudeDegrees,
+      );
+
   /// Whether the point ([latitudeDegrees], [longitudeDegrees]) is inside this
   /// Place's area.
   bool containsPoint(double latitudeDegrees, double longitudeDegrees) {
