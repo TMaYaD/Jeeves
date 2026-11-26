@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/time_window_hours.dart';
-import '../../providers/database_provider.dart';
 import '../../providers/time_window_provider.dart';
 import '../../widgets/app_title_bar/app_title_bar.dart';
 import '../../widgets/capture/capture_action.dart';
@@ -80,10 +79,8 @@ class TimeWindowManagementScreen extends ConsumerWidget {
                   style: const TextStyle(color: Color(0xFF9CA3AF)),
                 ),
                 onTap: () async {
-                  final placeUseCount = await ref
-                      .read(databaseProvider)
-                      .timeWindowDao
-                      .placeUseCount(row.window.id);
+                  final placeUseCount = await ref.read(
+                      timeWindowPlaceUseCountProvider(row.window.id).future);
                   if (!context.mounted) return;
                   await showTimeWindowEditorSheet(
                     context,

@@ -137,7 +137,12 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
   }
 
   bool get _canSave =>
-      _name.text.trim().isNotEmpty && _point != null && !_saving;
+      _name.text.trim().isNotEmpty &&
+      _point != null &&
+      !_saving &&
+      // A window choice with no window yet is an incomplete answer.
+      !(_hoursChoice == _PlaceHoursChoice.timeWindow &&
+          _timeWindowId == null);
 
   /// The zone the Place's hours are read on: the one the user named, or the
   /// phone's own zone until they name another one.
@@ -151,28 +156,22 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
 
   /// Takes the Place's hours from [choice].
   void _chooseHours(_PlaceHoursChoice choice) {
-    if (choice == _hoursChoice) {
-      // Choosing "Own hours" again opens the hours editor: it is the way to
-      // change them.
-      if (choice == _PlaceHoursChoice.own) _openOwnHours();
+    if (choice == _PlaceHoursChoice.own) {
+      // "Own hours" is taken only once the hours editor answers: cancelling
+      // it keeps what the Place had, so Save never writes a Place with no
+      // hours source by accident. Choosing it again edits the hours.
+      _openOwnHours();
       return;
     }
+    if (choice == _hoursChoice) return;
     setState(() {
       _hoursChoice = choice;
       _hoursTouched = true;
       if (choice == _PlaceHoursChoice.none) {
         _timeWindowId = null;
-        _ownHours = null;
-      } else if (choice == _PlaceHoursChoice.timeWindow) {
-        _ownHours = null;
-      } else {
-        _timeWindowId = null;
       }
+      _ownHours = null;
     });
-    if (choice == _PlaceHoursChoice.own && _ownHours == null) {
-      // There are no hours to edit yet, so the editor opens on its own.
-      _openOwnHours();
-    }
   }
 
   /// Opens the hours editor and keeps the hours it answers.
@@ -181,6 +180,7 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
     if (hours == null || !mounted) return;
     setState(() {
       _ownHours = hours;
+      _timeWindowId = null;
       _hoursChoice = _PlaceHoursChoice.own;
       _hoursTouched = true;
     });
@@ -223,6 +223,18 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
     final db = ref.read(databaseProvider);
     final userId = ref.read(currentUserIdProvider);
     final place = widget.place;
+    // The hours this save writes, read before the first await too: the sheet
+    // may be dismissed while the Place is written, and the hours still land.
+    final hoursTouched = _hoursTouched;
+    final hoursChoice = _hoursChoice;
+    final timeWindowId = _timeWindowId;
+    final ownHours = _ownHours;
+    final chosenZone = _timeZone;
+    final phoneZoneFuture = hoursTouched &&
+            hoursChoice != _PlaceHoursChoice.none &&
+            chosenZone == null
+        ? ref.read(phoneTimeZoneNameProvider.future)
+        : null;
     String? placeId;
     var saved = false;
     if (place == null) {
@@ -244,23 +256,32 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
         radiusMeters: _radiusMeters,
       );
     }
-    if (!mounted) return;
     if (placeId == null) {
-      setState(() => _saving = false);
+      if (mounted) setState(() => _saving = false);
       return;
     }
     // The hours travel in one write: the window, the hours of the Place's
     // own and the zone they are read on. A Place whose hours nobody touched
-    // is not written at all.
-    if (_hoursTouched) {
-      final phoneZone = ref.read(phoneTimeZoneNameProvider).value;
+    // is not written at all. The write finishes whether or not the sheet is
+    // still open.
+    if (hoursTouched) {
+      String? zone = chosenZone;
+      if (hoursChoice == _PlaceHoursChoice.none) {
+        zone = null;
+      } else if (zone == null && phoneZoneFuture != null) {
+        // A phone whose zone cannot be read keeps the phone's clock (null).
+        try {
+          zone = await phoneZoneFuture;
+        } catch (_) {
+          zone = null;
+        }
+      }
       await db.placeDao.setPlaceHours(
         placeId: placeId,
-        timeWindowId: _hoursChoice == _PlaceHoursChoice.timeWindow
-            ? _timeWindowId
-            : null,
-        hours: _hoursChoice == _PlaceHoursChoice.own ? _ownHours : null,
-        timeZone: _effectiveZone(phoneZone),
+        timeWindowId:
+            hoursChoice == _PlaceHoursChoice.timeWindow ? timeWindowId : null,
+        hours: hoursChoice == _PlaceHoursChoice.own ? ownHours : null,
+        timeZone: zone,
       );
     }
     if (!mounted) return;

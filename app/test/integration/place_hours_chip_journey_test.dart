@@ -52,7 +52,9 @@ void main() {
     ]);
   });
 
-  tearDown(() async => db.close());
+  tearDown(() async {
+    await db.close();
+  });
 
   Future<String> seedOutcome(String id) async {
     final now = DateTime.now();
@@ -82,14 +84,17 @@ void main() {
   }
 
   testWidgets('the chip reads place hours and the place name', (tester) async {
-    final placeId = await createPlace('Hardware store');
-    final actionId = await seedOutcome('o1');
-    await db.actionDao.setNamedPlace(actionId, placeId);
-    await db.placeDao.setPlaceHours(
-      placeId: placeId,
-      hours: TimeWindowHours.create(_storeHours),
-      now: _ts,
-    );
+    // Drift writes only finish on the real event queue (docs/TESTING.md).
+    await tester.runAsync(() async {
+      final placeId = await createPlace('Hardware store');
+      final actionId = await seedOutcome('o1');
+      await db.actionDao.setNamedPlace(actionId, placeId);
+      await db.placeDao.setPlaceHours(
+        placeId: placeId,
+        hours: TimeWindowHours.create(_storeHours),
+        now: _ts,
+      );
+    });
 
     final router = GoRouter(
       initialLocation: '/task/o1',
@@ -111,5 +116,10 @@ void main() {
 
     expect(find.text('Mon–Fri 11:00–20:00 · from Hardware store'),
         findsOneWidget);
+
+    // Drift's stream cleanup timers must finish before Flutter checks for
+    // pending timers, so the container goes down here, not in tearDown.
+    await tester.pumpWidget(const SizedBox());
+    await tester.runAsync(() async => container.dispose());
   });
 }

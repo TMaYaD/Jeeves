@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:timezone/timezone.dart' as tz;
 
 import '../database/gtd_database.dart' show Todo;
 import '../models/action_place_and_time_window.dart';
@@ -216,13 +217,17 @@ String _when(DateTime at, DateTime now) {
   return '${_dayNames[local.weekday - 1]} $clock';
 }
 
-/// When a place's time opens: format on the place's clock. The TZDateTime
-/// already has the correct hour/minute for the place's zone, so read them
-/// directly without converting to local.
-String _whenOnLocation(DateTime at, DateTime now, dynamic location) {
+/// When a place's time opens: format on the place's clock. [at] already
+/// carries the place's date and clock; [now] is converted to the same zone
+/// before the dates are compared, so a place a day ahead of the phone does not
+/// get a weekday for a time that opens today on its own clock.
+String _whenOnLocation(DateTime at, DateTime now, tz.Location? location) {
   final clock = '${at.hour.toString().padLeft(2, '0')}:'
       '${at.minute.toString().padLeft(2, '0')}';
-  if (at.year == now.year && at.month == now.month && at.day == now.day) {
+  final placeNow = location == null ? now.toLocal() : tz.TZDateTime.from(now, location);
+  if (at.year == placeNow.year &&
+      at.month == placeNow.month &&
+      at.day == placeNow.day) {
     return clock;
   }
   return '${_dayNames[at.weekday - 1]} $clock';

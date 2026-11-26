@@ -163,6 +163,9 @@ void main() {
       ProviderScope(
         overrides: [
           databaseProvider.overrideWithValue(db),
+          timeWindowsProvider.overrideWith((_) => Stream.value(const [])),
+          phoneTimeZoneNameProvider
+              .overrideWith((ref) async => 'Europe/Amsterdam'),
           namedPlacesWithUseCountProvider
               .overrideWith((_) => Stream.value(const [])),
         ],
@@ -185,7 +188,12 @@ void main() {
 
     await tester.pumpWidget(
       ProviderScope(
-        overrides: [databaseProvider.overrideWithValue(db)],
+        overrides: [
+          databaseProvider.overrideWithValue(db),
+          timeWindowsProvider.overrideWith((_) => Stream.value(const [])),
+          phoneTimeZoneNameProvider
+              .overrideWith((ref) async => 'Europe/Amsterdam'),
+        ],
         child: const MaterialApp(
           home: Scaffold(body: PlacePinSheet()),
         ),
@@ -226,6 +234,9 @@ void main() {
       ProviderScope(
         overrides: [
           databaseProvider.overrideWithValue(db),
+          timeWindowsProvider.overrideWith((_) => Stream.value(const [])),
+          phoneTimeZoneNameProvider
+              .overrideWith((ref) async => 'Europe/Amsterdam'),
           namedPlacesWithUseCountProvider
               .overrideWith((_) => Stream.value(places)),
         ],
@@ -357,7 +368,12 @@ void main() {
     final answer = Completer<SavedPlace?>();
     await tester.pumpWidget(
       ProviderScope(
-        overrides: [databaseProvider.overrideWithValue(db)],
+        overrides: [
+          databaseProvider.overrideWithValue(db),
+          timeWindowsProvider.overrideWith((_) => Stream.value(const [])),
+          phoneTimeZoneNameProvider
+              .overrideWith((ref) async => 'Europe/Amsterdam'),
+        ],
         child: MaterialApp(
           home: Scaffold(
             body: Builder(

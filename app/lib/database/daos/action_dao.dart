@@ -1095,7 +1095,14 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
       "AND places.kind = '$namedPlaceKind' "
       'LEFT OUTER JOIN time_windows '
       'ON time_windows.id = places.time_window_id '
-      "WHERE actions.role = 'current' AND actions.id = ("
+      "WHERE actions.role = 'current' "
+      // An Action's own time replaces the Place's hours, so an Action that
+      // names a window or holds a Time context carries none — however
+      // readable the value is. The raw columns decide, so a window that is
+      // gone, or a context the app cannot parse, never lets the Place's
+      // hours apply, and nothing waits for another stream to emit first.
+      'AND actions.time_window_id IS NULL AND actions.time_context IS NULL '
+      'AND actions.id = ('
       'SELECT mca.id FROM actions mca '
       'WHERE mca.outcome_id = actions.outcome_id AND mca.role = \'current\' '
       // The same rule [_winnerFirst] applies, spelled for the subquery's

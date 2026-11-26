@@ -26,6 +26,14 @@ final timeWindowsWithUseCountProvider =
       .watchTimeWindowsWithUseCount();
 });
 
+/// How many named places use the time window [windowId] for their hours.
+///
+/// Read once, when the window's editor opens; it holds no live query.
+final timeWindowPlaceUseCountProvider =
+    FutureProvider.autoDispose.family<int, String>((ref, windowId) {
+  return ref.watch(databaseProvider).timeWindowDao.placeUseCount(windowId);
+});
+
 /// The named time window of every Outcome's current Action, keyed by Outcome id
 /// (issue #55).
 ///

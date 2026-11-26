@@ -15,14 +15,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/action_place_and_time_window.dart';
 import 'clock_provider.dart';
 import 'database_provider.dart';
-import 'time_context_provider.dart';
 import 'time_window_provider.dart';
 
 /// The hours of the Place every current Action is at, keyed by Outcome id.
 ///
 /// Straight from the store: an Outcome whose Place carries hours the app
-/// cannot read is absent, and a one-time pin is absent too — only a named
-/// Place carries hours.
+/// cannot read is absent, a one-time pin is absent too — only a named Place
+/// carries hours — and so is an Outcome whose Action has a time of its own.
 final placeHoursProvider =
     StreamProvider<Map<String, ActionPlaceHours>>((ref) {
   return ref.watch(databaseProvider).actionDao.watchCurrentPlaceHours();
@@ -30,19 +29,12 @@ final placeHoursProvider =
 
 /// The hours that apply to each Outcome, keyed by Outcome id.
 ///
-/// The Place's hours, minus every Outcome whose current Action carries a time
-/// of its own: a named window or a Time context. An Action's own time
-/// replaces the Place's hours (decision D2), so those Outcomes do not carry
-/// Place hours at all — they are not hidden by the Place's opening times.
+/// The store already leaves out every Outcome whose current Action carries a
+/// time of its own — a named window or a Time context, readable or not — so
+/// the Place's hours never apply to it (decision D2). This provider is the one
+/// every surface reads, so the gate, the chip and the time page agree.
 final currentPlaceHoursProvider = Provider<Map<String, ActionPlaceHours>>((ref) {
-  final placeHours = ref.watch(placeHoursProvider).value ?? const {};
-  final windows = ref.watch(currentTimeWindowsProvider).value ?? const {};
-  final contexts = ref.watch(currentTimeContextsProvider).value ?? const {};
-  return {
-    for (final entry in placeHours.entries)
-      if (!windows.containsKey(entry.key) && !contexts.containsKey(entry.key))
-        entry.key: entry.value,
-  };
+  return ref.watch(placeHoursProvider).value ?? const {};
 });
 
 /// Outcome ids whose Place's hours are closed right now.
