@@ -2583,6 +2583,20 @@ class SyncClient {
             ..orderBy([(row) => OrderingTerm(expression: row.id)]))
           .get();
 
+  /// One author's unreleased gap rows, lowest position first, then row id.
+  Future<List<QuarantineRow>> _unreleasedGapRows(String authorMemberId) =>
+      (_db.select(_db.quarantinedOps)
+            ..where((row) =>
+                row.workspaceId.equals(workspaceId) &
+                row.authorMemberId.equals(authorMemberId) &
+                row.releasedAt.isNull() &
+                row.reason.equals(SyncRejectionReason.authorChainGap.code))
+            ..orderBy([
+              (row) => OrderingTerm(expression: row.authorSeq),
+              (row) => OrderingTerm(expression: row.id),
+            ]))
+          .get();
+
   Future<bool> _hasUnreleasedGap(String authorMemberId) async {
     final rows = await (_db.select(_db.quarantinedOps)
           ..where((row) =>
@@ -4134,12 +4148,14 @@ class SyncClient {
   /// Apply one held change, without checking where it sits in its author's
   /// chain.
   ///
-  /// The fail-closed rule says a change from an author whose chain has a hole
-  /// does not apply until the hole closes. **Taking upstream is the User
-  /// breaking that rule on purpose**: this change's *position* is unverified,
-  /// and every other check about it runs exactly as it does on the receive
-  /// path — the author's signature over the bytes, the codec, the payload's
-  /// shape, and the author's Grant at the change's own server seq.
+  /// Taking upstream records the hole and releases the held changes through the
+  /// ordinary pipeline (see [_takeUpstream]), so this is only for the rows that
+  /// bridge could not release — a change that is not the successor of the hole,
+  /// or one the release refused for another reason. It is the User breaking the
+  /// fail-closed rule on purpose: the change's *position* is unverified, and
+  /// every other check about it runs exactly as it does on the receive path —
+  /// the author's signature over the bytes, the codec, the payload's shape, and
+  /// the author's Grant at the change's own server seq.
   ///
   /// The chain verdict is the one check left out, and so is the `op_log`
   /// write: the change was refused, so it was never logged, and logging it now
@@ -4201,33 +4217,154 @@ class SyncClient {
     }
   }
 
-  /// Apply the changes the User decided to take from the server, and settle the
-  /// accusation they were holding open.
+  /// Take the changes the server holds, and settle the accusation they were
+  /// holding open.
   ///
   /// The decision is the User's: the server's chain is the one to keep, so the
-  /// changes it holds are applied even though their position in that chain was
-  /// never verified. Everything else about them is still checked — see
-  /// [_applyHeldChange].
+  /// range of the author's chain that never arrived is **accepted unverified**.
+  /// It is recorded as an `accepted_chain_holes` row, and the held changes are
+  /// then released through the ordinary pipeline — so they are written to
+  /// `op_log`, and every later change from the author is admitted on its own
+  /// signed predecessor hash. Every other check, and every chain check past the
+  /// hole, still runs. [_applyHeldChange] is left for the rows the bridge could
+  /// not release.
   ///
-  /// The rows are stamped `took_upstream` and **stay held**: the change was
-  /// never logged, and the chain release still owns the row, so the log heals
-  /// on its own if the missing change ever arrives.
+  /// **A hole is recorded only from a successor nothing else contests.** The
+  /// hash a hole stores is what every later change is verified against, so it is
+  /// taken from the change just past the hole only when every verifying row at
+  /// that position holds the same bytes. Two byte-different signed changes there
+  /// are a fork, and the decision does not settle a fork: `author_chain_fork` is
+  /// raised, nothing is accepted, and the contested rows and everything past
+  /// them stay held. The choice is never made by row id, transport seq or the
+  /// predecessor a change names — the row id is only the order the server served
+  /// them in.
+  ///
+  /// A row the receive path would refuse is not a successor of anything: the
+  /// change it holds is not one of this Workspace's chain, or does not sit at
+  /// the position its row claims, so it cannot define the range in front of it.
+  /// Those rows stay undecided, and the decision falls back to the held-change
+  /// path for them.
   ///
   /// The alarm is settled only when nothing is left undecided. A change that
   /// cannot be applied — corrupt bytes, a revoked Grant — leaves its row
-  /// undecided, and an undecided row keeps the alarm standing: the User asked
-  /// for the server's version, and the server's version could not be read.
+  /// undecided, and an undecided row keeps the alarm standing.
   ///
   /// **The accusation is settled after the change has reached the domain
   /// store, not before.** The decision is the User's answer; it takes effect
   /// when the app shows the change. A projection that fails, or an app that is
   /// killed between the two moments, leaves the accusation standing and
   /// unanswered — so the answer is still on offer and the work is done again
-  /// when the User gives it. Settling first would close the accusation over a
-  /// change the User never saw, with nothing left to retry.
+  /// when the User gives it.
   Future<void> _takeUpstream(IntegrityAlarmRow alarm) async {
     final affected = <AffectedEntity>{};
     final now = _now();
+    var stoppedOnAmbiguousSuccessor = false;
+    final bridgedAuthor = alarm.authorMemberId;
+    if (bridgedAuthor != null) {
+      final unreleasedBefore = await _unreleasedGapRows(bridgedAuthor);
+      final rememberedRowIds = [for (final row in unreleasedBefore) row.id];
+      for (var round = 0; round <= rememberedRowIds.length; round++) {
+        affected.addAll(
+          await _releaseChainSuccessors(
+            bridgedAuthor,
+            attestationBridged: true,
+          ),
+        );
+        final head = await effectiveChainHeadSeq(bridgedAuthor);
+        final beyond = [
+          for (final row in await _unreleasedGapRows(bridgedAuthor))
+            if (row.authorSeq != null && row.authorSeq! > head + 1) row,
+        ];
+        if (beyond.isEmpty) break;
+        final lowestSeq = beyond.first.authorSeq!;
+        final candidates = <({QuarantineRow row, OpHeader header})>[];
+        for (final row in beyond.where((r) => r.authorSeq == lowestSeq)) {
+          if (row.seq == null) continue;
+          try {
+            final header =
+                OpHeader.parse(splitEnvelope(row.envelope).header);
+            // **A candidate is a change this device could admit.** The hole's
+            // range comes from the row's position and its hash from the signed
+            // header, and the change it releases goes through the ordinary
+            // receive path, so the header has to name this Workspace and this
+            // author's chain at the row's position. A row that disagrees is
+            // not a successor of anything: the hole it would define describes
+            // a range the change does not occupy, and the release would
+            // refuse the change anyway.
+            if (header.workspaceId != workspaceId) continue;
+            if (header.authorSeq != row.authorSeq) continue;
+            await verifyEnvelope(
+              row.envelope,
+              directory.publicKeyFor(header.authorMemberId, header.authorKeyId),
+            );
+            candidates.add((row: row, header: header));
+          } on SyncRejection {
+            continue;
+          }
+        }
+        if (candidates.isEmpty) break;
+        final defining = candidates.first;
+        final contesting = candidates
+            .where((c) => !sameBytes(c.row.envelope, defining.row.envelope))
+            .firstOrNull;
+        if (contesting != null) {
+          await _raiseAlarm(
+            IntegrityAlarmKind.authorChainFork,
+            authorMemberId: bridgedAuthor,
+            detail: 'author_seq $lowestSeq is held twice with different signed '
+                'changes behind a missing change, so no hole was accepted',
+            quarantineOpRowId: contesting.row.id,
+          );
+          stoppedOnAmbiguousSuccessor = true;
+          break;
+        }
+        await _db.into(_db.acceptedChainHoles).insert(
+              AcceptedChainHolesCompanion.insert(
+                workspaceId: workspaceId,
+                authorMemberId: bridgedAuthor,
+                firstMissingAuthorSeq: head + 1,
+                lastMissingAuthorSeq: lowestSeq - 1,
+                lastMissingEnvelopeHash: defining.header.prevAuthorHash,
+                definingQuarantineOpRowId: defining.row.id,
+                decidedAt: now,
+              ),
+            );
+        // **The decision is recorded before the scan that releases the row.**
+        // The release scan closes a gap accusation once the author has no
+        // unreleased gap row left and no take upstream waiting for the screen;
+        // while the change the bridge is taking upstream is still waiting, the
+        // accusation has to keep standing — the answer is only complete when
+        // the change has reached the domain store. So the row the hole is
+        // defined by carries the decision now, and the scan that releases it
+        // in the next round sees the work that is still owed.
+        await (_db.update(_db.quarantinedOps)
+              ..where((row) =>
+                  row.id.equals(defining.row.id) & row.resolution.isNull()))
+            .write(QuarantinedOpsCompanion(
+          resolution: Value(AlarmResolution.tookUpstream.code),
+          resolutionDecidedAt: Value(now),
+        ));
+      }
+      if (rememberedRowIds.isNotEmpty) {
+        await (_db.update(_db.quarantinedOps)
+              ..where((row) =>
+                  row.id.isIn(rememberedRowIds) &
+                  row.releasedAt.isNotNull() &
+                  row.resolution.isNull()))
+            .write(QuarantinedOpsCompanion(
+          resolution: Value(AlarmResolution.tookUpstream.code),
+          resolutionDecidedAt: Value(now),
+        ));
+      }
+      if (stoppedOnAmbiguousSuccessor) {
+        final projector = this.projector;
+        if (projector != null) {
+          final touched = await projector.project(affected);
+          await _reconcileProjected(touched);
+        }
+        return;
+      }
+    }
     var complete = false;
     var stale = false;
     String? author;
@@ -4306,7 +4443,9 @@ class SyncClient {
       // The change is in the domain store now, so the accusation is settled:
       // nothing is left to decide about this author — and so is the fork the
       // gap was holding open.
-      if (complete && !stale) await _settleAuthorAlarms(author, now);
+      if (complete && !stale) {
+        await _settleAuthorAlarms(author, now, gapAlarmId: alarm.id);
+      }
     });
     if (stale) {
       throw StateError(
@@ -4417,21 +4556,27 @@ class SyncClient {
   ///
   /// The gap alarm the decision was about, and the fork it was holding open.
   /// Both are settled only when nothing they cover is left undecided.
-  Future<void> _settleAuthorAlarms(String? author, DateTime now) async {
+  Future<void> _settleAuthorAlarms(
+    String? author,
+    DateTime now, {
+    int? gapAlarmId,
+  }) async {
     await _db.transaction(() async {
       // A take upstream that has not reached the domain store is work still to
       // do: the accusation stands until it has.
       if (author != null && await _hasUnprojectedTakeUpstream(author)) return;
-      final gap = await _standingAlarm(
-        IntegrityAlarmKind.authorChainGap,
-        author,
-      );
+      // The release scan may already have closed the gap alarm; the decision
+      // still has to be recorded on it, so it is addressed by id then.
+      final gap = gapAlarmId == null
+          ? await _standingAlarm(IntegrityAlarmKind.authorChainGap, author)
+          : await _alarmRow(gapAlarmId);
       if (gap != null) {
         await _settleWhenNothingUndecided(
           alarm: gap,
           kind: IntegrityAlarmKind.authorChainGap,
           resolution: AlarmResolution.tookUpstream,
           now: now,
+          requireStanding: gapAlarmId == null,
         );
       }
       final fork = await _standingAlarm(
@@ -4890,6 +5035,7 @@ class SyncClient {
     required AlarmResolution resolution,
     required DateTime now,
     int? forkHeadSeq,
+    bool requireStanding = true,
   }) async {
     // The position the accused claimant holds, read here so the settlement
     // asks about exactly the rows the snapshot stamped — one definition, two
@@ -4900,7 +5046,7 @@ class SyncClient {
     await (_db.update(_db.integrityAlarms)
           ..where((row) =>
               row.id.equals(alarm.id) &
-              row.resolvedAt.isNull() &
+              (requireStanding ? row.resolvedAt.isNull() : const Constant(true)) &
               row.occurrenceCount.equals(alarm.occurrenceCount) &
               _noUndecidedCoveredRow(
                 kind: kind,

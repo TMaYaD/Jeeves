@@ -1573,7 +1573,6 @@ void main() {
 
       await a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
 
-      // The change is in the reduced state now.
       expect(await _doc(a, workspace), {'step': 'three'});
       final settled =
           (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
@@ -1582,21 +1581,29 @@ void main() {
       expect(settled.resolvedAt, isNotNull);
       expect((await a.client.health()).clean, isTrue);
 
-      // The row is still held. The decision did not make the change verified,
-      // and the chain release still owns the row.
+      // The row was released through the ordinary pipeline, bytes untouched.
       final heldAfter = await a.client.quarantined();
       expect(heldAfter.single.id, heldBefore.single.id);
-      expect(heldAfter.single.releasedAt, isNull);
+      expect(heldAfter.single.releasedAt, isNotNull);
       expect(heldAfter.single.resolution, AlarmResolution.tookUpstream.code);
+      expect(heldAfter.single.envelope, heldBefore.single.envelope);
 
-      // The log is unchanged: a change whose position was never verified is
-      // not written into the log.
+      // The released change is in the log, applied.
       final logAfter = await a.loggedOps();
-      expect(logAfter.length, logBefore.length);
-      expect(
-        logAfter.map((row) => row.seq).toList(),
-        logBefore.map((row) => row.seq).toList(),
+      expect(logAfter.length, logBefore.length + 1);
+      final third = logAfter.singleWhere(
+        (row) => row.authorSeq == firstPeerContentAuthorSeq + 2,
       );
+      expect(third.appliedAt, isNotNull);
+
+      // One hole, covering exactly the withheld position.
+      final holes =
+          await a.client.acceptedChainHoles(authorMemberId: peer.memberId);
+      expect(holes.single.firstMissingAuthorSeq, firstPeerContentAuthorSeq + 1);
+      expect(holes.single.lastMissingAuthorSeq, firstPeerContentAuthorSeq + 1);
+      final header =
+          OpHeader.parse(splitEnvelope(heldBefore.single.envelope).header);
+      expect(holes.single.lastMissingEnvelopeHash, header.prevAuthorHash);
     });
 
     test('a projection that fails leaves the accusation open for another answer',
@@ -1810,24 +1817,113 @@ void main() {
       expect(await _doc(a, workspace), {'step': 'three'});
     });
 
-    test('a change the device sends after the decision stands the alarm again',
+    test('a later change from that device applies and raises nothing',
         () async {
       await withholdTheMiddleChange();
       final gap =
           (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
       await a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
 
-      // The peer's next change, held back as well: a new accusation, and a new
-      // question — the last answer was about the changes held then.
       final fourth = await _op(workspace, peer, 'four');
       workspace.server.injectUnchecked(workspace.workspaceId, fourth);
       await a.sync();
 
+      expect(await _doc(a, workspace), {'step': 'four'});
       final after =
           (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
-      expect(after.resolvedAt, isNull);
-      expect(after.resolution, isNull);
+      expect(after.resolvedAt, isNotNull);
+      expect(after.resolution, AlarmResolution.tookUpstream.code);
+      expect((await a.client.health()).actionableAlarmCount, 0);
+      expect(await a.client.quarantined(includeReleased: false), isEmpty);
+      final logged = await a.loggedOps();
+      final row = logged.singleWhere(
+        (r) => r.authorSeq == firstPeerContentAuthorSeq + 3,
+      );
+      expect(row.appliedAt, isNotNull);
+    });
+
+    test('a second missing change asks again', () async {
+      await withholdTheMiddleChange();
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      await a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+
+      await _op(workspace, peer, 'four'); // minted, never delivered
+      final fifth = await _op(workspace, peer, 'five');
+      workspace.server.injectUnchecked(workspace.workspaceId, fifth);
+      await a.sync();
+
+      final standing =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(standing.resolvedAt, isNull);
+      expect(standing.resolution, isNull);
       expect((await a.client.health()).actionableAlarmCount, 1);
+
+      await a.client.resolveAlarm(standing.id, AlarmResolution.tookUpstream);
+
+      expect(
+        await a.client.acceptedChainHoles(authorMemberId: peer.memberId),
+        hasLength(2),
+      );
+      expect(await _doc(a, workspace), {'step': 'five'});
+      expect((await a.client.health()).clean, isTrue);
+    });
+
+    test(
+        'two different changes held behind the gap are a fork, and nothing is accepted',
+        () async {
+      final first = await _op(workspace, peer, 'one');
+      await peerSession.postOps(workspace.workspaceId, [first]);
+      await a.sync();
+
+      await _op(workspace, peer, 'two'); // minted, never posted or injected
+      final third = await _op(workspace, peer, 'three', advance: false);
+      final rival = await _op(workspace, peer, 'three as well', advance: false);
+      workspace.server.injectUnchecked(workspace.workspaceId, third);
+      await a.sync();
+      workspace.server.injectUnchecked(workspace.workspaceId, rival);
+      await a.sync();
+
+      final staged = await a.client.quarantined(includeReleased: false);
+      expect(staged.length, 2);
+      expect(
+        staged.map((row) => row.authorSeq).toSet(),
+        {firstPeerContentAuthorSeq + 2},
+      );
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(gap.resolvedAt, isNull);
+      final logLength = (await a.loggedOps()).length;
+
+      Future<void> expectNothingAccepted() async {
+        expect(
+          await a.client.acceptedChainHoles(authorMemberId: peer.memberId),
+          isEmpty,
+        );
+        expect(await _doc(a, workspace), {'step': 'one'});
+        final rows = await a.client.quarantined();
+        final rivalRow =
+            rows.singleWhere((row) => sameBytes(row.envelope, rival));
+        final fork =
+            (await a.alarmsByKind())[IntegrityAlarmKind.authorChainFork.code]!;
+        expect(fork.resolvedAt, isNull);
+        expect(fork.quarantineOpRowId, rivalRow.id);
+        final standing =
+            (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+        expect(standing.resolvedAt, isNull);
+        expect(standing.resolution, isNull);
+        for (final row in rows) {
+          expect(row.releasedAt, isNull);
+          expect(row.resolution, isNull);
+        }
+        expect((await a.loggedOps()).length, logLength);
+        expect((await a.client.health()).clean, isFalse);
+      }
+
+      await a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+      await expectNothingAccepted();
+      await a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+      await expectNothingAccepted();
     });
 
     test('a held change whose bytes were corrupted stays held, and the alarm stands',
@@ -1861,6 +1957,10 @@ void main() {
       expect(stillStanding.resolvedAt, isNull);
       expect(stillStanding.resolution, isNull);
       expect((await a.client.health()).actionableAlarmCount, 1);
+      expect(
+        await a.client.acceptedChainHoles(authorMemberId: peer.memberId),
+        isEmpty,
+      );
     });
 
     test('a held change whose header disagrees with its row is not applied',
