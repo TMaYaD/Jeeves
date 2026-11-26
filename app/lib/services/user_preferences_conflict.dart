@@ -244,7 +244,8 @@ ResolvedPreference _maxTimestampValue(
 ///   * a live row written after the clear survives it (a live row written
 ///     before it was silenced by it); with no clear every live row survives;
 ///   * among survivors the later snooze value wins, ties going to the later
-///     write; a value that is not a timestamp counts as the lowest;
+///     write and then to the lexically greater value; a value that is not a
+///     timestamp counts as the lowest;
 ///   * with no survivor the newest tombstone is the result.
 ///
 /// Returns null only when [rows] is empty. The returned row is one of [rows].
@@ -280,7 +281,12 @@ PreferenceRow? resolveSnoozeFloorAmong(Iterable<PreferenceRow> rows) {
     } else if (until != null && bestUntil != null && until != bestUntil) {
       wins = until.isAfter(bestUntil);
     } else {
-      wins = (row.updatedAt ?? _epoch).isAfter(best.updatedAt ?? _epoch);
+      final rowAt = row.updatedAt ?? _epoch;
+      final bestAt = best.updatedAt ?? _epoch;
+      // Equal writes (two unreadable values, say) go to the lexically greater
+      // value, so the result never depends on which row was read first.
+      wins = rowAt.isAfter(bestAt) ||
+          (rowAt == bestAt && (row.value ?? '').compareTo(best.value ?? '') > 0);
     }
     if (wins) {
       best = row;

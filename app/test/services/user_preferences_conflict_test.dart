@@ -370,6 +370,14 @@ void main() {
       expect(resolveSnoozeFloorAmong([floor, clear]), same(clear));
     });
 
+    test('equal writes of unreadable values resolve the same in both orders',
+        () {
+      final a = live('not-a-time', 9);
+      final b = live('zzz', 9);
+      expect(resolveSnoozeFloorAmong([a, b]), same(b));
+      expect(resolveSnoozeFloorAmong([b, a]), same(b));
+    });
+
     test('the later value wins among live floors', () {
       final low = live('2026-01-01T12:00:00.000Z', 11);
       final high = live('2026-01-01T18:00:00.000Z', 9);
