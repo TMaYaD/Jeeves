@@ -716,7 +716,7 @@ class _HabitDetailPaneState extends ConsumerState<HabitDetailPane> {
             _draft.placeId = placeId;
             _draft.pin = null;
           case PinDraft(:final area, :final name):
-            _draft.pin = PinChoice(area: area, name: name);
+            _draft.pin = (area: area, name: name);
             _draft.placeId = null;
           case ClearPlaceChoice():
             _draft.placeId = null;
