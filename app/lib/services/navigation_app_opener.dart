@@ -36,6 +36,15 @@ class UrlLauncherNavigationAppOpener implements NavigationAppOpener {
       _ => LaunchMode.externalApplication,
     };
     try {
+      // Below API 30 Android ignores the non-browser mode, so a link could
+      // fall through to a browser that keeps three waypoints. Only Maps
+      // handles `google.navigation:`, so its absence means refuse.
+      if (app == NavigationApp.googleMaps &&
+          !kIsWeb &&
+          defaultTargetPlatform == TargetPlatform.android &&
+          !await canLaunchUrl(Uri.parse('google.navigation:q=0,0'))) {
+        return false;
+      }
       return await launchUrl(uri, mode: mode);
     } on PlatformException {
       return false;

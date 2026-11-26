@@ -101,5 +101,11 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
+        <!-- Only Google Maps handles this scheme; Jeeves asks whether it is
+             installed before handing it a multi-stop route (issue #60). -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="google.navigation"/>
+        </intent>
     </queries>
 </manifest>

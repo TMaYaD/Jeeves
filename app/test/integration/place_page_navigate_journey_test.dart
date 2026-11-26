@@ -6,6 +6,8 @@
 /// the test reads the link Jeeves opened, in a recording stand-in for the OS.
 library;
 
+import 'dart:async';
+
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -228,6 +230,29 @@ void main() {
 
       expect(opener.calls, hasLength(1));
       expect(find.text('Google Maps is not installed'), findsOneWidget);
+      expect(find.text('1 selected'), findsOneWidget);
+    });
+  });
+
+  testWidgets('dismissing the sheet during a slow launch keeps the page',
+      (tester) async {
+    opener.holdOpen = Completer<void>();
+    await tester.runAsync(() async {
+      final hardware = await seedPlace(db, 'Hardware store', 52.3702, 4.8952);
+      await seedOutcomeAt(db, 'paint', hardware);
+    });
+    await onPlacePage(tester, () async {
+      await select(tester, ['paint']);
+      await tapNavigate(tester);
+      await tester.tap(find.byKey(const Key('navigate_google_maps')));
+      await tester.pump();
+      // The user taps outside the sheet while the launch is pending.
+      await tester.tapAt(const Offset(10, 10));
+      await _settle(tester);
+      opener.holdOpen!.complete();
+      await _settle(tester);
+
+      expect(find.byKey(const Key('navigate_google_maps')), findsNothing);
       expect(find.text('1 selected'), findsOneWidget);
     });
   });

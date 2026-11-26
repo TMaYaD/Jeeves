@@ -43,10 +43,13 @@ class _NavigateSheetState extends ConsumerState<_NavigateSheet> {
       widget.routes.fold<int>(0, (sum, route) => sum + route.length);
 
   Future<void> _open(NavigationApp app, Uri uri) async {
+    final sheetRoute = ModalRoute.of(context);
     final messenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
     final opened = await ref.read(navigationAppOpenerProvider).open(app, uri);
-    navigator.pop();
+    // Pop only while this sheet is still on top: a dismissed sheet must not
+    // take the page beneath it down with it.
+    if (sheetRoute?.isCurrent ?? false) navigator.pop();
     if (opened) return;
     messenger.showSnackBar(SnackBar(
       content: Text(app == NavigationApp.googleMaps
