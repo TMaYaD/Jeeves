@@ -1606,6 +1606,83 @@ void main() {
       expect(holes.single.lastMissingEnvelopeHash, header.prevAuthorHash);
     });
 
+    test('a tampered later change is refused under its own name', () async {
+      await withholdTheMiddleChange();
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      await a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+
+      // The next change from that device, with one byte of its body flipped:
+      // the signature no longer covers what it says it does.
+      final fourth = await _op(workspace, peer, 'four');
+      final tampered = Uint8List.fromList(fourth);
+      tampered[headerLengthBytes + 8] ^= 0x01;
+      workspace.server.injectUnchecked(workspace.workspaceId, tampered);
+      await a.sync();
+
+      // The refusal is filed under its own name. The bytes are not the
+      // author's, and that is the whole of the accusation.
+      final alarms = await a.alarmsByKind();
+      final signature = alarms[IntegrityAlarmKind.signatureInvalid.code]!;
+      expect(signature.resolvedAt, isNull);
+      expect(signature.resolution, isNull);
+      expect(
+        (await a.client.quarantined(includeReleased: false)).single.reason,
+        SyncRejectionReason.badSignature.code,
+      );
+
+      // The decision the User already made is not reopened by this: the gap it
+      // settled is still settled, and the hole it recorded is still recorded.
+      final settled = alarms[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(settled.resolvedAt, isNotNull);
+      expect(settled.resolution, AlarmResolution.tookUpstream.code);
+      expect(
+        await a.client.acceptedChainHoles(authorMemberId: peer.memberId),
+        hasLength(1),
+      );
+
+      // And the tampered change did not become the state.
+      expect(await _doc(a, workspace), {'step': 'three'});
+    });
+
+    test('different bytes at a position past the hole are a rewrite', () async {
+      await withholdTheMiddleChange();
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      await a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+
+      // A second change, at the position the log now holds one at. It is
+      // signed by the same author and it is newer than the change it would
+      // replace, so nothing but the chain rules stand between it and the log.
+      final rival = await peer.nextEnvelope(
+        workspace.workspaceId,
+        authorSeq: firstPeerContentAuthorSeq + 2,
+        advance: false,
+        payloadJson: jsonEncode({
+          'collection': _harnessCollection,
+          'id': _docId(workspace),
+          'fields': {
+            'step': {'v': 'three as well'},
+          },
+          'hlc': [workspace.clock.nowMs + 1, 0, memberIdToHex(peer.memberId)],
+        }),
+      );
+      workspace.server.injectUnchecked(workspace.workspaceId, rival);
+      await a.sync();
+
+      // The hole is a range the User accepted as missing, not a licence to
+      // change what the log already holds past it.
+      expect(
+        (await a.alarmsByKind())[IntegrityAlarmKind.authorChainRewrite.code],
+        isNotNull,
+      );
+      expect(
+        (await a.client.quarantined(includeReleased: false)).single.reason,
+        SyncRejectionReason.authorChainRewrite.code,
+      );
+      expect(await _doc(a, workspace), {'step': 'three'});
+    });
+
     test('a projection that fails leaves the accusation open for another answer',
         () async {
       // The same withheld change, over a collection with a domain row: the
@@ -1798,9 +1875,25 @@ void main() {
       expect(released.releasedAt, isNotNull);
       // Nothing changed twice: the change that was taken upstream is the state.
       expect(await _doc(a, workspace), {'step': 'three'});
-      final after =
-          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
-      expect(after.resolvedAt, isNotNull);
+
+      // The log holds the change that was missing: it fills the hole the User
+      // accepted, and it is logged like any other change.
+      final filled = (await a.loggedOps()).singleWhere(
+        (row) => row.authorSeq == firstPeerContentAuthorSeq + 1,
+      );
+      expect(filled.appliedAt, isNotNull);
+
+      // No alarm of any kind stands. The gap the decision settled is the only
+      // accusation there was, and it is settled.
+      final alarms = await a.alarmsByKind();
+      expect(alarms, isNotEmpty);
+      expect(
+        alarms.values.every((alarm) => alarm.resolvedAt != null),
+        isTrue,
+        reason: 'the only accusation left is the settled one',
+      );
+      expect((await a.client.health()).actionableAlarmCount, 0);
+      expect((await a.client.health()).clean, isTrue);
     });
 
     test('a rebuild from the log keeps a change that was taken upstream',
@@ -1810,11 +1903,32 @@ void main() {
           (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
       await a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
 
-      // A rebuild wipes the merge state and replays the log — and the log does
-      // not hold this change, because it was never logged.
+      // A rebuild wipes the merge state and replays the log — and the log
+      // holds this change now, because the decision released it into the log.
       await a.client.rebuildFromOpLog();
 
       expect(await _doc(a, workspace), {'step': 'three'});
+
+      // The decision is still recorded. A rebuild replays the log; it does not
+      // forget what the User accepted.
+      expect(
+        await a.client.acceptedChainHoles(authorMemberId: peer.memberId),
+        hasLength(1),
+      );
+
+      // And the standing decision still stands over what comes next.
+      await peerSession.postOps(
+        workspace.workspaceId,
+        [await _op(workspace, peer, 'four')],
+      );
+      await a.sync();
+
+      expect(await _doc(a, workspace), {'step': 'four'});
+      final after =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(after.resolvedAt, isNotNull);
+      expect(after.resolution, AlarmResolution.tookUpstream.code);
+      expect((await a.client.health()).actionableAlarmCount, 0);
     });
 
     test('a later change from that device applies and raises nothing',
@@ -1865,6 +1979,84 @@ void main() {
         await a.client.acceptedChainHoles(authorMemberId: peer.memberId),
         hasLength(2),
       );
+      expect(await _doc(a, workspace), {'step': 'five'});
+      expect((await a.client.health()).clean, isTrue);
+    });
+
+    test('the decision survives a restart', () async {
+      // A device with a real file behind its store, so a restart is a reopen of
+      // the same store and not a fresh memory.
+      final device = await SimDevice.create(
+        label: 'R',
+        userId: workspace.userId,
+        server: workspace.server,
+        clock: workspace.clock,
+        passphrase: workspace.passphrase,
+        fileBacked: true,
+      );
+      addTearDown(device.close);
+
+      final first = await _op(workspace, peer, 'one');
+      final withheld = await _op(workspace, peer, 'two');
+      final third = await _op(workspace, peer, 'three');
+      final appended = await peerSession.postOps(
+        workspace.workspaceId,
+        [first, withheld, third],
+      );
+      workspace.server.omitSeqs.add(appended[1].seq);
+      await device.sync();
+
+      final gap =
+          (await device.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(gap.resolvedAt, isNull);
+
+      await device.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+
+      // The app is killed and comes back. The decision is in the store, so it
+      // is still there.
+      final reopened = await device.reopenSyncStore();
+
+      final holes = await reopened.acceptedChainHoles(
+        authorMemberId: peer.memberId,
+      );
+      expect(holes, hasLength(1));
+      expect(holes.single.firstMissingAuthorSeq, firstPeerContentAuthorSeq + 1);
+      expect(holes.single.lastMissingAuthorSeq, firstPeerContentAuthorSeq + 1);
+    });
+
+    test('two holes at once are both accepted', () async {
+      final first = await _op(workspace, peer, 'one');
+      final second = await _op(workspace, peer, 'two');
+      final third = await _op(workspace, peer, 'three');
+      final fourth = await _op(workspace, peer, 'four');
+      final fifth = await _op(workspace, peer, 'five');
+      final appended = await peerSession.postOps(
+        workspace.workspaceId,
+        [first, second, third, fourth, fifth],
+      );
+      // The server withholds the second and the fourth change: two ranges of
+      // the chain never arrive.
+      workspace.server.omitSeqs.add(appended[1].seq);
+      workspace.server.omitSeqs.add(appended[3].seq);
+      await a.sync();
+
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(gap.resolvedAt, isNull);
+
+      await a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+
+      // One decision, two holes: the User accepted both ranges, and each is
+      // recorded as its own hole.
+      final holes =
+          await a.client.acceptedChainHoles(authorMemberId: peer.memberId);
+      expect(holes, hasLength(2));
+      expect(holes.first.firstMissingAuthorSeq, firstPeerContentAuthorSeq + 1);
+      expect(holes.first.lastMissingAuthorSeq, firstPeerContentAuthorSeq + 1);
+      expect(holes.last.firstMissingAuthorSeq, firstPeerContentAuthorSeq + 3);
+      expect(holes.last.lastMissingAuthorSeq, firstPeerContentAuthorSeq + 3);
+
+      // Every change that did arrive applies, and nothing is left to ask about.
       expect(await _doc(a, workspace), {'step': 'five'});
       expect((await a.client.health()).clean, isTrue);
     });
