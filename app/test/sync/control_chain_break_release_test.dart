@@ -16,6 +16,7 @@
 ///  * Every other check still runs on the re-examination: a fork is resolved,
 ///    not skipped.
 ///  * An op that names no real predecessor stays refused and is never touched.
+///  * A row the User has refused for good is not examined at all.
 @TestOn('!browser')
 library;
 
@@ -23,16 +24,35 @@ import 'dart:typed_data';
 
 import 'package:drift/drift.dart' show BooleanExpressionOperators, Value;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jeeves/sync/alarm_resolution.dart';
+import 'package:jeeves/sync/chain_verifier.dart';
 import 'package:jeeves/sync/control_payload.dart';
+import 'package:jeeves/sync/envelope.dart';
+import 'package:jeeves/sync/hlc.dart';
+import 'package:jeeves/sync/host/merge_state.dart';
 import 'package:jeeves/sync/sync_client.dart';
 import 'package:jeeves/sync/sync_database.dart';
-import 'package:jeeves/sync/sync_rejection.dart';
+import 'package:jeeves/sync/sync_health_detail.dart';
 
 import 'harness/author_fixture.dart';
 import 'harness/sim_device.dart';
 import 'harness/sim_workspace.dart';
 
 final String _breakCode = SyncRejectionReason.controlChainBreak.code;
+
+/// The collection D writes in, and the entity it writes.
+const String _collection = 'harness_docs';
+const String _docId = '33333333-3333-4333-8333-333333333333';
+
+/// The reduced fields of one entity on [device]'s **live** store.
+///
+/// [SimDevice.registry] is bound to the database that was open before the
+/// reopen, so a test that reopened the store has to read through a registry
+/// bound to the reopened one — the pre-crash handle is closed.
+Future<Map<String, Object?>?> _entity(SimDevice device, String entityId) async =>
+    CollectionRegistry(device.syncStore)
+        .register(_collection)
+        .readEntity(entityId);
 
 /// The control types applied on [device]'s live store.
 Future<List<AppliedControlRow>> _applied(SimDevice device) async =>
@@ -221,6 +241,207 @@ void main() {
       expect(
         (await _breakRows(fixed)).singleWhere((r) => r.id == held.id).releasedAt,
         isNull,
+      );
+    });
+
+    test('a second registration naming the same predecessor is settled as a '
+        'fork, not skipped', () async {
+      final scene = await _scene();
+      final b = scene.workspace.b;
+      final dId = scene.dFixture.memberId;
+
+      final held = (await _breakRows(scene.broken)).singleWhere(
+          (row) => row.authorMemberId == dId && row.releasedAt == null);
+      final predecessor = ControlPayload.decode(
+        parseBody(splitEnvelope(held.envelope).body),
+      ).prevControlHash;
+
+      // A newcomer whose registration names the same predecessor as D's: two
+      // registrations, one position. Its certificate is stamped later than D's,
+      // so the fork tie-break — earliest certificate HLC — settles it against
+      // the newcomer, whoever is examined first.
+      final e = await AuthorFixture.create(
+        seed: Uint8List.fromList(List<int>.filled(32, 0x6e)),
+      );
+      final root = await scene.workspace.recoverRoot();
+      final wallMs = scene.workspace.clock.nowMs + 1000;
+      scene.workspace.server.injectUnchecked(
+        scene.workspace.workspaceId,
+        await memberRegisterEnvelope(
+          device: e,
+          workspaceId: scene.workspace.workspaceId,
+          root: root,
+          prevControlHash: predecessor,
+          wallMs: wallMs,
+          certificate: RegistrationCertificate(
+            workspaceId: scene.workspace.workspaceId,
+            memberId: e.memberId,
+            signPk: e.signPk,
+            kexPk: e.kexPk,
+            registeredAtHlc: Hlc.forMember(e.memberId, wallMs),
+          ),
+        ),
+      );
+      root.drop();
+      await scene.broken.pull();
+
+      expect(
+        (await _breakRows(scene.broken))
+            .where((row) => row.authorMemberId == e.memberId && row.releasedAt == null),
+        hasLength(1),
+        reason: 'the newcomer is refused for the missing predecessor too',
+      );
+
+      final fixed = await b.reopenSyncStore(attachTransport: true);
+      await fixed.pull();
+      await fixed.pull();
+
+      // Exactly one of the two registrations holds the position: the other is
+      // settled by the fork, not left for a later pull.
+      final registered = (await _applied(b))
+          .where((row) => row.controlType == controlTypeMemberRegister)
+          .map((row) => ControlPayload.decode(row.payloadBytes).certificate().memberId)
+          .toSet();
+      expect(registered.contains(dId), isTrue);
+      expect(registered.contains(e.memberId), isFalse,
+          reason: 'the later certificate loses the tie-break');
+
+      final loser = (await _breakRows(fixed))
+          .singleWhere((row) => row.authorMemberId == e.memberId);
+      expect(loser.releasedAt, isNotNull,
+          reason: 'the row left the scan set under its own reason');
+      final fork = (await fixed.quarantined(includeReleased: false)).singleWhere(
+          (row) =>
+              row.reason == SyncRejectionReason.controlChainFork.code &&
+              row.seq == loser.seq);
+      expect(fork.releasedAt, isNull);
+      final alarms = await fixed.integrityAlarms();
+      expect(
+        alarms.any((alarm) => alarm.kind == IntegrityAlarmKind.controlChainFork.code),
+        isTrue,
+        reason: 'a fork is an accusation, and it is raised',
+      );
+    });
+
+    test('the release is visible on Sync Health', () async {
+      final scene = await _scene();
+      final b = scene.workspace.b;
+      final dId = scene.dFixture.memberId;
+
+      final fixed = await b.reopenSyncStore(attachTransport: true);
+      await fixed.pull();
+      await fixed.pull();
+
+      final row = (await _breakRows(fixed))
+          .singleWhere((r) => r.authorMemberId == dId);
+      final conditions = syncHealthConditionsFor(
+        workspaceId: fixed.workspaceId,
+        alarms: await fixed.integrityAlarms(),
+        refusals: await fixed.quarantined(),
+      );
+      final condition = conditions.singleWhere((c) => c.rowId == row.id);
+      expect(condition.reAdmitted, isTrue,
+          reason: 'a refusal that healed is marked, not hidden');
+    });
+
+    test('a late registration re-verdicts the content behind it', () async {
+      // D is a device, not a fixture: it writes at the Workspace's current
+      // epoch, which is what the content behind a late grant is written at.
+      final workspace = await SimWorkspace.create(deviceCount: 3, fileBacked: true);
+      addTearDown(workspace.close);
+      final a = workspace.a;
+      final b = workspace.b;
+      await a.enrolment.turnOnEncryption(passphrase: workspace.passphrase);
+      await workspace.syncAll();
+
+      final broken = await b.reopenSyncStore(
+        attachTransport: true,
+        restoreChainedMembers: false,
+      );
+      await a.enrolment.revokeAndRotate(
+        passphrase: workspace.passphrase,
+        memberId: workspace.devices[2].identity.memberId,
+      );
+      await a.sync();
+
+      final d = await SimDevice.create(
+        label: 'D',
+        userId: workspace.userId,
+        server: workspace.server,
+        clock: workspace.clock,
+        timers: workspace.timers,
+        passphrase: workspace.passphrase,
+      );
+      addTearDown(d.close);
+      final dId = d.identity.memberId;
+
+      // D writes before its registration is applied: this device cannot judge
+      // the content yet, so it holds it.
+      d.clock.advance(1000);
+      await d.client.capture(
+        collection: _collection,
+        entityId: _docId,
+        fields: {'body': 'from D'},
+      );
+      await d.sync();
+      await broken.pull();
+
+      expect(
+        (await _breakRows(broken))
+            .where((row) => row.authorMemberId == dId && row.releasedAt == null),
+        isNotEmpty,
+        reason: 'D\'s registration is refused for the missing predecessor',
+      );
+
+      final fixed = await b.reopenSyncStore(attachTransport: true);
+      await fixed.pull();
+      await fixed.pull();
+
+      expect(await _entity(b, _docId), isNotNull,
+          reason: 'the content behind the late registration applies');
+      final logged = await (b.syncStore.select(b.syncStore.opLog)
+            ..where((r) =>
+                r.workspaceId.equals(fixed.workspaceId) &
+                r.authorMemberId.equals(dId)))
+          .get();
+      final contentRows = logged
+          .where((row) =>
+              OpHeader.parse(splitEnvelope(row.envelope).header).opClass ==
+              opClassContent)
+          .toList();
+      expect(contentRows, hasLength(1));
+      expect(contentRows.single.appliedAt, isNotNull);
+      expect(contentRows.single.refusedReason, isNull);
+    });
+
+    test('a row the user refused for good is not examined again', () async {
+      final scene = await _scene();
+      final b = scene.workspace.b;
+      final dId = scene.dFixture.memberId;
+
+      final held = (await _breakRows(scene.broken)).singleWhere(
+          (row) => row.authorMemberId == dId && row.releasedAt == null);
+
+      // The user ends the question: the refused change is refused for good.
+      await scene.broken.resolveRefusedItem(
+        held.id,
+        AlarmResolution.rejectedPermanently,
+      );
+
+      final fixed = await b.reopenSyncStore(attachTransport: true);
+      await fixed.pull();
+      await fixed.pull();
+
+      final row = (await _breakRows(fixed)).singleWhere((r) => r.id == held.id);
+      expect(row.releasedAt, isNull,
+          reason: 'the decision is the end of the question');
+      expect(fixed.directory.isChained(dId), isFalse);
+      expect(
+        (await _applied(b)).where((r) =>
+            r.controlType == controlTypeMemberRegister &&
+            ControlPayload.decode(r.payloadBytes).certificate().memberId == dId),
+        isEmpty,
+        reason: 'the registration was not applied behind the user\'s back',
       );
     });
   });
