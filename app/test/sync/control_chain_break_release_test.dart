@@ -527,8 +527,17 @@ void main() {
           reason: 'the refused row still exists');
       expect(refusedAfter.single.releasedAt, isNull,
           reason: 'the row was not released (slot envelope mismatch)');
-      expect(refusedAfter.single.envelope, differentEnvelope,
+      expect(refusedAfter.single.envelope, refusedEnvelope,
+          reason: 'the quarantined envelope is unchanged');
+      final slotAfter = await (store.select(store.opLog)
+            ..where((row) =>
+                row.workspaceId.equals(fixed.workspaceId) &
+                row.seq.equals(refusedSeq!)))
+          .getSingle();
+      expect(slotAfter.envelope, differentEnvelope,
           reason: 'the slot envelope is unchanged');
+      expect(slotAfter.appliedAt, isNull,
+          reason: 'the mismatched slot was not applied');
     });
   });
 }
