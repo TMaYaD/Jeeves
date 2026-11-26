@@ -116,6 +116,13 @@ void main() {
     try {
       await _settle(tester);
 
+      await tester.dragUntilVisible(
+        find.byKey(const Key('habit_row_place')),
+        find.byType(Scrollable).first,
+        const Offset(0, -200),
+      );
+      await tester.pump();
+
       expect(tester.takeException(), isNull);
       expect(_placeRowValue(tester), longName);
       final valueWidth = tester
@@ -127,7 +134,10 @@ void main() {
       expect(valueWidth, lessThanOrEqualTo(160));
     } finally {
       await tester.pumpWidget(const SizedBox.shrink());
+      await tester.runAsync(() => pumpEventQueue());
       container.dispose();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 10));
     }
   });
 
