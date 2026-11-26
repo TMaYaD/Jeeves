@@ -197,7 +197,7 @@ void main() {
   });
 
   group('the store', () {
-    test('a v11 sync store upgrades through v16 and keeps every row',
+    test('a v11 sync store upgrades to the current version and keeps every row',
         () async {
       final directory = Directory.systemTemp.createTempSync('sync-v11-');
       addTearDown(() => directory.deleteSync(recursive: true));
@@ -224,7 +224,7 @@ void main() {
 
       final upgraded = SyncDatabase(NativeDatabase(file));
       addTearDown(upgraded.close);
-      expect(upgraded.schemaVersion, 15);
+      expect(upgraded.schemaVersion, SyncDatabase.supportedSchemaVersion);
 
       final alarm = await upgraded.select(upgraded.integrityAlarms).getSingle();
       expect(alarm.kind, IntegrityAlarmKind.ownWritesRollback.code);
@@ -252,7 +252,7 @@ void main() {
       expect(tables, contains('unauthored_changes'));
     });
 
-    test('a v12 sync store upgrades through v16 and keeps every row', () async {
+    test('a v12 sync store upgrades to the current version and keeps every row', () async {
       final directory = Directory.systemTemp.createTempSync('sync-v12-');
       addTearDown(() => directory.deleteSync(recursive: true));
       final file = File('${directory.path}/sync.sqlite');
@@ -282,7 +282,7 @@ void main() {
 
       final upgraded = SyncDatabase(NativeDatabase(file));
       addTearDown(upgraded.close);
-      expect(upgraded.schemaVersion, 15);
+      expect(upgraded.schemaVersion, SyncDatabase.supportedSchemaVersion);
 
       final alarm = await upgraded.select(upgraded.integrityAlarms).getSingle();
       expect(alarm.kind, IntegrityAlarmKind.ownWritesRollback.code);
@@ -306,7 +306,7 @@ void main() {
       expect(unauthed.entityId, 't1');
     });
 
-    test('a v13 sync store upgrades through v16 and keeps every row', () async {
+    test('a v13 sync store upgrades to the current version and keeps every row', () async {
       final directory = Directory.systemTemp.createTempSync('sync-v13-');
       addTearDown(() => directory.deleteSync(recursive: true));
       final file = File('${directory.path}/sync.sqlite');
@@ -331,7 +331,7 @@ void main() {
 
       final upgraded = SyncDatabase(NativeDatabase(file));
       addTearDown(upgraded.close);
-      expect(upgraded.schemaVersion, 15);
+      expect(upgraded.schemaVersion, SyncDatabase.supportedSchemaVersion);
 
       final alarm = await upgraded.select(upgraded.integrityAlarms).getSingle();
       expect(alarm.kind, IntegrityAlarmKind.ownWritesRollback.code);
@@ -360,7 +360,7 @@ void main() {
       expect(tables, contains('vault_page_bases'));
     });
 
-    test('a v14 sync store upgrades through v16 and keeps its decisions', () async {
+    test('a v14 sync store upgrades to the current version and keeps its decisions', () async {
       final directory = Directory.systemTemp.createTempSync('sync-v14-');
       addTearDown(() => directory.deleteSync(recursive: true));
       final file = File('${directory.path}/sync.sqlite');
@@ -380,7 +380,7 @@ void main() {
 
       final upgraded = SyncDatabase(NativeDatabase(file));
       addTearDown(upgraded.close);
-      expect(upgraded.schemaVersion, 15);
+      expect(upgraded.schemaVersion, SyncDatabase.supportedSchemaVersion);
 
       final quarantine = await upgraded.select(upgraded.quarantinedOps).getSingle();
       expect(quarantine.reason, SyncRejectionReason.badSignature.code);

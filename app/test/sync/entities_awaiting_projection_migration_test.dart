@@ -73,7 +73,8 @@ void main() {
     expect(cursors.single.read<int>('acknowledged_sequence'), 7);
 
     final version = await upgraded.customSelect('PRAGMA user_version').get();
-    expect(version.single.read<int>('user_version'), 16);
+    expect(version.single.read<int>('user_version'),
+        SyncDatabase.supportedSchemaVersion);
 
     await closeUpgraded();
   });
