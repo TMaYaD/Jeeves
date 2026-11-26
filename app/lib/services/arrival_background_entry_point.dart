@@ -6,12 +6,24 @@
 /// what to do about an arrival lives elsewhere, where a test can reach it.
 library;
 
-import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:native_geofence/native_geofence.dart';
+
+import 'arrival_notifications.dart';
+import 'arrival_snapshot.dart';
 
 /// Called by the OS in a headless engine on a geofence event.
 @pragma('vm:entry-point')
 Future<void> handleArrivalGeofenceEvent(GeofenceCallbackParams params) async {
-  // The arrival notification is wired in a later step.
-  debugPrint('Arrival geofence event ${params.event.name}');
+  final isEnter = params.event == GeofenceEvent.enter;
+  if (!isEnter && params.event != GeofenceEvent.exit) return;
+  final files = await ArrivalFiles.inApplicationSupport();
+  for (final geofence in params.geofences) {
+    await handleArrivalEvent(
+      geofenceId: geofence.id,
+      isEnter: isEnter,
+      nowUtc: DateTime.now().toUtc(),
+      files: files,
+      sink: LocalArrivalNotificationSink(),
+    );
+  }
 }
