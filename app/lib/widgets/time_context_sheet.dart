@@ -12,6 +12,7 @@ import '../database/gtd_database.dart' show TimeWindow;
 import '../models/action_place_and_time_window.dart';
 import '../models/time_context.dart';
 import '../models/time_window_hours.dart';
+import '../providers/place_hours_provider.dart';
 import '../providers/task_detail_provider.dart';
 import '../providers/time_window_provider.dart';
 import 'meta_chip.dart';
@@ -36,10 +37,15 @@ class TimeContextChip extends ConsumerWidget {
     final raw = action.timeContext;
     final parsed = TimeContext.tryParse(raw);
     final hasContext = raw != null && raw.trim().isNotEmpty;
+    final placeHours = ref.watch(currentPlaceHoursProvider);
+    final actionPlaceHours = placeHours[outcomeId];
+
     final label = window?.name ??
         parsed?.describe() ??
-        (hasContext ? 'Unreadable' : 'Time context');
-    final isSet = window != null || hasContext;
+        (actionPlaceHours != null
+            ? '${actionPlaceHours.hours.hours.describe()} · from ${actionPlaceHours.placeName}'
+            : (hasContext ? 'Unreadable' : 'Time context'));
+    final isSet = window != null || hasContext || actionPlaceHours != null;
     return InkWell(
       key: const Key('time_context_chip'),
       borderRadius: BorderRadius.circular(4),
