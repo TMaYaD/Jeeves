@@ -29,7 +29,9 @@ import 'dart:typed_data';
 import 'package:drift/drift.dart' show driftRuntimeOptions;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jeeves/sync/collection_codecs.dart' show userPreferencesCollection;
 import 'package:jeeves/sync/envelope.dart';
+import 'package:jeeves/sync/ids.dart';
 import 'package:jeeves/sync/merge_strategy.dart';
 import 'package:jeeves/sync/op_payload.dart';
 import 'package:jeeves/sync/reducer.dart';
@@ -70,8 +72,24 @@ void main() {
   final localNowMs = document['local_now_ms'] as int;
   final futureSkewBoundMs = document['future_skew_bound_ms'] as int;
 
+  // The spec user's two implicit Workspaces. The reducer vectors name no
+  // Workspace — they name collections, and a collection belongs to a Workspace —
+  // so the ids come from the frozen envelope vectors, and the derivation is
+  // re-run here and asserted against what those vectors publish: the two sides
+  // cannot drift apart silently.
+  final identities = envelopeVectors()['identities'] as Map<String, dynamic>;
+  final specUserId = identities['user_id'] as String;
+  final specDefaultWorkspaceId = defaultWorkspaceId(specUserId);
+  final specPreferencesWorkspaceId = userPreferencesWorkspaceId(specUserId);
+
   test('the skew bound in the vectors is the reducer default', () {
     expect(futureSkewBoundMs, defaultFutureSkewBoundMs);
+  });
+
+  test('the spec Workspaces are derived the way the vectors publish them', () {
+    expect(specDefaultWorkspaceId, identities['workspace_id']);
+    expect(specPreferencesWorkspaceId, identities['user_preferences_workspace_id']);
+    expect(specDefaultWorkspaceId, isNot(specPreferencesWorkspaceId));
   });
 
   Future<void> runOrder(
@@ -85,12 +103,28 @@ void main() {
     final database = SyncDatabase(NativeDatabase.memory());
     addTearDown(database.close);
     final registry = CollectionRegistry(database);
-    final reducer = Reducer(
-      database,
-      nowMs: () => localNowMs,
-      futureSkewBoundMs: futureSkewBoundMs,
-      strategies: _registryFor(testCase),
-    );
+    // A log reduces only its own collections, so an op is reduced by the
+    // reducer for the Workspace that owns its collection: the preferences
+    // Workspace for `user_preferences`, the default one for everything else.
+    // Two reducers over the one store — the store is shared and the Workspace
+    // is not.
+    final reducers = <String, Reducer>{};
+    Reducer reducerFor(String collection) {
+      final workspaceId = collection == userPreferencesCollection
+          ? specPreferencesWorkspaceId
+          : specDefaultWorkspaceId;
+      return reducers.putIfAbsent(
+        workspaceId,
+        () => Reducer(
+          database,
+          nowMs: () => localNowMs,
+          workspaceId: workspaceId,
+          userId: specUserId,
+          futureSkewBoundMs: futureSkewBoundMs,
+          strategies: _registryFor(testCase),
+        ),
+      );
+    }
 
     final quarantined = <String>[];
     for (final op in ops) {
@@ -105,7 +139,7 @@ void main() {
           payload,
           opClass: (op['op_class'] as int?) ?? opClassContent,
         );
-        await reducer.apply(
+        await reducerFor(payload.collection).apply(
           payload,
           authorMemberIdHex: op['author_member_id_hex'] as String,
         );
