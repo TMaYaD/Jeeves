@@ -145,8 +145,8 @@ It writes no domain row, tombstone or change.
 Merge state reaches the domain store through the projector, which gives up the
 store's writer between batches — a whole-store re-projection (after a schema upgrade,
 or a rebuild from the log) never holds a user's edit back for its length. That walk,
-and only that walk, leaves alone an entity whose local change is still in the outbox.
-A remote change is always projected on arrival; one reduced but unprojected is recorded in the sync store, so the next pull projects it. `DomainProjector.project`
+and only that walk, leaves an entity whose local change is still in the outbox.
+Remote changes are projected on arrival, or by the next pull. `DomainProjector.project`
 (`sync/domain_projector.dart`) gives the reason for each.
 ## The vault: a folder of Markdown pages
 

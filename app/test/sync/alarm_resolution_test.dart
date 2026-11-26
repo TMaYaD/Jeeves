@@ -197,15 +197,15 @@ void main() {
   });
 
   group('the store', () {
-    test('a v11 sync store upgrades through v15 and keeps every row',
+    test('a v11 sync store upgrades through v16 and keeps every row',
         () async {
       final directory = Directory.systemTemp.createTempSync('sync-v11-');
       addTearDown(() => directory.deleteSync(recursive: true));
       final file = File('${directory.path}/sync.sqlite');
 
       final seed = SyncDatabase(NativeDatabase(file));
-      // Take the columns v14 and v15 brought back out, and the table v12
-      // brought, so the file on disk is what a v11 store held.
+      // Take the columns v14 and v15 brought back out, and the tables v12 and
+      // v16 brought, so the file on disk is what a v11 store held.
       await seed.customStatement('DROP TABLE unauthored_changes');
       await dropColumnsAddedAfter(seed, 11);
       await seed.customStatement(
@@ -252,7 +252,7 @@ void main() {
       expect(tables, contains('unauthored_changes'));
     });
 
-    test('a v12 sync store upgrades through v15 and keeps every row', () async {
+    test('a v12 sync store upgrades through v16 and keeps every row', () async {
       final directory = Directory.systemTemp.createTempSync('sync-v12-');
       addTearDown(() => directory.deleteSync(recursive: true));
       final file = File('${directory.path}/sync.sqlite');
@@ -306,7 +306,7 @@ void main() {
       expect(unauthed.entityId, 't1');
     });
 
-    test('a v13 sync store upgrades through v15 and keeps every row', () async {
+    test('a v13 sync store upgrades through v16 and keeps every row', () async {
       final directory = Directory.systemTemp.createTempSync('sync-v13-');
       addTearDown(() => directory.deleteSync(recursive: true));
       final file = File('${directory.path}/sync.sqlite');
@@ -360,7 +360,7 @@ void main() {
       expect(tables, contains('vault_page_bases'));
     });
 
-    test('a v14 sync store upgrades through v15 and keeps its decisions', () async {
+    test('a v14 sync store upgrades through v16 and keeps its decisions', () async {
       final directory = Directory.systemTemp.createTempSync('sync-v14-');
       addTearDown(() => directory.deleteSync(recursive: true));
       final file = File('${directory.path}/sync.sqlite');
