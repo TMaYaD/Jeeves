@@ -3770,11 +3770,10 @@ class SyncClient {
       if (seq == null) continue;
       // Parse the control op to get its author for chain successor release.
       final OpHeader header;
-      final ControlPayload payload;
       try {
         final parts = splitEnvelope(row.envelope);
         header = OpHeader.parse(parts.header);
-        payload = ControlPayload.decode(parseBody(parts.body));
+        ControlPayload.decode(parseBody(parts.body));
       } on SyncRejection {
         continue;
       }

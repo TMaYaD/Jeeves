@@ -28,6 +28,7 @@ import 'package:jeeves/sync/alarm_resolution.dart';
 import 'package:jeeves/sync/chain_verifier.dart';
 import 'package:jeeves/sync/control_payload.dart';
 import 'package:jeeves/sync/envelope.dart';
+import 'package:jeeves/sync/domain_projector.dart';
 import 'package:jeeves/sync/hlc.dart';
 import 'package:jeeves/sync/host/merge_state.dart';
 import 'package:jeeves/sync/sync_client.dart';
@@ -101,6 +102,32 @@ Future<_Scene> _scene() async {
   await workspace.enrolFixture(d);
   await broken.pull();
   return _Scene(workspace, broken, d);
+}
+
+/// Inject one storage failure at the real projection boundary.
+class _FailingOnceProjector extends DomainProjector {
+  _FailingOnceProjector(DomainProjector inner)
+      : super(registry: inner.registry, domain: inner.domain);
+
+  Set<AffectedEntity>? failedAffected;
+  Set<AffectedEntity>? retriedAffected;
+
+  @override
+  Future<Set<String>> project(
+    Iterable<AffectedEntity> affected, {
+    bool leaveEntitiesAwaitingMerge = false,
+  }) async {
+    final entities = affected.toSet();
+    if (failedAffected == null) {
+      failedAffected = entities;
+      throw StateError('projection storage failure');
+    }
+    retriedAffected = entities;
+    return super.project(
+      entities,
+      leaveEntitiesAwaitingMerge: leaveEntitiesAwaitingMerge,
+    );
+  }
 }
 
 void main() {
@@ -394,8 +421,20 @@ void main() {
       );
 
       final fixed = await b.reopenSyncStore(attachTransport: true);
+      final failingProjector = _FailingOnceProjector(fixed.projector!);
+      fixed.projector = failingProjector;
+      await expectLater(fixed.pull(), throwsA(isA<StateError>()));
+      final pending = (await _breakRows(fixed))
+          .singleWhere((row) => row.authorMemberId == dId);
+      expect(pending.releasedAt, isNull,
+          reason: 'the durable recovery row stays until projection succeeds');
+      expect(failingProjector.failedAffected, isNotEmpty);
       await fixed.pull();
-      await fixed.pull();
+      expect(failingProjector.retriedAffected,
+          containsAll(failingProjector.failedAffected!),
+          reason: 'an empty pull retries every affected entity from the rebuild');
+      expect((await _breakRows(fixed))
+          .singleWhere((row) => row.id == pending.id).releasedAt, isNotNull);
 
       expect(await _entity(b, _docId), isNotNull,
           reason: 'the content behind the late registration applies');
@@ -469,13 +508,12 @@ void main() {
       if (differentEnvelope.isNotEmpty) {
         differentEnvelope[differentEnvelope.length - 1] ^= 1; // flip one bit
       }
-      await fixed.syncStore.transaction(() async {
-        await fixed.syncStore.update(fixed.syncStore.opLog)
-          ..where((r) =>
-              r.workspaceId.equals(fixed.workspaceId) &
-              r.seq.equals(refusedSeq!))
-          ..write(OpLogCompanion(envelope: Value(differentEnvelope)));
-      });
+      final store = scene.workspace.b.syncStore;
+      await (store.update(store.opLog)
+            ..where((r) =>
+                r.workspaceId.equals(fixed.workspaceId) &
+                r.seq.equals(refusedSeq!)))
+          .write(OpLogCompanion(envelope: Value(differentEnvelope)));
 
       await fixed.pull();
       await fixed.pull();
