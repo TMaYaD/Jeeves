@@ -289,8 +289,9 @@ status has to be answerable offline:
 
 - *not enrolled* — no stored keys **and** no pinned Root. The state the two doors above
   arbitrate between.
-- *half-founded* — either keys with a Workspace this device has not registered in, or **a
-  pinned Root with no keys at all**. The second is the one that is easy to get wrong:
+- *half-founded* — keys with a Workspace this device has not registered in; **a Workspace
+  whose epoch keys it never adopted**; or **a pinned Root with no keys at all**. The last is
+  the one that is easy to get wrong:
   `enrolFirstDevice` writes the escrow and pins Root *before* it stores the keypairs, so a
   crash in that window leaves the account's escrow claimed by a device that cannot prove
   it, and founding again can only ever return `escrow_version_regression`. All three are

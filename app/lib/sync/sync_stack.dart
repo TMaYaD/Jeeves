@@ -305,15 +305,23 @@ class SyncStack {
   /// applied control log. A joining device applies the founder's genesis and
   /// Grant as soon as it pulls, so a non-empty control log says the Workspace
   /// exists — not that this device may claim it.
+  ///
+  /// And it counts only when no key adoption is pending there either (#993):
+  /// the ceremony registers first and adopts the epoch keys second, so a
+  /// device stopped between the two is registered in the Workspace and holds
+  /// none of its keys.
   Future<EnrolmentCeremonyStatus> readEnrolmentStatus() async {
     final registered = <String>[];
+    final pendingKeyAdoption = <String>[];
     for (final workspaceId in workspaceIds) {
       final client = await workspaceClientFactory(workspaceId);
       if (await client.ownRegistrationApplied()) registered.add(workspaceId);
+      if (await client.isKeyAdoptionPending()) pendingKeyAdoption.add(workspaceId);
     }
     return deriveEnrolmentCeremonyStatus(
       workspaceIds: workspaceIds,
       registeredWorkspaceIds: registered,
+      pendingKeyAdoptionWorkspaceIds: pendingKeyAdoption,
       storedMemberId: (await keyStore.read(defaultClient.workspaceId))?.memberId,
       pinnedRootPk: await defaultClient.pinnedRootPk(),
       highestEscrowVersionSeen: await defaultClient.highestEscrowVersionSeen(),

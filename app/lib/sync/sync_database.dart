@@ -406,6 +406,30 @@ class EpochFloors extends Table {
   Set<Column<Object>> get primaryKey => {workspaceId};
 }
 
+/// This device's enrolment in a Workspace has not finished its **key plane**.
+///
+/// The ceremony registers the device in a Workspace and *then* adopts that
+/// Workspace's epoch keys, so there is a window between the two in which the
+/// device is registered and holds no key for a Workspace that may well be
+/// encrypted. A row here says that window was entered and not left.
+///
+/// **Recorded rather than derived.** Nothing local says a Workspace is
+/// encrypted when this device holds no key for it: epoch 0 has no control op,
+/// and an encrypted Workspace with no content yet has nothing quarantined to
+/// notice. The absence of a key is therefore not evidence of anything, and the
+/// fact has to be written down to survive a crash.
+///
+/// Not named `cached_*` deliberately: this is not derived from anything. It is
+/// the record of an unfinished ceremony, and its presence is the contract.
+@DataClassName('PendingKeyAdoptionRow')
+class PendingKeyAdoptions extends Table {
+  TextColumn get workspaceId => text()();
+  TextColumn get userId => text()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {workspaceId, userId};
+}
+
 /// Whether this device has finished authoring its pre-enrolment domain store
 /// into the log, per account.
 ///
@@ -621,6 +645,7 @@ class EntitiesAwaitingProjection extends Table {
     UnauthoredChanges,
     VaultPageBases,
     EntitiesAwaitingProjection,
+    PendingKeyAdoptions,
   ],
 )
 class SyncDatabase extends _$SyncDatabase {
@@ -642,7 +667,8 @@ class SyncDatabase extends _$SyncDatabase {
   /// adds the columns that record the user's decision on an integrity alarm or
   /// a refused op (#575); v15 adds the column that records whether a take
   /// upstream reached the domain store (#575); v16 adds the record of a reduced
-  /// entity that still needs projecting (#1031).
+  /// entity that still needs projecting (#1031); v17 adds the record of an
+  /// enrolment that stopped before it adopted a Workspace's epoch keys (#993).
   @override
   int get schemaVersion => supportedSchemaVersion;
 
@@ -652,7 +678,7 @@ class SyncDatabase extends _$SyncDatabase {
   /// carrying a **higher** version was written by a newer build, and this
   /// build refuses it: the op log is the evidence every merge verdict is
   /// derived from, and a build that cannot read it must not relabel it.
-  static const int supportedSchemaVersion = 16;
+  static const int supportedSchemaVersion = 17;
 
   /// Additive only. A device that already holds a log keeps every byte of it:
   /// each step is `CREATE TABLE`s, an `ADD COLUMN` or a `CREATE INDEX`, and no
@@ -843,6 +869,10 @@ CREATE TABLE integrity_alarms (
             // One new table, nothing altered or backfilled: a device that
             // predates it owes no projection it could have recorded.
             await migrator.createTable(entitiesAwaitingProjection);
+          }
+          if (from < 17) {
+            // Additive only: existing devices have no pending adoption record.
+            await migrator.createTable(pendingKeyAdoptions);
           }
         },
       );

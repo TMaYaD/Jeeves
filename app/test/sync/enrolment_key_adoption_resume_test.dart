@@ -151,8 +151,7 @@ void main() {
 
     expect((await joiner.stack.readEnrolmentStatus()).state, EnrolmentState.enrolled);
     await expectHoldsEpochZero(joiner);
-  }, skip: 'reads as enrolled until #993 is fixed: the status knows nothing '
-      'about a Workspace whose keys this device never adopted');
+  });
 
   test('a device that finished enrolling reads as enrolled and does not adopt '
       'again', () async {

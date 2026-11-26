@@ -19,13 +19,15 @@
 /// 4. POST /members under the User credential — a shell row, no authority
 /// 5. Proof of possession -> the member-scoped transport
 /// 6. Per Workspace, default first then user_preferences:
-///      pull and apply the existing control log, then branch on what was seen
+///      record the pending key adoption, pull and apply the existing control
+///      log, then branch on what was seen
 ///        observed EMPTY     -> op 1 `workspace_genesis`, op 2 root-signed
 ///                             owner self-grant
 ///        observed NON-EMPTY -> op 1 `member_register`, op 2 root-signed
 ///                             owner self-grant
 ///        this device already registered here -> author nothing, flush what an
 ///                             earlier attempt left queued, and move on
+///      adopt (or mint) the Workspace's epoch keys, and clear the record
 /// 7. Drop Root
 /// ```
 ///
@@ -424,6 +426,17 @@ class EnrolmentService {
 
     // 6. Per Workspace, default first: pull, look, then claim.
     for (final workspace in _workspaces) {
+      final scoped = await _scoped(workspace);
+      // The key plane comes *after* the registration, so there is a window
+      // between the two in which this device is registered in the Workspace and
+      // holds none of its epoch keys. The record below is what makes that
+      // window visible: without it the device reads as enrolled and nothing
+      // ever offers the passphrase resume that adopts the keys (#993).
+      //
+      // Written before the claim, cleared only after the key plane finished —
+      // so a throw anywhere in between leaves the record in place, which is
+      // the honest answer.
+      await scoped.markKeyAdoptionPending();
       await _claimPlaceIn(workspace, root);
       // 6b. The key plane, once this device is a granted Member of the Workspace.
       //     Two mutually exclusive cases, decided by what the Workspace already is:
@@ -443,6 +456,7 @@ class EnrolmentService {
         masterWrapKey: masterWrapKey,
         encryptFromGenesis: encryptFromGenesis,
       );
+      await scoped.clearKeyAdoptionPending();
     }
     // 7. Root is dropped by the caller's `finally`, whatever happened here.
   }
