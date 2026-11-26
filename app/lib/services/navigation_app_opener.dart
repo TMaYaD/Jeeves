@@ -20,32 +20,29 @@ abstract class NavigationAppOpener {
 
 /// Opens the link through the platform.
 ///
-/// On Android a Google Maps route opens only in the Maps app: a browser would
-/// quietly keep three waypoints and drop the rest, and #60 says no stop is
-/// dropped. A Waze link loses nothing in a browser (it takes one stop), so it
-/// may open as a web page. On the web both open in a new tab.
+/// On Android a Google Maps route goes to the Maps app through an intent bound
+/// to its package: a browser would quietly keep three waypoints and drop the
+/// rest, and #60 says no stop is dropped. Without Maps it returns false. A
+/// Waze link loses nothing in a browser (it takes one stop), so it may open as
+/// a web page. On the web both open in a new tab.
 class UrlLauncherNavigationAppOpener implements NavigationAppOpener {
   const UrlLauncherNavigationAppOpener();
 
+  static const _channel = MethodChannel('jeeves/navigation_app');
+
   @override
   Future<bool> open(NavigationApp app, Uri uri) async {
-    final mode = switch (app) {
-      NavigationApp.googleMaps
-          when !kIsWeb && defaultTargetPlatform == TargetPlatform.android =>
-        LaunchMode.externalNonBrowserApplication,
-      _ => LaunchMode.externalApplication,
-    };
     try {
-      // Below API 30 Android ignores the non-browser mode, so a link could
-      // fall through to a browser that keeps three waypoints. Only Maps
-      // handles `google.navigation:`, so its absence means refuse.
       if (app == NavigationApp.googleMaps &&
           !kIsWeb &&
-          defaultTargetPlatform == TargetPlatform.android &&
-          !await canLaunchUrl(Uri.parse('google.navigation:q=0,0'))) {
-        return false;
+          defaultTargetPlatform == TargetPlatform.android) {
+        final opened = await _channel.invokeMethod<bool>(
+          'openInGoogleMaps',
+          {'url': uri.toString()},
+        );
+        return opened ?? false;
       }
-      return await launchUrl(uri, mode: mode);
+      return await launchUrl(uri, mode: LaunchMode.externalApplication);
     } on PlatformException {
       return false;
     }
