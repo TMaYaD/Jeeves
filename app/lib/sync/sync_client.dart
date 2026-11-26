@@ -294,7 +294,8 @@ class SyncClient {
 
   /// Quarantine rows of control ops applied late by
   /// [_releaseOpsAwaitingControlPredecessor], stamped released only after the
-  /// pull-tail [rebuildFromOpLog] has recomputed the grant verdicts they change.
+  /// pull-tail [rebuildFromOpLog] has recomputed the grant verdicts they change
+  /// and projection has succeeded.
   /// [_rebuildRequired] is memory only, so the unreleased row is the durable record
   /// that the rebuild is owed: a process exit before the stamp makes the next
   /// scan find the op already applied, set the flag again and retry.
@@ -1454,16 +1455,10 @@ class SyncClient {
       // the content ops applied under are no longer the right ones.
       affected.addAll(await rebuildFromOpLog());
     }
-    // The rebuild owed by late-applied control ops has completed (or none was
-    // owed); only now is it safe to drop their rows out of the scan.
-    // Preserve the obligation list in case projection fails: a later pull will
-    // retry the scan with the same affected rows until projection succeeds.
+    // Keep the whole batch durable until projection succeeds, including entities
+    // removed by the rebuild. An empty pull (or a new client) must retry them.
+    if (projector != null) await _recordAwaitingProjection(affected);
     final toRelease = _releaseAfterRebuild.toList();
-    if (toRelease.isNotEmpty) {
-      for (final rowId in toRelease) {
-        await _markReleased(rowId);
-      }
-    }
     // Projection is the tail of the receive order, one pass per batch: an
     // entity touched by three ops in one pull is projected once, from the
     // reduced state all three produced. It reads the durable record of reduced
@@ -1475,10 +1470,11 @@ class SyncClient {
         : await _entitiesAwaitingProjection();
     affected.addAll(recorded);
     final touched = await projector?.project(affected);
-    // Clear the obligation only after projection succeeds; if projection throws,
-    // the obligation is preserved for the next pull to retry.
-    if (toRelease.isNotEmpty) {
-      _releaseAfterRebuild.clear();
+    // A late control op still owes both its rebuild and projection until this
+    // point. Its unreleased row re-arms the rebuild after a process exit.
+    for (final rowId in toRelease) {
+      await _markReleased(rowId);
+      _releaseAfterRebuild.remove(rowId);
     }
     if (recorded.isNotEmpty) await _clearAwaitingProjection(recorded);
     // And the convergence passes run on what it changed. This is the route by
@@ -1627,6 +1623,9 @@ class SyncClient {
     // Derived state only. The op log, the outbox, the applied control log and the
     // quarantine are all evidence, and evidence is not edited.
     await _db.transaction(() async {
+      // Once wiped, an entity removed by replay cannot be rediscovered from
+      // reduced state. Queue it atomically with the wipe for projection retry.
+      if (projector != null) await _recordAwaitingProjection(reducedBefore);
       final preferences = isPreferencesWorkspace;
       Expression<bool> owned(GeneratedColumn<String> collection) => preferences
           ? collection.equals(userPreferencesCollection)
