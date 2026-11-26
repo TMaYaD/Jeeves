@@ -27,11 +27,19 @@
 ///   refused (`preference_value_without_key`, ADR-0033), so reduction consults no
 ///   stored state to pick a strategy and selection is order-independent
 ///   structurally rather than by policy.
+/// - **A log reduces only its own collections.** Each Workspace's log carries
+///   only the collections that belong to it, so a change whose collection
+///   belongs to another Workspace is refused
+///   (`collection_outside_workspace`) before anything about the op itself is
+///   asked. The verdict reads the collection and the receiving Workspace's
+///   identity, so it is the same on every Device.
 library;
 
+import 'collection_codecs.dart' show userPreferencesCollection;
 import 'host/change.dart';
 import 'host/merge_core.dart';
 import 'host/merge_state.dart';
+import 'ids.dart';
 import 'merge_strategy.dart';
 import 'op_payload.dart';
 import 'sync_database.dart';
@@ -48,6 +56,8 @@ class Reducer {
   Reducer(
     SyncDatabase db, {
     required int Function() nowMs,
+    required this.workspaceId,
+    required this.userId,
     this.futureSkewBoundMs = defaultFutureSkewBoundMs,
     this.strategies = const MergeStrategyRegistry(),
   })  : _nowMs = nowMs,
@@ -56,6 +66,35 @@ class Reducer {
   final MergeCore _core;
   final int Function() _nowMs;
   final int futureSkewBoundMs;
+
+  /// The Workspace whose log this reducer reduces.
+  ///
+  /// **The rule's other half.** A change is refused when its collection belongs
+  /// to a different Workspace than the log carrying it, and that is a claim
+  /// about the *pairing* — so the reducer has to know which log it is reducing.
+  /// One reducer per Workspace: the store behind it is shared, the Workspace is
+  /// not.
+  final String workspaceId;
+
+  /// The owning User, whose two implicit Workspaces are derived from it.
+  final String userId;
+
+  /// Whether this reducer reduces the User-global preferences Workspace.
+  ///
+  /// The one place a Workspace's *identity* changes a rule: preferences grant
+  /// every Device and no Service ever, and the boundary is structural rather
+  /// than a policy the reducer could be talked out of.
+  bool get isPreferencesWorkspace =>
+      workspaceId == userPreferencesWorkspaceId(userId);
+
+  /// Whether [collection] belongs to this Workspace.
+  ///
+  /// The rule, in one line: `user_preferences` belongs to the preferences
+  /// Workspace and every other collection to the default one. Merge state has
+  /// no Workspace column, so this is also how a rebuild tells its own entities
+  /// from the other Workspace's on the same Device.
+  bool ownsCollection(String collection) =>
+      (collection == userPreferencesCollection) == isPreferencesWorkspace;
 
   /// Which [FieldMergeStrategy] governs each field. The default is the Conflict
   /// Strategy registry's adapter; every collection but `user_preferences` resolves to LWW.
@@ -103,6 +142,19 @@ class Reducer {
     OpPayload payload, {
     required String authorMemberIdHex,
   }) {
+    // **First, before every other guard.** Whether this log may reduce the op
+    // at all comes before any question about the op's contents: a change whose
+    // collection belongs to another Workspace is not this log's to reduce, and
+    // nothing about its shape, clock or authorship can make it so. The order is
+    // pinned by a vector — an op that breaks this rule *and* the skew bound is
+    // refused under this code alone.
+    if (!ownsCollection(payload.collection)) {
+      throw SyncRejection(
+        SyncRejectionReason.collectionOutsideWorkspace,
+        'collection ${payload.collection} belongs to another Workspace than '
+        '$workspaceId',
+      );
+    }
     if (payload.hlc.wallMs > _nowMs() + futureSkewBoundMs) {
       throw SyncRejection(
         SyncRejectionReason.hlcInTheFuture,

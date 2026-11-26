@@ -319,6 +319,29 @@ enum SyncRejectionReason {
   /// in `spec/sync/reducer_v1_vectors.json`).
   preferenceValueWithoutKey('preference_value_without_key'),
 
+  /// A change whose `collection` belongs to a **different Workspace** than the
+  /// log that carries it.
+  ///
+  /// Each Workspace's log carries only its own collections: `user_preferences`
+  /// belongs to the preferences Workspace and every other collection to the
+  /// default one. A change that crosses that line is refused on every Device,
+  /// whichever Workspace's log carried it — the refusal is about the *pairing*
+  /// of a collection and a log, so it holds in both directions.
+  ///
+  /// **Stateless, identical on every device, and pinned by a golden vector.**
+  /// The verdict reads the collection and the receiving Workspace's identity,
+  /// and nothing else — not the stored state, not what this device has already
+  /// applied — so it is the payload-semantics class rather than a per-author
+  /// chain rule, and it carries a vector
+  /// (`user_preferences_change_in_the_default_workspace_log_is_refused` and its
+  /// mirror in `spec/sync/reducer_v1_vectors.json`).
+  ///
+  /// Logged-but-refused like [preferenceValueWithoutKey]: the envelope stays in
+  /// the op log as evidence with this code stamped, nothing reaches merge state
+  /// or the domain tables, and the author's chain accounting advances — so the
+  /// author's next honest change still applies.
+  collectionOutsideWorkspace('collection_outside_workspace'),
+
   // --- Per-author chain rules (client-only) ---------------------------------
   //
   // These six are *stateful receiver policy*, not per-envelope codec rules: the

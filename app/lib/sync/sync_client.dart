@@ -73,7 +73,6 @@ import 'domain_reconciler.dart';
 import 'envelope.dart';
 import 'grants_view.dart';
 import 'hlc.dart';
-import 'ids.dart';
 import 'key_wraps.dart';
 import 'member_identity.dart';
 import 'op_payload.dart';
@@ -171,12 +170,32 @@ class SyncClient {
     DateTime Function()? now,
   })  : _db = database,
         _clock = clock,
-        _reducer = reducer,
+        _reducer = _reducerFor(reducer, workspaceId),
         _transport = transport,
         directory = directory ?? MemberDirectory(),
         workspaceKeys = workspaceKeys ?? InMemoryWorkspaceKeyStore(),
         _now = now ?? DateTime.now {
     this.directory.rememberSelf(identity);
+  }
+
+  /// The reducer this client reduces through, checked against its Workspace.
+  ///
+  /// **The two cannot disagree.** The reducer holds the rule that refuses a
+  /// change whose collection belongs to another Workspace, and it holds it
+  /// against *its own* Workspace identity — so a client paired with another
+  /// Workspace's reducer would refuse every honest change, and a client paired
+  /// with a reducer that thinks it is the preferences Workspace would apply
+  /// another Workspace's collections. Either is a wiring mistake, and a
+  /// constructor that refuses it is cheaper than a device that quietly
+  /// mis-reduces.
+  static Reducer _reducerFor(Reducer reducer, String workspaceId) {
+    if (reducer.workspaceId != workspaceId) {
+      throw ArgumentError(
+        'a SyncClient for workspace $workspaceId cannot reduce through a '
+        'reducer built for workspace ${reducer.workspaceId}',
+      );
+    }
+    return reducer;
   }
 
   final String workspaceId;
@@ -189,7 +208,7 @@ class SyncClient {
   /// The one place a Workspace's *identity* changes a rule: preferences grant
   /// every Device and no Service ever, and the boundary is structural rather than
   /// a policy the reducer could be talked out of.
-  bool get isPreferencesWorkspace => workspaceId == userPreferencesWorkspaceId(userId);
+  bool get isPreferencesWorkspace => _reducer.isPreferencesWorkspace;
 
   /// Whether [collection] belongs to this client's Workspace.
   ///
@@ -197,8 +216,10 @@ class SyncClient {
   /// Workspace, every other collection to the GTD one). Merge state has no
   /// Workspace column, so this is how a rebuild tells its own entities from the
   /// other Workspace's on the same Device.
-  bool ownsCollection(String collection) =>
-      (collection == userPreferencesCollection) == isPreferencesWorkspace;
+  ///
+  /// The rule itself lives on the reducer, which is what refuses a change that
+  /// crosses the line; this is the same answer, read from the same place.
+  bool ownsCollection(String collection) => _reducer.ownsCollection(collection);
   final MemberIdentity identity;
   final MemberDirectory directory;
 

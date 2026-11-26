@@ -3,7 +3,7 @@
   "local_now_ms": 1800000000000,
   "future_skew_bound_ms": 300000,
   "$note": "Ops here are payload-level, paired with the header author the reducer's guards check against. Envelope framing is envelope_v1_vectors.json's job. 'expected_entities' lists the live fields of every live entity after applying the ops in order; an entity with no live field is absent from the map.",
-  "$case_schema": "Three optional per-case keys, all added by #550 and honoured by every runner. 'permute': apply the ops in every order and assert the reduced state is identical across all of them \u2014 a values-only pairwise case cannot catch an associativity failure. 'expected_clocks': the stored per-field HLC as {collection: {entity_id: {field: [wall_ms, counter, member_hex]}}}, asserted against `field_clocks` regardless of tombstone visibility, because a non-LWW strategy joins the clock independently of the value and nothing else observes that. 'strategy_overrides': {preference_key: strategy_name} for keys with no production strategy \u2014 today only 'set_merge', which is provisioned but unregistered. #555 adds a per-*op* key: 'op_class', present only when it is not 1, which the runner passes to the class-4 shape guard before the payload reaches the reducer.",
+  "$case_schema": "Three optional per-case keys, all added by #550 and honoured by every runner. 'permute': apply the ops in every order and assert the reduced state is identical across all of them \u2014 a values-only pairwise case cannot catch an associativity failure. 'expected_clocks': the stored per-field HLC as {collection: {entity_id: {field: [wall_ms, counter, member_hex]}}}, asserted against `field_clocks` regardless of tombstone visibility, because a non-LWW strategy joins the clock independently of the value and nothing else observes that. 'strategy_overrides': {preference_key: strategy_name} for keys with no production strategy \u2014 today only 'set_merge', which is provisioned but unregistered. #555 adds a per-*op* key: 'op_class', present only when it is not 1, which the runner passes to the class-4 shape guard before the payload reaches the reducer. A per-*case* key 'log_workspace' names which of the spec user's two Workspaces carries the case's ops: 'default' or 'preferences'. Absent means each op travels in the Workspace its collection belongs to \u2014 the preferences Workspace for 'user_preferences', the default one for every other collection \u2014 which describes every case that predates the key.",
   "cases": [
     {
       "name": "single_write",
@@ -1190,7 +1190,7 @@
     },
     {
       "name": "max_timestamp_value_clear_then_earlier_resnooze_keeps_preclear_floor",
-      "note": "The owned divergence from ADR-0011's pairwise matrix (ADR-0030): the value join is a max over every value ever asserted, so a re-snooze carrying an *earlier* value after a clear revives the field at the pre-clear floor. The floor never shrinks through a clear \u2014 it errs toward longer silence and never re-fires early.",
+      "note": "The owned divergence from the registry's pairwise matrix (ADR-0030): the value join is a max over every value ever asserted, so a re-snooze carrying an *earlier* value after a clear revives the field at the pre-clear floor. The floor never shrinks through a clear \u2014 it errs toward longer silence and never re-fires early.",
       "permute": true,
       "ops": [
         {
@@ -2183,6 +2183,86 @@
       },
       "expected_quarantine_reasons": [
         "compaction_field_without_hlc"
+      ]
+    },
+    {
+      "name": "user_preferences_change_in_the_default_workspace_log_is_refused",
+      "note": "A well-formed user_preferences write carried by the default Workspace's log. The collection belongs to the preferences Workspace, so the log may not reduce it: it is refused under collection_outside_workspace and nothing is reduced. The second op is the same kind of write and is also beyond the skew bound, which pins the order \u2014 the Workspace check runs first, so the verdict is the Workspace one and not hlc_in_the_future. Not permuted: quarantine is a per-arrival fact the permutation harness cannot assert.",
+      "log_workspace": "default",
+      "ops": [
+        {
+          "author_member_id_hex": "bb0ed91aa6e058d5b26cbf810533e512",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "34736729-93ca-55f0-8bf9-0ab5eca99873",
+            "fields": {
+              "key": {
+                "v": "nudge_snoozed_until"
+              },
+              "value": {
+                "v": "\"2026-06-01T00:00:00.000Z\""
+              }
+            },
+            "hlc": [
+              1800000000000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        },
+        {
+          "author_member_id_hex": "7b1f9b7ebc6156cbb599b381b220645f",
+          "payload": {
+            "collection": "user_preferences",
+            "id": "34736729-93ca-55f0-8bf9-0ab5eca99873",
+            "fields": {
+              "key": {
+                "v": "nudge_snoozed_until"
+              },
+              "value": {
+                "v": "\"2026-01-01T00:00:00.000Z\""
+              }
+            },
+            "hlc": [
+              1800003600000,
+              0,
+              "7b1f9b7ebc6156cbb599b381b220645f"
+            ]
+          }
+        }
+      ],
+      "expected_entities": {},
+      "expected_quarantine_reasons": [
+        "collection_outside_workspace",
+        "collection_outside_workspace"
+      ]
+    },
+    {
+      "name": "default_workspace_collection_in_the_preferences_log_is_refused",
+      "note": "The other direction: a collection that belongs to the default Workspace, carried by the preferences Workspace's log. The refusal is the same code \u2014 it is about the pairing of a collection and a log, not about which of the two is the preferences one \u2014 and it holds on every device, since the verdict reads the collection and the receiving Workspace and nothing else.",
+      "log_workspace": "preferences",
+      "ops": [
+        {
+          "author_member_id_hex": "bb0ed91aa6e058d5b26cbf810533e512",
+          "payload": {
+            "collection": "harness_docs",
+            "id": "05da3673-f2b2-5e77-994f-b23b3c1e8ebc",
+            "fields": {
+              "a": {
+                "v": "from_the_wrong_log"
+              }
+            },
+            "hlc": [
+              1800000000000,
+              0,
+              "bb0ed91aa6e058d5b26cbf810533e512"
+            ]
+          }
+        }
+      ],
+      "expected_entities": {},
+      "expected_quarantine_reasons": [
+        "collection_outside_workspace"
       ]
     }
   ]
