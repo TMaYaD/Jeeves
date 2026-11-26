@@ -469,7 +469,7 @@ void main() {
     );
     await tester.pumpWidget(
       UncontrolledProviderScope(
-        container: container,
+        container: container!,
         child: MaterialApp.router(routerConfig: router),
       ),
     );
@@ -515,7 +515,7 @@ void main() {
     );
     await tester.pumpWidget(
       UncontrolledProviderScope(
-        container: container,
+        container: container!,
         child: MaterialApp.router(routerConfig: router),
       ),
     );

@@ -24,7 +24,6 @@ import 'package:jeeves/providers/location_permission_flow.dart';
 import 'package:jeeves/providers/phone_time_zone_provider.dart';
 import 'package:jeeves/providers/arrival_permission_flow.dart';
 import 'package:jeeves/providers/location_source_provider.dart';
-import 'package:jeeves/providers/place_gate_provider.dart';
 import 'package:jeeves/providers/places_provider.dart';
 import 'package:jeeves/providers/time_window_provider.dart';
 import 'package:jeeves/widgets/place_editor_sheet.dart';
