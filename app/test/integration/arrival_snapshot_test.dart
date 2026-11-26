@@ -11,6 +11,7 @@ import 'dart:io';
 
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
+import 'package:flutter/widgets.dart' show AppLifecycleState;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -20,9 +21,13 @@ import 'package:jeeves/models/place_area.dart';
 import 'package:jeeves/providers/arrival_notification_settings.dart';
 import 'package:jeeves/providers/arrival_snapshot_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/providers/location_source_provider.dart';
+import 'package:jeeves/services/location_source.dart';
 import 'package:jeeves/services/arrival_snapshot.dart';
 import 'package:jeeves/services/arrival_visit_rule.dart';
 
+import '../helpers/fake_geofence_registrar.dart';
+import '../helpers/fake_location_source.dart';
 import '../test_helpers.dart';
 
 const _userId = 'local';
@@ -47,13 +52,20 @@ void main() {
   late Directory directory;
   late ArrivalFiles files;
   late ProviderContainer container;
+  late FakeGeofenceRegistrar registrar;
+  late FakeLocationSource location;
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     db = GtdDatabase(NativeDatabase.memory());
     directory = Directory.systemTemp.createTempSync('jeeves-arrival-snapshot');
     files = ArrivalFiles(directory);
+    registrar = FakeGeofenceRegistrar();
+    location = FakeLocationSource()
+      ..permissionState = LocationPermission.always;
     container = ProviderContainer(overrides: [
+      geofenceRegistrarProvider.overrideWithValue(registrar),
+      locationSourceProvider.overrideWithValue(location),
       databaseProvider.overrideWithValue(db),
       arrivalFilesProvider.overrideWith((ref) async => files),
     ]);
@@ -269,5 +281,112 @@ void main() {
     // The visit at a Place Jeeves no longer watches is gone too.
     final visits = await waitForVisits((visits) => !visits.containsKey(storeId));
     expect(visits, isEmpty);
+  });
+
+  /// Waits until [done] holds, or fails with [what].
+  Future<void> waitUntil(bool Function() done, String what) async {
+    for (var attempt = 0; attempt < 800; attempt++) {
+      if (done()) return;
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    fail('never happened: $what');
+  }
+
+  group('the OS watches exactly the switched-on Places', () {
+    test('switching on registers the Place once, with its radius', () async {
+      final homeId = await createPlace('Home', _storeLatitude, _storeLongitude);
+      await container.read(arrivalPlaceIdsProvider.notifier).turnOn(homeId);
+
+      await waitUntil(() => registrar.watched.containsKey(homeId), 'registered');
+      await waitForSnapshot((s) => placeIn(s, homeId) != null);
+      expect(registrar.registrations, hasLength(1));
+      expect(registrar.registrations.single.radiusMeters, 150);
+    });
+
+    test('editing the area removes the Place and registers it again',
+        () async {
+      final homeId = await createPlace('Home', _storeLatitude, _storeLongitude);
+      await container.read(arrivalPlaceIdsProvider.notifier).turnOn(homeId);
+      await waitUntil(() => registrar.registrations.length == 1, 'first');
+
+      await db.placeDao.updateNamedPlace(placeId: homeId, radiusMeters: 400);
+
+      await waitUntil(() => registrar.registrations.length == 2, 'second');
+      expect(registrar.removals, [homeId]);
+      expect(registrar.watched[homeId]!.radiusMeters, 400);
+    });
+
+    test('an unrelated change does not register the Place again', () async {
+      final homeId = await createPlace('Home', _storeLatitude, _storeLongitude);
+      await container.read(arrivalPlaceIdsProvider.notifier).turnOn(homeId);
+      await waitUntil(() => registrar.registrations.length == 1, 'first');
+
+      await createOutcome('o-a', 'Water the plants');
+      await putAtPlace('o-a', homeId);
+      await waitForSnapshot((s) => placeIn(s, homeId)?.dueCount == 1);
+
+      expect(registrar.registrations, hasLength(1));
+      expect(registrar.removals, isEmpty);
+    });
+
+    test('switching off removes the Place', () async {
+      final homeId = await createPlace('Home', _storeLatitude, _storeLongitude);
+      await container.read(arrivalPlaceIdsProvider.notifier).turnOn(homeId);
+      await waitUntil(() => registrar.watched.containsKey(homeId), 'registered');
+
+      await container.read(arrivalPlaceIdsProvider.notifier).turnOff(homeId);
+
+      await waitUntil(() => registrar.watched.isEmpty, 'removed');
+    });
+
+    test('deleting the Place removes it', () async {
+      final homeId = await createPlace('Home', _storeLatitude, _storeLongitude);
+      await container.read(arrivalPlaceIdsProvider.notifier).turnOn(homeId);
+      await waitUntil(() => registrar.watched.containsKey(homeId), 'registered');
+
+      await db.placeDao.deletePlace(homeId);
+
+      await waitUntil(() => registrar.watched.isEmpty, 'removed');
+    });
+
+    test('with location only while using, nothing is registered', () async {
+      location.permissionState = LocationPermission.whileInUse;
+      final homeId = await createPlace('Home', _storeLatitude, _storeLongitude);
+      await container.read(arrivalPlaceIdsProvider.notifier).turnOn(homeId);
+
+      await waitForSnapshot((s) => placeIn(s, homeId) != null);
+      await container.read(arrivalSnapshotWriterProvider)!.settled();
+
+      expect(registrar.registrations, isEmpty);
+    });
+
+    test('coming back to the app registers a Place the OS lost', () async {
+      final homeId = await createPlace('Home', _storeLatitude, _storeLongitude);
+      await container.read(arrivalPlaceIdsProvider.notifier).turnOn(homeId);
+      await waitUntil(() => registrar.registrations.length == 1, 'first');
+
+      // The OS forgets the geofence while Jeeves is away.
+      registrar.watched.clear();
+      TestWidgetsFlutterBinding.instance
+          .handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+
+      await waitUntil(() => registrar.watched.containsKey(homeId), 'again');
+      expect(registrar.registrations, hasLength(2));
+    });
+
+    test('a refused registration is tried again on the next run', () async {
+      registrar.registerError = StateError('permission missing');
+      final homeId = await createPlace('Home', _storeLatitude, _storeLongitude);
+      await container.read(arrivalPlaceIdsProvider.notifier).turnOn(homeId);
+      await waitForSnapshot((s) => placeIn(s, homeId) != null);
+      await container.read(arrivalSnapshotWriterProvider)!.settled();
+      expect(registrar.watched, isEmpty);
+
+      registrar.registerError = null;
+      TestWidgetsFlutterBinding.instance
+          .handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+
+      await waitUntil(() => registrar.watched.containsKey(homeId), 'retried');
+    });
   });
 }

@@ -11,14 +11,18 @@
 library;
 
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/gtd_database.dart';
 import '../models/action_place_and_time_window.dart';
 import '../services/arrival_snapshot.dart';
 import '../services/arrival_visit_rule.dart';
+import '../services/geofence_registrar.dart';
+import '../services/location_source.dart';
 import 'arrival_notification_settings.dart';
 import 'database_provider.dart';
+import 'location_source_provider.dart';
 import 'place_gate_provider.dart';
 
 /// The user's named Places, watched.
@@ -41,6 +45,11 @@ final arrivalFilesProvider = FutureProvider<ArrivalFiles>((ref) async {
   return ArrivalFiles.inApplicationSupport();
 });
 
+/// The OS's list of Places to watch.
+final geofenceRegistrarProvider = Provider<GeofenceRegistrar>((ref) {
+  return createGeofenceRegistrar();
+});
+
 /// The writer that keeps the arrival snapshot in step.
 ///
 /// It is a provider of its own because the reconciler below is rebuilt every
@@ -52,8 +61,17 @@ final arrivalSnapshotWriterProvider = Provider<ArrivalSnapshotWriter?>((ref) {
 
   final writer = ArrivalSnapshotWriter(
     files: ref.watch(arrivalFilesProvider.future),
+    registrar: ref.watch(geofenceRegistrarProvider),
+    permission: () => ref.read(locationSourceProvider).permission(),
   );
-  ref.onDispose(writer.dispose);
+  // Android can drop a geofence while Jeeves is away, so the OS's list is
+  // checked again each time the app comes back.
+  final observer = _ResumeObserver(writer.reconcileGeofencesAgain);
+  WidgetsBinding.instance.addObserver(observer);
+  ref.onDispose(() {
+    WidgetsBinding.instance.removeObserver(observer);
+    writer.dispose();
+  });
   return writer;
 });
 
@@ -125,15 +143,41 @@ ArrivalSnapshot buildArrivalSnapshot({
   return (places: places);
 }
 
-/// Keeps the arrival snapshot on disk equal to what the app knows.
+class _ResumeObserver with WidgetsBindingObserver {
+  _ResumeObserver(this._onResumed);
+
+  final void Function() _onResumed;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _onResumed();
+  }
+}
+
+/// Keeps the arrival snapshot on disk equal to what the app knows, and the
+/// OS watching exactly the Places in it.
 ///
 /// The writes are queued, so two changes that arrive together are written one
 /// after the other and the file ends with the newer of them.
 class ArrivalSnapshotWriter {
-  ArrivalSnapshotWriter({required this.files});
+  ArrivalSnapshotWriter({
+    required this.files,
+    required this.registrar,
+    required this.permission,
+  });
 
   /// Where the two files are.
   final Future<ArrivalFiles> files;
+
+  /// The OS's list of Places to watch.
+  final GeofenceRegistrar registrar;
+
+  /// The location permission as it stands now.
+  final Future<LocationPermission> Function() permission;
+
+  /// The snapshot most recently built, so the OS's list can be checked again
+  /// without waiting for something to change.
+  ArrivalSnapshot _latest = emptyArrivalSnapshot;
 
   /// The snapshot as last written, so that an unchanged one is not written
   /// again.
@@ -162,6 +206,15 @@ class ArrivalSnapshotWriter {
         ));
   }
 
+  /// Checks the OS's list of Places against the latest snapshot again.
+  void reconcileGeofencesAgain() {
+    _enqueue(() async {
+      final arrivalFiles = await _resolveFiles();
+      if (arrivalFiles == null) return;
+      await _reconcileGeofences(arrivalFiles, _latest);
+    });
+  }
+
   /// Completes once every write queued so far has finished.
   Future<void> settled() => _queue;
 
@@ -187,6 +240,8 @@ class ArrivalSnapshotWriter {
       currentPlaces: currentPlaces,
     );
 
+    _latest = snapshot;
+
     final arrivalFiles = await _resolveFiles();
     if (arrivalFiles == null) return;
 
@@ -197,6 +252,22 @@ class ArrivalSnapshotWriter {
     }
 
     await _pruneVisits(arrivalFiles, snapshot);
+    await _reconcileGeofences(arrivalFiles, snapshot);
+  }
+
+  /// Makes the OS watch exactly the Places of [snapshot].
+  Future<void> _reconcileGeofences(
+    ArrivalFiles arrivalFiles,
+    ArrivalSnapshot snapshot,
+  ) async {
+    final before = await arrivalFiles.readRegisteredAreas();
+    final after = await reconcileGeofences(
+      registrar: registrar,
+      snapshot: snapshot,
+      areas: before,
+      permission: await permission(),
+    );
+    if (!_sameAreas(before, after)) await arrivalFiles.writeRegisteredAreas(after);
   }
 
   /// Where the files are, looked up once.
@@ -245,6 +316,14 @@ bool _sameSnapshot(ArrivalSnapshot a, ArrivalSnapshot b) {
     for (var title = 0; title < first.dueTitles.length; title++) {
       if (first.dueTitles[title] != second.dueTitles[title]) return false;
     }
+  }
+  return true;
+}
+
+bool _sameAreas(Map<String, String> a, Map<String, String> b) {
+  if (a.length != b.length) return false;
+  for (final entry in a.entries) {
+    if (b[entry.key] != entry.value) return false;
   }
   return true;
 }

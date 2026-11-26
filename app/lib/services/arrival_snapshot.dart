@@ -35,6 +35,9 @@ const String arrivalSnapshotFileName = 'arrival_snapshot.json';
 /// The name of the file holding the visit record.
 const String arrivalVisitsFileName = 'arrival_visits.json';
 
+/// The name of the file holding the areas Jeeves last registered with the OS.
+const String arrivalGeofencesFileName = 'arrival_geofences.json';
+
 /// The version of the format this build writes.
 const int arrivalSnapshotFormatVersion = 1;
 
@@ -162,6 +165,10 @@ class ArrivalFiles {
   /// The file holding the visit record.
   File get visitsFile => File(p.join(directory.path, arrivalVisitsFileName));
 
+  /// The file holding the areas last registered with the OS, by Place id.
+  /// Only the foreground app reads it.
+  File get geofencesFile => File(p.join(directory.path, arrivalGeofencesFileName));
+
   /// Reads the snapshot. A file that is missing or unreadable reads as empty.
   Future<ArrivalSnapshot> readSnapshot() async {
     try {
@@ -190,6 +197,31 @@ class ArrivalFiles {
   /// Writes the visit record, so that a reader never sees half of one.
   Future<void> writeVisits(Map<String, PlaceVisit> visits) =>
       _writeAtomically(visitsFile, encodeVisitRecord(visits));
+
+  /// Reads the areas last registered with the OS, by Place id. A file that is
+  /// missing or unreadable reads as none: every Place is then registered
+  /// again, which is the safe way to be wrong.
+  Future<Map<String, String>> readRegisteredAreas() async {
+    try {
+      final decoded = _decodeObject(await geofencesFile.readAsString());
+      final areas = decoded?['areas'];
+      if (areas is! Map) return <String, String>{};
+      return {
+        for (final entry in areas.entries)
+          if (entry.key is String && entry.value is String)
+            entry.key as String: entry.value as String,
+      };
+    } on Object {
+      return <String, String>{};
+    }
+  }
+
+  /// Writes the areas last registered with the OS.
+  Future<void> writeRegisteredAreas(Map<String, String> areas) =>
+      _writeAtomically(
+        geofencesFile,
+        jsonEncode({'version': arrivalSnapshotFormatVersion, 'areas': areas}),
+      );
 
   /// Writes [text] to [file] through a temporary file, so that a reader — the
   /// background arrival code — sees either the old file or the new one, never

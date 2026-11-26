@@ -49,6 +49,7 @@ dependencies:
 
   # Location
   geolocator: ^14.1.2
+  native_geofence: ^1.5.1
   geocoding: ^5.0.1
 
   # Voice / Speech
