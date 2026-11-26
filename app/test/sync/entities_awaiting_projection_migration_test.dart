@@ -12,6 +12,8 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/sync/sync_database.dart';
 
+import 'harness/resolution_columns.dart';
+
 void main() {
   test('an upgrade from v15 adds the table and keeps the reduced state', () async {
     final directory =
@@ -39,7 +41,7 @@ void main() {
     );
 
     // The store as a device that has not upgraded yet: v15, without the table.
-    await current.customStatement('DROP TABLE entities_awaiting_projection');
+    await dropColumnsAddedAfter(current, 15);
     await current.customStatement('PRAGMA user_version = 15');
     await closeCurrent();
 
