@@ -307,8 +307,11 @@ class HabitDao extends DatabaseAccessor<GtdDatabase> with _$HabitDaoMixin {
     );
     var wrotePin = false;
     await attachedDatabase.capturing(() async {
-      var place = await _namedPlaceId(placeId);
-      if (pinArea != null) {
+      // A pin wins over a named Place; a refused pin leaves no Place at all.
+      String? place;
+      if (pinArea == null) {
+        place = await _namedPlaceId(placeId);
+      } else {
         final pinId = await _insertPin(
           userId: userId,
           area: pinArea,

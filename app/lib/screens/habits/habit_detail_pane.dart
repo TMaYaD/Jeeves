@@ -871,7 +871,18 @@ class _FieldRow extends StatelessWidget {
   Widget build(BuildContext context) => ListTile(
     key: rowKey,
     title: Text(label),
-    trailing: Text(value, style: Theme.of(context).textTheme.bodyMedium),
+    trailing: ConstrainedBox(
+      constraints: BoxConstraints(
+        maxWidth: MediaQuery.sizeOf(context).width * 0.5,
+      ),
+      child: Text(
+        value,
+        style: Theme.of(context).textTheme.bodyMedium,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        textAlign: TextAlign.end,
+      ),
+    ),
     onTap: onTap,
   );
 }

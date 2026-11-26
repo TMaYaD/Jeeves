@@ -2208,6 +2208,29 @@ void main() {
           expect(await placeIdOf(habitId), isNull);
           expect(await db.select(db.places).get(), isEmpty);
         });
+
+        test('a refused pin does not fall back to the named Place', () async {
+          final placeId = await namedPlace('Hardware store');
+
+          final habitId = await db.habitDao.createHabit(
+            userId: _userId,
+            title: 'Read a book',
+            today: '2026-11-18',
+            now: _now,
+            firstCommitment: _everyDay,
+            placeId: placeId,
+            pinArea: area,
+            pinName: 'x' * (Places.maxNameLength + 1),
+          );
+
+          expect(await placeIdOf(habitId), isNull);
+          expect(
+            await (db.select(db.places)
+                  ..where((p) => p.kind.equals(pinPlaceKind)))
+                .get(),
+            isEmpty,
+          );
+        });
       });
     });
   });

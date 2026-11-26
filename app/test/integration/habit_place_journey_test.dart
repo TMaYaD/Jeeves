@@ -86,6 +86,51 @@ void main() {
     await db.close();
   });
 
+  testWidgets('a long Place name is cut short in a narrow Place row', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    final longName = 'L' * 100;
+    final longId = (await db.placeDao.createNamedPlace(
+      name: longName,
+      latitudeDegrees: 52.3702,
+      longitudeDegrees: 4.8952,
+      radiusMeters: 150,
+      userId: 'local',
+    ))!;
+    await db.habitDao.setNamedPlace(habitId, longId, now: DateTime.now());
+
+    final container = ProviderContainer(overrides: [
+      databaseProvider.overrideWithValue(db),
+      locationSourceProvider.overrideWithValue(location),
+    ]);
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(home: HabitDetailScreen(habitId: habitId)),
+      ),
+    );
+    try {
+      await _settle(tester);
+
+      expect(tester.takeException(), isNull);
+      expect(_placeRowValue(tester), longName);
+      final valueWidth = tester
+          .getSize(find.descendant(
+            of: find.byKey(const Key('habit_row_place')),
+            matching: find.byType(Text),
+          ).last)
+          .width;
+      expect(valueWidth, lessThanOrEqualTo(160));
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      container.dispose();
+    }
+  });
+
   testWidgets('a saved Habit takes a named Place, then a pin, then none', (
     tester,
   ) async {
