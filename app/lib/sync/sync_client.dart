@@ -2264,15 +2264,16 @@ class SyncClient {
     // reading `attested[authorSeq]` preserves the stored-over-provisional
     // precedence the two separate queries had.
     final positions = await _attestedPositions(header.authorMemberId, head: head);
+    final stored = await _storedAtAuthorSeq(header.authorMemberId, header.authorSeq);
     return chainVerdict(
       header: header,
       envelope: envelope,
       head: head,
-      storedAtAuthorSeq: await _storedAtAuthorSeq(
-        header.authorMemberId,
-        header.authorSeq,
-      ),
+      storedAtAuthorSeq: stored,
       storedUnderOpId: await _storedUnderOpId(header.authorMemberId, header.opId),
+      acceptedHole: stored == null && !positions.attested.containsKey(header.authorSeq)
+          ? await _acceptedHoleNeighbours(header)
+          : null,
       // The seam #551 left dormant, now live: a verified prune or an accepted
       // hole is what can supply a floor, and the floor wins above the derived
       // head so a mid-chain hole is bridgeable rather than a permanent gap.
@@ -2283,6 +2284,27 @@ class SyncClient {
               envelopeHash: positions.attested[header.authorSeq]!,
             )
           : null,
+    );
+  }
+
+  /// What an accepted hole pins down around [header]'s position, or null when the
+  /// position lies in no accepted hole (#975).
+  Future<AcceptedHoleNeighbours?> _acceptedHoleNeighbours(OpHeader header) async {
+    final holes = await acceptedChainHoles(authorMemberId: header.authorMemberId);
+    final hole = _holeCovering(holes, header.authorSeq);
+    if (hole == null) return null;
+    final before = await _storedAtAuthorSeq(header.authorMemberId, header.authorSeq - 1);
+    final after = await _storedAtAuthorSeq(header.authorMemberId, header.authorSeq + 1);
+    Uint8List? successorPrevAuthorHash;
+    if (after != null) {
+      successorPrevAuthorHash =
+          OpHeader.parse(splitEnvelope(after.envelope).header).prevAuthorHash;
+    } else if (header.authorSeq == hole.lastMissingAuthorSeq) {
+      successorPrevAuthorHash = hole.lastMissingEnvelopeHash;
+    }
+    return (
+      predecessorEnvelopeHash: before == null ? null : envelopeHash(before.envelope),
+      successorPrevAuthorHash: successorPrevAuthorHash,
     );
   }
 

@@ -2389,7 +2389,13 @@ void main() {
     /// The peer's content positions are 3, 4 and 5 — the enrolment spent the
     /// first two on the register and the grant — so only the first arrives, the
     /// logged head is 3, and the change that never came is at 4.
-    Future<({Uint8List withheld, Uint8List third, int thirdTransportSeq})>
+    Future<
+            ({
+              Uint8List withheld,
+              int withheldTransportSeq,
+              Uint8List third,
+              int thirdTransportSeq,
+            })>
         withholdTwoChanges() async {
       final first = await _op(workspace, peer, 'one');
       final withheld = await _op(workspace, peer, 'two');
@@ -2403,6 +2409,7 @@ void main() {
       await a.sync();
       return (
         withheld: withheld,
+        withheldTransportSeq: appended[1].seq,
         third: third,
         thirdTransportSeq: appended[2].seq,
       );
@@ -2565,6 +2572,75 @@ void main() {
         firstPeerContentAuthorSeq,
         reason: 'a hole that does not start at the head is not a bridge',
       );
+    });
+
+    test('a missing change that arrives later fills the hole', () async {
+      final withheld = await withholdTwoChanges();
+      await acceptHole(
+        firstMissingAuthorSeq: firstPeerContentAuthorSeq + 1,
+        lastMissingAuthorSeq: firstPeerContentAuthorSeq + 1,
+        lastMissingEnvelopeHash: envelopeHash(withheld.withheld),
+      );
+      workspace.server.omitSeqs.remove(withheld.thirdTransportSeq);
+      await a.sync();
+      expect(await _doc(a, workspace), {'step': 'three'});
+
+      // The change the hole stands for turns up after all.
+      workspace.server.omitSeqs.remove(withheld.withheldTransportSeq);
+      await a.client.resetCursorForReplay();
+      await a.sync();
+
+      final logged = await a.loggedOps();
+      final filled = logged.where(
+        (row) => row.authorSeq == firstPeerContentAuthorSeq + 1,
+      );
+      expect(filled, hasLength(1));
+      expect(filled.single.envelope, withheld.withheld);
+      expect(
+        await _doc(a, workspace),
+        {'step': 'three'},
+        reason: 'the later change still wins; the filled one is older history',
+      );
+      expect(await a.alarmsByKind(), isEmpty);
+    });
+
+    test('a different change at a position inside the hole is refused', () async {
+      final withheld = await withholdTwoChanges();
+      await acceptHole(
+        firstMissingAuthorSeq: firstPeerContentAuthorSeq + 1,
+        lastMissingAuthorSeq: firstPeerContentAuthorSeq + 1,
+        lastMissingEnvelopeHash: envelopeHash(withheld.withheld),
+      );
+      workspace.server.omitSeqs.remove(withheld.thirdTransportSeq);
+      await a.sync();
+
+      // A different envelope minted at the position the missing change held.
+      final forgedAlternate = await peer.nextEnvelope(
+        workspace.workspaceId,
+        authorSeq: firstPeerContentAuthorSeq + 1,
+        advance: false,
+        payloadJson: jsonEncode({
+          'collection': _harnessCollection,
+          'id': _docId(workspace),
+          'fields': {
+            'step': {'v': 'forged'},
+          },
+          'hlc': [workspace.clock.nowMs + 1, 0, memberIdToHex(peer.memberId)],
+        }),
+      );
+      workspace.server.injectUnchecked(workspace.workspaceId, forgedAlternate);
+      await a.sync();
+
+      expect(
+        (await a.alarmsByKind())[IntegrityAlarmKind.authorChainRewrite.code],
+        isNotNull,
+      );
+      expect(
+        (await a.loggedOps())
+            .where((row) => row.authorSeq == firstPeerContentAuthorSeq + 1),
+        isEmpty,
+      );
+      expect(await _doc(a, workspace), {'step': 'three'});
     });
   });
 

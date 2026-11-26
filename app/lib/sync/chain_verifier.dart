@@ -216,6 +216,19 @@ typedef StoredChainOp = ({int authorSeq, Uint8List envelope});
 /// bytes at a position it claims were removed.
 typedef PrunedPositionAttestation = ({int authorSeq, Uint8List envelopeHash});
 
+/// The hashes a hole the User accepted (#975) pins down around one position inside
+/// it, when the log holds nothing at that position.
+///
+/// [predecessorEnvelopeHash] is the hash of the logged envelope at `authorSeq - 1`,
+/// and [successorPrevAuthorHash] is what the change at `authorSeq + 1` named as its
+/// predecessor — taken from the logged envelope there, or, for the last position of
+/// the hole, from the signed header that defined it. Either may be null: then that
+/// link is simply not checkable.
+typedef AcceptedHoleNeighbours = ({
+  Uint8List? predecessorEnvelopeHash,
+  Uint8List? successorPrevAuthorHash,
+});
+
 /// What the chain rules say about one received op.
 enum ChainOutcome {
   /// Chain-valid: continue the receive pipeline.
@@ -284,6 +297,10 @@ final Uint8List _zeroPrevAuthorHash = Uint8List(prevAuthorHashBytes);
 /// attestations account for, and [storedAttestation] what a prune attested at the
 /// arriving op's own position when the log holds nothing there.
 ///
+/// An empty position below the head is a rewrite, unless it lies in an accepted
+/// hole ([acceptedHole]) and hash-links to what the log holds around it: a missing
+/// change that arrives late fills the hole, and nothing else does.
+///
 /// No latching anywhere: a refusal never moves the head, so the author's stream
 /// is judged against the last position this device actually verified rather than
 /// against whatever the server last claimed.
@@ -295,6 +312,7 @@ ChainVerdict chainVerdict({
   StoredChainOp? storedUnderOpId,
   VerifiedChainFloor? verifiedFloor,
   PrunedPositionAttestation? storedAttestation,
+  AcceptedHoleNeighbours? acceptedHole,
 }) {
   // Checked first and independently of position: an op id the log already holds
   // under a *different* position, or under the same one with different bytes, is
@@ -371,6 +389,24 @@ ChainVerdict chainVerdict({
       ),
       IntegrityAlarmKind.pruneAttestationDivergence,
     );
+  }
+  // An empty position inside a hole the User accepted. The change fills the hole
+  // when it links to what the log holds around it: at least one link has to be
+  // checkable, and every checkable link has to hold.
+  if (storedAtAuthorSeq == null && acceptedHole != null) {
+    final predecessorHash = header.authorSeq == 1
+        ? _zeroPrevAuthorHash
+        : acceptedHole.predecessorEnvelopeHash;
+    final successorPrev = acceptedHole.successorPrevAuthorHash;
+    final predecessorHolds =
+        predecessorHash != null && sameBytes(predecessorHash, header.prevAuthorHash);
+    final successorHolds =
+        successorPrev != null && sameBytes(successorPrev, envelopeHash(envelope));
+    final predecessorFails = predecessorHash != null && !predecessorHolds;
+    final successorFails = successorPrev != null && !successorHolds;
+    if ((predecessorHolds || successorHolds) && !predecessorFails && !successorFails) {
+      return const ChainVerdict.accept();
+    }
   }
   return ChainVerdict.refuse(
     SyncRejection(
