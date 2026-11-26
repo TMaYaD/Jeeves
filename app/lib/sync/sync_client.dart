@@ -3745,11 +3745,15 @@ class SyncClient {
   /// back from `op_log`: still a positional break leaves the row unreleased; an
   /// applied op, or a different refusal (which `_receive` has already filed under
   /// its true reason), stamps it released.
+  ///
+  /// A row the User has refused for good is not examined at all: their decision
+  /// is the end of the question, so the scan skips it and the op stays refused.
   Future<Set<AffectedEntity>> _releaseOpsAwaitingControlPredecessor() async {
     final rows = await (_db.select(_db.quarantinedOps)
           ..where((row) =>
               row.workspaceId.equals(workspaceId) &
               row.releasedAt.isNull() &
+              row.resolution.isNull() &
               row.reason.equals(SyncRejectionReason.controlChainBreak.code))
           ..orderBy([(row) => OrderingTerm(expression: row.id)]))
         .get();
