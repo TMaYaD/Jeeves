@@ -1435,16 +1435,23 @@ class SyncClient {
     }
     // The rebuild owed by late-applied control ops has completed (or none was
     // owed); only now is it safe to drop their rows out of the scan.
-    if (_releaseAfterRebuild.isNotEmpty) {
-      for (final rowId in _releaseAfterRebuild.toList()) {
+    // Preserve the obligation list in case projection fails: a later pull will
+    // retry the scan with the same affected rows until projection succeeds.
+    final toRelease = _releaseAfterRebuild.toList();
+    if (toRelease.isNotEmpty) {
+      for (final rowId in toRelease) {
         await _markReleased(rowId);
       }
-      _releaseAfterRebuild.clear();
     }
     // Projection is the tail of the receive order, one pass per batch: an
     // entity touched by three ops in one pull is projected once, from the
     // reduced state all three produced.
     final touched = await projector?.project(affected);
+    // Clear the obligation only after projection succeeds; if projection throws,
+    // the obligation is preserved for the next pull to retry.
+    if (toRelease.isNotEmpty) {
+      _releaseAfterRebuild.clear();
+    }
     // And the convergence passes run on what it changed. This is the route by
     // which a peer's Tag entity first reaches the domain store, so it is where a
     // duplicate `(name, type)` group is folded and a junction stranded on a
@@ -3761,6 +3768,16 @@ class SyncClient {
     for (final row in rows) {
       final seq = row.seq;
       if (seq == null) continue;
+      // Parse the control op to get its author for chain successor release.
+      final OpHeader header;
+      final ControlPayload payload;
+      try {
+        final parts = splitEnvelope(row.envelope);
+        header = OpHeader.parse(parts.header);
+        payload = ControlPayload.decode(parseBody(parts.body));
+      } on SyncRejection {
+        continue;
+      }
       // Applied already (a stop between the receive commit and the stamp, or a
       // failed read-back): nothing to apply, but the rebuild is still owed.
       final alreadyHeld = await _opLogRowAt(seq);
@@ -3769,6 +3786,8 @@ class SyncClient {
           sameBytes(alreadyHeld.envelope, row.envelope)) {
         _rebuildRequired = true;
         _releaseAfterRebuild.add(row.id);
+        // Control op already applied; release its author's chain successors.
+        affected.addAll(await _releaseChainSuccessors(header.authorMemberId));
         continue;
       }
       if (!await _namesAppliedPredecessor(row.envelope, seq)) continue;
@@ -3778,6 +3797,9 @@ class SyncClient {
       ));
       final after = await _opLogRowAt(seq);
       if (after == null) continue;
+      // Verify the envelope identity: the read-back op_log row must be for the
+      // same envelope we're examining, or its verdict is for a different op.
+      if (!sameBytes(after.envelope, row.envelope)) continue;
       if (after.appliedAt == null &&
           after.refusedReason == SyncRejectionReason.controlChainBreak.code) {
         // Refused for the same reason again: the slot was not in the state the
@@ -3787,8 +3809,10 @@ class SyncClient {
       if (after.appliedAt != null) {
         // Its authority can change the grant verdict of content already judged at
         // a later `seq`; the tail's `rebuildFromOpLog` recomputes that verdict.
+        // Control op newly admitted; release its author's chain successors.
         _rebuildRequired = true;
         _releaseAfterRebuild.add(row.id);
+        affected.addAll(await _releaseChainSuccessors(header.authorMemberId));
         continue;
       }
       await _markReleased(row.id);
@@ -3809,12 +3833,11 @@ class SyncClient {
     } on SyncRejection {
       return false;
     }
-    final applied = await _appliedControlLog();
+    final applied = await _appliedControlLog(includeQuarantined: false);
     if (!applied.any((row) => sameBytes(row.payloadHash, payload.prevControlHash))) {
       return false;
     }
-    final held = await _appliedControlLog();
-    return held.isEmpty || seq > held.last.seq;
+    return applied.isEmpty || seq > applied.last.seq;
   }
 
   Future<OpLogRow?> _opLogRowAt(int seq) => (_db.select(_db.opLog)
@@ -3834,6 +3857,18 @@ class SyncClient {
         !sameBytes(existing.envelope, pulled.envelope) ||
         existing.appliedAt != null ||
         existing.refusedReason != SyncRejectionReason.controlChainBreak.code) {
+      return false;
+    }
+    // The user may have permanently rejected this op via quarantined_ops.resolution.
+    // Re-read it in this transaction; if set, the decision is final and the op
+    // stays refused.
+    final quarantined = await (_db.select(_db.quarantinedOps)
+          ..where((row) =>
+              row.workspaceId.equals(workspaceId) &
+              row.seq.equals(pulled.seq) &
+              row.reason.equals(SyncRejectionReason.controlChainBreak.code)))
+        .getSingleOrNull();
+    if (quarantined != null && quarantined.resolution != null) {
       return false;
     }
     await _clearRefused(pulled.seq);

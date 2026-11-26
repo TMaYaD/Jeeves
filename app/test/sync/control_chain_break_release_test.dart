@@ -444,5 +444,53 @@ void main() {
         reason: 'the registration was not applied behind the user\'s back',
       );
     });
+
+    test('a slot with a different envelope is not reclaimed', () async {
+      final scene = await _scene();
+      final broken = scene.broken;
+      final dId = scene.dFixture.memberId;
+
+      // The original registration is refused; get its seq and envelope.
+      final breakRows = await _breakRows(broken);
+      final refused = breakRows.singleWhere((row) =>
+          row.authorMemberId == dId &&
+          row.releasedAt == null &&
+          row.reason == _breakCode);
+      final refusedSeq = refused.seq;
+      final refusedEnvelope = refused.envelope;
+      expect(refusedSeq, isNotNull);
+
+      // Inject a different envelope at the same seq after fixing.
+      final fixed = await scene.workspace.b
+          .reopenSyncStore(attachTransport: true);
+      // Create a different registration envelope for D (simulated by just
+      // altering the refused one minimally for test purposes).
+      final differentEnvelope = Uint8List.fromList(refusedEnvelope);
+      if (differentEnvelope.isNotEmpty) {
+        differentEnvelope[differentEnvelope.length - 1] ^= 1; // flip one bit
+      }
+      await fixed.syncStore.transaction(() async {
+        await fixed.syncStore.update(fixed.syncStore.opLog)
+          ..where((r) =>
+              r.workspaceId.equals(fixed.workspaceId) &
+              r.seq.equals(refusedSeq!))
+          ..write(OpLogCompanion(envelope: Value(differentEnvelope)));
+      });
+
+      await fixed.pull();
+      await fixed.pull();
+
+      // The original refused row should still be refused (not reclaimed) because
+      // the envelope in the slot does not match.
+      final refusedAfter = (await _breakRows(fixed))
+          .where((r) => r.seq == refusedSeq && r.reason == _breakCode)
+          .toList();
+      expect(refusedAfter, hasLength(1),
+          reason: 'the refused row still exists');
+      expect(refusedAfter.single.releasedAt, isNull,
+          reason: 'the row was not released (slot envelope mismatch)');
+      expect(refusedAfter.single.envelope, differentEnvelope,
+          reason: 'the slot envelope is unchanged');
+    });
   });
 }
