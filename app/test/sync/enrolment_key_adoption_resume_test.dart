@@ -11,6 +11,8 @@
 /// `enrolment_ceremony_runner_test.dart` does.
 library;
 
+import 'dart:io';
+
 import 'package:drift/drift.dart' show driftRuntimeOptions;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -40,7 +42,8 @@ class _Phone {
 
   late SyncStack stack;
   final DeviceLink link;
-  final SyncDatabase database;
+  SyncDatabase database;
+  File? databaseFile;
   final InMemoryDeviceKeyStore keyStore;
   final InMemoryWorkspaceKeyStore workspaceKeys;
 }
@@ -66,15 +69,24 @@ void main() {
         kdfFloor: harnessKdfParameters,
       );
 
-  Future<_Phone> phone() async {
-    final database = SyncDatabase(NativeDatabase.memory());
-    addTearDown(database.close);
+  Future<_Phone> phone({bool persistDatabase = false}) async {
+    File? databaseFile;
+    if (persistDatabase) {
+      final directory = await Directory.systemTemp.createTemp('adoption-resume');
+      addTearDown(() => directory.delete(recursive: true));
+      databaseFile = File('${directory.path}/sync.sqlite');
+    }
+    final database = SyncDatabase(databaseFile == null
+        ? NativeDatabase.memory()
+        : NativeDatabase(databaseFile));
     final created = _Phone(
       DeviceLink(server.connectAsUser(_userId)),
       database,
       InMemoryDeviceKeyStore(),
       InMemoryWorkspaceKeyStore(),
     );
+    created.databaseFile = databaseFile;
+    addTearDown(() => created.database.close());
     created.stack = await assemble(created);
     return created;
   }
@@ -97,9 +109,9 @@ void main() {
   /// does in a Workspace and the only thing that needs the passphrase: the
   /// wraps it would return are opened with the master wrap key, which is never
   /// cached on the device.
-  Future<_Phone> joinerStoppedBeforeAdopting() async {
+  Future<_Phone> joinerStoppedBeforeAdopting({bool persistDatabase = false}) async {
     await enrolFounder();
-    final joiner = await phone();
+    final joiner = await phone(persistDatabase: persistDatabase);
     joiner.link.failNextEpochKeysForWorkspaceId = preferencesWorkspaceId;
     await expectLater(
       joiner.stack.enrolment.enrolWithPassphrase(_passphrase),
@@ -135,14 +147,16 @@ void main() {
 
   test('a joining device that stopped before adopting keys reads as unfinished '
       'and the passphrase resume adopts them', () async {
-    final joiner = await joinerStoppedBeforeAdopting();
+    final joiner = await joinerStoppedBeforeAdopting(persistDatabase: true);
 
     expect((await joiner.stack.readEnrolmentStatus()).state,
         EnrolmentState.foundingIncomplete,
         reason: 'registered everywhere is not enrolled while a Workspace\'s keys '
             'are unadopted (#993)');
 
-    // A relaunch over the same store reads the same.
+    // A relaunch reopens the durable store and still sees the pending adoption.
+    await joiner.database.close();
+    joiner.database = SyncDatabase(NativeDatabase(joiner.databaseFile!));
     joiner.stack = await assemble(joiner);
     expect((await joiner.stack.readEnrolmentStatus()).state,
         EnrolmentState.foundingIncomplete);
