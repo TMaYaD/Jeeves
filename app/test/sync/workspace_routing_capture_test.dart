@@ -24,6 +24,7 @@ import 'package:jeeves/sync/member_identity.dart';
 import 'package:jeeves/sync/reducer.dart';
 import 'package:jeeves/sync/sync_client.dart';
 import 'package:jeeves/sync/sync_database.dart';
+import 'package:jeeves/sync/sync_rejection.dart';
 
 import '../test_helpers.dart';
 
@@ -62,7 +63,12 @@ void main() {
           identity: identity,
           database: database,
           clock: clock,
-          reducer: Reducer(database, nowMs: () => _nowMs),
+          reducer: Reducer(
+            database,
+            nowMs: () => _nowMs,
+            workspaceId: workspaceId,
+            userId: _userId,
+          ),
           now: () => DateTime.fromMillisecondsSinceEpoch(_nowMs, isUtc: true),
         );
     gtdClient = clientFor(defaultWorkspaceId(_userId));
@@ -201,6 +207,80 @@ void main() {
     // the op queued behind it.
     expect(await queuedWorkspaceIds(), [defaultWorkspaceId(_userId)],
         reason: 'the discarded preference does not hold the drain open');
+  });
+
+  group('a client refuses a change belonging to the other Workspace', () {
+    test('the GTD client refuses a preference write, and nothing is queued',
+        () async {
+      final outboxBefore = await queuedWorkspaceIds();
+      final stateBefore = await database.select(database.reducedFields).get();
+
+      // The same reducer the receive path uses, so a change every peer would
+      // refuse is never signed into an outbox at all.
+      await expectLater(
+        gtdClient.capture(
+          collection: userPreferencesCollection,
+          entityId: preferenceEntityId(
+            userPreferencesWorkspaceId(_userId),
+            'clarify_mode',
+          ),
+          fields: {'key': 'clarify_mode', 'value': '"oneToOne"'},
+        ),
+        throwsA(isA<SyncRejection>().having(
+          (rejection) => rejection.reason,
+          'reason',
+          SyncRejectionReason.collectionOutsideWorkspace,
+        )),
+      );
+
+      expect(await queuedWorkspaceIds(), outboxBefore,
+          reason: 'nothing was queued');
+      expect(await database.select(database.reducedFields).get(), stateBefore,
+          reason: 'nothing was reduced locally');
+    });
+
+    test('the preferences client refuses a GTD write, and nothing is queued',
+        () async {
+      final outboxBefore = await queuedWorkspaceIds();
+      final stateBefore = await database.select(database.reducedFields).get();
+
+      await expectLater(
+        preferencesClient.capture(
+          collection: todosCollection,
+          entityId: _outcomeId,
+          fields: {
+            'title': 'Write the thing',
+            'created_at': '2026-02-01T09:00:00.000Z',
+            'user_id': _userId,
+          },
+        ),
+        throwsA(isA<SyncRejection>().having(
+          (rejection) => rejection.reason,
+          'reason',
+          SyncRejectionReason.collectionOutsideWorkspace,
+        )),
+      );
+
+      expect(await queuedWorkspaceIds(), outboxBefore,
+          reason: 'nothing was queued');
+      expect(await database.select(database.reducedFields).get(), stateBefore,
+          reason: 'nothing was reduced locally');
+    });
+
+    test('the right client accepts the same change', () async {
+      // The refusal is about the *pairing* of a collection and a Workspace, not
+      // about the collection: the same write on the client that owns it lands.
+      await preferencesClient.capture(
+        collection: userPreferencesCollection,
+        entityId: preferenceEntityId(
+          userPreferencesWorkspaceId(_userId),
+          'clarify_mode',
+        ),
+        fields: {'key': 'clarify_mode', 'value': '"oneToOne"'},
+      );
+
+      expect(await queuedWorkspaceIds(), [userPreferencesWorkspaceId(_userId)]);
+    });
   });
 
   test('binding drains ops buffered while undecided, in write order', () async {

@@ -3,30 +3,32 @@
 /// The user's named places, most recently used first, with a name search; a
 /// one-time pin for a single errand; a new place; and a way to clear the
 /// Place altogether.
+///
+/// The picker writes nothing: it answers with the choice the user made, and
+/// the surface that opened it applies it.
 library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../providers/location_permission_flow.dart';
-import '../providers/location_source_provider.dart';
-import '../providers/place_gate_provider.dart';
+import '../models/place_choice.dart';
 import '../providers/places_provider.dart';
-import '../providers/task_detail_provider.dart';
 import 'place_editor_sheet.dart';
 import 'place_pin_sheet.dart';
 
-/// Opens the picker for the Place of the Action [actionId] of [outcomeId].
-Future<void> showPlacePickerSheet(
+/// Opens the picker and answers the choice the user made.
+///
+/// Null means the user backed out without choosing. [canClear] says whether
+/// "Clear place" is on offer: it is when there is a Place to clear.
+Future<PlaceChoice?> showPlacePickerSheet(
   BuildContext context, {
-  required String outcomeId,
-  required String actionId,
+  required bool canClear,
 }) {
-  return showModalBottomSheet<void>(
+  return showModalBottomSheet<PlaceChoice>(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.white,
-    builder: (_) => PlacePickerSheet(outcomeId: outcomeId, actionId: actionId),
+    builder: (_) => PlacePickerSheet(canClear: canClear),
   );
 }
 
@@ -34,15 +36,11 @@ Future<void> showPlacePickerSheet(
 class PlacePickerSheet extends ConsumerStatefulWidget {
   const PlacePickerSheet({
     super.key,
-    required this.outcomeId,
-    required this.actionId,
+    required this.canClear,
   });
 
-  final String outcomeId;
-
-  /// The Action the Place is set on. A write that lands after this Action
-  /// stopped being current is dropped.
-  final String actionId;
+  /// Whether the user may clear the Place outright.
+  final bool canClear;
 
   @override
   ConsumerState<PlacePickerSheet> createState() => _PlacePickerSheetState();
@@ -58,58 +56,29 @@ class _PlacePickerSheetState extends ConsumerState<PlacePickerSheet> {
     super.dispose();
   }
 
-  Future<void> _chooseNamedPlace(String placeId) async {
-    await ref.read(taskDetailNotifierProvider(widget.outcomeId)).setNamedPlace(
-          actionId: widget.actionId,
-          placeId: placeId,
-        );
-    if (!mounted) return;
-    Navigator.pop(context);
+  void _chooseNamedPlace(String placeId, String name) {
+    Navigator.pop(context, NamedPlaceDraft(placeId, name));
   }
 
   Future<void> _dropPin() async {
     final pin = await showPlacePinSheet(context);
     if (pin == null || !mounted) return;
-    final dropped = await ref.read(taskDetailNotifierProvider(widget.outcomeId)).setPin(
-          actionId: widget.actionId,
-          area: pin.area,
-          name: pin.name,
-        );
-    if (!mounted) return;
-    // A pin is a Place too: the first one saved may ask for the location. A
-    // pin that was not written — the Action is no longer the current one —
-    // is no Place saved, so it asks nothing.
-    if (dropped) {
-      await askForLocationAfterFirstSave(
-          context, ref.read(locationSourceProvider));
-    }
-    if (!mounted) return;
-    Navigator.pop(context);
+    Navigator.pop(context, PinDraft(area: pin.area, name: pin.name));
   }
 
   Future<void> _makeNewPlace() async {
-    final placeId = await showPlaceEditorSheet(context);
-    if (placeId == null || !mounted) return;
-    await ref.read(taskDetailNotifierProvider(widget.outcomeId)).setNamedPlace(
-          actionId: widget.actionId,
-          placeId: placeId,
-        );
-    if (!mounted) return;
-    Navigator.pop(context);
+    final saved = await showPlaceEditorSheet(context);
+    if (saved == null || !mounted) return;
+    Navigator.pop(context, NamedPlaceDraft(saved.id, saved.name));
   }
 
-  Future<void> _clearPlace() async {
-    await ref.read(taskDetailNotifierProvider(widget.outcomeId)).clearPlace(
-          actionId: widget.actionId,
-        );
-    if (!mounted) return;
-    Navigator.pop(context);
+  void _clearPlace() {
+    Navigator.pop(context, const ClearPlaceChoice());
   }
 
   @override
   Widget build(BuildContext context) {
     final places = ref.watch(namedPlacesWithUseCountProvider);
-    final current = ref.watch(currentPlacesProvider).value?[widget.outcomeId];
     final query = _query.trim().toLowerCase();
     return SafeArea(
       child: Padding(
@@ -175,7 +144,7 @@ class _PlacePickerSheetState extends ConsumerState<PlacePickerSheet> {
                             style: const TextStyle(
                                 fontSize: 12, color: Color(0xFF9CA3AF)),
                           ),
-                          onTap: () => _chooseNamedPlace(row.id),
+                          onTap: () => _chooseNamedPlace(row.id, row.name),
                         ),
                     ],
                   );
@@ -197,7 +166,7 @@ class _PlacePickerSheetState extends ConsumerState<PlacePickerSheet> {
                 subtitle: const Text('For this action alone'),
                 onTap: _dropPin,
               ),
-              if (current != null)
+              if (widget.canClear)
                 ListTile(
                   key: const Key('place_picker_clear'),
                   contentPadding: EdgeInsets.zero,

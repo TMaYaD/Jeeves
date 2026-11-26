@@ -223,4 +223,40 @@ void main() {
     );
     expect(pins, isEmpty);
   });
+
+  testWidgets('a Place chosen while the Action is replaced does not land on '
+      'the successor', (tester) async {
+    await openDetail(tester);
+    final named =
+        await _real(tester, () => db.placeDao.watchNamedPlaces().first);
+    final homeId = named.firstWhere((p) => p.name == 'Home').id;
+
+    // The picker opens on the Action that is current now.
+    await tester.tap(find.byKey(const Key('place_chip')));
+    await _settle(tester);
+    expect(find.byKey(Key('place_picker_place_$homeId')), findsOneWidget);
+
+    // The Action is replaced while the picker is up: the Outcome moved on,
+    // and its current Action is a different one.
+    await _real(
+      tester,
+      () => db.actionDao.supersedeCurrentAction(
+        'o1',
+        newActionText: 'work on o1 again',
+      ),
+    );
+    await _settle(tester);
+
+    // The user picks a Place. The choice was made for the Action the picker
+    // was opened on, which is gone.
+    await tester.tap(find.byKey(Key('place_picker_place_$homeId')));
+    await _settle(tester);
+
+    // The successor carries no Place. The choice belonged to an Action that
+    // is no longer current, so it is dropped rather than landing on the
+    // Action the user never saw.
+    final action =
+        await _real(tester, () => db.actionDao.getCurrentAction('o1'));
+    expect(action!.placeId, isNull);
+  });
 }

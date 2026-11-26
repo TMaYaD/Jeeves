@@ -2959,6 +2959,15 @@ _MEMBER_B = MEMBER_IDS["device_b"].hex
 # device_a and device_b must sort in a known direction for the tie-break case.
 _LOWER_MEMBER, _HIGHER_MEMBER = sorted((_MEMBER_A, _MEMBER_B))
 
+# --- The Workspace boundary -------------------------------------------------
+#
+# Which of the spec user's two Workspaces carries a case's ops.  Absent from a
+# case means each op travels in the Workspace its collection belongs to, which
+# describes every case that predates the boundary.
+
+LOG_WORKSPACE_DEFAULT = "default"
+LOG_WORKSPACE_PREFERENCES = "preferences"
+
 # --- #550: junction identity and the merge-strategy lattice ------------------
 
 _TODO_TAGS_COLLECTION = "todo_tags"
@@ -3193,6 +3202,85 @@ def _compaction_reduction_cases(t: int) -> list[dict[str, Any]]:
     ]
 
 
+def _workspace_boundary_cases(t: int) -> list[dict[str, Any]]:
+    """A log reduces only its own collections, both ways round.
+
+    Each Workspace's log carries only the collections that belong to it, so a
+    change whose collection belongs to another Workspace is refused before
+    anything about the op itself is asked.  The two cases are the two
+    directions: a preference carried by the default Workspace's log, and a
+    default-Workspace collection carried by the preferences log.
+
+    The first case's second op is also beyond the skew bound, and that is the
+    point of it: the Workspace check runs *before* the clock guards, so the
+    verdict is the Workspace one rather than ``hlc_in_the_future``.  Without
+    that op the order would be unpinned — two guards, two codes, and a runner
+    that checked either would stay green.
+    """
+    return [
+        {
+            "name": "user_preferences_change_in_the_default_workspace_log_is_refused",
+            "note": (
+                "A well-formed user_preferences write carried by the default "
+                "Workspace's log. The collection belongs to the preferences "
+                "Workspace, so the log may not reduce it: it is refused under "
+                "collection_outside_workspace and nothing is reduced. The "
+                "second op is the same kind of write and is also beyond the "
+                "skew bound, which pins the order — the Workspace check runs "
+                "first, so the verdict is the Workspace one and not "
+                "hlc_in_the_future. Not permuted: quarantine is a per-arrival "
+                "fact the permutation harness cannot assert."
+            ),
+            "log_workspace": LOG_WORKSPACE_DEFAULT,
+            "ops": [
+                _reduce_op(
+                    author=_MEMBER_A,
+                    collection=USER_PREFERENCES_COLLECTION,
+                    entity_id=_SNOOZE_ENTITY_ID,
+                    hlc=[t, 0, _MEMBER_A],
+                    fields={"key": {"v": _SNOOZE_KEY}, "value": {"v": _FLOOR_LATE}},
+                ),
+                _reduce_op(
+                    author=_MEMBER_B,
+                    collection=USER_PREFERENCES_COLLECTION,
+                    entity_id=_SNOOZE_ENTITY_ID,
+                    hlc=[t + 3_600_000, 0, _MEMBER_B],
+                    fields={"key": {"v": _SNOOZE_KEY}, "value": {"v": _FLOOR_EARLY}},
+                ),
+            ],
+            "expected_entities": {},
+            "expected_quarantine_reasons": [
+                "collection_outside_workspace",
+                "collection_outside_workspace",
+            ],
+        },
+        {
+            "name": "default_workspace_collection_in_the_preferences_log_is_refused",
+            "note": (
+                "The other direction: a collection that belongs to the default "
+                "Workspace, carried by the preferences Workspace's log. The "
+                "refusal is the same code — it is about the pairing of a "
+                "collection and a log, not about which of the two is the "
+                "preferences one — and it holds on every device, since the "
+                "verdict reads the collection and the receiving Workspace and "
+                "nothing else."
+            ),
+            "log_workspace": LOG_WORKSPACE_PREFERENCES,
+            "ops": [
+                _reduce_op(
+                    author=_MEMBER_A,
+                    collection=_HARNESS_COLLECTION,
+                    entity_id=_DOC_ID,
+                    hlc=[t, 0, _MEMBER_A],
+                    fields={"a": {"v": "from_the_wrong_log"}},
+                ),
+            ],
+            "expected_entities": {},
+            "expected_quarantine_reasons": ["collection_outside_workspace"],
+        },
+    ]
+
+
 def _reducer_vectors_document() -> dict[str, Any]:
     t = BASE_WALL_MS
     cases: list[dict[str, Any]] = [
@@ -3400,6 +3488,7 @@ def _reducer_vectors_document() -> dict[str, Any]:
     ]
     cases.extend(_collection_and_strategy_cases(t))
     cases.extend(_compaction_reduction_cases(t))
+    cases.extend(_workspace_boundary_cases(t))
     return {
         "$frozen": FROZEN_NOTICE,
         "local_now_ms": BASE_WALL_MS,
@@ -3425,7 +3514,12 @@ def _reducer_vectors_document() -> dict[str, Any]:
             "with no production strategy — today only 'set_merge', which is "
             "provisioned but unregistered. #555 adds a per-*op* key: 'op_class', "
             "present only when it is not 1, which the runner passes to the class-4 "
-            "shape guard before the payload reaches the reducer."
+            "shape guard before the payload reaches the reducer. A per-*case* key "
+            "'log_workspace' names which of the spec user's two Workspaces carries "
+            "the case's ops: 'default' or 'preferences'. Absent means each op "
+            "travels in the Workspace its collection belongs to — the preferences "
+            "Workspace for 'user_preferences', the default one for every other "
+            "collection — which describes every case that predates the key."
         ),
         "cases": cases,
     }

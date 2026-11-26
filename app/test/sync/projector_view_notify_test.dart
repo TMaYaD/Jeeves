@@ -39,7 +39,12 @@ import 'package:jeeves/models/search_result.dart';
 import 'package:jeeves/sync/collection_codecs.dart';
 import 'package:jeeves/sync/domain_projector.dart';
 import 'package:jeeves/sync/hlc.dart';
-import 'package:jeeves/sync/ids.dart' show focusSessionTaskIdFor, jeevesWorkspaceNamespace;
+import 'package:jeeves/sync/ids.dart'
+    show
+        defaultWorkspaceId,
+        focusSessionTaskIdFor,
+        jeevesWorkspaceNamespace,
+        userPreferencesWorkspaceId;
 import 'package:jeeves/sync/op_payload.dart';
 import 'package:jeeves/sync/reducer.dart';
 import 'package:jeeves/sync/sync_database.dart';
@@ -60,6 +65,7 @@ void main() {
   late SyncDatabase sync;
   late CollectionRegistry registry;
   late Reducer reducer;
+  late Reducer preferencesReducer;
   late DomainProjector projector;
 
   setUp(() async {
@@ -74,7 +80,21 @@ void main() {
 
     sync = SyncDatabase(NativeDatabase.memory());
     registry = CollectionRegistry(sync);
-    reducer = Reducer(sync, nowMs: () => _baseWallMs);
+    // One reducer per Workspace, as production builds: a log reduces only its
+    // own collections, so `user_preferences` is reduced by the preferences
+    // Workspace's reducer and everything else by the default one.
+    reducer = Reducer(
+      sync,
+      nowMs: () => _baseWallMs,
+      workspaceId: defaultWorkspaceId(_userId),
+      userId: _userId,
+    );
+    preferencesReducer = Reducer(
+      sync,
+      nowMs: () => _baseWallMs,
+      workspaceId: userPreferencesWorkspaceId(_userId),
+      userId: _userId,
+    );
     projector = DomainProjector(registry: registry, domain: domain);
   });
 
@@ -96,7 +116,10 @@ void main() {
     Map<String, Object?> fields, {
     bool tombstone = false,
   }) async {
-    return reducer.apply(
+    final owner = collection == userPreferencesCollection
+        ? preferencesReducer
+        : reducer;
+    return owner.apply(
       OpPayload(
         collection: collection,
         entityId: entityId,

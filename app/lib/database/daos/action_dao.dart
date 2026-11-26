@@ -117,6 +117,12 @@ const ActionWriteEffect _noEffect =
 /// moves away takes the pin with it.
 typedef ActionPlaceWriteEffect = ({bool changed, bool placesChanged});
 
+/// What an Action's pin write changed: [pinId] the new pin's id (null when
+/// the write was refused), [changed] iff the `actions` row was written,
+/// [placesChanged] iff a `places` row went with it.
+typedef ActionPinWriteEffect =
+    ({String? pinId, bool changed, bool placesChanged});
+
 /// One row of an Outcome's history (ADR-0001 story 8, issue #478): a terminated
 /// [Action] with the minutes logged against *that* Action, derived at read time
 /// from `time_logs` ([TimeLogDao.totalMinutesSubqueryForAction]) rather than
@@ -370,64 +376,100 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     DateTime? now,
   }) async {
     final ts = (now ?? DateTime.now()).toUtc();
-    final trimmed = name?.trim();
-    if (trimmed != null && trimmed.length > Places.maxNameLength) {
+    if (_pinName(name).refused) {
       return null;
     }
-    final pinName = (trimmed == null || trimmed.isEmpty) ? null : trimmed;
-    final effect = await attachedDatabase.capturing(() async {
-      final row = await (select(actions)..where((a) => a.id.equals(actionId)))
-          .getSingleOrNull();
-      if (row == null) {
-        return (pinId: null, changed: false, placesChanged: false);
-      }
-      final pinId = uuid.v4();
-      await into(places).insert(
-        PlacesCompanion(
-          id: Value(pinId),
-          userId: Value(row.userId),
-          kind: const Value(pinPlaceKind),
-          name: Value(pinName),
-          latitudeMicrodegrees: Value(area.latitudeMicrodegrees),
-          longitudeMicrodegrees: Value(area.longitudeMicrodegrees),
-          radiusMeters: Value(area.radiusMeters),
-          createdAt: Value(ts),
-        ),
-      );
-      // Creation asserts the whole row, so a peer that has never seen the pin
-      // can build it.
-      attachedDatabase.opCapture.write(
-        collection: placesCollection,
-        entityId: pinId,
-        fields: {
-          'user_id': row.userId,
-          'kind': pinPlaceKind,
-          'name': pinName,
-          'latitude_microdegrees': area.latitudeMicrodegrees,
-          'longitude_microdegrees': area.longitudeMicrodegrees,
-          'radius_meters': area.radiusMeters,
-          'created_at': encodeInstant(ts),
-        },
-      );
-      await (update(actions)..where((a) => a.id.equals(actionId))).write(
-        ActionsCompanion(
-          placeId: Value(pinId),
-          updatedAt: Value(ts),
-        ),
-      );
-      _captureAction(actionId, {
-        'place_id': pinId,
-        'updated_at': encodeInstant(ts),
-      });
-      await _dropPinIfAny(row.placeId);
-      return (pinId: pinId, changed: true, placesChanged: true);
-    });
+    final effect = await attachedDatabase.capturing(
+      () => applySetPin(actionId, area, name: name, ts: ts),
+    );
     if (effect.changed) {
       attachedDatabase.notifyActionsViewWrite();
       attachedDatabase.notifyTodosViewWrite();
       attachedDatabase.notifyPlacesViewWrite();
     }
     return effect.pinId;
+  }
+
+  /// Transaction-body variant of [setPin].
+  ///
+  /// Writes the pin and points the Action at it inside the caller's
+  /// transaction, so a pin can land in the same write as the Action it
+  /// belongs to. [ts] is the instant the row carries.
+  ///
+  /// Returns the pin's id (null when the write is refused), whether the
+  /// `actions` row was written, and whether a `places` row went with it.
+  Future<ActionPinWriteEffect> applySetPin(
+    String actionId,
+    PlaceArea area, {
+    String? name,
+    required DateTime ts,
+  }) async {
+    final pin = _pinName(name);
+    if (pin.refused) {
+      return (pinId: null, changed: false, placesChanged: false);
+    }
+    final pinName = pin.name;
+    final row = await (select(actions)..where((a) => a.id.equals(actionId)))
+        .getSingleOrNull();
+    if (row == null) {
+      return (pinId: null, changed: false, placesChanged: false);
+    }
+    final pinId = uuid.v4();
+    await into(places).insert(
+      PlacesCompanion(
+        id: Value(pinId),
+        userId: Value(row.userId),
+        kind: const Value(pinPlaceKind),
+        name: Value(pinName),
+        latitudeMicrodegrees: Value(area.latitudeMicrodegrees),
+        longitudeMicrodegrees: Value(area.longitudeMicrodegrees),
+        radiusMeters: Value(area.radiusMeters),
+        createdAt: Value(ts),
+      ),
+    );
+    // Creation asserts the whole row, so a peer that has never seen the pin
+    // can build it.
+    attachedDatabase.opCapture.write(
+      collection: placesCollection,
+      entityId: pinId,
+      fields: {
+        'user_id': row.userId,
+        'kind': pinPlaceKind,
+        'name': pinName,
+        'latitude_microdegrees': area.latitudeMicrodegrees,
+        'longitude_microdegrees': area.longitudeMicrodegrees,
+        'radius_meters': area.radiusMeters,
+        'created_at': encodeInstant(ts),
+      },
+    );
+    await (update(actions)..where((a) => a.id.equals(actionId))).write(
+      ActionsCompanion(
+        placeId: Value(pinId),
+        updatedAt: Value(ts),
+      ),
+    );
+    _captureAction(actionId, {
+      'place_id': pinId,
+      'updated_at': encodeInstant(ts),
+    });
+    await _dropPinIfAny(row.placeId);
+    return (pinId: pinId, changed: true, placesChanged: true);
+  }
+
+  /// The name a pin carries, or a refusal.
+  ///
+  /// The name is trimmed; a blank one is no name at all. A name longer than
+  /// [Places.maxNameLength] is refused: the column carries no length
+  /// constraint of its own, so the write path is where the rule is enforced.
+  static ({bool refused, String? name}) _pinName(String? name) {
+    final trimmed = name?.trim();
+    if (trimmed != null && trimmed.length > Places.maxNameLength) {
+      return (refused: true, name: null);
+    }
+    return (
+      refused: false,
+      name: (trimmed == null || trimmed.isEmpty) ? null : trimmed,
+    );
   }
 
   /// Set ([windowId]) or clear (null) the time window of the Action [actionId].

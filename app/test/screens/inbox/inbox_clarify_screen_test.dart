@@ -117,6 +117,39 @@ Future<void> _scrollAndTap(WidgetTester tester, String label) async {
   await tester.pumpAndSettle();
 }
 
+/// Scrolls the button labelled [label] into view.
+///
+/// The routing bar sits below the fold on the 800x600 test surface, and the
+/// clarify card grew a field — the Place chip (#1078) — so the bar is not
+/// built at all until the card is scrolled toward it. Being built still is
+/// not enough to be tappable: a ListView builds children within its
+/// cacheExtent while they remain below the viewport, and a tap at such a
+/// widget's centre hit-tests empty space instead. Hence drag-until-built,
+/// then ensureVisible.
+Future<void> _scrollToButton(WidgetTester tester, String label) async {
+  for (var i = 0; i < 15 && find.text(label).evaluate().isEmpty; i++) {
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, -200));
+    await tester.pump(const Duration(milliseconds: 50));
+  }
+  expect(find.text(label), findsOneWidget,
+      reason: 'the $label button never came into view');
+  await tester.ensureVisible(find.text(label));
+  await tester.pumpAndSettle();
+}
+
+/// Scrolls the card back to its top.
+///
+/// The card's fields sit at the top and its routing bar at the bottom, and
+/// the lazy list builds only what is near the viewport — so a test that
+/// scrolled to the bar has to scroll back to look at the fields.
+Future<void> _scrollToTop(WidgetTester tester) async {
+  for (var i = 0; i < 15; i++) {
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, 400));
+    await tester.pump(const Duration(milliseconds: 50));
+  }
+  await tester.pumpAndSettle();
+}
+
 /// Confirms [NextActionDialog] with whatever phrase it opened seeded with.
 ///
 /// The clarify card leaves the default-on `nextActionDialog` modifier on for a
@@ -375,6 +408,8 @@ void main() {
         expect(find.byType(InboxClarifyScreen), findsOneWidget);
         expect(find.text('Capture c-old'), findsOneWidget);
 
+        await _scrollToButton(tester, 'Next Action');
+
         await tester.tap(find.text('Next Action'));
         await tester.pumpAndSettle();
         await _acceptNextActionDialog(tester);
@@ -382,10 +417,14 @@ void main() {
             reason: 'moved on to the next oldest');
         expect(await _inboxIds(db), unorderedEquals(['c-mid', 'c-new']));
 
+        await _scrollToButton(tester, 'Next Action');
+
         await tester.tap(find.text('Next Action'));
         await tester.pumpAndSettle();
         await _acceptNextActionDialog(tester);
         expect(find.text('Capture c-new'), findsOneWidget);
+
+        await _scrollToButton(tester, 'Next Action');
 
         await tester.tap(find.text('Next Action'));
         await tester.pumpAndSettle();
@@ -403,6 +442,7 @@ void main() {
 
         await tester.pumpWidget(_buildApp(db, 'c-old', sequence: true));
         await tester.pumpAndSettle();
+        await _scrollToButton(tester, 'Next Action');
         await tester.tap(find.text('Next Action'));
         await tester.pumpAndSettle();
         await _acceptNextActionDialog(tester);
@@ -447,6 +487,8 @@ void main() {
       await tester.pumpWidget(_buildApp(db, 'x'));
       await tester.pumpAndSettle();
 
+      await _scrollToButton(tester, 'Next Action');
+
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
       await _acceptNextActionDialog(tester);
@@ -483,8 +525,7 @@ void main() {
       await tester.pumpAndSettle();
 
       // Waiting For sits below the default 800x600 test viewport.
-      await tester.ensureVisible(find.text('Waiting For'));
-      await tester.pumpAndSettle();
+      await _scrollToButton(tester, 'Waiting For');
       await tester.tap(find.text('Waiting For'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Alice'));
@@ -563,8 +604,7 @@ void main() {
       }
       expect(_skipEnabled(tester), isTrue);
 
-      await tester.ensureVisible(find.text('Next Action'));
-      await tester.pumpAndSettle();
+      await _scrollToButton(tester, 'Next Action');
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
 
@@ -605,8 +645,7 @@ void main() {
       // it needs no scrolling.
       expect(find.byKey(const Key('capture_action')), findsOneWidget);
 
-      await tester.ensureVisible(find.text('Next Action'));
-      await tester.pumpAndSettle();
+      await _scrollToButton(tester, 'Next Action');
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Save'));
@@ -645,8 +684,7 @@ void main() {
       await tester.pump();
       expect(_backEnabled(tester), isTrue);
 
-      await tester.ensureVisible(find.text('Next Action'));
-      await tester.pumpAndSettle();
+      await _scrollToButton(tester, 'Next Action');
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
       // Save before driving platform back, or the pop would land on the
@@ -693,6 +731,7 @@ void main() {
       await tester.enterText(find.byKey(const Key('clarify_title')), '');
       await tester.pump();
 
+      await _scrollToButton(tester, 'Next Action');
       await tester.tap(find.text('Next Action'), warnIfMissed: false);
       await tester.pumpAndSettle();
 
@@ -704,6 +743,8 @@ void main() {
       expect(find.byType(NextActionDialog), findsNothing);
       expect(await _outcomeOf(db, 'x'), isNull);
       expect((await db.captureDao.getCapture('x'))!.clarifiedAt, isNull);
+      // The error is on the title field, at the top of the card.
+      await _scrollToTop(tester);
       expect(find.text('Title is required to process'), findsOneWidget);
     });
 
@@ -716,6 +757,8 @@ void main() {
       // is exactly what the row now holds, so the row is the assertion.
       await tester.pumpWidget(_buildApp(db, 'x'));
       await tester.pumpAndSettle();
+
+      await _scrollToButton(tester, 'Next Action');
 
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
@@ -752,6 +795,8 @@ void main() {
       await tester.pump();
       await tester.tap(find.text('30m'));
       await tester.pump();
+
+      await _scrollToButton(tester, 'Next Action');
 
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
@@ -790,6 +835,8 @@ void main() {
       );
       await tester.pumpAndSettle();
 
+      await _scrollToButton(tester, 'Next Action');
+
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
       await _acceptNextActionDialog(tester);
@@ -798,7 +845,9 @@ void main() {
       // itself — otherwise the write escapes as an unhandled async error and
       // the tap looks like it did nothing.
       expect(find.text('Operation failed. Please try again.'), findsOneWidget);
-      // And the screen stays put, so the user's edits are not lost.
+      // And the screen stays put, so the user's edits are not lost. The title
+      // field is at the top of the card, which the routing bar is far below.
+      await _scrollToTop(tester);
       expect(find.byKey(const Key('clarify_title')), findsOneWidget);
       expect(await _outcomeOf(db, 'x'), isNull);
     });
@@ -871,6 +920,8 @@ void main() {
       await feed.emitFrom(db, 'x');
       await tester.pumpAndSettle();
 
+      await _scrollToButton(tester, 'Next Action');
+
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
       await _acceptNextActionDialog(tester);
@@ -909,6 +960,8 @@ void main() {
 
       await tester.enterText(find.byKey(const Key('clarify_notes')), '');
       await tester.pumpAndSettle();
+
+      await _scrollToButton(tester, 'Next Action');
 
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
@@ -960,6 +1013,7 @@ void main() {
             ..where((c) => c.id.equals('x')))
           .go());
       capture.clear();
+      await _scrollToButton(tester, 'Next Action');
       await tester.tap(find.text('Next Action'));
       await tester.pumpAndSettle();
       if (find.byType(NextActionDialog).evaluate().isNotEmpty) {

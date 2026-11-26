@@ -573,6 +573,8 @@ class SimDevice {
       reducer: Reducer(
         database,
         nowMs: () => clock.nowMs,
+        workspaceId: defaultWorkspaceId(userId),
+        userId: userId,
         strategies: strategies,
       ),
       workspaceKeys: workspaceKeys,
@@ -614,7 +616,13 @@ class SimDevice {
             identity: identity,
             database: database,
             clock: hlc,
-            reducer: Reducer(database, nowMs: () => clock.nowMs, strategies: strategies),
+            reducer: Reducer(
+              database,
+              nowMs: () => clock.nowMs,
+              workspaceId: scopedWorkspaceId,
+              userId: userId,
+              strategies: strategies,
+            ),
             transport: link,
             // The one directory, so a Member chained in one Workspace is not a
             // stranger in the other. Real devices share it for the same reason, and
@@ -829,7 +837,13 @@ class SimDevice {
       identity: identity,
       database: reopened,
       clock: hlc,
-      reducer: Reducer(reopened, nowMs: () => clock.nowMs, strategies: strategies),
+      reducer: Reducer(
+        reopened,
+        nowMs: () => clock.nowMs,
+        workspaceId: client.workspaceId,
+        userId: userId,
+        strategies: strategies,
+      ),
       transport: attachTransport ? link : null,
       workspaceKeys: workspaceKeys,
       now: () => clock.asDateTime,
