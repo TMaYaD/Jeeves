@@ -146,7 +146,13 @@ class SyncStack {
       identity: identity,
       database: database,
       clock: clock,
-      reducer: Reducer(database, nowMs: nowMs, strategies: strategies),
+      reducer: Reducer(
+        database,
+        nowMs: nowMs,
+        workspaceId: defaultWorkspaceId(userId),
+        userId: userId,
+        strategies: strategies,
+      ),
       workspaceKeys: epochKeys,
       now: now,
     )
@@ -174,7 +180,13 @@ class SyncStack {
           identity: identity,
           database: database,
           clock: clock,
-          reducer: Reducer(database, nowMs: nowMs, strategies: strategies),
+          reducer: Reducer(
+            database,
+            nowMs: nowMs,
+            workspaceId: scopedWorkspaceId,
+            userId: userId,
+            strategies: strategies,
+          ),
           // The one directory, so a Member chained in one Workspace is not a
           // stranger in the other; and the one key store, which is keyed by
           // Workspace and therefore already the right scope for both.

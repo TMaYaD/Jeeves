@@ -12,6 +12,7 @@ library;
 
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:jeeves/models/place_choice.dart';
 import 'package:jeeves/widgets/clarify_retention.dart';
 
 /// A draft the user has typed into: [title] differs from its baseline.
@@ -169,9 +170,9 @@ void main() {
     });
 
     test('the draft-only attributes always survive', () {
-      // Energy, estimate and due date have no column on a Capture, so there is
-      // no incoming value that could win — but before retention they were lost
-      // on every unmount.
+      // Energy, estimate, due date and the Place have no column on a Capture,
+      // so there is no incoming value that could win — but before retention
+      // they were lost on every unmount.
       final retained = RetainedClarifyDraft(
         title: 'seeded title',
         notes: 'seeded notes',
@@ -180,6 +181,7 @@ void main() {
         energyLevel: 'high',
         timeEstimateMinutes: 30,
         dueDate: DateTime(2026, 3, 9),
+        place: const NamedPlaceDraft('p1', 'Hardware store'),
       );
 
       // Seeded against a *changed* row, so the clean path is the one taken —
@@ -193,6 +195,37 @@ void main() {
       expect(seeded.energyLevel, 'high');
       expect(seeded.timeEstimateMinutes, 30);
       expect(seeded.dueDate, DateTime(2026, 3, 9));
+      expect(seeded.place, const NamedPlaceDraft('p1', 'Hardware store'));
+    });
+
+    test('a chosen Place survives the unmount', () {
+      // The Place is draft-only, so it has no baseline and no incoming value:
+      // the retained draft is the only place it can come from.
+      final retained = RetainedClarifyDraft(
+        title: 'seeded title',
+        notes: 'seeded notes',
+        baselineTitle: 'seeded title',
+        baselineNotes: 'seeded notes',
+        place: const NamedPlaceDraft('p1', 'Hardware store'),
+      );
+
+      final seeded = RetainedClarifyDraft.seedFrom(
+        retained,
+        incomingTitle: 'incoming title',
+        incomingNotes: 'incoming notes',
+      );
+
+      expect(seeded.place, const NamedPlaceDraft('p1', 'Hardware store'));
+    });
+
+    test('no retained Place seeds none', () {
+      final seeded = RetainedClarifyDraft.seedFrom(
+        null,
+        incomingTitle: 'Buy milk',
+        incomingNotes: null,
+      );
+
+      expect(seeded.place, isNull);
     });
   });
 

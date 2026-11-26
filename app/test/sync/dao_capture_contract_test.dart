@@ -24,6 +24,7 @@ import 'package:jeeves/database/daos/focus_session_dao.dart'
 import 'package:jeeves/database/daos/tag_dao.dart' show todoTagIdFor;
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/intent.dart';
+import 'package:jeeves/models/place_area.dart';
 import 'package:jeeves/models/routing_kind.dart';
 import 'package:jeeves/models/time_context.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
@@ -435,6 +436,34 @@ void main() {
       expect(op.fields['time_context'], value.encode());
       expect(op.fields.containsKey('updated_at'), isTrue);
       expect(capture.forCollection(todosCollection), isEmpty);
+    });
+
+    test('a pin write authors the places row and points the Action at it',
+        () async {
+      final id = await seedOutcome();
+      await db.actionDao.setCurrentAction(id, 'Draft', now: _ts);
+      final actionId = only(actionsCollection).entityId;
+      capture.clear();
+
+      final area =
+          PlaceArea.create(latitudeDegrees: 51.5, longitudeDegrees: -0.12)!;
+      final pinId =
+          await db.actionDao.setPin(actionId, area, name: 'Corner shop', now: _ts);
+      expect(pinId, isNotNull);
+
+      // The pin is an entity of its own: one op, asserting the whole row, so
+      // a peer that has never seen the pin can build it.
+      final pin = only(placesCollection);
+      expect(pin.entityId, pinId);
+      expect(pin.fields['kind'], 'pin');
+      expect(pin.fields['name'], 'Corner shop');
+      expect(pin.fields['latitude_microdegrees'], area.latitudeMicrodegrees);
+      expect(pin.fields['longitude_microdegrees'], area.longitudeMicrodegrees);
+      expect(pin.fields['radius_meters'], area.radiusMeters);
+      expect(pin.fields['created_at'], isNotNull);
+
+      // The Action op points at the pin it now carries.
+      expect(only(actionsCollection).fields['place_id'], pinId);
     });
 
     test('the estimate sheet\'s write captures the estimate and the Timeboxed '

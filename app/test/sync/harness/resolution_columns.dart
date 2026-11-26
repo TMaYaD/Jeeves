@@ -44,6 +44,13 @@ Future<void> dropColumnsAddedAfter(SyncDatabase database, int version) async {
   if (version < 13) {
     await database.customStatement('DROP TABLE IF EXISTS vault_page_bases');
   }
+  // v16 added the record of reduced entities that still need projecting; a
+  // store from before it does not hold it.
+  if (version < 16) {
+    await database.customStatement(
+      'DROP TABLE IF EXISTS entities_awaiting_projection',
+    );
+  }
   for (final entry in columnsAddedAt.entries) {
     if (entry.key <= version) continue;
     for (final (table, column) in entry.value) {

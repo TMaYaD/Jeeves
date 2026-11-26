@@ -22,6 +22,7 @@ import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/intent.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/inbox_provider.dart';
+import 'package:jeeves/providers/place_gate_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/providers/time_window_provider.dart';
@@ -113,6 +114,10 @@ void main() {
               .overrideWith((_) => Stream.value(seeded.current)),
           currentTimeWindowsProvider
               .overrideWith((_) => Stream.value(const {})),
+          // The Place chip reads the Places of the Outcomes' current Actions,
+          // so the detail screen watches one more live row stream. It is
+          // stubbed like the others above, for the same reason.
+          currentPlacesProvider.overrideWith((_) => Stream.value(const {})),
           plannedActionsProvider('o1')
               .overrideWith((_) => Stream.value(seeded.planned)),
           terminatedActionsProvider('o1')

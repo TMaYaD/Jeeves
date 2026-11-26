@@ -28,6 +28,7 @@ import '../utils/uuid.dart';
 import '../database/gtd_database.dart';
 import '../models/action_draft.dart';
 import '../models/follow_up_change.dart';
+import '../models/place_choice.dart';
 import '../models/routing_kind.dart';
 import '../providers/database_provider.dart';
 
@@ -58,11 +59,13 @@ abstract class ClarificationService {
   /// 1. Creates a clarified `todos` Outcome from the clarify-card draft
   ///    (title / notes / due), routed to [to], carrying [action]'s effort
   ///    values on its columns so the birth Action seeds from them (D3).
-  /// 2. Attaches the non-person [tagIds] the card carried into the draft (its
+  /// 2. Puts [action]'s Place on the Action the routing mints, when [to] is
+  ///    Next or Waiting For and the draft carried one.
+  /// 3. Attaches the non-person [tagIds] the card carried into the draft (its
   ///    seeded tag hints plus any context/project edits) and, when [to] is
   ///    Waiting For, the [personTagIds] delegate set.
-  /// 3. Links the Capture to the new Outcome (`capture_outcomes` provenance).
-  /// 4. Stamps `captures.clarified_at` (1-1 mode: the first link completes the
+  /// 4. Links the Capture to the new Outcome (`capture_outcomes` provenance).
+  /// 5. Stamps `captures.clarified_at` (1-1 mode: the first link completes the
   ///    clarify act).
   ///
   /// **Overwrite semantics.** A Capture re-routed after Ceremony Back → re-tap
@@ -84,7 +87,9 @@ abstract class ClarificationService {
   /// collected none. Its effort values are written to the Outcome's columns
   /// regardless of destination (draft storage, D3); its phrase reaches an
   /// Action row only on the Next / Waiting For arms, where
-  /// [TodoDao.applyRouting] mints one that seeds from those columns.
+  /// [TodoDao.applyRouting] mints one that seeds from those columns. Its
+  /// Place rides the same two arms: a named Place or a one-time pin lands on
+  /// the minted Action, and every other destination drops it.
   ///
   /// [userId] denormalises onto the Outcome, the provenance link, and any tag
   /// rows. [outcomeId] / [now] are injectable for deterministic testing.
@@ -337,7 +342,10 @@ class DaoClarificationService implements ClarificationService {
       );
     }
     final id = outcomeId ?? uuid.v4();
-    return _db.capturing(() async {
+    final ts = (now ?? DateTime.now()).toUtc();
+    var placeChanged = false;
+    var placesChanged = false;
+    await _db.capturing(() async {
       // Require the Capture at commit time, inside the transaction: the
       // [captureExists] pre-check callers run can go stale (sync/another device
       // hard-deletes the row between snapshot and tap). Guarding here — not just
@@ -376,10 +384,52 @@ class DaoClarificationService implements ClarificationService {
         userId: personTagIds != null ? userId : null,
         now: now,
       );
+      // The Place the card carried lands on the Action the routing minted, in
+      // this same transaction. Only the Next and Waiting For arms mint an
+      // Action, so everywhere else the Place is dropped with the routing.
+      final place = action?.place;
+      if (place != null &&
+          (to == RoutingKind.nextAction || to == RoutingKind.waitingFor)) {
+        final current = await _db.actionDao.getCurrentAction(id);
+        if (current != null) {
+          var changed = false;
+          var placesMoved = false;
+          switch (place) {
+            case NamedPlaceDraft(:final placeId):
+              // A named Place that has since been deleted is refused by the
+              // write, and the Outcome lands without one.
+              final named = await _db.actionDao.applySetNamedPlace(
+                current.id,
+                placeId,
+                ts: ts,
+              );
+              changed = named.changed;
+              placesMoved = named.placesChanged;
+            case PinDraft(:final area, :final name):
+              final pin = await _db.actionDao.applySetPin(
+                current.id,
+                area,
+                name: name,
+                ts: ts,
+              );
+              changed = pin.changed;
+              placesMoved = pin.placesChanged;
+          }
+          placeChanged = changed;
+          placesChanged = placesMoved;
+        }
+      }
       await _db.captureDao.linkOutcome(captureId, id, userId, at: now);
       await _db.captureDao.stampClarified(captureId, at: now);
-      return id;
     });
+    // The Place write touched the Action row (and, for a pin, a `places` row),
+    // so the watchers that read across those tables refresh after the commit.
+    if (placeChanged) {
+      _db.notifyActionsViewWrite();
+      _db.notifyTodosViewWrite();
+    }
+    if (placesChanged) _db.notifyPlacesViewWrite();
+    return id;
   }
 
   @override

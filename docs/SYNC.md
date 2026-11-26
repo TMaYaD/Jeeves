@@ -50,7 +50,7 @@ Every strategy owes ADR-0030's obligations: merge must be commutative, associati
 
 ### The default is safe for any future key
 
-An unregistered key resolves as `lww`, which never *loses* a write: it selects the newer of the two by HLC and nothing else. That includes a tombstone, which the reducer treats as an ordinary value (see the matrix below) — so a later clear does win, and the key reads as absent afterwards. What LWW does not do is remove the row or discard the fresher of two writes: a key needs explicit registration only when *choosing the newer write* would be wrong (snooze floors, sets), not merely to be safe.
+An unregistered key resolves as `lww`, which never *loses* a write: it selects the newer of the two by HLC and nothing else. That includes a tombstone, which the reducer treats as an ordinary value (see the matrix below) — so a later clear does win, and the key reads as absent afterwards. What LWW does not do is remove the row or discard the fresher of two writes: a key needs explicit registration only when *choosing the newer write* would be wrong (snooze floors, sets).
 
 ### Explicit registration
 
@@ -58,7 +58,7 @@ An unregistered key resolves as `lww`, which never *loses* a write: it selects t
 
 ### Strategy selection is per op
 
-The strategy is selected from the op alone. A `user_preferences` op that carries `value` carries its `key` too, and the reducer refuses one that does not, under `preference_value_without_key` — a logged-but-refused quarantine, not a decode failure. **Nothing stored is read to pick the strategy**, so two devices cannot arbitrate the same pair of writes under different lattices depending on which of them had already learned the key ([ADR-0033](./adr/0033-user-preferences-ops-carry-their-key.md)). `SyncClient.capture` runs the same guard before authoring, so the shape cannot be signed into an outbox either. The refusal is pinned by `user_preferences_value_without_key_is_refused` (`spec/sync/reducer_v1_vectors.json`).
+The strategy is selected from the op alone. A `user_preferences` op that carries `value` carries its `key` too, and the reducer refuses one that does not, under `preference_value_without_key` — a logged-but-refused quarantine, not a decode failure. A change whose collection belongs to another Workspace is refused the same way, under `collection_outside_workspace`, and pinned by `user_preferences_change_in_the_default_workspace_log_is_refused` and `default_workspace_collection_in_the_preferences_log_is_refused`. **Nothing stored is read to pick the strategy**, so two devices cannot arbitrate the same pair of writes under different lattices depending on which of them had already learned the key ([ADR-0033](./adr/0033-user-preferences-ops-carry-their-key.md)). `SyncClient.capture` runs the same guard before authoring, so the shape cannot be signed into an outbox either. The refusal is pinned by `user_preferences_value_without_key_is_refused` (`spec/sync/reducer_v1_vectors.json`).
 
 ## Conflict matrix — every current `user_preferences` key
 
@@ -91,7 +91,7 @@ Every current key, grouped by family:
 | `planning_notification_snoozed_until`, `shutdown_notification_snoozed_until`, `periodic_review_notification_snoozed_until` | datetime | `maxTimestampValue` | Snooze floor must never regress; un-snooze is a tombstone |
 | *(none today)* | list/set | `setMerge` | Provisioned for future filter/pin selections |
 
-**Snooze arbitration departs deliberately from the blanket LWW default**: between two live values the later *value* wins so a floor never regresses, while a clear is arbitrated against a live value by last-write-wins.
+**Snooze arbitration departs from the blanket LWW default**; the `maxTimestampValue` bullet above states the rule.
 
 ### Sprints
 
@@ -145,8 +145,8 @@ It writes no domain row, tombstone or change.
 Merge state reaches the domain store through the projector, which gives up the
 store's writer between batches — a whole-store re-projection (after a schema upgrade,
 or a rebuild from the log) never holds a user's edit back for its length. That walk,
-and only that walk, leaves alone an entity whose local change is still in the outbox.
-A remote change is always projected on arrival. `DomainProjector.project`
+and only that walk, leaves an entity whose local change is still in the outbox.
+Remote changes are projected on arrival, or by the next pull. `DomainProjector.project`
 (`sync/domain_projector.dart`) gives the reason for each.
 ## The vault: a folder of Markdown pages
 

@@ -316,8 +316,11 @@ void main() {
     // scenario scale rather than at vector scale.
     final reversed = SyncDatabase(NativeDatabase.memory());
     addTearDown(reversed.close);
-    final reversedReducer =
-        Reducer(reversed, nowMs: () => clock.nowMs, strategies: strategies);
+    // One reducer per Workspace, because a log reduces only its own
+    // collections: a single reducer over both Workspaces would refuse half the
+    // history — the preferences Workspace's ops under the default Workspace's
+    // reducer, and the rest the other way round.
+    final reversedReducers = <String, Reducer>{};
     final log = await a.database.select(a.database.opLog).get();
     for (final row in log.reversed) {
       // Refused ops stay in the log as evidence, never applied. Replaying one
@@ -330,7 +333,18 @@ void main() {
       // nothing — the same split the receive pipeline makes. Order-independence
       // is a claim about content, and a MemberRegister has no fields to merge.
       if (header.opClass != opClassContent) continue;
-      await reversedReducer.apply(
+      final logWorkspaceId = row.workspaceId;
+      final reducer = reversedReducers.putIfAbsent(
+        logWorkspaceId,
+        () => Reducer(
+          reversed,
+          nowMs: () => clock.nowMs,
+          workspaceId: logWorkspaceId,
+          userId: _userId,
+          strategies: strategies,
+        ),
+      );
+      await reducer.apply(
         OpPayload.decode(parseBody(parts.body)),
         authorMemberIdHex: memberIdToHex(header.authorMemberId),
       );
