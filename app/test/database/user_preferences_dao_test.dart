@@ -199,6 +199,28 @@ void main() {
           DateTime.utc(2026, 1, 1, 12));
     });
 
+    test('a clear that was carried over stays in force on a later carry',
+        () async {
+      final dao = db.userPreferencesDao;
+      const key = 'planning_notification_snoozed_until';
+
+      // The account cleared at 10:00; one copy holds an 18:00 floor written at
+      // 09:00 (before the clear), another a 12:00 floor written at 11:00.
+      await dao.set(_accountId, key, null,
+          updatedAt: '2026-01-01T10:00:00.000Z');
+      await dao.set(_signedOutUserId, key, '"2026-01-01T18:00:00.000Z"',
+          updatedAt: '2026-01-01T09:00:00.000Z');
+      await dao.set('other-account', key, '"2026-01-01T12:00:00.000Z"',
+          updatedAt: '2026-01-01T11:00:00.000Z');
+
+      await dao.carryNewestPreferencesInto(_accountId);
+      expect(await dao.get(_accountId, key), '"2026-01-01T12:00:00.000Z"');
+
+      // The second carry must not revive the floor the clear silenced.
+      await dao.carryNewestPreferencesInto(_accountId);
+      expect(await dao.get(_accountId, key), '"2026-01-01T12:00:00.000Z"');
+    });
+
     test('a change that lands while a setting is carried in is not undone',
         () async {
       final dao = db.userPreferencesDao;

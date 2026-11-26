@@ -246,6 +246,36 @@ class UserPreferencesDao {
             candidates.map(preferenceRowOf),
           );
           if (winnerRow == null) continue;
+          // A clear silences every live copy written before it. Once the
+          // clear is overwritten in the account's row (a later live write
+          // wins it), a later carry could not see it any more and would
+          // revive the silenced floor. So the silenced copies on the other
+          // user ids are marked cleared at the clear's own timestamp, which
+          // keeps the clear in force on every later carry. No row is deleted.
+          QueryRow? newestClear;
+          for (final row in candidates) {
+            if (row.read<String?>('value') != null) continue;
+            if (newestClear == null || _isNewerThan(row, newestClear)) {
+              newestClear = row;
+            }
+          }
+          if (newestClear != null) {
+            final clearedAt = newestClear.read<String?>('updated_at');
+            for (final row in entry.value) {
+              if (row.read<String?>('value') == null) continue;
+              if (_isNewerThan(row, newestClear)) continue;
+              await _db.customUpdate(
+                'UPDATE user_preferences SET value = NULL, updated_at = ? '
+                'WHERE user_id = ? AND "key" = ?',
+                variables: [
+                  Variable(clearedAt),
+                  Variable(row.read<String>('user_id')),
+                  Variable(key),
+                ],
+                updates: {_db.userPreferences},
+              );
+            }
+          }
           // The timestamp counts too: two equal values (two clears, say) with
           // different timestamps resolve to the newer one, and only a carry
           // brings that timestamp into the account's row.
