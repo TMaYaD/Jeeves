@@ -101,6 +101,18 @@ incoherent. Triggers stay autonomous about content; this rule is content-indepen
 and applies uniformly, which is why it lives at the Nudge level rather than being
 duplicated into each Trigger.
 
+## Habits in Evening Shutdown
+
+- **The day being closed** is the local day the open FocusSession started, so
+  after midnight it is yesterday. Check-ins made in the ritual count for that day.
+- **The habit step** comes after Resolve Unfinished and lists the Habits for that
+  day with no Check-in yet (a measurable Habit below its target is still open). A
+  Habit left alone gets no Check-in. With nothing open the step is not shown and
+  the step count says so.
+- **Habits only.** When every Outcome is done but Habits are open, ending the
+  session from Now shows the habit step alone and closes the session after it.
+  Back leaves the session open.
+
 ## Triggers
 
 A Trigger is an autonomous predicate with edge detection: it fires its Nudge to

@@ -6,6 +6,7 @@ import '../database/daos/action_dao.dart' show TerminatedAction;
 import '../database/daos/capture_dao.dart' show CarvedOutcome;
 import '../database/gtd_database.dart';
 import '../models/action_draft.dart';
+import '../models/place_area.dart';
 import '../models/time_context.dart';
 import '../models/intent.dart';
 import '../models/routing_kind.dart';
@@ -261,6 +262,161 @@ class TaskDetailNotifier {
       _db.notifyTodosViewWrite();
     }
     return present;
+  }
+
+  /// Sets or clears (null) the named time window of the Action [actionId] the
+  /// editor was opened for. Returns whether the Outcome was still present.
+  ///
+  /// The write is dropped when that Action is no longer the Outcome's current
+  /// one, exactly as [setTimeContext] drops its own: an edit never lands on a
+  /// successor the user did not see. A named window and a Time context are
+  /// exclusive — the write clears the other (issue #239).
+  Future<bool> setTimeWindow(String? windowId,
+      {required String actionId}) async {
+    var wrote = false;
+    final present = await _ifOutcomePresent(() async {
+      final current = await _db.actionDao.getCurrentAction(_todoId);
+      if (current == null || current.id != actionId) return;
+      wrote = await _db.actionDao.applySetTimeWindow(
+        current.id,
+        windowId,
+        ts: DateTime.now().toUtc(),
+      );
+    });
+    if (wrote) {
+      _db.notifyActionsViewWrite();
+      _db.notifyTodosViewWrite();
+    }
+    return present;
+  }
+
+  /// Clears every kind of time on the Action [actionId] the editor was opened
+  /// for: the named window and the one-time Time context, in one write.
+  ///
+  /// The write is dropped when that Action is no longer the Outcome's current
+  /// one, exactly as [setTimeContext] and [setTimeWindow] drop theirs: an
+  /// edit never lands on a successor the user did not see.
+  Future<bool> clearTime({required String actionId}) async {
+    var wrote = false;
+    final present = await _ifOutcomePresent(() async {
+      final current = await _db.actionDao.getCurrentAction(_todoId);
+      if (current == null || current.id != actionId) return;
+      wrote = await _db.actionDao.applyClearTime(
+        current.id,
+        ts: DateTime.now().toUtc(),
+      );
+    });
+    if (wrote) {
+      _db.notifyActionsViewWrite();
+      _db.notifyTodosViewWrite();
+    }
+    return present;
+  }
+
+  /// Sets the estimate and the Timeboxed switch of the Action the sheet was
+  /// opened for, in one write (issue #923).
+  ///
+  /// The estimate sheet offers the two together, so they are written together:
+  /// one transaction, one timestamp, and the estimate and the switch can never
+  /// disagree about which Action they belong to.
+  ///
+  /// [minutes] is the new estimate; null leaves it alone unless [clearEstimate]
+  /// says to clear it. [timeboxed] is the new switch; null leaves it alone.
+  ///
+  /// [estimateIfUnset] is the estimate the sheet shows. It is written only
+  /// when the switch is turned on and the Action carries no estimate of its
+  /// own: a limit is measured against the Action's estimate, so a switch with
+  /// none is not a limit. The Action's own estimate is read here, inside the
+  /// write, so a peer that cleared it while the sheet was open cannot leave a
+  /// switch with nothing to limit — the estimate the sheet shows travels with
+  /// the switch instead.
+  ///
+  /// The switch lives on the Action, not the Outcome, so it is written with the
+  /// same guard [setTimeContext] uses: it is dropped when that Action is no
+  /// longer the Outcome's current one, so an edit never lands on a successor
+  /// the user did not see. The estimate is an Outcome's own, so it goes
+  /// whichever Action is current.
+  Future<bool> setEstimateAndTimeboxed({
+    required String actionId,
+    int? minutes,
+    bool clearEstimate = false,
+    bool? timeboxed,
+    int? estimateIfUnset,
+  }) async {
+    return _ifOutcomePresent(() async {
+      final current = await _db.actionDao.getCurrentAction(_todoId);
+      // The switch belongs to the Action the sheet was opened for: when that
+      // Action is no longer the current one, the switch is not written.
+      final action = current != null && current.id == actionId ? current : null;
+      final needsEstimate = action != null &&
+          timeboxed == true &&
+          !clearEstimate &&
+          action.timeEstimate == null &&
+          estimateIfUnset != null;
+      await _db.todoDao.updateFields(
+        _todoId,
+        timeEstimate: minutes ?? (needsEstimate ? estimateIfUnset : null),
+        clearTimeEstimate: clearEstimate,
+        timeboxed: action != null ? timeboxed : null,
+      );
+    });
+  }
+
+  /// Sets the named Place of the Action the sheet was opened for (issue #55).
+  ///
+  /// Guarded like [setTimeContext]: the write is dropped when that Action is
+  /// no longer the Outcome's current one, so an edit never lands on a
+  /// successor the user did not see.
+  ///
+  /// A one-time pin the Action stops pointing at goes with the reference; a
+  /// named Place belongs to the user's list and stays in it.
+  /// Sets the named Place on the Action the sheet was opened for (issue #55).
+  ///
+  /// Returns whether the Place was written: a write that the guard drops —
+  /// the Action that was current when the sheet opened is no longer current —
+  /// writes nothing and says so.
+  Future<bool> setNamedPlace({
+    required String actionId,
+    required String placeId,
+  }) async {
+    var written = false;
+    final outcomePresent = await _ifOutcomePresent(() async {
+      final current = await _db.actionDao.getCurrentAction(_todoId);
+      if (current == null || current.id != actionId) return;
+      written = await _db.actionDao.setNamedPlace(current.id, placeId);
+    });
+    return outcomePresent && written;
+  }
+
+  /// Drops a one-time pin on the Action the sheet was opened for (issue #55).
+  ///
+  /// A pin belongs to this one Action: it is never listed anywhere, and it goes
+  /// when the Action stops pointing at it. The same guard as [setNamedPlace]
+  /// applies, and the answer says whether the pin was actually dropped.
+  Future<bool> setPin({
+    required String actionId,
+    required PlaceArea area,
+    String? name,
+  }) async {
+    var written = false;
+    final outcomePresent = await _ifOutcomePresent(() async {
+      final current = await _db.actionDao.getCurrentAction(_todoId);
+      if (current == null || current.id != actionId) return;
+      final pinId = await _db.actionDao.setPin(current.id, area, name: name);
+      written = pinId != null;
+    });
+    return outcomePresent && written;
+  }
+
+  /// Clears the Place of the Action the sheet was opened for (issue #55).
+  Future<bool> clearPlace({required String actionId}) async {
+    var written = false;
+    final outcomePresent = await _ifOutcomePresent(() async {
+      final current = await _db.actionDao.getCurrentAction(_todoId);
+      if (current == null || current.id != actionId) return;
+      written = await _db.actionDao.setNamedPlace(current.id, null);
+    });
+    return outcomePresent && written;
   }
 
   Future<bool> setDueDate(DateTime date) =>

@@ -84,20 +84,31 @@ class FocusModeNotifier extends Notifier<FocusModeState> {
     final db = ref.read(databaseProvider);
     final now = DateTime.now();
 
-    final session = await db.focusSessionDao.getActiveSession();
-    if (session != null) {
-      await db.focusSessionDao.setCurrentTask(
-        sessionId: session.id,
-        taskId: todoId,
-        now: now,
-      );
-    } else {
-      await db.timeLogDao.openLog(
-        taskId: todoId,
+    // One thing at a time: a Focus on a Habit does not run beside an Outcome.
+    // Closing it and opening the Outcome engagement is one transaction, so a
+    // Habit start that overlaps this one either commits first (and is closed
+    // here) or commits after (and closes this engagement): never both open.
+    await db.capturing(() async {
+      await db.habitFocusDao.closeHabitFocus(
         userId: ref.read(currentUserIdProvider),
         now: now,
       );
-    }
+
+      final session = await db.focusSessionDao.getActiveSession();
+      if (session != null) {
+        await db.focusSessionDao.setCurrentTask(
+          sessionId: session.id,
+          taskId: todoId,
+          now: now,
+        );
+      } else {
+        await db.timeLogDao.openLog(
+          taskId: todoId,
+          userId: ref.read(currentUserIdProvider),
+          now: now,
+        );
+      }
+    });
     state = FocusModeState(
       activeTodoId: todoId,
       sessionStart: now,
@@ -121,6 +132,37 @@ class FocusModeNotifier extends Notifier<FocusModeState> {
     );
   }
 
+  /// Moves Focus straight from the Outcome just completed to [todoId], with
+  /// no pass through the list: closes any open TimeLog, opens one on [todoId]
+  /// and points the session at it in one write (issue #407).
+  ///
+  /// The state never reads inactive in between, so the Focus screen is not
+  /// sent back to the list. Without an open session the engagement is ad hoc,
+  /// as in [startFocus].
+  Future<void> advanceTo(String todoId) async {
+    final db = ref.read(databaseProvider);
+    final now = DateTime.now();
+    final session = await db.focusSessionDao.getActiveSession();
+    if (session != null) {
+      await db.focusSessionDao.setCurrentTask(
+        sessionId: session.id,
+        taskId: todoId,
+        now: now,
+      );
+    } else {
+      final previousTodoId = state.activeTodoId;
+      if (previousTodoId != null) {
+        await db.timeLogDao.closeLog(taskId: previousTodoId);
+      }
+      await db.timeLogDao.openLog(
+        taskId: todoId,
+        userId: ref.read(currentUserIdProvider),
+        now: now,
+      );
+    }
+    state = FocusModeState(activeTodoId: todoId, sessionStart: now);
+  }
+
   /// Clears the focused task and resets the timer, closing the open TimeLog
   /// (through the session when one is open; directly for ad-hoc engagement).
   ///
@@ -138,6 +180,13 @@ class FocusModeNotifier extends Notifier<FocusModeState> {
       // Ad-hoc engagement (ADR-0005): no session to close the log through.
       await db.timeLogDao.closeLog(taskId: state.activeTodoId!);
     }
+    state = const FocusModeState();
+  }
+
+  /// Clears the in-memory engagement only. The store was already settled by
+  /// another writer (a Habit Focus start), so nothing is written here: a later
+  /// Outcome engagement that committed in the meantime must not be closed.
+  void resetState() {
     state = const FocusModeState();
   }
 }

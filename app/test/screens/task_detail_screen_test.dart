@@ -21,6 +21,7 @@ import 'package:jeeves/providers/sprint_timer_provider.dart'
     show sprintTimerProvider;
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
+import 'package:jeeves/providers/time_window_provider.dart';
 import 'package:jeeves/screens/task_detail/task_detail_screen.dart';
 import 'package:jeeves/sync/collection_codecs.dart' show todosCollection;
 import 'package:jeeves/sync/domain_op_capture.dart'
@@ -140,6 +141,10 @@ Future<void> _seedRunningSprint(GtdDatabase db, String taskId) async {
           .overrideWith((_) => Stream.value(capturedFrom)),
       currentActionProvider(todoId)
           .overrideWith((_) => currentActionStream ?? Stream.value(null)),
+      // The Time context chip reads the named windows of the Outcomes' current
+      // Actions, so the detail screen watches one more live row stream. It is
+      // stubbed like the others above, for the same reason.
+      currentTimeWindowsProvider.overrideWith((_) => Stream.value(const {})),
       plannedActionsProvider(todoId)
           .overrideWith((_) => plannedActionsStream ?? Stream.value([])),
       terminatedActionsProvider(todoId).overrideWith(
@@ -417,6 +422,12 @@ void main() {
       expect(await db.focusSessionDao.getActiveSession(), isNull);
 
       await tapBarAction(tester, const Key('task_detail_start_focus'));
+      // The Timeboxed gate reads the limit from the database before the
+      // engagement opens a TimeLog (issue #923), so the tap is followed by
+      // two real-async rounds: one for that read, one for the write it
+      // leads to. Drift only answers outside the fake async zone.
+      await tester.runAsync(() => pumpEventQueue());
+      await tester.pumpAndSettle();
       await tester.runAsync(() => pumpEventQueue());
       await tester.pumpAndSettle();
 
@@ -1261,7 +1272,15 @@ void main() {
       final rowId = (await h.plannedRows()).single.id;
 
       expect(find.byKey(Key('planned_effort_unset_$rowId')), findsOneWidget);
-      expect(find.text('Set'), findsOneWidget);
+      // The row's own affordance reads "Set". It is read off the keyed widget
+      // rather than off the text, because the Outcome's own estimate tag also
+      // reads "Set" now that it is a quiet prompt (issue #923).
+      expect(
+        tester
+            .widget<Text>(find.byKey(Key('planned_effort_unset_$rowId')))
+            .data,
+        'Set',
+      );
       expect(find.byKey(Key('planned_meta_$rowId')), findsNothing);
     });
 

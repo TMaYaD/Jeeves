@@ -22,6 +22,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
+import 'package:jeeves/providers/habit_progress_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_settings_provider.dart';
 import 'package:jeeves/providers/synced_preferences_provider.dart';
 import 'package:jeeves/screens/planning/steps/plan_summary_step.dart';
@@ -68,7 +69,19 @@ Future<ProviderContainer> _pumpStep(
   int? defaultEstimate,
 }) async {
   final container = ProviderContainer(overrides: [
+      // The Habits row watches live Drift streams; none of these tests are
+      // about Habits, so keep it empty rather than leave a stream timer.
+      activeHabitProgressProvider.overrideWithValue(const {}),
+      habitsForTodayProvider.overrideWithValue(const {}),
+      habitStackChainsProvider.overrideWithValue(const []),
     databaseProvider.overrideWithValue(db),
+    // The step reads when each Outcome's time opens; that provider watches
+    // drift's Time contexts, so stub it rather than hold a live watch
+    // (TESTING.md).
+    plannedDayTimeProvider.overrideWithValue((
+      notInPlannedDay: const <String>{},
+      opensLaterAt: const <String, DateTime>{},
+    )),
     notificationServiceProvider.overrideWithValue(_StubNotificationService()),
     _testTodosProvider.overrideWith((_) => todos),
     nextForFocusSessionPlanningProvider.overrideWith((ref) {

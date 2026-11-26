@@ -530,10 +530,14 @@ class ListItemFooter extends StatelessWidget {
     required this.onSkip,
     required this.onNext,
     required this.hasMoreItems,
+    this.nextLabel = 'Next step',
   });
 
   final String ceremonyId;
   final Color accentColor;
+
+  /// The forward button's label once nothing is left to skip.
+  final String nextLabel;
 
   /// Back handler. Typically wired to retreat the per-item cursor first,
   /// crossing to the previous step once the cursor is at the first item.
@@ -590,7 +594,7 @@ class ListItemFooter extends StatelessWidget {
                         padding: const EdgeInsets.symmetric(
                             horizontal: 32, vertical: 14),
                       ),
-                      child: const Text('Next step'),
+                      child: Text(nextLabel),
                     ),
             ),
           ),

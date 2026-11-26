@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'meta_chip.dart';
+import 'timeboxed_glyph.dart';
 
 /// Editable Outcome metadata in energy, estimate, logged time, due order.
 /// Unset editable values retain their prompts; optional logged time is read-only.
@@ -13,6 +14,8 @@ class OutcomeAttributeStrip extends StatelessWidget {
     this.timeLoggedMinutes,
     this.dueDate,
     this.timeContextChip,
+    this.placeChip,
+    this.timeboxed = false,
     required this.onEnergyTap,
     required this.onEstimateTap,
     required this.onDueTap,
@@ -25,8 +28,16 @@ class OutcomeAttributeStrip extends StatelessWidget {
   final AsyncValue<int>? timeLoggedMinutes;
   final DateTime? dueDate;
 
+  /// Whether the estimate is a limit rather than a guess (issue #923). The
+  /// mark rides the estimate tag, so it is only ever seen where the
+  /// estimate is.
+  final bool timeboxed;
+
   /// The Time context chip, shown between logged time and due date when given.
   final Widget? timeContextChip;
+
+  /// The Place chip, shown beside the Time context chip when given (issue #55).
+  final Widget? placeChip;
   final VoidCallback onEnergyTap;
   final VoidCallback onEstimateTap;
   final VoidCallback onDueTap;
@@ -58,14 +69,16 @@ class OutcomeAttributeStrip extends StatelessWidget {
           icon: Icons.timer_outlined,
           label: timeEstimateMinutes != null
               ? formatMinutesLabel(timeEstimateMinutes!)
-              : 'Time',
+              : 'Set',
           color: timeEstimateMinutes != null
               ? const Color(0xFF2563EB)
               : const Color(0xFF9CA3AF),
+          trailing: timeboxed ? const TimeboxedGlyph() : null,
         ),
       ),
       if (timeLoggedMinutes != null) _TimeLoggedChip(value: timeLoggedMinutes!),
       ?timeContextChip,
+      ?placeChip,
       _TapChip(
         key: Key('${keyPrefix}_due'),
         onTap: onDueTap,

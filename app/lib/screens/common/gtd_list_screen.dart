@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../database/gtd_database.dart';
+import '../../providers/place_gate_provider.dart';
 import '../../widgets/active_filter_bar.dart';
 import '../../widgets/async_list.dart';
 import '../../widgets/outcome_multi_select.dart';
@@ -22,6 +23,8 @@ class GtdListScreen extends ConsumerStatefulWidget {
     this.emptySubtitle,
     this.showFilterBar = true,
     this.selectable = true,
+    this.showPlaceName = false,
+    this.header,
   });
 
   final StreamProvider<List<Todo>> provider;
@@ -37,6 +40,14 @@ class GtdListScreen extends ConsumerStatefulWidget {
   /// Whether long-press enters multi-select. Done and Trash are read-oriented
   /// record surfaces and pass false.
   final bool selectable;
+
+  /// Whether each row names the Place its Outcome is at (issue #55). Only the
+  /// Next list does: the other lists are unchanged by a Place.
+  final bool showPlaceName;
+
+  /// A line above the list — the Next list's calm note about not knowing
+  /// where the user is (issue #55).
+  final Widget? header;
 
   @override
   ConsumerState<GtdListScreen> createState() => _GtdListScreenState();
@@ -63,7 +74,14 @@ class _GtdListScreenState extends ConsumerState<GtdListScreen> {
   @override
   Widget build(BuildContext context) {
     final asyncItems = ref.watch(widget.provider);
-    final items = asyncItems.asData?.value ?? const <Todo>[];
+    // The retained value, not the resolved one: a list that is reloading —
+    // because the location changed, say — still holds the rows it had, and
+    // the selection must survive that window.
+    final items = asyncItems.value ?? const <Todo>[];
+    // The Place names are only read where the rows show them.
+    final placeNames = widget.showPlaceName
+        ? ref.watch(currentPlaceNamesProvider)
+        : const <String, String>{};
     final visibleIds = {for (final t in items) t.id};
     // An Outcome that left the list (status change, filter, sync delete) drops
     // out of the selection; an empty selection is "not in the mode".
@@ -88,6 +106,7 @@ class _GtdListScreenState extends ConsumerState<GtdListScreen> {
                   onClear: _clear,
                   onSelectAll: () => setState(() => _selectedIds = visibleIds),
                 ),
+              if (widget.header != null) widget.header!,
               Expanded(
                 child: AsyncList<Todo>(
                   asyncValue: asyncItems,
@@ -103,6 +122,7 @@ class _GtdListScreenState extends ConsumerState<GtdListScreen> {
                         todo: todo,
                         selectionActive: selectionActive,
                         selected: _selectedIds.contains(todo.id),
+                        placeName: placeNames[todo.id],
                         onOpen: () => context.push('/task/${todo.id}'),
                         onToggle: () => _toggle(todo.id),
                         onEnterSelection:

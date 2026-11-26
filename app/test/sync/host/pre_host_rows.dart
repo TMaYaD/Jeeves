@@ -35,6 +35,8 @@ Map<String, String> get preHostEntityIdByCollection => {
       capturesCollection: _captureId,
       timeLogsCollection: 'pre-host-time-log',
       sprintsCollection: 'pre-host-sprint',
+      placesCollection: 'pre-host-place',
+      timeWindowsCollection: 'pre-host-window',
       focusSessionsCollection: _sessionId,
       todoTagsCollection: todoTagIdFor(preHostOutcomeId, _tagId),
       captureOutcomesCollection:
@@ -102,6 +104,29 @@ Future<void> writeRowInEveryCollection(
   await run(
     "INSERT INTO todo_tags (id, todo_id, tag_id, user_id) VALUES (?, ?, ?, ?)",
     [ids[todoTagsCollection], preHostOutcomeId, _tagId, preHostUserId],
+  );
+  await run(
+    "INSERT INTO places (id, user_id, kind, name, latitude_microdegrees, "
+    "longitude_microdegrees, radius_meters, created_at) "
+    "VALUES (?, ?, 'named', 'Home', ?, ?, ?, ?)",
+    [
+      ids[placesCollection],
+      preHostUserId,
+      52000000,
+      13000000,
+      150,
+      _instant,
+    ],
+  );
+  await run(
+    "INSERT INTO time_windows (id, user_id, name, hours, created_at) "
+    "VALUES (?, ?, 'Store hours', ?, ?)",
+    [
+      ids[timeWindowsCollection],
+      preHostUserId,
+      '[{"day":1,"start":"11:00","end":"20:00"}]',
+      _instant,
+    ],
   );
   await run(
     "INSERT INTO capture_outcomes (id, capture_id, outcome_id, created_at, user_id) "

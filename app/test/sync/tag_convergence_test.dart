@@ -421,6 +421,76 @@ void main() {
     });
   });
 
+  group('the retired Label type is retyped on arrival', () {
+    late SimWorkspace workspace;
+    late SimDevice a;
+    late SimDevice b;
+
+    setUp(() async {
+      workspace = await SimWorkspace.create();
+      addTearDown(workspace.close);
+      a = workspace.a;
+      b = workspace.b;
+      await workspace.syncAll();
+    });
+
+    test("a peer's 'label' Tag becomes 'context' on both devices, link kept",
+        () async {
+      final outcome = await outcomeOn(a, 'errand-outcome');
+      final tagId = _id('errands');
+      await tagWithId(a, tagId, name: 'Errands', type: 'label');
+      await a.domain.tagDao.assignTag(outcome, tagId, _userId);
+
+      await settle([a, b]);
+
+      final tags = await expectConverged([a, b], 'tags');
+      final errands = tags.where((row) => row['name'] == 'Errands').single;
+      expect(errands['id'], tagId);
+      expect(errands['type'], 'context');
+      final junctions = await expectConverged([a, b], 'todo_tags');
+      expect(junctions.single['tag_id'], tagId);
+      await expectReducedStateAgrees([a, b]);
+    });
+
+    test("a 'label' Tag meets a same-name Label: one Label keeps every link",
+        () async {
+      final ids = _idsInMinOrder(['home-a', 'home-b']);
+      b.goOffline();
+      final outcomeOne = await outcomeOn(b, 'home-one');
+      await tagWithId(b, ids.last, name: 'Home', type: 'context');
+      await b.domain.tagDao.assignTag(outcomeOne, ids.last, _userId);
+
+      final outcomeTwo = await outcomeOn(a, 'home-two');
+      await tagWithId(a, ids.first, name: 'Home', type: 'label');
+      await a.domain.tagDao.assignTag(outcomeTwo, ids.first, _userId);
+      final captureId = _id('home-capture');
+      await a.domain.captureDao.insertCapture(CapturesCompanion(
+        id: Value(captureId),
+        title: const Value('call home'),
+        captureSource: const Value('voice'),
+        userId: const Value(_userId),
+        createdAt: Value(a.clock.asDateTime),
+      ));
+      await a.domain.captureDao.assignTagHint(captureId, ids.first, _userId);
+
+      b.goOnline();
+      await settle([a, b]);
+
+      final tags = await expectConverged([a, b], 'tags');
+      final home = tags.where((row) => row['name'] == 'Home').toList();
+      expect(home, hasLength(1), reason: 'the two Labels did not fold');
+      expect(home.single['id'], ids.first, reason: 'MIN(id) survives');
+      expect(home.single['type'], 'context');
+      final junctions = await expectConverged([a, b], 'todo_tags');
+      expect(junctions.map((row) => row['todo_id']).toSet(),
+          {outcomeOne, outcomeTwo});
+      expect(junctions.map((row) => row['tag_id']).toSet(), {ids.first});
+      final hints = await expectConverged([a, b], 'capture_tags');
+      expect(hints.single['tag_id'], ids.first);
+      await expectReducedStateAgrees([a, b]);
+    });
+  });
+
   group('rename, merge and delete from the management screens', () {
     test('reach the other device: no reference to a merged or deleted entry',
         () async {

@@ -52,6 +52,11 @@ void main() {
 
     final tile = find.byKey(tileKey);
     await tester.scrollUntilVisible(tile, 200);
+    // The list builds children within its cacheExtent while they still sit
+    // below the fold, so the finder can answer before the tile is on screen:
+    // bring it into view before tapping it (docs/TESTING.md).
+    await tester.ensureVisible(tile);
+    await tester.pumpAndSettle();
     await tester.tap(tile);
     await tester.pumpAndSettle();
     await tester.tap(find.byIcon(Icons.keyboard_outlined));

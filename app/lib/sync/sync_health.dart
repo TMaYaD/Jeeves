@@ -16,6 +16,12 @@
 ///   to the User, and only the first of those two turns the indicator red. The
 ///   classification lives in `sync_condition_class.dart` and is persisted
 ///   nowhere.
+/// * **A condition the User has answered is not a condition gone.** The two
+///   counts that ask the User for something skip the rows with a recorded
+///   decision, while [unresolvedAlarmCount] and [quarantineCount] keep counting
+///   them: the condition happened and is still worth reading about, it is just
+///   not something to ask about again. The decision itself lives in
+///   `alarm_resolution.dart`.
 /// * [lastSyncedAt] stamps on **pull completion, independent of flush state**.
 ///   The timestamp never claims healthy; a wedged outbox shows through
 ///   [pendingOpCount], and withholding the timestamp would only make a device
@@ -49,10 +55,14 @@ class SyncHealth {
 
   /// The subset of [unresolvedAlarmCount] whose kind is
   /// `SyncConditionClass.actionable` — the four kinds that mean something of the
-  /// User's is stuck or lost.
+  /// User's is stuck or lost — and which the User has not yet answered.
   ///
   /// The only count that turns the indicator red. See
   /// `sync_condition_class.dart`.
+  ///
+  /// A decided alarm is not counted here even though it still stands: the User
+  /// has answered it, and an alarm they have answered is not something to paint
+  /// the device red for.
   final int actionableAlarmCount;
 
   /// Ops still refused by a fail-closed rule: never applied, always surfaced.
@@ -62,11 +72,14 @@ class SyncHealth {
 
   /// The subset of [quarantineCount] that is not self-healing — every refusal
   /// reason except the five delivery gaps (a KeyWrap or an epoch that has not
-  /// arrived yet).
+  /// arrived yet) — and which the User has not yet answered.
   ///
   /// It makes the sync-health screen reachable; it never makes the indicator an
   /// error. A refusal is the app *working*: the bytes were refused, which is the
   /// outcome the fail-closed rule exists to produce.
+  ///
+  /// A decided refusal is not counted here even though it still stands, for the
+  /// same reason a decided alarm is not counted in [actionableAlarmCount].
   final int reportableQuarantineCount;
 
   /// The distinct kinds of the unresolved alarms.

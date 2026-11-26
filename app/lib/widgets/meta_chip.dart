@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import 'timeboxed_glyph.dart';
+
 /// User-facing label for an energy level. Falls back to the raw value so an
 /// unknown level from a newer client renders as itself rather than vanishing.
 String energyLevelLabel(String level) => switch (level) {
@@ -25,6 +27,10 @@ String formatDueDateLabel(DateTime dueDate) =>
 
 /// Read-only Outcome attributes in energy, estimate, logged, due order.
 /// Omit an attribute by leaving its value null; zero is a present duration.
+///
+/// [placeName] is the name of the Place the Outcome's current Action is at.
+/// It comes last, and only where the surface asks for it: the Next list
+/// shows it (issue #55), every other surface leaves it out.
 class OutcomeMetaLine extends StatelessWidget {
   const OutcomeMetaLine({
     super.key,
@@ -32,14 +38,24 @@ class OutcomeMetaLine extends StatelessWidget {
     this.timeEstimateMinutes,
     this.timeLoggedMinutes,
     this.dueDate,
+    this.placeName,
     this.muted = false,
+    this.timeboxed = false,
   });
 
   final String? energyLevel;
   final int? timeEstimateMinutes;
   final int? timeLoggedMinutes;
   final DateTime? dueDate;
+
+  /// The name of the Place the Outcome is at, when the surface shows it.
+  final String? placeName;
   final bool muted;
+
+  /// Whether the estimate is a limit rather than a guess (issue #923). The
+  /// mark rides the estimate chip, so it is only ever seen where the
+  /// estimate is.
+  final bool timeboxed;
 
   @override
   Widget build(BuildContext context) => Wrap(
@@ -57,6 +73,9 @@ class OutcomeMetaLine extends StatelessWidget {
           icon: Icons.timer_outlined,
           label: formatMinutesLabel(timeEstimateMinutes!),
           color: muted ? const Color(0xFFBDBDBD) : const Color(0xFF2563EB),
+          trailing: timeboxed
+              ? TimeboxedGlyph(color: muted ? const Color(0xFFBDBDBD) : null)
+              : null,
         ),
       if (timeLoggedMinutes != null)
         MetaChip(
@@ -69,6 +88,12 @@ class OutcomeMetaLine extends StatelessWidget {
           icon: Icons.event_outlined,
           label: formatDueDateLabel(dueDate!),
           color: muted ? const Color(0xFFBDBDBD) : const Color(0xFFDC2626),
+        ),
+      if (placeName != null)
+        MetaChip(
+          icon: Icons.place_outlined,
+          label: placeName!,
+          color: muted ? const Color(0xFFBDBDBD) : const Color(0xFF6B7280),
         ),
     ],
   );
@@ -91,11 +116,15 @@ class MetaChip extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.color,
+    this.trailing,
   });
 
   final IconData icon;
   final String label;
   final Color color;
+
+  /// A mark after the label — the Timeboxed glyph on the estimate chip.
+  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
@@ -111,14 +140,25 @@ class MetaChip extends StatelessWidget {
         children: [
           Icon(icon, size: 14, color: color),
           const SizedBox(width: 4),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 12,
-              color: color,
-              fontWeight: FontWeight.w500,
+          // The label takes the width the chip has left. A row hands its
+          // non-flex children unbounded width, so a long label — a Place name
+          // the user wrote — would push the chip past the row it sits in.
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 12,
+                color: color,
+                fontWeight: FontWeight.w500,
+              ),
             ),
           ),
+          if (trailing != null) ...[
+            const SizedBox(width: 4),
+            trailing!,
+          ],
         ],
       ),
     );

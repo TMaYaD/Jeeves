@@ -11,6 +11,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../database/daos/action_dao.dart' show TerminatedAction;
 import '../../database/gtd_database.dart';
+import '../../models/timeboxed.dart';
 import '../../providers/focus_session_provider.dart';
 import '../../providers/sprint_timer_provider.dart' show sprintTimerProvider;
 import '../../providers/task_detail_provider.dart';
@@ -20,12 +21,14 @@ import '../../widgets/async_subject.dart';
 import '../../widgets/meta_chip.dart';
 import '../../widgets/outcome_attribute_editors.dart';
 import '../../widgets/outcome_attribute_strip.dart';
+import '../../widgets/place_chip.dart';
 import '../../widgets/outcome_plan_section.dart';
 import '../../widgets/person_tag_picker.dart';
 import '../../widgets/project_picker.dart';
 import '../../widgets/dotted_add_button.dart';
 import '../../widgets/tag_list.dart';
 import '../../widgets/time_context_sheet.dart';
+import '../../widgets/timeboxed_gate.dart';
 import '../../widgets/task_status_row.dart';
 
 class TaskDetailScreen extends ConsumerStatefulWidget {
@@ -197,6 +200,9 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   Widget build(BuildContext context) {
     final todoAsync = ref.watch(taskDetailTodoProvider(widget.todoId));
     final tagsAsync = ref.watch(taskTagsProvider(widget.todoId));
+    // The Timeboxed switch lives on the Action, not the Outcome (issue #923),
+    // so the mark on the estimate tag is read from the current Action.
+    final action = ref.watch(currentActionProvider(widget.todoId)).value;
 
     return GestureDetector(
       onTap: () => FocusScope.of(context).unfocus(),
@@ -259,7 +265,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                     children: [
                       // Project Picker Custom UI
                       ProjectPickerWidget(
-                        currentProjectTag: projectTag,
+                        currentTag: projectTag,
                         onAssign: (tag) => _notifier.assignProject(tag.id).ignore(),
                         onClear: () => _notifier.clearProject().ignore(),
                         customChild: Padding(
@@ -309,13 +315,43 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                       OutcomeAttributeStrip(
                         energyLevel: todo.energyLevel,
                         timeEstimateMinutes: todo.timeEstimate,
+                        // The limit is the Action's own estimate — that is
+                        // what the limit is derived from — so the mark
+                        // follows the Action, not the Outcome's mirror.
+                        timeboxed: isTimeboxedAction(
+                          timeboxed: action?.timeboxed,
+                          timeEstimate: action?.timeEstimate,
+                        ),
                         dueDate: todo.dueDate,
                         timeContextChip:
                             TimeContextChip(outcomeId: widget.todoId),
-                        onEnergyTap: () => showOutcomeEnergyLevelSheet(
-                            context, _notifier, todo.energyLevel),
+                        placeChip: PlaceChip(outcomeId: widget.todoId),
+                        onEnergyTap: () {
+                          // Captured now so the open sheet keeps writing to
+                          // the task it displays.
+                          final notifier = _notifier;
+                          showOutcomeEnergyLevelSheet(
+                            context,
+                            onSet: (level) => notifier.setEnergyLevel(level).ignore(),
+                            onClear: () => notifier.clearEnergyLevel().ignore(),
+                            current: todo.energyLevel,
+                          );
+                        },
                         onEstimateTap: () => showOutcomeTimeEstimateSheet(
-                            context, _notifier, todo.timeEstimate),
+                          context,
+                          // Captured now so the open sheet keeps writing to
+                          // the task it displays.
+                          _notifier,
+                          current: todo.timeEstimate,
+                          actionText: action?.actionText ?? todo.title,
+                          actionId: action?.id,
+                          // The switch reads as the limit does: on only
+                          // when there is an estimate to limit.
+                          timeboxed: isTimeboxedAction(
+                            timeboxed: action?.timeboxed,
+                            timeEstimate: action?.timeEstimate,
+                          ),
+                        ),
                         onDueTap: () async {
                           final picked = await pickOutcomeDueDate(context, todo.dueDate);
                           if (picked != null) {
@@ -635,8 +671,17 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
       context.push('/focus/active');
       return;
     }
-    await ref.read(focusModeProvider.notifier).startFocus(todo.id);
-    if (mounted) context.push('/focus/active');
+    // A Sprint that would start past a Timeboxed limit goes past the gate
+    // first, before the engagement opens a TimeLog (issue #923).
+    await guardSprintPastLimit(
+      context,
+      ref,
+      outcomeId: todo.id,
+      start: () async {
+        await ref.read(focusModeProvider.notifier).startFocus(todo.id);
+        if (mounted) context.push('/focus/active');
+      },
+    );
   }
 
   Widget _buildInfoSection({required IconData icon, required Color iconBg, required Color iconColor, required String title, required Widget contentWidget, VoidCallback? onTap}) {

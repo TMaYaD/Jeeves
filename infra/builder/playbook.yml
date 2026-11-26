@@ -1,0 +1,30 @@
+# Turn any Ubuntu/Debian x86_64 machine into a Jeeves Android build machine.
+# Portable by design: nothing here names a host, user, network or hypervisor.
+# Bring your own inventory; see README.md.
+#
+#   ansible-playbook -i <your inventory> infra/builder/playbook.yml
+- name: Jeeves Android build machine
+  hosts: "{{ builder_hosts | default('builder') }}"
+  gather_facts: true
+
+  pre_tasks:
+    - name: Supported platform
+      ansible.builtin.assert:
+        that:
+          - ansible_architecture == "x86_64"
+          - ansible_os_family == "Debian"
+        fail_msg: >-
+          The Android SDK/NDK host tools are x86_64 Linux; this playbook uses
+          apt. Got {{ ansible_distribution }} {{ ansible_architecture }}.
+
+    - name: SDK platform list covers the app's compileSdk
+      ansible.builtin.assert:
+        that: >-
+          builder_android_packages | select('match', 'platforms;android-' ~ builder_compile_sdk ~ '(\.\d+)?$') | list | length > 0
+        fail_msg: >-
+          app/android/app/build.gradle.kts has compileSdk = {{ builder_compile_sdk }},
+          but builder_android_packages has no matching platforms;android-{{ builder_compile_sdk }}.
+          Update infra/builder/roles/jeeves_builder/defaults/main.yml.
+
+  roles:
+    - jeeves_builder

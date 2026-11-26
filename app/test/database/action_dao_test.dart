@@ -15,7 +15,9 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/place_area.dart';
 import 'package:jeeves/models/time_context.dart';
+import 'package:jeeves/sync/domain_op_capture.dart';
 import '../test_helpers.dart';
 
 const _userId = 'test-user';
@@ -112,8 +114,10 @@ void main() {
   setUpAll(configureSqliteForTests);
 
   late GtdDatabase db;
+  late RecordingDomainOpCapture capture;
   setUp(() async {
-    db = GtdDatabase(NativeDatabase.memory());
+    capture = RecordingDomainOpCapture();
+    db = GtdDatabase(NativeDatabase.memory(), opCapture: capture);
     await _seedOutcome(db);
   });
   tearDown(() => db.close());
@@ -1019,6 +1023,218 @@ void main() {
       await db.customStatement(
           "UPDATE actions SET time_context = 'garbage' WHERE outcome_id = 'o1'");
       expect(await db.actionDao.watchCurrentTimeContexts().first, isEmpty);
+    });
+  });
+
+  group('the Action\'s Place and time window (issue #239)', () {
+    late String actionId;
+
+    final area = PlaceArea.create(
+      latitudeDegrees: 51.5074,
+      longitudeDegrees: -0.1278,
+      radiusMeters: 150,
+    )!;
+
+    setUp(() async {
+      await db.actionDao.setCurrentAction('o1', 'call the plumber', now: _t1);
+      actionId = (await _current(db, 'o1'))!['id'] as String;
+    });
+
+    Future<String> namedPlace(String name, {int radiusMeters = 150}) async {
+      final id = await db.placeDao.createNamedPlace(
+        name: name,
+        latitudeDegrees: 52.3702,
+        longitudeDegrees: 4.8952,
+        radiusMeters: radiusMeters,
+        userId: _userId,
+        now: _t1,
+      );
+      return id!;
+    }
+
+    Future<String> timeWindow(String name) async {
+      final id = await db.timeWindowDao.createTimeWindow(
+        name: name,
+        hours: {1: (startMinute: 11 * 60, endMinute: 20 * 60)},
+        userId: _userId,
+        now: _t1,
+      );
+      return id!;
+    }
+
+    test('a named Place attaches to the Action and resolves with its name '
+        'and its area', () async {
+      final placeId = await namedPlace('Hardware store', radiusMeters: 300);
+
+      expect(await db.actionDao.setNamedPlace(actionId, placeId, now: _t2),
+          isTrue);
+
+      final resolved = await db.actionDao.placeAndTimeWindowFor(actionId);
+      expect(resolved.place!.id, placeId);
+      expect(resolved.place!.name, 'Hardware store');
+      expect(resolved.place!.isPin, isFalse);
+      expect(resolved.place!.area.radiusMeters, 300);
+      expect(resolved.place!.area.latitudeMicrodegrees, 52370200);
+      expect(resolved.timeWindow, isNull);
+      // Organising, not clarifying: the stamp does not move.
+      expect(await _lastClarified(db, 'o1'), _t1);
+    });
+
+    test('a pin replaces the named Place, and the named Place stays in the '
+        'list', () async {
+      final placeId = await namedPlace('Hardware store');
+      await db.actionDao.setNamedPlace(actionId, placeId, now: _t2);
+
+      final pinId =
+          await db.actionDao.setPin(actionId, area, now: _t3);
+
+      expect(pinId, isNotNull);
+      final resolved = await db.actionDao.placeAndTimeWindowFor(actionId);
+      expect(resolved.place!.id, pinId);
+      expect(resolved.place!.isPin, isTrue);
+      expect(resolved.place!.name, isNull);
+      // The named Place is the user's own and is left where it was.
+      final named = await db.placeDao.watchNamedPlaces().first;
+      expect(named.map((p) => p.id), [placeId]);
+    });
+
+    test('replacing a pin deletes the old pin row and tombstones it',
+        () async {
+      final first = await db.actionDao.setPin(actionId, area, now: _t2);
+      capture.clear();
+
+      final second = await db.actionDao.setPin(
+        actionId,
+        PlaceArea.create(latitudeDegrees: 52.0, longitudeDegrees: 0.5)!,
+        now: _t3,
+      );
+
+      expect((await db.select(db.places).get()).map((p) => p.id), [second]);
+      final tombstoned = capture.recorded
+          .where((op) => op.tombstone)
+          .map((op) => '${op.collection}/${op.entityId}');
+      expect(tombstoned, contains('places/$first'));
+      expect(
+        (await db.actionDao.placeAndTimeWindowFor(actionId)).place!.id,
+        second,
+      );
+    });
+
+    test('clearing the Place takes the pin it pointed at with it', () async {
+      await db.actionDao.setPin(actionId, area, now: _t2);
+
+      expect(await db.actionDao.setNamedPlace(actionId, null, now: _t3), isTrue);
+
+      expect(await db.select(db.places).get(), isEmpty);
+      expect((await db.actionDao.placeAndTimeWindowFor(actionId)).place, isNull);
+    });
+
+    test('a Place that does not exist is refused, and so is a pin id',
+        () async {
+      expect(
+        await db.actionDao.setNamedPlace(actionId, 'no-such-place', now: _t2),
+        isFalse,
+      );
+      expect((await _current(db, 'o1'))!['place_id'], isNull);
+
+      final pinId = await db.actionDao.setPin(actionId, area, now: _t2);
+      expect(await db.actionDao.setNamedPlace(actionId, pinId, now: _t3),
+          isFalse);
+      expect((await _current(db, 'o1'))!['place_id'], pinId);
+    });
+
+    test('setTimeWindow clears the TimeContext, and a TimeContext clears the '
+        'window', () async {
+      final windowId = await timeWindow('Store hours');
+      final context = TimeContext.create(days: {2, 4})!;
+
+      await db.actionDao.setTimeContext(actionId, context, now: _t2);
+      expect(await db.actionDao.setTimeWindow(actionId, windowId, now: _t3),
+          isTrue);
+      expect((await _current(db, 'o1'))!['time_context'], isNull);
+      expect((await _current(db, 'o1'))!['time_window_id'], windowId);
+
+      await db.actionDao.setTimeContext(actionId, context, now: _t4);
+      expect((await _current(db, 'o1'))!['time_window_id'], isNull);
+      expect((await _current(db, 'o1'))!['time_context'], context.encode());
+    });
+
+    test('a window that does not exist is refused', () async {
+      expect(
+        await db.actionDao.setTimeWindow(actionId, 'no-such-window', now: _t2),
+        isFalse,
+      );
+      expect((await _current(db, 'o1'))!['time_window_id'], isNull);
+    });
+
+    test('a dangling place_id resolves to no place', () async {
+      await db.customStatement(
+          "UPDATE actions SET place_id = 'gone' WHERE id = '$actionId'");
+
+      expect((await db.actionDao.placeAndTimeWindowFor(actionId)).place, isNull);
+    });
+
+    test('hours the app cannot read resolve to no window', () async {
+      final windowId = await timeWindow('Store hours');
+      await db.actionDao.setTimeWindow(actionId, windowId, now: _t2);
+      await db.customStatement(
+          "UPDATE time_windows SET hours = 'not hours' WHERE id = '$windowId'");
+
+      expect(
+        (await db.actionDao.placeAndTimeWindowFor(actionId)).timeWindow,
+        isNull,
+      );
+    });
+
+    test('a window governs the TimeContext when a concurrent edit left both',
+        () async {
+      final windowId = await timeWindow('Store hours');
+      final context = TimeContext.create(days: {2, 4})!;
+      // Both set, as two devices editing while apart would leave them.
+      await db.customStatement(
+          "UPDATE actions SET time_context = '${context.encode()}', "
+          "time_window_id = '$windowId' WHERE id = '$actionId'");
+
+      expect(await db.actionDao.watchCurrentTimeContexts().first, isEmpty,
+          reason: 'the named window governs the Action\'s time');
+      expect(
+        (await db.actionDao.placeAndTimeWindowFor(actionId)).timeWindow!.name,
+        'Store hours',
+      );
+    });
+
+    test('the Outcome\'s Labels are untouched by any of it', () async {
+      final tagId =
+          await db.tagDao.findOrCreateTag('errand', 'context', _userId);
+      await db.tagDao.assignTag('o1', tagId, _userId);
+      final placeId = await namedPlace('Hardware store');
+      final windowId = await timeWindow('Store hours');
+
+      await db.actionDao.setNamedPlace(actionId, placeId, now: _t2);
+      await db.actionDao.setTimeWindow(actionId, windowId, now: _t2);
+      await db.actionDao.setPin(actionId, area, now: _t3);
+
+      final links = await db.select(db.todoTags).get();
+      expect(links.map((l) => l.tagId), [tagId]);
+      final tag = await (db.select(db.tags)..where((t) => t.id.equals(tagId)))
+          .getSingle();
+      expect(tag.type, 'context');
+    });
+
+    test('a successor Action inherits neither the Place nor the window',
+        () async {
+      final placeId = await namedPlace('Hardware store');
+      final windowId = await timeWindow('Store hours');
+      await db.actionDao.setNamedPlace(actionId, placeId, now: _t2);
+      await db.actionDao.setTimeWindow(actionId, windowId, now: _t2);
+
+      await db.actionDao
+          .supersedeCurrentAction('o1', newActionText: 'email', now: _t3);
+
+      final successor = (await _current(db, 'o1'))!;
+      expect(successor['place_id'], isNull);
+      expect(successor['time_window_id'], isNull);
+      expect(successor['time_context'], isNull);
     });
   });
 }

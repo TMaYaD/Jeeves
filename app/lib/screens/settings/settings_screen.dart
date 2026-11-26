@@ -23,11 +23,13 @@ import '../../providers/periodic_review_provider.dart';
 import '../../providers/periodic_review_settings_provider.dart';
 import '../../providers/shutdown_settings_provider.dart';
 import '../../providers/bypassed_outcomes_provider.dart';
+import '../../providers/vault_sync_provider.dart';
 import '../../services/export_service.dart';
 import '../../sync/device_names.dart';
 import '../../widgets/app_title_bar/app_title_bar.dart';
 import '../enrolment/enrolment_ceremony_screen.dart';
 import '../tag_management/tag_management_screen.dart';
+import '../time_window_management/time_window_management_screen.dart';
 import 'system_trust_section.dart';
 import '../../widgets/capture/capture_action.dart';
 import '../../widgets/jeeves_logo.dart';
@@ -58,6 +60,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   static const int _tapsToUnlock = 7;
   int _jeevesTaps = 0;
 
+  /// Whether the folder picker is open.
+  ///
+  /// The picker is a system dialog: while it is open the action that opened
+  /// it is off, so a second tap cannot reach the picker behind it.
+  bool _vaultPickerPending = false;
+
   @override
   Widget build(BuildContext context) {
     final devUnlocked = ref.watch(devOptionsUnlockedProvider);
@@ -75,6 +83,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           // claim about the account.
           final isAuthenticated = gate == SessionGate.signedInNotEnrolled ||
               gate == SessionGate.ready;
+          // The vault's whole setting is the folder it points at: a folder set
+          // means the vault is on, and no folder means it is off. While the
+          // string is still being read the answer is not known, and the screen
+          // says so rather than claiming the vault is off.
+          final vaultSetting = ref.watch(vaultFolderProvider);
+          final vaultOn = vaultSetting.asData?.value != null;
+          final vaultKnown = vaultSetting.asData != null;
           return ListView(
         children: [
           const SystemTrustSection(),
@@ -101,6 +116,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           // signed in, and a name set while signed out carries into the
           // account later.
           _deviceNameTile(context, ref),
+          // The vault: one plugin at a time (#914). It is offered where the op
+          // log's own door is not — a device that has not enrolled for the op
+          // log — and it is not offered where there is no folder to pick.
+          ..._vaultRows(
+            context,
+            ref,
+            gate,
+            vaultSetting,
+          ),
           if (!isAuthenticated) ...[
             ListTile(
               key: const Key('sign_in_to_sync_tile'),
@@ -123,7 +147,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             // The only door into the enrolment ceremony. `push`, not `go`: the
             // user is choosing to look at it and must be able to back out with
             // the app bar's own arrow.
-            if (gate == SessionGate.signedInNotEnrolled)
+            //
+            // Hidden while the vault is on: one plugin at a time (#914), and the
+            // op log is not yet behind the plugin interface.
+            //
+            // Hidden while the vault's own setting is still being read: the
+            // ceremony changes what this device syncs through, and it may not
+            // be offered before the answer is known.
+            if (gate == SessionGate.signedInNotEnrolled && vaultKnown && !vaultOn)
               ListTile(
                 key: const Key('enrolment_ceremony_tile'),
                 leading: const Icon(Icons.cloud_sync_outlined,
@@ -140,8 +171,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   'everything stays here.',
                   style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
                 ),
-                onTap: () =>
-                    context.push(EnrolmentCeremonyScreen.routePath),
+                // Not while a folder turn is in progress: the vault's setting
+                // is not yet saved, so the ceremony could start beside it.
+                onTap: _vaultPickerPending
+                    ? null
+                    : () => context.push(EnrolmentCeremonyScreen.routePath),
               ),
             ListTile(
               key: const Key('sign_out_tile'),
@@ -185,6 +219,38 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
               onTap: () => context.push(kind.routePath),
             ),
+          ListTile(
+            key: const Key('manage_time_windows_tile'),
+            leading: const Icon(Icons.schedule_outlined, color: Color(0xFF9CA3AF)),
+            title: const Text(
+              'Time windows',
+              style:
+                  TextStyle(fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+            ),
+            subtitle: const Text(
+              'Name the hours a thing can be done in.',
+              style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+            ),
+            onTap: () => context.push(TimeWindowManagementScreen.routePath),
+          ),
+          ListTile(
+            key: const Key('manage_places_tile'),
+            leading: Icon(
+              Icons.place_outlined,
+              color: const Color(0xFF9CA3AF),
+            ),
+            title: Text(
+              'Places',
+              style: const TextStyle(
+                  fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+            ),
+            subtitle: Text(
+              'Name the places you go, and how far they reach.',
+              style:
+                  const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+            ),
+            onTap: () => context.push('/manage/places'),
+          ),
           const Divider(height: 1, color: Color(0xFFF3F4F6)),
           _sectionHeader('IMPORT'),
           ListTile(
@@ -437,6 +503,152 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         ),
       ),
     );
+  }
+
+  /// The vault's rows in the SYNC section.
+  ///
+  /// **One setting, three states.** The vault's whole setting is one string:
+  /// this device's reference to the folder.
+  ///
+  /// - The setting is still being read, or could not be read: the row says so
+  ///   and offers nothing. The enrolment ceremony and the folder picker both
+  ///   change what this device syncs through, and neither may be offered
+  ///   before the answer is known.
+  /// - The setting names no folder: the vault is off, and the row offers the
+  ///   picker — but only where the op log's own door is not (a device that has
+  ///   not enrolled for the op log) and only where a folder can be picked.
+  /// - The setting names a folder: the row offers to forget it, whatever the
+  ///   gate says. The op log's arrival may have stopped the vault, but the
+  ///   folder is still this device's to forget.
+  List<Widget> _vaultRows(
+    BuildContext context,
+    WidgetRef ref,
+    SessionGate gate,
+    AsyncValue<String?> vaultSetting,
+  ) {
+    final vaultOn = vaultSetting.asData?.value != null;
+    final vaultKnown = vaultSetting.asData != null;
+    if (!vaultKnown) {
+      return [
+        ListTile(
+          key: const Key('vault_folder_loading_tile'),
+          leading: const Icon(Icons.folder_outlined, color: Color(0xFF9CA3AF)),
+          title: const Text(
+            'Sync through a folder of pages',
+            style: TextStyle(
+                fontWeight: FontWeight.w500, color: Color(0xFF9CA3AF)),
+          ),
+          subtitle: Text(
+            vaultSetting.hasError
+                ? 'This device\'s folder setting could not be read.'
+                : 'Reading this device\'s folder setting…',
+            style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+          ),
+          trailing: vaultSetting.hasError
+              ? TextButton(
+                  key: const Key('vault_folder_retry_button'),
+                  onPressed: () => ref.invalidate(vaultFolderProvider),
+                  child: const Text('Try again'),
+                )
+              : null,
+        ),
+      ];
+    }
+    if (vaultOn) {
+      return [
+        ListTile(
+          key: const Key('vault_folder_tile'),
+          leading: const Icon(Icons.folder_outlined, color: Color(0xFF2563EB)),
+          title: const Text(
+            'Stop syncing through this folder',
+            style: TextStyle(
+              fontWeight: FontWeight.w500,
+              color: Color(0xFF2563EB),
+            ),
+          ),
+          subtitle: const Text(
+            'Your Outcomes, sessions and captures stay as Markdown pages in a '
+            'folder you chose.',
+            style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+          ),
+          onTap: () => _toggleVault(context, ref, vaultOn: true),
+        ),
+      ];
+    }
+    // No folder: the vault is off. It is offered where the op log's own door
+    // is not — a device that has not enrolled for the op log — and only where
+    // a folder can be picked at all.
+    if (gate != SessionGate.signedOut &&
+        gate != SessionGate.signedInNotEnrolled) {
+      return const [];
+    }
+    if (!ref.watch(vaultFolderPickerAvailableProvider)) return const [];
+    return [
+      ListTile(
+        key: const Key('vault_folder_tile'),
+        leading: const Icon(Icons.folder_outlined, color: Color(0xFF2563EB)),
+        title: const Text(
+          'Sync through a folder of pages',
+          style: TextStyle(
+            fontWeight: FontWeight.w500,
+            color: Color(0xFF2563EB),
+          ),
+        ),
+        subtitle: const Text(
+          'Keep your Outcomes, sessions and captures as Markdown pages in a '
+          'folder you choose.',
+          style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+        ),
+        // The picker is a system dialog: while it is open the action that
+        // opened it is off, so a second tap cannot reach the picker behind it.
+        onTap: _vaultPickerPending
+            ? null
+            : () => _toggleVault(context, ref, vaultOn: false),
+      ),
+    ];
+  }
+
+  /// Turn the vault on, or off.
+  ///
+  /// Turning it on asks the person for a folder (the system picker on Android);
+  /// turning it off only stops this device syncing through it — the folder and
+  /// everything in it are left exactly where they are.
+  Future<void> _toggleVault(
+    BuildContext context,
+    WidgetRef ref, {
+    required bool vaultOn,
+  }) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final controller = ref.read(vaultControllerProvider);
+    if (vaultOn) {
+      _reportVaultOutcome(messenger, await controller.turnOff());
+      return;
+    }
+    setState(() => _vaultPickerPending = true);
+    VaultTurnOutcome outcome = VaultTurnOutcome.cancelled;
+    try {
+      outcome = await controller.turnOn();
+    } finally {
+      if (mounted) setState(() => _vaultPickerPending = false);
+    }
+    _reportVaultOutcome(messenger, outcome);
+  }
+
+  /// Say what the turn did, when it did not do what was asked.
+  void _reportVaultOutcome(
+    ScaffoldMessengerState messenger,
+    VaultTurnOutcome outcome,
+  ) {
+    final message = switch (outcome) {
+      VaultTurnOutcome.changed => null,
+      VaultTurnOutcome.cancelled => null,
+      VaultTurnOutcome.pickerFailed =>
+        'The folder picker could not be opened. Try again.',
+      VaultTurnOutcome.notPersisted =>
+        'The folder setting could not be saved. Try again.',
+    };
+    if (message == null) return;
+    messenger.showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _confirmLogout(BuildContext context) async {
@@ -813,7 +1025,9 @@ class _FocusModeSettings extends ConsumerWidget {
   const _FocusModeSettings();
 
   static const _sprintOptions = [5, 10, 15, 20, 25, 30];
-  static const _breakOptions = [1, 2, 3, 5, 10];
+  static const _shortBreakOptions = [1, 2, 3, 5, 10];
+  static const _longBreakOptions = [10, 15, 20, 25, 30];
+  static const _sprintsBeforeLongBreakOptions = [2, 3, 4, 5, 6];
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -823,46 +1037,115 @@ class _FocusModeSettings extends ConsumerWidget {
     return Column(
       children: [
         ListTile(
+          key: const Key('focus_sprint_length_tile'),
           leading: const Icon(Icons.timer_outlined, color: Color(0xFF9CA3AF)),
           title: const Text(
-            'Sprint duration',
+            'Sprint length',
             style: TextStyle(
                 fontWeight: FontWeight.w500, color: Color(0xFF374151)),
           ),
-          subtitle: Text(
-            '${settings.sprintDurationMinutes} minutes',
-            style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+          subtitle: const Text(
+            'Each Sprint starts at this. You may stop early or run over.',
+            style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
           ),
+          trailing: _valueLabel('${settings.sprintDurationMinutes}m',
+              const Key('focus_sprint_length_value')),
           onTap: () => _pickDuration(
             context,
-            title: 'Sprint duration',
+            title: 'Sprint length',
             options: _sprintOptions,
             current: settings.sprintDurationMinutes,
             onPicked: notifier.setSprintDurationMinutes,
           ),
         ),
         ListTile(
+          key: const Key('focus_short_break_tile'),
           leading: const Icon(Icons.self_improvement, color: Color(0xFF9CA3AF)),
           title: const Text(
-            'Break duration',
+            'Short break',
             style: TextStyle(
                 fontWeight: FontWeight.w500, color: Color(0xFF374151)),
           ),
-          subtitle: Text(
-            '${settings.breakDurationMinutes} minutes',
-            style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+          subtitle: const Text(
+            'After a Sprint.',
+            style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
           ),
+          trailing: _valueLabel('${settings.shortBreakDurationMinutes}m',
+              const Key('focus_short_break_value')),
           onTap: () => _pickDuration(
             context,
-            title: 'Break duration',
-            options: _breakOptions,
-            current: settings.breakDurationMinutes,
-            onPicked: notifier.setBreakDurationMinutes,
+            title: 'Short break',
+            options: _shortBreakOptions,
+            current: settings.shortBreakDurationMinutes,
+            onPicked: notifier.setShortBreakDurationMinutes,
+          ),
+        ),
+        ListTile(
+          key: const Key('focus_long_break_tile'),
+          leading: const Icon(Icons.self_improvement, color: Color(0xFF9CA3AF)),
+          title: const Text(
+            'Long break',
+            style: TextStyle(
+                fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+          ),
+          subtitle: const Text(
+            'After a run of Sprints.',
+            style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+          ),
+          trailing: _valueLabel('${settings.longBreakDurationMinutes}m',
+              const Key('focus_long_break_value')),
+          onTap: () => _pickDuration(
+            context,
+            title: 'Long break',
+            options: _longBreakOptions,
+            current: settings.longBreakDurationMinutes,
+            onPicked: notifier.setLongBreakDurationMinutes,
+          ),
+        ),
+        ListTile(
+          key: const Key('focus_sprints_before_long_break_tile'),
+          leading: const Icon(Icons.repeat, color: Color(0xFF9CA3AF)),
+          title: const Text(
+            'Sprints before a long break',
+            style: TextStyle(
+                fontWeight: FontWeight.w500, color: Color(0xFF374151)),
+          ),
+          subtitle: const Text(
+            'The count runs across Outcomes and Actions.',
+            style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+          ),
+          trailing: _valueLabel('${settings.sprintsBeforeLongBreak}',
+              const Key('focus_sprints_before_long_break_value')),
+          onTap: () => _pickDuration(
+            context,
+            title: 'Sprints before a long break',
+            options: _sprintsBeforeLongBreakOptions,
+            current: settings.sprintsBeforeLongBreak,
+            onPicked: notifier.setSprintsBeforeLongBreak,
+            unit: 'sprints',
+          ),
+        ),
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
+          child: Text(
+            'The count starts over after a long break, or after a gap '
+            'with no Sprint as long as a long break.',
+            style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
           ),
         ),
       ],
     );
   }
+
+  /// The setting's value, on the right of its row.
+  static Widget _valueLabel(String value, Key key) => Text(
+        value,
+        key: key,
+        style: const TextStyle(
+          fontWeight: FontWeight.w500,
+          color: Color(0xFF374151),
+        ),
+      );
 
   Future<void> _pickDuration(
     BuildContext context, {
@@ -870,6 +1153,7 @@ class _FocusModeSettings extends ConsumerWidget {
     required List<int> options,
     required int current,
     required Future<void> Function(int) onPicked,
+    String unit = 'minutes',
   }) async {
     final picked = await showDialog<int>(
       context: context,
@@ -879,7 +1163,7 @@ class _FocusModeSettings extends ConsumerWidget {
             .map((m) => SimpleDialogOption(
                   onPressed: () => Navigator.pop(ctx, m),
                   child: Text(
-                    '$m minutes',
+                    '$m $unit',
                     style: TextStyle(
                       fontWeight: m == current
                           ? FontWeight.w700

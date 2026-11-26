@@ -8,7 +8,6 @@
 // makes the OS's scheduled notifications match it.
 
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
@@ -17,6 +16,7 @@ import 'package:timezone/timezone.dart' as tz;
 
 import '../database/gtd_database.dart' show Todo;
 import '../providers/database_provider.dart';
+import 'notification_ids.dart';
 import 'notification_service.dart';
 
 /// Local hour of the due day at which the notification fires.
@@ -40,11 +40,7 @@ const _kIdRangeEnd = 0x7FFFFFFF; // plugin ids are 32-bit signed.
 /// mapped into `[10000, 2^31-1)`). Not `String.hashCode`, which differs between
 /// runs.
 int dueDateNotificationId(String outcomeId) {
-  var hash = 0x811c9dc5;
-  for (final byte in utf8.encode(outcomeId)) {
-    hash ^= byte;
-    hash = (hash * 0x01000193) & 0xFFFFFFFF;
-  }
+  final hash = fnv1a32(outcomeId);
   return _kIdRangeStart + hash % (_kIdRangeEnd - _kIdRangeStart);
 }
 

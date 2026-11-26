@@ -13,8 +13,15 @@ import '../../utils/uuid.dart';
 import 'package:uuid/enums.dart' show Namespace;
 
 import '../../sync/collection_codecs.dart';
+// The junction family derives its row ids here, so that a plugin which has to
+// name a link — the vault, when a person types a label into a page — reaches
+// the same derivation without the DAO layer. Re-exported so the callers that
+// already read it from this file keep reading it from here.
+import '../../sync/ids.dart' show captureTagIdFor;
 import '../gtd_database.dart';
 import 'action_dao.dart' show ActionDao;
+
+export '../../sync/ids.dart' show captureTagIdFor;
 
 part 'capture_dao.g.dart';
 
@@ -28,10 +35,6 @@ String captureOutcomeIdFor(String captureId, String outcomeId) => uuid.v5(
       Namespace.url.value,
       'jeeves://capture_outcome/$captureId/$outcomeId',
     );
-
-/// Deterministic `capture_tags.id` for the (captureId, tagId) pair.
-String captureTagIdFor(String captureId, String tagId) =>
-    uuid.v5(Namespace.url.value, 'jeeves://capture_tag/$captureId/$tagId');
 
 /// An Outcome a Capture claims, plus how many Captures claim it in total.
 ///

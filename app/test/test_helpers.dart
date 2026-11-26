@@ -1,7 +1,9 @@
 import 'package:drift/drift.dart';
+import 'package:timezone/timezone.dart' as tz;
 
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/ritual.dart';
+import 'package:jeeves/services/habit_notifications.dart';
 import 'package:jeeves/services/notification_service.dart';
 
 /// Call once before any test that uses [NativeDatabase].
@@ -173,3 +175,83 @@ class StubNotificationService extends RecordingNotificationService {}
 /// wide open. For tests about *which* Outcomes are Stale or Actionless that do
 /// not exercise the time box itself.
 final actionlessGateOpenCutoff = DateTime.utc(2100);
+
+
+/// The OS, stood in for the habit notifications: keeps its pending set and
+/// its tray in memory.
+///
+/// The pending set holds the payload of every alarm, so a test can read the
+/// day and the wording a notification was armed with.
+class FakeHabitNotifications extends NotificationService {
+  FakeHabitNotifications() : super.forTesting();
+
+  /// The alarms the OS holds, by notification id.
+  final pending = <int, String>{};
+
+  /// The notifications that already fired and sit in the tray.
+  final delivered = <int>{};
+
+  /// The titles the OS was given, by notification id.
+  final titles = <int, String>{};
+
+  /// The button the OS was given, by notification id.
+  final actions = <int, HabitNotificationAction>{};
+
+  /// The labels of the buttons the OS was given, by notification id. A
+  /// notification with no button has no entry.
+  final buttons = <int, String>{};
+
+  /// The device's time zone, read on the next resume.
+  String? deviceZone;
+
+  @override
+  Future<void> scheduleHabitNotification({
+    required int id,
+    required String title,
+    required String body,
+    required DateTime fireAt,
+    required String payload,
+    HabitNotificationAction action = HabitNotificationAction.none,
+  }) async {
+    pending[id] = payload;
+    titles[id] = title;
+    actions[id] = action;
+    // The button is what the OS is given, so the fake asks the same mapping
+    // the service uses rather than recording the action alone.
+    final button = habitNotificationButton(action);
+    if (button == null) {
+      buttons.remove(id);
+    } else {
+      buttons[id] = button.label;
+    }
+  }
+
+  @override
+  Future<void> cancelReminder(int id) async {
+    pending.remove(id);
+    titles.remove(id);
+    delivered.remove(id);
+    buttons.remove(id);
+  }
+
+  @override
+  Future<HabitNotificationsOnDevice> habitNotificationsOnDevice() async => (
+        pending: pending.keys.toSet(),
+        pendingPayloads: Map.of(pending),
+        delivered: delivered.toSet(),
+      );
+
+  @override
+  Future<bool> refreshLocalTimezone() async {
+    final zone = deviceZone;
+    if (zone == null || zone == tz.local.name) return false;
+    tz.setLocalLocation(tz.getLocation(zone));
+    return true;
+  }
+
+  /// The days the OS holds a notification for, soonest first.
+  List<String> get days => [
+        for (final payload in pending.values)
+          parseHabitNotificationPayload(payload)!.day,
+      ]..sort();
+}

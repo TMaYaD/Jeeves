@@ -128,7 +128,19 @@ void main() {
       await _settle(tester);
       await tester.tap(find.text('2h 5m'));
       await _settle(tester);
-      await tester.tap(find.text('30m').last);
+      // The estimate sheet is a stepper, not a list of options (issue #923):
+      // 2h 5m is off the ladder, so it steps down to 120, 90, 60, 45 and 30.
+      for (var step = 0; step < 5; step++) {
+        await tester.tap(find.byKey(const Key('estimate_sheet_less')));
+        await _settle(tester);
+      }
+      expect(
+        tester
+            .widget<Text>(find.byKey(const Key('estimate_sheet_value')))
+            .data,
+        '30m',
+      );
+      await tester.tap(find.byKey(const Key('estimate_sheet_save')));
       await _settle(tester);
       await tester.tap(find.text('Mar 15, 2030'));
       await _settle(tester);

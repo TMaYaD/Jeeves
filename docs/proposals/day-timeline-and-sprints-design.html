@@ -476,7 +476,7 @@ function breaks(){
     btns:'<button class="btn" type="button">Stop</button><button class="btn p" type="button">Push on</button>',extra:''});
   const longOver=focusScreen({title:'Long break',brk:true,cls:'long',v:'P',task:'Long break · 15m',meta:'Logged 1h 52m',frac:.28,over:true,n:'Long break',time:'+4:10',sub:'Overtime',done:3,hint:3,jv:['Take your time, sir.','I shall keep the minutes.'],btns:'<button class="btn" type="button">Stop</button><button class="btn p" type="button">Right ho</button>'});
   const pool=`<div class="pool"><div><b>A longer pause, sir.</b><span>Four sprints is a respectable showing.</span></div><div><b>Quite earned, sir.</b><span>The work will keep for a quarter of an hour.</span></div><div><b>Might I suggest a turn about the room?</b><span>The chair will not take offence.</span></div><div><b>The tea is, I trust, still warm.</b><span>Fifteen minutes, and I shall say nothing of the clock.</span></div><div><b>I have cleared the next quarter-hour, sir.</b><span>Nothing requires you but the kettle.</span></div></div>`;
-  return fig('Short break (break green)',short)+fig('Long break (break green as shipped, outer hairline ring, a full group of dots)',long)+fig('Long break · overtime (counter-clockwise, grows)',longOver)+fig('Jeeves pool for the long break',pool);
+  return fig('Short break (break green)',short)+fig('Long break (break green as shipped, outer hairline ring, a full group of dots)',long)+fig('Long break · overtime (counter-clockwise, grows)',longOver)+fig('Jeeves pool for the long break (the count line names the Sprints in the run, so it says the count reached, not the setting)',pool);
 }
 function rows(){
   const L=[

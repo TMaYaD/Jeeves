@@ -11,6 +11,8 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../providers/coming_week_time_provider.dart';
+import '../../../providers/current_action_provider.dart';
 import '../../../providers/periodic_review_provider.dart';
 import '../../../widgets/process_to_handlers.dart';
 import 'list_review_step.dart';
@@ -26,8 +28,8 @@ class NextStep extends ConsumerWidget {
         periodicReviewProvider.select((s) => s.nextLoadError));
     final routings = ref.watch(
         periodicReviewProvider.select((s) => s.nextRoutings));
-    final actionTexts = ref.watch(
-        periodicReviewProvider.select((s) => s.actionTexts));
+    final currentActions = ref.watch(currentActionsProvider).value ?? const {};
+    final comingWeekLines = ref.watch(comingWeekTimeLinesProvider);
     final notifier = ref.read(periodicReviewProvider.notifier);
 
     return ListReviewStep<Todo>(
@@ -52,12 +54,43 @@ class NextStep extends ConsumerWidget {
       ),
       loadErrorTitle: "Couldn't load Next",
       // Surface the current Action's text so the reviewer sees the concrete
-      // commitment they made, not just the Outcome title.
-      subtextFor: (todo) => actionTexts[todo.id],
-      currentActionTextFor: (todo) => actionTexts[todo.id],
+      // commitment they made, not just the Outcome title. It comes from the
+      // same read as the time line below, so the card never pairs one
+      // Action's words with another's time.
+      subtextFor: (todo) => currentActions[todo.id]?.actionText,
+      currentActionTextFor: (todo) => currentActions[todo.id]?.actionText,
+      // Say when the Outcome's time opens in the coming week, under the
+      // notes. Plain text: it names the day, it does not book it.
+      metaFor: (todo) => _comingWeekTime(comingWeekLines[todo.id]),
       onRetry: () => notifier.loadNextSnapshot(),
       onRecordRouting: notifier.recordNextRouting,
       onAdvance: notifier.advanceNext,
+    );
+  }
+
+  /// The line that says when the Outcome's time opens in the coming week, or
+  /// null when it does not open this week.
+  Widget? _comingWeekTime(String? line) {
+    if (line == null) return null;
+    return Row(
+      key: const Key('coming-week-time'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Padding(
+          padding: EdgeInsets.only(top: 2, right: 6),
+          child: Icon(Icons.schedule, size: 14, color: Color(0xFF6B7280)),
+        ),
+        Expanded(
+          child: Text(
+            line,
+            style: const TextStyle(
+              fontSize: 14,
+              color: Color(0xFF6B7280),
+              height: 1.4,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

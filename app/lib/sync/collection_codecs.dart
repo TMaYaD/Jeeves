@@ -1,8 +1,8 @@
 /// Per-collection column↔field codecs, and the one canonical value encoding.
 ///
-/// Twelve collections, named exactly after their tables. A codec answers two
-/// questions: which columns travel on the wire for this collection, and how a
-/// reduced field map becomes a row in the domain store.
+/// The collections this slice carries, named exactly after their tables. A
+/// codec answers two questions: which columns travel on the wire for this
+/// collection, and how a reduced field map becomes a row in the domain store.
 ///
 /// ## Value encodings (protocol surface)
 ///
@@ -63,6 +63,8 @@ const String focusSessionPlanningBypassesCollection =
 const String focusSessionReschedulesCollection = 'focus_session_reschedules';
 const String outcomeBypassDecisionsCollection = 'outcome_bypass_decisions';
 const String userPreferencesCollection = 'user_preferences';
+const String placesCollection = 'places';
+const String timeWindowsCollection = 'time_windows';
 
 /// How a column's SQL value maps to and from its JSON field value.
 enum FieldKind {
@@ -263,6 +265,13 @@ const Map<String, CollectionCodec> collectionCodecs = {
       'energy_level': FieldKind.text,
       'time_estimate': FieldKind.integer,
       'time_context': FieldKind.text,
+      'timeboxed': FieldKind.boolean,
+      // The place the Action is at and the window it is gated by (issue
+      // #239). Both nullable: a peer on an older build skips an unknown field
+      // (ADR-0039), and a row that names a place which no longer exists reads
+      // as "no place" rather than hiding the Action.
+      'place_id': FieldKind.text,
+      'time_window_id': FieldKind.text,
       'created_at': FieldKind.instant,
       'updated_at': FieldKind.instant,
       'done_at': FieldKind.instant,
@@ -382,6 +391,8 @@ const Map<String, CollectionCodec> collectionCodecs = {
       'disposition': FieldKind.text,
       'pinned_start_at': FieldKind.instant,
       'added_during_execution_at': FieldKind.instant,
+      'batch_id': FieldKind.text,
+      'batch_suggestion_declined_at': FieldKind.instant,
       ..._junctionUserId,
     },
     requiredColumns: {'focus_session_id', 'task_id', 'position', 'user_id'},
@@ -458,5 +469,48 @@ const Map<String, CollectionCodec> collectionCodecs = {
     },
     requiredColumns: {'user_id', 'key', 'updated_at'},
     identityColumns: ['user_id', 'key'],
+  ),
+  // The named places (issue #239). Ordinary id-addressed entities: the row id
+  // is the entity id, and the fields merge last-write-wins. The point is
+  // carried as microdegrees and the area as a radius in metres, because the
+  // wire format has no float.
+  placesCollection: CollectionCodec(
+    collection: placesCollection,
+    table: 'places',
+    columns: {
+      'user_id': FieldKind.text,
+      // named | pin — a pin belongs to the one Action that points at it.
+      'kind': FieldKind.text,
+      'name': FieldKind.text,
+      'latitude_microdegrees': FieldKind.integer,
+      'longitude_microdegrees': FieldKind.integer,
+      'radius_meters': FieldKind.integer,
+      'created_at': FieldKind.instant,
+      'updated_at': FieldKind.instant,
+    },
+    requiredColumns: {
+      'user_id',
+      'kind',
+      'latitude_microdegrees',
+      'longitude_microdegrees',
+      'radius_meters',
+      'created_at',
+    },
+    identityColumns: ['id'],
+  ),
+  // The named time windows (issue #239). The hours travel as the canonical
+  // JSON the model encodes, byte for byte.
+  timeWindowsCollection: CollectionCodec(
+    collection: timeWindowsCollection,
+    table: 'time_windows',
+    columns: {
+      'user_id': FieldKind.text,
+      'name': FieldKind.text,
+      'hours': FieldKind.text,
+      'created_at': FieldKind.instant,
+      'updated_at': FieldKind.instant,
+    },
+    requiredColumns: {'user_id', 'name', 'hours', 'created_at'},
+    identityColumns: ['id'],
   ),
 };

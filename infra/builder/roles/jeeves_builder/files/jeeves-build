@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# jeeves-build — sync a source tree into the warm build checkout and run one
+# command there, as a single locked operation.
+#
+# Installed on a build machine by infra/builder (as /usr/local/bin/jeeves-build).
+# Knows nothing about any particular machine; callers reach it however they
+# like (typically `ssh <builder> jeeves-build ...`).
+#
+#   <tar stream of the repo root> | jeeves-build [--wait SECONDS] -- '<command>'
+#   jeeves-build --no-sync [--wait SECONDS] -- '<command>'
+#
+# The command runs in <tree>/app through a login shell, so the toolchain from
+# ~/.profile is on PATH.
+#
+# Why one lock around sync *and* build: the warm checkout is shared. Syncing
+# outside the lock lets one caller's `rsync --delete` replace the tree while
+# another caller's build is reading it.
+#
+# Exit codes: the command's own, or
+#   64  usage error           nothing ran
+#   65  stream is not a Jeeves tree (no app/)  nothing ran
+#   75  lock wait timed out   nothing ran; try again later
+# (ssh itself exits 255 when the VM cannot be reached.)
+
+set -euo pipefail
+
+TREE="${JEEVES_BUILD_TREE:-$HOME/jeeves}"
+LOCK="${JEEVES_BUILD_LOCK:-$HOME/.jeeves-build.lock}"
+STAGE="${JEEVES_BUILD_STAGE:-$HOME/.jeeves-build-stage}"
+WAIT=3600
+SYNC=1
+
+usage() { sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; }
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --wait)    WAIT="${2:?--wait needs seconds}"; shift 2 ;;
+    --no-sync) SYNC=0; shift ;;
+    -h|--help) usage; exit 0 ;;
+    --)        shift; break ;;
+    *)         echo "jeeves-build: unknown option: $1" >&2; usage >&2; exit 64 ;;
+  esac
+done
+[ $# -gt 0 ] || { echo "jeeves-build: no command given" >&2; usage >&2; exit 64; }
+CMD="$*"
+
+if [ "$SYNC" = 1 ] && [ -t 0 ]; then
+  echo "jeeves-build: expected a tar stream on stdin (or pass --no-sync)" >&2
+  exit 64
+fi
+
+# Hold the lock on fd 9 for sync + command. flock releases it when this
+# process exits, including when the caller's ssh drops.
+exec 9>"$LOCK"
+if ! flock -w "$WAIT" 9; then
+  echo "jeeves-build: another build held the lock for ${WAIT}s; nothing ran" >&2
+  exit 75
+fi
+
+if [ "$SYNC" = 1 ]; then
+  rm -rf "$STAGE"
+  mkdir -p "$STAGE" "$TREE"
+  tar -xf - -C "$STAGE"
+  if [ ! -d "$STAGE/app" ]; then
+    echo "jeeves-build: stream has no app/ directory; send the repository root" >&2
+    exit 65
+  fi
+  # Content-compared and without -t: unchanged files keep their mtimes, so
+  # incremental Dart/Gradle work sees only what really changed. The excludes
+  # protect the warm build output and caches from --delete.
+  rsync -rlp --checksum --delete \
+    --exclude=.git --exclude=build/ --exclude=.dart_tool/ --exclude=.gradle/ \
+    "$STAGE"/ "$TREE"/
+  rm -rf "$STAGE"
+fi
+
+if [ ! -d "$TREE/app" ]; then
+  echo "jeeves-build: $TREE/app does not exist; sync a tree first" >&2
+  exit 65
+fi
+cd "$TREE/app"
+echo "jeeves-build: in $TREE/app: $CMD" >&2
+
+# The sshd process serving our caller, if any. When the caller goes away
+# (agent run killed or timed out), sshd exits but a non-tty command keeps
+# running — and would keep the lock for up to an hour on a cold build.
+caller_sshd() {
+  local pid=$$ comm
+  while [ "${pid:-1}" -gt 1 ]; do
+    pid=$(ps -o ppid= -p "$pid" | tr -d ' ')
+    comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 0
+    case "$comm" in sshd*) echo "$pid"; return 0 ;; esac
+  done
+}
+sshd_pid=$(caller_sshd)
+
+# Run the command as its own process group so it can be stopped as a whole.
+# 9>&- : daemons the build starts (Gradle, Kotlin) outlive it; they must not
+# inherit the lock, or it is never released.
+set -m
+bash -lc "$CMD" 9>&- </dev/null &
+job=$!
+set +m
+
+watchdog=""
+if [ -n "$sshd_pid" ]; then
+  (
+    exec 9>&-
+    while kill -0 "$job" 2>/dev/null; do
+      if ! kill -0 "$sshd_pid" 2>/dev/null; then
+        echo "jeeves-build: caller disconnected; stopping the build" >&2
+        kill -TERM -- "-$job" 2>/dev/null
+        sleep 10
+        kill -KILL -- "-$job" 2>/dev/null
+        exit 0
+      fi
+      sleep 2
+    done
+  ) </dev/null >/dev/null 2>&1 &
+  watchdog=$!
+fi
+
+set +e
+wait "$job"
+rc=$?
+set -e
+[ -n "$watchdog" ] && { kill "$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null; } || true
+exit "$rc"

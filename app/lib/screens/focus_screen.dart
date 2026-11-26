@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -7,9 +9,13 @@ import '../providers/database_provider.dart';
 import '../providers/focus_session_planning_provider.dart';
 import '../providers/focus_session_provider.dart';
 import '../providers/focus_settings_provider.dart';
+import '../providers/timeboxed_limit_provider.dart';
+import '../providers/shutdown_habits_provider.dart'
+    show readShutdownOpenHabits;
 import '../providers/sprint_timer_provider.dart'
-    show findBatchingCandidates, sprintTimerProvider;
+    show sprintTimerProvider;
 import '../models/day_timeline.dart';
+import '../utils/uuid.dart';
 import '../providers/clock_provider.dart';
 import '../providers/day_timeline_provider.dart';
 import '../utils/sprint_hint.dart';
@@ -20,6 +26,7 @@ import '../widgets/nudge_banner.dart'
 import '../widgets/added_during_the_day_tag.dart';
 import '../widgets/day_timeline/plan_and_timeline_layout.dart';
 import '../widgets/outcome_row.dart';
+import '../widgets/timeboxed_gate.dart';
 
 class FocusScreen extends ConsumerWidget {
   const FocusScreen({super.key});
@@ -45,6 +52,11 @@ class FocusScreen extends ConsumerWidget {
     final addedDuringTheDayIds =
         ref.watch(activeSessionAddedDuringExecutionTaskIdsProvider).value ??
             const <String>{};
+    // Which Outcomes are Timeboxed (issue #923). The mark rides the estimate
+    // on the row; absent from the map == not Timeboxed, and the map is empty
+    // until the first emission lands, so no row shows a mark speculatively.
+    final timeboxedIds = ref.watch(currentTimeboxedProvider).value ??
+        const <String, bool>{};
 
     return Scaffold(
       body: SafeArea(
@@ -62,11 +74,6 @@ class FocusScreen extends ConsumerWidget {
                     ..sort((a, b) => a.dueDate!.compareTo(b.dueDate!));
                   final noDue = tasks.where((t) => t.dueDate == null).toList();
                   final sortedTasks = [...withDue, ...noDue];
-
-                  final batchCandidates = findBatchingCandidates(
-                    tasks,
-                    sprintMinutes: sprintMinutes,
-                  );
 
                   // Planning-done derives from persistent session data: an
                   // open FocusSession exists (ADR-0020). This survives process
@@ -129,14 +136,6 @@ class FocusScreen extends ConsumerWidget {
                             // bespoke ⋮ here.
                             planHeading: "Today's Tasks",
                             planChildren: [
-                              // Batching suggestion banner.
-                              if (planningDone &&
-                                  sortedTasks.isNotEmpty &&
-                                  batchCandidates.isNotEmpty)
-                                _BatchSuggestionBanner(
-                                  candidates: batchCandidates,
-                                  sprintMinutes: sprintMinutes,
-                                ),
                               if (planningDone && sortedTasks.isNotEmpty)
                                 ...sortedTasks.map(
                                   (t) => _focusOutcomeRow(
@@ -147,6 +146,7 @@ class FocusScreen extends ConsumerWidget {
                                     settlement: settlements[t.id],
                                     addedDuringTheDay:
                                         addedDuringTheDayIds.contains(t.id),
+                                    timeboxed: timeboxedIds[t.id] ?? false,
                                   ),
                                 )
                               else if (sortedTasks.isEmpty && nudgeHead != null)
@@ -273,6 +273,15 @@ class FocusScreen extends ConsumerWidget {
         reviewSurface != null && reviewSurface.every((t) => t.doneAt != null);
     if (allDone) {
       final db = ref.read(databaseProvider);
+      // Habits still open for the day being closed keep the session open: the
+      // habit step is asked first, alone, and it closes the session after.
+      final openHabits =
+          await readShutdownOpenHabits(db, ref.read(clockProvider)());
+      if (!context.mounted) return;
+      if (openHabits.isNotEmpty) {
+        context.go('/shutdown?habitsOnly=1');
+        return;
+      }
       // The list on screen may belong to an earlier moment (a new session
       // paired with the empty list from before it opened), so the close
       // re-reads this session's Review surface and refuses if anything is
@@ -298,6 +307,7 @@ Widget _focusOutcomeRow(
   required SessionSettlement? settlement,
   required int sprintMinutes,
   bool addedDuringTheDay = false,
+  bool timeboxed = false,
 }) {
   final estimate = todo.timeEstimate;
   final isDone = todo.doneAt != null;
@@ -326,7 +336,8 @@ Widget _focusOutcomeRow(
                   spacing: 6,
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    OutcomeMetaLine(timeEstimateMinutes: estimate),
+                    OutcomeMetaLine(
+                        timeEstimateMinutes: estimate, timeboxed: timeboxed),
                     if (sprintHint != null)
                       Text(
                         '· $sprintHint',
@@ -359,83 +370,6 @@ Widget _focusOutcomeRow(
       ],
     ),
   );
-}
-
-// ---------------------------------------------------------------------------
-// Batching suggestion banner
-// ---------------------------------------------------------------------------
-
-class _BatchSuggestionBanner extends StatefulWidget {
-  const _BatchSuggestionBanner({
-    required this.candidates,
-    required this.sprintMinutes,
-  });
-  final List<Todo> candidates;
-  final int sprintMinutes;
-
-  @override
-  State<_BatchSuggestionBanner> createState() => _BatchSuggestionBannerState();
-}
-
-class _BatchSuggestionBannerState extends State<_BatchSuggestionBanner> {
-  bool _dismissed = false;
-
-  @override
-  Widget build(BuildContext context) {
-    if (_dismissed) return const SizedBox.shrink();
-
-    final count = widget.candidates.length;
-    final total = widget.candidates.fold<int>(
-        0, (sum, t) => sum + (t.timeEstimate ?? 0));
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFFBEB),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFFDE68A)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Icon(Icons.lightbulb_outline_rounded,
-              size: 18, color: Color(0xFFD97706)),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Batch $count micro-tasks into one sprint',
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFF92400E),
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  '$count tasks · ${total}m total — fits in one ${widget.sprintMinutes}-min sprint.',
-                  style: const TextStyle(
-                      fontSize: 12, color: Color(0xFFB45309)),
-                ),
-              ],
-            ),
-          ),
-          Semantics(
-            button: true,
-            label: 'Dismiss batching suggestion',
-            child: GestureDetector(
-              onTap: () => setState(() => _dismissed = true),
-              child: const Icon(Icons.close_rounded,
-                  size: 16, color: Color(0xFFD97706)),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 class _StartButton extends ConsumerWidget {
@@ -477,10 +411,20 @@ class _StartButton extends ConsumerWidget {
           }
         }
 
-        await ref.read(focusModeProvider.notifier).startFocus(todoId);
-        if (context.mounted) {
-          context.push('/focus/active');
-        }
+        // A Sprint that would start past a Timeboxed limit goes past the gate
+        // first, before the engagement opens a TimeLog (issue #923).
+        if (!context.mounted) return;
+        unawaited(guardSprintPastLimit(
+          context,
+          ref,
+          outcomeId: todoId,
+          start: () async {
+            await ref.read(focusModeProvider.notifier).startFocus(todoId);
+            if (context.mounted) {
+              context.push('/focus/active');
+            }
+          },
+        ));
       },
       style: FilledButton.styleFrom(
         backgroundColor: const Color(0xFF2667B7),
@@ -633,6 +577,12 @@ class _NowTimeline extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final extras = ref.watch(nowTimelineExtrasProvider);
+    // Which Outcomes are Timeboxed (issue #923): their tile carries the
+    // heavier bottom edge. Absent from the map == not Timeboxed, and the map
+    // is empty until the first emission lands, so no tile shows the edge
+    // speculatively.
+    final timeboxedIds =
+        ref.watch(currentTimeboxedProvider).value ?? const <String, bool>{};
     final flowOrigin =
         roundUpToFiveMinutes(DateTime.parse(session.startedAt).toLocal());
     final entries = dayTimelineEntriesFor(
@@ -642,7 +592,13 @@ class _NowTimeline extends ConsumerWidget {
       timeContexts: extras.timeContexts,
       pinnedStarts: extras.pinnedStarts,
       engagedTaskIds: extras.engagedTaskIds,
+      contextTags: extras.contextTags,
+      batchState: extras.batchState,
       runningTaskId: session.currentTaskId,
+      timeboxedTaskIds: {
+        for (final entry in timeboxedIds.entries)
+          if (entry.value) entry.key
+      },
     );
     return DayTimeline(
       scope: session.id,
@@ -651,6 +607,22 @@ class _NowTimeline extends ConsumerWidget {
       availableMinutes: extras.availableMinutes,
       chunkUnitMinutes: extras.settings.chunkUnitMinutes,
       sprintMarks: extras.sprintMarks,
+      onAcceptBatch: (startByOutcomeId) => ref
+          .read(databaseProvider)
+          .focusSessionDao
+          .acceptBatch(
+            sessionId: session.id,
+            batchId: uuid.v4(),
+            startByTaskId: startByOutcomeId,
+          ),
+      onDeclineBatch: (outcomeIds) => ref
+          .read(databaseProvider)
+          .focusSessionDao
+          .declineBatchSuggestion(
+            sessionId: session.id,
+            taskIds: outcomeIds,
+            declinedAt: ref.read(clockProvider)(),
+          ),
       onSetPinnedStart: (outcomeId, startAt) => ref
           .read(databaseProvider)
           .focusSessionDao

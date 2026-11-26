@@ -8,7 +8,7 @@ The op log over the minimal sync server is the only way a device syncs ([ADR-002
 
 The direction: **the device database is the source of truth on every device, and sync is a plugin.** A plugin carries changes between this device and somewhere else. It never decides what a field's value is — the app does, with the merge strategies it already has ([SYNC.md](../SYNC.md), [ADR-0030](../adr/0030-merge-strategies-must-be-join-semilattices.md)).
 
-This proposal fixes the interface between the app and a plugin. It does not build any plugin.
+This proposal fixes the interface between the app and a plugin. The vault is the first plugin built on it, and its shape is in [SYNC.md](../SYNC.md#the-vault-a-folder-of-markdown-pages).
 
 ## The split
 
@@ -77,10 +77,10 @@ The outbound half already exists: `DomainOpCapture` emits one coalesced `(collec
 **Vault.** A folder of Markdown pages that *is* the user's GTD system on disk, mirroring the paper practice of one sheet per thing:
 
 - `Outcomes/<slug>.md` — one page per Outcome. Frontmatter carries its id, Intent, due date, Area and Labels; the body carries its notes and its Actions as a checklist.
-- `Sessions/<date>-<session-id>.md` — one sheet per FocusSession, so two sittings on one day never collide: the Plan as a checklist of links to Outcome pages, the TimeLogs recorded against it, and the Dispositions given at Review. The sheet a person writes when they sit down at the desk and files away when they leave.
+- `Sessions/<date>-<session-id>.md` — one sheet per FocusSession, so two sittings on one day never collide: the Plan as a checklist of links to Outcome pages, and the TimeLogs and Dispositions given at Review carried in the machine block rather than written on the sheet. The sheet a person writes when they sit down at the desk and files away when they leave. It is read only: a session is history, and history is not edited by hand.
 - `Inbox/<capture-id>.md` — one page per Capture. The body is the captured text and is never rewritten ([ADR-0023](../adr/0023-clarification-never-rewrites-the-capture.md)); frontmatter carries what does change — `clarified_at` and the tag hints — and merges like any other field.
 
-Pages are readable, greppable and editable by any tool; an edit made outside the app is observed, diffed field by field and applied as a change. Each device keeps a private, unsynced copy of the last version of each page it has seen. When the medium surfaces a concurrent version, the plugin has base, local and remote, and merges three-way per field; only the same field changed on both sides is a real conflict, and the host's strategy settles it. Deletion is a tombstone in the page, never a missing file, because a missing file is indistinguishable from one that has not arrived. The vault carries no signatures and no encryption; its trust model is whoever can read the folder.
+Pages are readable, greppable and editable by any tool; an edit made outside the app is observed, diffed field by field against the device's own copy of the page, and handed to the host as a change. Each device keeps a private, unsynced copy of the last version of each page it has seen; that copy is the base a hand edit is read against, and it never leaves the device. The plugin never merges: where two devices hold two versions of the same field, it hands the host the value and the clock it read, and the host's strategy decides which wins. A field whose value on the page matches the clock that stamped it is a copy; a field whose value no longer matches it was changed by hand, and arrives with a fresh clock. The clocks a page carries live in one machine-written block at the end of the page, inside an HTML comment ([ADR-0051](../adr/0051-vault-pages-keep-field-clocks-in-one-end-block.md)), so the readable part of the page stays clean and the clocks travel with the content they stamp. Deletion is a tombstone in the page — a `deleted` date in the frontmatter — and the page stays, never a missing file, because a missing file is indistinguishable from one that has not arrived. The vault carries no signatures and no encryption; its trust model is whoever can read the folder.
 
 ## Consequences
 
@@ -91,7 +91,6 @@ Pages are readable, greppable and editable by any tool; an edit made outside the
 
 ## Open questions
 
-1. **Vault field clocks.** Where a page keeps the clocks that order its fields — a frontmatter key, or a sidecar under a hidden folder — and how much of that a person editing the page is expected to see.
-2. **Workspace.** Whether partitioning ([ADR-0027](../adr/0027-workspace-as-partition-unit.md)) stays a host concept every plugin respects, or becomes the op-log plugin's concern alone.
-3. **Health.** How several plugins' health folds into the single drawer indicator and the sync-health screen.
-4. **Device identity.** What the host uses as the HLC tie-breaker before, or without, enrolment.
+1. **Workspace.** Whether partitioning ([ADR-0027](../adr/0027-workspace-as-partition-unit.md)) stays a host concept every plugin respects, or becomes the op-log plugin's concern alone.
+2. **Health.** How several plugins' health folds into the single drawer indicator and the sync-health screen.
+3. **Device identity.** What the host uses as the HLC tie-breaker before, or without, enrolment.

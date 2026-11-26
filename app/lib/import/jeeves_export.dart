@@ -50,9 +50,13 @@ library;
 
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show debugPrint;
+
 import 'package:drift/drift.dart';
 
 import '../database/gtd_database.dart';
+import '../models/place_area.dart';
+import '../models/time_window_hours.dart';
 import '../sync/collection_codecs.dart';
 import 'import_progress.dart';
 import 'nirvana_local_import.dart' show ImportFailure, ImportResult;
@@ -121,6 +125,10 @@ const List<String> jeevesExportCollections = <String>[
   tagsCollection,
   todosCollection,
   capturesCollection,
+  // The places and the time windows an Action may point at (issue #239),
+  // before the Actions that point at them.
+  placesCollection,
+  timeWindowsCollection,
   actionsCollection,
   focusSessionsCollection,
   timeLogsCollection,
@@ -389,6 +397,18 @@ Future<ImportResult> importJeevesExport({
     _notifyAllViews(db);
   }
 
+  // Imported Labels are written under the stored Label value, so the fold
+  // merges them into any same-name Label of the importing account. It runs whether or not anything was
+  // retyped: a pull between two batches may have folded a Tag a later batch
+  // links to. The rows are committed by now, so a failure here is not the
+  // import's: the startup fold and the next pull's reconcile repeat it.
+  try {
+    await db.tagDao.retypeRetiredLabelTags();
+    await db.tagDao.foldDuplicateTags(userId: userId);
+  } catch (error, stackTrace) {
+    debugPrint('Import label fold failed: $error\n$stackTrace');
+  }
+
   _notifyAllViews(db);
   return ImportResult(
     importedCount: importedOutcomeCount,
@@ -499,6 +519,17 @@ Future<_RecordOutcome> _takeRecord(
   List<ImportFailure> failures,
 ) async {
   final fields = _importFields(row.codec, row.raw, userId);
+  // A value the app cannot read is refused before the row is written and
+  // before the op is authored: a record this device did not keep must not
+  // be asserted to the other devices either.
+  final refusal = _refusedValue(row.codec, fields);
+  if (refusal != null) {
+    failures.add(ImportFailure(
+      record: _recordName(row),
+      reason: refusal,
+    ));
+    return _RecordOutcome.failed;
+  }
   try {
     // Author the op only if the local row was actually persisted. When
     // [_writeRow] cannot locate the row (an unresolvable junction key),
@@ -526,6 +557,54 @@ Future<_RecordOutcome> _takeRecord(
 
 /// How a record is named in a failure report: its collection and its id.
 String _recordName(_PendingRow row) => '${row.codec.collection}/${row.id}';
+
+/// The reason this row's values are refused, or null when they are accepted.
+///
+/// The store's own constraints catch a value a column will not hold, but two
+/// columns take a value the app cannot use. A window's hours are free text:
+/// the column takes any string, and the app cannot read one that is not a
+/// valid set of hours. A place's point is an integer that may lie off the
+/// globe: the column takes any integer, and the app cannot read a point that
+/// is not a point. Either record is dead — here, and on every other device
+/// the import syncs it to — so both are checked with the same rule the DAO
+/// applies, and the record is named and set aside rather than written.
+String? _refusedValue(CollectionCodec codec, Map<String, Object?> fields) {
+  switch (codec.collection) {
+    case timeWindowsCollection:
+      final hours = fields['hours'];
+      if (hours is String && TimeWindowHours.tryParse(hours) != null) {
+        return null;
+      }
+      return 'The time window hours are not a readable set of hours: "$hours".';
+    case placesCollection:
+      final latitude = _asStoredMicrodegrees(fields['latitude_microdegrees']);
+      final longitude = _asStoredMicrodegrees(fields['longitude_microdegrees']);
+      // A coordinate the file does not carry as a number is left to the
+      // store, whose own constraint refuses the column it cannot hold.
+      if (latitude == null || longitude == null) return null;
+      if (PlaceArea.isPointOnGlobe(
+        latitudeMicrodegrees: latitude,
+        longitudeMicrodegrees: longitude,
+      )) {
+        return null;
+      }
+      return 'The place point is off the globe: '
+          'latitude $latitude, longitude $longitude.';
+    default:
+      return null;
+  }
+}
+
+/// The coordinate as the integer the row would hold, or null when the file
+/// carries something that is not a number.
+int? _asStoredMicrodegrees(Object? value) {
+  if (value is int) return value;
+  if (value is double) {
+    if (!value.isFinite) return null;
+    return value.toInt();
+  }
+  return null;
+}
 
 /// A failure reason a user can read: what went wrong, without the noise.
 String _describeFailure(Object error) {
@@ -580,6 +659,12 @@ Map<String, Object?> _importFields(
       fields[column] = raw[column];
     }
   });
+  // A file from a build that stored Labels as the retired value is written as
+  // the stored Label value, so the row and its op never carry the retired one.
+  if (codec.collection == tagsCollection &&
+      fields['type'] == retiredLabelTagType) {
+    fields['type'] = labelTagType;
+  }
   return fields;
 }
 
@@ -683,6 +768,8 @@ void _notifyAllViews(GtdDatabase db) {
   db.notifyTagsViewWrite();
   db.notifyTodosViewWrite(includeTodoTags: true);
   db.notifyCapturesViewWrite();
+  db.notifyPlacesViewWrite();
+  db.notifyTimeWindowsViewWrite();
   db.notifyActionsViewWrite();
   db.notifyTimeLogsViewWrite();
   db.notifySprintsViewWrite();

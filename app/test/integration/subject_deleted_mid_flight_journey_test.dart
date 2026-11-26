@@ -24,10 +24,8 @@ import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/inbox_provider.dart';
 import 'package:jeeves/providers/tags_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
+import 'package:jeeves/providers/time_window_provider.dart';
 import 'package:jeeves/screens/task_detail/task_detail_screen.dart';
-import 'package:jeeves/widgets/clarify_shared_widgets.dart'
-    show kEstimateOptionsMinutes;
-import 'package:jeeves/widgets/meta_chip.dart' show formatMinutesLabel;
 import 'package:jeeves/widgets/tag_list.dart' show TagList;
 import 'package:jeeves/widgets/tag_text.dart' show TagText;
 import 'package:jeeves/sync/collection_codecs.dart' show todosCollection;
@@ -113,6 +111,8 @@ void main() {
               .overrideWith((_) => Stream.value([])),
           currentActionProvider('o1')
               .overrideWith((_) => Stream.value(seeded.current)),
+          currentTimeWindowsProvider
+              .overrideWith((_) => Stream.value(const {})),
           plannedActionsProvider('o1')
               .overrideWith((_) => Stream.value(seeded.planned)),
           terminatedActionsProvider('o1')
@@ -260,12 +260,16 @@ void main() {
       _DeletedMidFlightScenario(
         name: 'time estimate sheet',
         open: (tester) async {
-          await tester.tap(find.text('Time'));
+          await tester.tap(find.byKey(const Key('outcome_attribute_time')));
           await tester.pumpAndSettle();
         },
-        sheetMarker: find.text('Time Estimate'),
-        confirm: (tester) async => tester.tap(find.widgetWithText(
-            ListTile, formatMinutesLabel(kEstimateOptionsMinutes.first))),
+        sheetMarker: find.byKey(const Key('estimate_sheet_value')),
+        confirm: (tester) async {
+          // Raise the estimate, then save: the save is the write.
+          await tester.tap(find.byKey(const Key('estimate_sheet_more')));
+          await tester.pump();
+          await tester.tap(find.byKey(const Key('estimate_sheet_save')));
+        },
       ),
       _DeletedMidFlightScenario(
         name: 'due-date picker',
