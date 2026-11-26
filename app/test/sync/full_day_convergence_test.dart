@@ -66,6 +66,8 @@ const _tables = <String, Set<String>>{
   'outcome_bypass_decisions': {},
   'time_logs': {},
   'sprints': {},
+  'places': {},
+  'time_windows': {},
   'user_preferences': {},
 };
 

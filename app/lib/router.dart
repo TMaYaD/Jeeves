@@ -9,16 +9,24 @@ import 'screens/auth/login_screen.dart';
 import 'screens/auth/register_screen.dart';
 import 'screens/done/done_screen.dart';
 import 'screens/enrolment/enrolment_ceremony_screen.dart';
+import 'screens/habits/habit_calendar_screen.dart';
+import 'screens/habits/habit_detail_pane.dart';
+import 'screens/habits/habit_focus_screen.dart';
+import 'screens/habits/habits_screen.dart';
 import 'screens/inbox/inbox_screen.dart';
 import 'screens/next/next_screen.dart';
 import 'screens/project/project_screen.dart';
 import 'screens/periodic_review/periodic_review_screen.dart';
+import 'screens/place_management/place_management_screen.dart';
+import 'screens/place_page/place_page_screen.dart';
 import 'screens/planning/focus_session_planning_screen.dart';
 import 'screens/settings/settings_screen.dart';
 import 'screens/tag_management/tag_management_screen.dart';
+import 'screens/time_window_management/time_window_management_screen.dart';
 import 'screens/someday_maybe/someday_maybe_screen.dart';
 import 'screens/sync_health/sync_health_screen.dart';
 import 'screens/task_detail/task_detail_screen.dart';
+import 'screens/time_page/time_page_screen.dart';
 import 'screens/trash/trash_screen.dart';
 import 'screens/waiting_for/waiting_for_screen.dart';
 import 'screens/active_focus_screen.dart';
@@ -38,43 +46,42 @@ import 'screens/shutdown/shutdown_ritual_screen.dart';
 GoRouterRedirect buildAppRouterRedirect({
   bool swsMode = isSwsMode,
   ValueListenable<SessionGate>? gate,
-}) =>
-    (context, state) {
-      // In SWS mode the wallet is the identity — there is no email signup, so
-      // /register is meaningless. Bounce any stale deep link / nav entry back to
-      // /login where the "Connect wallet" flow lives.
-      if (swsMode && state.matchedLocation == '/register') return '/login';
+}) => (context, state) {
+  // In SWS mode the wallet is the identity — there is no email signup, so
+  // /register is meaningless. Bounce any stale deep link / nav entry back to
+  // /login where the "Connect wallet" flow lives.
+  if (swsMode && state.matchedLocation == '/register') return '/login';
 
-      // **Nothing here routes anybody *to* enrolment.** Enrolment is opt-in
-      // (issue #673): local-only is a supported steady state, so a signed-in,
-      // un-enrolled device runs the app like any other and reaches the ceremony
-      // only by navigating there itself — from Settings, or from the
-      // first-launch card. The router used to pin every location to
-      // `/enrolment`, which on a device with no network was a trap with no way
-      // back to the user's own data.
-      //
-      // What remains is the negative half: keeping the ceremony out of reach of
-      // the two sessions it cannot mean anything for. Bouncing *off* a route is
-      // not routing *to* one.
-      switch ((gate ?? sessionGateNotifier).value) {
-        case SessionGate.checking:
-        case SessionGate.signedInNotEnrolled:
-          // Restore has not answered, or it has and the answer changes nothing
-          // about where the user may be.
-          return null;
-        case SessionGate.signedOut:
-        case SessionGate.ready:
-          // The screen has nothing to say to either: a signed-out device has no
-          // account to enrol against, and an enrolled one is done — which is
-          // also how a completed ceremony hands the user back to the app.
-          return state.matchedLocation == EnrolmentCeremonyScreen.routePath
-              ? '/inbox'
-              : null;
-      }
-      // Unauthenticated users are deliberately *not* forced to /login: the app
-      // is fully usable local-only, so signing out from Settings stays on
-      // Settings and /login is always something the user can back out of.
-    };
+  // **Nothing here routes anybody *to* enrolment.** Enrolment is opt-in
+  // (issue #673): local-only is a supported steady state, so a signed-in,
+  // un-enrolled device runs the app like any other and reaches the ceremony
+  // only by navigating there itself — from Settings, or from the
+  // first-launch card. The router used to pin every location to
+  // `/enrolment`, which on a device with no network was a trap with no way
+  // back to the user's own data.
+  //
+  // What remains is the negative half: keeping the ceremony out of reach of
+  // the two sessions it cannot mean anything for. Bouncing *off* a route is
+  // not routing *to* one.
+  switch ((gate ?? sessionGateNotifier).value) {
+    case SessionGate.checking:
+    case SessionGate.signedInNotEnrolled:
+      // Restore has not answered, or it has and the answer changes nothing
+      // about where the user may be.
+      return null;
+    case SessionGate.signedOut:
+    case SessionGate.ready:
+      // The screen has nothing to say to either: a signed-out device has no
+      // account to enrol against, and an enrolled one is done — which is
+      // also how a completed ceremony hands the user back to the app.
+      return state.matchedLocation == EnrolmentCeremonyScreen.routePath
+          ? '/inbox'
+          : null;
+  }
+  // Unauthenticated users are deliberately *not* forced to /login: the app
+  // is fully usable local-only, so signing out from Settings stays on
+  // Settings and /login is always something the user can back out of.
+};
 
 /// Top-level redirect callback used by [appRouter].
 ///
@@ -91,10 +98,7 @@ final appRouter = GoRouter(
   // the next navigation.
   refreshListenable: sessionGateNotifier,
   routes: [
-    GoRoute(
-      path: '/login',
-      builder: (context, state) => const LoginScreen(),
-    ),
+    GoRoute(path: '/login', builder: (context, state) => const LoginScreen()),
     GoRoute(
       path: '/register',
       builder: (context, state) => const RegisterScreen(),
@@ -113,7 +117,9 @@ final appRouter = GoRouter(
     ),
     GoRoute(
       path: '/shutdown',
-      builder: (context, state) => const ShutdownRitualScreen(),
+      builder: (context, state) => ShutdownRitualScreen(
+        habitsOnly: state.uri.queryParameters['habitsOnly'] == '1',
+      ),
     ),
     GoRoute(
       path: '/settings',
@@ -125,6 +131,16 @@ final appRouter = GoRouter(
         path: kind.routePath,
         builder: (context, state) => TagManagementScreen(kind: kind),
       ),
+    // Outside the shell, like the other management lists.
+    GoRoute(
+      path: TimeWindowManagementScreen.routePath,
+      builder: (context, state) => const TimeWindowManagementScreen(),
+    ),
+    // Outside the shell too: the user's named places (issue #55).
+    GoRoute(
+      path: '/manage/places',
+      builder: (context, state) => const PlaceManagementScreen(),
+    ),
     // Outside the shell, like /settings: it is an account of what happened
     // rather than a place in the app. Nothing routes here on its own — the
     // drawer indicator pushes it, and only while there is something to report.
@@ -146,9 +162,15 @@ final appRouter = GoRouter(
           path: '/inbox',
           builder: (context, state) => const InboxScreen(),
         ),
+        GoRoute(path: '/next', builder: (context, state) => const NextScreen()),
+        // Every Outcome with a Place, grouped by Place (issue #55).
         GoRoute(
-          path: '/next',
-          builder: (context, state) => const NextScreen(),
+          path: '/places',
+          builder: (context, state) => const PlacePageScreen(),
+        ),
+        GoRoute(
+          path: '/time',
+          builder: (context, state) => const TimePageScreen(),
         ),
         GoRoute(
           path: '/projects/:id',
@@ -164,13 +186,14 @@ final appRouter = GoRouter(
           builder: (context, state) => const SomedayMaybeScreen(),
         ),
         GoRoute(
+          path: '/habits',
+          builder: (context, state) => const HabitsScreen(),
+        ),
+        GoRoute(
           path: '/focus',
           builder: (context, state) => const FocusScreen(),
         ),
-        GoRoute(
-          path: '/done',
-          builder: (context, state) => const DoneScreen(),
-        ),
+        GoRoute(path: '/done', builder: (context, state) => const DoneScreen()),
         GoRoute(
           path: '/trash',
           builder: (context, state) => const TrashScreen(),
@@ -185,22 +208,36 @@ final appRouter = GoRouter(
       ),
     ),
     GoRoute(
-      path: '/task/:id',
-      builder: (context, state) => TaskDetailScreen(
-        todoId: state.pathParameters['id']!,
+      path: '/habits/new',
+      builder: (context, state) => const HabitDetailScreen(habitId: null),
+    ),
+    GoRoute(
+      path: '/habits/:id/focus',
+      builder: (context, state) =>
+          HabitFocusScreen(habitId: state.pathParameters['id']!),
+    ),
+    GoRoute(
+      path: '/habits/:id/calendar',
+      builder: (context, state) =>
+          HabitCalendarScreen(habitId: state.pathParameters['id']!),
+    ),
+    GoRoute(
+      path: '/habits/:id',
+      builder: (context, state) => HabitDetailScreen(
+        habitId: state.pathParameters['id']!,
+        justCreated: state.uri.queryParameters['new'] == '1',
       ),
+    ),
+    GoRoute(
+      path: '/task/:id',
+      builder: (context, state) =>
+          TaskDetailScreen(todoId: state.pathParameters['id']!),
     ),
     GoRoute(
       path: '/focus/active',
       builder: (context, state) => const ActiveFocusScreen(),
     ),
-    GoRoute(
-      path: '/import',
-      builder: (context, state) => const ImportScreen(),
-    ),
-    GoRoute(
-      path: '/search',
-      builder: (context, state) => const SearchScreen(),
-    ),
+    GoRoute(path: '/import', builder: (context, state) => const ImportScreen()),
+    GoRoute(path: '/search', builder: (context, state) => const SearchScreen()),
   ],
 );

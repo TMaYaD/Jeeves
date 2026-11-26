@@ -14,6 +14,8 @@ library;
 
 import 'package:drift/drift.dart';
 
+import '../database/store_refusal_error.dart';
+
 part 'sync_database.g.dart';
 
 /// Every envelope this device has received, byte for byte, in arrival order.
@@ -151,6 +153,31 @@ class QuarantinedOps extends Table {
   /// so the re-arm predicate matches interrupted replays alone, never a
   /// permanently standing fork.
   DateTimeColumn get releaseStartedAt => dateTime().nullable()();
+
+  /// The decision the user recorded about this refused op, as an
+  /// `AlarmResolution.code` — see `alarm_resolution.dart`. Null until a
+  /// decision is made.
+  ///
+  /// A decided row is no longer *reportable*: the user has already answered
+  /// it, so it must not ask again. The row itself is kept — the refusal
+  /// happened, and hiding it would lose the record.
+  TextColumn get resolution => text().nullable()();
+
+  /// When the user recorded [resolution].
+  DateTimeColumn get resolutionDecidedAt => dateTime().nullable()();
+
+  /// When a *take upstream* decision reached the domain store.
+  ///
+  /// A take upstream is work, not a note: the held change is applied to the
+  /// reduced state and then projected into the domain store, and only the
+  /// second half puts it on the User's screen. A projection that fails leaves
+  /// the change reduced but unseen — the decision is recorded and the work is
+  /// still to be done.
+  ///
+  /// So this timestamp is null until the projection has succeeded, and a null
+  /// one on a taken-upstream row is what the recovery walks. It is null for
+  /// every other decision: nothing else has a projection to wait for.
+  DateTimeColumn get resolutionProjectedAt => dateTime().nullable()();
 }
 
 /// What the server or an author stands accused of — the per-event vocabulary,
@@ -199,6 +226,31 @@ class IntegrityAlarms extends Table {
   DateTimeColumn get firstDetectedAt => dateTime()();
   DateTimeColumn get lastDetectedAt => dateTime()();
   DateTimeColumn get resolvedAt => dateTime().nullable()();
+
+  /// The decision the user recorded about this accusation, as an
+  /// `AlarmResolution.code` — see `alarm_resolution.dart`. Null until a
+  /// decision is made.
+  ///
+  /// A decision and a heal are different things. [resolvedAt] says the
+  /// accusation no longer stands (the gap closed, the rows were released);
+  /// [resolution] says the user answered it — took upstream, kept ours, or
+  /// rejected it for good. A decided alarm stops being *actionable* while it
+  /// stays *unresolved*, because the user still has to know it happened.
+  TextColumn get resolution => text().nullable()();
+
+  /// When the user recorded [resolution].
+  DateTimeColumn get resolutionDecidedAt => dateTime().nullable()();
+
+  /// The author's chain position this device's writes were reposted from, when
+  /// the alarm is one the user can answer by keeping its own work.
+  ///
+  /// Set when the server was found to have lost writes it had already
+  /// acknowledged: the client's own ops are still in the outbox, and keeping
+  /// them means reposting from the last position the server and this device
+  /// agreed on. Null for every other alarm, and null for the rollback alarm
+  /// raised when the server holds a position this device never wrote — there
+  /// is no agreed position to repost from.
+  IntColumn get repostFromAuthorSeq => integer().nullable()();
 }
 
 /// The reduced value of one field of one entity. Visibility is decided at read
@@ -563,9 +615,20 @@ class SyncDatabase extends _$SyncDatabase {
   /// marker (#620); v10 adds the sync host's durable change sequence and its
   /// per-plugin cursors; v11 adds the marker that the pre-existing domain rows were
   /// walked into merge state; v12 adds the record of a merged change that still
-  /// needs an op; v13 adds the vault plugin's private base copies of pages.
+  /// needs an op; v13 adds the vault plugin's private base copies of pages; v14
+  /// adds the columns that record the user's decision on an integrity alarm or
+  /// a refused op (#575); v15 adds the column that records whether a take
+  /// upstream reached the domain store (#575).
   @override
-  int get schemaVersion => 13;
+  int get schemaVersion => supportedSchemaVersion;
+
+  /// The schema version this build reads and writes.
+  ///
+  /// The number the store's file carries in `PRAGMA user_version`. A file
+  /// carrying a **higher** version was written by a newer build, and this
+  /// build refuses it: the op log is the evidence every merge verdict is
+  /// derived from, and a build that cannot read it must not relabel it.
+  static const int supportedSchemaVersion = 15;
 
   /// Additive only. A device that already holds a log keeps every byte of it:
   /// each step is `CREATE TABLE`s, an `ADD COLUMN` or a `CREATE INDEX`, and no
@@ -577,6 +640,19 @@ class SyncDatabase extends _$SyncDatabase {
   MigrationStrategy get migration => MigrationStrategy(
         onCreate: (migrator) => migrator.createAll(),
         onUpgrade: (migrator, from, to) async {
+          // A store written by a newer build. Drift calls
+          // `onUpgrade` for **any** version difference, a downgrade included,
+          // so this is where an older build meets a newer file. Refuse before
+          // touching anything: the file keeps its version and every row, and
+          // the app says the data belongs to a newer Jeeves instead of
+          // relabelling it with a version this build does not understand.
+          if (from > to) {
+            throw StoreVersionTooNewError(
+              storeName: 'op log',
+              storedVersion: from,
+              supportedVersion: to,
+            );
+          }
           if (from < 2) {
             await migrator.createTable(rootPins);
             await migrator.createTable(controlChainState);
@@ -585,7 +661,31 @@ class SyncDatabase extends _$SyncDatabase {
             await migrator.addColumn(syncCursors, syncCursors.lastSyncCompletedAt);
           }
           if (from < 4) {
-            await migrator.createTable(integrityAlarms);
+            // The alarm table **as v4 had it**, written out rather than created
+            // from the current class.
+            //
+            // The class carries the columns v12 added, and creating the table
+            // from it would give a device upgrading from before v4 a table that
+            // already has them — so the v12 step would add them a second time.
+            // A duplicate column fails the whole migration, and a store that
+            // cannot open is a device that cannot sync.
+            //
+            // This is the ladder's premise made concrete: each step leaves the
+            // schema that version had, so the steps after it can add what they
+            // add. The shape below is v4's, and it does not change again.
+            await customStatement('''
+CREATE TABLE integrity_alarms (
+  id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  workspace_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  author_member_id TEXT,
+  detail TEXT NOT NULL,
+  quarantine_op_row_id INTEGER,
+  occurrence_count INTEGER NOT NULL,
+  first_detected_at TEXT NOT NULL,
+  last_detected_at TEXT NOT NULL,
+  resolved_at TEXT
+)''');
             await migrator.addColumn(quarantinedOps, quarantinedOps.authorMemberId);
             await migrator.addColumn(quarantinedOps, quarantinedOps.authorSeq);
             await migrator.addColumn(quarantinedOps, quarantinedOps.releasedAt);
@@ -684,6 +784,36 @@ class SyncDatabase extends _$SyncDatabase {
           if (from < 13) {
             // One new table: private copies of vault pages, not user data.
             await migrator.createTable(vaultPageBases);
+          }
+          if (from < 14) {
+            // Five new columns, nothing altered or backfilled. Every one of
+            // them is null until the user decides something, which is exactly
+            // right for a device that predates the decision: nothing has been
+            // decided yet.
+            await migrator.addColumn(integrityAlarms, integrityAlarms.resolution);
+            await migrator.addColumn(
+              integrityAlarms,
+              integrityAlarms.resolutionDecidedAt,
+            );
+            await migrator.addColumn(
+              integrityAlarms,
+              integrityAlarms.repostFromAuthorSeq,
+            );
+            await migrator.addColumn(quarantinedOps, quarantinedOps.resolution);
+            await migrator.addColumn(
+              quarantinedOps,
+              quarantinedOps.resolutionDecidedAt,
+            );
+          }
+          if (from < 15) {
+            // One new nullable column, no backfill. A null reads as "no take
+            // upstream has been waiting for a projection", which is exactly
+            // right for a device that predates the decision: nothing has been
+            // decided yet, so nothing is waiting to reach the domain store.
+            await migrator.addColumn(
+              quarantinedOps,
+              quarantinedOps.resolutionProjectedAt,
+            );
           }
         },
       );

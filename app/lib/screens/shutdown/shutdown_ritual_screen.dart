@@ -1,7 +1,9 @@
 /// Evening shutdown ritual — outer container screen (Issue #83).
 ///
-/// Steps 0–1 are composed against the shared [Wizard] widget; Step 2
-/// (Close Day) is rendered standalone — full-screen moon-rise animation
+/// Steps 0–1 are composed against the shared [Wizard] widget, and so is the
+/// habit step, which takes the place of Close Day while the closing day has
+/// open Habits; Close Day
+/// is rendered standalone — full-screen moon-rise animation
 /// that commits dispositions, fades out, and exits the app. The wizard
 /// chrome is owned by [Wizard] per issue #322; each [WizardStep] owns its
 /// own footer widget through [WizardStep.footer].
@@ -14,19 +16,29 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../models/ritual.dart';
 import '../../providers/ceremony_in_progress_provider.dart';
 import '../../providers/evening_shutdown_provider.dart';
 import '../../providers/focus_session_planning_provider.dart';
+import '../../providers/habit_progress_provider.dart';
+import '../../providers/shutdown_habits_provider.dart';
 import '../../widgets/ceremony/ceremony_pop_scope.dart';
 import '../../widgets/ceremony/wizard.dart';
+import '../habits/habit_copy.dart';
 import 'steps/close_day_step.dart';
+import 'steps/habit_check_in_step.dart';
 import 'steps/settled_review_step.dart';
 import 'steps/unfinished_tasks_step.dart';
 
 class ShutdownRitualScreen extends ConsumerStatefulWidget {
-  const ShutdownRitualScreen({super.key});
+  const ShutdownRitualScreen({super.key, this.habitsOnly = false});
+
+  /// Every Outcome is done and only Habits are open: the ritual is the habit
+  /// step alone, then the session closes. It has no Review, no Resolve
+  /// Unfinished and no Close Day screen.
+  final bool habitsOnly;
 
   @override
   ConsumerState<ShutdownRitualScreen> createState() =>
@@ -42,6 +54,10 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
   late final bool _launchedByDailyPlanning;
   int? _resolveInitialTotal;
   bool _showCloseDay = false;
+
+  /// The open Habits, latched the first time the habit step is reached so a
+  /// row stays in place after its Check-in. Null until then.
+  List<ShutdownOpenHabit>? _latchedHabits;
 
   static const _ceremonyId = 'shutdown';
   static const _accent = Color(0xFF1E3A5F);
@@ -89,10 +105,74 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
     final notifier = ref.read(eveningShutdownProvider.notifier);
     final step = shutdownState.currentStep;
 
+    // The habit step needs the closing day and every Habit's history. Watch
+    // both from the start so they are loaded by the time the step is reached.
+    final closingDayAsync = ref.watch(shutdownClosingDayProvider);
+    final histories = ref.watch(habitHistoriesProvider);
+    final habitsReady = histories.hasValue && closingDayAsync.hasValue;
+    if (!habitsReady && (histories.hasError || closingDayAsync.hasError)) {
+      return CeremonyPopScope(
+        // From Review (or habits-only) there is nowhere earlier to go back to,
+        // so Back must exit the ceremony rather than re-enter this screen.
+        onBack: widget.habitsOnly || step == kShutdownReviewStep
+            ? null
+            : () => notifier.goToStep(kShutdownReviewStep),
+        child: Scaffold(
+          body: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(habitShutdownLoadErrorText,
+                    key: Key('shutdown_habit_load_error')),
+                TextButton(
+                  key: const Key('shutdown_habit_load_retry'),
+                  onPressed: () {
+                    ref.invalidate(habitHistoriesProvider);
+                    ref.invalidate(shutdownClosingDayProvider);
+                  },
+                  child: const Text(habitShutdownRetryLabel),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+    final liveOpenHabits = ref.watch(shutdownOpenHabitsProvider);
+    final closingDay = closingDayAsync.value;
+    ref.watch(shutdownHabitCheckInsProvider);
+
+    if (widget.habitsOnly) {
+      return _buildHabitsOnly(
+        habitsReady: habitsReady,
+        closingDay: closingDay,
+        liveOpenHabits: liveOpenHabits,
+        notifier: notifier,
+      );
+    }
+
+    final pastResolve = step == kShutdownCloseDayStep && !_showCloseDay;
+    if (pastResolve && !shutdownState.habitsStepDone && habitsReady) {
+      _latchedHabits ??= liveOpenHabits;
+    }
+    final habitStepPending = pastResolve &&
+        !shutdownState.habitsStepDone &&
+        (_latchedHabits == null || _latchedHabits!.isNotEmpty);
+
+    // Still finding out whether there is a habit step: show nothing yet rather
+    // than flash Close Day.
+    if (habitStepPending && _latchedHabits == null) {
+      return CeremonyPopScope(
+        onBack: () => notifier.goToStep(kShutdownReviewStep),
+        child: const Scaffold(body: Center(child: CircularProgressIndicator())),
+      );
+    }
+
     // Lock onto CloseDayStep once reached. closeDay() resets currentStep to 0
     // mid fade-out; without this latch the parent would rebuild and unmount
     // CloseDayStep, exposing the Review step underneath.
-    if (step == 2 && !_showCloseDay) {
+    final atCloseDay = step == kShutdownCloseDayStep && !habitStepPending;
+    if (atCloseDay && !_showCloseDay) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && !_showCloseDay) {
           setState(() => _showCloseDay = true);
@@ -102,7 +182,7 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
     // Close Day is the terminal confirmation — footer Back is unavailable,
     // so system back exits to the execution home like other completion
     // screens (the ritual itself exits the app once Close Day is tapped).
-    if (_showCloseDay || step == 2) {
+    if (_showCloseDay || atCloseDay) {
       return const CeremonyPopScope(onBack: null, child: CloseDayStep());
     }
 
@@ -117,7 +197,8 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
         setState(() => _resolveInitialTotal = tasks.length);
       }
       if (tasks.isEmpty &&
-          ref.read(eveningShutdownProvider).currentStep == 1) {
+          ref.read(eveningShutdownProvider).currentStep ==
+              kShutdownResolveStep) {
         notifier.advanceStep();
       }
     });
@@ -125,19 +206,20 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
     // If we render step 1 with no unfinished tasks (e.g. user landed here
     // directly with an empty list, so the listener above never observed a
     // transition), skip past it on the next frame.
-    if (step == 1 &&
+    if (step == kShutdownResolveStep &&
         (ref.watch(unfinishedSelectedTodayProvider).asData?.value.isEmpty ??
             false)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted &&
-            ref.read(eveningShutdownProvider).currentStep == 1) {
+            ref.read(eveningShutdownProvider).currentStep ==
+                kShutdownResolveStep) {
           notifier.advanceStep();
         }
       });
     }
 
     double resolveProgress = 0.0;
-    if (step == 1 && _resolveInitialTotal != null && _resolveInitialTotal! > 0) {
+    if (step == kShutdownResolveStep && _resolveInitialTotal != null && _resolveInitialTotal! > 0) {
       final current =
           ref.watch(unfinishedSelectedTodayProvider).asData?.value.length;
       if (current != null) {
@@ -146,11 +228,16 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
       }
     }
 
+    // The habit step counts as a step only when there are open Habits.
+    final habitsForStep = _latchedHabits ?? liveOpenHabits;
+    final showsHabitStep = habitsReady && habitsForStep.isNotEmpty;
+    final stepCount = showsHabitStep ? 3 : 2;
+
     final steps = <WizardStep>[
       WizardStep(
         title: _stepTitles[0],
         body: const SettledReviewStep(),
-        subtitle: 'Step 1 of 2',
+        subtitle: 'Step 1 of $stepCount',
         footer: WizardFooter(
           ceremonyId: _ceremonyId,
           accentColor: _accent,
@@ -162,7 +249,7 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
         title: _stepTitles[1],
         body: const UnfinishedTasksStep(),
         activeFraction: resolveProgress,
-        subtitle: 'Step 2 of 2',
+        subtitle: 'Step 2 of $stepCount',
         // Dispositions on each task drive advancement here; the footer
         // offers no forward affordance, only Back. Back retreats the
         // unfinished snapshot cursor before crossing to Step 0.
@@ -171,6 +258,30 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
           onBack: _backForStep(1, shutdownState, notifier),
         ),
       ),
+      if (showsHabitStep && closingDay != null)
+        WizardStep(
+          title: habitShutdownStepTitle,
+          body: HabitCheckInStep(
+            closingDay: closingDay,
+            habits: habitsForStep,
+          ),
+          activeFraction: _habitProgress(
+            habitsForStep,
+            ref.watch(shutdownHabitCheckInsProvider),
+          ),
+          subtitle: 'Step 3 of 3',
+          footer: ListItemFooter(
+            ceremonyId: _ceremonyId,
+            accentColor: _accent,
+            onBack: _backForStep(kShutdownCloseDayStep, shutdownState, notifier),
+            onSkip: notifier.finishHabitsStep,
+            onNext: notifier.finishHabitsStep,
+            hasMoreItems: _anyHabitUntouched(
+              habitsForStep,
+              ref.watch(shutdownHabitCheckInsProvider),
+            ),
+          ),
+        ),
     ];
 
     return CeremonyPopScope(
@@ -187,6 +298,67 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
     );
   }
 
+  /// The habits-only ritual: the habit step alone, whose forward button closes
+  /// the session. Back leaves the session open and returns to Now.
+  Widget _buildHabitsOnly({
+    required bool habitsReady,
+    required String? closingDay,
+    required List<ShutdownOpenHabit> liveOpenHabits,
+    required EveningShutdownNotifier notifier,
+  }) {
+    if (habitsReady) _latchedHabits ??= liveOpenHabits;
+    final habits = _latchedHabits;
+    if (habits == null || closingDay == null) {
+      return CeremonyPopScope(
+        onBack: null,
+        child: const Scaffold(body: Center(child: CircularProgressIndicator())),
+      );
+    }
+    final made = ref.watch(shutdownHabitCheckInsProvider);
+    return CeremonyPopScope(
+      onBack: null,
+      child: Wizard(
+        ceremonyLabel: 'Evening Shutdown',
+        ceremonyIcon: Icons.nightlight_outlined,
+        accentColor: _accent,
+        currentStep: 0,
+        steps: [
+          WizardStep(
+            title: habitShutdownStepTitle,
+            body: HabitCheckInStep(closingDay: closingDay, habits: habits),
+            activeFraction: _habitProgress(habits, made),
+            footer: ListItemFooter(
+              ceremonyId: _ceremonyId,
+              accentColor: _accent,
+              onBack: () => context.go(kCeremonyExitRoute),
+              onSkip: () => _closeAfterHabitsOnly(notifier, closingDay),
+              onNext: () => _closeAfterHabitsOnly(notifier, closingDay),
+              hasMoreItems: _anyHabitUntouched(habits, made),
+              nextLabel: habitShutdownForwardLabelHabitsOnly,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  bool _closingAfterHabitsOnly = false;
+
+  /// Closes the session and leaves for the inbox; when something turns out to
+  /// be unfinished, the full ritual starts instead.
+  Future<void> _closeAfterHabitsOnly(
+      EveningShutdownNotifier notifier, String closingDay) async {
+    if (_closingAfterHabitsOnly) return;
+    _closingAfterHabitsOnly = true;
+    try {
+      final closed = await notifier.closeAfterHabitsOnly(closingDay);
+      if (!mounted) return;
+      context.go(closed ? '/inbox' : '/shutdown');
+    } finally {
+      _closingAfterHabitsOnly = false;
+    }
+  }
+
   /// The Back callback for [stepIndex] — the same callback its footer
   /// renders. Null when Back is unavailable, which [CeremonyPopScope]
   /// translates into a ceremony exit.
@@ -196,10 +368,28 @@ class _ShutdownRitualScreenState extends ConsumerState<ShutdownRitualScreen> {
     EveningShutdownNotifier notifier,
   ) =>
       switch (stepIndex) {
-        0 => null,
-        1 => shutdownState.unfinishedNav.canGoBack
+        kShutdownReviewStep => null,
+        kShutdownResolveStep => shutdownState.unfinishedNav.canGoBack
             ? notifier.previousUnfinishedTask
-            : () => notifier.goToStep(0),
-        _ => null,
+            : () => notifier.goToStep(kShutdownReviewStep),
+        // The habit step: Resolve Unfinished is empty by now and would only
+        // advance again, so Back goes to Review.
+        _ => () => notifier.goToStep(kShutdownReviewStep),
       };
+
+  static bool _anyHabitUntouched(
+    List<ShutdownOpenHabit> habits,
+    Map<String, List<String>> made,
+  ) =>
+      habits.any((open) => (made[open.habit.id] ?? const []).isEmpty);
+
+  static double _habitProgress(
+    List<ShutdownOpenHabit> habits,
+    Map<String, List<String>> made,
+  ) {
+    if (habits.isEmpty) return 0;
+    final touched =
+        habits.where((o) => (made[o.habit.id] ?? const []).isNotEmpty).length;
+    return touched / habits.length;
+  }
 }

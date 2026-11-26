@@ -16,19 +16,23 @@ import '../providers/focus_session_planning_provider.dart'
         SessionSettlement,
         activeSessionSettlementsProvider,
         activeSessionTasksProvider;
+import '../providers/day_timeline_provider.dart'
+    show activeSessionBatchStateProvider, activeSessionPinnedStartsProvider;
 import '../providers/focus_session_provider.dart';
 import '../providers/sprint_timer_provider.dart';
 import '../providers/task_detail_provider.dart';
 import '../providers/timeboxed_limit_provider.dart';
 import '../services/clarification_service.dart';
 import '../services/notification_service.dart';
+import 'batch_break_screen.dart';
 import '../widgets/app_title_bar/app_title_bar.dart';
 import '../widgets/capture/capture_action.dart';
 import '../widgets/elapsed_timer_widget.dart';
 import '../widgets/meta_chip.dart' show formatMinutesLabel;
 import '../widgets/process_to_handlers.dart' show ProcessAction;
 import '../widgets/reclarify_prompt_sheet.dart';
-import '../widgets/timeboxed_gate.dart';
+import '../widgets/sprint_ring.dart';
+import '../widgets/timeboxed_gate.dart' show guardSprintPastLimit;
 import '../widgets/timeboxed_limit_strip.dart';
 
 /// The focus-list transition message shown after a Focus "Done" verdict
@@ -75,6 +79,36 @@ Todo? focusNextTask({
             t.doneAt == null &&
             !settlements.containsKey(t.id))
         .firstOrNull;
+
+/// The Outcome Focus goes straight on to after Done on [completedTodoId], when
+/// that Outcome belongs to an accepted small-task batch: the first other member
+/// of the same batch, in start-time order, that is not done and not Settled.
+/// Null when the Outcome is in no batch or was its batch's last member.
+@visibleForTesting
+String? batchNextMemberId({
+  required String completedTodoId,
+  required Map<String, ({String? batchId, bool declined})> batchState,
+  required Map<String, DateTime> pinnedStarts,
+  required List<Todo> sessionTasks,
+  required Map<String, SessionSettlement> settlements,
+}) {
+  final batchId = batchState[completedTodoId]?.batchId;
+  if (batchId == null) return null;
+  final members = [
+    for (final task in sessionTasks)
+      if (task.id != completedTodoId &&
+          batchState[task.id]?.batchId == batchId &&
+          task.doneAt == null &&
+          !settlements.containsKey(task.id))
+        task,
+  ]..sort((a, b) {
+      final aStart = pinnedStarts[a.id];
+      final bStart = pinnedStarts[b.id];
+      if (aStart == null || bStart == null) return 0;
+      return aStart.compareTo(bStart);
+    });
+  return members.firstOrNull?.id;
+}
 
 class ActiveFocusScreen extends ConsumerStatefulWidget {
   const ActiveFocusScreen({super.key});
@@ -173,11 +207,28 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
 
     // The completed Action's Outcome is excluded by `t.id != todoId` whether or
     // not it was achieved, so the advance-to-next pick is unchanged (AC5).
-    final nextTask = focusNextTask(
-      sessionTasks: allSessionTasks,
+    // An accepted small-task batch carries straight on to its next member
+    // (issue #407); anything else advances to the first Plan member owed
+    // attention.
+    final batchState = await ref.read(activeSessionBatchStateProvider.future);
+    if (!mounted) return;
+    final pinnedStarts =
+        await ref.read(activeSessionPinnedStartsProvider.future);
+    if (!mounted) return;
+    final batchNextId = batchNextMemberId(
       completedTodoId: todoId,
+      batchState: batchState,
+      pinnedStarts: pinnedStarts,
+      sessionTasks: allSessionTasks,
       settlements: settlements,
     );
+    final nextTask = batchNextId != null
+        ? allSessionTasks.firstWhere((t) => t.id == batchNextId)
+        : focusNextTask(
+            sessionTasks: allSessionTasks,
+            completedTodoId: todoId,
+            settlements: settlements,
+          );
 
     final message = focusAdvanceMessage(nextTask: nextTask, verdict: verdict);
 
@@ -203,9 +254,49 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
       ),
     );
 
+    var advancedToNextMember = false;
+    if (batchNextId != null) {
+      // No Break between batch members: the next one is in Focus at once, and
+      // its screen starts its Sprint. A next member whose Timeboxed limit has
+      // passed goes past the gate first, like any Sprint; declining it leaves
+      // the member on the list to start later.
+      await guardSprintPastLimit(
+        context,
+        ref,
+        outcomeId: batchNextId,
+        start: () async {
+          await ref.read(focusModeProvider.notifier).advanceTo(batchNextId);
+          advancedToNextMember = true;
+        },
+      );
+      if (advancedToNextMember) {
+        // The notification was cancelled when Done was pressed; the next
+        // member's Focus shows it again.
+        if (mounted) {
+          _notificationTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+            if (mounted) _refreshNotification();
+          });
+          _refreshNotification();
+        }
+        return;
+      }
+      if (!mounted) return;
+    }
+
+    // The last member of a batch is followed by the one Break (a member left
+    // on the list by the gate is not the last). Capture the root navigator
+    // first: go('/focus') unmounts this screen.
+    final isLastBatchMember =
+        batchNextId == null && batchState[todoId]?.batchId != null;
+    final navigator = Navigator.of(context, rootNavigator: true);
     await ref.read(focusModeProvider.notifier).endFocus();
     if (!mounted) return;
     context.go('/focus');
+    if (isLastBatchMember) {
+      unawaited(navigator.push(
+        MaterialPageRoute<void>(builder: (_) => const BatchBreakScreen()),
+      ));
+    }
   }
 
   /// Stops the sprint and returns to the focus list without completing the task.
@@ -254,6 +345,9 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
               return const SizedBox.shrink();
             }
             return _FocusBody(
+              // A new body per Outcome, so a batch's next member starts its own
+              // Sprint rather than reusing the previous member's state.
+              key: ValueKey(todo.id),
               todo: todo,
               onComplete: () => _onComplete(todo),
               onStop: () => _onStop(todo.id),
@@ -271,6 +365,7 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
 
 class _FocusBody extends ConsumerStatefulWidget {
   const _FocusBody({
+    super.key,
     required this.todo,
     required this.onComplete,
     required this.onStop,
@@ -488,14 +583,14 @@ class _TimerPage extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              _SprintRing(
+              SprintRing(
                 timer: timer,
                 size: ringSize,
                 color: ringColor,
                 onPhaseSkip: onPhaseSkip,
               ),
               const SizedBox(width: 20),
-              _SprintDotsColumn(
+              SprintDotsColumn(
                 timer: timer,
                 pulseCtrl: pulseCtrl,
                 limit: limit,
@@ -805,313 +900,4 @@ class _PageDots extends StatelessWidget {
       ),
     );
   }
-}
-
-// ---------------------------------------------------------------------------
-// Sprint ring — countdown (full→empty) or overtime (empty→full, amber→red)
-// ---------------------------------------------------------------------------
-
-class _SprintRing extends StatefulWidget {
-  const _SprintRing({
-    required this.timer,
-    required this.size,
-    required this.color,
-    this.onPhaseSkip,
-  });
-  final SprintTimerState timer;
-  final double size;
-  final Color color;
-  final VoidCallback? onPhaseSkip;
-
-  @override
-  State<_SprintRing> createState() => _SprintRingState();
-}
-
-class _SprintRingState extends State<_SprintRing>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _pulseCtrl;
-
-  @override
-  void initState() {
-    super.initState();
-    _pulseCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1100),
-    );
-    _syncPulse();
-  }
-
-  @override
-  void didUpdateWidget(_SprintRing old) {
-    super.didUpdateWidget(old);
-    _syncPulse();
-  }
-
-  void _syncPulse() {
-    final suggest = widget.timer.isNearPhaseEnd;
-    if (suggest && !_pulseCtrl.isAnimating) {
-      _pulseCtrl.repeat();
-    } else if (!suggest && _pulseCtrl.isAnimating) {
-      _pulseCtrl.stop();
-      _pulseCtrl.reset();
-    }
-  }
-
-  @override
-  void dispose() {
-    _pulseCtrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final bool overtime = widget.timer.isOvertime;
-
-    final Color ringColor;
-    final Color trackColor;
-    final double progress;
-    final Duration displayTime;
-
-    if (overtime) {
-      final p = widget.timer.overtimeProgress;
-      ringColor = Color.lerp(
-            const Color(0xFFF59E0B),
-            const Color(0xFFDC2626),
-            p,
-          ) ??
-          const Color(0xFFDC2626);
-      trackColor = const Color(0xFFFEF3C7);
-      progress = p;
-      displayTime = widget.timer.overtime;
-    } else {
-      ringColor = widget.color;
-      trackColor = widget.timer.isBreak
-          ? const Color(0xFFD1FAE5)
-          : const Color(0xFFDBEAFE);
-      progress = widget.timer.progress;
-      displayTime = widget.timer.remaining;
-    }
-
-    final minutes =
-        displayTime.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final seconds =
-        displayTime.inSeconds.remainder(60).toString().padLeft(2, '0');
-
-    final phaseLabel =
-        widget.timer.isBreak ? 'Start sprint' : 'Start break';
-    final phaseIcon = widget.timer.isBreak
-        ? Icons.play_arrow_rounded
-        : Icons.coffee_outlined;
-
-    return SizedBox(
-      width: widget.size,
-      height: widget.size,
-      child: CustomPaint(
-        painter: _RingPainter(
-          progress: progress,
-          ringColor: ringColor,
-          trackColor: trackColor,
-          clockwise: widget.timer.isOvertime != widget.timer.isBreak,
-        ),
-        child: Padding(
-          // Keep the column's bounds inside the ring's stroke, with room for
-          // the Sprint number above the countdown — the ring shrinks to 160px
-          // on a small screen, and the column has to hold both.
-          padding: const EdgeInsets.symmetric(vertical: 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.max,
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              const Spacer(),
-              // The number of the Sprint being worked, and nothing else: no
-              // total to match it against, so the count never reads as a
-              // target. A Break is not a Sprint, so it carries no number.
-              if (widget.timer.isFocus) ...[
-                Text(
-                  'Sprint ${widget.timer.sprintNumber}',
-                  style: const TextStyle(
-                    fontSize: 12,
-                    height: 1.15,
-                    fontWeight: FontWeight.w500,
-                    color: Color(0xFF6B7280),
-                  ),
-                ),
-                const SizedBox(height: 2),
-              ],
-              Text(
-                '$minutes:$seconds',
-                style: TextStyle(
-                  fontSize: widget.size * 0.17,
-                  fontWeight: FontWeight.bold,
-                  color: ringColor,
-                  letterSpacing: -1,
-                ),
-              ),
-              const Spacer(),
-              AnimatedBuilder(
-                animation: _pulseCtrl,
-                builder: (context, child) {
-                  final scale =
-                      1.0 + math.sin(_pulseCtrl.value * math.pi) * 0.12;
-                  return Transform.scale(scale: scale, child: child);
-                },
-                child: IconButton(
-                  onPressed: widget.onPhaseSkip,
-                  tooltip: phaseLabel,
-                  icon: Icon(phaseIcon, color: ringColor),
-                  iconSize: 36,
-                  style: IconButton.styleFrom(
-                    backgroundColor: ringColor.withValues(alpha: 0.07),
-                    shape: const StadiumBorder(),
-                  ),
-                ),
-              ),
-              const Spacer(),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Sprint dots column — vertical progress indicator
-// ---------------------------------------------------------------------------
-
-class _SprintDotsColumn extends StatelessWidget {
-  const _SprintDotsColumn({
-    required this.timer,
-    required this.pulseCtrl,
-    this.limit,
-  });
-  final SprintTimerState timer;
-  final AnimationController pulseCtrl;
-
-  /// The limit status of the Outcome's current Action, when it is Timeboxed.
-  final TimeboxedLimitStatus? limit;
-
-  @override
-  Widget build(BuildContext context) {
-    final total = timer.totalSprints;
-    final completedCount =
-        timer.isBreak ? timer.sprintNumber : timer.sprintNumber - 1;
-    // The first recorded Sprint that started at or after the limit: from
-    // there on, the dots are red (issue #923). The dots and the recorded
-    // Sprints count alike — the Action's Sprints, oldest first — so the dot
-    // for the k-th Sprint is the k-th recorded start.
-    final starts = limit?.sprintStarts ?? const <DateTime>[];
-    final passedAt = limit?.limitPassedAt;
-    var firstPast = starts.length;
-    if (passedAt != null) {
-      for (var i = 0; i < starts.length; i++) {
-        if (!starts[i].isBefore(passedAt)) {
-          firstPast = i;
-          break;
-        }
-      }
-    }
-
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: List.generate(total, (i) {
-        final isCompleted = i < completedCount;
-        final isCurrent = !timer.isBreak && i == timer.sprintNumber - 1;
-        final isFilled = isCompleted || isCurrent;
-        // Red means a limit has been passed (docs/DESIGN.md § Colour).
-        final isPastLimit = isFilled && i >= firstPast;
-
-        Widget dot = Container(
-          key: ValueKey('sprint_dot_$i'),
-          width: 14,
-          height: 14,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: isPastLimit
-                ? const Color(0xFFDC2626)
-                : isFilled
-                    ? const Color(0xFF2563EB)
-                    : Colors.transparent,
-            border: isFilled
-                ? null
-                : Border.all(color: const Color(0xFFBFDBFE), width: 2),
-          ),
-        );
-
-        if (isCurrent) {
-          dot = ScaleTransition(
-            scale: Tween<double>(begin: 0.82, end: 1.18).animate(
-              CurvedAnimation(parent: pulseCtrl, curve: Curves.easeInOut),
-            ),
-            child: dot,
-          );
-        }
-
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 5),
-          child: dot,
-        );
-      }),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Ring painter
-// ---------------------------------------------------------------------------
-
-class _RingPainter extends CustomPainter {
-  const _RingPainter({
-    required this.progress,
-    required this.ringColor,
-    required this.trackColor,
-    this.clockwise = true,
-  });
-
-  final double progress;
-  final Color ringColor;
-  final Color trackColor;
-  final bool clockwise;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-    final radius = (size.shortestSide / 2) - 10;
-    const strokeWidth = 11.0;
-    const startAngle = -math.pi / 2;
-
-    canvas.drawArc(
-      Rect.fromCircle(center: center, radius: radius),
-      0,
-      math.pi * 2,
-      false,
-      Paint()
-        ..color = trackColor
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = strokeWidth
-        ..strokeCap = StrokeCap.round,
-    );
-
-    if (progress > 0) {
-      final sweep = (clockwise ? 1 : -1) * math.pi * 2 * progress;
-      canvas.drawArc(
-        Rect.fromCircle(center: center, radius: radius),
-        startAngle,
-        sweep,
-        false,
-        Paint()
-          ..color = ringColor
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = strokeWidth
-          ..strokeCap = StrokeCap.round,
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(_RingPainter old) =>
-      old.progress != progress ||
-      old.ringColor != ringColor ||
-      old.trackColor != trackColor ||
-      old.clockwise != clockwise;
 }

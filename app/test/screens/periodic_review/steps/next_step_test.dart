@@ -23,6 +23,7 @@ import 'package:jeeves/screens/periodic_review/steps/next_step.dart';
 import 'package:jeeves/widgets/app_title_bar/app_title_bar.dart';
 import 'package:jeeves/widgets/clarify_card.dart';
 
+import '../../../helpers/settle.dart';
 import '../../../test_helpers.dart';
 
 const _userId = 'local';
@@ -98,7 +99,9 @@ Future<ProviderContainer> _enterStep(
     container: container,
     child: const MaterialApp(home: Scaffold(body: NextStep())),
   ));
-  await tester.pumpAndSettle();
+  // The card reads the current Actions live, and the drift query that feeds it
+  // only emits on the real event loop.
+  await settleWithRealAsync(tester);
   return container;
 }
 

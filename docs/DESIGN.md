@@ -120,7 +120,7 @@ Our color palette is designed for a **light** color mode, prioritizing clarity a
 *   **Tertiary Color**: `#4A5568` - A sophisticated gray-blue accent, providing depth for highlights or decorative elements.
 *   **Neutral Color**: `#4A5568` - This versatile neutral forms the foundation for backgrounds and general UI surfaces.
 
-**Amber (`#F59E0B`) means "worth your eye, not your action."** One meaning covering its uses: the capacity bar's approaching-a-limit segment (§ Capacity bar), the sync indicator's calm state (§ Sync health), and the start of the sprint ring's overtime blend, which runs from amber to red. Read narrowly as "warn", the later uses would look like drift; read as above, they are the same statement about the same kind of thing. **Amber is spent on those three.** Red means a limit has been passed: the capacity bar over capacity, and a Timeboxed Action's sprint dots started past the limit. It is not available for a transient or in-progress state — see § Sync health for why a future "working on it" indicator should not be a colour at all.
+**Amber (`#F59E0B`) means "worth your eye, not your action."** One meaning covering its uses: the capacity bar's approaching-a-limit segment (§ Capacity bar), the sync indicator's calm state (§ Sync health), and the start of the sprint ring's overtime blend, which runs from amber to red. Read narrowly as "warn", the later uses would look like drift; read as above, they are the same statement about the same kind of thing. **Amber is spent on those three.** Red means a limit has been passed: the capacity bar over capacity, and a Timeboxed Action's sprint dots started past the limit. It is not available for a transient or in-progress state — see § Sync health for why a "working on it" indicator should not be a colour at all.
 
 ### Typography
 Our brand font is **Manrope**, used consistently across every surface of the app. Manrope ships as an embedded variable font (`assets/fonts/Manrope-VariableFont_wght.ttf`) so the app works without internet access.
@@ -385,6 +385,17 @@ tags only — Recolour. Merge targets are the same kind only. Merge and delete
 confirm in a dialog that says what happens to the Outcomes and that it cannot
 be undone.
 
+### Named time windows
+Settings → Manage lists the user's named time windows beside the label, project and people lists.
+
+| Element | Contract |
+|---|---|
+| Manage list | One row per window: its name, its hours in words ("Mon–Fri 09:00–17:00"), and the number of actions using it. The title bar's New action makes one; tapping a row edits it. An empty list says so in Jeeves's voice, from a pool. |
+| Editor | A name, and the hours of each day: the same on chosen days, or day by day. An end before the start is the next day, and is labelled so. |
+| Save and Delete | Save stays disabled until the name and the hours are acceptable. Delete asks how many actions lose the window, and the window goes. |
+| Chip | The Time context chip reads the window's name, and its sheet offers the user's windows beside the one-time time. Picking a window attaches it; a one-time time replaces it. |
+| Time page | A drawer page, in the Waiting For idiom: one group per named window, its hours in the header, then a "One-time" group. Each row says "On Next", or when its time opens — the glyph and the words carry it, never a colour. |
+
 ### Ceremony back navigation
 System back inside a ceremony mirrors the footer Back affordance — it invokes
 the exact callback the active step's footer renders, retreating the per-item
@@ -417,7 +428,7 @@ A Plan entry's suggested time, tall as its estimate, no sprint blocks; a chunked
 | Sprint count | The tile's detail line ends with the Outcome's Sprints and their time: "2 sprints · 46m". A running Sprint counts the time since it started. A short tile has one line and no detail line of its own, so the count joins the time there. |
 
 ### Outcome peek sheet
-On the Daily Planning Plan Summary step, a plain **tap** on any card (Today's Plan, Up Next, or Skipped) opens the **Outcome peek** — a bottom sheet (`OutcomePeekSheet`, `app/lib/widgets/outcome_peek_sheet.dart`) that reads as a viewer and edits in place. Title and notes are borderless fields saved on focus loss and flushed on dismissal; energy, time estimate and due date are tappable chips; below them sit the context tags, the Waiting For people and the Plan. The sheet reuses the Task Detail editors (`outcome_attribute_editors.dart`, `outcome_plan_section.dart`) and writes through `TaskDetailNotifier`, so stamping and the deleted-Outcome guard behave as on the detail screen. The **Time context** chip (`time_context_sheet.dart`, also at the end of the Task Detail attribute strip) shows the current Action's time predicate or a quiet `Time context`; it opens a sheet with a From date, seven day chips and a Between range, a Save that is disabled while the value is invalid, and `Clear time context`. Time logged stays read-only, summed from `time_logs`. Status changes and project assignment are deliberately not offered, and Areas and Labels have no editor in the app yet.
+On the Daily Planning Plan Summary step, a plain **tap** on any card (Today's Plan, Up Next, or Skipped) opens the **Outcome peek** — a bottom sheet (`OutcomePeekSheet`, `app/lib/widgets/outcome_peek_sheet.dart`) that reads as a viewer and edits in place. Title and notes are borderless fields saved on focus loss and flushed on dismissal; energy, time estimate and due date are tappable chips; below them sit the context tags, the Waiting For people and the Plan. The sheet reuses the Task Detail editors (`outcome_attribute_editors.dart`, `outcome_plan_section.dart`) and writes through `TaskDetailNotifier`, so stamping and the deleted-Outcome guard behave as on the detail screen. The **Time context** chip (`time_context_sheet.dart`, also at the end of the Task Detail attribute strip) shows the current Action's time — a named window's name, or a quiet `Time context`; it opens a sheet offering the user's named windows beside the one-time From date, day chips and Between range, with a Save that is disabled while the value is invalid and `Clear time context`. Time logged stays read-only, summed from `time_logs`. Status changes and project assignment are deliberately not offered, and Areas and Labels have no editor in the app yet.
 
 Opening, editing or dismissing never selects, skips or otherwise touches the pick-up state, and an unedited open writes nothing. An edit can change what Up Next shows — a higher energy than the day's level, or a delegate on an Outcome with no current Action, drops it from the pool — without changing any selection. The modal sits over the never-unmounted list, so scroll and selection are preserved.
 
@@ -487,18 +498,15 @@ accessible difference** — amber against green can collapse under deuteranopia 
 20px, and the outlined-versus-filled shape reads with no colour at all. Tooltip:
 *A few things worth knowing*.
 
-Amber is **spent** here (§ Color Palette). When alarm resolutions land, "a
-resolution is in flight" must not be amber, and should probably not be a colour:
-in-flight is a transient state, and motion, a progress treatment or an inline
-row-level indicator all say "working on it" more honestly than a hue that has to
-be memorised.
+A resolution in flight is the blue Syncing indicator plus a row-level progress bar,
+never amber.
 
 The screen itself is a plain `ListView` under `AppTitleBar(title: 'Sync')`, white,
 2/4/6 radii, per-Workspace overline sections in the Settings `_sectionHeader`
 idiom. Two groups — **NEEDS ATTENTION** and **HANDLED** — and, whenever nothing
-needs attention, one sentence above them saying so. **No buttons of any kind**: no
-dismiss, no retry, no release. There are no resolutions yet, and a control that
-did nothing would be worse than none.
+needs attention, one sentence above them saying so. **A condition offers only the
+resolutions its kind has**, as text buttons under its sentence, and never a
+dismiss.
 
 Two copy rules, both asserted by test (`sync_health_copy_test.dart`):
 
@@ -529,17 +537,21 @@ their reasons so that a new surface can reuse the same contract.
 
 | Representation | Fields and layout | Interaction contract |
 |---|---|---|
-| `OutcomeMetaLine` | Read-only chips, ordered energy · estimate · time logged · due. Unset attributes omitted; the caller supplies the attributes it shows. | No gestures; the containing surface owns the tap target. |
+| `OutcomeMetaLine` | Read-only chips, ordered energy · estimate · time logged · due · place. Unset attributes omitted; the caller supplies the attributes it shows. The place chip is grey-blue and rides the Next list's rows only. | No gestures; the containing surface owns the tap target. |
 | [`AddedDuringTheDayTag`](../app/lib/widgets/added_during_the_day_tag.dart) | Text tag `Added during the day`, marking an Outcome added to the Plan during Execution rather than chosen in Planning. Last item in the row's meta line. 12sp medium `#4B5563` on `#F3F4F6`, 4px radius, no icon; the text carries the state, not colour. Shown on the Now screen's Plan list and on the Evening Shutdown unfinished-Outcome card and Settled rows. | No gestures; the containing surface owns the tap target. |
 | [`OutcomeRow`](../app/lib/widgets/outcome_row.dart) | Optional leading slot, title (normal, muted or struck), secondary line, metadata (default `OutcomeMetaLine`), optional trailing slot. Flat or framed with r12 border and h16/v12 padding. | Whole-row tap and long-press callbacks. No ink or chevron when no tap callback exists. |
 | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Banner (icon, text, tone), people chips, title, current Action, notes, optional metadata and actions. Absent Action and notes are omitted. | Injected `ProcessToHandlers` or resolution buttons. |
 | Outcome detail / [`OutcomeAttributeStrip`](../app/lib/widgets/outcome_attribute_strip.dart) | Title → editable attribute strip → contexts → people → Plan → notes. Strip uses the metadata order with shared attribute editors. | Each editable chip has an ancestor tap target; logged time stays read-only. |
+| [`PlaceChip`](../app/lib/widgets/place_chip.dart) | Quiet "Place", or the Place's name — "Pin" for a one-time pin without one. Grey-blue `#4A5568` when set, grey `#9CA3AF` when not. | Opens the place picker; the chip is the target. |
+| Place picker — [`place_picker_sheet.dart`](../app/lib/widgets/place_picker_sheet.dart) | The user's named places, most recently used first, with a name search; "New place…", "Drop a pin…", "Clear place". | Chooses the Place of the current Action. |
+| Place editor — [`place_editor_sheet.dart`](../app/lib/widgets/place_editor_sheet.dart) | Name, point, area. The area runs 50 m – 2 km in 50 m steps and is shown in metres. | Saves a named Place; the point comes from "Use where I am", an address or coordinates. The coordinate field is the point: a pair that is one makes the Place saveable, and one that is not leaves it without a point. |
+| [`HabitCheckInMark`](../app/lib/widgets/habit_check_in_mark.dart) | 28px circle in a 48px tap target, theme colours: `primary` ring (open), filled with `onPrimary` check (done), ring with `add` (measurable, below target), dashed `outline` ring with `remove` (not due), `outline` ring on `surfaceContainerHighest` with `pause` (paused). | Tap on open, done and add-amount; none when not due or paused. |
 
 Energy uses purple `#7C3AED` and `bolt_outlined`; estimate uses blue `#2563EB`
 and `timer_outlined`; logged time uses green `#16A34A` and
 `history_toggle_off_outlined`; due uses red `#DC2626` and `event_outlined`.
 `formatMinutesLabel` renders durations as `45m`, `2h` or `2h 5m`.
-`energyLevelLabel` preserves unknown values. `formatDueDateLabel` converts to
+`formatDueDateLabel` converts to
 local time and renders `MMM d, y` (for example, `Nov 9, 2026`).
 
 ### Surface inventory
@@ -551,17 +563,20 @@ Paths are under `app/lib/`; DPR means Daily Planning and ES means Evening Shutdo
 | Task detail — `screens/task_detail/task_detail_screen.dart` | Project, status, title, attributes, contexts, people, Plan, History, notes, reminders, captured-from | Full Outcome detail | Autosave edits; status menu; attribute editors |
 | Peek — `widgets/outcome_peek_sheet.dart` | Title, energy, estimate, logged time, due, contexts, people, Plan, notes | Bottom-sheet Outcome detail | Edit in place; close |
 | Clarify — `widgets/clarify_card.dart` | Title, notes, project, labels, energy, estimate, due, process-to | Outlined form; shared labels and estimate picker | Capture draft or Outcome autosave; process-to routing |
-| DPR plan summary — `screens/planning/steps/plan_summary_step.dart` | Title, off-Up-Next reason, estimate, energy | Framed `OutcomeRow`, checkbox and selection controls | Peek, long-press selection, Select/Skip/Undo |
+| DPR plan summary — `screens/planning/steps/plan_summary_step.dart` | Title, off-Up-Next reason ("Not open before Evening Shutdown" for a time-gated Outcome), estimate, energy | Framed `OutcomeRow`; Up Next rows carry a `schedule` glyph with "from HH:MM" when the time opens later today; checkbox and selection controls | Peek, long-press selection, Select/Skip/Undo |
 | DPR re-clarify — `screens/planning/steps/task_review_step.dart` | Hint, title, notes, current Action | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | `ProcessToHandlers` |
 | DPR scheduled — `screens/planning/steps/scheduled_review_step.dart` | Title, due, estimate | Framed `OutcomeRow` | None |
 | ES settled — `screens/shutdown/steps/settled_review_step.dart` | Settlement icon, title, estimate vs actual, added-during-the-day tag | Framed `OutcomeRow` | None |
 | ES disposition — `screens/shutdown/steps/unfinished_tasks_step.dart` | Title, current Action, notes, estimate, logged, added-during-the-day tag | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Done (verdict sheet) / Roll over / Return to Next / Defer |
-| Weekly review — `screens/periodic_review/steps/list_review_step.dart` | Banner, people, title, current Action, notes | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Injected `ProcessToHandlers` |
-| Focus — `screens/focus_screen.dart` | Title, due, estimate, sprint hint, added-during-the-day tag | Flat `OutcomeRow`, trailing Start/status | Open detail; Start/Resume |
-| Focus carried-over — `screens/focus_screen.dart` | Muted title, estimate | Flat `OutcomeRow`, leading icon | None |
+| Weekly review — `screens/periodic_review/steps/list_review_step.dart` | Banner, people, title, current Action, notes, coming-week time (Next step) | [`OutcomeReviewCard`](../app/lib/widgets/outcome_review_card.dart) | Injected `ProcessToHandlers` |
+| Focus — `screens/focus_screen.dart` | Title, due, estimate, sprint hint, added-during-the-day tag; carried-over: muted title, estimate | Flat `OutcomeRow`, trailing Start/status | Open detail; Start/Resume |
 | Search — `screens/search/widgets/search_result_tile.dart` | Title, snippet, match hint, status | Flat `OutcomeRow` | Capture → clarify; Outcome → detail |
-| GTD lists / Project — `screens/common/gtd_list_screen.dart` | Title, energy, estimate, due when set | Flat `OutcomeRow` | Open detail; long-press multi-selects |
-| Waiting For — `screens/waiting_for/waiting_for_screen.dart` | Title, energy, estimate, due when set | Flat `OutcomeRow`, grouped by person | Open detail; long-press multi-selects |
+| GTD lists / Project / Waiting For (grouped by person) — `screens/common/gtd_list_screen.dart` | Title, energy, estimate, due when set; Next adds the Place name | Flat `OutcomeRow` | Open detail; long-press multi-selects |
+| Time page — `screens/time_page/time_page_screen.dart` | Title, marker (On Next, or when the time opens) | Grouped `OutcomeRow`, one group per named window then one-time | Open detail; long-press multi-selects |
+| Places — `screens/place_page/place_page_screen.dart` | Place name, Outcome, and a marker: "On Next" or "Elsewhere"; a "Near each other" line over a group of two or more | Grouped by the Places that are near each other; inside a group, the Places in name order, then the pins, each under its own name | Open detail; long-press multi-selects |
+| Location-unknown line — [`location_unknown_line.dart`](../app/lib/widgets/location_unknown_line.dart) | One calm line from a pool, drawn once, and "Allow location" only where the permission is refused | Above the Next list, only when an Outcome on Next has a Place | Ask again, or open the app's settings where the OS will not ask |
+| Habit list and detail — `screens/habits/habits_screen.dart` | Title, anchor, state; notes, Check-in, Repeat, Area, Labels, energy, estimate | Detail beside the list from 840 px; theme colours | Edit in place; sheets with Done/Cancel; pause, archive, restore |
+| Check-in calendar — `screens/habits/habit_calendar_screen.dart` | Month of day marks (done, partial, missed, not due, paused, before the Habit); "5 of 8", "2×", repeat-changed flag; legend | Round marks by shape, never colour; missed is never red; one painter for month, year and strip; phone layout on every width | Title opens the year; a day opens the day sheet: add, change, remove at once with no confirmation or undo |
 | Linked Outcomes — `widgets/capture_outcomes_section.dart` | Title, next Action, contexts, Capture provenance count | Framed `OutcomeRow` | Unlink |
 
 ### Deliberate variations

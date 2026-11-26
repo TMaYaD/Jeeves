@@ -7,11 +7,13 @@
 /// user has no reason to know they live in different places.
 ///
 /// **It carries no copy.** A row here is the stored code, the class it falls
-/// under and when it happened; the sentence the user reads is resolved in
+/// under, when it happened and the decisions it may still be given; the
+/// sentence the user reads and the words on the buttons are resolved in
 /// `screens/sync_health/sync_health_copy.dart` from exactly those. That is what
 /// keeps this file — which reads the two tables — from importing a screen.
 library;
 
+import 'alarm_resolution.dart';
 import 'sync_condition_class.dart';
 import 'sync_database.dart';
 
@@ -35,6 +37,8 @@ class SyncHealthCondition {
     required this.rowId,
     this.detail = '',
     this.memberId,
+    this.resolutions = const <AlarmResolution>[],
+    this.resolutionInFlight = false,
   });
 
   final String workspaceId;
@@ -60,6 +64,23 @@ class SyncHealthCondition {
   final int rowId;
   final String detail;
   final String? memberId;
+
+  /// The decisions this condition may still be given.
+  ///
+  /// Empty whenever there is nothing to decide: the kind has no decision at
+  /// all (it closes by mechanism), the condition has already been answered, or
+  /// the row behind it is one the user cannot act on. **A condition that offers
+  /// a decision is the only kind that carries a button** — there is no
+  /// dismiss, and nothing is offered that the row would refuse.
+  final List<AlarmResolution> resolutions;
+
+  /// Whether a decision has been made and its work has not landed yet.
+  ///
+  /// The one case is *keep ours* on a rollback: the accusation is answered but
+  /// the re-send has not been acknowledged, so the condition is not settled.
+  /// The row says so with a progress bar, and the indicator is the blue
+  /// Syncing one — never amber, which is spent on the calm state.
+  final bool resolutionInFlight;
 }
 
 /// One Workspace's rows, as the screen renders them.
@@ -68,12 +89,20 @@ class SyncHealthCondition {
 /// on is exercised by a test reading a real store rather than only by a live
 /// widget over a Drift `watch()`.
 ///
-/// Two filters, both load-bearing:
+/// Three filters, all load-bearing:
 ///
 /// * **Only unresolved accusations.** A resolved one is history the log keeps and
 ///   the screen does not re-litigate.
 /// * **No self-healing refusals, released or not.** A wrap in flight is not an
 ///   event, and a wrap that arrived is not news about the one that was late.
+/// * **No answered refusals.** A refused change the user has already refused
+///   for good is a decision, not a question, and a question already answered is
+///   not asked again.
+///
+/// The decisions a row may still be given come from the row's own kind
+/// (`alarm_resolution.dart`), never from the screen: a kind that offers no
+/// decision offers no button, and the row cannot be asked for one the store
+/// would refuse.
 List<SyncHealthCondition> syncHealthConditionsFor({
   required String workspaceId,
   required List<IntegrityAlarmRow> alarms,
@@ -93,9 +122,12 @@ List<SyncHealthCondition> syncHealthConditionsFor({
             rowId: row.id,
             detail: row.detail,
             memberId: row.authorMemberId,
+            resolutions: resolutionsOfferedForAlarmRow(row),
+            resolutionInFlight: row.resolution != null && row.resolvedAt == null,
           ),
       for (final row in refusals)
-        if (classOfRefusalCode(row.reason) != SyncConditionClass.transient)
+        if (classOfRefusalCode(row.reason) != SyncConditionClass.transient &&
+            row.resolution == null)
           SyncHealthCondition(
             workspaceId: workspaceId,
             source: SyncConditionSource.refusedItem,
@@ -107,6 +139,11 @@ List<SyncHealthCondition> syncHealthConditionsFor({
             rowId: row.id,
             detail: row.detail,
             memberId: row.authorMemberId,
+            // A refused change that was applied later has nothing left to
+            // decide; one that is still held may be refused for good.
+            resolutions: row.releasedAt == null
+                ? resolutionsForRefusalCode(row.reason)
+                : const <AlarmResolution>[],
           ),
     ];
 

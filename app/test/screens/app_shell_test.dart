@@ -120,6 +120,14 @@ Widget _buildShellOnly({
                     builder: (_, _) => const Scaffold(body: Text('Next body')),
                   ),
                   GoRoute(
+                    path: '/time',
+                    builder: (_, _) => const Scaffold(body: Text('Time body')),
+                  ),
+                  GoRoute(
+                    path: '/places',
+                    builder: (_, _) => const Scaffold(body: Text('Places body')),
+                  ),
+                  GoRoute(
                     path: '/projects/:id',
                     builder: (_, state) => Scaffold(
                         body: Text('Project body ${state.pathParameters['id']}')),
@@ -135,6 +143,10 @@ Widget _buildShellOnly({
                   GoRoute(
                     path: '/focus',
                     builder: (_, _) => const Scaffold(body: Text('Focus body')),
+                  ),
+                  GoRoute(
+                    path: '/habits',
+                    builder: (_, _) => const Scaffold(body: Text('Habits body')),
                   ),
                   GoRoute(
                     path: '/done',

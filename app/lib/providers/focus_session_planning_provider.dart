@@ -16,12 +16,15 @@
 /// - Stream providers expose live lists of tasks for each ritual step.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/daos/focus_session_dao.dart' show SessionSettlement;
 import '../database/gtd_database.dart';
 import '../models/action_draft.dart';
+import '../models/planned_day.dart';
 import '../models/routing_kind.dart';
 import '../services/clarification_service.dart';
 import '../utils/snapshot_nav.dart';
@@ -33,6 +36,7 @@ import 'nudge_triggers.dart' show lastAnchorBefore;
 import 'shutdown_settings_provider.dart' show shutdownSettingsProvider;
 import 'synced_preferences_provider.dart' show syncedPrefs;
 import 'time_context_provider.dart';
+import 'time_window_provider.dart';
 
 export '../database/gtd_database.dart' show Todo, FocusSession, Tag;
 export '../database/daos/focus_session_dao.dart' show SessionSettlement;
@@ -241,6 +245,97 @@ bool _energyFits(String? taskEnergy, String? dayEnergy) {
   return task <= day;
 }
 
+/// The day being planned, and when each Outcome's time opens inside it.
+///
+/// The planned day runs from now to today's Evening Shutdown time, or to the
+/// next midnight when the planning runs after that time. An Outcome whose time
+/// opens inside that day can be picked, even though it cannot be done yet.
+///
+/// [notInPlannedDay] holds the Outcome ids whose time does not open in that
+/// day: they stay out of Up Next. [opensLaterAt] holds the ids whose time
+/// opens later in that day, with the instant it opens.
+///
+/// A one-time Time context and a named time window are the same rule: each
+/// answers for itself, and the two maps never hold the same Outcome, because
+/// an Action carries one time at a time.
+final plannedDayTimeProvider =
+    Provider<({Set<String> notInPlannedDay, Map<String, DateTime> opensLaterAt})>(
+        (ref) {
+  ref.watch(timeContextBoundaryTickProvider);
+  ref.watch(timeWindowBoundaryTickProvider);
+  final now = ref.watch(clockProvider)();
+  final shutdownTime =
+      ref.watch(shutdownSettingsProvider.select((s) => s.shutdownTime));
+  final contexts =
+      ref.watch(currentTimeContextsProvider).value ?? const {};
+  final windows = ref.watch(currentTimeWindowsProvider).value ?? const {};
+  final dayEnd = plannedDayEnd(now: now, shutdownTime: shutdownTime);
+  // The day being planned ends at [dayEnd], and then it changes: at the
+  // Evening Shutdown time it runs on to the next midnight, and at midnight it
+  // becomes the next day's shutdown time. Nothing else moves that end, so one
+  // timer there is enough. It is armed again on every rebuild, which keeps it
+  // right when the clock or the shutdown time changes. A Dart Timer does not
+  // count time the process was suspended, so a late timer only delays the
+  // refresh; the rule is read from the clock on every rebuild, so it never
+  // shows wrong data.
+  final dayEndTimer = Timer(dayEnd.difference(now), ref.invalidateSelf);
+  ref.onDispose(dayEndTimer.cancel);
+  final notInPlannedDay = <String>{};
+  final opensLaterAt = <String, DateTime>{};
+  for (final entry in contexts.entries) {
+    final timeContext = entry.value;
+    _applyPlannedDay(
+      id: entry.key,
+      isOpenAt: timeContext.isSatisfiedAt,
+      nextTransitionAfter: timeContext.nextTransitionAfter,
+      now: now,
+      dayEnd: dayEnd,
+      notInPlannedDay: notInPlannedDay,
+      opensLaterAt: opensLaterAt,
+    );
+  }
+  for (final entry in windows.entries) {
+    final hours = entry.value.hours;
+    _applyPlannedDay(
+      id: entry.key,
+      isOpenAt: hours.isOpenAt,
+      nextTransitionAfter: hours.nextTransitionAfter,
+      now: now,
+      dayEnd: dayEnd,
+      notInPlannedDay: notInPlannedDay,
+      opensLaterAt: opensLaterAt,
+    );
+  }
+  return (notInPlannedDay: notInPlannedDay, opensLaterAt: opensLaterAt);
+});
+
+/// Puts one Outcome's time into the planned-day sets.
+///
+/// The time is open in the planned day when it is open now, or when it opens
+/// at some instant before the day ends. It is not in the planned day when it
+/// does not open there at all.
+void _applyPlannedDay({
+  required String id,
+  required bool Function(DateTime) isOpenAt,
+  required DateTime? Function(DateTime) nextTransitionAfter,
+  required DateTime now,
+  required DateTime dayEnd,
+  required Set<String> notInPlannedDay,
+  required Map<String, DateTime> opensLaterAt,
+}) {
+  final opens = firstOpenInPlannedDay(
+    isOpenAt: isOpenAt,
+    nextTransitionAfter: nextTransitionAfter,
+    now: now,
+    dayEnd: dayEnd,
+  );
+  if (opens == null) {
+    notInPlannedDay.add(id);
+  } else if (opens.isAfter(now)) {
+    opensLaterAt[id] = opens;
+  }
+}
+
 /// Next-action tasks not yet reviewed in today's planning session, filtered
 /// down to the ones whose energy requirement fits the user's self-reported
 /// day-energy. Reactive: changing [FocusSessionPlanningState.energyLevel]
@@ -249,6 +344,10 @@ bool _energyFits(String? taskEnergy, String? dayEnergy) {
 ///
 /// A null day-energy (Energy step not yet visited) means no filtering at
 /// all; tasks with no energy tag are never filtered out.
+///
+/// An Outcome whose time opens in the day being planned is in the list, even
+/// when it is not open yet: only one whose time does not open in that day is
+/// left out (see [plannedDayTimeProvider]).
 final nextForFocusSessionPlanningProvider =
     StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
@@ -258,11 +357,11 @@ final nextForFocusSessionPlanningProvider =
     ...planningState.pendingSelectedTaskIds,
   };
   final dayEnergy = planningState.energyLevel;
-  final outsideTimeContext = ref.watch(outsideTimeContextOutcomeIdsProvider);
+  final notInPlannedDay = ref.watch(plannedDayTimeProvider).notInPlannedDay;
   return db.todoDao.watchNext().map((all) => all
       .where((t) =>
           !reviewed.contains(t.id) &&
-          !outsideTimeContext.contains(t.id) &&
+          !notInPlannedDay.contains(t.id) &&
           _energyFits(t.energyLevel, dayEnergy))
       .toList());
 });
@@ -272,7 +371,11 @@ enum OffUpNextReason {
   someday('Someday'),
   waitingFor('Waiting For'),
   aboveEnergy('Above today\'s energy'),
-  outsideTimeContext('Outside its time context');
+  outsideTimeContext('Outside its time context'),
+  /// The Outcome's time does not open in the day being planned, so it is not
+  /// in Up Next. Daily Planning's search says so in its own words; Add to Plan
+  /// keeps [outsideTimeContext], whose rule is the one it applies.
+  notOpenBeforeShutdown('Not open before Evening Shutdown');
 
   const OffUpNextReason(this.label);
   final String label;
@@ -291,8 +394,9 @@ final _allNextPoolProvider = StreamProvider.autoDispose<List<Todo>>((ref) {
 });
 
 /// Outcomes the plan-building search can offer that are not in Up Next:
-/// Someday/Maybe, Waiting-For-only, and Next Outcomes hidden by today's
-/// energy. Already-selected and already-reviewed Outcomes are left out.
+/// Someday/Maybe, Waiting-For-only, Next Outcomes whose time does not open in
+/// the day being planned, and Next Outcomes hidden by today's energy.
+/// Already-selected and already-reviewed Outcomes are left out.
 ///
 /// Only watch this while a search is active. It is a plain [Provider] over two
 /// auto-disposed streams, with a not-yet-loaded stream counting as empty, so
@@ -307,7 +411,7 @@ final offUpNextForFocusSessionPlanningProvider =
   final dayEnergy = planningState.energyLevel;
   final pool = ref.watch(_offUpNextPoolProvider).value ?? const [];
   final nextAll = ref.watch(_allNextPoolProvider).value ?? const [];
-  final outsideTimeContext = ref.watch(outsideTimeContextOutcomeIdsProvider);
+  final notInPlannedDay = ref.watch(plannedDayTimeProvider).notInPlannedDay;
   return [
     for (final t in pool)
       if (!taken.contains(t.id))
@@ -317,16 +421,16 @@ final offUpNextForFocusSessionPlanningProvider =
               ? OffUpNextReason.someday
               : OffUpNextReason.waitingFor,
         ),
-    // Outside-its-time-context wins over above-energy, so an Outcome is listed
-    // once.
+    // Not-open-before-Evening-Shutdown wins over above-energy, so an Outcome
+    // is listed once.
     for (final t in nextAll)
       if (!taken.contains(t.id) &&
-          (outsideTimeContext.contains(t.id) ||
+          (notInPlannedDay.contains(t.id) ||
               !_energyFits(t.energyLevel, dayEnergy)))
         (
           todo: t,
-          reason: outsideTimeContext.contains(t.id)
-              ? OffUpNextReason.outsideTimeContext
+          reason: notInPlannedDay.contains(t.id)
+              ? OffUpNextReason.notOpenBeforeShutdown
               : OffUpNextReason.aboveEnergy,
         ),
   ];

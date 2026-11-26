@@ -45,6 +45,10 @@ import 'dart:convert';
 
 import '../models/clarify_mode.dart' show kClarifyModePrefKey;
 import '../models/bypassed_outcome.dart' show kBypassThresholdPrefKey;
+import '../models/focus_settings.dart'
+    show
+        kFocusLongBreakDurationMinutesPrefKey,
+        kFocusSprintsBeforeLongBreakPrefKey;
 import '../models/search_query.dart' show kRecentSearchesPrefKey;
 
 /// How two conflicting rows for the same `user_preferences` key are reconciled.
@@ -110,6 +114,12 @@ const preferenceConflictRegistry = <String, ConflictStrategy>{
   kClarifyModePrefKey: ConflictStrategy.lww,
   // A scalar setting: the latest value on any device is the right winner.
   kBypassThresholdPrefKey: ConflictStrategy.lww,
+  // The long Break length and the number of Sprints before it (issue #911).
+  // Each is one number the user chose, so the latest choice on any device is
+  // the right winner — and each travels as its own key, so a concurrent edit
+  // to one never drops the other's.
+  kFocusLongBreakDurationMinutesPrefKey: ConflictStrategy.lww,
+  kFocusSprintsBeforeLongBreakPrefKey: ConflictStrategy.lww,
   // An ordered, capped list with removals: a union would sort it alphabetically,
   // grow it past the cap and bring removed entries back. The latest whole list
   // wins; the cost is that two simultaneous searches on two devices keep one.

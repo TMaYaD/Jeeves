@@ -222,6 +222,8 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
             'disposition': null,
             'pinned_start_at': encodeInstant(pinnedStart),
             'added_during_execution_at': null,
+            'batch_id': null,
+            'batch_suggestion_declined_at': null,
             'user_id': userId,
           },
         );
@@ -328,6 +330,8 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
           'disposition': null,
           'pinned_start_at': null,
           'added_during_execution_at': encodeInstant(addedAt),
+          'batch_id': null,
+          'batch_suggestion_declined_at': null,
           'user_id': session.userId,
         },
       );
@@ -628,26 +632,117 @@ class FocusSessionDao extends DatabaseAccessor<GtdDatabase>
     required String taskId,
     required DateTime? pinnedStartAt,
   }) async {
-    final membership = await (select(focusSessionTasks)
-          ..where((fst) =>
-              fst.focusSessionId.equals(sessionId) &
-              fst.taskId.equals(taskId)))
-        .getSingleOrNull();
-    if (membership == null) {
-      throw StateError('Task $taskId is not part of session $sessionId');
-    }
     final pinnedUtc = pinnedStartAt?.toUtc();
     await attachedDatabase.capturing(() async {
+      // Read the membership inside the transaction that moves the entry, so a
+      // batch accepted in between cannot be missed (issue #407).
+      final membership = await (select(focusSessionTasks)
+            ..where((fst) =>
+                fst.focusSessionId.equals(sessionId) &
+                fst.taskId.equals(taskId)))
+          .getSingleOrNull();
+      if (membership == null) {
+        throw StateError('Task $taskId is not part of session $sessionId');
+      }
+      // Moving or freeing one member takes it out of its batch.
+      final leavesBatch = membership.batchId != null;
       await (update(focusSessionTasks)
             ..where((fst) =>
                 fst.focusSessionId.equals(sessionId) &
                 fst.taskId.equals(taskId)))
-          .write(FocusSessionTasksCompanion(pinnedStartAt: Value(pinnedUtc)));
+          .write(FocusSessionTasksCompanion(
+        pinnedStartAt: Value(pinnedUtc),
+        batchId: leavesBatch ? const Value(null) : const Value.absent(),
+      ));
       attachedDatabase.opCapture.write(
         collection: focusSessionTasksCollection,
         entityId: focusSessionTaskIdFor(sessionId, taskId),
-        fields: {'pinned_start_at': encodeInstant(pinnedUtc)},
+        fields: {
+          'pinned_start_at': encodeInstant(pinnedUtc),
+          if (leavesBatch) 'batch_id': null,
+        },
       );
+    });
+  }
+
+  /// Accepts a small-task suggestion (issue #407): in one transaction, sets
+  /// each member's start time and marks every member with [batchId]. One field
+  /// op per entry. [startByTaskId] holds the members; each must be in
+  /// [sessionId]'s Plan, otherwise a [StateError] is thrown and nothing is
+  /// written.
+  Future<void> acceptBatch({
+    required String sessionId,
+    required String batchId,
+    required Map<String, DateTime> startByTaskId,
+  }) async {
+    await attachedDatabase.capturing(() async {
+      for (final entry in startByTaskId.entries) {
+        final membership = await (select(focusSessionTasks)
+              ..where((fst) =>
+                  fst.focusSessionId.equals(sessionId) &
+                  fst.taskId.equals(entry.key)))
+            .getSingleOrNull();
+        if (membership == null) {
+          throw StateError(
+              'Task ${entry.key} is not part of session $sessionId');
+        }
+      }
+      for (final entry in startByTaskId.entries) {
+        final startUtc = entry.value.toUtc();
+        await (update(focusSessionTasks)
+              ..where((fst) =>
+                  fst.focusSessionId.equals(sessionId) &
+                  fst.taskId.equals(entry.key)))
+            .write(FocusSessionTasksCompanion(
+          pinnedStartAt: Value(startUtc),
+          batchId: Value(batchId),
+        ));
+        attachedDatabase.opCapture.write(
+          collection: focusSessionTasksCollection,
+          entityId: focusSessionTaskIdFor(sessionId, entry.key),
+          fields: {
+            'pinned_start_at': encodeInstant(startUtc),
+            'batch_id': batchId,
+          },
+        );
+      }
+    });
+  }
+
+  /// Records "Not today" for a small-task suggestion (issue #407): stamps
+  /// [declinedAt] on each of [taskIds]'s Plan entries so they are not offered
+  /// again this session. Throws [StateError] for an Outcome not in the Plan,
+  /// writing nothing.
+  Future<void> declineBatchSuggestion({
+    required String sessionId,
+    required Iterable<String> taskIds,
+    required DateTime declinedAt,
+  }) async {
+    final declinedUtc = declinedAt.toUtc();
+    await attachedDatabase.capturing(() async {
+      for (final taskId in taskIds) {
+        final membership = await (select(focusSessionTasks)
+              ..where((fst) =>
+                  fst.focusSessionId.equals(sessionId) &
+                  fst.taskId.equals(taskId)))
+            .getSingleOrNull();
+        if (membership == null) {
+          throw StateError('Task $taskId is not part of session $sessionId');
+        }
+      }
+      for (final taskId in taskIds) {
+        await (update(focusSessionTasks)
+              ..where((fst) =>
+                  fst.focusSessionId.equals(sessionId) &
+                  fst.taskId.equals(taskId)))
+            .write(FocusSessionTasksCompanion(
+                batchSuggestionDeclinedAt: Value(declinedUtc)));
+        attachedDatabase.opCapture.write(
+          collection: focusSessionTasksCollection,
+          entityId: focusSessionTaskIdFor(sessionId, taskId),
+          fields: {'batch_suggestion_declined_at': encodeInstant(declinedUtc)},
+        );
+      }
     });
   }
 
@@ -1018,6 +1113,32 @@ HAVING COUNT(DISTINCT p.session_id) >= ?''';
         if (startAt != null) pinned[entry.taskId] = startAt;
       }
       return pinned;
+    });
+  }
+
+  /// The small-task suggestion state of the open session's Plan entries
+  /// (issue #407), keyed by Outcome id: the accepted batch an entry belongs to,
+  /// and whether the user declined a suggestion that included it. Entries with
+  /// neither are absent.
+  Stream<Map<String, ({String? batchId, bool declined})>>
+      watchActiveSessionBatchState() {
+    return customSelect(
+      'SELECT fst.* FROM focus_session_tasks fst '
+      'WHERE fst.focus_session_id = $_activeSessionIdSql '
+      'AND (fst.batch_id IS NOT NULL '
+      'OR fst.batch_suggestion_declined_at IS NOT NULL)',
+      variables: [],
+      readsFrom: {focusSessionTasks, focusSessions},
+    ).watch().map((rows) {
+      final state = <String, ({String? batchId, bool declined})>{};
+      for (final row in rows) {
+        final entry = focusSessionTasks.map(row.data);
+        state[entry.taskId] = (
+          batchId: entry.batchId,
+          declined: entry.batchSuggestionDeclinedAt != null,
+        );
+      }
+      return state;
     });
   }
 

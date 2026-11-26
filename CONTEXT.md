@@ -33,7 +33,7 @@ The current known divergences:
 
 **Capture**:
 A raw, unprocessed fragment the user has put into the system because it has their attention. Pending clarification; not yet an Outcome or Action. A Capture's clarification is its terminal act, recorded once as `clarified_at` — stamped when the user completes the clarify act for that Capture, whether it produced new Outcomes, merged into existing ones, or was **discarded** (see **Discard**). An unstamped Capture sits in the Inbox; a stamped one persists as provenance for the Outcomes it clarified into — Captures are never deleted and merge never consumes them.
-**Clarification never rewrites a Capture** (ADR-0023). The clarify surface seeds its fields from the fragment and feeds the Outcome draft; the Capture keeps exactly what was captured, so what the system holds stays the raw record rather than the interpretation of it.
+**Clarification never rewrites a Capture** (ADR-0023). The clarify surface seeds its fields from the fragment and feeds the Outcome draft; the Capture keeps exactly what was captured — the raw record, not the interpretation of it.
 
 A Capture may carry **tag hints** from capture time — the one exception to the rule above, written to the Capture at capture and during clarification. A hint is *not* Organising and never stamps anything: a suggestion recorded beside the raw fragment, not a rewrite of it, surfaced on the Outcome draft at clarification. Organising — sorting an Outcome into structure — happens on the Outcome, not the Capture.
 _Avoid_: Todo, Task, Item, Inbox item, Thought, Stuff, Note
@@ -56,7 +56,7 @@ A physical, visible activity that moves an Outcome forward. A first-class entity
 
 Terminated Actions (`done` or `superseded`) stay attached to their Outcome — the time-ordered chain of terminated Action rows is the Outcome's history, and it is user-visible: the Outcome detail view renders it newest-first, read-only, under the Plan.
 
-The history chain is honest about *what* terminated, not about *who* terminated it: a row retired by the startup reconciliation sweep reads as "Abandoned", like one the user abandoned deliberately. That is accepted — a marker column would amend the no-linkage-metadata rule above for a case that only arises from repair.
+The history chain is honest about *what* terminated, not about *who* terminated it: a row retired by the startup reconciliation sweep reads as "Abandoned", like one the user abandoned deliberately. A marker column would amend the no-linkage-metadata rule above for a case that only arises from repair.
 
 **The Action rows are the only grain.** The `actions` table is the only thing the app reads or writes to answer "what is this Outcome's next move?". No Outcome column holds a next-action phrase, and no invariant ties one to the Action rows. An Outcome reduced in from a client predating the Actions table renders Actionless until re-clarified. An accidental multi-`current` set is repaired by the writers as it is encountered, never by a startup sweep.
 
@@ -76,24 +76,32 @@ A person the user knows, interacts with, or depends on. Identified by a user-cho
 _Avoid_: Contact, User (User is reserved for an authenticating identity — see Implementation tier), Collaborator
 
 **Area** *(of Focus)*:
-A domain of recurring responsibility — Allen's GTD horizon-2 concept. Examples: "Health", "Finance", "Family". A permanent or long-lived categorisation, and **exclusive**: an Outcome belongs to at most one Area, which is what makes an Area-by-Area pass non-overlapping — the Areas plus the Area-less remainder cover everything exactly once. Cross-cutting grouping is **Label**'s job; gating on where you physically are is **Context**'s. Allen specifies no project↔area membership at all, so the cardinality is a Jeeves choice, not GTD canon (ADR-0025).
+A domain of recurring responsibility — Allen's GTD horizon-2 concept. Examples: "Health", "Finance", "Family". A permanent or long-lived categorisation, and **exclusive**: an Outcome belongs to at most one Area, which is what makes an Area-by-Area pass non-overlapping — the Areas plus the Area-less remainder cover everything exactly once. Cross-cutting grouping is **Label**'s job; where you physically are is a **Place**'s. Allen specifies no project↔area membership at all, so the cardinality is a Jeeves choice, not GTD canon (ADR-0025).
 _Avoid_: Category, Topic, Folder, Project (a named group, not a responsibility domain)
 
 **Label**:
-A user-defined granular grouping, and the system's only cross-cutting one: an Outcome carries any number of Labels, and a Label may span Areas ("urgent-this-week" across Health and Finance). Jeeves-specific extension, not GTD canon. Free-form; the user creates and retires Labels as needed. Where **Area** answers *where does this live*, Label answers *what else is this about* (ADR-0025). Legacy `@` `Tag(type='context')` rows show as Labels, never Tags.
+A user-defined granular grouping, and the system's only cross-cutting one: an Outcome carries any number of Labels, and a Label may span Areas ("urgent-this-week" across Health and Finance). Jeeves-specific extension, not GTD canon. Free-form; the user creates and retires Labels as needed. Where **Area** answers *where does this live*, Label answers *what else is this about* (ADR-0025). Stored as `Tag(type='context')`, the `@` rows; the value predates the name and stays so older Devices read every Label, and `'label'` is retyped on arrival ([SYNC.md](docs/SYNC.md)).
 _Avoid_: Tag (Tag is the storage shape, not the concept), Bucket, Area (Area is the exclusive home; Label is the cross-cutting one)
 
 **Blocker**:
-Outside-the-user world-state relevant to an Outcome that is unresolved. Attaches to the Outcome (it describes the outcome's situation), and *coexists* with the Outcome's current Action — having a Blocker does not preclude having a current Action, and the current Action may be the very thing that resolves the Blocker.
+Outside-the-user world-state relevant to an Outcome that is unresolved. Attaches to the Outcome (it describes the outcome's situation), and *coexists* with the Outcome's current Action — a Blocker does not preclude a current Action, and the current Action may be the very thing that resolves the Blocker.
 _Avoid_: Block, Dependency, Constraint (Constraint is reserved for action-level predicates — see Context)
 
 **PersonBlocker**:
 A Blocker whose unresolved world-state is "this Person has not yet acted." References a specific **Person**; existence of the reference is the wait, removal is its resolution. The user-visible list grouping Outcomes-by-Person is called **Waiting For**.
 _Avoid_: WaitingFor (as an entity name), Wait, PendingPerson
 
-**Context** *(time modelled as TimeContext; location deferred)*:
-A predicate over current world state ("is *now* a moment when this action is doable?") that attaches to an Action and gates its visibility. Distinct from a Blocker: a Blocker describes outside-the-user state relevant to the *outcome*; a Context gates *whether you can act*. **TimeContext** (UI: "Time context") is the time predicate — from a date and/or in a weekly window ("after Nov 30"): unsatisfied, it hides the Outcome from the Next List and Up Next, which leaves it on Next. Detail in REQUIREMENTS.
+**Context** *(time as TimeContext or a time window; place as a Place)*:
+A predicate over current world state ("is *now* a moment when this action is doable?") that attaches to an Action and gates its visibility. Distinct from a Blocker: a Blocker describes outside-the-user state relevant to the *outcome*; a Context gates *whether you can act*. **TimeContext** (UI: "Time context") is the one-time time predicate — from a date and/or in a weekly window ("after Nov 30"): unsatisfied, it hides the Outcome from the Next List and leaves it on Next; Up Next shows what opens in the day being planned. Detail in REQUIREMENTS.
 _Avoid_: Constraint, Filter, Gate
+
+**Place**:
+A point plus an area: where an Action is. Named, or a one-time pin it owns; at most one per Action. The current location is never stored. Detail in REQUIREMENTS.
+_Avoid_: Location, Geofence, Venue
+
+**Time window**:
+Named hours that can differ by day, days with no hours closed. At most one per Action, never with a TimeContext; it belongs to the day it starts (Monday 22:00–02:00 runs into Tuesday). Detail in REQUIREMENTS.
+_Avoid_: Schedule, Opening hours, Time context
 
 **Hard landscape** *(not modelled — lives in the user's calendar)*:
 GTD's "sacred territory": the commitments that are genuinely time-bound with real consequences if missed — the only things that belong on a calendar (time-specific and day-specific commitments). Distinct from a due date (which may be aspirational) and from a **suggested time** (a session-scoped intention — see Engagement). Jeeves only reads the calendar: it never marks an Outcome as hard landscape and never writes to the calendar (#410). The term exists so suggested times and soft due dates are never described as calendar-worthy.
@@ -118,7 +126,7 @@ _Avoid_: Stale (a different predicate), Rotting, "stale task"
 An Outcome with no current Action. May still have planned Actions (the user has externalised thinking but not committed to engagement) or none (planless).
 
 **Planless** *(derived predicate)*:
-An Outcome with no current Action **and** no planned Actions. The Outcome exists but the user has not externalised any "what's next." The strongest needs-attention signal among non-terminal Outcomes.
+An Outcome with no current Action **and** no planned Actions. The user has externalised no "what's next." The strongest needs-attention signal among non-terminal Outcomes.
 
 **List**:
 A named collection of items. A List may be **explicit** — its membership is stored (the planned Actions of an Outcome, the task membership of a FocusSession) — or **implicit** — its membership is a query over the system's entities (the GTD lists below, the Outcomes in an Area). The split affects storage and ordering, not the conceptual role. List is first-class across every tier: the model has explicit Lists as relations, the UI renders every multi-item view as one, and the user *thinks* in Lists. Before inventing a new "collection of X", ask which kind of List it is.
@@ -139,7 +147,7 @@ The user engages with the row's *current Action* — but the List contains Outco
 _Avoid_: Next Actions (the list is of Outcomes, not Actions — though "Next Action" remains the user-facing label for the role of the row's current Action), Todo, Ready
 
 **Waiting For**:
-The implicit List of Outcomes that are PersonBlocked, grouped by the blocking Person. An Outcome blocked on multiple Persons appears under each Person it is blocked on. **Overlaps with Next when the Outcome has a current Action**: such an Outcome appears on Next (the Action is doable) *and* under Waiting For (the dependency is real). The overlap is by design — it surfaces "I can do this *while* waiting" without losing either fact. An actionless PersonBlocked Outcome appears here only — it is excluded from Next by the rule above.
+The implicit List of Outcomes that are PersonBlocked, grouped by the blocking Person. An Outcome blocked on multiple Persons appears under each Person it is blocked on. **Overlaps with Next when the Outcome has a current Action**: it appears on Next (the Action is doable) *and* under Waiting For (the dependency is real), by design — it surfaces "I can do this *while* waiting" without losing either fact. An actionless PersonBlocked Outcome appears here only, excluded from Next by the rule above.
 _Avoid_: Waiting, Blocked, Pending
 
 **Someday/Maybe**:
@@ -157,20 +165,18 @@ _Avoid_: Deleted, Removed (the row persists; Intent expresses the user's stance)
 **Discard**:
 The zero-Outcome clarification of a **Capture** — the verdict "this was never worth doing." The clarify act completes, so `clarified_at` is stamped and the Capture leaves the Inbox, but no Outcome is created (`ClarificationService.discardCapture`). The Capture itself persists as the record of what was discarded.
 
-Discard is **not** the same verdict as **Done**, and the two must never share an affordance: Done says the Capture clarified into an Outcome that is *already achieved*, and records a Completion. Discard says there was nothing to record at all. Nor is Discard the same as **Trash**: Trash is a List of Outcomes (`Intent = trash`), and since a discarded Capture never becomes an Outcome it can never appear there.
-
-UI label mapping — the `trash` action in `ProcessToHandlers` resolves its copy from the subject: **"Discard Capture"** on a Capture (this term), **"Trash"** on an Outcome (the List above). One code identifier, two canonical names, because the two subjects genuinely mean different things.
+**Not** the same verdict as **Done** (which records a Completion on an Outcome that is *already achieved*), and the two must never share an affordance. Nor is it **Trash**, a List of Outcomes a discarded Capture never appears on. The `trash` action in `ProcessToHandlers` resolves its copy from the subject: **"Discard Capture"** on a Capture (this term), **"Trash"** on an Outcome (the List above) — one code identifier, two canonical names, because the subjects mean different things.
 _Avoid_: Delete, Dismiss, Done (Done is a different verdict entirely), Trash (Trash is the Outcome-side List)
 
 **System Trust**:
-Whether the user's system can still be trusted: one indicator over three signals — Captures in the Inbox, days since the last Weekly Review, Bypassed Outcomes — read as all good or needs attention, never a number. Guardrails nudge towards the habit; they never block. Surface: [docs/DESIGN.md § Guardrails](docs/DESIGN.md#guardrails--nudges-never-blocks).
+Whether the user's system can still be trusted: one indicator over three signals — Captures in the Inbox, days since the last Weekly Review, Bypassed Outcomes — read as all good or needs attention, never a number. Guardrails nudge; they never block. Surface: [docs/DESIGN.md § Guardrails](docs/DESIGN.md#guardrails--nudges-never-blocks).
 _Avoid_: health score, score, System Health
 
 #### Relationships
 
 - A **Capture** is many-to-many with **Outcome**: one Capture may clarify to zero, one, or several Outcomes; one Outcome may trace back to several Captures (duplicate or complementary fragments merged during clarification).
 - The clarify UX runs in one of two user-selectable modes — a preference over the same many-to-many model, never a storage change. In **1-1 mode** each Capture clarifies to *at most* one Outcome — routing to an Intent creates exactly one and `clarified_at` stamps automatically at that first Outcome link, while a discard is the legitimate zero-Outcome verdict that stamps without creating anything; in **n-m mode** (split/merge) the user explicitly completes each Capture, and only that completion stamps `clarified_at` — a Capture stays in the Inbox while Outcomes are incrementally carved out of it, or merged into. Carving and merging are the same gesture on the same field: one names an Outcome that does not exist yet, the other picks one that does. Retracting a claim follows provenance — undoing a carve removes the Outcome it created, while unmerging only detaches, because merge never owned the Outcome in the first place.
-- **Clarifying a Capture routes to one of three destinations** — Next Action, Waiting For, Someday — in both modes. **Done** and **Trash** are not clarify-time destinations for an Outcome: Done is a Completion, an event recorded when the work is finished, and an Outcome captured already-complete is a contradiction; Trash is an Intent the user sets on an Outcome they have decided against. Both remain available on the Outcome's own surface. At Capture scope the two terminal verdicts are **Done with this Capture** (stamp `clarified_at`, keep every Outcome) and **Discard Capture** (the zero-Outcome verdict: stamp, create nothing).
+- **Clarifying a Capture routes to one of three destinations** — Next Action, Waiting For, Someday — in both modes. **Done** and **Trash** are not clarify-time destinations for an Outcome: Done is a Completion, an event recorded when the work is finished, and an Outcome captured already-complete is a contradiction; Trash is an Intent the user sets on an Outcome they have decided against. Both remain available on the Outcome's own surface. At Capture scope the terminal verdicts are **Done with this Capture** (stamp `clarified_at`, keep every Outcome), **Discard Capture** (the zero-Outcome verdict: stamp, create nothing) and **Make it a Habit** (stamp, create a Habit, no Outcome).
 - An **Outcome** has at most one *current* **Action** at any time, may have any number of *planned* Actions (the user's externalised "what's next" thinking), and has 0..N *terminated* Actions (done or superseded) over its lifetime.
 - An **Outcome** carries an **Intent** (the user's willingness) and may carry a **Completion** timestamp (the fact of achievement); the two axes are independent.
 - An **Outcome** may have any number of **Blockers** that *coexist* with its current **Action**. The classic case: a PersonBlocker "waiting on Trixy" lives on the Outcome while the current Action reads "follow up with Trixy." Acting on the current Action is what *might* resolve the Blocker; the two are not in opposition.
@@ -178,7 +184,7 @@ _Avoid_: health score, score, System Health
 - An **Outcome** belongs to at most one **Project** and at most one **Area** (each 1:N, independent of the other) and is labelled with zero or more **Labels** (M:N — Label is the cross-cutting annotation).
 - A **PersonBlocker** references exactly one **Person**; one Outcome may have multiple PersonBlockers (waiting on multiple Persons), and one Person may be the subject of PersonBlockers on multiple Outcomes.
 - A **Person** may also appear in Action text or Outcome notes without being a Blocker — referencing a Person does not imply blocking on them.
-- An **Action** has at most one **TimeContext**, owned by the Action, not the Outcome; other Contexts are deferred.
+- An **Action** has at most one **Place** (named or a one-time pin) and at most one time (a **Time window** or a **TimeContext**), owned by the Action, not the Outcome.
 - **Only the *current* Action is engageable.** Planned Actions cannot have TimeLogs, do not surface in **Next** / Focus Mode / Today's Plan. They are visible only in the context of their Outcome (where the Outcome's plan — an explicit List of planned Actions — is shown).
 - **Promotion from `planned` to `current` is an explicit clarifying act, never automatic.** When the current Action terminates, the Outcome enters the "no current Action" state until the user re-clarifies and either promotes a planned Action, edits one, or creates a new one.
 - **The plan carries no explicit dependencies.** Ordering among planned Actions is the user's intuition about sequence, not a DAG. The user revises ordering during clarification.
@@ -195,7 +201,6 @@ _Avoid_: health score, score, System Health
 - The proposal's four long-term states collapse two independent axes into one enum; the code's `intent` column and `done_at` keep them apart.
 - A trivially-actionable Capture ("call John") could in principle skip Outcome creation and land directly as an Action. The model says no — every Capture clarifies through an Outcome.
 - **Project and Area exclusivity are not enforced in storage.** Both are typed Tags linked through `todo_tags`, which carries no `type`, so "at most one" is not expressible as a unique index. Project's rule is held by the writers and the reconciler; Area's by the cutover.
-- **Label has two storage values.** `'context'` rows (shown as Labels) and cutover-minted `'label'` rows back one concept; folding them is a migration (TMaYaD/Jeeves#1001).
 
 ### Engagement
 
@@ -264,7 +269,7 @@ Settled Outcomes group for the Review summary by a **presentation ladder** — C
 _Avoid_: Resolved / Resolution (spoken for — see Disposition's _Avoid_ and the ambiguity below), Handled, Closed
 
 **Sprint** / **Break**:
-Subdivisions of a TimeLog applying the Pomodoro discipline. A **Sprint** is a timed stretch of work; a **Break** is the rest between Sprints, short or **long** (after a run of Sprints, counted across Actions). The clock keeps running through both without breaking the TimeLog's continuity. Sprints are recorded and show on every Device, eventually right; of two ends the earlier stands, and an open one reads as ending just before the next. A Sprint is what was done, never a plan. Small Actions may run as one Sprint, with no Break between them. The "about N sprints" hint, `Action.time_estimate / Sprint length` rounded up, is presentational only, never a target.
+Subdivisions of a TimeLog applying the Pomodoro discipline. A **Sprint** is a timed stretch of work; a **Break** is the rest between Sprints, short or **long** (after a run of Sprints, counted across Actions). The clock keeps running through both without breaking the TimeLog's continuity. Sprints are recorded and show on every Device, eventually right; of two ends the earlier stands, and an open one reads as ending just before the next. A Sprint is what was done, never a plan. Small same-Context Actions may run back to back, a Sprint each, no Break between them and one Break after the last. The "about N sprints" hint, `Action.time_estimate / Sprint length` rounded up, is presentational only, never a target.
 _Avoid_: PomodoroPhase, FocusBlock, WorkBlock, "pomodoro" in UI copy
 
 **Disposition**:
@@ -293,7 +298,6 @@ _Avoid_: Resolution, Decision, Handling, Action (overloaded)
 #### Flagged ambiguities
 
 - "Plan" is polymorphic in Jeeves' vocabulary. The **FocusSession's Plan** (this context) is a List of *Outcomes* selected for one session. An **Outcome's plan** (GTD Core) is its List of *planned Actions* — the user's externalised "what's next" thinking for a single Outcome. Different scopes, same English word; context disambiguates. If the clash bites in code or copy, the per-Outcome notion can be rewritten as "the planned Actions of an Outcome" without losing meaning; the per-session notion is the one that needs the short name.
-- **Where a Sprint sits relative to TimeLogs is unsettled.** The hierarchy above makes a Sprint part of one TimeLog, and switching Actions closes the TimeLog. Yet small same-Context Actions may run as one Sprint, and the long-break count runs across Actions. Both cannot hold as written; #910 (recorded Sprints) and #407 (batching) settle it.
 - **There is no "pause" in the engagement model.** An earlier implementation surfaced a pause control which was actually an unlabelled "start break" — corrected in #246 / PR #252. Residual `pause` / `isPaused` / `resume` references may persist in code, copy, or older docs; treat any such reference as a candidate for removal. The two real intents the misnomer collapsed: *abandon sprint* (Stop) and *take a break* (Start break — a phase transition, not a clock suspension).
 - **"Resolution" is spoken for, and the Review step still says it.** Disposition's `_Avoid_` list rejects Resolution, but the Evening Shutdown step-1 code uses it *to mean Disposition* — `_TaskResolutionCard`, `_ResolutionButton`, the step title "Resolve Unfinished". So "group the summary by resolution" would read in this codebase as "group by Disposition", which is exactly backwards; the summary groups by **Settled**. Renaming those identifiers and that copy to Disposition vocabulary is outstanding.
 - **"Settled" is a homonym across contexts.** In Engagement it is the per-session verdict predicate above. In **Sync Integrity** it describes a quarantined op whose gap claimant arrived, and a conflict that has been decided. Different bounded contexts and no shared code path, so both usages stand — but a reader meeting one after the other should know they are unrelated.
@@ -343,7 +347,7 @@ _Avoid_: stack, list (too generic), priority list (acceptable but Nudge queue is
 #### Flagged ambiguities
 
 - **Nudge** (this context) and **Reminder** (forthcoming, GTD Core) are different concepts. A Nudge targets a *Ritual* — "it's time for your weekly review". A Reminder targets an *individual Action* — "remind me to call John at 5pm". Different scopes, triggers and lifecycles; do not collapse them into one primitive even though both surface as OS notifications.
-- The **due-date notification** (an Outcome due today) and the **follow-up notification** (a Waiting For Outcome's follow-up date, the from-date of its current Action's Time context, has arrived) are neither a Nudge nor the reserved **Reminder**. `NotificationService.scheduleReminder` keeps its name but serves due-date notifications; the name is a candidate for renaming when Reminder is built.
+- The **due-date notification** (an Outcome due today), the **follow-up notification** (a Waiting For Outcome's follow-up date, the from-date of its current Action's Time context, has arrived) and the **habit notification** (a Habit's clock time on a day it is for) are neither a Nudge nor the reserved **Reminder**. `NotificationService.scheduleReminder` keeps its name but serves due-date notifications; the name is a candidate for renaming when Reminder is built.
 
 ### Habit Tracking
 
@@ -378,6 +382,7 @@ _Avoid_: Target, Quota
 #### Relationships
 
 - A Habit anchored after or before another Habit forms a stack: the stack gives order and the prompt only — each Habit's own repeat rule still decides whether it is due.
+- An estimated Habit can enter Focus Mode.
 
 #### Flagged ambiguities
 
@@ -422,7 +427,7 @@ _Avoid_: Account (no tenancy wrapper exists — User is the identity), Owner (na
 
 **Workspace** *(a complete, isolated GTD system)*:
 The unit of partition, encryption, and replication — one Inbox, one set of Areas, one Next List, one Plan. Not a subset of a User's data but a whole system, as Allen advises for a functional workstation (GTD ch. 4). **A Workspace is one mind's system**: its Inbox, Next List and Plan hold personal *stance* — Intent, clarification stamps, what the User chose to do today — which has no shared meaning across two people. The standing position is therefore **delegation over co-ownership**: work is handed to another User by copying the Outcome into *their* Workspace while the sender keeps a PersonBlocker. A Capture always lands in the current Workspace, unprompted — capture must never ask a question; relocating it is a clarification verdict alongside carve / merge / discard. Isolation is a property of storage and membership, not of the User's view. Mechanics in [docs/SYNC.md](docs/SYNC.md).
-_Avoid_: Vault (the Sync term for a folder of pages), Space (reads as a synonym for Area), Realm, Partition, Tenant, Desk (the physical metaphor is the origin, but "where I am" is **Context**'s job)
+_Avoid_: Vault (the Sync term for a folder of pages), Space (reads as a synonym for Area), Realm, Partition, Tenant, Desk (the physical metaphor is the origin, but "where I am" is a **Place**'s)
 
 **Member** *(a keyholder that can participate in Workspaces)*:
 An entity that can hold Workspace keys, author Ops, and authenticate to the sync server. Two kinds. A **Device** is owned by exactly one User and is granted every Workspace its User participates in, automatically. A **Service** is *registered, not owned* — it belongs to no User, and Users relate to it only through Grants, one named Workspace at a time.
@@ -437,13 +442,13 @@ How a new Device bootstraps with only the User's passphrase and no second device
 _Avoid_: Backup (it recovers keys, not data — data recovery is any surviving device's local store), Recovery member (it is not a Member)
 
 **Integrity Alarm** *(a standing accusation, or a standing local condition that will never heal)*:
-What a Device records when the log it was served cannot be reconciled with the chains bound into it, or with the keys it holds — a withheld op, a forked stream, a rollback of its own writes, a signature that does not verify. **An accusation standing is not the same as the User being told something is wrong**, and most standing accusations are records of the app working, not evidence that something of the User's is stuck or lost. **A refusal is never an error to the User** — the bytes were refused, which is the outcome the rule exists to produce. A key that has not arrived yet is a delivery gap that heals, never an accusation. Kinds, classes and resolution in [docs/SYNC.md](docs/SYNC.md).
-_Avoid_: Sync error (a transport failure of one attempt is not an accusation), Conflict (merge conflicts are resolved by the merge strategy and are not integrity events), Dead Letter (retired vocabulary, for an unrelated mechanism), Rejected op (a rejection is the server's answer to an append, not the receiver's record)
+What a Device records when the log it was served cannot be reconciled with the chains bound into it, or the keys it holds — a withheld op, a forked stream, a rollback of its own writes, a bad signature. **An accusation standing is not the User being told something is wrong**, and most standing accusations record the app working, not evidence that something of the User's is stuck or lost. **A refusal is never an error to the User** — the bytes were refused, which is the outcome the rule exists to produce. A key not yet arrived is a delivery gap that heals, never an accusation. Kinds, classes and resolution in [docs/SYNC.md](docs/SYNC.md).
+_Avoid_: Sync error (a transport failure of one attempt is not an accusation), Conflict (merge conflicts are resolved by the merge strategy and are not integrity events), Dead Letter (retired vocabulary, for an unrelated mechanism), Rejected op (a rejection is the server's answer to an append, not the receiver's record), Dismiss (silence is not an outcome; alarms are resolved by decisions)
 
-**Tag** *(backs the GTD Core concepts Person, Project, Area, Label, and legacy Context)*:
+**Tag** *(backs the GTD Core concepts Person, Project, Area and Label)*:
 The shared storage row backing several conceptual entities, discriminated by a `Tag.type` field. Outcome ↔ Tag links are stored in a `TodoTags` join table; the join carries no role information of its own (its semantics depend entirely on the linked Tag's `type`). The user does not think in terms of Tags — they think in the domain entities Tag backs. Physical-world equivalent: a folder, sticky note, or label-maker — a categorisation mechanism, not a domain concept.
 
-**A Tag has two identities, and only one of them is the primary key.** `id` is the op-log identity, client-random; `(name, type)` is the *user-facing* one — two rows with the same pair are one Person, one Project, one Area, one Label or one Context. Two Devices creating the same pair while apart mint two entities for one pair; they fold as the Devices converge. Fold mechanics in [docs/SYNC.md](docs/SYNC.md).
+**A Tag has two identities, and only one of them is the primary key.** `id` is the op-log identity, client-random; `(name, type)` is the *user-facing* one — two rows with the same pair are one Person, one Project, one Area or one Label. Two Devices creating the same pair while apart mint two entities for one pair; they fold as the Devices converge. Fold mechanics in [docs/SYNC.md](docs/SYNC.md).
 _Avoid_: (none — Tag is the canonical name for the storage)
 
 **Banner** *(an in-app surface for a Nudge)*:

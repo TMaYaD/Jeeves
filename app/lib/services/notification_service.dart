@@ -23,6 +23,11 @@ import 'follow_up_notifications.dart'
     show
         followUpFireAtMillisFromNotificationPayload,
         followUpOutcomeIdFromNotificationPayload;
+import 'habit_notifications.dart'
+    show
+        HabitNotificationAction,
+        HabitNotificationsOnDevice,
+        kHabitNotificationPayloadPrefix;
 
 // Stable notification IDs.
 const _kFocusSessionPlanningNotificationId = 0;
@@ -45,9 +50,50 @@ const kPeriodicReviewActionOpen = 'periodic_review_open';
 const kPeriodicReviewActionSnooze = 'periodic_review_snooze';
 const kPeriodicReviewActionSkip = 'periodic_review_skip_today';
 
+/// The action id of a Habit's "Check in" button, and the iOS category that
+/// carries it.
+const kNotificationActionHabitCheckIn = 'habit_check_in';
+
+/// The action id of a Habit's "Start Focus" button, and the iOS category that
+/// carries it.
+const kNotificationActionHabitStartFocus = 'habit_start_focus';
+
+/// The button a habit notification carries.
+///
+/// The action id is what the OS hands back when the button is tapped, so the
+/// notification's handler reads it to know which button was pressed.
+typedef HabitNotificationButton = ({
+  String actionId,
+  String label,
+  bool showsUserInterface,
+});
+
+/// The button a habit notification with [action] carries, or null when it
+/// carries none.
+///
+/// The iOS category is named after the button, as the Check in category is:
+/// iOS shows an action button only for a registered category.
+HabitNotificationButton? habitNotificationButton(HabitNotificationAction action) =>
+    switch (action) {
+      HabitNotificationAction.checkIn => const (
+          actionId: kNotificationActionHabitCheckIn,
+          label: 'Check in',
+          // The Check-in is recorded in the shade; the app does not open.
+          showsUserInterface: false,
+        ),
+      HabitNotificationAction.startFocus => const (
+          actionId: kNotificationActionHabitStartFocus,
+          label: 'Start Focus',
+          // Focus Mode needs the app: the tap opens it.
+          showsUserInterface: true,
+        ),
+      HabitNotificationAction.none => null,
+    };
+
 const _kFocusId = 1001;
 const _kDueDateChannelId = 'due_dates';
 const _kFollowUpChannelId = 'follow_ups';
+const _kHabitChannelId = 'habit_notifications';
 
 class NotificationService {
   NotificationService._();
@@ -61,8 +107,21 @@ class NotificationService {
 
   final _plugin = FlutterLocalNotificationsPlugin();
 
+  /// Registers the plugin's callbacks.
+  ///
+  /// [onNotificationResponse] is the foreground callback. It runs on the main
+  /// isolate, so it may be a closure that captures what it needs.
+  ///
+  /// [onBackgroundNotificationResponse] is the background callback. The plugin
+  /// starts a separate Flutter engine for it and calls it through a callback
+  /// handle, and **only a top-level or static function has one**: a closure
+  /// that captures anything has no handle, and the plugin asserts on it in
+  /// debug and dereferences a null handle in release, so the app never starts.
+  /// The function the app registers is
+  /// `notification_background_entry_point.dart`'s.
   static Future<void> initialize({
     void Function(NotificationResponse)? onNotificationResponse,
+    void Function(NotificationResponse)? onBackgroundNotificationResponse,
   }) async {
     tz_data.initializeTimeZones();
     // flutter_timezone 5.x returns TimezoneInfo; .identifier gives the IANA string.
@@ -106,12 +165,35 @@ class NotificationService {
                 kPeriodicReviewActionSkip, 'Skip this week'),
           ],
         ),
+        // The "Check in" button of a Habit's notification. iOS shows an
+        // action button only for a registered category, so a habit
+        // notification without this entry carries no button at all.
+        DarwinNotificationCategory(
+          kNotificationActionHabitCheckIn,
+          actions: [
+            // Plain: the Check in runs without opening the app.
+            DarwinNotificationAction.plain(
+                kNotificationActionHabitCheckIn, 'Check in'),
+          ],
+        ),
+        // The "Start Focus" button of a Habit's notification. Focus Mode
+        // needs the app, so the action is a foreground one.
+        DarwinNotificationCategory(
+          kNotificationActionHabitStartFocus,
+          actions: [
+            DarwinNotificationAction.plain(
+              kNotificationActionHabitStartFocus,
+              'Start Focus',
+              options: {DarwinNotificationActionOption.foreground},
+            ),
+          ],
+        ),
       ],
     );
     await instance._plugin.initialize(
       settings: InitializationSettings(android: android, iOS: iOS),
       onDidReceiveNotificationResponse: onNotificationResponse,
-      onDidReceiveBackgroundNotificationResponse: onNotificationResponse,
+      onDidReceiveBackgroundNotificationResponse: onBackgroundNotificationResponse,
     );
   }
 
@@ -304,6 +386,100 @@ class NotificationService {
   }
 
   // ---------------------------------------------------------------------------
+  // Habit notifications — a Habit whose anchor is a clock time, at that time.
+  // ---------------------------------------------------------------------------
+
+  /// Schedules one habit notification at [fireAt].
+  ///
+  /// [id] decides what it replaces: scheduling again under the same id moves
+  /// the alarm. The instant is passed as an absolute one, so it does not
+  /// depend on the zone the OS happens to be in.
+  Future<void> scheduleHabitNotification({
+    required int id,
+    required String title,
+    required String body,
+    required DateTime fireAt,
+    required String payload,
+    HabitNotificationAction action = HabitNotificationAction.none,
+  }) async {
+    final canExact = await canScheduleExactRitualNotifications();
+    final button = habitNotificationButton(action);
+    await _plugin.zonedSchedule(
+      id: id,
+      title: title,
+      body: body,
+      payload: payload,
+      scheduledDate: ritualAlarmScheduledDate(fireAt),
+      notificationDetails: NotificationDetails(
+        android: AndroidNotificationDetails(
+          _kHabitChannelId,
+          'Habits',
+          channelDescription: 'Habits that are due at a time of day',
+          importance: Importance.high,
+          priority: Priority.high,
+          actions: [
+            if (button != null)
+              // A Check in runs without opening the app: the button stays
+              // in the shade and the notification goes. A Start Focus opens
+              // the app, because Focus Mode needs it.
+              AndroidNotificationAction(
+                button.actionId,
+                button.label,
+                showsUserInterface: button.showsUserInterface,
+                cancelNotification: true,
+              ),
+          ],
+        ),
+        iOS: DarwinNotificationDetails(
+          categoryIdentifier: button?.actionId,
+        ),
+      ),
+      // Exact when the OS already permits it, so a notification lands at the
+      // Habit's clock time; otherwise Android may deliver it late.
+      androidScheduleMode: ritualAndroidScheduleMode(canExact: canExact),
+    );
+  }
+
+  /// The habit notifications the OS holds, recognised by their payload:
+  /// `pending` are still scheduled to fire; `pendingPayloads` maps a pending
+  /// id to the payload it carries; `delivered` already fired and sit in the
+  /// tray. The queries are sequential, so an alarm that fires between them
+  /// appears in both sets.
+  Future<HabitNotificationsOnDevice> habitNotificationsOnDevice() async {
+    final pending = <int>{};
+    final pendingPayloads = <int, String>{};
+    for (final request in await _plugin.pendingNotificationRequests()) {
+      final payload = request.payload;
+      if (payload == null ||
+          !payload.startsWith(kHabitNotificationPayloadPrefix)) {
+        continue;
+      }
+      pending.add(request.id);
+      pendingPayloads[request.id] = payload;
+    }
+    final delivered = <int>{};
+    final android = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    for (final shown
+        in await android?.getActiveNotifications() ?? const <ActiveNotification>[]) {
+      final id = shown.id;
+      if (id == null) continue;
+      // Android reports no payload for active notifications (iOS/macOS only),
+      // so recognise ours by channel, or by payload where one is present.
+      if (shown.channelId == _kHabitChannelId ||
+          (shown.payload?.startsWith(kHabitNotificationPayloadPrefix) ??
+              false)) {
+        delivered.add(id);
+      }
+    }
+    return (
+      pending: pending,
+      pendingPayloads: pendingPayloads,
+      delivered: delivered
+    );
+  }
+
+  // ---------------------------------------------------------------------------
   // Ritual notifications — unified surface for every Ritual's Nudge.
   // The per-Ritual notification IDs, channel IDs, titles, action IDs, and
   // iOS category identifiers live in [_ritualConfigs]; adding a fourth
@@ -420,8 +596,12 @@ class NotificationService {
   }
 
   /// Schedules a one-off notification at [endTime] for the end of a break.
+  ///
+  /// [durationMinutes] is the length of the break that is ending — the short
+  /// Break's or the long Break's (issue #911) — and the notification says so.
   Future<void> scheduleBreakEndNotification({
     required DateTime endTime,
+    required int durationMinutes,
   }) async {
     await _plugin.cancel(id: _kBreakEndNotificationId);
     final scheduled = tz.TZDateTime.from(endTime, tz.local);
@@ -431,7 +611,7 @@ class NotificationService {
     await _plugin.zonedSchedule(
       id: _kBreakEndNotificationId,
       title: 'Break over — back to it!',
-      body: 'Your 3-minute break has ended. Start the next sprint.',
+      body: 'Your $durationMinutes-minute break has ended. Start the next sprint.',
       payload: 'focus',
       scheduledDate: scheduled,
       notificationDetails: const NotificationDetails(
@@ -455,6 +635,12 @@ class NotificationService {
   /// Cancels both sprint-related notifications.
   Future<void> cancelSprintNotifications() async {
     await _plugin.cancel(id: _kSprintEndNotificationId);
+    await _plugin.cancel(id: _kBreakEndNotificationId);
+  }
+
+  /// Cancels only the Break-end reminder, leaving a Sprint-end reminder that
+  /// was scheduled for the next Sprint in place.
+  Future<void> cancelBreakEndNotification() async {
     await _plugin.cancel(id: _kBreakEndNotificationId);
   }
 

@@ -1,4 +1,4 @@
-/// Sprint timer state and notifier (Issues #47, #910).
+/// Sprint timer state and notifier (Issues #47, #910, #911).
 ///
 /// Binds a focus Sprint + Break cycle to the open TimeLog. **The recorded Sprint
 /// is the only source of truth**: the notifier derives its whole state from the
@@ -8,6 +8,10 @@
 /// storage, so a Sprint started on one device shows on every other, and a
 /// restart resumes from the record.
 ///
+/// Which Break is the long one is derived the same way — from the recorded
+/// Sprints and the synced settings, never stored ([longBreakDecision]) —
+/// so every device reaches the same answer without anything new to sync.
+///
 /// Restoring never writes: past its set length a Sprint reads as overtime — the
 /// same as in the foreground — instead of being turned into a Break, because on a
 /// shared record that would let one device end a Sprint another is still running.
@@ -16,12 +20,14 @@ library;
 import 'dart:async';
 
 import 'package:drift/drift.dart' show OrderingTerm, TableUpdateQuery;
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/daos/sprint_dao.dart';
 import '../database/gtd_database.dart';
+import '../models/focus_settings.dart';
+import '../models/long_break.dart';
 import '../services/notification_service.dart';
 import 'auth_provider.dart';
 import 'database_provider.dart';
@@ -56,9 +62,28 @@ class SprintTimerState {
   final bool isProcessing;
   // Minutes used for the current (or last) sprint/break — set at startSprint.
   final int sprintDurationMinutes;
-  final int breakDurationMinutes;
+
+  /// The length of the Break in progress: the short Break's, or the long
+  /// Break's when [isLongBreak] holds.
+  final int currentBreakDurationMinutes;
+
+  /// True while the Break in progress is the long one (issue #911).
+  final bool isLongBreak;
+
+  /// The Sprints in the run the long Break came from.
+  ///
+  /// The run holds the Sprints since the count last restarted, so it is not
+  /// the setting the user chose: a Sprint that ran over brings the long
+  /// Break after fewer Sprints than the setting names. Carried with the
+  /// state so the copy that names a count — "four sprints" — names the count
+  /// the user actually reached. Zero when no long Break is in progress.
+  final int longBreakSprintCount;
   // Timestamp of the most recent break completion (null if none this session).
   final DateTime? lastBreakEndedAt;
+
+  /// Length of the Break that `lastBreakEndedAt` closed. The cooldown lasts
+  /// that long: a long Break is not forgotten after a short Break's worth.
+  final int lastBreakDurationMinutes;
 
   const SprintTimerState({
     this.phase = SprintPhase.idle,
@@ -71,8 +96,11 @@ class SprintTimerState {
     this.overtime = Duration.zero,
     this.isProcessing = false,
     this.sprintDurationMinutes = 20,
-    this.breakDurationMinutes = 3,
+    this.currentBreakDurationMinutes = 3,
+    this.isLongBreak = false,
+    this.longBreakSprintCount = 0,
     this.lastBreakEndedAt,
+    this.lastBreakDurationMinutes = 3,
   });
 
   bool get isActive => phase != SprintPhase.idle;
@@ -104,7 +132,7 @@ class SprintTimerState {
   bool get isPostBreakCooldown {
     if (lastBreakEndedAt == null) return false;
     return DateTime.now().difference(lastBreakEndedAt!) <
-        Duration(minutes: breakDurationMinutes);
+        Duration(minutes: lastBreakDurationMinutes);
   }
 
   SprintTimerState copyWith({
@@ -118,8 +146,11 @@ class SprintTimerState {
     Duration? overtime,
     bool? isProcessing,
     int? sprintDurationMinutes,
-    int? breakDurationMinutes,
+    int? currentBreakDurationMinutes,
+    bool? isLongBreak,
+    int? longBreakSprintCount,
     DateTime? lastBreakEndedAt,
+    int? lastBreakDurationMinutes,
   }) =>
       SprintTimerState(
         phase: phase ?? this.phase,
@@ -133,8 +164,14 @@ class SprintTimerState {
         isProcessing: isProcessing ?? this.isProcessing,
         sprintDurationMinutes:
             sprintDurationMinutes ?? this.sprintDurationMinutes,
-        breakDurationMinutes: breakDurationMinutes ?? this.breakDurationMinutes,
+        currentBreakDurationMinutes:
+            currentBreakDurationMinutes ?? this.currentBreakDurationMinutes,
+        isLongBreak: isLongBreak ?? this.isLongBreak,
+        longBreakSprintCount:
+            longBreakSprintCount ?? this.longBreakSprintCount,
         lastBreakEndedAt: lastBreakEndedAt ?? this.lastBreakEndedAt,
+        lastBreakDurationMinutes:
+            lastBreakDurationMinutes ?? this.lastBreakDurationMinutes,
       );
 }
 
@@ -161,7 +198,8 @@ int _calcTotalSprints(int? estimateMinutes, int sprintMinutes) {
 /// * The latest Sprint is running on the TimeLog's Action: focus, or focus
 ///   overtime once `started_at + planned length` has passed.
 /// * The latest Sprint ended at or after the TimeLog opened: break, or break
-///   overtime once `ended_at + break length` has passed.
+///   overtime once `ended_at + break length` has passed. The Break is the long
+///   one when the run of Sprints has spent its budget (issue #911).
 /// * Otherwise idle.
 ///
 /// `sprintNumber` counts the recorded Sprints on the TimeLog's Action, the
@@ -174,17 +212,33 @@ SprintTimerState deriveSprintTimerState({
   required Todo? activeTask,
   required int sprintMinutesSetting,
   required int breakMinutesSetting,
+  required int longBreakMinutesSetting,
+  required int sprintsBeforeLongBreakSetting,
   required DateTime now,
   String? suppressedSprintId,
 }) {
   final latest = sprints.isEmpty ? null : sprints.last;
   final lastBreakEndedAt =
       sprints.length >= 2 ? latest!.startedAtUtc.toLocal() : null;
+  // The Break that ended when the latest Sprint began was the one after the
+  // Sprint before it; the cooldown lasts as long as that Break did.
+  final lastBreakDurationMinutes = sprints.length >= 2 &&
+          longBreakDecision(
+            sprints: sprints,
+            sprintId: sprints[sprints.length - 2].id,
+            sprintDurationMinutes: sprintMinutesSetting,
+            shortBreakDurationMinutes: breakMinutesSetting,
+            longBreakDurationMinutes: longBreakMinutesSetting,
+            sprintsBeforeLongBreak: sprintsBeforeLongBreakSetting,
+          ).isLong
+      ? longBreakMinutesSetting
+      : breakMinutesSetting;
   if (activeLog == null) {
     return SprintTimerState(
       sprintDurationMinutes: sprintMinutesSetting,
-      breakDurationMinutes: breakMinutesSetting,
+      currentBreakDurationMinutes: breakMinutesSetting,
       lastBreakEndedAt: lastBreakEndedAt,
+      lastBreakDurationMinutes: lastBreakDurationMinutes,
     );
   }
 
@@ -203,10 +257,31 @@ SprintTimerState deriveSprintTimerState({
       : null;
 
   final nowUtc = now.toUtc();
-  final breakMinutes = breakMinutesSetting;
   final sprintMinutes =
       latestOnAction?.plannedDurationMinutes ?? sprintMinutesSetting;
   final recorded = sprintsOnAction.length;
+
+  // Which Break comes after the latest Sprint: the long one when the run of
+  // Sprints has spent its budget, the short one otherwise (issue #911). A
+  // running or suppressed Sprint has no Break after it yet, and reads short.
+  // The run it came from says how many Sprints the user actually did, which
+  // is not the setting: a Sprint that ran over brings the long Break after
+  // fewer Sprints than the setting names.
+  final longBreak = latestOnAction == null
+      ? null
+      : longBreakDecision(
+          sprints: sprints,
+          sprintId: latestOnAction.id,
+          sprintDurationMinutes: sprintMinutesSetting,
+          shortBreakDurationMinutes: breakMinutesSetting,
+          longBreakDurationMinutes: longBreakMinutesSetting,
+          sprintsBeforeLongBreak: sprintsBeforeLongBreakSetting,
+        );
+  final isLongBreak = longBreak?.isLong ?? false;
+  final longBreakSprintCount =
+      longBreak != null && longBreak.isLong ? longBreak.sprintCount : 0;
+  final breakMinutes =
+      isLongBreak ? longBreakMinutesSetting : breakMinutesSetting;
 
   SprintTimerState build({
     required SprintPhase phase,
@@ -228,8 +303,11 @@ SprintTimerState deriveSprintTimerState({
         total: total,
         overtime: overtime,
         sprintDurationMinutes: sprintMinutes,
-        breakDurationMinutes: breakMinutes,
+        currentBreakDurationMinutes: breakMinutes,
+        isLongBreak: isLongBreak,
+        longBreakSprintCount: longBreakSprintCount,
         lastBreakEndedAt: lastBreakEndedAt,
+        lastBreakDurationMinutes: lastBreakDurationMinutes,
       );
 
   if (latestOnAction != null && latestOnAction.isRunning) {
@@ -335,7 +413,12 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
 
   int get _sprintMinutes =>
       ref.read(focusSettingsProvider).sprintDurationMinutes;
-  int get _breakMinutes => ref.read(focusSettingsProvider).breakDurationMinutes;
+  int get _shortBreakMinutes =>
+      ref.read(focusSettingsProvider).shortBreakDurationMinutes;
+  int get _longBreakMinutes =>
+      ref.read(focusSettingsProvider).longBreakDurationMinutes;
+  int get _sprintsBeforeLongBreak =>
+      ref.read(focusSettingsProvider).sprintsBeforeLongBreak;
 
   // ---------------------------------------------------------------------------
   // Public API
@@ -480,9 +563,11 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
         now: endedAt,
       );
       await _reload();
-      await _scheduleEndNotification(
-        endedAt.add(Duration(minutes: _breakMinutes)),
-        isFocus: false,
+      // The Break that follows may be the long one, and its length is the
+      // one the countdown runs on — the reload has already derived it.
+      await _scheduleBreakEnd(
+        endedAt.add(Duration(minutes: state.currentBreakDurationMinutes)),
+        state.currentBreakDurationMinutes,
       );
     } finally {
       if (state.isProcessing) state = state.copyWith(isProcessing: false);
@@ -524,8 +609,17 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
       // The synced settings only matter once there is an engagement to time, so
       // an idle timer does not even instantiate them. A change to either is
       // picked up by the next one-second re-evaluation.
-      sprintMinutesSetting: _activeLog == null ? 20 : _sprintMinutes,
-      breakMinutesSetting: _activeLog == null ? 3 : _breakMinutes,
+      sprintMinutesSetting:
+          _activeLog == null ? kDefaultSprintDurationMinutes : _sprintMinutes,
+      breakMinutesSetting: _activeLog == null
+          ? kDefaultShortBreakDurationMinutes
+          : _shortBreakMinutes,
+      longBreakMinutesSetting: _activeLog == null
+          ? kDefaultLongBreakDurationMinutes
+          : _longBreakMinutes,
+      sprintsBeforeLongBreakSetting: _activeLog == null
+          ? kDefaultSprintsBeforeLongBreak
+          : _sprintsBeforeLongBreak,
       now: DateTime.now(),
       suppressedSprintId: _suppressedSprintId,
     );
@@ -537,6 +631,7 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
       HapticFeedback.heavyImpact();
     }
     state = next;
+    _reconcileBreakNotification(next);
     final counting = next.isActive && !(next.isOvertime && next.overtime >= next.total);
     if (counting) {
       _ticker ??= Timer.periodic(const Duration(seconds: 1), (_) => _recompute());
@@ -550,10 +645,12 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
     _ticker = null;
   }
 
-  Future<void> _scheduleEndNotification(
+  /// Returns whether the reminder was scheduled.
+  Future<bool> _scheduleEndNotification(
     DateTime endTime, {
     required bool isFocus,
     String? taskTitle,
+    int breakDurationMinutes = kDefaultShortBreakDurationMinutes,
   }) async {
     // A reminder is a side effect: failing to schedule it must not undo the
     // Sprint that is already recorded.
@@ -565,47 +662,112 @@ class SprintTimerNotifier extends Notifier<SprintTimerState> {
           taskTitle: taskTitle ?? 'your task',
         );
       } else {
-        await svc.scheduleBreakEndNotification(endTime: endTime);
+        await svc.scheduleBreakEndNotification(
+          endTime: endTime,
+          durationMinutes: breakDurationMinutes,
+        );
       }
+      return true;
     } catch (error) {
       debugPrint('Sprint end notification not scheduled: $error');
+      return false;
+    }
+  }
+
+  /// The Break-end reminder as last scheduled, so a change to the Break's
+  /// length (a setting edited mid-Break) can replace it and a plain
+  /// one-second tick cannot.
+  DateTime? _scheduledBreakEndAt;
+  int? _scheduledBreakMinutes;
+
+  /// True from the first attempt to schedule this Break's reminder until the
+  /// Break is cancelled, so an attempt that failed is retried rather than
+  /// mistaken for a Break that never wanted one.
+  bool _breakReminderWanted = false;
+  DateTime? _breakReminderRetryNotBefore;
+  @visibleForTesting
+  static Duration breakReminderRetryDelay = const Duration(seconds: 15);
+
+  void _reconcileBreakNotification(SprintTimerState next) {
+    if (!_breakReminderWanted || _breakScheduleInFlight) return;
+    if (next.phase != SprintPhase.break_) return;
+    final endAt = DateTime.now().add(next.remaining);
+    final plannedEndAt = _scheduledBreakEndAt;
+    if (plannedEndAt == null) {
+      // The last attempt failed, so nothing is known to be in place.
+      final retryNotBefore = _breakReminderRetryNotBefore;
+      if (retryNotBefore != null && DateTime.now().isBefore(retryNotBefore)) {
+        return;
+      }
+    } else {
+      final moved =
+          endAt.difference(plannedEndAt).abs() > const Duration(seconds: 2);
+      if (!moved &&
+          next.currentBreakDurationMinutes == _scheduledBreakMinutes) {
+        return;
+      }
+    }
+    unawaited(_scheduleBreakEnd(endAt, next.currentBreakDurationMinutes));
+  }
+
+  /// Bumped by every cancel, so a schedule that was already in flight when
+  /// the Break was cancelled can tell it is stale.
+  int _breakNotificationGeneration = 0;
+  bool _breakScheduleInFlight = false;
+
+  Future<void> _scheduleBreakEnd(DateTime endAt, int minutes) async {
+    final generation = _breakNotificationGeneration;
+    _breakReminderWanted = true;
+    _breakScheduleInFlight = true;
+    final bool scheduled;
+    try {
+      scheduled = await _scheduleEndNotification(
+        endAt,
+        isFocus: false,
+        breakDurationMinutes: minutes,
+      );
+    } finally {
+      _breakScheduleInFlight = false;
+    }
+    if (generation != _breakNotificationGeneration) {
+      // The Break was skipped or ended while this reminder was being
+      // scheduled: take it back rather than let it fire for a Break that is
+      // over, and do not record it.
+      if (scheduled) {
+        try {
+          await ref
+              .read(notificationServiceProvider)
+              .cancelBreakEndNotification();
+        } catch (error) {
+          debugPrint('Stale Break reminder not cancelled: $error');
+        }
+      }
+      return;
+    }
+    // Recorded only once it exists, so a failed schedule is not mistaken for
+    // a reminder that is already in place.
+    if (scheduled) {
+      _scheduledBreakEndAt = endAt;
+      _scheduledBreakMinutes = minutes;
+      _breakReminderRetryNotBefore = null;
+    } else {
+      // A failed replacement may already have cancelled the reminder it was
+      // replacing, so the old record cannot be trusted either: forget it and
+      // let the next tick try again once the retry delay has passed.
+      _scheduledBreakEndAt = null;
+      _scheduledBreakMinutes = null;
+      _breakReminderRetryNotBefore =
+          DateTime.now().add(breakReminderRetryDelay);
     }
   }
 
   Future<void> _cancelSprintNotifications() async {
+    _breakNotificationGeneration++;
+    _breakReminderWanted = false;
+    _breakReminderRetryNotBefore = null;
+    _scheduledBreakEndAt = null;
+    _scheduledBreakMinutes = null;
     final svc = ref.read(notificationServiceProvider);
     await svc.cancelSprintNotifications();
   }
-}
-
-// ---------------------------------------------------------------------------
-// Batching suggestion helpers
-// ---------------------------------------------------------------------------
-
-/// Returns micro-tasks from [todayTasks] that collectively fit in one sprint.
-///
-/// Micro-tasks have [Todo.timeEstimate] ≤ 15 min. Batching is suggested when
-/// 2+ micro-tasks fit within [sprintMinutes] (default 20).
-List<Todo> findBatchingCandidates(List<Todo> todayTasks,
-    {int sprintMinutes = 20}) {
-  final microTasks = todayTasks
-      .where((t) => t.timeEstimate != null && t.timeEstimate! <= 15)
-      .toList()
-    ..sort((a, b) => (a.timeEstimate ?? 0).compareTo(b.timeEstimate ?? 0));
-
-  if (microTasks.length < 2) return [];
-
-  // Greedy accumulation (smallest-first) — finds the largest subset that fits
-  // in one sprint rather than requiring *all* micro-tasks to fit.
-  var budget = 0;
-  final candidates = <Todo>[];
-  for (final task in microTasks) {
-    final est = task.timeEstimate ?? 0;
-    if (budget + est <= sprintMinutes) {
-      budget += est;
-      candidates.add(task);
-    }
-  }
-
-  return candidates.length >= 2 ? candidates : [];
 }

@@ -287,6 +287,9 @@ void main() {
       expect(find.byType(TagText, skipOffstage: false), findsNWidgets(20));
       expect(find.byKey(const Key('tag_cloud_show_more')), findsNothing);
 
+      // The Habits item above the cloud pushes the first chip below the fold.
+      await tester.ensureVisible(find.byKey(const Key('tag_chip_t0')));
+      await tester.pumpAndSettle();
       await tester.longPress(find.byKey(const Key('tag_chip_t0')));
       await tester.pumpAndSettle();
       expect(find.byType(TagManagementSheet), findsOneWidget);

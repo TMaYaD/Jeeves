@@ -66,6 +66,10 @@ import 'project_picker.dart';
 const _kTextSaveFailedMessage =
     'Routed, but your latest edit to the text was not saved.';
 
+/// Shown when [ClarifyCard.onMakeHabit] throws; nothing was written.
+const _kMakeHabitFailedMessage =
+    "Couldn't make it a Habit. It's still in your Inbox.";
+
 /// What a clarify surface does with the subject's tags — and, inseparably, how
 /// it reads them.
 ///
@@ -98,6 +102,7 @@ class ClarifyCard extends ConsumerStatefulWidget {
     this.footer,
     this.missingCta,
     this.onProcessingChanged,
+    this.onMakeHabit,
   }) : todoId = null;
 
   /// Re-clarify an Outcome that has already been through the flow once.
@@ -106,20 +111,21 @@ class ClarifyCard extends ConsumerStatefulWidget {
     required this.todoId,
     this.lastAction,
     this.onAfterRoute,
-  })  : captureId = null,
-        onCaptureCompleted = null,
-        // An Outcome's edits persist as they happen, so there is nothing to
-        // retain. Fixed rather than offered, so "re-clarify with retention"
-        // cannot be written.
-        retention = null,
-        // An Outcome's tags live in `todo_tags` and there are no *hints* to
-        // consume as draft input, so `draftInputOnly` has no meaning on this
-        // shape.
-        tagSection = ClarifyTagSection.editablePickers,
-        // The one host is [ReclarifyRoute], which owns its own chrome.
-        footer = null,
-        missingCta = null,
-        onProcessingChanged = null;
+  }) : captureId = null,
+       onCaptureCompleted = null,
+       // An Outcome's edits persist as they happen, so there is nothing to
+       // retain. Fixed rather than offered, so "re-clarify with retention"
+       // cannot be written.
+       retention = null,
+       // An Outcome's tags live in `todo_tags` and there are no *hints* to
+       // consume as draft input, so `draftInputOnly` has no meaning on this
+       // shape.
+       tagSection = ClarifyTagSection.editablePickers,
+       // The one host is [ReclarifyRoute], which owns its own chrome.
+       footer = null,
+       missingCta = null,
+       onProcessingChanged = null,
+       onMakeHabit = null;
 
   /// The Capture being clarified, or null when re-clarifying an Outcome.
   final String? captureId;
@@ -183,6 +189,16 @@ class ClarifyCard extends ConsumerStatefulWidget {
   /// the host has unmounted — hosts must guard their own `setState`.
   final ValueChanged<bool>? onProcessingChanged;
 
+  /// Offers **Make it a Habit** below the routing choices when set, and is
+  /// called with the title and notes to make it from: the card's live draft in
+  /// 1-1, the Capture's own in n-m.
+  ///
+  /// The card owns the button and its in-flight state; the host owns the
+  /// write and where to go next. A throw is reported in a SnackBar and leaves
+  /// the Capture in the Inbox.
+  final Future<void> Function({required String title, String? notes})?
+  onMakeHabit;
+
   @override
   ConsumerState<ClarifyCard> createState() => _ClarifyCardState();
 }
@@ -202,6 +218,31 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
 
   TextEditingController? _titleCtrl;
   TextEditingController? _notesCtrl;
+
+  /// True while [ClarifyCard.onMakeHabit] runs.
+  bool _makingHabit = false;
+
+  /// True while the routing bar or the n-m Outcome section has a write in
+  /// flight on this Capture. Kept apart from [_makingHabit] so one write
+  /// finishing cannot clear the other's busy state for the host.
+  bool _routingBusy = false;
+  bool _carveBusy = false;
+
+  bool get _anyCaptureWriteBusy => _makingHabit || _routingBusy || _carveBusy;
+
+  void _emitBusy() => widget.onProcessingChanged?.call(_anyCaptureWriteBusy);
+
+  void _onRoutingBusy(bool busy) {
+    _routingBusy = busy;
+    if (mounted) setState(() {});
+    _emitBusy();
+  }
+
+  void _onCarveBusy(bool busy) {
+    _carveBusy = busy;
+    if (mounted) setState(() {});
+    _emitBusy();
+  }
 
   /// Focus nodes for the two text fields. On the Outcome shape their listeners
   /// are the save trigger — the same focus-loss rule `task_detail_screen` and
@@ -309,14 +350,14 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   /// The card's current text and draft attributes, with the baselines they
   /// were typed against, ready to hand to the retention store.
   RetainedClarifyDraft _retainable() => RetainedClarifyDraft(
-        title: _titleCtrl?.text ?? '',
-        notes: _notesCtrl?.text ?? '',
-        baselineTitle: _baselineTitle,
-        baselineNotes: _baselineNotes,
-        energyLevel: _energyLevel,
-        timeEstimateMinutes: _timeEstimate,
-        dueDate: _dueDate,
-      );
+    title: _titleCtrl?.text ?? '',
+    notes: _notesCtrl?.text ?? '',
+    baselineTitle: _baselineTitle,
+    baselineNotes: _baselineNotes,
+    energyLevel: _energyLevel,
+    timeEstimateMinutes: _timeEstimate,
+    dueDate: _dueDate,
+  );
 
   /// Drops this Capture's retained draft when [action] was a verdict: the
   /// interpretation now lives on an Outcome (or the fragment was discarded)
@@ -475,7 +516,8 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
       // see that field.
       final trimmedTitle = (_titleCtrl?.text ?? '').trim();
       final trimmedNotes = (_notesCtrl?.text ?? '').trim();
-      final hasPendingWrite = trimmedTitle.isNotEmpty &&
+      final hasPendingWrite =
+          trimmedTitle.isNotEmpty &&
           (trimmedTitle != _baselineTitle || trimmedNotes != _baselineNotes);
       if (hasPendingWrite) {
         unawaited(
@@ -531,8 +573,10 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     // "no change" to the DAO, so clearing has to travel as the clear flag.
     // The baselines move only if the write landed: a deleted Outcome keeps
     // them, so nothing mistakes the unsaved text for saved.
-    final landed =
-        await _tagNotifier.updateTitleAndNotes(trimmedTitle, trimmedNotes);
+    final landed = await _tagNotifier.updateTitleAndNotes(
+      trimmedTitle,
+      trimmedNotes,
+    );
     if (!landed) return;
     _baselineTitle = trimmedTitle;
     _baselineNotes = trimmedNotes;
@@ -647,17 +691,20 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
 
   void _draftRemoveAll(List<Tag> tags) {
     if (!_isCapture) return;
-    setState(() => _draftTagIds = {...?_draftTagIds}
-      ..removeAll(tags.map((t) => t.id)));
+    setState(
+      () => _draftTagIds = {...?_draftTagIds}..removeAll(tags.map((t) => t.id)),
+    );
   }
 
   /// Swap [t] in for whatever tags of the same axis are currently drafted —
   /// the single-project invariant, applied to the draft as well as the DB.
   void _draftReplaceOfType(Tag t, List<Tag> current) {
     if (!_isCapture) return;
-    setState(() => _draftTagIds = {...?_draftTagIds}
-      ..removeAll(current.map((c) => c.id))
-      ..add(t.id));
+    setState(
+      () => _draftTagIds = {...?_draftTagIds}
+        ..removeAll(current.map((c) => c.id))
+        ..add(t.id),
+    );
   }
 
   Future<DateTime?> _pickDate(BuildContext context) {
@@ -718,10 +765,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
         return _buildBody(
           context,
           tags: hints,
-          subject: CaptureSubject(
-            capture: capture,
-            draft: () => _draft(hints),
-          ),
+          subject: CaptureSubject(capture: capture, draft: () => _draft(hints)),
         );
       },
     );
@@ -771,16 +815,16 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   /// [CaptureSubject.draft]. The assembly rules themselves live in
   /// [ClarifyDraft.assemble]; this method only supplies the field state.
   ClarifyDraft _draft(List<Tag> hints) => ClarifyDraft.assemble(
-        title: _titleCtrl?.text ?? '',
-        notes: _notesCtrl?.text ?? '',
-        dueDate: _dueDate,
-        hintTags: hints,
-        // The synchronous draft once seeded, else null so the loaded hints
-        // stand in for it.
-        draftTagIds: _draftTagsSeeded ? _draftTagIds ?? const <String>{} : null,
-        energyLevel: _energyLevel,
-        timeEstimateMinutes: _timeEstimate,
-      );
+    title: _titleCtrl?.text ?? '',
+    notes: _notesCtrl?.text ?? '',
+    dueDate: _dueDate,
+    hintTags: hints,
+    // The synchronous draft once seeded, else null so the loaded hints
+    // stand in for it.
+    draftTagIds: _draftTagsSeeded ? _draftTagIds ?? const <String>{} : null,
+    energyLevel: _energyLevel,
+    timeEstimateMinutes: _timeEstimate,
+  );
 
   Widget _buildBody(
     BuildContext context, {
@@ -821,8 +865,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
           ),
           child: const Row(
             children: [
-              Icon(Icons.help_outline,
-                  size: 18, color: Color(0xFF2563EB)),
+              Icon(Icons.help_outline, size: 18, color: Color(0xFF2563EB)),
               SizedBox(width: 8),
               Expanded(
                 child: Text(
@@ -848,8 +891,10 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
             labelText: 'Title',
             errorText: _titleIsBlank ? 'Title is required to process' : null,
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(4)),
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 10,
+            ),
           ),
           textCapitalization: TextCapitalization.sentences,
           maxLines: 2,
@@ -866,8 +911,10 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
             labelText: 'Notes (optional)',
             hintText: 'Context, desired outcome, dependencies…',
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(4)),
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 10,
+            ),
           ),
           textCapitalization: TextCapitalization.sentences,
           maxLines: 4,
@@ -947,9 +994,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
               },
               icon: const Icon(Icons.calendar_today_outlined, size: 16),
               label: Text(
-                _dueDate != null
-                    ? formatDueDateLabel(_dueDate!)
-                    : 'Set date',
+                _dueDate != null ? formatDueDateLabel(_dueDate!) : 'Set date',
               ),
               style: OutlinedButton.styleFrom(
                 foregroundColor: _dueDate != null
@@ -975,39 +1020,48 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
 
         const ClarifyFieldLabel('PROCESS TO'),
         const SizedBox(height: 12),
-        ProcessToHandlers(
-          subject: subject,
-          titleAsActionOnWaitingFor: true,
-          disabled: disabled,
-          // On a Capture, Done is not a clarify-time destination — an Outcome
-          // captured already-complete is a contradiction, and completing one
-          // belongs on its own surface. Trash stays as the Capture-level
-          // Discard verdict in the slot Done vacates. Re-clarifying an
-          // *Outcome* keeps Done: there the row exists and finishing it is a
-          // real verdict.
-          //
-          // The `nextActionDialog` modifier is now on for **both** arms (issue
-          // #723). On a **Capture** it opens seeded from the title mirror. On an
-          // **Outcome** it offers the planned queue for one-tap promotion and,
-          // for a new phrase, applies the title-as-action fallback — the
-          // coupling that used to live in [_onAfterRoute] for Next moved into
-          // the dialog handler ([ProcessToHandlers._nextWithDialog]), so Next
-          // here reports `nextActionDialog` and its title-mirror branch below no
-          // longer fires. Waiting For mirrors inside its routing write
-          // ([ProcessToHandlers.titleAsActionOnWaitingFor]).
-          except: {
-            if (_isCapture) ProcessAction.done,
-          },
-          lastAction: widget.lastAction,
-          onAfterRoute: _onAfterRoute,
-          onProcessingChanged: widget.onProcessingChanged,
-          // The Outcome's title is edited in an unsaved controller, so the
-          // dialog must read it live rather than from the (stale) subject row —
-          // both for display and for the blank-save fallback mirror (§6). On a
-          // Capture the subject title is already the live draft, so this only
-          // agrees with it.
-          liveTitle: () async => _titleCtrl?.text.trim(),
+        IgnorePointer(
+          ignoring: _makingHabit,
+          child: ProcessToHandlers(
+            subject: subject,
+            titleAsActionOnWaitingFor: true,
+            disabled: disabled,
+            // On a Capture, Done is not a clarify-time destination — an Outcome
+            // captured already-complete is a contradiction, and completing one
+            // belongs on its own surface. Trash stays as the Capture-level
+            // Discard verdict in the slot Done vacates. Re-clarifying an
+            // *Outcome* keeps Done: there the row exists and finishing it is a
+            // real verdict.
+            //
+            // The `nextActionDialog` modifier is now on for **both** arms (issue
+            // #723). On a **Capture** it opens seeded from the title mirror. On an
+            // **Outcome** it offers the planned queue for one-tap promotion and,
+            // for a new phrase, applies the title-as-action fallback — the
+            // coupling that used to live in [_onAfterRoute] for Next moved into
+            // the dialog handler ([ProcessToHandlers._nextWithDialog]), so Next
+            // here reports `nextActionDialog` and its title-mirror branch below no
+            // longer fires. Waiting For mirrors inside its routing write
+            // ([ProcessToHandlers.titleAsActionOnWaitingFor]).
+            except: {if (_isCapture) ProcessAction.done},
+            lastAction: widget.lastAction,
+            onAfterRoute: _onAfterRoute,
+            onProcessingChanged: _onRoutingBusy,
+            // The Outcome's title is edited in an unsaved controller, so the
+            // dialog must read it live rather than from the (stale) subject row —
+            // both for display and for the blank-save fallback mirror (§6). On a
+            // Capture the subject title is already the live draft, so this only
+            // agrees with it.
+            liveTitle: () async => _titleCtrl?.text.trim(),
+          ),
         ),
+        if (widget.onMakeHabit != null) ...[
+          const SizedBox(height: 12),
+          _makeHabitButton(
+            enabled: !_titleIsBlank,
+            title: () => _titleCtrl?.text ?? '',
+            notes: () => _notesCtrl?.text,
+          ),
+        ],
         if (widget.footer != null) ...[
           const SizedBox(height: 20),
           widget.footer!,
@@ -1032,7 +1086,16 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
           tagIds: draft.tagIds,
           personTagHintIds: draft.personTagHintIds,
           onCompleted: _onCaptureCompleted,
+          onBusyChanged: _onCarveBusy,
         ),
+        if (widget.onMakeHabit != null) ...[
+          const SizedBox(height: 12),
+          _makeHabitButton(
+            enabled: capture.title.trim().isNotEmpty,
+            title: () => capture.title,
+            notes: () => capture.notes,
+          ),
+        ],
         // The footer survives into n-m unchanged: leaving mid-split is exactly
         // what that mode is for — the Capture keeps whatever Outcomes it has
         // carved so far and stays in the Inbox.
@@ -1042,6 +1105,35 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
         ],
       ],
     );
+  }
+
+  Widget _makeHabitButton({
+    required bool enabled,
+    required String Function() title,
+    required String? Function() notes,
+  }) {
+    return ClarifyDestinationButton(
+      label: 'Make it a Habit',
+      icon: Icons.repeat,
+      color: const Color(0xFF7C3AED),
+      enabled: enabled && !_anyCaptureWriteBusy,
+      onTap: () => unawaited(_makeHabit(title(), notes())),
+    );
+  }
+
+  Future<void> _makeHabit(String title, String? notes) async {
+    if (_anyCaptureWriteBusy) return;
+    setState(() => _makingHabit = true);
+    _emitBusy();
+    try {
+      await widget.onMakeHabit!(title: title, notes: notes);
+    } catch (_) {
+      _report(_kMakeHabitFailedMessage);
+    } finally {
+      _makingHabit = false;
+      if (mounted) setState(() {});
+      _emitBusy();
+    }
   }
 
   /// Post-routing bookkeeping.
@@ -1094,8 +1186,8 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
 
   void _report(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 }

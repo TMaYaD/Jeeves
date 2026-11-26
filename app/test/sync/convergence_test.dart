@@ -468,6 +468,59 @@ void main() {
     expect(await pinnedOn(b), isNull);
   });
 
+  test('one device accepts a batch while another moves a member: both settle',
+      () async {
+    final a = workspace.a;
+    final b = workspace.b;
+    final firstId = _overlapId('batch-first');
+    final secondId = _overlapId('batch-second');
+    for (final id in [firstId, secondId]) {
+      await a.domain.todoDao.insertOutcome(
+        id: id,
+        title: 'Small $id',
+        userId: _specUserId,
+        now: a.clock.asDateTime,
+      );
+    }
+    final sessionId = await a.domain.focusSessionDao.openSession(
+      userId: _specUserId,
+      taskIds: [firstId, secondId],
+      now: a.clock.asDateTime,
+    );
+    await workspace.syncAll();
+
+    Future<List<String?>> batchIdsOn(SimDevice device) async {
+      final rows = await device.domain
+          .customSelect('SELECT batch_id FROM focus_session_tasks '
+              'ORDER BY position')
+          .get();
+      return [for (final row in rows) row.read<String?>('batch_id')];
+    }
+
+    await a.domain.focusSessionDao.acceptBatch(
+      sessionId: sessionId,
+      batchId: 'batch-1',
+      startByTaskId: {
+        firstId: DateTime.utc(2026, 11, 16, 10),
+        secondId: DateTime.utc(2026, 11, 16, 10, 10),
+      },
+    );
+    await workspace.syncAll();
+    expect(await batchIdsOn(b), ['batch-1', 'batch-1']);
+
+    // The second device moves one member: that member leaves the batch, and
+    // both devices end up in the same state.
+    b.clock.advance(60000);
+    await b.domain.focusSessionDao.setPinnedStart(
+      sessionId: sessionId,
+      taskId: secondId,
+      pinnedStartAt: DateTime.utc(2026, 11, 16, 14),
+    );
+    await workspace.syncAll();
+    expect(await batchIdsOn(a), ['batch-1', null]);
+    expect(await batchIdsOn(b), ['batch-1', null]);
+  });
+
   // --- AC 4: nothing the server says is trusted -----------------------------
 
   test('the golden negative vectors quarantine and never apply', () async {

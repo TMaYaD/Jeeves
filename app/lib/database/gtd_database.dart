@@ -27,13 +27,18 @@ import '../utils/uuid.dart';
 import 'daos/action_dao.dart';
 import 'daos/capture_dao.dart';
 import 'daos/focus_session_dao.dart';
+import 'daos/habit_dao.dart';
+import 'daos/habit_focus_dao.dart';
+import 'daos/place_dao.dart';
 import 'daos/search_dao.dart';
 import 'daos/tag_dao.dart';
 import 'daos/sprint_dao.dart';
 import 'daos/time_log_dao.dart';
+import 'daos/time_window_dao.dart';
 import 'daos/todo_dao.dart';
 import 'daos/user_preferences_dao.dart';
 import '../sync/domain_op_capture.dart';
+import 'store_refusal_error.dart';
 import 'tables.dart';
 
 export 'tables.dart';
@@ -41,8 +46,8 @@ export 'tables.dart';
 part 'gtd_database.g.dart';
 
 @DriftDatabase(
-  tables: [Todos, Tags, TodoTags, TimeLogs, Sprints, FocusSessions, FocusSessionTasks, FocusSessionDispositions, FocusSessionPlanningBypasses, FocusSessionReschedules, OutcomeBypassDecisions, UserPreferences, Captures, CaptureAttachments, CaptureOutcomes, CaptureTags, Actions, LocalMigrationMarkers, PendingChanges, DeviceClockIdentity],
-  daos: [TagDao, TodoDao, TimeLogDao, SprintDao, FocusSessionDao, CaptureDao, ActionDao],
+  tables: [Todos, Tags, TodoTags, TimeLogs, Sprints, FocusSessions, FocusSessionTasks, FocusSessionDispositions, FocusSessionPlanningBypasses, FocusSessionReschedules, OutcomeBypassDecisions, UserPreferences, Captures, CaptureAttachments, CaptureOutcomes, CaptureTags, Actions, Places, TimeWindows, LocalMigrationMarkers, PendingChanges, DeviceClockIdentity, Habits, HabitCommitments, HabitCheckIns, HabitInactivePeriods, HabitTags, HabitTimeLogs, HabitSprints],
+  daos: [TagDao, TodoDao, TimeLogDao, SprintDao, FocusSessionDao, CaptureDao, ActionDao, HabitDao, HabitFocusDao, PlaceDao, TimeWindowDao],
 )
 class GtdDatabase extends _$GtdDatabase {
   GtdDatabase(super.executor, {this.opCapture = const NoopDomainOpCapture()});
@@ -194,7 +199,16 @@ class GtdDatabase extends _$GtdDatabase {
   late final UserPreferencesDao userPreferencesDao = UserPreferencesDao(this);
 
   @override
-  int get schemaVersion => 12;
+  int get schemaVersion => supportedSchemaVersion;
+
+  /// The schema version this build reads and writes.
+  ///
+  /// The number the store's file carries in `PRAGMA user_version`. A file
+  /// carrying a **higher** version was written by a newer build, and this
+  /// build refuses it: opening it would relabel the file with a version it
+  /// does not understand, and the newer build would then find a store it
+  /// believes is old.
+  static const int supportedSchemaVersion = 16;
 
   /// Completes with the [OpeningDetails] of this store's one open.
   ///
@@ -204,13 +218,34 @@ class GtdDatabase extends _$GtdDatabase {
   /// pre-migration state. A caller that has to act on "did this launch upgrade the
   /// schema?" therefore issues a query to force the open and awaits this.
   ///
-  /// Fed from [MigrationStrategy.beforeOpen], which drift runs on **every** open,
-  /// so the future always completes. Feeding it from `onUpgrade` instead would
-  /// leave it unresolved for ever on a launch that migrates nothing, and hang the
-  /// caller.
+  /// Fed from [MigrationStrategy.beforeOpen], which drift runs on **every**
+  /// successful open, so the future completes on a launch that migrates
+  /// nothing. Feeding it from `onUpgrade` instead would leave it unresolved for
+  /// ever on such a launch, and hang the caller.
+  ///
+  /// **A migration that throws leaves it pending**: `beforeOpen` never runs,
+  /// and the error surfaces through the query that forced the open. Force the
+  /// open with a query first, and await this after it.
+  ///
+  /// It completes with a [StoreVersionTooNewError] when the open was refused
+  /// (see [_failOpen]), so a caller awaiting it learns why rather than hanging.
+  /// Any other migration failure is not routed here.
   Future<OpeningDetails> get opened => _opened.future;
 
   final Completer<OpeningDetails> _opened = Completer<OpeningDetails>();
+
+  /// Completes [opened] with [error] when the open failed.
+  ///
+  /// [opened] is fed from `beforeOpen`, which drift runs only after the
+  /// migration succeeded. A refused open never reaches it, so without this the
+  /// future would stay unresolved and a caller awaiting it would hang for ever.
+  void _failOpen(Object error) {
+    if (_opened.isCompleted) return;
+    _opened.completeError(error);
+    // Nobody may be awaiting this future yet, and an error nobody listens for
+    // is reported as unhandled. `ignore()` marks it as handled.
+    _opened.future.ignore();
+  }
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -234,6 +269,21 @@ class GtdDatabase extends _$GtdDatabase {
           await ensureDeviceClockIdentity();
         }),
         onUpgrade: (m, from, to) => _duringMigration(() async {
+          // A store written by a newer build. Drift calls
+          // `onUpgrade` for **any** version difference, a downgrade included,
+          // so this is where an older build meets a newer file. Refuse before
+          // touching anything: the file keeps its version and every row, and
+          // the app says the data belongs to a newer Jeeves instead of
+          // relabelling it with a version this build does not understand.
+          if (from > to) {
+            final refusal = StoreVersionTooNewError(
+              storeName: 'domain read model',
+              storedVersion: from,
+              supportedVersion: to,
+            );
+            _failOpen(refusal);
+            throw refusal;
+          }
           // v2 (issue #604): drop `todos.time_spent_minutes`, a denormalised
           // time-spent cache with no write path — time spent is derived from
           // `SUM(time_logs)` at read time. The column carried nothing on a v1
@@ -381,6 +431,121 @@ class GtdDatabase extends _$GtdDatabase {
               await m.addColumn(actions, actions.timeboxed);
             }
           }
+          // v13 (issue #401): the Habit data model. Purely additive — five new
+          // tables and one index, no existing row or column touched, nothing
+          // backfilled (there were no Habits before this build, so there is
+          // nothing to backfill *from*).
+          //
+          // Each table is created only when it is missing, as v11 does for
+          // `sprints`: a store that already carries one (a rebuilt fixture, a
+          // half-applied earlier attempt) must not fail the ladder on it.
+          if (from < 13) {
+            final tables = await m.database
+                .customSelect(
+                    "SELECT name FROM sqlite_master WHERE type='table'")
+                .get();
+            bool hasTable(String name) =>
+                tables.any((row) => row.read<String>('name') == name);
+            if (!hasTable('habits')) await m.createTable(habits);
+            if (!hasTable('habit_commitments')) {
+              await m.createTable(habitCommitments);
+            }
+            if (!hasTable('habit_check_ins')) {
+              await m.createTable(habitCheckIns);
+            }
+            if (!hasTable('habit_inactive_periods')) {
+              await m.createTable(habitInactivePeriods);
+            }
+            if (!hasTable('habit_tags')) await m.createTable(habitTags);
+            // The Check-in index is declared on the table, but `createTable`
+            // creates the table and not its indices — drift installs those
+            // from `createAll`, which a migration does not run. Without it,
+            // reading a day's Check-ins is a scan per Habit.
+            final indices = await m.database
+                .customSelect(
+                    "SELECT name FROM sqlite_master WHERE type='index'")
+                .get();
+            if (!indices.any((row) =>
+                row.read<String>('name') == 'idx_habit_check_ins_habit_day')) {
+              await m.createIndex(idxHabitCheckInsHabitDay);
+            }
+          }
+          // v14 (issue #407): `focus_session_tasks.batch_id` and
+          // `batch_suggestion_declined_at`, an accepted small-task suggestion
+          // and a "Not today" on a Plan entry. Nullable `ADD COLUMN`s — no table
+          // rebuild, every existing entry reads NULL (not batched, not
+          // declined), nothing is lost. Each guarded on the column's absence
+          // like v7.
+          if (from < 14) {
+            final existing = await m.database
+                .customSelect('PRAGMA table_info(focus_session_tasks)')
+                .get();
+            bool has(String name) =>
+                existing.any((row) => row.read<String>('name') == name);
+            if (!has('batch_id')) {
+              await m.addColumn(focusSessionTasks, focusSessionTasks.batchId);
+            }
+            if (!has('batch_suggestion_declined_at')) {
+              await m.addColumn(
+                  focusSessionTasks, focusSessionTasks.batchSuggestionDeclinedAt);
+            }
+          }
+          // v15 (issue #239): the named places and the named time windows, and
+          // the two references an Action holds to them. Purely additive — two
+          // new tables and two nullable columns, no existing row or column
+          // touched, nothing backfilled (there were no places or windows
+          // before this build, so there is nothing to backfill *from*).
+          //
+          // The tables are created only when missing, as v11 does for `sprints`
+          // and v13 for the Habit tables: a store that already carries one (a
+          // rebuilt fixture, a half-applied earlier attempt) must not fail the
+          // ladder on it.
+          if (from < 15) {
+            final tables = await m.database
+                .customSelect(
+                    "SELECT name FROM sqlite_master WHERE type='table'")
+                .get();
+            bool hasTable(String name) =>
+                tables.any((row) => row.read<String>('name') == name);
+            if (!hasTable('places')) await m.createTable(places);
+            if (!hasTable('time_windows')) await m.createTable(timeWindows);
+            // The two Action columns are nullable `ADD COLUMN`s, guarded on
+            // their absence like v7: every existing Action reads NULL (no
+            // place, no window), and nothing is lost.
+            final existing = await m.database
+                .customSelect('PRAGMA table_info(actions)')
+                .get();
+            bool has(String name) =>
+                existing.any((row) => row.read<String>('name') == name);
+            if (!has('place_id')) {
+              await m.addColumn(actions, actions.placeId);
+            }
+            if (!has('time_window_id')) {
+              await m.addColumn(actions, actions.timeWindowId);
+            }
+          }
+          // v16 (issue #405): time spent on a Habit in Focus Mode. Purely
+          // additive — two new local tables and one index, no existing row or
+          // column touched, nothing backfilled. Each is created only when it is
+          // missing, as v13 does for the Habit tables.
+          if (from < 16) {
+            final tables = await m.database
+                .customSelect(
+                    "SELECT name FROM sqlite_master WHERE type='table'")
+                .get();
+            bool hasTable(String name) =>
+                tables.any((row) => row.read<String>('name') == name);
+            if (!hasTable('habit_time_logs')) await m.createTable(habitTimeLogs);
+            if (!hasTable('habit_sprints')) await m.createTable(habitSprints);
+            final indices = await m.database
+                .customSelect(
+                    "SELECT name FROM sqlite_master WHERE type='index'")
+                .get();
+            if (!indices.any((row) =>
+                row.read<String>('name') == 'idx_habit_time_logs_habit')) {
+              await m.createIndex(idxHabitTimeLogsHabit);
+            }
+          }
         }),
       );
 
@@ -508,5 +673,18 @@ class GtdDatabase extends _$GtdDatabase {
   /// writes the same table without one, so it fires this instead.
   void notifyUserPreferencesViewWrite() => notifyUpdates({
         const TableUpdate('user_preferences'),
+      });
+
+  /// The [notifyTodosViewWrite] analogue for `places` (issue #239).
+  ///
+  /// Fired by the projector and the importer, which write through raw SQL, and
+  /// by the place DAO once it exists.
+  void notifyPlacesViewWrite() => notifyUpdates({
+        const TableUpdate('places'),
+      });
+
+  /// The [notifyTodosViewWrite] analogue for `time_windows` (issue #239).
+  void notifyTimeWindowsViewWrite() => notifyUpdates({
+        const TableUpdate('time_windows'),
       });
 }
