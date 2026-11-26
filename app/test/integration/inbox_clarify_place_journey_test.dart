@@ -285,18 +285,23 @@ void main() {
       expect(next.value!.map((t) => t.id), isNot(contains(id)),
           reason: 'the user is at the office, nowhere near the store');
 
-      // The place page is where it is to be found.
+      // The place page is where it is to be found. The page groups the Places
+      // that are near each other, so the Place is found inside a group.
       final groups = await eventually<AsyncValue<List<PlacePageGroup>>>(
         tester,
         placePageGroupsProvider,
         (v) =>
             v.hasValue &&
             v.value!.any(
-              (g) => g.rows.any((r) => r.todo.id == id),
+              (g) => g.places.any(
+                    (p) => p.rows.any((r) => r.todo.id == id),
+                  ),
             ),
       );
-      final group = groups.value!.firstWhere((g) => g.label == 'Hardware store');
-      final row = group.rows.firstWhere((r) => r.todo.id == id);
+      final place = groups.value!
+          .expand((g) => g.places)
+          .firstWhere((p) => p.label == 'Hardware store');
+      final row = place.rows.firstWhere((r) => r.todo.id == id);
       expect(row.isOnNext, isFalse);
     } finally {
       await closeApp(tester);
