@@ -53,6 +53,18 @@ final currentPlaceNamesProvider = Provider<Map<String, String>>((ref) {
   };
 });
 
+/// The name to show for the Place each Habit carries, keyed by Habit id.
+///
+/// The Place's own name, or "Pin" for a one-time pin that has none. A Habit
+/// whose Place no longer exists is absent from the map.
+final habitPlaceNamesProvider = Provider<Map<String, String>>((ref) {
+  final places = ref.watch(habitPlacesProvider).value ?? const {};
+  return {
+    for (final entry in places.entries)
+      entry.key: placeDisplayName(entry.value),
+  };
+});
+
 /// The away rule, as a pure function of the places and the location.
 ///
 /// An Outcome is away when the area of its Place does not hold the point.

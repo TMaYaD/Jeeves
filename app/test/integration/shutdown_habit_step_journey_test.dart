@@ -18,9 +18,12 @@ import 'package:jeeves/database/daos/habit_dao.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/habit_commitment.dart';
 import 'package:jeeves/providers/clock_provider.dart';
+import 'package:jeeves/providers/current_location_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/providers/location_source_provider.dart';
 import 'package:jeeves/screens/shutdown/shutdown_ritual_screen.dart';
 
+import '../helpers/fake_location_source.dart';
 import '../helpers/settle.dart';
 import '../test_helpers.dart';
 
@@ -28,11 +31,15 @@ const _userId = 'local';
 const _nextStep = Key('shutdown_next_step');
 const _skip = Key('shutdown_skip');
 
+/// The user is somewhere else: far outside every Place in this test.
+const _elsewhere = (latitudeDegrees: 52.0, longitudeDegrees: 4.0);
+
 void main() {
   setUpAll(configureSqliteForTests);
 
   late GtdDatabase db;
   late ProviderContainer container;
+  late FakeLocationSource location;
   late String stretchId;
   late String waterId;
 
@@ -71,6 +78,7 @@ void main() {
       setUp(() async {
         SharedPreferences.setMockInitialValues({});
         db = GtdDatabase(NativeDatabase.memory());
+        location = FakeLocationSource()..freshPoint = _elsewhere;
         await insertOutcome(sessionStart);
         await db.focusSessionDao.openSession(
             userId: _userId, taskIds: ['t1'], now: sessionStart);
@@ -86,7 +94,10 @@ void main() {
               ));
         }
       });
-      tearDown(() async => db.close());
+      tearDown(() async {
+        await location.dispose();
+        await db.close();
+      });
       body(clock);
     });
   }
@@ -95,6 +106,11 @@ void main() {
     container = ProviderContainer(overrides: [
       databaseProvider.overrideWithValue(db),
       clockProvider.overrideWithValue(() => clock),
+      locationSourceProvider.overrideWithValue(location),
+      // The phone knows the user is elsewhere. A Place never hides a Habit.
+      currentLocationProvider.overrideWith(
+        () => FixedLocationNotifier(const LocationKnown(_elsewhere)),
+      ),
     ]);
     final router = GoRouter(
       initialLocation: '/shutdown',
@@ -166,6 +182,34 @@ void main() {
       await tester.tap(find.byKey(Key('shutdown_habit_toggle_$stretchId')));
       await settleWithRealAsync(tester, rounds: 2);
       expect(await checkIns(tester, stretchId), isEmpty);
+
+      await unmount(tester);
+    });
+
+    testWidgets('the step says where each Habit is, and hides none of them',
+        (tester) async {
+      final placeId = await db.placeDao.createNamedPlace(
+        name: 'Home',
+        latitudeDegrees: 52.3702,
+        longitudeDegrees: 4.8952,
+        radiusMeters: 150,
+        userId: _userId,
+      );
+      await db.habitDao.setNamedPlace(stretchId, placeId!, now: evening);
+      await db.habitDao.setNamedPlace(waterId, placeId, now: evening);
+
+      await mount(tester, clock);
+      await throughResolveUnfinished(tester);
+
+      // The user is elsewhere, and every Habit of the day is still listed.
+      expect(find.byKey(Key('shutdown_habit_row_$stretchId')), findsOneWidget);
+      expect(find.byKey(Key('shutdown_habit_row_$waterId')), findsOneWidget);
+      // The binary Habit's Place is on its own line under the title, and the
+      // measurable Habit's on the line under its title. The Place list is a
+      // live Drift stream, so it needs a turn of its own.
+      await pumpUntilFound(tester, find.text('Home · 0 of 8 glasses'));
+      expect(find.text('Home'), findsOneWidget);
+      expect(find.text('Home · 0 of 8 glasses'), findsOneWidget);
 
       await unmount(tester);
     });

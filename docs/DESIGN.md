@@ -575,7 +575,7 @@ Paths are under `app/lib/`; DPR means Daily Planning and ES means Evening Shutdo
 | Time page — `screens/time_page/time_page_screen.dart` | Title, marker (On Next, or when the time opens) | Grouped `OutcomeRow`, one group per named window then one-time | Open detail; long-press multi-selects |
 | Places — `screens/place_page/place_page_screen.dart` | Place name, Outcome, and a marker: "On Next" or "Elsewhere"; a "Near each other" line over a group of two or more | Grouped by the Places that are near each other; inside a group, the Places in name order, then the pins, each under its own name | Open detail; long-press multi-selects |
 | Location-unknown line — [`location_unknown_line.dart`](../app/lib/widgets/location_unknown_line.dart) | One calm line from a pool, drawn once, and "Allow location" only where the permission is refused | Above the Next list, only when an Outcome on Next has a Place | Ask again, or open the app's settings where the OS will not ask |
-| Habit list and detail — `screens/habits/habits_screen.dart` | Title, anchor, state; notes, Check-in, Repeat, Area, Labels, Place, energy, estimate | Detail beside the list from 840 px; theme colours | Edit in place; sheets with Done/Cancel; pause, archive, restore |
+| Habit list and detail — `screens/habits/habits_screen.dart` | Title, Place, anchor, state; notes, Check-in, Repeat, Area, Labels, Place, energy, estimate | Detail beside the list from 840 px; theme colours | Edit in place; sheets with Done/Cancel; pause, archive, restore |
 | Check-in calendar — `screens/habits/habit_calendar_screen.dart` | Month of day marks (done, partial, missed, not due, paused, before the Habit); "5 of 8", "2×", repeat-changed flag; legend | Round marks by shape, never colour; missed is never red; one painter for month, year and strip; phone layout on every width | Title opens the year; a day opens the day sheet: add, change, remove at once with no confirmation or undo |
 | Linked Outcomes — `widgets/capture_outcomes_section.dart` | Title, next Action, contexts, Capture provenance count | Framed `OutcomeRow` | Unlink |
 
@@ -598,6 +598,7 @@ Paths are under `app/lib/`; DPR means Daily Planning and ES means Evening Shutdo
 | Linked Outcomes | Context chips and merge provenance; no navigation | The surface edits Capture links. |
 | DPR re-clarify | Hint banner | Explains why the Outcome is queued. |
 | ES disposition | Four resolution buttons (Done floats the session verdict sheet) with previous choice | Records the unfinished Outcome's disposition. |
+| Habit rows | The Place's name leads the row's second line — Daily Planning, the Habits list, Evening Shutdown | A Place says where a Habit is; it never hides one. |
 
 `TaskStatusRow` is a status control, and `CaptureListItem` represents Captures;
 neither is an Outcome representation. Blank-title handling and the energy
