@@ -163,6 +163,8 @@ NamedPlaceWithUse _hardwareStore() => (
         radiusMeters: 150,
       )!,
       useCount: 0,
+      hoursLabel: null,
+      hours: (timeWindowId: null, ownHoursText: null, timeZone: null),
     );
 
 /// A Capture card in whichever configuration a test is exercising.

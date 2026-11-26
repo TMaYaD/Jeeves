@@ -22,7 +22,6 @@ import 'package:jeeves/models/time_window_hours.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/location_permission_flow.dart';
 import 'package:jeeves/providers/phone_time_zone_provider.dart';
-import 'package:jeeves/providers/place_gate_provider.dart';
 import 'package:jeeves/providers/places_provider.dart';
 import 'package:jeeves/providers/time_window_provider.dart';
 import 'package:jeeves/widgets/place_editor_sheet.dart';
@@ -209,6 +208,8 @@ void main() {
           radiusMeters: 150,
         )!,
         useCount: 0,
+        hoursLabel: null,
+        hours: (timeWindowId: null, ownHoursText: null, timeZone: null),
       );
 
   /// Opens the picker from a button, over the given named Places.

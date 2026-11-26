@@ -13,7 +13,6 @@ import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
-import 'package:jeeves/models/place_area.dart';
 import 'package:jeeves/models/time_window_hours.dart';
 import 'package:jeeves/providers/clock_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
@@ -55,7 +54,7 @@ void main() {
 
   tearDown(() async => db.close());
 
-  Future<String> _seedOutcome(String id) async {
+  Future<String> seedOutcome(String id) async {
     final now = DateTime.now();
     await db.into(db.todos).insert(TodosCompanion(
           id: Value(id),
@@ -69,7 +68,7 @@ void main() {
     return (await db.actionDao.getCurrentAction(id))!.id;
   }
 
-  Future<String> _createPlace(String name) async {
+  Future<String> createPlace(String name) async {
     final id = await db.placeDao.createNamedPlace(
       name: name,
       latitudeDegrees: 52.37,
@@ -83,8 +82,8 @@ void main() {
   }
 
   testWidgets('the chip reads place hours and the place name', (tester) async {
-    final placeId = await _createPlace('Hardware store');
-    final actionId = await _seedOutcome('o1');
+    final placeId = await createPlace('Hardware store');
+    final actionId = await seedOutcome('o1');
     await db.actionDao.setNamedPlace(actionId, placeId);
     await db.placeDao.setPlaceHours(
       placeId: placeId,
@@ -108,12 +107,9 @@ void main() {
         child: MaterialApp.router(routerConfig: router),
       ),
     );
-    try {
-      await _settle(tester);
+    await _settle(tester);
 
-      expect(find.text('Mon–Fri 11:00–20:00 · from Hardware store'), findsOneWidget);
-    } finally {
-      addTearDown(tester.binding.window.physicalSizeTestValue = null);
-    }
+    expect(find.text('Mon–Fri 11:00–20:00 · from Hardware store'),
+        findsOneWidget);
   });
 }

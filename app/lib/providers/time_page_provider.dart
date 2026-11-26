@@ -76,7 +76,7 @@ List<TimePageGroup> _grouped(
   DateTime now,
 ) {
   final byWindow = <String, List<TimePageRow>>{};
-  final byPlace = <String, (String placeName, ActionPlaceHours hours, List<TimePageRow> rows)>{};
+  final byPlace = <String, (String placeName, PlaceHours hours, List<TimePageRow> rows)>{};
   final oneTime = <TimePageRow>[];
   for (final todo in todos) {
     final window = windows[todo.id];
@@ -126,7 +126,7 @@ List<TimePageGroup> _grouped(
   for (final entry in usedPlaces) {
     final (placeName, placeHoursData, rows) = entry.value;
     groups.add((
-      id: entry.key,
+      id: 'place:${entry.key}',
       title: placeName,
       hours: placeHoursData.hours.describe(),
       rows: rows,
