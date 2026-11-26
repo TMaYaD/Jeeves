@@ -29,7 +29,7 @@ part 'time_window_dao.g.dart';
 /// that use it (issue #55).
 typedef TimeWindowWithCount = ({TimeWindow window, int useCount});
 
-@DriftAccessor(tables: [TimeWindows, Actions, Todos])
+@DriftAccessor(tables: [TimeWindows, Actions, Todos, Places])
 class TimeWindowDao extends DatabaseAccessor<GtdDatabase>
     with _$TimeWindowDaoMixin {
   TimeWindowDao(super.db);
@@ -182,15 +182,31 @@ class TimeWindowDao extends DatabaseAccessor<GtdDatabase>
     });
   }
 
+  /// How many named Places take their hours from the window [windowId].
+  ///
+  /// This is the number a delete would take hours away from, so the delete
+  /// dialog can say it.
+  Future<int> placeUseCount(String windowId) async {
+    final count = countAll();
+    final row = await (selectOnly(places)
+          ..addColumns([count])
+          ..where(places.timeWindowId.equals(windowId)))
+        .getSingle();
+    return row.read(count) ?? 0;
+  }
+
   /// Deletes the time window with [windowId] and detaches it from every
-  /// Action that used it.
+  /// Action and every named Place that used it.
   ///
   /// The detach is by hand: every Action that points at this window gets
-  /// `time_window_id = null` and an op saying so, and only then does the row
-  /// go, with a tombstone. A window that does not exist writes nothing.
+  /// `time_window_id = null` and an op saying so; every Place that takes its
+  /// hours from it loses them (window, hours and zone, in one op, as
+  /// `PlaceDao.setPlaceHours` writes them). Only then does the row go, with a
+  /// tombstone. A window that does not exist writes nothing.
   Future<void> deleteTimeWindow(String windowId, {DateTime? now}) async {
     final ts = (now ?? DateTime.now()).toUtc();
     var detached = 0;
+    var detachedPlaces = 0;
     var deleted = false;
     await attachedDatabase.capturing(() async {
       final existing =
@@ -214,6 +230,30 @@ class TimeWindowDao extends DatabaseAccessor<GtdDatabase>
         );
       }
       detached = attached.length;
+      final usingPlaces = await (select(places)
+            ..where((p) => p.timeWindowId.equals(windowId)))
+          .get();
+      for (final place in usingPlaces) {
+        await (update(places)..where((p) => p.id.equals(place.id))).write(
+          PlacesCompanion(
+            timeWindowId: const Value(null),
+            hours: const Value(null),
+            timeZone: const Value(null),
+            updatedAt: Value(ts),
+          ),
+        );
+        attachedDatabase.opCapture.write(
+          collection: placesCollection,
+          entityId: place.id,
+          fields: {
+            'time_window_id': null,
+            'hours': null,
+            'time_zone': null,
+            'updated_at': encodeInstant(ts),
+          },
+        );
+      }
+      detachedPlaces = usingPlaces.length;
       await (delete(timeWindows)..where((w) => w.id.equals(windowId))).go();
       attachedDatabase.opCapture.tombstone(
         collection: timeWindowsCollection,
@@ -222,6 +262,7 @@ class TimeWindowDao extends DatabaseAccessor<GtdDatabase>
       deleted = true;
     });
     if (detached > 0) attachedDatabase.notifyActionsViewWrite();
+    if (detachedPlaces > 0) attachedDatabase.notifyPlacesViewWrite();
     if (deleted) attachedDatabase.notifyTimeWindowsViewWrite();
   }
 

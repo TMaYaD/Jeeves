@@ -19,12 +19,17 @@ Future<String?> showTimeWindowEditorSheet(
   BuildContext context, {
   TimeWindow? window,
   int useCount = 0,
+  int placeUseCount = 0,
 }) {
   return showModalBottomSheet<String>(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.white,
-    builder: (ctx) => _TimeWindowEditorSheet(window: window, useCount: useCount),
+    builder: (ctx) => _TimeWindowEditorSheet(
+      window: window,
+      useCount: useCount,
+      placeUseCount: placeUseCount,
+    ),
   );
 }
 
@@ -57,6 +62,7 @@ class _TimeWindowEditorSheet extends ConsumerStatefulWidget {
   const _TimeWindowEditorSheet({
     required this.window,
     required this.useCount,
+    this.placeUseCount = 0,
     this.hoursOnly = false,
     this.initialHours,
   });
@@ -67,6 +73,10 @@ class _TimeWindowEditorSheet extends ConsumerStatefulWidget {
   /// How many current Actions of active Outcomes use the window — the number
   /// a delete would take away.
   final int useCount;
+
+  /// How many named Places take their hours from the window — the Places a
+  /// delete would leave without hours.
+  final int placeUseCount;
 
   /// Whether the sheet edits hours alone.
   ///
@@ -283,6 +293,19 @@ class _TimeWindowEditorSheetState extends ConsumerState<_TimeWindowEditorSheet> 
     Navigator.pop(context, id);
   }
 
+  String _deleteConsequence() {
+    final actions = widget.useCount;
+    final places = widget.placeUseCount;
+    if (actions == 0 && places == 0) return 'No action or place uses it.';
+    final parts = <String>[
+      if (actions > 0)
+        '$actions ${actions == 1 ? 'action loses' : 'actions lose'} this window.',
+      if (places > 0)
+        '$places ${places == 1 ? 'place loses its' : 'places lose their'} hours.',
+    ];
+    return parts.join(' ');
+  }
+
   Future<void> _confirmDelete() async {
     final existing = widget.window;
     if (existing == null) return;
@@ -290,13 +313,7 @@ class _TimeWindowEditorSheetState extends ConsumerState<_TimeWindowEditorSheet> 
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Delete time window?'),
-        content: Text(
-          widget.useCount == 0
-              ? 'No action uses it.'
-              : '${widget.useCount} '
-                  '${widget.useCount == 1 ? 'action loses' : 'actions lose'} '
-                  'this window.',
-        ),
+        content: Text(_deleteConsequence()),
         actions: [
           TextButton(
             key: const Key('time_window_delete_cancel'),

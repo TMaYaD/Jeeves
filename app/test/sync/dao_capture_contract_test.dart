@@ -629,6 +629,39 @@ void main() {
       expect(op.fields['time_zone'], isNull);
     });
 
+    test('deleting a window detaches each place that uses it, then tombstones',
+        () async {
+      // Issue #1074: a peer must see every place lose its hours before it
+      // sees the window go.
+      final windowId = await seedWindow();
+      final first = await seedPlace(name: 'Hardware store');
+      final second = await seedPlace(name: 'Garden centre');
+      for (final placeId in [first, second]) {
+        await db.placeDao.setPlaceHours(
+          placeId: placeId,
+          timeWindowId: windowId,
+          timeZone: 'Europe/Amsterdam',
+          now: _ts,
+        );
+      }
+      capture.clear();
+
+      await db.timeWindowDao.deleteTimeWindow(windowId, now: _ts);
+
+      final placeOps = capture.forCollection(placesCollection);
+      expect(placeOps.map((op) => op.entityId), unorderedEquals([first, second]));
+      for (final op in placeOps) {
+        expect(op.tombstone, isFalse);
+        expect(op.fields['time_window_id'], isNull);
+        expect(op.fields['hours'], isNull);
+        expect(op.fields['time_zone'], isNull);
+      }
+      final order = capture.recorded.map((op) => op.collection).toList();
+      expect(order.lastIndexOf(placesCollection),
+          lessThan(order.indexOf(timeWindowsCollection)));
+      expect(only(timeWindowsCollection).tombstone, isTrue);
+    });
+
     test('a refused write authors no op', () async {
       final placeId = await seedPlace();
       final windowId = await seedWindow();
