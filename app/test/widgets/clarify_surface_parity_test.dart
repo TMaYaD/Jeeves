@@ -505,6 +505,47 @@ void main() {
     }
   });
 
+  // The Place chip is one of the shared card's fields, so it belongs to the
+  // shared body and not to one host: both Capture hosts — the Inbox clarify
+  // screen and the ceremony's Clarify Inbox step — offer it.
+  group('the Place chip shows under every Capture host configuration', () {
+    for (final tagSection in ClarifyTagSection.values) {
+      testWidgets('$tagSection', (tester) async {
+        // A viewport tall enough for the whole card: the chip sits below the
+        // fold on a phone-sized screen, and a ListView builds its children
+        // lazily — so a test that scrolls to reach the chip also rebuilds
+        // the card's other children, and the drift watches behind them leave
+        // a pending timer behind (docs/TESTING.md).
+        tester.view.physicalSize = const Size(500, 1400);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+
+        final capture = await _insertCapture(db, id: 'x', title: 'Buy milk');
+
+        await tester.pumpWidget(_card(
+          db,
+          capture,
+          tagSection: tagSection,
+          // Only `editablePickers` reads the hint stream; supplying it under
+          // both keeps this loop's two arms otherwise identical.
+          tagHintsStream: tagSection == ClarifyTagSection.editablePickers
+              ? Stream.value(const <Tag>[])
+              : null,
+        ));
+        await _pumpFrames(tester, frames: 5);
+
+        expect(find.byKey(const Key('clarify_place_chip')), findsOneWidget);
+
+        // Take the card off screen: a drift watch left open when the tree
+        // goes leaves a timer pending, and the next test would pay for it
+        // (docs/TESTING.md).
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pump(const Duration(milliseconds: 10));
+        await tester.pump(const Duration(milliseconds: 10));
+      });
+    }
+  });
+
   group('the body renders no chrome and never pops', () {
     testWidgets('no Scaffold, AppBar or PopScope of its own', (tester) async {
       // Scoped to descendants of the card, and pumped inside a host Scaffold,

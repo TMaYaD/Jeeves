@@ -17,6 +17,7 @@ import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/focus_session_provider.dart';
 import 'package:jeeves/providers/focus_settings_provider.dart';
 import 'package:jeeves/providers/inbox_provider.dart';
+import 'package:jeeves/providers/place_gate_provider.dart';
 import 'package:jeeves/providers/sprint_timer_provider.dart'
     show sprintTimerProvider;
 import 'package:jeeves/providers/tags_provider.dart';
@@ -145,6 +146,10 @@ Future<void> _seedRunningSprint(GtdDatabase db, String taskId) async {
       // Actions, so the detail screen watches one more live row stream. It is
       // stubbed like the others above, for the same reason.
       currentTimeWindowsProvider.overrideWith((_) => Stream.value(const {})),
+      // The Place chip reads the Places of the Outcomes' current Actions, so
+      // the detail screen watches one more live row stream. It is stubbed
+      // like the others above, for the same reason.
+      currentPlacesProvider.overrideWith((_) => Stream.value(const {})),
       plannedActionsProvider(todoId)
           .overrideWith((_) => plannedActionsStream ?? Stream.value([])),
       terminatedActionsProvider(todoId).overrideWith(
