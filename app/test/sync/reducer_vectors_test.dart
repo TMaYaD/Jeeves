@@ -21,6 +21,13 @@
 /// The runner hands it to [guardOpClassShape] before the payload reaches the
 /// reducer, which is where that guard sits on the receive path — so the class-4
 /// shape rules are pinned by the reduction suite as well as by the envelope one.
+///
+/// One per-**case** key: `log_workspace`, naming which of the spec user's two
+/// Workspaces carries the case's ops — `"default"` or `"preferences"`. Absent,
+/// each op travels in the Workspace its collection belongs to, which describes
+/// every case that predates the key. It is how the refusal is pinned: a change
+/// whose collection belongs to the *other* Workspace is refused by the reducer
+/// for the Workspace carrying it, in both directions.
 library;
 
 import 'dart:convert';
@@ -104,15 +111,21 @@ void main() {
     addTearDown(database.close);
     final registry = CollectionRegistry(database);
     // A log reduces only its own collections, so an op is reduced by the
-    // reducer for the Workspace that owns its collection: the preferences
-    // Workspace for `user_preferences`, the default one for everything else.
-    // Two reducers over the one store — the store is shared and the Workspace
-    // is not.
+    // reducer for the Workspace that carries it. The case's `log_workspace`
+    // names that Workspace; absent, each op travels in the Workspace its
+    // collection belongs to — the preferences Workspace for `user_preferences`,
+    // the default one for everything else. Two reducers over the one store:
+    // the store is shared and the Workspace is not.
+    final logWorkspace = testCase['log_workspace'] as String?;
     final reducers = <String, Reducer>{};
     Reducer reducerFor(String collection) {
-      final workspaceId = collection == userPreferencesCollection
-          ? specPreferencesWorkspaceId
-          : specDefaultWorkspaceId;
+      final workspaceId = switch (logWorkspace) {
+        'preferences' => specPreferencesWorkspaceId,
+        'default' => specDefaultWorkspaceId,
+        _ => collection == userPreferencesCollection
+            ? specPreferencesWorkspaceId
+            : specDefaultWorkspaceId,
+      };
       return reducers.putIfAbsent(
         workspaceId,
         () => Reducer(

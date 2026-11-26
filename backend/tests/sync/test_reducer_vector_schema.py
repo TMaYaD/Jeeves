@@ -9,7 +9,9 @@ or drops one it depends on.
 The #550 additions are ``permute`` (apply the ops in every order and expect the
 same reduced state), ``expected_clocks`` (the stored per-field HLC, which a
 values-only case cannot observe) and ``strategy_overrides`` (a preference key's
-merge strategy, for keys with no production registration).
+merge strategy, for keys with no production registration).  ``log_workspace``
+names which of the spec user's two Workspaces carries a case's ops, so the
+runner can reduce them under the right Workspace's rule.
 """
 
 from __future__ import annotations
@@ -19,7 +21,11 @@ from typing import Any
 from tests.sync.vectors import dart_merge_strategy_names, reducer_vectors
 
 CASE_REQUIRED_KEYS = {"name", "note", "ops", "expected_entities", "expected_quarantine_reasons"}
-CASE_OPTIONAL_KEYS = {"permute", "expected_clocks", "strategy_overrides"}
+CASE_OPTIONAL_KEYS = {"permute", "expected_clocks", "strategy_overrides", "log_workspace"}
+
+#: The Workspaces a case's ops may travel in, as the ``log_workspace`` key
+#: names them.
+LOG_WORKSPACES = {"default", "preferences"}
 
 
 def _cases() -> list[dict[str, Any]]:
@@ -93,6 +99,23 @@ def test_strategy_overrides_name_known_strategies() -> None:
             assert strategy in known, f"{case['name']} overrides {key} to {strategy}"
 
 
+def test_log_workspace_names_a_workspace_the_runner_has() -> None:
+    """A named Workspace has to be one the Dart runner can resolve.
+
+    The runner maps the name onto one of the spec user's two derived
+    Workspaces, so a name it does not know would leave the case reducing under
+    no Workspace at all — and every op in it would be refused for a reason the
+    case never claims.
+    """
+    for case in _cases():
+        log_workspace = case.get("log_workspace")
+        if log_workspace is None:
+            continue
+        assert log_workspace in LOG_WORKSPACES, (
+            f"{case['name']} travels in an unknown Workspace {log_workspace!r}"
+        )
+
+
 def test_the_lattice_cases_are_present() -> None:
     """The merge-strategy coverage #550 froze, by name.
 
@@ -118,3 +141,18 @@ def test_the_lattice_cases_are_present() -> None:
         "user_preferences_value_without_key_is_refused",
     }
     assert required <= names, f"missing lattice vectors: {sorted(required - names)}"
+
+
+def test_the_workspace_boundary_cases_are_present() -> None:
+    """The Workspace-boundary coverage, by name.
+
+    A log reduces only its own collections, and the two directions of that
+    rule are what the vectors pin. Losing them to a refactor of the generator
+    would silently drop the property, so they are asserted by name.
+    """
+    names = {case["name"] for case in _cases()}
+    required = {
+        "user_preferences_change_in_the_default_workspace_log_is_refused",
+        "default_workspace_collection_in_the_preferences_log_is_refused",
+    }
+    assert required <= names, f"missing Workspace-boundary vectors: {sorted(required - names)}"
