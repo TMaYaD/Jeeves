@@ -225,6 +225,16 @@ class DeviceLink implements SyncTransport, UserTransport {
   /// the first is registered and the second is not.
   String? failNextPullForWorkspaceId;
 
+  /// Fails the next [fetchEpochKeys] for one Workspace, once.
+  ///
+  /// Key adoption is the last thing the ceremony does in a Workspace, after its
+  /// registration is applied, so this stops an enrolment exactly there.
+  String? failNextEpochKeysForWorkspaceId;
+
+  /// How many times this device asked for a Workspace's epoch keys — what a
+  /// test reads to say "this device did not adopt again".
+  int epochKeysFetchCount = 0;
+
   /// Fails the next [postOps] for one Workspace, once, **before** the batch
   /// reaches the server.
   ///
@@ -407,6 +417,11 @@ class DeviceLink implements SyncTransport, UserTransport {
   @override
   Future<List<EpochKeyRecord>> fetchEpochKeys(String workspaceId) async {
     _requireOnline();
+    epochKeysFetchCount++;
+    if (workspaceId == failNextEpochKeysForWorkspaceId) {
+      failNextEpochKeysForWorkspaceId = null;
+      throw const SyncTransportException.unreachable('epoch keys fetch failed before it left the device');
+    }
     return _member.fetchEpochKeys(workspaceId);
   }
 
