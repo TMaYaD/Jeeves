@@ -4,6 +4,7 @@ import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/focus_settings.dart';
 import 'package:jeeves/providers/auth_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/focus_settings_provider.dart';
