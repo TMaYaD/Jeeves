@@ -246,12 +246,19 @@ class UserPreferencesDao {
             candidates.map(preferenceRowOf),
           );
           if (winnerRow == null) continue;
-          // A clear silences every live copy written before it. Once the
-          // clear is overwritten in the account's row (a later live write
-          // wins it), a later carry could not see it any more and would
-          // revive the silenced floor. So the silenced copies on the other
-          // user ids are marked cleared at the clear's own timestamp, which
+          // A clear silences every live copy written before it. Once a later
+          // live write wins over the clear in the current user's row, a later
+          // carry could not see the clear any more and would revive the
+          // silenced floor. So the silenced copy under the signed-out
+          // placeholder is marked cleared at the clear's own timestamp, which
           // keeps the clear in force on every later carry. No row is deleted.
+          //
+          // Only the placeholder's copy is written. It is never authored, so
+          // nothing about it can be lost from the sync log. A copy under an
+          // account id is never touched: a raw write there would bypass
+          // capture, leave that account's other devices holding the floor,
+          // and make the account's own sign-in see matching rows and skip
+          // the upload of the clear.
           QueryRow? newestClear;
           for (final row in candidates) {
             if (row.read<String?>('value') != null) continue;
@@ -262,6 +269,7 @@ class UserPreferencesDao {
           if (newestClear != null) {
             final clearedAt = newestClear.read<String?>('updated_at');
             for (final row in entry.value) {
+              if (row.read<String>('user_id') != _signedOutUserId) continue;
               if (row.read<String?>('value') == null) continue;
               if (_isNewerThan(row, newestClear)) continue;
               await _db.customUpdate(
@@ -269,7 +277,7 @@ class UserPreferencesDao {
                 'WHERE user_id = ? AND "key" = ?',
                 variables: [
                   Variable(clearedAt),
-                  Variable(row.read<String>('user_id')),
+                  Variable(_signedOutUserId),
                   Variable(key),
                 ],
                 updates: {_db.userPreferences},
@@ -319,6 +327,9 @@ class UserPreferencesDao {
       }
     });
   }
+
+  /// The placeholder user id the device uses while nobody is signed in.
+  static const _signedOutUserId = 'local';
 
   /// Whether [candidate] carries a strictly newer timestamp than [other].
   ///
