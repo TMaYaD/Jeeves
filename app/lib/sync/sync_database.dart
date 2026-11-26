@@ -576,6 +576,50 @@ class UnauthoredChanges extends Table {
   TextColumn get changeJson => text()();
 }
 
+/// A range of one author's chain the User accepted as missing (#975).
+///
+/// The record of a decision: *for this device, positions *m*…*n* of this
+/// author's chain never arrived, the User accepted that, and the change after
+/// the hole named this hash as its predecessor*. Chain verification then
+/// resumes on the far side of the hole instead of stopping at it.
+///
+/// Plain inserts, never edited and never deleted — the same rule
+/// `pruned_attestations` follows, and for the same reason. A hole is
+/// something a User agreed to, and what they agreed to does not change.
+///
+/// [lastMissingEnvelopeHash] is the hash of the envelope that used to sit at
+/// [lastMissingAuthorSeq]. It is known only because the change *after* the hole
+/// names it in its own signed header: the positions before it in the range are
+/// gone, and their hashes with them. That is the whole of what is given up
+/// across the hole, and it is why the range is recorded rather than just its
+/// end.
+@DataClassName('AcceptedChainHoleRow')
+class AcceptedChainHoles extends Table {
+  TextColumn get workspaceId => text()();
+  TextColumn get authorMemberId => text()();
+
+  /// The first position of the author's chain that never arrived.
+  IntColumn get firstMissingAuthorSeq => integer()();
+
+  /// The last position of the author's chain that never arrived, inclusive.
+  IntColumn get lastMissingAuthorSeq => integer()();
+
+  /// SHA-256 over the envelope that used to sit at [lastMissingAuthorSeq] — the
+  /// predecessor hash the change after the hole names.
+  BlobColumn get lastMissingEnvelopeHash => blob()();
+
+  /// The [QuarantinedOps] row whose signed header supplied that hash: the held
+  /// change just past the hole, the one the User decided about.
+  IntColumn get definingQuarantineOpRowId => integer()();
+
+  /// When the User decided.
+  DateTimeColumn get decidedAt => dateTime()();
+
+  @override
+  Set<Column<Object>> get primaryKey =>
+      {workspaceId, authorMemberId, firstMissingAuthorSeq};
+}
+
 @DriftDatabase(
   tables: [
     OpLog,
@@ -598,6 +642,7 @@ class UnauthoredChanges extends Table {
     MergeStateSeeding,
     UnauthoredChanges,
     VaultPageBases,
+    AcceptedChainHoles,
   ],
 )
 class SyncDatabase extends _$SyncDatabase {
@@ -618,7 +663,8 @@ class SyncDatabase extends _$SyncDatabase {
   /// needs an op; v13 adds the vault plugin's private base copies of pages; v14
   /// adds the columns that record the user's decision on an integrity alarm or
   /// a refused op (#575); v15 adds the column that records whether a take
-  /// upstream reached the domain store (#575).
+  /// upstream reached the domain store (#575); v16 adds the accepted chain
+  /// holes — the ranges of a chain the user accepted as missing (#975).
   @override
   int get schemaVersion => supportedSchemaVersion;
 
@@ -628,7 +674,7 @@ class SyncDatabase extends _$SyncDatabase {
   /// carrying a **higher** version was written by a newer build, and this
   /// build refuses it: the op log is the evidence every merge verdict is
   /// derived from, and a build that cannot read it must not relabel it.
-  static const int supportedSchemaVersion = 15;
+  static const int supportedSchemaVersion = 16;
 
   /// Additive only. A device that already holds a log keeps every byte of it:
   /// each step is `CREATE TABLE`s, an `ADD COLUMN` or a `CREATE INDEX`, and no
@@ -814,6 +860,13 @@ CREATE TABLE integrity_alarms (
               quarantinedOps,
               quarantinedOps.resolutionProjectedAt,
             );
+          }
+          if (from < 16) {
+            // One new table, nothing altered or backfilled. A device that
+            // predates it has accepted no hole, and an absent hole is exactly
+            // right for such a device: its chain floor is still made of prune
+            // attestations alone.
+            await migrator.createTable(acceptedChainHoles);
           }
         },
       );
