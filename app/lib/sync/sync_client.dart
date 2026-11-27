@@ -1552,6 +1552,13 @@ class SyncClient {
   /// standing as the last visible trace of a quarantined branch. The pre-wipe set
   /// is unioned into the return value, so such an entity reaches
   /// [DomainProjector.project] with no live field and is deleted there.
+  ///
+  /// The pre-wipe set is the *reduced* state's memory of the entity, and the
+  /// reduced state is wiped before the replay — so a rebuild that threw leaves
+  /// the next rebuild with nothing to read it from. The op log is the evidence
+  /// that outlives the wipe: an op that was applied and that the corrected view
+  /// now refuses names its entity here, so the entity reaches the projector
+  /// either way.
   Future<Set<AffectedEntity>> rebuildFromOpLog() async {
     final rows = await (_db.select(_db.opLog)
           ..where((row) => row.workspaceId.equals(workspaceId))
@@ -1646,6 +1653,20 @@ class SyncClient {
         );
         if (authorization != null) {
           await _stampRefused(row.seq, authorization.reason);
+          // An op that was applied and is now refused loses its place in the
+          // reduced state, and the entity it belonged to has to be re-surfaced
+          // so the projector hears of the removal. The pre-wipe reduced state
+          // names that entity — but only while it still holds it, and a rebuild
+          // that threw has already wiped it. The op log is the evidence that
+          // outlives the wipe, so the entity is named from there: `applied_at`
+          // says the op was applied, and the corrected view says it no longer
+          // may be.
+          if (row.appliedAt != null && ownsCollection(payload.collection)) {
+            affected.add((
+              collection: payload.collection,
+              entityId: payload.entityId,
+            ));
+          }
           return;
         }
         try {
