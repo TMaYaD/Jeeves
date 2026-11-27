@@ -22,7 +22,8 @@ library;
 
 import 'dart:typed_data';
 
-import 'package:drift/drift.dart' show BooleanExpressionOperators, Value;
+import 'package:drift/drift.dart'
+    show BooleanExpressionOperators, OrderingTerm, Value;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/sync/alarm_resolution.dart';
 import 'package:jeeves/sync/chain_verifier.dart';
@@ -55,10 +56,11 @@ Future<Map<String, Object?>?> _entity(SimDevice device, String entityId) async =
         .register(_collection)
         .readEntity(entityId);
 
-/// The control types applied on [device]'s live store.
+/// The control types applied on [device]'s live store, in transport order.
 Future<List<AppliedControlRow>> _applied(SimDevice device) async =>
     (device.syncStore.select(device.syncStore.appliedControlLog)
-          ..where((row) => row.workspaceId.equals(device.client.workspaceId)))
+          ..where((row) => row.workspaceId.equals(device.client.workspaceId))
+          ..orderBy([(row) => OrderingTerm(expression: row.seq)]))
         .get();
 
 Future<List<QuarantineRow>> _breakRows(SyncClient client) async =>
@@ -392,6 +394,122 @@ void main() {
         isTrue,
         reason: 'a fork is an accusation, and it is raised',
       );
+    });
+
+    test('a registration served below the op it names is not admitted',
+        () async {
+      final workspace =
+          await SimWorkspace.create(deviceCount: 3, fileBacked: true);
+      addTearDown(workspace.close);
+      final b = workspace.b;
+      await workspace.a.enrolment.turnOnEncryption(
+        passphrase: workspace.passphrase,
+      );
+      await workspace.syncAll();
+
+      final root = await workspace.recoverRoot();
+      final headHash = (await _applied(b)).last.payloadHash;
+
+      // P: a registration for D, naming the head the device holds.
+      final d = await AuthorFixture.create(
+        seed: Uint8List.fromList(List<int>.filled(32, 0x64)),
+      );
+      final pEnvelope = await memberRegisterEnvelope(
+        device: d,
+        workspaceId: workspace.workspaceId,
+        root: root,
+        prevControlHash: headHash,
+        wallMs: workspace.clock.nowMs,
+      );
+      final pHash =
+          controlPayloadHash(parseBody(splitEnvelope(pEnvelope).body));
+
+      // F: a registration for E, naming P, and served *below* P. The transport
+      // seq is the server's to hand out, so this is a server that reordered: E's
+      // op sits in the log before the op it names.
+      final e = await AuthorFixture.create(
+        seed: Uint8List.fromList(List<int>.filled(32, 0x65)),
+      );
+      final fEnvelope = await memberRegisterEnvelope(
+        device: e,
+        workspaceId: workspace.workspaceId,
+        root: root,
+        prevControlHash: pHash,
+        wallMs: workspace.clock.nowMs,
+      );
+
+      // Q: a registration for G, also naming P, and served above it. Q is the
+      // applied op that names P, so it is the rival F would be settled against
+      // — and F's certificate is the earlier one, so F would win that
+      // tie-break and take the position.
+      final g = await AuthorFixture.create(
+        seed: Uint8List.fromList(List<int>.filled(32, 0x66)),
+      );
+      final qEnvelope = await memberRegisterEnvelope(
+        device: g,
+        workspaceId: workspace.workspaceId,
+        root: root,
+        prevControlHash: pHash,
+        wallMs: workspace.clock.nowMs + 1000,
+      );
+
+      final base = workspace.server.storedOps
+          .where((op) => op.workspaceId == workspace.workspaceId)
+          .map((op) -> op.seq)
+          .fold(0, (highest, seq) => seq > highest ? seq : highest);
+      root.drop();
+      workspace.server.injectUnchecked(
+        workspace.workspaceId,
+        fEnvelope,
+        atSeq: base + 1,
+      );
+      workspace.server.injectUnchecked(
+        workspace.workspaceId,
+        pEnvelope,
+        atSeq: base + 2,
+      );
+      workspace.server.injectUnchecked(
+        workspace.workspaceId,
+        qEnvelope,
+        atSeq: base + 3,
+      );
+      // The log now spends seqs the server's own bookkeeping has not reached;
+      // hand the rest back so a later append does not collide with them.
+      workspace.server.rollbackToSeq(base + 3);
+
+      await b.sync();
+
+      // F was served first, so it was refused for the op it named, which had
+      // not been applied yet; P and Q arrived after it and were applied.
+      final registered = (await _applied(b))
+          .where((row) => row.controlType == controlTypeMemberRegister)
+          .map((row) =>
+              ControlPayload.decode(row.payloadBytes).certificate().memberId)
+          .toSet();
+      expect(registered, contains(d.memberId));
+      expect(registered, contains(g.memberId));
+      expect(
+        registered,
+        isNot(contains(e.memberId)),
+        reason: 'an op below the op it names cannot be applied: the applied '
+            'log is ordered by seq, and it would leave the log reading the '
+            'op it names as the chain tip',
+      );
+
+      // F's row is left exactly as it was: refused, unreleased, untouched.
+      final fBreak = (await _breakRows(b.client))
+          .singleWhere((row) => row.authorMemberId == e.memberId);
+      expect(fBreak.reason, _breakCode);
+      expect(fBreak.releasedAt, isNull);
+      final fSlot = (await b.syncStore.select(b.syncStore.opLog)
+            ..where((r) =>
+                r.workspaceId.equals(b.client.workspaceId) &
+                r.seq.equals(fBreak.seq!)))
+          .getSingle();
+      expect(fSlot.appliedAt, isNull);
+      expect(fSlot.refusedReason, _breakCode);
+      expect(b.client.directory.isChained(e.memberId), isFalse);
+      expect(b.client.directory.isChained(d.memberId), isTrue);
     });
 
     test('the release is visible on Sync Health', () async {

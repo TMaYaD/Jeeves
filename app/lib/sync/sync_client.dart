@@ -3909,13 +3909,15 @@ class SyncClient {
   /// and never passes the gate.
   ///
   /// The gate decides only *whether to ask again*; it verifies nothing. The row's
-  /// `prev_control_hash` must name an op in the applied control log. What
-  /// happens to the row then is decided where it would be live: an op naming the
-  /// head is an ordinary append and must sit above it — an op slotted *under* the
-  /// head would leave `applied.last` no longer the chain head — and an op naming
-  /// an earlier applied op takes the fork path and is settled by tie-break, so
-  /// that a device which saw it before its rival and a device which saw it after
-  /// keep the same branch.
+  /// `prev_control_hash` must name an op in the applied control log, and the row
+  /// must sit above the op it names: the applied log is ordered by transport
+  /// `seq` and its last row is the chain head, so an op slotted *under* the op
+  /// it names would leave `applied.last` reading as that op rather than as the
+  /// new tip. What happens to the row then is decided where it would be live:
+  /// an op naming the head is an ordinary append, and an op naming an earlier
+  /// applied op takes the fork path and is settled by tie-break, so that a
+  /// device which saw it before its rival and a device which saw it after keep
+  /// the same branch.
   ///
   /// Calling [_receive] on the row is not enough. A positional break is
   /// logged-but-refused, so the `op_log` slot holds the op's own bytes and
@@ -4002,20 +4004,26 @@ class SyncClient {
   /// [_releaseOpsAwaitingControlPredecessor].
   ///
   /// The predecessor's being applied is what makes the op worth asking about
-  /// again. What happens to it is **not** decided here. An op naming the **head**
-  /// is an ordinary append, and it has to sit above the head: the applied log is
-  /// ordered by transport `seq` and its last row is the chain head, so an op
-  /// slotted under the head would leave `applied.last` no longer the head. An op
-  /// naming an **earlier** applied op is a fork candidate, and the tie-break in
-  /// [_resolveControlPosition] settles it: the branch it beats is quarantined,
-  /// and the branch it loses is quarantined instead.
+  /// again. What happens to it is **not** decided here. Two things are, and both
+  /// are about **order**:
   ///
-  /// Refusing every op that does not sit above the head would decide the fork
-  /// here, and wrongly: a device that saw the op *before* its rival would keep
-  /// the rival's branch for ever, while a device that saw it after would take
-  /// the op's. The tie-break is total and order-independent, so it is the one
-  /// place that decides, and it is the same answer whichever order the two ops
-  /// arrived in.
+  ///  * The op has to sit **above** the op it names. The applied log is ordered
+  ///    by transport `seq` and its last row is the chain head, so an op slotted
+  ///    under the op it names would leave `applied.last` reading as that op
+  ///    rather than as the new tip — and every op chained after it would then be
+  ///    refused, because the head this device offers is one step behind the one
+  ///    the chain is on. A server that hands out a lower `seq` for an op than
+  ///    the op it names produces exactly that, and the op stays refused.
+  ///  * Nothing about the fork. An op naming the **head** is an ordinary
+  ///    append; an op naming an **earlier** applied op is a fork candidate, and
+  ///    the tie-break in [_resolveControlPosition] settles it: the branch it
+  ///    beats is quarantined, and the branch it loses is quarantined instead.
+  ///
+  /// Refusing every fork candidate here would decide the fork wrongly: a device
+  /// that saw the op *before* its rival would keep the rival's branch for ever,
+  /// while a device that saw it after would take the op's. The tie-break is
+  /// total and order-independent, so it is the one place that decides, and it is
+  /// the same answer whichever order the two ops arrived in.
   Future<bool> _namesAppliedPredecessor(Uint8List envelope, int seq) async {
     final ControlPayload payload;
     try {
@@ -4028,16 +4036,16 @@ class SyncClient {
     }
     final applied = await _appliedControlLog(includeQuarantined: false);
     if (applied.isEmpty) return false;
-    if (!applied.any((row) => sameBytes(row.payloadHash, payload.prevControlHash))) {
-      return false;
-    }
-    final head = applied.last;
-    if (sameBytes(payload.prevControlHash, head.payloadHash)) {
-      // An ordinary append follows the active head, and must be above it.
-      return seq > head.seq;
-    }
-    // A fork candidate: the tie-break decides which branch survives.
-    return true;
+    // The applied op this one names: its predecessor.
+    final predecessor = applied
+        .where((row) => sameBytes(row.payloadHash, payload.prevControlHash))
+        .firstOrNull;
+    if (predecessor == null) return false;
+    // It has to sit above the op it names. Above the head, when it names the
+    // head — the ordinary append — and above an earlier op, when it names one:
+    // the tie-break settles which of the two branches survives, and the winner
+    // becomes the new head, so the winner has to be the last row of the log.
+    return seq > predecessor.seq;
   }
 
   Future<OpLogRow?> _opLogRowAt(int seq) => (_db.select(_db.opLog)
