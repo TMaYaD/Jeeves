@@ -14,6 +14,7 @@ import 'time_context.dart';
 /// [timeWindow] and [timeContext] are the Action's one time: a named window
 /// governs when the Action carries one, so the two are never both set.
 typedef CurrentAction = ({
+  String actionId,
   String actionText,
   ActionTimeWindow? timeWindow,
   TimeContext? timeContext,

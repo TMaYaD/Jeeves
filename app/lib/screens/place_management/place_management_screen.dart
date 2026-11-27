@@ -87,7 +87,9 @@ class _PlaceManagementScreenState extends ConsumerState<PlaceManagementScreen> {
                       fontWeight: FontWeight.w500, color: Color(0xFF374151)),
                 ),
                 subtitle: Text(
-                  '${row.area.radiusMeters} m',
+                  row.hoursLabel == null
+                      ? '${row.area.radiusMeters} m'
+                      : '${row.area.radiusMeters} m · ${row.hoursLabel}',
                   style:
                       const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
                 ),

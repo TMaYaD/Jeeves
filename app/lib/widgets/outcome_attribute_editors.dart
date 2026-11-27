@@ -94,6 +94,27 @@ void showOutcomeContextTagEditor(BuildContext context, String todoId) {
   );
 }
 
+/// What the raise sheet has to know about the Action being raised.
+///
+/// Raising an estimate is a different job from setting one: the value has to
+/// beat the time already logged, so the sheet has to say what that time is.
+class EstimateRaise {
+  const EstimateRaise({
+    required this.outcomeTitle,
+    required this.limitMinutes,
+    required this.logged,
+  });
+
+  /// The Outcome the Action belongs to.
+  final String outcomeTitle;
+
+  /// The Action's limit as it stands: its estimate.
+  final int limitMinutes;
+
+  /// The time logged on the Action so far, breaks included.
+  final Duration logged;
+}
+
 /// The estimate sheet: the estimate, and whether it is a limit.
 ///
 /// A stepper rather than a list of options, because the sheet now carries a
@@ -108,8 +129,12 @@ void showOutcomeContextTagEditor(BuildContext context, String todoId) {
 /// clearing the estimate clears the switch with it.
 ///
 /// [initial] opens the sheet on a value other than the stored one — the
-/// gate's "Raise the estimate…" opens it one step up. Saving writes that
-/// value; cancelling writes nothing.
+/// gate's "Raise the estimate…" opens it on the first step above the time
+/// logged. Saving writes that value; cancelling writes nothing.
+///
+/// [raise] puts the sheet in raise mode: it says what has been logged, and
+/// will not save a value that does not beat it. Without it the sheet is
+/// unchanged for every other caller.
 ///
 /// The sheet does not read the Action's estimate itself. The write path reads
 /// the Action's row as it stands, so an estimate a peer cleared while the
@@ -131,6 +156,7 @@ Future<bool> showOutcomeTimeEstimateSheet(
   bool timeboxed = false,
   bool showTimeboxedSwitch = true,
   Future<void> Function(int? minutes)? onSaveEstimate,
+  EstimateRaise? raise,
 }) async {
   assert(
     (notifier == null) != (onSaveEstimate == null),
@@ -149,6 +175,7 @@ Future<bool> showOutcomeTimeEstimateSheet(
       timeboxed: timeboxed,
       showTimeboxedSwitch: showTimeboxedSwitch,
       onSaveEstimate: onSaveEstimate,
+      raise: raise,
     ),
   );
   return saved ?? false;
@@ -166,6 +193,7 @@ class _EstimateSheet extends StatefulWidget {
     this.initial,
     this.actionText,
     this.actionId,
+    this.raise,
   });
 
   final TaskDetailNotifier? notifier;
@@ -191,6 +219,10 @@ class _EstimateSheet extends StatefulWidget {
 
   /// Whether the Action's estimate is a limit right now.
   final bool timeboxed;
+
+  /// What the raise has to beat, when the sheet is raising rather than
+  /// setting; null for every other caller.
+  final EstimateRaise? raise;
 
   @override
   State<_EstimateSheet> createState() => _EstimateSheetState();
@@ -219,12 +251,25 @@ class _EstimateSheetState extends State<_EstimateSheet> {
   /// Whether the ladder has a step above the current value.
   bool get _atTop => _minutes != null && stepEstimateUp(_minutes) == null;
 
+  /// Whether the sheet may be saved.
+  ///
+  /// A raise has to beat the time already logged: a limit that the work has
+  /// already passed is no limit at all. Every other caller may save whatever
+  /// the stepper holds.
+  bool get _canSave {
+    final raise = widget.raise;
+    if (raise == null) return true;
+    if (_minutes == null) return false;
+    return Duration(minutes: _minutes!) > raise.logged;
+  }
+
   void _stepDown() {
     setState(() {
       _minutes = stepEstimateDown(_minutes);
       _stepped = true;
-      // No estimate, no limit to mark.
-      if (_minutes == null) _timeboxed = false;
+      // No estimate, no limit to mark. A raise keeps the Action Timeboxed
+      // whatever the stepper holds, so the switch does not move.
+      if (_minutes == null && widget.raise == null) _timeboxed = false;
     });
   }
 
@@ -243,11 +288,15 @@ class _EstimateSheetState extends State<_EstimateSheet> {
     // must not write again, and must not pop a second time: the sheet is on
     // its way out, and a pop takes the top route — which by then may be the
     // screen below it.
-    if (_saving || !mounted) return;
+    if (_saving || !mounted || !_canSave) return;
     setState(() => _saving = true);
     final notifier = widget.notifier;
     final estimateMoved = _stepped && _minutes != widget.current;
-    final switchMoved = _hasEstimate && _timeboxed != widget.timeboxed;
+    // A raise keeps the Action Timeboxed: the switch is not on the sheet, so
+    // it cannot move, and the write leaves it alone.
+    final switchMoved = widget.raise == null &&
+        _hasEstimate &&
+        _timeboxed != widget.timeboxed;
     try {
       if (notifier == null) {
         if (estimateMoved) await widget.onSaveEstimate!(_minutes);
@@ -280,13 +329,25 @@ class _EstimateSheetState extends State<_EstimateSheet> {
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
+    final raise = widget.raise;
+    Widget body = SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            if (raise != null) ...[
+              Text(
+                raise.outcomeTitle,
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFF4A5568),
+                ),
+              ),
+              const SizedBox(height: 4),
+            ],
             Text(
               widget.actionText == null
                   ? 'Estimate'
@@ -294,6 +355,27 @@ class _EstimateSheetState extends State<_EstimateSheet> {
               style: const TextStyle(
                   fontSize: 18, fontWeight: FontWeight.bold),
             ),
+            if (raise != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Current limit: ${formatMinutesLabel(raise.limitMinutes)}',
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFF4A5568),
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'Logged so far: ${formatMinutesLabel(raise.logged.inMinutes)},'
+                ' breaks included',
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFF4A5568),
+                ),
+              ),
+            ],
             const SizedBox(height: 20),
             Row(
               children: [
@@ -321,7 +403,7 @@ class _EstimateSheetState extends State<_EstimateSheet> {
                   icon: const Icon(Icons.add),
                   tooltip: 'More',
                 ),
-                if (widget.showTimeboxedSwitch) ...[
+                if (widget.showTimeboxedSwitch && raise == null) ...[
                 const SizedBox(width: 16),
                 _TimeboxedToggle(
                   value: _timeboxed,
@@ -335,19 +417,51 @@ class _EstimateSheetState extends State<_EstimateSheet> {
                 ],
               ],
             ),
+            if (raise != null) ...[
+              const SizedBox(height: 12),
+              if (!_canSave)
+                // Plain text, not an error: the value is short of the time
+                // logged, not wrong.
+                Semantics(
+                  liveRegion: true,
+                  child: Text(
+                    'Must be more than the '
+                    '${formatMinutesLabel(raise.logged.inMinutes)} already '
+                    'logged.',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: Color(0xFF4A5568),
+                      height: 1.3,
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 8),
+              Text(
+                'I shall re-flow the rest of the day.',
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFF4A5568),
+                  height: 1.3,
+                ),
+              ),
+            ],
             const SizedBox(height: 24),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
+            // An overflow bar, so the buttons wrap at a large text scale
+            // rather than truncating.
+            OverflowBar(
+              alignment: MainAxisAlignment.end,
+              spacing: 12,
               children: [
                 TextButton(
                   key: const Key('estimate_sheet_cancel'),
                   onPressed: () => Navigator.of(context).pop(),
                   child: const Text('Cancel'),
                 ),
-                const SizedBox(width: 12),
                 FilledButton(
                   key: const Key('estimate_sheet_save'),
-                  onPressed: _saving ? null : _save,
+                  onPressed: _saving || !_canSave ? null : _save,
                   style: FilledButton.styleFrom(
                     backgroundColor: const Color(0xFF2667B7),
                   ),
@@ -358,6 +472,20 @@ class _EstimateSheetState extends State<_EstimateSheet> {
           ],
         ),
       ),
+    );
+    if (raise == null) return body;
+    // A raise says more than the sheet usually does, and at a large text
+    // scale it can be taller than the screen: it scrolls rather than spilling
+    // over the edge.
+    body = SingleChildScrollView(child: body);
+    // The raise sheet names itself for a screen reader: what it is for is not
+    // obvious from the controls alone. The sheet's own words stay separate,
+    // so the name does not swallow them.
+    return Semantics(
+      container: true,
+      explicitChildNodes: true,
+      label: 'Raise the estimate for ${widget.actionText ?? ''}',
+      child: body,
     );
   }
 }

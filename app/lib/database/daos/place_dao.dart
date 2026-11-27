@@ -19,7 +19,9 @@ library;
 
 import 'package:drift/drift.dart';
 
+import '../../models/action_place_and_time_window.dart';
 import '../../models/place_area.dart';
+import '../../models/time_window_hours.dart';
 import '../../sync/collection_codecs.dart';
 import '../../utils/uuid.dart';
 import '../gtd_database.dart';
@@ -32,7 +34,7 @@ const String namedPlaceKind = 'named';
 /// The `kind` a one-time pin carries.
 const String pinPlaceKind = 'pin';
 
-@DriftAccessor(tables: [Places, Actions, Habits])
+@DriftAccessor(tables: [Places, Actions, TimeWindows, Habits])
 class PlaceDao extends DatabaseAccessor<GtdDatabase> with _$PlaceDaoMixin {
   PlaceDao(super.db);
 
@@ -213,6 +215,87 @@ class PlaceDao extends DatabaseAccessor<GtdDatabase> with _$PlaceDaoMixin {
     });
   }
 
+  /// Sets the hours a named Place carries, and the zone they are read on
+  /// (issue #1074).
+  ///
+  /// A Place has **one** source of hours: the named time window [timeWindowId]
+  /// names, or hours of its own ([hours]). The two are exclusive, and this
+  /// write refuses both at once. Passing neither clears the Place's hours —
+  /// the window, the own hours and the zone all go.
+  ///
+  /// The zone travels with the hours: [timeZone] is the IANA name the hours
+  /// are read on, and null reads them on the phone's clock. A Place with no
+  /// hours has no zone either, so a zone is only stored alongside hours.
+  ///
+  /// Refused: a one-time pin (only a named Place carries hours), a Place that
+  /// does not exist, both kinds of hours at once, and a [timeWindowId] that
+  /// names no time window. A refused write stores nothing and authors no op.
+  ///
+  /// Returns whether the row was written. A write that changes nothing writes
+  /// nothing and authors no op.
+  Future<bool> setPlaceHours({
+    required String placeId,
+    String? timeWindowId,
+    TimeWindowHours? hours,
+    String? timeZone,
+    DateTime? now,
+  }) {
+    return attachedDatabase.capturing(() async {
+      final current = await (select(places)..where((p) => p.id.equals(placeId)))
+          .getSingleOrNull();
+      if (current == null) return false;
+      // Only a named Place carries hours: a pin belongs to the one Action that
+      // points at it and is never listed, so it has no hours of its own.
+      if (current.kind != namedPlaceKind) return false;
+      // One source of hours: a window, or hours of the Place's own.
+      if (timeWindowId != null && hours != null) return false;
+      if (timeWindowId != null) {
+        final window = await (select(timeWindows)
+              ..where((w) => w.id.equals(timeWindowId)))
+            .getSingleOrNull();
+        if (window == null) return false;
+      }
+
+      final newHoursText = hours?.encode();
+      // The three fields travel together: no hours means no zone.
+      final newTimeZone =
+          (timeWindowId == null && hours == null) ? null : timeZone;
+      // A write that changes nothing writes nothing: an op for a value that
+      // stands still would undo another device's change if it synced first.
+      if (current.timeWindowId == timeWindowId &&
+          current.hours == newHoursText &&
+          current.timeZone == newTimeZone) {
+        return false;
+      }
+
+      final ts = (now ?? DateTime.now()).toUtc();
+      await (update(places)..where((p) => p.id.equals(placeId))).write(
+        PlacesCompanion(
+          timeWindowId: Value(timeWindowId),
+          hours: Value(newHoursText),
+          timeZone: Value(newTimeZone),
+          updatedAt: Value(ts),
+        ),
+      );
+      // One op, all three fields: a peer never sees a window and own hours
+      // side by side.
+      attachedDatabase.opCapture.write(
+        collection: placesCollection,
+        entityId: placeId,
+        fields: {
+          'time_window_id': timeWindowId,
+          'hours': newHoursText,
+          'time_zone': newTimeZone,
+          'updated_at': encodeInstant(ts),
+        },
+      );
+      return true;
+    }).then((written) {
+      if (written) attachedDatabase.notifyPlacesViewWrite();
+      return written;
+    });
+  }
+
   /// Deletes the Place with [placeId] — a named place or a one-time pin — and
   /// detaches it from every Action and every Habit that used it.
   ///
@@ -347,14 +430,26 @@ class PlaceDao extends DatabaseAccessor<GtdDatabase> with _$PlaceDaoMixin {
   /// the count and the gate never disagree. An Outcome with two current
   /// Actions, as a sync conflict can leave behind, counts once, for the one
   /// that wins.
+  ///
+  /// A Place that carries hours says so in [NamedPlaceWithUse.hoursLabel]: the
+  /// name of the window it takes its hours from, or the short form of the
+  /// hours of its own. A Place whose hours the app cannot read has no label:
+  /// a value the app cannot read never hides anything, and it says nothing
+  /// either.
   Stream<List<NamedPlaceWithUse>> watchNamedPlacesWithUseCount() {
     return customSelect(
       'SELECT places.id AS id, places.name AS name, '
       'places.latitude_microdegrees AS latitude_microdegrees, '
       'places.longitude_microdegrees AS longitude_microdegrees, '
       'places.radius_meters AS radius_meters, '
+      'places.time_window_id AS time_window_id, '
+      'places.hours AS own_hours_text, '
+      'places.time_zone AS time_zone, '
+      'tw.name AS time_window_name, '
+      'tw.hours AS time_window_hours_text, '
       'COUNT(t.id) AS use_count '
       'FROM places '
+      'LEFT JOIN time_windows tw ON tw.id = places.time_window_id '
       'LEFT JOIN actions a ON a.place_id = places.id AND a.role = \'current\' '
       'AND a.id = ('
       'SELECT mca.id FROM actions mca '
@@ -369,7 +464,7 @@ class PlaceDao extends DatabaseAccessor<GtdDatabase> with _$PlaceDaoMixin {
       'ORDER BY MAX(CASE WHEN t.id IS NOT NULL '
       'THEN COALESCE(a.updated_at, a.created_at) END) DESC, places.name',
       variables: [Variable(namedPlaceKind)],
-      readsFrom: {places, actions, todos},
+      readsFrom: {places, actions, todos, timeWindows},
     ).watch().map((rows) {
       final result = <NamedPlaceWithUse>[];
       for (final row in rows) {
@@ -380,11 +475,31 @@ class PlaceDao extends DatabaseAccessor<GtdDatabase> with _$PlaceDaoMixin {
         );
         // A stored point off the globe is not a place: the row is skipped.
         if (area == null) continue;
+        final timeWindowId = row.read<String?>('time_window_id');
+        final ownHoursText = row.read<String?>('own_hours_text');
+        final timeZone = row.read<String?>('time_zone');
+        final resolved = resolvePlaceHours(
+          timeWindowId: timeWindowId,
+          timeWindowName: row.read<String?>('time_window_name'),
+          timeWindowHoursText: row.read<String?>('time_window_hours_text'),
+          ownHoursText: ownHoursText,
+          timeZoneName: timeZone,
+        );
         result.add((
           id: row.read<String>('id'),
           name: row.read<String>('name'),
           area: area,
           useCount: row.read<int>('use_count'),
+          // The window's name reads as the hours it gives; hours of the
+          // Place's own read as their short form.
+          hoursLabel: resolved == null
+              ? null
+              : (resolved.timeWindowName ?? resolved.hours.describe()),
+          hours: (
+            timeWindowId: timeWindowId,
+            ownHoursText: ownHoursText,
+            timeZone: timeZone,
+          ),
         ));
       }
       return result;
@@ -408,4 +523,22 @@ typedef NamedPlaceWithUse = ({
   String name,
   PlaceArea area,
   int useCount,
+  /// How the Place's hours read in the list: the name of the window it takes
+  /// its hours from, or the short form of the hours of its own.
+  ///
+  /// Null when the Place has no hours, or hours the app cannot read.
+  String? hoursLabel,
+  /// The hours the Place carries, as stored.
+  StoredPlaceHours hours,
+});
+
+/// The hours a named Place carries, as stored (issue #1074).
+///
+/// A Place has **one** source of hours: the window it names, or hours of its
+/// own. [timeZone] is the IANA name they are read on; null reads them on the
+/// phone's clock.
+typedef StoredPlaceHours = ({
+  String? timeWindowId,
+  String? ownHoursText,
+  String? timeZone,
 });
