@@ -11,6 +11,7 @@ import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/models/time_context.dart';
 
+import 'package:jeeves/database/daos/action_dao.dart' show ActionDao;
 import 'package:jeeves/database/daos/focus_session_dao.dart'
     show focusSessionDispositionIdFor;
 import 'package:jeeves/database/gtd_database.dart';
@@ -109,6 +110,29 @@ void main() {
     await workspace.syncAll();
     expect((await b.domain.actionDao.getCurrentAction(id))!.timeContext,
         value.encode());
+  });
+
+  test('an Action stopped at its limit reads the same on the other device',
+      () async {
+    final id = await outcomeOnA();
+    await a.domain.todoDao
+        .setCurrentActionText(id, 'Draft the memo', now: a.clock.asDateTime);
+    final actionId = (await a.domain.actionDao.getCurrentAction(id))!.id;
+    await a.domain.actionDao.stopCurrentActionAtLimit(
+      id,
+      expectedActionId: actionId,
+      now: a.clock.asDateTime,
+    );
+    await workspace.syncAll();
+
+    // The other device reads it as stopped at its limit, not as an ordinary
+    // abandoned Action.
+    final onB = await b.domain.actionDao.getTerminatedActions(id);
+    expect(onB, hasLength(1));
+    expect(onB.single.action.id, actionId);
+    expect(onB.single.action.stoppedAtLimitAt, isNotNull);
+    expect(ActionDao.isStoppedAtLimit(onB.single.action), isTrue);
+    await expectTableConverges('actions');
   });
 
   test('an Action carries its Timeboxed switch to the other device', () async {

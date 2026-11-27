@@ -718,6 +718,16 @@ class Actions extends Table {
   /// Completion timestamp; non-null once the Action is `done`.
   DateTimeColumn get doneAt => dateTime().nullable()();
 
+  /// The instant the Action was **stopped at its Timeboxed limit** (issue #49).
+  ///
+  /// NULL on every Action that was not stopped at a limit. Set together with
+  /// `role='superseded'`: the Action was neither completed nor replaced — the
+  /// approach ran out of time and the user said so.
+  ///
+  /// The mark says *how* the Action ended; it says nothing about what came
+  /// after, so it is not linkage metadata.
+  DateTimeColumn get stoppedAtLimitAt => dateTime().nullable()();
+
   @override
   Set<Column<Object>> get primaryKey => {id};
 }

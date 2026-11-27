@@ -615,6 +615,35 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     if (effect.logChanged) attachedDatabase.notifyTimeLogsViewWrite();
   }
 
+  /// Close the Outcome's current Action as **stopped at its limit** (issue #49).
+  ///
+  /// The Action is retired with the stopped-at-the-limit mark, so the Outcome's
+  /// history tells it apart from an abandoned Action. Its logged time stays on
+  /// it, and no successor inherits it.
+  ///
+  /// [expectedActionId] closes the confirm-time race: a caller that showed the
+  /// user a *specific* current Action passes its id, and the write throws
+  /// rather than stopping an Action the user never saw.
+  ///
+  /// No-op on an Outcome with no current Action, and idempotent: a replay finds
+  /// no current row and writes nothing.
+  Future<void> stopCurrentActionAtLimit(
+    String outcomeId, {
+    required String expectedActionId,
+    DateTime? now,
+  }) async {
+    final ts = (now ?? DateTime.now()).toUtc();
+    final effect = await attachedDatabase.capturing(
+      () => applyStopCurrentActionAtLimit(
+        outcomeId,
+        expectedActionId: expectedActionId,
+        ts: ts,
+      ),
+    );
+    if (effect.changed) attachedDatabase.notifyActionsViewWrite();
+    if (effect.logChanged) attachedDatabase.notifyTimeLogsViewWrite();
+  }
+
   // ---------------------------------------------------------------------------
   // Planned-queue primitives (ADR-0004 story 5, issue #475). Each opens a
   // transaction, stamps, and notifies after commit.
@@ -1575,6 +1604,83 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     // Nothing is written to `todos`: completion must not stamp, and there is
     // no Outcome-column cursor to clear — it was deleted outright, along with the adoption pass that would have needed guarding. The caller still
     // fires the `todos` view notification — see [completeCurrentAction].
+    return (changed: true, stamped: false, logChanged: closedLog != null);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Stopped at the limit (issue #49).
+  // ---------------------------------------------------------------------------
+
+  /// Whether the Action [actionId] is still a `planned` row that could be
+  /// promoted to `current`.
+  ///
+  /// Read before anything is written when a stop at the limit rides the same
+  /// transaction as a promote: "the route did not land" has to mean "nothing
+  /// was written", or the Action would be closed at its limit by a verdict
+  /// that never landed (issue #49).
+  Future<bool> isPromotablePlannedAction(String actionId) async {
+    final row = await (select(actions)..where((a) => a.id.equals(actionId)))
+        .getSingleOrNull();
+    return row != null && row.role == 'planned';
+  }
+
+  /// Whether [action] was closed as **stopped at its Timeboxed limit** rather
+  /// than completed or replaced.
+  ///
+  /// One rule, read everywhere: the mark is set and the row is terminal. The
+  /// role check matters because the mark is a separate field: a device that has
+  /// received the mark but not yet the role would otherwise read a still-live
+  /// Action as stopped.
+  static bool isStoppedAtLimit(Action action) =>
+      action.stoppedAtLimitAt != null &&
+      (action.role == 'done' || action.role == 'superseded');
+
+  /// Transaction-body variant of [stopCurrentActionAtLimit], shared with the
+  /// routing write so "the Action stops at its limit" and the Outcome change
+  /// the user chose land in one transaction (issue #49).
+  ///
+  /// [expectedActionId] closes the confirm-time race: a device that showed the
+  /// user a *specific* current Action passes its id, and the write throws
+  /// rather than stopping an Action the user never saw.
+  ///
+  /// Always returns `stamped: false` — stopping is not a clarifying act of its
+  /// own; the routing write that carries the user's verdict stamps.
+  Future<ActionWriteEffect> applyStopCurrentActionAtLimit(
+    String outcomeId, {
+    required String expectedActionId,
+    required DateTime ts,
+  }) async {
+    final resolved = await _resolveCurrentAction(outcomeId, ts);
+    final current = resolved.current;
+    if (current == null) {
+      // A replay: the Action is already terminal, so there is nothing to stop.
+      return (changed: resolved.converged, stamped: false, logChanged: false);
+    }
+    if (current.id != expectedActionId) {
+      throw StateError(
+        'stopCurrentActionAtLimit: current Action changed under the sheet '
+        '(expected $expectedActionId, found ${current.id})',
+      );
+    }
+
+    await (update(actions)..where((a) => a.id.equals(current.id))).write(
+      ActionsCompanion(
+        role: const Value('superseded'),
+        stoppedAtLimitAt: Value(ts),
+        updatedAt: Value(ts),
+      ),
+    );
+    _captureAction(current.id, {
+      'role': 'superseded',
+      'stopped_at_limit_at': encodeInstant(ts),
+      'updated_at': encodeInstant(ts),
+    });
+    // Engagement on this Action ended at the limit — close its open TimeLog
+    // here (issue #476), not at a later endFocus(). No reopen: a stopped
+    // Action has no successor to continue against, exactly as at Done.
+    final closedLog = await _closeOpenLogFor(current.id, ts);
+    // Nothing is written to `todos`: the routing write that carries the
+    // user's verdict owns the Outcome row and its stamp.
     return (changed: true, stamped: false, logChanged: closedLog != null);
   }
 

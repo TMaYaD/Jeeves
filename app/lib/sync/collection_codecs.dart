@@ -275,6 +275,11 @@ const Map<String, CollectionCodec> collectionCodecs = {
       'created_at': FieldKind.instant,
       'updated_at': FieldKind.instant,
       'done_at': FieldKind.instant,
+      // The mark that says an Action was stopped at its Timeboxed limit
+      // (issue #49). Nullable: a peer on an older build skips a field it
+      // does not know (ADR-0039) and reads the row as an ordinary
+      // superseded Action.
+      'stopped_at_limit_at': FieldKind.instant,
     },
     requiredColumns: {'outcome_id', 'user_id', 'text', 'role', 'created_at'},
     identityColumns: ['id'],

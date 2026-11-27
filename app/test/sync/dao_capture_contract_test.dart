@@ -414,6 +414,27 @@ void main() {
       );
     });
 
+    test('stopping an Action at its limit captures the mark', () async {
+      final id = await seedOutcome();
+      await db.actionDao.setCurrentAction(id, 'Draft', now: _ts);
+      final actionId = (await db.actionDao.getCurrentAction(id))!.id;
+      capture.clear();
+
+      await db.actionDao.stopCurrentActionAtLimit(
+        id,
+        expectedActionId: actionId,
+        now: _ts,
+      );
+
+      // The mark travels with the role: a peer that has the mark but not yet
+      // the role reads the Action as still live, so the two cannot be split.
+      final op = only(actionsCollection);
+      expect(op.entityId, actionId);
+      expect(op.fields['role'], 'superseded');
+      expect(op.fields['stopped_at_limit_at'], isNotNull);
+      expect(op.fields['updated_at'], isNotNull);
+    });
+
     test('editAction mirrors metadata onto the Outcome on the same seam', () async {
       final id = await seedOutcome();
       await db.actionDao.setCurrentAction(id, 'Draft', now: _ts);

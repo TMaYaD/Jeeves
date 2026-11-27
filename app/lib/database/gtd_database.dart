@@ -208,7 +208,7 @@ class GtdDatabase extends _$GtdDatabase {
   /// build refuses it: opening it would relabel the file with a version it
   /// does not understand, and the newer build would then find a store it
   /// believes is old.
-  static const int supportedSchemaVersion = 17;
+  static const int supportedSchemaVersion = 18;
 
   /// Completes with the [OpeningDetails] of this store's one open.
   ///
@@ -556,6 +556,20 @@ class GtdDatabase extends _$GtdDatabase {
                 .get();
             if (!existing.any((row) => row.read<String>('name') == 'place_id')) {
               await m.addColumn(habits, habits.placeId);
+            }
+          }
+          // v18 (issue #49): `actions.stopped_at_limit_at`, the mark that says
+          // an Action was stopped at its Timeboxed limit rather than completed
+          // or replaced. A nullable `ADD COLUMN` — no table rebuild, every
+          // existing Action reads NULL (not stopped at a limit), nothing is
+          // lost. Guarded on the column's absence like v7.
+          if (from < 18) {
+            final existing = await m.database
+                .customSelect('PRAGMA table_info(actions)')
+                .get();
+            if (!existing.any((row) =>
+                row.read<String>('name') == 'stopped_at_limit_at')) {
+              await m.addColumn(actions, actions.stoppedAtLimitAt);
             }
           }
         }),
