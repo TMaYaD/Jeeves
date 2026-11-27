@@ -235,36 +235,29 @@ ResolvedPreference _maxTimestampValue(
 /// [ConflictStrategy.maxTimestampValue] key) to the one that holds, in a way
 /// that does not depend on the order of [rows].
 ///
-/// Pairwise folding with [resolveWithStrategy] is not associative for three
-/// rows (a live floor, a clear, a later re-snooze), so a caller holding more
-/// than two copies must reduce them here instead. The rule agrees with the
-/// pairwise one for two rows:
+/// This is the rule the sync merge itself applies to these keys: the greatest
+/// live value ever written wins and "no value" ranks below every live value, so
+/// a clear never replaces a live snooze. A caller that wrote a clear here would
+/// have it undone by the host, so the device's own reductions follow the same
+/// rule instead of inventing a stronger one.
 ///
-///   * the newest tombstone is the clear;
-///   * a live row written after the clear survives it (a live row written
-///     before it was silenced by it); with no clear every live row survives;
-///   * among survivors the later snooze value wins, ties going to the later
+///   * live rows (a non-null value) always beat clears;
+///   * among live rows the later snooze value wins, ties going to the later
 ///     write and then to the lexically greater value; a value that is not a
 ///     timestamp counts as the lowest;
-///   * with no survivor the newest tombstone is the result.
+///   * with no live row the newest clear is the result.
 ///
 /// Returns null only when [rows] is empty. The returned row is one of [rows].
 PreferenceRow? resolveSnoozeFloorAmong(Iterable<PreferenceRow> rows) {
   PreferenceRow? newestClear;
-  for (final row in rows) {
-    if (!row.isTombstone) continue;
-    if (newestClear == null ||
-        (row.updatedAt ?? _epoch).isAfter(newestClear.updatedAt ?? _epoch)) {
-      newestClear = row;
-    }
-  }
   PreferenceRow? best;
   DateTime? bestUntil;
   for (final row in rows) {
-    if (row.isTombstone) continue;
-    if (newestClear != null &&
-        !(row.updatedAt ?? _epoch)
-            .isAfter(newestClear.updatedAt ?? _epoch)) {
+    if (row.isTombstone) {
+      if (newestClear == null ||
+          (row.updatedAt ?? _epoch).isAfter(newestClear.updatedAt ?? _epoch)) {
+        newestClear = row;
+      }
       continue;
     }
     final until = _parseTimestampValue(row.value);

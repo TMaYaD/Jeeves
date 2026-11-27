@@ -181,6 +181,56 @@ void main() {
         '"dark"');
   });
 
+  test('a snooze set while signed out reaches the account and a second device',
+      () async {
+    const key = 'planning_notification_snoozed_until';
+    final phone = await signedOutPhone();
+    await phone.domain.userPreferencesDao.set('local', key,
+        '"2026-01-01T18:00:00.000Z"', updatedAt: '2026-01-01T09:00:00.000Z');
+    await phone.domain.userPreferencesDao.carryNewestPreferencesInto(_userId);
+    final preferences = await phone.preferencesClient;
+
+    expect(await phone.activate(), SyncActivation.active);
+    await flush(phone);
+    await preferences.flushOutbox();
+
+    final witness = await phoneNamed('B');
+    await witness.enrolWithPassphrase(_passphrase);
+    expect(await witness.activate(), SyncActivation.active);
+    expect(await witness.domain.userPreferencesDao.get(_userId, key),
+        '"2026-01-01T18:00:00.000Z"');
+  });
+
+  test('a carry over a cleared snooze leaves the account snooze alone and '
+      'authors nothing', () async {
+    const key = 'planning_notification_snoozed_until';
+    final phone = await phoneNamed('A');
+    await phone.enrolAsFirstDevice(passphrase: _passphrase);
+    expect(await phone.activate(), SyncActivation.active);
+    clock.advance(1000);
+    await phone.domain.userPreferencesDao.set(_userId, key,
+        '"2026-01-01T18:00:00.000Z"', updatedAt: '2026-01-01T09:00:00.000Z');
+    final preferences = await phone.preferencesClient;
+    await preferences.flushOutbox();
+    await phone.lifecycle!.deactivate();
+    phone.lifecycle = null;
+    clock.advance(1000);
+    await phone.domain.userPreferencesDao.set('local', key, null,
+        updatedAt: '2026-01-01T10:00:00.000Z');
+    final storedBefore = server.storedOps.length;
+
+    await phone.domain.userPreferencesDao.carryNewestPreferencesInto(_userId);
+    expect(await phone.domain.userPreferencesDao.get(_userId, key),
+        '"2026-01-01T18:00:00.000Z"');
+    expect(await phone.activate(), SyncActivation.active);
+    await flush(phone);
+    await preferences.flushOutbox();
+
+    expect(await phone.domain.userPreferencesDao.get(_userId, key),
+        '"2026-01-01T18:00:00.000Z"');
+    expect(server.storedOps.length, storedBefore);
+  });
+
   test('a second activation authors nothing further', () async {
     final phone = await signedOutPhone();
     await phone.domain.userPreferencesDao.set(_userId, 'theme', '"dark"');

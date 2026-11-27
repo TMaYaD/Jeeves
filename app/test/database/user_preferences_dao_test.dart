@@ -199,78 +199,51 @@ void main() {
           DateTime.utc(2026, 1, 1, 12));
     });
 
-    test('a clear that was carried over stays in force on a later carry',
+    test('a clear never replaces a live snooze, in either direction',
         () async {
       final dao = db.userPreferencesDao;
       const key = 'planning_notification_snoozed_until';
 
-      // The account cleared at 10:00; one copy holds an 18:00 floor written at
-      // 09:00 (before the clear), another a 12:00 floor written at 11:00.
+      // The sync merge ranks "no value" below every live value, so a carry
+      // that wrote a clear over a live floor would be undone by the host.
       await dao.set(_accountId, key, null,
           updatedAt: '2026-01-01T10:00:00.000Z');
       await dao.set(_signedOutUserId, key, '"2026-01-01T18:00:00.000Z"',
           updatedAt: '2026-01-01T09:00:00.000Z');
-      await dao.set('other-account', key, '"2026-01-01T12:00:00.000Z"',
-          updatedAt: '2026-01-01T11:00:00.000Z');
-
       await dao.carryNewestPreferencesInto(_accountId);
-      expect(await dao.get(_accountId, key), '"2026-01-01T12:00:00.000Z"');
+      expect(await dao.get(_accountId, key), '"2026-01-01T18:00:00.000Z"');
 
-      // The second carry must not revive the floor the clear silenced.
-      await dao.carryNewestPreferencesInto(_accountId);
-      expect(await dao.get(_accountId, key), '"2026-01-01T12:00:00.000Z"');
-    });
-
-    test('a clear never rewrites another account\'s row', () async {
-      final dao = db.userPreferencesDao;
-      const key = 'planning_notification_snoozed_until';
-
-      await dao.set(_accountId, key, null,
-          updatedAt: '2026-01-01T10:00:00.000Z');
-      await dao.set('other-account', key, '"2026-01-01T18:00:00.000Z"',
+      await dao.set(_accountId, key, '"2026-01-01T18:00:00.000Z"',
           updatedAt: '2026-01-01T09:00:00.000Z');
-      await dao.set('third-account', key, '"2026-01-01T12:00:00.000Z"',
-          updatedAt: '2026-01-01T11:00:00.000Z');
-
+      await dao.set(_signedOutUserId, key, null,
+          updatedAt: '2026-01-01T10:00:00.000Z');
       await dao.carryNewestPreferencesInto(_accountId);
-
-      expect(await dao.get('other-account', key),
-          '"2026-01-01T18:00:00.000Z"');
-      final row = await db.customSelect(
-        'SELECT updated_at FROM user_preferences WHERE user_id = ? AND "key" = ?',
-        variables: [Variable.withString('other-account'), Variable.withString(key)],
-      ).getSingle();
-      expect(DateTime.parse(row.read<String>('updated_at')).toUtc(),
-          DateTime.utc(2026, 1, 1, 9));
+      expect(await dao.get(_accountId, key), '"2026-01-01T18:00:00.000Z"');
+      // No source row is modified.
+      expect(await dao.get(_signedOutUserId, key), isNull);
     });
 
-    test(
-        'a signed-out clear of a synced snooze reaches the account through '
-        'the carry, even after a carry into the signed-out copy', () async {
+    test('repeated carries over a cleared copy write nothing', () async {
       final dao = db.userPreferencesDao;
       const key = 'planning_notification_snoozed_until';
 
-      // The account holds a live floor from 09:00; the user clears it while
-      // signed out at 10:00.
       await dao.set(_accountId, key, '"2026-01-01T18:00:00.000Z"',
           updatedAt: '2026-01-01T09:00:00.000Z');
       await dao.set(_signedOutUserId, key, null,
           updatedAt: '2026-01-01T10:00:00.000Z');
 
-      // Cold start while signed out: the carry into the placeholder.
-      await dao.carryNewestPreferencesInto(_signedOutUserId);
-      // The account's row is untouched, so the sign-in carry still sees the
-      // clear as newer and writes it through the captured path.
-      expect(await dao.get(_accountId, key), '"2026-01-01T18:00:00.000Z"');
-
       await dao.carryNewestPreferencesInto(_accountId);
-      expect(await dao.get(_accountId, key), isNull);
-      final row = await db.customSelect(
-        'SELECT updated_at FROM user_preferences WHERE user_id = ? AND "key" = ?',
-        variables: [Variable.withString(_accountId), Variable.withString(key)],
+      final first = await db.customSelect(
+        'SELECT updated_at FROM user_preferences WHERE user_id = ?',
+        variables: [Variable.withString(_accountId)],
       ).getSingle();
-      expect(DateTime.parse(row.read<String>('updated_at')).toUtc(),
-          DateTime.utc(2026, 1, 1, 10));
+      await dao.carryNewestPreferencesInto(_accountId);
+      final second = await db.customSelect(
+        'SELECT updated_at FROM user_preferences WHERE user_id = ?',
+        variables: [Variable.withString(_accountId)],
+      ).getSingle();
+      expect(second.read<String>('updated_at'),
+          first.read<String>('updated_at'));
     });
 
     test('a change that lands while a setting is carried in is not undone',

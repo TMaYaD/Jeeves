@@ -237,53 +237,16 @@ class UserPreferencesDao {
         final key = entry.key;
         final mine = current[key];
         if (strategyForKey(key) == ConflictStrategy.maxTimestampValue) {
-          // A snooze floor: the later snooze value wins, not the later write,
-          // so a carry can never lower an active floor and re-fire a silenced
-          // notification. Every copy on the device is reduced together, in an
-          // order-independent way, so a third copy cannot be ignored.
+          // A snooze floor: the sync merge keeps the greatest live value and
+          // ranks "no value" lowest, so a clear can never replace a live
+          // snooze (a clear written here would be undone by the host). The
+          // carry follows the same rule: every copy on the device is reduced
+          // together, in an order-independent way, and a live value wins.
           final candidates = <QueryRow>[?mine, ...entry.value];
           final winnerRow = resolveSnoozeFloorAmong(
             candidates.map(preferenceRowOf),
           );
           if (winnerRow == null) continue;
-          // A clear silences every live copy written before it. Once a later
-          // live write wins over the clear in the current user's row, a later
-          // carry could not see the clear any more and would revive the
-          // silenced floor. So the silenced copy under the signed-out
-          // placeholder is marked cleared at the clear's own timestamp, which
-          // keeps the clear in force on every later carry. No row is deleted.
-          //
-          // Only the placeholder's copy is written. It is never authored, so
-          // nothing about it can be lost from the sync log. A copy under an
-          // account id is never touched: a raw write there would bypass
-          // capture, leave that account's other devices holding the floor,
-          // and make the account's own sign-in see matching rows and skip
-          // the upload of the clear.
-          QueryRow? newestClear;
-          for (final row in candidates) {
-            if (row.read<String?>('value') != null) continue;
-            if (newestClear == null || _isNewerThan(row, newestClear)) {
-              newestClear = row;
-            }
-          }
-          if (newestClear != null) {
-            final clearedAt = newestClear.read<String?>('updated_at');
-            for (final row in entry.value) {
-              if (row.read<String>('user_id') != _signedOutUserId) continue;
-              if (row.read<String?>('value') == null) continue;
-              if (_isNewerThan(row, newestClear)) continue;
-              await _db.customUpdate(
-                'UPDATE user_preferences SET value = NULL, updated_at = ? '
-                'WHERE user_id = ? AND "key" = ?',
-                variables: [
-                  Variable(clearedAt),
-                  Variable(_signedOutUserId),
-                  Variable(key),
-                ],
-                updates: {_db.userPreferences},
-              );
-            }
-          }
           // The timestamp counts too: two equal values (two clears, say) with
           // different timestamps resolve to the newer one, and only a carry
           // brings that timestamp into the account's row.
@@ -327,9 +290,6 @@ class UserPreferencesDao {
       }
     });
   }
-
-  /// The placeholder user id the device uses while nobody is signed in.
-  static const _signedOutUserId = 'local';
 
   /// Whether [candidate] carries a strictly newer timestamp than [other].
   ///

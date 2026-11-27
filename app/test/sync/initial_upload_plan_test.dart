@@ -729,7 +729,7 @@ void main() {
     });
 
     test('a snooze floor, a later clear and a later re-snooze collapse to the '
-        're-snooze whatever the row order', () async {
+        'greatest live floor whatever the row order', () async {
       const key = 'planning_notification_snoozed_until';
       final floor = _preferenceRow('preference/a', 'user-a',
           '"2026-07-01T18:00:00.000Z"', '2026-07-01T09:00:00.000Z',
@@ -753,7 +753,7 @@ void main() {
       ]) {
         final plan = await _plan({'user_preferences': rows});
         final entity = plan.entitiesFor(userPreferencesCollection).single;
-        expect(entity.fields['value'], '"2026-07-01T12:00:00.000Z"');
+        expect(entity.fields['value'], '"2026-07-01T18:00:00.000Z"');
       }
     });
 
