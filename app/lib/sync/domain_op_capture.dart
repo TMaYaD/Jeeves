@@ -43,6 +43,7 @@ import 'package:drift/drift.dart' show GeneratedDatabase;
 import 'collection_codecs.dart' show userPreferencesCollection;
 import 'host/change.dart';
 import 'hlc.dart';
+import 'ids.dart' show preferenceEntityId;
 import 'sync_client.dart';
 import 'sync_rejection.dart';
 
@@ -404,13 +405,20 @@ enum _CaptureDecision {
 /// log its entity id belongs to, buffering until the enrolment decision is made
 /// and dropping once it is made "author nothing".
 ///
-/// Three reasons this exists rather than `SyncOpCapture(client)`:
+/// Four reasons this exists rather than `SyncOpCapture(client)`:
 ///
 /// * **Routing.** `UserPreferencesDao` describes its effects into
 ///   `user_preferences`, whose entity id is `uuid5(preferences_workspace_id,
 ///   key)`. An op authored into the *GTD* Workspace would land in a log whose id
 ///   derivation nobody there shares, so two devices would converge on an id
 ///   neither Workspace holds. Everything else goes to the default Workspace.
+/// * **Whose preference.** The preferences Workspace belongs to *one* user, and
+///   a row stored under another user id — the signed-out `'local'` id, or a
+///   previous account's — derives its entity id from that other user's
+///   preferences Workspace. Routing it by collection alone would put it on the
+///   account's log under another user's id, where the account's other devices
+///   would read it. A preference is authored only when its key derives to its
+///   entity id in the bound Workspace.
 /// * **Late binding.** `GtdDatabase` is constructed at process start — before
 ///   sign-in, before enrolment — so at construction there is no client to route
 ///   to. `sync_lifecycle.dart` [bind]s it once a device is enrolled, and
@@ -576,6 +584,27 @@ class WorkspaceRoutingOpCapture extends BufferedDomainOpCapture {
         ? _preferencesClient
         : _gtdClient;
     if (client == null) return;
+    // A preference's entity id is derived from the preferences Workspace of the
+    // user the row is stored under, so a row written under another user id —
+    // the signed-out `'local'` id, or a previous account's — names an entity
+    // this Workspace does not hold. Authoring it would put a row under another
+    // user's id on this account's log, where the account's other devices would
+    // read it.
+    //
+    // The rule is the derivation itself, not a list of user ids: the op is
+    // authored only when its key derives to its entity id *in this Workspace*.
+    // An op that names no key cannot be checked against the derivation, so it
+    // is not authored.
+    if (op.collection == userPreferencesCollection) {
+      final key = op.fields['key'];
+      if (key is! String ||
+          preferenceEntityId(client.workspaceId, key) != op.entityId) {
+        // Never authored, so a host-clocked record of it is handed back like
+        // any other change this bridge will not author.
+        await _leaveUnauthored([op]);
+        return;
+      }
+    }
     final hostClock = op.clock;
     // A change the host clocked under the device node id (made before this
     // device enrolled) is not this member's to author: the wire refuses an op

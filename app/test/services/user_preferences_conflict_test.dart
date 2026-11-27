@@ -333,4 +333,67 @@ void main() {
       expect(r.updatedAt, DateTime.parse('2026-01-02T00:00:00Z'));
     });
   });
+
+  group('resolveSnoozeFloorAmong', () {
+    PreferenceRow live(String until, int hour) => PreferenceRow(
+          value: '"$until"',
+          updatedAt: DateTime.utc(2026, 1, 1, hour),
+        );
+
+    test('is empty for no rows', () {
+      expect(resolveSnoozeFloorAmong(const []), isNull);
+    });
+
+    test('gives the same row for every order of floor, clear and re-snooze',
+        () {
+      // The greatest live value wins; the clear and the order do not matter.
+      final floor = live('2026-01-01T18:00:00.000Z', 9);
+      final clear =
+          PreferenceRow(value: null, updatedAt: DateTime.utc(2026, 1, 1, 10));
+      final resnooze = live('2026-01-01T12:00:00.000Z', 11);
+      final orders = [
+        [floor, clear, resnooze],
+        [floor, resnooze, clear],
+        [clear, floor, resnooze],
+        [clear, resnooze, floor],
+        [resnooze, floor, clear],
+        [resnooze, clear, floor],
+      ];
+      for (final rows in orders) {
+        expect(resolveSnoozeFloorAmong(rows), same(floor));
+      }
+    });
+
+    test('a clear never replaces a live floor, however much newer', () {
+      final floor = live('2026-01-01T18:00:00.000Z', 9);
+      final clear =
+          PreferenceRow(value: null, updatedAt: DateTime.utc(2026, 1, 1, 10));
+      expect(resolveSnoozeFloorAmong([floor, clear]), same(floor));
+      expect(resolveSnoozeFloorAmong([clear, floor]), same(floor));
+    });
+
+    test('with no live floor the newest clear is the result', () {
+      final older =
+          PreferenceRow(value: null, updatedAt: DateTime.utc(2026, 1, 1, 9));
+      final newer =
+          PreferenceRow(value: null, updatedAt: DateTime.utc(2026, 1, 1, 10));
+      expect(resolveSnoozeFloorAmong([older, newer]), same(newer));
+      expect(resolveSnoozeFloorAmong([newer, older]), same(newer));
+    });
+
+    test('equal writes of unreadable values resolve the same in both orders',
+        () {
+      final a = live('not-a-time', 9);
+      final b = live('zzz', 9);
+      expect(resolveSnoozeFloorAmong([a, b]), same(b));
+      expect(resolveSnoozeFloorAmong([b, a]), same(b));
+    });
+
+    test('the later value wins among live floors', () {
+      final low = live('2026-01-01T12:00:00.000Z', 11);
+      final high = live('2026-01-01T18:00:00.000Z', 9);
+      expect(resolveSnoozeFloorAmong([low, high]), same(high));
+      expect(resolveSnoozeFloorAmong([high, low]), same(high));
+    });
+  });
 }

@@ -118,9 +118,19 @@ class SyncedPreferencesNotifier
     await _migrateSharedPreferencesIfNeeded(dao, userId);
     if (!ref.mounted) return const SyncedPreferences({});
 
+    // Carry the newest value of each setting on the device into the current
+    // user's copy of it. The device keeps one preference row per (user id,
+    // key), and the user id changes on sign-in and on sign-out, so without
+    // this the app would swap between two copies of every setting.
+    await dao.carryNewestPreferencesInto(userId);
+    if (!ref.mounted) return const SyncedPreferences({});
+
     // Copy values that predate sync into this account, once. Skipped for the
     // signed-out placeholder: at cold start the id is `'local'` until session
     // restore answers, and a copy under it would leave the account with defaults.
+    //
+    // This runs after the carry, so the copy only fills keys the account has
+    // no row for and cannot undo a value the carry brought from the device.
     if (userId != _signedOutUserId) {
       await _copyLegacyDeviceValuesOnce(dao, userId);
       if (!ref.mounted) return const SyncedPreferences({});
