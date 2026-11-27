@@ -312,6 +312,39 @@ void main() {
     }, sessionTasks: sessionTasks);
   });
 
+  testWidgets('"More to do…" with no queue lets the user name a new Action', (
+    tester,
+  ) async {
+    final sessionTasks = (await tester.runAsync(() => _seed(db)))!;
+
+    await _withApp(tester, db, () async {
+      await _settle(tester);
+      await _rightHo(tester);
+      await tester.tap(find.text('More to do…'));
+      await _settle(tester);
+
+      // No queue to offer, so the dialog is the plain text field.
+      final field = find.descendant(
+        of: find.byType(NextActionDialog),
+        matching: find.byType(TextField),
+      );
+      expect(field, findsOneWidget);
+      await tester.enterText(field, 'Draft the outline');
+      await tester.tap(find.text('Save'));
+      await _settle(tester);
+
+      // The named Action is the Outcome's current one, and the Action that
+      // ran out of time is in the history, stopped at its limit.
+      final current = await tester.runAsync(() => _current(db));
+      expect(current!.actionText, 'Draft the outline');
+      expect(current.stoppedAtLimitAt, isNull);
+
+      final history = await tester.runAsync(() => _history(db));
+      expect(history!.single.action.role, 'superseded');
+      expect(history.single.action.stoppedAtLimitAt, isNotNull);
+    }, sessionTasks: sessionTasks);
+  });
+
   testWidgets('dismissing the sheet writes nothing, and the gate asks again',
       (tester) async {
     final seeded = await tester.runAsync(() => _seed(db));
