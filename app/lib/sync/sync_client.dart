@@ -133,6 +133,31 @@ class _VerifiedControlOp {
   final RegistrationCertificate? learned;
 }
 
+/// The head of this Workspace's applied control log: the op every control op
+/// chains on, and the transport `seq` it was logged at.
+///
+/// Both halves, because the two answer different questions. The hash is what an
+/// arriving op names, and the `seq` is the boundary an arriving op has to sit
+/// above: the log is ordered by transport `seq`, so its last row is the chain
+/// head, and an op slotted under it would leave `applied.last` no longer the
+/// head.
+class _AppliedControlHead {
+  const _AppliedControlHead({required this.seq, required this.payloadHash});
+
+  final int seq;
+  final Uint8List payloadHash;
+}
+
+/// The head of a Workspace that has applied no control op yet.
+///
+/// A value rather than null, so "this Workspace has no head" is a state the
+/// scan compares against like any other — and not the same as "the scan has
+/// not run yet", which is a different thing entirely: the first pull after a
+/// launch runs the scan, and every pull after that must not. The `seq` sits
+/// below every op's, so the empty head is never equal to a real one.
+final _AppliedControlHead _noAppliedControlHead =
+    _AppliedControlHead(seq: -1, payloadHash: zeroPrevControlHash);
+
 /// What one [SyncClient.flushOutbox] concluded.
 ///
 /// A return value rather than an exception because none of the three is an
@@ -1373,9 +1398,9 @@ class SyncClient {
         _knownSigningKeyCountAtLastUnchainedScan = knownSigningKeyCount;
         scanned = true;
       }
-      final appliedControlHead = await this.appliedControlHead();
+      final appliedControlHead = await _appliedControlHeadState();
       final headAtLastScan = _appliedControlHeadAtLastBreakScan;
-      if (headAtLastScan == null || !sameBytes(appliedControlHead, headAtLastScan)) {
+      if (headAtLastScan == null || !_sameAppliedControlHead(appliedControlHead, headAtLastScan)) {
         affected.addAll(await _releaseOpsAwaitingControlPredecessor());
         _appliedControlHeadAtLastBreakScan = appliedControlHead;
         scanned = true;
@@ -1386,7 +1411,14 @@ class SyncClient {
     // fetch is bounded — one round-trip per pull, never one per op — and the
     // freshness race F14b names (the wraps PUT landing moments after the rotate op)
     // resolves on the next pull rather than as a mystery decryption failure.
-    if (_epochKeyRefreshRequired || await _hasOpsAwaitingEpochKeys()) {
+    //
+    // The third trigger is the state-based one: this device is at a keyed epoch
+    // it does not hold the key for. The flag is memory, so a device that exited
+    // between a rotate applying and its fetch comes back without it, and with
+    // nothing quarantined to fetch on either — see [_lacksCurrentEpochKey].
+    if (_epochKeyRefreshRequired ||
+        await _hasOpsAwaitingEpochKeys() ||
+        await _lacksCurrentEpochKey()) {
       await refreshEpochKeys();
       // Cleared only once the fetch has actually happened. A rotate can raise this
       // flag while nothing is quarantined yet — no content at the new epoch has
@@ -3152,6 +3184,27 @@ class SyncClient {
             ..orderBy([(row) => OrderingTerm(expression: row.seq)]))
           .get();
 
+  /// The head of the applied control log, or [_noAppliedControlHead] for a
+  /// Workspace that has applied no control op yet.
+  ///
+  /// Read from the log rather than from [appliedControlHead], because the two can
+  /// part company: a fork resolution quarantines a branch, and the log's head is
+  /// then a row the chain state has not caught up with yet.
+  Future<_AppliedControlHead> _appliedControlHeadState() async {
+    final applied = await _appliedControlLog();
+    if (applied.isEmpty) return _noAppliedControlHead;
+    final head = applied.last;
+    return _AppliedControlHead(seq: head.seq, payloadHash: head.payloadHash);
+  }
+
+  /// Whether two applied control heads are the same head.
+  ///
+  /// Both halves are compared: the scan's gate asks whether the head *moved*,
+  /// and the head's transport `seq` moves the boundary a refused op has to sit
+  /// above even when the payload hash does not change.
+  bool _sameAppliedControlHead(_AppliedControlHead a, _AppliedControlHead b) =>
+      a.seq == b.seq && sameBytes(a.payloadHash, b.payloadHash);
+
   /// Whether the chained-member directory has been refilled from the applied
   /// control log yet.
   bool _chainedMembersRestored = false;
@@ -3588,8 +3641,17 @@ class SyncClient {
   /// [_releaseOpsAwaitingControlPredecessor] scan.
   ///
   /// Null until that scan has run, so the first pull after any launch runs it and
-  /// heals the rows an earlier build left behind.
-  Uint8List? _appliedControlHeadAtLastBreakScan;
+  /// heals the rows an earlier build left behind. A Workspace with no applied
+  /// control op has no head, and that is [_noAppliedControlHead] rather than
+  /// null: the scan has run, and found nothing to work on.
+  ///
+  /// The head is remembered as a **sequence and a payload hash**, not as the hash
+  /// alone: the scan's own gate asks whether a refused op sits above the head, and
+  /// that is a question about the head's transport `seq`. A head whose hash did not
+  /// change but whose `seq` did — the same control op read at another position —
+  /// moves that boundary, so a scan gated on the hash alone would skip an op the
+  /// new head now admits.
+  _AppliedControlHead? _appliedControlHeadAtLastBreakScan;
 
   /// Set when this pull applied a `rotate` that actually **raised** the epoch floor.
   ///
@@ -3847,12 +3909,13 @@ class SyncClient {
   /// and never passes the gate.
   ///
   /// The gate decides only *whether to ask again*; it verifies nothing. The row's
-  /// `prev_control_hash` must name an op in the applied control log, and its `seq`
-  /// must lie above every control op this device holds, which is where live
-  /// receipt always puts a control op — an op slotted *under* the head would leave
-  /// `applied.last` no longer the chain head. A predecessor that is applied but
-  /// not the head is admitted on purpose: [_receive] then takes the fork path and
-  /// settles it by tie-break, as it would live.
+  /// `prev_control_hash` must name an op in the applied control log. What
+  /// happens to the row then is decided where it would be live: an op naming the
+  /// head is an ordinary append and must sit above it — an op slotted *under* the
+  /// head would leave `applied.last` no longer the chain head — and an op naming
+  /// an earlier applied op takes the fork path and is settled by tie-break, so
+  /// that a device which saw it before its rival and a device which saw it after
+  /// keep the same branch.
   ///
   /// Calling [_receive] on the row is not enough. A positional break is
   /// logged-but-refused, so the `op_log` slot holds the op's own bytes and
@@ -3934,9 +3997,25 @@ class SyncClient {
     return affected;
   }
 
-  /// Whether [envelope], held at [seq], is a control op that names an applied
-  /// predecessor and sits above every active control op this device holds. Advisory
-  /// only: see [_releaseOpsAwaitingControlPredecessor].
+  /// Whether [envelope], held at [seq], is a control op that names a predecessor
+  /// this device has applied. Advisory only: see
+  /// [_releaseOpsAwaitingControlPredecessor].
+  ///
+  /// The predecessor's being applied is what makes the op worth asking about
+  /// again. What happens to it is **not** decided here. An op naming the **head**
+  /// is an ordinary append, and it has to sit above the head: the applied log is
+  /// ordered by transport `seq` and its last row is the chain head, so an op
+  /// slotted under the head would leave `applied.last` no longer the head. An op
+  /// naming an **earlier** applied op is a fork candidate, and the tie-break in
+  /// [_resolveControlPosition] settles it: the branch it beats is quarantined,
+  /// and the branch it loses is quarantined instead.
+  ///
+  /// Refusing every op that does not sit above the head would decide the fork
+  /// here, and wrongly: a device that saw the op *before* its rival would keep
+  /// the rival's branch for ever, while a device that saw it after would take
+  /// the op's. The tie-break is total and order-independent, so it is the one
+  /// place that decides, and it is the same answer whichever order the two ops
+  /// arrived in.
   Future<bool> _namesAppliedPredecessor(Uint8List envelope, int seq) async {
     final ControlPayload payload;
     try {
@@ -3948,10 +4027,17 @@ class SyncClient {
       return false;
     }
     final applied = await _appliedControlLog(includeQuarantined: false);
+    if (applied.isEmpty) return false;
     if (!applied.any((row) => sameBytes(row.payloadHash, payload.prevControlHash))) {
       return false;
     }
-    return applied.isEmpty || seq > applied.last.seq;
+    final head = applied.last;
+    if (sameBytes(payload.prevControlHash, head.payloadHash)) {
+      // An ordinary append follows the active head, and must be above it.
+      return seq > head.seq;
+    }
+    // A fork candidate: the tie-break decides which branch survives.
+    return true;
   }
 
   Future<OpLogRow?> _opLogRowAt(int seq) => (_db.select(_db.opLog)
@@ -3987,6 +4073,29 @@ class SyncClient {
     }
     await _clearRefused(pulled.seq);
     return true;
+  }
+
+  /// Whether this device is at a keyed epoch whose key it does not hold — the
+  /// state-based half of the refresh trigger, and the restart-safe form of
+  /// [_epochKeyRefreshRequired].
+  ///
+  /// A `rotate` raises the floor and sets that flag in memory, and the pull tail
+  /// fetches the wraps on the strength of it. A device that exits between the
+  /// rotate applying and the fetch comes back with the flag cleared, and with no
+  /// quarantine row to fetch from either: nothing has been received at the new
+  /// epoch yet, so nothing has been refused for a missing key. The device would
+  /// sit at its own current epoch without the key for it, and every local
+  /// capture would be refused as `missing_epoch_key`, until some peer's op
+  /// happened to quarantine and fetch.
+  ///
+  /// So the obligation is read from the state rather than remembered: a floor
+  /// above zero means this device's own control log established a keyed epoch,
+  /// and the key for it is a wrap the server holds for this Member. The fetch is
+  /// one round-trip per pull, the same bound the flag-triggered fetch has.
+  Future<bool> _lacksCurrentEpochKey() async {
+    final floor = await epochFloor();
+    if (floor <= 0) return false;
+    return await workspaceKeys.keyFor(workspaceId, floor) == null;
   }
 
   /// Whether anything is still waiting on a key — the state-based half of the
