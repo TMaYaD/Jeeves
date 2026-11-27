@@ -1685,7 +1685,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        17,
+        18,
       );
 
       expect(await _columnNames(upgraded, 'habits'),
