@@ -476,6 +476,11 @@ void main() {
     /// the old schema rather than the current classes' idea of it. Timestamps are
     /// ISO-8601 text because that is what `store_date_time_values_as_text` makes
     /// every date in this store, v3 rows included.
+    ///
+    /// `sync_cursors` is created empty because opening this store at the current
+    /// schema runs *every* later migration step, and v17 adds a column to it
+    /// (#1032): a real v3 store always holds this table, so the fixture must
+    /// too, or the upgrade fails on a table only this partial fixture omitted.
     void writeV3Store({bool withDuplicateChainSlot = false}) {
       final database = raw.sqlite3.open(file.path);
       database
@@ -499,6 +504,13 @@ CREATE TABLE quarantined_ops (
   detail TEXT NOT NULL,
   envelope BLOB NOT NULL,
   detected_at TEXT NOT NULL
+)''')
+        ..execute('''
+CREATE TABLE sync_cursors (
+  workspace_id TEXT NOT NULL,
+  last_seq INTEGER NOT NULL,
+  last_sync_completed_at TEXT,
+  PRIMARY KEY (workspace_id)
 )''')
         ..execute(
           'INSERT INTO op_log VALUES (?, ?, ?, ?, ?, ?, ?)',
@@ -644,6 +656,7 @@ CREATE TABLE quarantined_ops (
     /// current schema runs *every* later migration step, and v9 adds a column to
     /// it (#620): a real v5 store always holds this table, so the fixture must
     /// too, or the upgrade fails on a table only this partial fixture omitted.
+    /// `sync_cursors` is the same case: v17 adds a column to it (#1032).
     void writeV5Alarms(List<String?> authorMemberIds) {
       final database = raw.sqlite3.open(file.path);
       database.execute('''
@@ -671,6 +684,13 @@ CREATE TABLE quarantined_ops (
   author_member_id TEXT,
   author_seq INTEGER,
   released_at TEXT
+)''');
+      database.execute('''
+CREATE TABLE sync_cursors (
+  workspace_id TEXT NOT NULL,
+  last_seq INTEGER NOT NULL,
+  last_sync_completed_at TEXT,
+  PRIMARY KEY (workspace_id)
 )''');
       for (final authorMemberId in authorMemberIds) {
         database.execute(
