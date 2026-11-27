@@ -147,8 +147,9 @@ void main() {
 
       final fixed = await b.reopenSyncStore(attachTransport: true);
       await fixed.pull();
-      await fixed.pull();
 
+      // The registration is applied in the pull that recovers its predecessor:
+      // the two scans feed each other, so one pull is enough.
       final row = (await _breakRows(fixed))
           .singleWhere((row) => row.authorMemberId == dId);
       expect(row.id, held.singleWhere((r) => r.authorMemberId == dId).id);
@@ -171,6 +172,49 @@ void main() {
             .where((r) => r.authorMemberId == dId),
         isEmpty,
       );
+
+      // A second pull changes nothing: the refusal is dealt with, and the
+      // registration is applied.
+      await fixed.pull();
+      final after = (await _breakRows(fixed)).singleWhere((r) => r.id == row.id);
+      expect(after.releasedAt, row.releasedAt);
+      expect(fixed.directory.isChained(dId), isTrue);
+      expect(
+        (await _applied(b)).where((r) =>
+            r.controlType == controlTypeMemberRegister &&
+            ControlPayload.decode(r.payloadBytes).certificate().memberId == dId),
+        hasLength(1),
+      );
+    });
+
+    test('a device that lost its epoch key fetches it again after a restart',
+        () async {
+      final scene = await _scene();
+      final b = scene.workspace.b;
+
+      final fixed = await b.reopenSyncStore(attachTransport: true);
+      await fixed.pull();
+      final floor = await fixed.epochFloor();
+      expect(floor, greaterThan(0),
+          reason: 'the recovered rotate raised the epoch floor');
+      expect(await fixed.workspaceKeys.keyFor(fixed.workspaceId, floor),
+          isNotNull,
+          reason: 'the pull that applied the rotate fetched the wraps');
+
+      // The key is gone, as it would be if the process had exited between the
+      // rotate applying and the wrap being fetched. The flag that owed that
+      // fetch is memory, so a restart does not carry it.
+      await fixed.workspaceKeys.clear(fixed.workspaceId);
+      expect(await fixed.workspaceKeys.keyFor(fixed.workspaceId, floor), isNull);
+
+      final restarted = await b.reopenSyncStore(attachTransport: true);
+      await restarted.pull();
+
+      expect(
+          await restarted.workspaceKeys.keyFor(restarted.workspaceId, floor),
+          isNotNull,
+          reason: 'a device at a keyed epoch it cannot read fetches that '
+              'epoch\'s wraps on its next pull');
     });
 
     test('rows with no real predecessor stay refused and untouched', () async {
