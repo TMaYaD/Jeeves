@@ -3,7 +3,9 @@
 /// The stop is a closing that is neither a completion nor a replacement: the
 /// Action keeps the time it logged, gains the stopped-at-the-limit mark, and no
 /// successor inherits it. These tests pin the write itself, the replay, the
-/// stale-current refusal, and the way the Outcome's history reads it back.
+/// stale-current refusal, and the way the Outcome's history reads it back —
+/// and the rule that the stop rides the verdict's own write, so a verdict
+/// that fails to land leaves the Action current.
 library;
 
 import 'package:drift/drift.dart' hide isNotNull, isNull;
@@ -12,6 +14,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/daos/action_dao.dart' show ActionDao;
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/routing_kind.dart';
 
 import '../test_helpers.dart';
 
@@ -170,6 +173,89 @@ void main() {
     // The Action the user saw is untouched, and so is the one that replaced it.
     expect((await _action(db, 'a1'))!.stoppedAtLimitAt, isNull);
     expect((await _action(db, 'a2'))!.stoppedAtLimitAt, isNull);
+  });
+
+  test('the stop rides the verdict\'s own write', () async {
+    await _seed(db);
+
+    final landed = await db.todoDao.applyRouting(
+      'o1',
+      to: RoutingKind.nextAction,
+      actionText: 'Carry on with the summary',
+      stopAtLimitActionId: 'a1',
+      now: _t2,
+    );
+
+    expect(landed, isTrue);
+    // The Action is closed at its limit…
+    final stopped = await _action(db, 'a1');
+    expect(stopped!.role, 'superseded');
+    expect(stopped.stoppedAtLimitAt, isNotNull);
+    // …and the Outcome change landed with it.
+    final todo = await db.todoDao.getTodo('o1');
+    expect(todo!.intent, 'next');
+    expect(todo.lastClarifiedAt, isNotNull);
+    // The new Action is the Outcome's current one.
+    final current = await db.actionDao.getCurrentAction('o1');
+    expect(current!.actionText, 'Carry on with the summary');
+  });
+
+  test('a verdict that fails to land leaves the Action current', () async {
+    await _seed(db);
+    await db.into(db.actions).insert(ActionsCompanion(
+          id: const Value('p1'),
+          outcomeId: const Value('o1'),
+          userId: const Value(_userId),
+          actionText: const Value('Planned action'),
+          role: const Value('planned'),
+          createdAt: Value(_t1),
+          updatedAt: Value(_t1),
+        ));
+
+    // The promoted Action vanished on another device: the route lands nothing,
+    // and the stop must not have landed either.
+    await db.customStatement('DELETE FROM actions WHERE id = ?', ['p1']);
+
+    final landed = await db.todoDao.applyRouting(
+      'o1',
+      to: RoutingKind.nextAction,
+      promotePlannedActionId: 'p1',
+      stopAtLimitActionId: 'a1',
+      now: _t2,
+    );
+
+    expect(landed, isFalse);
+    final action = await _action(db, 'a1');
+    expect(action!.role, 'current');
+    expect(action.stoppedAtLimitAt, isNull);
+  });
+
+  test('the stop is refused alongside a replacing current Action', () async {
+    await _seed(db);
+
+    expect(
+      () => db.todoDao.applyRouting(
+        'o1',
+        to: RoutingKind.nextAction,
+        promotePlannedActionId: 'p1',
+        replacingCurrentActionId: 'a1',
+        stopAtLimitActionId: 'a1',
+      ),
+      throwsArgumentError,
+    );
+  });
+
+  test('the stop is refused for trash', () async {
+    await _seed(db);
+
+    expect(
+      () => db.todoDao.applyRouting(
+        'o1',
+        to: RoutingKind.trash,
+        stopAtLimitActionId: 'a1',
+      ),
+      throwsArgumentError,
+    );
   });
 
   test('the Outcome\'s history reads the stopped Action back', () async {
