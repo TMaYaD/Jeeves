@@ -170,6 +170,19 @@ String? habitRowStateText({
   }
 }
 
+/// The Place in front of a Habit's own line: "Home · Not yet", or the Place
+/// alone when the Habit has nothing else to say.
+///
+/// A Habit with no Place leaves the line as it was. A Place is shown wherever
+/// the Habit appears, whether or not the user is there.
+String habitPlaceLine({required String? placeName, required String? line}) {
+  final place = placeName?.trim();
+  final rest = line?.trim();
+  if (place == null || place.isEmpty) return rest ?? '';
+  if (rest == null || rest.isEmpty) return place;
+  return '$place · $rest';
+}
+
 const _weekdayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const _monthNames = [
   'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',

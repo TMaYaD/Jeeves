@@ -42,10 +42,13 @@ import 'package:jeeves/sync/envelope.dart';
 import 'package:jeeves/sync/hlc.dart';
 import 'package:jeeves/sync/ids.dart';
 import 'package:jeeves/sync/reducer.dart';
+import 'package:jeeves/sync/sync_database.dart';
+import 'package:sqlite3/common.dart' show SqliteException;
 import 'package:uuid/uuid.dart';
 
 import 'harness/author_fixture.dart';
 import 'harness/fake_sync_server.dart';
+import 'harness/fault_injecting_store.dart';
 import 'harness/reduced_state.dart';
 import 'harness/sim_device.dart';
 import 'harness/sim_workspace.dart';
@@ -174,6 +177,185 @@ void main() {
       seq: seq,
     );
   }
+
+  group('an owed grant re-check survives a restart and a failed rebuild (#1032)',
+      () {
+    /// The marker of an owed rebuild on [store]'s cursor row for this Workspace.
+    Future<DateTime?> markerOn(SyncDatabase store) async {
+      final row = await (store.select(store.syncCursors)
+            ..where((r) => r.workspaceId.equals(workspace.workspaceId)))
+          .getSingleOrNull();
+      return row?.rebuildRequiredAt;
+    }
+
+    Future<Set<String>> reducedTodoIds(SyncDatabase store) async {
+      final rows = await store
+          .customSelect(
+              "SELECT DISTINCT entity_id FROM reduced_fields WHERE collection = 'todos'")
+          .get();
+      return {for (final row in rows) row.read<String>('entity_id')};
+    }
+
+    Future<OpLogRow> logRow(SyncDatabase store, int seq) =>
+        (store.select(store.opLog)
+              ..where((r) =>
+                  r.workspaceId.equals(workspace.workspaceId) & r.seq.equals(seq)))
+            .getSingle();
+
+    /// The fork, staged so that the winning control op resolves it on the
+    /// second pull and the rebuild it forces throws.
+    ///
+    /// The ops are posted in the order their seqs need: the losing branch, its
+    /// content, the winning branch, its content. The losing content has to land
+    /// before the winning branch is posted, so that the winning branch's seq is
+    /// above the cursor the first pull leaves behind — an op below the cursor is
+    /// never served again, and the fork would never be resolved.
+    ///
+    /// The second pull serves the winning **content before the winning grant**,
+    /// so the content is refused `no_live_grant` first and only the rebuild can
+    /// undo that verdict. The rebuild's replay of it is the write that faults,
+    /// so the pull throws with the obligation still owed.
+    Future<
+        ({
+          int loserContent,
+          int winnerContent,
+          String loserTodo,
+          String winnerTodo,
+        })> stageFailedRebuild() async {
+      final faults = FaultInjectingInterceptor();
+      await workspace.close();
+      workspace = await SimWorkspace.create(
+        userId: _userId,
+        deviceCount: 1,
+        aSyncStoreInterceptor: faults,
+        fileBacked: true,
+      );
+      final losingAuthor = await chained(91);
+      final losingGrantee = await chained(101);
+      final winningAuthor = await chained(131);
+      final winningGrantee = await chained(141);
+      await workspace.syncAll();
+
+      final head = workspace.controlChainHead();
+      await branch(
+        author: losingAuthor,
+        grantee: losingGrantee,
+        prevControlHash: head,
+        certWallMs: simulationStartWallMs + 8000,
+      );
+      final loserTodo = preferenceEntityId(workspace.workspaceId, 'from-loser');
+      final winnerTodo = preferenceEntityId(workspace.workspaceId, 'from-winner');
+      final loserContent =
+          (await losingGrantee.session.postOps(workspace.workspaceId, [
+        await _todoOp(
+            workspace, losingGrantee.fixture, loserTodo, 'authored on the loser'),
+      ])).single.seq;
+      final winner = await branch(
+        author: winningAuthor,
+        grantee: winningGrantee,
+        prevControlHash: head,
+        certWallMs: simulationStartWallMs + 2000,
+      );
+      final winnerContent =
+          (await winningGrantee.session.postOps(workspace.workspaceId, [
+        await _todoOp(
+            workspace, winningGrantee.fixture, winnerTodo, 'authored on the winner'),
+      ])).single.seq;
+
+      // Pull 1: the losing branch and its content land, and the winning branch
+      // is withheld. The content the losing branch authorized applies, so the
+      // domain holds it — the row the rebuild later has to take away.
+      workspace.server.omitSeqs
+        ..add(winner.seq)
+        ..add(winnerContent);
+      await workspace.a.client.pull();
+      expect((await logRow(workspace.a.syncStore, loserContent)).refusedReason,
+          isNull);
+      expect(await reducedTodoIds(workspace.a.syncStore), {loserTodo});
+      expect(
+        {for (final row in await _todoRows(workspace.a)) row['id']},
+        {loserTodo},
+      );
+      expect(await markerOn(workspace.a.syncStore), isNull,
+          reason: 'nothing is owed before the fork');
+
+      // Pull 2: the winning content is served before the winning grant, so it
+      // is refused `no_live_grant`; the winning grant then resolves the fork,
+      // which owes the rebuild. The rebuild's replay of the winning content is
+      // the first write into the reduced state, and it faults.
+      workspace.server
+        ..omitSeqs.clear()
+        ..serveOrder = [winnerContent, winner.seq];
+      faults.failNextInsertInto('reduced_fields');
+      await expectLater(
+        workspace.a.client.pull(),
+        throwsA(isA<SqliteException>()),
+      );
+      expect(faults.firedCount, 1, reason: 'the fault hit the rebuild');
+      expect(await markerOn(workspace.a.syncStore), isNotNull,
+          reason: 'the throwing rebuild left the obligation on disk');
+      return (
+        loserContent: loserContent,
+        winnerContent: winnerContent,
+        loserTodo: loserTodo,
+        winnerTodo: winnerTodo,
+      );
+    }
+
+    Future<void> expectVerdictFixed(
+      SyncDatabase store,
+      SimDevice device,
+      ({
+        int loserContent,
+        int winnerContent,
+        String loserTodo,
+        String winnerTodo,
+      }) staged,
+    ) async {
+      expect(await reducedTodoIds(store), {staged.winnerTodo});
+      expect((await logRow(store, staged.loserContent)).refusedReason,
+          'no_live_grant');
+      final winnerRow = await logRow(store, staged.winnerContent);
+      expect(winnerRow.refusedReason, isNull);
+      expect(winnerRow.appliedAt, isNotNull);
+      expect(await markerOn(store), isNull,
+          reason: 'cleared once the rebuild and its projection finished');
+      final todoIds = {for (final row in await _todoRows(device)) row['id']};
+      expect(todoIds, {staged.winnerTodo},
+          reason: 'the projection shows the winning branch only');
+      expect(todoIds, isNot(contains(staged.loserTodo)),
+          reason: 'the row the losing branch put there is gone');
+    }
+
+    test('a restart before the rebuild finishes still gets it on the first pull',
+        () async {
+      final staged = await stageFailedRebuild();
+      final reopened = await workspace.a.reopenSyncStore(attachTransport: true);
+      expect(await markerOn(workspace.a.syncStore), isNotNull,
+          reason: 'the obligation is on the reopened file');
+
+      await reopened.pull();
+
+      await expectVerdictFixed(workspace.a.syncStore, workspace.a, staged);
+
+      // No churn: a further pull with nothing new changes nothing.
+      await reopened.pull();
+      expect(await reducedTodoIds(workspace.a.syncStore), {staged.winnerTodo});
+      expect(await markerOn(workspace.a.syncStore), isNull);
+    });
+
+    test('a rebuild that threw once is run again by the next pull', () async {
+      final staged = await stageFailedRebuild();
+
+      await workspace.a.client.pull();
+
+      await expectVerdictFixed(workspace.a.syncStore, workspace.a, staged);
+      await workspace.a.client.pull();
+      expect(await reducedTodoIds(workspace.a.syncStore), {staged.winnerTodo});
+      expect(await markerOn(workspace.a.syncStore), isNull);
+    });
+  });
+
 
   group('the tie-break', () {
     test('is the certificate clock, and the loser is quarantined', () async {

@@ -18,6 +18,15 @@ final currentPlacesProvider =
   return ref.watch(databaseProvider).actionDao.watchCurrentPlaces();
 });
 
+/// The Place each Habit carries, keyed by Habit id (issue #1075).
+///
+/// A Habit is never hidden by its Place: this is what shows where it is, not
+/// a gate. A Habit whose Place no longer exists is absent from the map.
+final habitPlacesProvider =
+    StreamProvider<Map<String, HabitPlace>>((ref) {
+  return ref.watch(databaseProvider).habitDao.watchHabitPlaces();
+});
+
 /// Outcome ids whose current Action is at a Place the user is not at.
 ///
 /// Empty when the location is unknown: with no fix, nothing is hidden by
@@ -38,6 +47,18 @@ String placeDisplayName(ActionPlace place) => placeNameLabel(place.name);
 /// The name to show for the Place each Outcome carries, keyed by Outcome id.
 final currentPlaceNamesProvider = Provider<Map<String, String>>((ref) {
   final places = ref.watch(currentPlacesProvider).value ?? const {};
+  return {
+    for (final entry in places.entries)
+      entry.key: placeDisplayName(entry.value),
+  };
+});
+
+/// The name to show for the Place each Habit carries, keyed by Habit id.
+///
+/// The Place's own name, or "Pin" for a one-time pin that has none. A Habit
+/// whose Place no longer exists is absent from the map.
+final habitPlaceNamesProvider = Provider<Map<String, String>>((ref) {
+  final places = ref.watch(habitPlacesProvider).value ?? const {};
   return {
     for (final entry in places.entries)
       entry.key: placeDisplayName(entry.value),

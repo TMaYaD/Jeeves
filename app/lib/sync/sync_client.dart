@@ -284,21 +284,14 @@ class SyncClient {
   /// the case the flat loop already covers.
   final Set<String> _releasingChainOfAuthors = <String>{};
 
-  /// Set when a control fork resolution invalidated the authorization verdicts
-  /// content ops were applied under.
-  ///
-  /// Acted on at the end of the pull rather than mid-page: a rebuild replays the
-  /// whole retained log, so doing it per-op inside a page would be quadratic in
-  /// the page for no extra correctness.
-  bool _rebuildRequired = false;
-
   /// Quarantine rows of control ops applied late by
   /// [_releaseOpsAwaitingControlPredecessor], stamped released only after the
   /// pull-tail [rebuildFromOpLog] has recomputed the grant verdicts they change
   /// and projection has succeeded.
-  /// [_rebuildRequired] is memory only, so the unreleased row is the durable record
-  /// that the rebuild is owed: a process exit before the stamp makes the next
-  /// scan find the op already applied, set the flag again and retry.
+  ///
+  /// The unreleased row is the durable record that the rebuild is owed: a process
+  /// exit before the stamp makes the next scan find the op already applied, raise
+  /// the rebuild obligation again and retry.
   final Set<int> _releaseAfterRebuild = <int>{};
 
   /// The pull in flight, and whether another pull was asked for while it ran.
@@ -1359,7 +1352,7 @@ class SyncClient {
     //
     // Placed first on the tail so that whatever a re-received op sets in
     // motion — a `missing_epoch_key` refusal, a raised epoch floor,
-    // `_rebuildRequired` — is picked up by the blocks below in the same pull.
+    // the stored rebuild marker — is picked up by the blocks below in the same pull.
     //
     // A control op refused because its predecessor was not applied yet is
     // re-examined once the applied control head has moved (or on the first pull
@@ -1394,7 +1387,7 @@ class SyncClient {
     // freshness race F14b names (the wraps PUT landing moments after the rotate op)
     // resolves on the next pull rather than as a mystery decryption failure.
     if (_epochKeyRefreshRequired || await _hasOpsAwaitingEpochKeys()) {
-      final learnedEpochKeys = await refreshEpochKeys();
+      await refreshEpochKeys();
       // Cleared only once the fetch has actually happened. A rotate can raise this
       // flag while nothing is quarantined yet — no content at the new epoch has
       // arrived — so clearing it before a fetch that then fails on transport would
@@ -1407,16 +1400,6 @@ class SyncClient {
       // release on *this* fetch having learned something would leave those ops
       // quarantined for ever.
       affected.addAll(await _releaseOpsAwaitingEpochKeys());
-      if (learnedEpochKeys > 0) {
-        // A rebuild skips rows it cannot decode, and those rows are in `op_log`
-        // rather than the quarantine — the release scan above will never reach
-        // them. A newly arrived epoch key is the one event that can change that
-        // verdict, so it re-arms the replay. Gated on *learning* rather than on
-        // the skip, because an unconditional re-arm would replay the whole log on
-        // every pull for as long as a key stayed missing, and a key is learned at
-        // most once per epoch.
-        _rebuildRequired = true;
-      }
     }
     // A rotate raised the floor this pull, so ops quarantined at an epoch that is
     // now established can be released. Placed **after** the key-refresh block above
@@ -1450,9 +1433,14 @@ class SyncClient {
         affected.addAll(await _releaseChainSuccessors(author));
       }
     }
-    if (_rebuildRequired) {
-      // A control fork resolved during this pull, so the authorization verdicts
-      // the content ops applied under are no longer the right ones.
+    // A verdict-changing event (a resolved control fork, a late control op, a
+    // newly learned epoch key) stored a marker when it happened, so the obligation
+    // survives a restart and a rebuild that throws. The marker is cleared below,
+    // only after the projection of what the rebuild changed (#1032).
+    final rebuildRequiredSince = await _rebuildRequiredSince();
+    if (rebuildRequiredSince != null) {
+      // The authorization verdicts the content ops applied under are no longer
+      // the right ones.
       affected.addAll(await rebuildFromOpLog());
     }
     // Keep the whole batch durable until projection succeeds, including entities
@@ -1477,6 +1465,9 @@ class SyncClient {
       _releaseAfterRebuild.remove(rowId);
     }
     if (recorded.isNotEmpty) await _clearAwaitingProjection(recorded);
+    if (rebuildRequiredSince != null) {
+      await _clearRebuildRequirement(rebuildRequiredSince);
+    }
     // And the convergence passes run on what it changed. This is the route by
     // which a peer's Tag entity first reaches the domain store, so it is where a
     // duplicate `(name, type)` group is folded and a junction stranded on a
@@ -1591,6 +1582,11 @@ class SyncClient {
   /// the recovery path can never oscillate. #555 inherits this entry point, since
   /// compaction needs the same one and must keep it correct under pruning.
   ///
+  /// This is the replay only. Owing it, and clearing what is owed, is the pull
+  /// tail's job: the stored marker stays set until the rebuild **and** the
+  /// projection of what it changed have finished, so a throw part-way leaves it
+  /// owed (#1032).
+  ///
   /// **Entities the rebuild *un*-reduces are surfaced too**, which is the whole
   /// reason [_reducedEntities] is read before the wipe. An entity whose every op
   /// became refused reduces to nothing, so the replay never names it — and a
@@ -1598,8 +1594,14 @@ class SyncClient {
   /// standing as the last visible trace of a quarantined branch. The pre-wipe set
   /// is unioned into the return value, so such an entity reaches
   /// [DomainProjector.project] with no live field and is deleted there.
+  ///
+  /// The pre-wipe set is the *reduced* state's memory of the entity, and the
+  /// reduced state is wiped before the replay — so a rebuild that threw leaves
+  /// the next rebuild with nothing to read it from. The op log is the evidence
+  /// that outlives the wipe: an op that was applied and that the corrected view
+  /// now refuses names its entity here, so the entity reaches the projector
+  /// either way.
   Future<Set<AffectedEntity>> rebuildFromOpLog() async {
-    _rebuildRequired = false;
     final rows = await (_db.select(_db.opLog)
           ..where((row) => row.workspaceId.equals(workspaceId))
           ..orderBy([(row) => OrderingTerm(expression: row.seq)]))
@@ -1696,6 +1698,20 @@ class SyncClient {
         );
         if (authorization != null) {
           await _stampRefused(row.seq, authorization.reason);
+          // An op that was applied and is now refused loses its place in the
+          // reduced state, and the entity it belonged to has to be re-surfaced
+          // so the projector hears of the removal. The pre-wipe reduced state
+          // names that entity — but only while it still holds it, and a rebuild
+          // that threw has already wiped it. The op log is the evidence that
+          // outlives the wipe, so the entity is named from there: `applied_at`
+          // says the op was applied, and the corrected view says it no longer
+          // may be.
+          if (row.appliedAt != null && ownsCollection(payload.collection)) {
+            affected.add((
+              collection: payload.collection,
+              entityId: payload.entityId,
+            ));
+          }
           return;
         }
         try {
@@ -3470,8 +3486,9 @@ class SyncClient {
           'was re-reduced under the winning grants view',
     );
     // A resolved control fork can change which *content* ops were authorized, so
-    // convergence of the grants view alone is not convergence.
-    _rebuildRequired = true;
+    // convergence of the grants view alone is not convergence. Written inside
+    // the transaction that stamped the quarantine, so the two commit together.
+    await _requireRebuild();
   }
 
   // --- Suite dispatch and epoch keys -------------------------------------------
@@ -3546,7 +3563,7 @@ class SyncClient {
 
   /// Set when this pull learned that an epoch key it does not hold now exists.
   ///
-  /// Acted on at the end of the pull rather than mid-page, for [_rebuildRequired]'s
+  /// Acted on at the end of the pull rather than mid-page, for the stored rebuild marker's
   /// reason: a rotate and the first op at the new epoch usually arrive in one page,
   /// and re-fetching per op would spend a round-trip per op.
   bool _epochKeyRefreshRequired = false;
@@ -3624,18 +3641,24 @@ class SyncClient {
       if (!sameBytes(record.kexKeyId, ownKexKeyId)) continue;
       if (await workspaceKeys.keyFor(workspaceId, record.epoch) != null) continue;
       try {
-        await workspaceKeys.remember(
-          workspaceId,
-          record.epoch,
-          await unwrapEpochKeyForMember(
-            wrap: record.wrap,
-            kexKeyPair: identity.kexKeyPair,
-            workspaceId: workspaceId,
-            epoch: record.epoch,
-            memberId: identity.memberId,
-            kexKeyId: ownKexKeyId,
-          ),
+        final epochKey = await unwrapEpochKeyForMember(
+          wrap: record.wrap,
+          kexKeyPair: identity.kexKeyPair,
+          workspaceId: workspaceId,
+          epoch: record.epoch,
+          memberId: identity.memberId,
+          kexKeyId: ownKexKeyId,
         );
+        // A rebuild skips rows it cannot decode, and those rows are in `op_log`
+        // rather than the quarantine, so the release scan never reaches them. A
+        // newly arrived epoch key is the one event that can change that verdict,
+        // so it owes a replay. Gated on *learning* rather than on the skip,
+        // because an unconditional re-arm would replay the whole log on every
+        // pull for as long as a key stayed missing. Stored **before** the key
+        // is: a kill in between costs one extra, idempotent rebuild, where the
+        // reverse order would learn the key and never owe the replay.
+        await _requireRebuild();
+        await workspaceKeys.remember(workspaceId, record.epoch, epochKey);
         learned++;
       } on SyncRejection catch (rejection) {
         await _raiseAlarm(
@@ -3802,7 +3825,7 @@ class SyncClient {
         // Its authority can change the grant verdict of content already judged
         // at a later `seq`; the tail's existing `rebuildFromOpLog` recomputes
         // exactly that verdict.
-        _rebuildRequired = true;
+        await _requireRebuild();
         // A control op occupies a position in its author's chain, but the
         // control branch of `_receive` returns without asking whether a held
         // successor is now valid — the content and prune branches end in
@@ -3875,7 +3898,7 @@ class SyncClient {
       if (alreadyHeld != null &&
           alreadyHeld.appliedAt != null &&
           sameBytes(alreadyHeld.envelope, row.envelope)) {
-        _rebuildRequired = true;
+        await _requireRebuild();
         _releaseAfterRebuild.add(row.id);
         // Control op already applied; release its author's chain successors.
         affected.addAll(await _releaseChainSuccessors(header.authorMemberId));
@@ -3901,7 +3924,7 @@ class SyncClient {
         // Its authority can change the grant verdict of content already judged at
         // a later `seq`; the tail's `rebuildFromOpLog` recomputes that verdict.
         // Control op newly admitted; release its author's chain successors.
-        _rebuildRequired = true;
+        await _requireRebuild();
         _releaseAfterRebuild.add(row.id);
         affected.addAll(await _releaseChainSuccessors(header.authorMemberId));
         continue;
@@ -5200,6 +5223,42 @@ class SyncClient {
           ..where((r) => r.workspaceId.equals(workspaceId)))
         .getSingleOrNull();
     return row?.lastSeq ?? 0;
+  }
+
+  /// Record that a rebuild from the op log is owed, on this Workspace's cursor
+  /// row. Touches only the marker, never the cursor.
+  Future<void> _requireRebuild() async {
+    await _db.into(_db.syncCursors).insert(
+          SyncCursorsCompanion.insert(
+            workspaceId: workspaceId,
+            lastSeq: 0,
+            rebuildRequiredAt: Value(_now()),
+          ),
+          onConflict: DoUpdate(
+            (_) => SyncCursorsCompanion(rebuildRequiredAt: Value(_now())),
+          ),
+        );
+  }
+
+  /// When a rebuild became owed, or null when none is.
+  Future<DateTime?> _rebuildRequiredSince() async {
+    final row = await (_db.select(_db.syncCursors)
+          ..where((r) => r.workspaceId.equals(workspaceId)))
+        .getSingleOrNull();
+    return row?.rebuildRequiredAt;
+  }
+
+  /// Clear the marker [raisedAt] read before the rebuild. The equality guard
+  /// leaves a marker raised again while the rebuild ran. Drift keeps a
+  /// `DateTime` as ISO-8601 text, so the column keeps milliseconds: two raises
+  /// inside the same millisecond are not told apart, and nothing raises the
+  /// marker during a rebuild today.
+  Future<void> _clearRebuildRequirement(DateTime raisedAt) async {
+    await (_db.update(_db.syncCursors)
+          ..where((r) =>
+              r.workspaceId.equals(workspaceId) &
+              r.rebuildRequiredAt.equals(raisedAt)))
+        .write(const SyncCursorsCompanion(rebuildRequiredAt: Value(null)));
   }
 
   Future<void> _saveCursor(int seq) async {

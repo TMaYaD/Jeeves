@@ -106,6 +106,11 @@ class SyncCursors extends Table {
   /// a timestamp that would make a receiving device look unreachable.
   DateTimeColumn get lastSyncCompletedAt => dateTime().nullable()();
 
+  /// Set when a late control op or a newly learned epoch key may have changed a
+  /// grant verdict already judged; cleared by the pull tail once the rebuild and
+  /// its projection have both completed. Null = nothing owed (#1032).
+  DateTimeColumn get rebuildRequiredAt => dateTime().nullable()();
+
   @override
   Set<Column<Object>> get primaryKey => {workspaceId};
 }
@@ -642,7 +647,8 @@ class SyncDatabase extends _$SyncDatabase {
   /// adds the columns that record the user's decision on an integrity alarm or
   /// a refused op (#575); v15 adds the column that records whether a take
   /// upstream reached the domain store (#575); v16 adds the record of a reduced
-  /// entity that still needs projecting (#1031).
+  /// entity that still needs projecting (#1031); v17 adds the marker that a
+  /// grant re-check is owed (#1032).
   @override
   int get schemaVersion => supportedSchemaVersion;
 
@@ -652,7 +658,7 @@ class SyncDatabase extends _$SyncDatabase {
   /// carrying a **higher** version was written by a newer build, and this
   /// build refuses it: the op log is the evidence every merge verdict is
   /// derived from, and a build that cannot read it must not relabel it.
-  static const int supportedSchemaVersion = 16;
+  static const int supportedSchemaVersion = 17;
 
   /// Additive only. A device that already holds a log keeps every byte of it:
   /// each step is `CREATE TABLE`s, an `ADD COLUMN` or a `CREATE INDEX`, and no
@@ -843,6 +849,12 @@ CREATE TABLE integrity_alarms (
             // One new table, nothing altered or backfilled: a device that
             // predates it owes no projection it could have recorded.
             await migrator.createTable(entitiesAwaitingProjection);
+          }
+          if (from < 17) {
+            // One nullable column, no backfill: null is right for every existing
+            // store, because an obligation a previous build held lived in memory
+            // and died with its process.
+            await migrator.addColumn(syncCursors, syncCursors.rebuildRequiredAt);
           }
         },
       );
