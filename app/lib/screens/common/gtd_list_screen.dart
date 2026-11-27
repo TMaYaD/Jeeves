@@ -25,6 +25,7 @@ class GtdListScreen extends ConsumerStatefulWidget {
     this.selectable = true,
     this.showPlaceName = false,
     this.header,
+    this.emptyBuilder,
   });
 
   final StreamProvider<List<Todo>> provider;
@@ -48,6 +49,15 @@ class GtdListScreen extends ConsumerStatefulWidget {
   /// A line above the list — the Next list's calm note about not knowing
   /// where the user is (issue #55).
   final Widget? header;
+
+  /// A fully custom empty surface, for a list whose empty state has to say
+  /// something the shared surface cannot — the Next list's "everything on it
+  /// is waiting for its time or its place" (issue #1076).
+  ///
+  /// When it is given it replaces the standard empty layout entirely, and the
+  /// callsite owns its copy: [emptyIcon], [emptyTitle] and [emptySubtitle]
+  /// are not read.
+  final WidgetBuilder? emptyBuilder;
 
   @override
   ConsumerState<GtdListScreen> createState() => _GtdListScreenState();
@@ -113,6 +123,7 @@ class _GtdListScreenState extends ConsumerState<GtdListScreen> {
                   emptyIcon: widget.emptyIcon,
                   emptyTitle: widget.emptyTitle,
                   emptySubtitle: widget.emptySubtitle,
+                  emptyBuilder: widget.emptyBuilder,
                   dataBuilder: (context, items) => ListView.builder(
                     padding: const EdgeInsets.only(top: 8, bottom: 24),
                     itemCount: items.length,
