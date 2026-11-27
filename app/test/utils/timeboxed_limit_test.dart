@@ -142,4 +142,115 @@ void main() {
       expect(limitPassedAt(15, [open, closed]), _at(9, 5).toUtc());
     });
   });
+
+  group('loggedDurationOn', () {
+    test('is nothing when nothing was logged', () {
+      expect(loggedDurationOn(const [], _at(9, 0)), Duration.zero);
+    });
+
+    test('adds up the closed stints', () {
+      final logged = loggedDurationOn([
+        TimeLogInterval(
+          startedAt: _at(9, 0).toIso8601String(),
+          endedAt: _at(9, 15).toIso8601String(),
+        ),
+        TimeLogInterval(
+          startedAt: _at(9, 20).toIso8601String(),
+          endedAt: _at(9, 50).toIso8601String(),
+        ),
+      ], _at(10, 0));
+
+      expect(logged, const Duration(minutes: 45));
+    });
+
+    test('an open stint counts on to now', () {
+      final logged = loggedDurationOn([
+        TimeLogInterval(
+          startedAt: _at(9, 0).toIso8601String(),
+          endedAt: _at(9, 15).toIso8601String(),
+        ),
+        TimeLogInterval(startedAt: _at(9, 20).toIso8601String()),
+      ], _at(9, 50));
+
+      // 15 minutes closed, and the open stint has run on for 30.
+      expect(logged, const Duration(minutes: 45));
+    });
+
+    test('a stint that ends before it starts counts for nothing', () {
+      final logged = loggedDurationOn([
+        TimeLogInterval(
+          startedAt: _at(9, 10).toIso8601String(),
+          endedAt: _at(9, 0).toIso8601String(),
+        ),
+        TimeLogInterval(
+          startedAt: _at(9, 0).toIso8601String(),
+          endedAt: _at(9, 10).toIso8601String(),
+        ),
+      ], _at(9, 30));
+
+      expect(logged, const Duration(minutes: 10));
+    });
+
+    test('a stint whose start does not parse is skipped, not fatal', () {
+      final logged = loggedDurationOn([
+        TimeLogInterval(
+          startedAt: 'not a timestamp',
+          endedAt: _at(9, 30).toIso8601String(),
+        ),
+        TimeLogInterval(
+          startedAt: _at(9, 0).toIso8601String(),
+          endedAt: _at(9, 30).toIso8601String(),
+        ),
+      ], _at(10, 0));
+
+      expect(logged, const Duration(minutes: 30));
+    });
+
+    test('the time logged and the limit never disagree', () {
+      final stintSets = <List<TimeLogInterval>>[
+        // One closed stint.
+        [
+          TimeLogInterval(
+            startedAt: _at(9, 0).toIso8601String(),
+            endedAt: _at(9, 30).toIso8601String(),
+          ),
+        ],
+        // A closed stint, then one still running.
+        [
+          TimeLogInterval(
+            startedAt: _at(9, 0).toIso8601String(),
+            endedAt: _at(9, 20).toIso8601String(),
+          ),
+          TimeLogInterval(startedAt: _at(9, 25).toIso8601String()),
+        ],
+        // A stint that ends before it starts, and one that does not parse.
+        [
+          TimeLogInterval(
+            startedAt: _at(9, 10).toIso8601String(),
+            endedAt: _at(9, 0).toIso8601String(),
+          ),
+          TimeLogInterval(startedAt: 'not a timestamp'),
+          TimeLogInterval(
+            startedAt: _at(9, 0).toIso8601String(),
+            endedAt: _at(9, 40).toIso8601String(),
+          ),
+        ],
+      ];
+      final now = _at(10, 0);
+
+      for (final intervals in stintSets) {
+        for (final value in [5, 15, 30, 45, 55, 60, 90, 120]) {
+          final logged = loggedDurationOn(intervals, now);
+          final passed = limitPassedAt(value, intervals);
+          expect(
+            Duration(minutes: value) > logged,
+            passed == null || passed.isAfter(now),
+            reason:
+                '$value minutes against $logged logged; the limit passed at '
+                '$passed',
+          );
+        }
+      }
+    });
+  });
 }
