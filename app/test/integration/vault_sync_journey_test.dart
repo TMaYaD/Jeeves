@@ -11,8 +11,8 @@
 ///
 /// The harness follows the shape the other Settings journeys use: the stores
 /// are opened outside the test's fake clock, the notification plugin is
-/// stubbed, the time-boundary tick is pinned, and the work is settled by
-/// bounded rounds rather than by waiting for the screen to go quiet (see
+/// stubbed, the time-boundary tick is pinned, and the work is settled by real
+/// time rather than by waiting for the screen to go quiet (see
 /// `docs/TESTING.md`). The Next list is a live Drift watch, and a live watch
 /// keeps `pumpAndSettle` spinning to its timeout, so the frames are pumped
 /// one at a time — the way the other list journeys do it.
@@ -55,10 +55,48 @@ import '../test_helpers.dart';
 const String _outcomeId = '3f2d1c4e-5a6b-4c8d-9e0f-1a2b3c4d5e6f';
 const String _userId = 'vault-user';
 
+/// How long one wait may take in real time before it gives up.
+///
+/// **Real time, not a count of rounds.** The vault does real file I/O, and a
+/// round of the old wait cost the test's own clock, not the wall clock the
+/// files are slow on: forty of them were worth less than a second on a quick
+/// machine, so a machine that stalled for a few hundred milliseconds ran the
+/// budget out — and on a slow one they were worth ten seconds, so the same
+/// test passed or failed with the machine's mood.
+const Duration _waitDeadline = Duration(seconds: 30);
+
+/// The real time the journey's waits may take together.
+///
+/// The suite's per-test budget is 60 seconds, and the waits must be able to
+/// give up and say what they saw inside it.
+const Duration _journeyRealBudget = Duration(seconds: 45);
+
+/// The real time one step of a wait costs.
+///
+/// The wait spends its wall-clock budget here, so a round is worth real time
+/// however quick the machine is: a wait that counted rounds gave a quick
+/// machine less time than the work needed.
+const Duration _stepRealTime = Duration(milliseconds: 5);
+
+/// The fake clock's advance per step of a wait.
+///
+/// Small on purpose. The vault reads the folder again every 30 seconds of fake
+/// time, and a wait that advanced the clock that fast would let that periodic
+/// scan deliver the hand edit the resume path is meant to deliver — a broken
+/// resume path would pass.
+const Duration _stepFakeTime = Duration(milliseconds: 5);
+
+/// The fake time the whole journey may spend, across every wait.
+///
+/// Below the vault's 30-second scan interval, so the periodic scan cannot
+/// stand in for the resume path however long the journey takes.
+const Duration _journeyFakeBudget = Duration(seconds: 10);
+
 /// The delay every operation on the folder takes in the slow journey.
 ///
-/// Real time: the point is a folder that is slow the way a busy machine or a
-/// slow disk makes it, not one that spends the test's budget.
+/// Real time, and four hundred milliseconds of it: the point is a folder that
+/// is slow the way a busy machine or a slow disk makes it, not one that spends
+/// the test's budget.
 const Duration _slowFolderDelay = Duration(milliseconds: 400);
 
 void main() {
@@ -145,6 +183,8 @@ Future<void> _journey(
   required GtdDatabase db,
   required Directory vault,
 }) async {
+  final clock = _JourneyClock();
+
   // The whole Settings list fits on the surface, so the vault's tile is on
   // the screen without a scroll.
   tester.view.physicalSize = const Size(1200, 6000);
@@ -164,7 +204,7 @@ Future<void> _journey(
     child: MaterialApp.router(routerConfig: router),
   ));
   try {
-    await _settle(tester);
+    await _settle(tester, clock);
 
     // The vault is turned on from Settings, the way a person turns it on.
     final tile = find.byKey(const Key('vault_folder_tile'));
@@ -172,7 +212,10 @@ Future<void> _journey(
     await tester.tap(tile);
     await _settleUntil(
       tester,
+      clock,
       () => find.text('Stop syncing through this folder').evaluate().isNotEmpty,
+      what: 'the vault to offer to stop syncing',
+      describe: () => _snapshot(tester, vault),
     );
     expect(find.text('Stop syncing through this folder'), findsOneWidget);
 
@@ -185,11 +228,11 @@ Future<void> _journey(
         onError: (Object error) => pluginError = error,
       ),
     );
-    await _settleUntil(tester, () {
+    await _settleUntil(tester, clock, () {
       final error = pluginError;
       if (error != null) fail('the vault plugin did not start: $error');
       return pluginAttached;
-    });
+    }, what: 'the vault plugin to attach', describe: () => _snapshot(tester, vault));
 
     // An Outcome created in the app.
     //
@@ -208,11 +251,11 @@ Future<void> _journey(
             onError: (Object error) => writeError = error,
           ),
     );
-    await _settleUntil(tester, () {
+    await _settleUntil(tester, clock, () {
       final error = writeError;
       if (error != null) fail('the app write failed: $error');
       return written && _pagesIn(vault).isNotEmpty;
-    });
+    }, what: 'the app write to land in the folder', describe: () => _snapshot(tester, vault));
 
     // Its page is in the folder.
     final path = _pagePath(vault);
@@ -229,7 +272,7 @@ Future<void> _journey(
 
     // The app is on the list, showing the Outcome.
     router.go('/');
-    await _settle(tester);
+    await _settle(tester, clock);
     expect(find.text('Old title'), findsOneWidget);
 
     // A person edits the page in another tool.
@@ -245,7 +288,10 @@ Future<void> _journey(
     // The edit reaches the app, and the app shows it.
     await _settleUntil(
       tester,
+      clock,
       () => find.text('New title').evaluate().isNotEmpty,
+      what: 'the hand edit to reach the app',
+      describe: () => _snapshot(tester, vault),
     );
     expect(find.text('New title'), findsOneWidget);
     expect(find.text('Old title'), findsNothing);
@@ -253,10 +299,10 @@ Future<void> _journey(
     // And the host wrote the merged page back: the block carries the new
     // title's digest, at a clock of its own. The page's frontmatter alone
     // would not say so — the hand edit put that there.
-    await _settleUntil(tester, () {
+    await _settleUntil(tester, clock, () {
       final entry = _titleEntry(File(path).readAsStringSync());
       return entry != null && entry.digest == digestOf('New title');
-    });
+    }, what: 'the host to write the merged page back', describe: () => _snapshot(tester, vault));
     final rewritten = _titleEntry(File(path).readAsStringSync());
     expect(rewritten, isNotNull,
         reason: 'the page still carries the title in its block');
@@ -304,11 +350,29 @@ String _pagePath(Directory vault) {
 /// Next list is a live Drift watch, and a live watch keeps the settle from
 /// ever going quiet. This is the shape the other list journeys use
 /// (`outcome_row_journey_test.dart`).
-Future<void> _settle(WidgetTester tester) async {
+Future<void> _settle(WidgetTester tester, _JourneyClock clock) async {
   for (var i = 0; i < 6; i++) {
-    await tester.runAsync(() => pumpEventQueue());
-    await tester.pump(const Duration(milliseconds: 150));
+    await _step(tester, clock, const Duration(milliseconds: 150));
   }
+}
+
+/// One step of a wait: real time passes, then the test's own clock moves.
+///
+/// The real time is what the work needs — the files are real files — and the
+/// clock's advance is what lets the continuations the real work started in the
+/// test's own zone run.
+Future<void> _step(
+  WidgetTester tester,
+  _JourneyClock clock, [
+  Duration fakeTime = _stepFakeTime,
+]) async {
+  await tester.runAsync(() async {
+    // Real time: the timer is the root zone's, so it is the machine's clock
+    // and not the test's.
+    await Zone.root.run(() => Future<void>.delayed(_stepRealTime));
+    await pumpEventQueue();
+  });
+  await tester.pump(clock.advance(fakeTime));
 }
 
 /// The same, until [done] says the work is done.
@@ -323,16 +387,58 @@ Future<void> _settle(WidgetTester tester) async {
 /// failed at random. When the budget runs out, the wait says what it saw.
 Future<void> _settleUntil(
   WidgetTester tester,
-  bool Function() done,
-) async {
-  for (var round = 0; round < 40; round++) {
-    for (var i = 0; i < 2; i++) {
-      await tester.runAsync(() => pumpEventQueue());
-      await tester.pump(const Duration(milliseconds: 150));
-    }
+  _JourneyClock clock,
+  bool Function() done, {
+  required String what,
+  required String Function() describe,
+}) async {
+  final started = DateTime.now();
+  var rounds = 0;
+  while (DateTime.now().difference(started) < _waitDeadline &&
+      !clock.outOfTime) {
+    await _step(tester, clock);
+    await _step(tester, clock);
+    rounds++;
     if (done()) return;
   }
-  fail('the vault did not settle in time');
+  fail('the vault did not settle in time: $what\n'
+      'after $rounds rounds, '
+      '${DateTime.now().difference(started).inMilliseconds} ms of real time and '
+      '${clock.spent.inMilliseconds} ms of the test\'s clock\n'
+      '${describe()}');
+}
+
+/// The journey's clock.
+///
+/// The fake time is the journey's, not a wait's: the vault's periodic scan
+/// runs for the whole test, so the budget that keeps that scan from firing is
+/// the whole test's. So is the real time: the waits together must be able to
+/// give up inside the suite's per-test budget.
+class _JourneyClock {
+  _JourneyClock() : _started = DateTime.now();
+
+  final DateTime _started;
+  Duration _spent = Duration.zero;
+
+  /// The fake time the journey has spent.
+  Duration get spent => _spent;
+
+  /// Whether the journey's waits have spent their real-time budget.
+  bool get outOfTime =>
+      DateTime.now().difference(_started) >= _journeyRealBudget;
+
+  /// The fake time the next step may advance the clock by.
+  ///
+  /// Zero once the journey has spent its budget: the steps keep coming, so
+  /// the real work still gets its turns, but the clock stops moving and the
+  /// vault's 30-second scan cannot come round.
+  Duration advance([Duration step = _stepFakeTime]) {
+    if (_spent >= _journeyFakeBudget) return Duration.zero;
+    final left = _journeyFakeBudget - _spent;
+    final take = step > left ? left : step;
+    _spent += take;
+    return take;
+  }
 }
 
 /// A folder whose every operation takes real time.
@@ -374,6 +480,25 @@ class _SlowFolder implements VaultFolder {
     await _slow();
     await _inner.remove(relativePath);
   }
+}
+
+/// What the wait could see when it gave up: the folder's pages, and what the
+/// screen shows.
+String _snapshot(WidgetTester tester, Directory vault) {
+  final pages = _pagesIn(vault);
+  final titles = <String>[];
+  for (final path in pages) {
+    final page = File(path).readAsStringSync();
+    final line = page
+        .split('\n')
+        .firstWhere((line) => line.startsWith('title:'), orElse: () => 'no title');
+    titles.add(line.trim());
+  }
+  return 'the folder holds ${pages.length} page(s) (${titles.join(', ')}); '
+      'the screen shows "Old title": '
+      '${find.text('Old title').evaluate().isNotEmpty}; '
+      'the screen shows "New title": '
+      '${find.text('New title').evaluate().isNotEmpty}';
 }
 
 /// The block's entry for the Outcome's title, or null when the page carries
