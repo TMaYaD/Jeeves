@@ -67,9 +67,7 @@ class _NextEmptyStateState extends ConsumerState<NextEmptyState> {
         subtitle: 'Clarify an inbox item to add one.',
       );
     }
-    return EmptySurface(
-      key: const Key('next_all_hidden'),
-      icon: Icons.bedtime_outlined,
+    return _AllHiddenSurface(
       title: _line.$1,
       subtitle: _line.$2,
       cta: Wrap(
@@ -89,6 +87,76 @@ class _NextEmptyStateState extends ConsumerState<NextEmptyState> {
             label: const Text('Places'),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// The surface for a Next list that is empty only because everything on it is
+/// waiting.
+///
+/// It carries Jeeves's own words, so it wears the Jeeves-speak treatment
+/// (docs/DESIGN.md § Voice): a bold header line over a lighter subtitle, set
+/// apart from ordinary copy. [EmptySurface]'s plain grey styles are for
+/// functional copy, so the all-hidden state styles the pair itself rather than
+/// borrowing those. The ordinary empty state is untouched.
+class _AllHiddenSurface extends StatelessWidget {
+  const _AllHiddenSurface({
+    required this.title,
+    required this.subtitle,
+    required this.cta,
+  });
+
+  /// Jeeves-speak ink: the header's colour.
+  static const _ink = Color(0xFF1A1A2E);
+
+  /// The subtitle's colour: lighter than the header, the same muted tone the
+  /// onboarding card uses for its second line.
+  static const _inkMuted = Color(0xFF6B7280);
+
+  /// The glyph's tone, as [EmptySurface]'s icon.
+  static const _iconTone = Color(0xFFD1D5DB);
+
+  final String title;
+  final String subtitle;
+  final Widget cta;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      key: const Key('next_all_hidden'),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.bedtime_outlined, size: 48, color: _iconTone),
+            const SizedBox(height: 12),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: _ink,
+                height: 1.3,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              subtitle,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                color: _inkMuted,
+                height: 1.35,
+              ),
+            ),
+            const SizedBox(height: 16),
+            cta,
+          ],
+        ),
       ),
     );
   }

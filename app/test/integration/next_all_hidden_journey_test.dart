@@ -220,6 +220,31 @@ void main() {
     });
   });
 
+  testWidgets('the all-hidden line wears the Jeeves-speak treatment',
+      (tester) async {
+    await withContainer(tester, () async {
+      await tester.runAsync(seedThreeWindowedOutcomes);
+      await pumpNext(tester);
+
+      // Jeeves's own words, so they get Jeeves's shape: a bold header line
+      // over a lighter subtitle (docs/DESIGN.md § Voice).
+      final header = tester.widget<Text>(find.byWidgetPredicate(
+        (widget) =>
+            widget is Text &&
+            nextAllHiddenPool.any((pair) => pair.$1 == widget.data),
+      ));
+      expect(header.style?.fontSize, 15);
+      expect(header.style?.fontWeight, FontWeight.w700);
+
+      final subtitle = tester.widget<Text>(find.byWidgetPredicate(
+        (widget) =>
+            widget is Text &&
+            nextAllHiddenPool.any((pair) => pair.$2 == widget.data),
+      ));
+      expect(subtitle.style?.fontWeight, FontWeight.w500);
+    });
+  });
+
   testWidgets('the empty state links to the time page and the place page',
       (tester) async {
     await withContainer(tester, () async {
