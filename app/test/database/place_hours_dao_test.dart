@@ -102,6 +102,9 @@ void main() {
 
     expect(hours.keys, {outcomeId});
     expect(hours[outcomeId]!.placeId, placeId);
+    // The winning Action is named, so a surface can drop hours that belong to
+    // a replaced Action.
+    expect(hours[outcomeId]!.actionId, 'a1');
     expect(hours[outcomeId]!.placeName, 'Hardware store');
     expect(hours[outcomeId]!.hours.hours.days, [1, 2, 3, 4, 5]);
     // No zone: the hours are read on the phone's clock.

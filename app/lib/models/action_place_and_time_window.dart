@@ -66,6 +66,7 @@ typedef PlaceHours = ({
 ///
 /// Only a named Place carries hours, and [placeName] is that Place's name.
 typedef ActionPlaceHours = ({
+  String actionId,
   String placeId,
   String placeName,
   PlaceHours hours,

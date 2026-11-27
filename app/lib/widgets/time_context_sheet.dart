@@ -38,7 +38,9 @@ class TimeContextChip extends ConsumerWidget {
     final parsed = TimeContext.tryParse(raw);
     final hasContext = raw != null && raw.trim().isNotEmpty;
     final placeHours = ref.watch(currentPlaceHoursProvider);
-    final actionPlaceHours = placeHours[outcomeId];
+    final candidatePlaceHours = placeHours[outcomeId];
+    final actionPlaceHours =
+        candidatePlaceHours?.actionId == action.id ? candidatePlaceHours : null;
 
     final label = window?.name ??
         parsed?.describe() ??

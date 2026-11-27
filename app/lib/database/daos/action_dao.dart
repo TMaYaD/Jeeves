@@ -947,6 +947,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
           ? null
           : TimeContext.tryParse(action.timeContext);
       result[entry.key] = (
+        actionId: action.id,
         actionText: action.actionText,
         timeWindow: namedWindow,
         timeContext: timeContext,
@@ -1044,7 +1045,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
   /// written: the hours are part of the answer.
   Stream<Map<String, ActionPlaceHours>> watchCurrentPlaceHours() {
     return customSelect(
-      'SELECT actions.outcome_id AS outcome_id, '
+      'SELECT actions.outcome_id AS outcome_id, actions.id AS action_id, '
       'places.id AS place_id, places.name AS place_name, '
       'places.time_window_id AS time_window_id, '
       'places.hours AS own_hours, places.time_zone AS time_zone, '
@@ -1083,6 +1084,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
         // with no hours hides nothing.
         if (hours == null) continue;
         result[row.read<String>('outcome_id')] = (
+          actionId: row.read<String>('action_id'),
           placeId: row.read<String>('place_id'),
           placeName: row.readNullable<String>('place_name') ?? '',
           hours: hours,

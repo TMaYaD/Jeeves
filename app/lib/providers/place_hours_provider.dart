@@ -14,6 +14,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/action_place_and_time_window.dart';
 import 'clock_provider.dart';
+import 'current_action_provider.dart';
 import 'database_provider.dart';
 import 'time_window_provider.dart';
 
@@ -34,7 +35,16 @@ final placeHoursProvider =
 /// the Place's hours never apply to it (decision D2). This provider is the one
 /// every surface reads, so the gate, the chip and the time page agree.
 final currentPlaceHoursProvider = Provider<Map<String, ActionPlaceHours>>((ref) {
-  return ref.watch(placeHoursProvider).value ?? const {};
+  final placeHours = ref.watch(placeHoursProvider).value ?? const {};
+  final currentActions = ref.watch(currentActionsProvider).value ?? const {};
+  // The two streams emit separately. Hours read for an Action that is no
+  // longer the Outcome's current one belong to a replaced Action and must not
+  // apply to its successor. Until the current Actions arrive, nothing applies.
+  return {
+    for (final entry in placeHours.entries)
+      if (currentActions[entry.key]?.actionId == entry.value.actionId)
+        entry.key: entry.value,
+  };
 });
 
 /// Outcome ids whose Place's hours are closed right now.
