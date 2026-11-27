@@ -137,6 +137,71 @@ class _ArrivalDuringResolution extends QueryInterceptor {
   }
 }
 
+/// Holds the next quarantine insert, so a test can decide what reaches the
+/// table while a decision that reads those rows is running.
+///
+/// The hold is **inside the quarantine lock**: the row is not in the table yet
+/// and the lock is taken, so a decision that reads the rows under that lock
+/// cannot see the held row until the hold is released — and cannot write its
+/// own answer until then either. That is the shape of the race a pull and a
+/// decision make for the same author's chain.
+class _QuarantineGate extends QueryInterceptor {
+  /// The hold to wait on, or null when there is none armed.
+  Completer<void>? hold;
+
+  /// Completes when a quarantine insert has reached the hold.
+  final Completer<void> reached = Completer<void>();
+
+  bool _fired = false;
+
+  @override
+  Future<int> runInsert(
+    QueryExecutor executor,
+    String statement,
+    List<Object?> args,
+  ) async {
+    final gate = hold;
+    if (gate != null && !_fired && _writesToQuarantine(statement)) {
+      _fired = true;
+      if (!reached.isCompleted) reached.complete();
+      await gate.future;
+    }
+    return super.runInsert(executor, statement, args);
+  }
+
+  /// Whether this statement inserts into the quarantine table.
+  bool _writesToQuarantine(String statement) {
+    final text = statement.toLowerCase();
+    return text.startsWith('insert') && text.contains('quarantined_ops');
+  }
+}
+
+/// The statement-level seams this file uses, in one interceptor.
+///
+/// The arrival seam runs a callback in the middle of the next write to the
+/// accusation table; the quarantine gate holds the next quarantine insert.
+/// Drift calls one interceptor, so the two live together here.
+class _StoreInterceptors extends QueryInterceptor {
+  final _ArrivalDuringResolution arrival = _ArrivalDuringResolution();
+  final _QuarantineGate quarantine = _QuarantineGate();
+
+  @override
+  Future<int> runInsert(
+    QueryExecutor executor,
+    String statement,
+    List<Object?> args,
+  ) =>
+      quarantine.runInsert(executor, statement, args);
+
+  @override
+  Future<int> runUpdate(
+    QueryExecutor executor,
+    String statement,
+    List<Object?> args,
+  ) =>
+      arrival.runUpdate(executor, statement, args);
+}
+
 /// A projector that fails the first time it is asked to project, and works
 /// afterwards.
 ///
@@ -255,13 +320,13 @@ void main() {
   late SimDevice a;
   late AuthorFixture peer;
   late SyncTransport peerSession;
-  late _ArrivalDuringResolution arrival;
+  late _StoreInterceptors seams;
 
   setUp(() async {
     // Installed disarmed: only the case that needs an arrival mid-resolution
     // arms it, and it arms it for one statement.
-    arrival = _ArrivalDuringResolution();
-    workspace = await SimWorkspace.create(aSyncStoreInterceptor: arrival);
+    seams = _StoreInterceptors();
+    workspace = await SimWorkspace.create(aSyncStoreInterceptor: seams);
     a = workspace.a;
     peer = await AuthorFixture.create(
       seed: Uint8List.fromList(List<int>.generate(32, (index) => index + 91)),
@@ -1108,7 +1173,7 @@ void main() {
       // refusal, and the accusation stands again.
       final second = Uint8List.fromList(planted.authored.last);
       second[headerLengthBytes + 8] ^= 0x02;
-      arrival.arrival = (executor) async {
+      seams.arrival.arrival = (executor) async {
         final store = SyncDatabase(executor);
         await store.into(store.quarantinedOps).insert(
               QuarantinedOpsCompanion.insert(
@@ -2118,6 +2183,62 @@ void main() {
       await expectNothingAccepted();
     });
 
+    test(
+        'a rival quarantined while the decision runs is seen by the decision',
+        () async {
+      final first = await _op(workspace, peer, 'one');
+      await peerSession.postOps(workspace.workspaceId, [first]);
+      await a.sync();
+
+      // The change at the next position never arrives, so the change behind
+      // it is held — and the rival is a second, different signed change at
+      // that same position: the fork the decision must not settle.
+      await _op(workspace, peer, 'two'); // minted, never posted or injected
+      final held = await _op(workspace, peer, 'three', advance: false);
+      final rival = await _op(workspace, peer, 'three as well', advance: false);
+      workspace.server.injectUnchecked(workspace.workspaceId, held);
+      await a.sync();
+
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+
+      // The rival is held at the gate: its quarantine has taken the lock and
+      // its row is not in the table yet.
+      final gate = Completer<void>();
+      seams.quarantine.hold = gate;
+      workspace.server.injectUnchecked(workspace.workspaceId, rival);
+      final pull = a.sync();
+      await seams.quarantine.reached.future;
+
+      // The decision runs while the rival waits at the gate. It reads the rows
+      // under the quarantine lock, so it cannot see the rival and cannot write
+      // its answer until the gate opens.
+      final decision =
+          a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      gate.complete();
+      await pull;
+      await decision;
+
+      // The rival was in the table before the hole was written, so no hole was
+      // recorded: the hash a hole stores is what every later change of that
+      // author is verified against, and it is never taken from a position
+      // something else contests.
+      expect(
+        await a.client.acceptedChainHoles(authorMemberId: peer.memberId),
+        isEmpty,
+      );
+      // The fork is accused against the rival, and nothing was taken.
+      final fork =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainFork.code]!;
+      expect(fork.resolvedAt, isNull);
+      final rivalRow = (await a.client.quarantined(includeReleased: false))
+          .singleWhere((row) => sameBytes(row.envelope, rival));
+      expect(fork.quarantineOpRowId, rivalRow.id);
+      expect(rivalRow.releasedAt, isNull);
+      expect(await _doc(a, workspace), {'step': 'one'});
+    });
+
     test('a held change whose bytes were corrupted stays held, and the alarm stands',
         () async {
       await withholdTheMiddleChange();
@@ -2409,7 +2530,7 @@ void main() {
       // the accusation is closed. A refusal that arrives in that window is a
       // new accusation — the server forgot this device's writes again, and
       // further back — and the answer the User gave was about the smaller one.
-      arrival.arrival = (executor) async {
+      seams.arrival.arrival = (executor) async {
         final store = SyncDatabase(executor);
         await (store.update(store.integrityAlarms)
               ..where((row) => row.id.equals(rollback.id)))
@@ -2447,7 +2568,7 @@ void main() {
       // answer the User gave was about the smaller one. It lands on the first
       // write to the accusation table — the moment the decision is stamped —
       // which is inside the very transaction that records the answer.
-      arrival.arrival = (executor) async {
+      seams.arrival.arrival = (executor) async {
         final store = SyncDatabase(executor);
         await (store.update(store.integrityAlarms)
               ..where((row) => row.id.equals(rollback.id)))

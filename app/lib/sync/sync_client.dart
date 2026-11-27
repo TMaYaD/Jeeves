@@ -103,6 +103,24 @@ const Set<int> _slotTakenResultCodes = {
 /// Whether an arriving control op takes its position, or loses a fork.
 enum _ControlPosition { accept, quarantineThis }
 
+/// What the bridge found at the position just past a hole.
+///
+/// The three answers are the three ways a decision about a missing change can
+/// end: nothing is held past the head, a hole was recorded, or the position
+/// past the hole is contested and the decision stops there.
+enum _HoleDecision {
+  /// Nothing is held past the head: there is no hole to record, and the
+  /// decision has nothing left to bridge.
+  nothingHeld,
+
+  /// A hole was recorded, from a successor nothing else contests.
+  recorded,
+
+  /// Two byte-different signed changes are held at that position. Nothing is
+  /// recorded, the fork is accused, and the decision stops there.
+  contested,
+}
+
 /// One logged op that writes to a particular entity — what a compaction pass needs
 /// to know about a candidate target without re-decoding it.
 ///
@@ -4123,6 +4141,12 @@ class SyncClient {
   /// lock, because there is no `Mutex`/`synchronized` package in this codebase
   /// to lean on. The chain's tail swallows the body's error so a failed
   /// quarantine does not poison the next one's chain; the caller still sees it.
+  ///
+  /// The lock covers the quarantine table, so it is what makes "the rows I read
+  /// are the rows there are" true for anything that reads them and then writes
+  /// — the dedupe in [_quarantine], and the decision about a hole in
+  /// [_recordAcceptedHole]. A body that runs under it must not quarantine
+  /// anything itself: it would wait for the lock it already holds.
   Future<T> _runQuarantineExclusive<T>(Future<T> Function() body) {
     final next = _quarantineTail.then((_) => body());
     _quarantineTail = next.then<void>((_) {}, onError: (Object _) {});
@@ -4332,6 +4356,14 @@ class SyncClient {
   /// predecessor a change names — the row id is only the order the server served
   /// them in.
   ///
+  /// **The rows and the hole are read and written as one step.** A pull runs
+  /// beside this decision and can quarantine a rival successor while it is
+  /// running, so the decision reads the rows and writes the hole under the
+  /// quarantine lock — the lock every quarantine insert takes. A rival that
+  /// arrives before the hole is written is seen, and no hole is recorded; one
+  /// that arrives after it is a change that came after the decision, and the
+  /// release scan judges it as it judges any other contested position.
+  ///
   /// A row the receive path would refuse is not a successor of anything: the
   /// change it holds is not one of this Workspace's chain, or does not sit at
   /// the position its row claims, so it cannot define the range in front of it.
@@ -4363,80 +4395,12 @@ class SyncClient {
             attestationBridged: true,
           ),
         );
-        final head = await effectiveChainHeadSeq(bridgedAuthor);
-        final beyond = [
-          for (final row in await _unreleasedGapRows(bridgedAuthor))
-            if (row.authorSeq != null && row.authorSeq! > head + 1) row,
-        ];
-        if (beyond.isEmpty) break;
-        final lowestSeq = beyond.first.authorSeq!;
-        final candidates = <({QuarantineRow row, OpHeader header})>[];
-        for (final row in beyond.where((r) => r.authorSeq == lowestSeq)) {
-          if (row.seq == null) continue;
-          try {
-            final header =
-                OpHeader.parse(splitEnvelope(row.envelope).header);
-            // **A candidate is a change this device could admit.** The hole's
-            // range comes from the row's position and its hash from the signed
-            // header, and the change it releases goes through the ordinary
-            // receive path, so the header has to name this Workspace and this
-            // author's chain at the row's position. A row that disagrees is
-            // not a successor of anything: the hole it would define describes
-            // a range the change does not occupy, and the release would
-            // refuse the change anyway.
-            if (header.workspaceId != workspaceId) continue;
-            if (header.authorSeq != row.authorSeq) continue;
-            await verifyEnvelope(
-              row.envelope,
-              directory.publicKeyFor(header.authorMemberId, header.authorKeyId),
-            );
-            candidates.add((row: row, header: header));
-          } on SyncRejection {
-            continue;
-          }
-        }
-        if (candidates.isEmpty) break;
-        final defining = candidates.first;
-        final contesting = candidates
-            .where((c) => !sameBytes(c.row.envelope, defining.row.envelope))
-            .firstOrNull;
-        if (contesting != null) {
-          await _raiseAlarm(
-            IntegrityAlarmKind.authorChainFork,
-            authorMemberId: bridgedAuthor,
-            detail: 'author_seq $lowestSeq is held twice with different signed '
-                'changes behind a missing change, so no hole was accepted',
-            quarantineOpRowId: contesting.row.id,
-          );
+        final decision = await _recordAcceptedHole(bridgedAuthor, now);
+        if (decision == _HoleDecision.nothingHeld) break;
+        if (decision == _HoleDecision.contested) {
           stoppedOnAmbiguousSuccessor = true;
           break;
         }
-        await _db.into(_db.acceptedChainHoles).insert(
-              AcceptedChainHolesCompanion.insert(
-                workspaceId: workspaceId,
-                authorMemberId: bridgedAuthor,
-                firstMissingAuthorSeq: head + 1,
-                lastMissingAuthorSeq: lowestSeq - 1,
-                lastMissingEnvelopeHash: defining.header.prevAuthorHash,
-                definingQuarantineOpRowId: defining.row.id,
-                decidedAt: now,
-              ),
-            );
-        // **The decision is recorded before the scan that releases the row.**
-        // The release scan closes a gap accusation once the author has no
-        // unreleased gap row left and no take upstream waiting for the screen;
-        // while the change the bridge is taking upstream is still waiting, the
-        // accusation has to keep standing — the answer is only complete when
-        // the change has reached the domain store. So the row the hole is
-        // defined by carries the decision now, and the scan that releases it
-        // in the next round sees the work that is still owed.
-        await (_db.update(_db.quarantinedOps)
-              ..where((row) =>
-                  row.id.equals(defining.row.id) & row.resolution.isNull()))
-            .write(QuarantinedOpsCompanion(
-          resolution: Value(AlarmResolution.tookUpstream.code),
-          resolutionDecidedAt: Value(now),
-        ));
       }
       if (rememberedRowIds.isNotEmpty) {
         await (_db.update(_db.quarantinedOps)
@@ -4554,6 +4518,109 @@ class SyncClient {
       );
     }
   }
+
+  /// Record the hole the User's decision accepts, when the position just past
+  /// it holds nothing but one change.
+  ///
+  /// **The rows and the hole are one step.** The candidates are quarantined
+  /// rows, and a pull runs beside this decision — it can quarantine a rival
+  /// successor while the decision is between reading the rows and writing the
+  /// hole. Under the quarantine lock, the lock every quarantine insert takes,
+  /// the rows read here are the rows there are: a rival a pull quarantined
+  /// while this waited for the lock is seen, and no hole is recorded. One that
+  /// arrives after the lock is released is a change that came after the
+  /// decision, and the release scan judges it as it judges any other contested
+  /// position.
+  ///
+  /// The lock is not held across the release scan, which quarantines rows
+  /// itself and would wait for this lock for ever.
+  ///
+  /// **A hole is recorded only from a successor nothing else contests.** The
+  /// hash a hole stores is what every later change of that author is verified
+  /// against, so it is never chosen by the order the server served things in:
+  /// two byte-different signed changes held at that position record nothing,
+  /// `author_chain_fork` is raised against the second one, and the decision
+  /// stops there.
+  Future<_HoleDecision> _recordAcceptedHole(
+    String authorMemberId,
+    DateTime now,
+  ) =>
+      _runQuarantineExclusive(() async {
+        final head = await effectiveChainHeadSeq(authorMemberId);
+        final beyond = [
+          for (final row in await _unreleasedGapRows(authorMemberId))
+            if (row.authorSeq != null && row.authorSeq! > head + 1) row,
+        ];
+        if (beyond.isEmpty) return _HoleDecision.nothingHeld;
+        final lowestSeq = beyond.first.authorSeq!;
+        final candidates = <({QuarantineRow row, OpHeader header})>[];
+        for (final row in beyond.where((r) => r.authorSeq == lowestSeq)) {
+          if (row.seq == null) continue;
+          try {
+            final header =
+                OpHeader.parse(splitEnvelope(row.envelope).header);
+            // **A candidate is a change this device could admit.** The hole's
+            // range comes from the row's position and its hash from the signed
+            // header, and the change it releases goes through the ordinary
+            // receive path, so the header has to name this Workspace and this
+            // author's chain at the row's position. A row that disagrees is
+            // not a successor of anything: the hole it would define describes
+            // a range the change does not occupy, and the release would
+            // refuse the change anyway.
+            if (header.workspaceId != workspaceId) continue;
+            if (header.authorSeq != row.authorSeq) continue;
+            await verifyEnvelope(
+              row.envelope,
+              directory.publicKeyFor(header.authorMemberId, header.authorKeyId),
+            );
+            candidates.add((row: row, header: header));
+          } on SyncRejection {
+            continue;
+          }
+        }
+        if (candidates.isEmpty) return _HoleDecision.nothingHeld;
+        final defining = candidates.first;
+        final contesting = candidates
+            .where((c) => !sameBytes(c.row.envelope, defining.row.envelope))
+            .firstOrNull;
+        if (contesting != null) {
+          await _raiseAlarm(
+            IntegrityAlarmKind.authorChainFork,
+            authorMemberId: authorMemberId,
+            detail: 'author_seq $lowestSeq is held twice with different signed '
+                'changes behind a missing change, so no hole was accepted',
+            quarantineOpRowId: contesting.row.id,
+          );
+          return _HoleDecision.contested;
+        }
+        await _db.into(_db.acceptedChainHoles).insert(
+              AcceptedChainHolesCompanion.insert(
+                workspaceId: workspaceId,
+                authorMemberId: authorMemberId,
+                firstMissingAuthorSeq: head + 1,
+                lastMissingAuthorSeq: lowestSeq - 1,
+                lastMissingEnvelopeHash: defining.header.prevAuthorHash,
+                definingQuarantineOpRowId: defining.row.id,
+                decidedAt: now,
+              ),
+            );
+        // **The decision is recorded before the scan that releases the row.**
+        // The release scan closes a gap accusation once the author has no
+        // unreleased gap row left and no take upstream waiting for the screen;
+        // while the change the bridge is taking upstream is still waiting, the
+        // accusation has to keep standing — the answer is only complete when
+        // the change has reached the domain store. So the row the hole is
+        // defined by carries the decision now, and the scan that releases it
+        // in the next round sees the work that is still owed.
+        await (_db.update(_db.quarantinedOps)
+              ..where((row) =>
+                  row.id.equals(defining.row.id) & row.resolution.isNull()))
+            .write(QuarantinedOpsCompanion(
+          resolution: Value(AlarmResolution.tookUpstream.code),
+          resolutionDecidedAt: Value(now),
+        ));
+        return _HoleDecision.recorded;
+      });
 
   /// Stamp the rows whose take upstream has reached the domain store.
   Future<void> _stampResolutionsProjected(List<int> rowIds) async {
