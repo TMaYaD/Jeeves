@@ -22,6 +22,12 @@ typedef ActionPlace = ({
   bool isPin,
 });
 
+/// The Place a Habit carries, resolved from the row it points at.
+///
+/// The same shape as [ActionPlace]: a Habit carries at most one Place, a
+/// named one or a one-time pin, and the pin belongs to this one Habit.
+typedef HabitPlace = ActionPlace;
+
 /// The time window an Action carries, resolved from the row it points at.
 typedef ActionTimeWindow = ({
   String id,

@@ -31,6 +31,9 @@ const Map<int, List<(String, String)>> columnsAddedAt = {
   15: [
     ('quarantined_ops', 'resolution_projected_at'),
   ],
+  17: [
+    ('sync_cursors', 'rebuild_required_at'),
+  ],
 };
 
 /// Take out of [database] every column that a store at [version] did not have,
@@ -51,9 +54,9 @@ Future<void> dropColumnsAddedAfter(SyncDatabase database, int version) async {
       'DROP TABLE IF EXISTS entities_awaiting_projection',
     );
   }
-  // v17 added the accepted chain holes; a store from before it does not hold
+  // v18 added the accepted chain holes; a store from before it does not hold
   // them, and the upgrade would fail on a table that already exists.
-  if (version < 17) {
+  if (version < 18) {
     await database.customStatement('DROP TABLE IF EXISTS accepted_chain_holes');
   }
   for (final entry in columnsAddedAt.entries) {

@@ -12,6 +12,7 @@ import '../../providers/habit_check_ins_provider.dart';
 import '../../providers/habit_focus_provider.dart';
 import '../../providers/habit_progress_provider.dart';
 import '../../providers/habit_stack_offer_provider.dart';
+import '../../providers/place_gate_provider.dart';
 import '../../widgets/habit_check_in_mark.dart';
 import 'habit_amount_entry_sheet.dart';
 import 'habit_copy.dart';
@@ -250,10 +251,15 @@ class HabitRow extends ConsumerWidget {
         ? ref.watch(offerSourceHabitProvider)
         : null;
     final anchorText = habitAnchorSummary(habit);
-    final secondLine = [
-      ?stateText,
-      ?anchorText,
-    ].join(' · ');
+    // A Habit is never hidden by its Place: the Place is said, not a gate.
+    final placeName = ref.watch(habitPlaceNamesProvider)[habit.id];
+    final secondLine = habitPlaceLine(
+      placeName: placeName,
+      line: [
+        ?stateText,
+        ?anchorText,
+      ].join(' · '),
+    );
     final showPips =
         progress != null &&
         !inactive &&

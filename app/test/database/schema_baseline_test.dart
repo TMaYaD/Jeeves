@@ -82,16 +82,16 @@ void main() {
   setUpAll(configureSqliteForTests);
 
   group('schema version', () {
-    test('is 16 — fifteen onUpgrade steps behind the fresh baseline', () async {
+    test('is 17 — sixteen onUpgrade steps behind the fresh baseline', () async {
       final db = _openInMemory();
       addTearDown(db.close);
-      expect(db.schemaVersion, 16);
+      expect(db.schemaVersion, 17);
       // A fresh file runs onCreate at the current version, not the ladder.
       expect(
         await db.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        16,
+        17,
       );
     });
   });
@@ -302,7 +302,7 @@ void main() {
       await seed.customStatement('PRAGMA user_version = 1');
       await seed.close();
 
-      // Open 2: Drift sees user_version=1 and schemaVersion=16, so it runs the
+      // Open 2: Drift sees user_version=1 and schemaVersion=17, so it runs the
       // whole ladder — the v2 drop asserted here, and the v3 `tags` recreate the
       // group below owns.
       final upgraded = GtdDatabase(
@@ -314,7 +314,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        16,
+        17,
       );
       expect(await _columnNames(upgraded, 'todos'),
           isNot(contains('time_spent_minutes')),
@@ -441,7 +441,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        16,
+        17,
       );
       expect(await _uniqueConstraintIndexes(upgraded, 'tags'), isEmpty,
           reason: 'v3 drops UNIQUE (name, type)');
@@ -501,7 +501,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        16,
+        17,
       );
       expect(await _objects(upgraded, 'table'), contains('capture_attachments'));
       expect(await _rows(upgraded, 'captures'), hasLength(1));
@@ -606,7 +606,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        16,
+        17,
       );
       expect(await _columnNames(upgraded, 'todos'), isNot(contains('clarified')),
           reason: 'v5 drops the dead flag');
@@ -707,7 +707,7 @@ void main() {
           await upgraded.customSelect('PRAGMA user_version').getSingle().then(
                 (r) => r.read<int>('user_version'),
               ),
-          16,
+          17,
         );
         expect(await _rows(upgraded, 'todos'), todosBefore);
         expect(await _rows(upgraded, 'captures'), capturesBefore);
@@ -1184,6 +1184,7 @@ void main() {
         'anchor_part_of_day',
         'anchor_clock_time',
         'anchor_habit_id',
+        'place_id',
         'created_at',
         'updated_at',
       },
@@ -1277,7 +1278,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        16,
+        17,
       );
 
       for (final entry in habitTables.entries) {
@@ -1502,7 +1503,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        16,
+        17,
       );
 
       for (final entry in placeTables.entries) {
@@ -1598,7 +1599,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        16,
+        17,
       );
       expect(await _columnNames(upgraded, 'habit_time_logs'),
           {'id', 'user_id', 'habit_id', 'started_at', 'ended_at'});
@@ -1624,6 +1625,96 @@ void main() {
             .read<String>('id'),
         'h1',
       );
+    });
+  });
+
+  group('v17 onUpgrade adds habits.place_id', () {
+    test('adds a nullable column and keeps every existing Habit row',
+        () async {
+      final raw = sqlite3.openInMemory();
+      addTearDown(raw.close);
+
+      final seed = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      var seedClosed = false;
+      Future<void> closeSeed() async {
+        if (seedClosed) return;
+        seedClosed = true;
+        await seed.close();
+      }
+
+      addTearDown(closeSeed);
+
+      // A v16 `habits` table: the current declaration with the v17 column cut
+      // out of the CREATE statement Drift itself emitted.
+      final createSql = (await seed
+              .customSelect("SELECT sql FROM sqlite_master "
+                  "WHERE type = 'table' AND name = 'habits'")
+              .getSingle())
+          .read<String>('sql');
+      final v16Sql = createSql.replaceFirst(
+        RegExp(r',\s*"?place_id"?\s+TEXT\s+NULL', caseSensitive: false),
+        '',
+      );
+      expect(v16Sql, isNot(contains('place_id')),
+          reason: 'the fixture is only a v16 store without the column');
+      await seed.customStatement('DROP TABLE habits');
+      await seed.customStatement(v16Sql);
+
+      await seed.customStatement(
+        'INSERT INTO habits (id, user_id, title, created_at) '
+        "VALUES ('h1', 'u1', 'Read a book', '2026-11-24T09:00:00.000Z')",
+      );
+      await seed.customStatement('PRAGMA user_version = 16');
+      await closeSeed();
+
+      final upgraded = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      addTearDown(upgraded.close);
+      final fresh = GtdDatabase(NativeDatabase.memory());
+      addTearDown(fresh.close);
+
+      expect(
+        await upgraded.customSelect('PRAGMA user_version').getSingle().then(
+              (r) => r.read<int>('user_version'),
+            ),
+        17,
+      );
+
+      expect(await _columnNames(upgraded, 'habits'),
+          await _columnNames(fresh, 'habits'),
+          reason: 'the upgraded store matches a fresh one');
+
+      // The Habit from before the column existed is still there, and reads as
+      // being at no place.
+      final habits = await upgraded.select(upgraded.habits).get();
+      expect(habits, hasLength(1));
+      expect(habits.single.id, 'h1');
+      expect(habits.single.title, 'Read a book');
+      expect(habits.single.placeId, isNull,
+          reason: 'an existing Habit is at no place');
+    });
+
+    test('a store that already carries the column upgrades without failing',
+        () async {
+      final raw = sqlite3.openInMemory();
+      addTearDown(raw.close);
+
+      final seed = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      await seed.customStatement('SELECT 1');
+      await seed.customStatement('PRAGMA user_version = 16');
+      await seed.close();
+
+      final upgraded = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      addTearDown(upgraded.close);
+
+      expect(await _columnNames(upgraded, 'habits'), contains('place_id'));
     });
   });
 }

@@ -14,4 +14,24 @@ void main() {
       expect(habitAmountText(3), '3');
     });
   });
+
+  group('habitPlaceLine', () {
+    test('puts the Place in front of the Habit\'s own line', () {
+      expect(
+        habitPlaceLine(placeName: 'Home', line: 'Not yet'),
+        'Home · Not yet',
+      );
+    });
+
+    test('shows the Place alone when the Habit has nothing else to say', () {
+      expect(habitPlaceLine(placeName: 'Home', line: ''), 'Home');
+      expect(habitPlaceLine(placeName: 'Home', line: null), 'Home');
+    });
+
+    test('leaves the line alone when the Habit has no Place', () {
+      expect(habitPlaceLine(placeName: null, line: 'Not yet'), 'Not yet');
+      expect(habitPlaceLine(placeName: null, line: null), '');
+      expect(habitPlaceLine(placeName: '', line: 'Not yet'), 'Not yet');
+    });
+  });
 }

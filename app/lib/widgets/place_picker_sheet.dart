@@ -23,12 +23,18 @@ import 'place_pin_sheet.dart';
 Future<PlaceChoice?> showPlacePickerSheet(
   BuildContext context, {
   required bool canClear,
+  String pinSubtitle = 'For this action alone',
+  String ownerName = 'action',
 }) {
   return showModalBottomSheet<PlaceChoice>(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.white,
-    builder: (_) => PlacePickerSheet(canClear: canClear),
+    builder: (_) => PlacePickerSheet(
+      canClear: canClear,
+      pinSubtitle: pinSubtitle,
+      ownerName: ownerName,
+    ),
   );
 }
 
@@ -37,7 +43,15 @@ class PlacePickerSheet extends ConsumerStatefulWidget {
   const PlacePickerSheet({
     super.key,
     required this.canClear,
+    this.pinSubtitle = 'For this action alone',
+    this.ownerName = 'action',
   });
+
+  /// What the pin sheet calls the owner of the pin.
+  final String ownerName;
+
+  /// What the one-time pin row says it belongs to.
+  final String pinSubtitle;
 
   /// Whether the user may clear the Place outright.
   final bool canClear;
@@ -61,7 +75,7 @@ class _PlacePickerSheetState extends ConsumerState<PlacePickerSheet> {
   }
 
   Future<void> _dropPin() async {
-    final pin = await showPlacePinSheet(context);
+    final pin = await showPlacePinSheet(context, ownerName: widget.ownerName);
     if (pin == null || !mounted) return;
     Navigator.pop(context, PinDraft(area: pin.area, name: pin.name));
   }
@@ -163,7 +177,7 @@ class _PlacePickerSheetState extends ConsumerState<PlacePickerSheet> {
                 contentPadding: EdgeInsets.zero,
                 leading: const Icon(Icons.push_pin_outlined),
                 title: const Text('Drop a pin…'),
-                subtitle: const Text('For this action alone'),
+                subtitle: Text(widget.pinSubtitle),
                 onTap: _dropPin,
               ),
               if (widget.canClear)
