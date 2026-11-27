@@ -5013,9 +5013,10 @@ class SyncClient {
   }
 
   /// Clear the marker [raisedAt] read before the rebuild. The equality guard
-  /// leaves a marker raised again while the rebuild ran. The column keeps one
-  /// second, so two raises inside the same second are not told apart; nothing
-  /// raises the marker during a rebuild today.
+  /// leaves a marker raised again while the rebuild ran. Drift keeps a
+  /// `DateTime` as ISO-8601 text, so the column keeps milliseconds: two raises
+  /// inside the same millisecond are not told apart, and nothing raises the
+  /// marker during a rebuild today.
   Future<void> _clearRebuildRequirement(DateTime raisedAt) async {
     await (_db.update(_db.syncCursors)
           ..where((r) =>
