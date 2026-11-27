@@ -216,6 +216,36 @@ void main() {
         }
       }
     });
+
+    test('without maxMembers a large close group stays whole', () {
+      final areas = {
+        for (var i = 0; i < 12; i++) i: _at(52.37 + i * 0.0001, 4.8952),
+      };
+      final groups = _groupIndexes([for (var i = 0; i < 12; i++) i],
+          areas: areas, compare: (a, b) => a - b);
+      expect(groups, [
+        [for (var i = 0; i < 12; i++) i]
+      ]);
+    });
+
+    test('maxMembers cuts a group with too many members', () {
+      // Two blobs of six, about 800 m apart, are one group of twelve.
+      final areas = {
+        for (var i = 0; i < 6; i++) i: _at(52.37 + i * 0.0001, 4.8952),
+        for (var i = 6; i < 12; i++) i: _at(52.3772 + i * 0.0001, 4.8952),
+      };
+      final groups = groupNearby<int>(
+        [for (var i = 0; i < 12; i++) i],
+        areaOf: (item) => areas[item]!,
+        compare: (a, b) => a - b,
+        maxMembers: 10,
+      );
+      expect(groups, [
+        [0, 1, 2, 3, 4, 5],
+        [6, 7, 8, 9, 10, 11],
+      ]);
+    });
+
   });
 
   group('distanceMetersTo', () {

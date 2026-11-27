@@ -13,6 +13,8 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/action_draft.dart';
+import 'package:jeeves/models/place_area.dart';
+import 'package:jeeves/models/place_choice.dart';
 import 'package:jeeves/models/routing_kind.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/services/clarification_service.dart';
@@ -21,6 +23,7 @@ import 'package:jeeves/sync/collection_codecs.dart'
         actionsCollection,
         captureOutcomesCollection,
         capturesCollection,
+        placesCollection,
         todosCollection;
 import 'package:jeeves/sync/domain_op_capture.dart'
     show RecordingDomainOpCapture;
@@ -58,6 +61,22 @@ Future<Todo> _row(GtdDatabase db, String id) =>
 
 Future<Todo?> _rowOrNull(GtdDatabase db, String id) =>
     (db.select(db.todos)..where((t) => t.id.equals(id))).getSingleOrNull();
+
+/// The user's named Place, for a test that needs one to point at.
+Future<String> _namedPlace(GtdDatabase db, String name) async {
+  final id = await db.placeDao.createNamedPlace(
+    name: name,
+    latitudeDegrees: 51.5,
+    longitudeDegrees: -0.12,
+    userId: _userId,
+  );
+  expect(id, isNotNull, reason: 'the named Place must be created');
+  return id!;
+}
+
+/// The point the pin tests drop.
+final PlaceArea _pinArea =
+    PlaceArea.create(latitudeDegrees: 51.5, longitudeDegrees: -0.12)!;
 
 void main() {
   setUpAll(configureSqliteForTests);
@@ -465,6 +484,192 @@ void main() {
       expect(await db.captureDao.captureIdsForOutcome(shared), ['c2']);
       expect(await db.captureDao.outcomeIdsForCapture('c1'), [fresh]);
     });
+
+    test('to Next puts the draft\'s named place on the Action it mints',
+        () async {
+      final ts = DateTime.utc(2026, 8, 1, 9);
+      await db.captureDao.insertCapture(_captureRow(id: 'c1', title: 'Buy hinges'));
+      final placeId = await _namedPlace(db, 'Hardware store');
+
+      final outcomeId = await service.clarifyCaptureToOutcome(
+        'c1',
+        to: RoutingKind.nextAction,
+        userId: _userId,
+        title: 'Buy hinges',
+        action: ActionDraft(
+          text: 'Buy hinges',
+          place: NamedPlaceDraft(placeId, 'Hardware store'),
+        ),
+        now: ts,
+      );
+
+      final action = await db.actionDao.getCurrentAction(outcomeId);
+      expect(action!.placeId, placeId);
+      // The named Place itself is untouched: the Action points at it.
+      final place = await (db.select(db.places)
+            ..where((p) => p.id.equals(placeId)))
+          .getSingle();
+      expect(place.kind, 'named');
+      expect(place.name, 'Hardware store');
+
+      // A Place is not a clarifying act, so the Outcome's stamp is the one the
+      // routing wrote — the same one a clarify without a place gets.
+      await db.captureDao.insertCapture(_captureRow(id: 'c2', title: 'Other'));
+      final plain = await service.clarifyCaptureToOutcome(
+        'c2',
+        to: RoutingKind.nextAction,
+        userId: _userId,
+        title: 'Other',
+        action: const ActionDraft(text: 'Other'),
+        now: ts,
+      );
+      expect((await _row(db, outcomeId)).lastClarifiedAt,
+          (await _row(db, plain)).lastClarifiedAt);
+    });
+
+    test('to Next with a pin creates the pin and points the Action at it',
+        () async {
+      await db.captureDao.insertCapture(_captureRow(id: 'c1', title: 'Buy hinges'));
+
+      final outcomeId = await service.clarifyCaptureToOutcome(
+        'c1',
+        to: RoutingKind.nextAction,
+        userId: _userId,
+        title: 'Buy hinges',
+        action: ActionDraft(
+          text: 'Buy hinges',
+          place: PinDraft(area: _pinArea, name: 'Corner shop'),
+        ),
+      );
+
+      final action = await db.actionDao.getCurrentAction(outcomeId);
+      final pinId = action!.placeId!;
+      final pin =
+          await (db.select(db.places)..where((p) => p.id.equals(pinId))).getSingle();
+      expect(pin.kind, 'pin');
+      expect(pin.name, 'Corner shop');
+      expect(pin.latitudeMicrodegrees, _pinArea.latitudeMicrodegrees);
+      expect(pin.longitudeMicrodegrees, _pinArea.longitudeMicrodegrees);
+      expect(pin.radiusMeters, _pinArea.radiusMeters);
+      // A pin belongs to the one Action that points at it: it is never listed.
+      expect(await db.placeDao.watchNamedPlaces().first, isEmpty);
+    });
+
+    test('to Waiting For carries the place onto the Action', () async {
+      await db.captureDao.insertCapture(_captureRow(id: 'c1', title: 'Ask Bob'));
+      final placeId = await _namedPlace(db, 'Hardware store');
+
+      final outcomeId = await service.clarifyCaptureToOutcome(
+        'c1',
+        to: RoutingKind.waitingFor,
+        userId: _userId,
+        title: 'Ask Bob',
+        action: ActionDraft(
+          text: 'Ask Bob',
+          place: NamedPlaceDraft(placeId, 'Hardware store'),
+        ),
+      );
+
+      expect((await db.actionDao.getCurrentAction(outcomeId))!.placeId, placeId);
+    });
+
+    test('to Maybe drops the place — no Place row is written', () async {
+      await db.captureDao.insertCapture(_captureRow(id: 'c1', title: 'Someday'));
+
+      final outcomeId = await service.clarifyCaptureToOutcome(
+        'c1',
+        to: RoutingKind.maybe,
+        userId: _userId,
+        title: 'Someday',
+        action: ActionDraft(
+          text: 'Someday',
+          place: PinDraft(area: _pinArea, name: 'Corner shop'),
+        ),
+      );
+
+      // Only the Next and Waiting For arms mint an Action, so there is
+      // nothing for the Place to ride on and nothing is written.
+      expect(await db.select(db.places).get(), isEmpty);
+      expect(await db.actionDao.getCurrentAction(outcomeId), isNull);
+      // The Outcome is made as before.
+      expect((await _row(db, outcomeId)).intent, 'maybe');
+    });
+
+    test('a Capture that is gone mid-clarify leaves no pin behind', () async {
+      await expectLater(
+        service.clarifyCaptureToOutcome(
+          'missing',
+          to: RoutingKind.nextAction,
+          userId: _userId,
+          title: 'Orphan',
+          action: ActionDraft(
+            text: 'Orphan',
+            place: PinDraft(area: _pinArea, name: 'Corner shop'),
+          ),
+        ),
+        throwsA(isA<CaptureNotFoundError>()),
+      );
+
+      // The throw rolls the whole transaction back — the pin went with it.
+      expect(await db.select(db.places).get(), isEmpty);
+      expect(await db.select(db.actions).get(), isEmpty);
+    });
+
+    test('a named place deleted before the verdict lands the Outcome without '
+        'one', () async {
+      await db.captureDao.insertCapture(_captureRow(id: 'c1', title: 'Buy hinges'));
+      final placeId = await _namedPlace(db, 'Hardware store');
+      await db.placeDao.deletePlace(placeId);
+
+      final outcomeId = await service.clarifyCaptureToOutcome(
+        'c1',
+        to: RoutingKind.nextAction,
+        userId: _userId,
+        title: 'Buy hinges',
+        action: ActionDraft(
+          text: 'Buy hinges',
+          place: NamedPlaceDraft(placeId, 'Hardware store'),
+        ),
+      );
+
+      // A Place that no longer exists is refused rather than stored as a
+      // reference to nothing — and the clarify still lands.
+      expect((await db.actionDao.getCurrentAction(outcomeId))!.placeId, isNull);
+      expect((await _row(db, outcomeId)).title, 'Buy hinges');
+    });
+
+    test('the Capture keeps exactly what was captured', () async {
+      await db.captureDao.insertCapture(CapturesCompanion(
+        id: const Value('c1'),
+        title: const Value('Buy hinges'),
+        notes: const Value('the blue ones'),
+        captureSource: const Value('manual'),
+        userId: const Value(_userId),
+        createdAt: Value(DateTime.utc(2026, 8, 1, 8)),
+        updatedAt: Value(DateTime.utc(2026, 8, 1, 8)),
+      ));
+      final tag = await db.tagDao.findOrCreateTag('hardware', 'context', _userId);
+      await db.captureDao.assignTagHint('c1', tag, _userId);
+
+      await service.clarifyCaptureToOutcome(
+        'c1',
+        to: RoutingKind.nextAction,
+        userId: _userId,
+        title: 'Buy hinges',
+        action: ActionDraft(
+          text: 'Buy hinges',
+          place: PinDraft(area: _pinArea, name: 'Corner shop'),
+        ),
+      );
+
+      final capture = await db.captureDao.getCapture('c1');
+      expect(capture!.title, 'Buy hinges');
+      expect(capture.notes, 'the blue ones');
+      final hints = await (db.select(db.captureTags)
+            ..where((t) => t.captureId.equals('c1')))
+          .get();
+      expect(hints.map((t) => t.tagId), [tag]);
+    });
   });
 
   group('discardCapture (zero-Outcome clarification)', () {
@@ -587,6 +792,41 @@ void main() {
       expect(capture.forCollection(actionsCollection), hasLength(1));
       expect(capture.forCollection(captureOutcomesCollection), hasLength(1));
       expect(capture.forCollection(capturesCollection), hasLength(1));
+      // No entity is authored more than once.
+      expect(capture.keys.toSet(), hasLength(capture.keys.length),
+          reason: 'exactly one coalesced op per entity');
+    });
+
+    test('a clarify with a pin authors one pin op and points the Action op at '
+        'it', () async {
+      await captureDb.captureDao.insertCapture(
+        _captureRow(id: 'c1', title: 'Draft'),
+      );
+      capture.clear();
+
+      await captureService.clarifyCaptureToOutcome(
+        'c1',
+        to: RoutingKind.nextAction,
+        userId: _userId,
+        title: 'Draft outline',
+        action: ActionDraft(
+          text: 'Draft outline',
+          place: PinDraft(area: _pinArea, name: 'Corner shop'),
+        ),
+      );
+
+      // The pin is an entity of its own: one op for its `places` row.
+      final placeOps = capture.forCollection(placesCollection);
+      expect(placeOps, hasLength(1));
+      expect(placeOps.single.fields['kind'], 'pin');
+      expect(placeOps.single.fields['name'], 'Corner shop');
+
+      // The Action op carries the pin it now points at — one op for the
+      // Action, not one for each write that touched it.
+      final actionOps = capture.forCollection(actionsCollection);
+      expect(actionOps, hasLength(1));
+      expect(actionOps.single.fields['place_id'], placeOps.single.entityId);
+
       // No entity is authored more than once.
       expect(capture.keys.toSet(), hasLength(capture.keys.length),
           reason: 'exactly one coalesced op per entity');

@@ -1,8 +1,11 @@
+import 'place_choice.dart';
+
 /// The editable attributes of an **Action** as a UI/service-boundary value.
 ///
 /// Names what the user is describing when they say what the next physical,
-/// visible step is: the phrase itself plus the two effort attributes that
-/// belong to the *action of doing* rather than to the Outcome (ADR-0001).
+/// visible step is: the phrase itself, the two effort attributes that belong
+/// to the *action of doing* rather than to the Outcome (ADR-0001), and the
+/// Place the step happens at.
 /// It travels from a clarify surface or the Plan section's sheet down to
 /// [ClarificationService] / `TaskDetailNotifier`, and stops there.
 ///
@@ -21,6 +24,7 @@ class ActionDraft {
     required this.text,
     this.energyLevel,
     this.timeEstimateMinutes,
+    this.place,
   });
 
   /// The Action's phrase.
@@ -42,16 +46,25 @@ class ActionDraft {
   /// Estimated minutes to do the Action, or null when unset.
   final int? timeEstimateMinutes;
 
+  /// The Place the Action happens at, or null when it carries none.
+  ///
+  /// A named Place or a one-time pin — the two things the place picker hands
+  /// back. It is not an effort attribute: it says *where* the step is, not how
+  /// long it takes.
+  final ActionPlaceDraft? place;
+
   /// Returns a copy with the named fields replaced. `null` means "keep";
-  /// use [clearEnergyLevel] / [clearTimeEstimate] to null a value, matching
-  /// the `clear*` convention of `TodoDao.updateFields` and
+  /// use [clearEnergyLevel] / [clearTimeEstimate] / [clearPlace] to null a
+  /// value, matching the `clear*` convention of `TodoDao.updateFields` and
   /// `ActionDao.editAction`.
   ActionDraft copyWith({
     String? text,
     String? energyLevel,
     int? timeEstimateMinutes,
+    ActionPlaceDraft? place,
     bool clearEnergyLevel = false,
     bool clearTimeEstimate = false,
+    bool clearPlace = false,
   }) {
     return ActionDraft(
       text: text ?? this.text,
@@ -59,6 +72,7 @@ class ActionDraft {
       timeEstimateMinutes: clearTimeEstimate
           ? null
           : (timeEstimateMinutes ?? this.timeEstimateMinutes),
+      place: clearPlace ? null : (place ?? this.place),
     );
   }
 
@@ -68,12 +82,14 @@ class ActionDraft {
       other is ActionDraft &&
           other.text == text &&
           other.energyLevel == energyLevel &&
-          other.timeEstimateMinutes == timeEstimateMinutes;
+          other.timeEstimateMinutes == timeEstimateMinutes &&
+          other.place == place;
 
   @override
-  int get hashCode => Object.hash(text, energyLevel, timeEstimateMinutes);
+  int get hashCode =>
+      Object.hash(text, energyLevel, timeEstimateMinutes, place);
 
   @override
   String toString() => 'ActionDraft(text: $text, energyLevel: $energyLevel, '
-      'timeEstimateMinutes: $timeEstimateMinutes)';
+      'timeEstimateMinutes: $timeEstimateMinutes, place: $place)';
 }

@@ -2,11 +2,13 @@
 /// near each other (issue #1090).
 ///
 /// This is where an Outcome hidden because the user is somewhere else can be
-/// found. It is a list and nothing more: no map, no errands, no route.
+/// found. It has no map yet.
 ///
 /// The list follows the same multi-select convention as the other grouped
 /// lists: a tap opens the Outcome, a long-press enters the mode, and the bar
-/// above the list carries the bulk actions.
+/// above the list carries the bulk actions. On this page the bar also has
+/// Navigate (issue #60): the Places of the chosen Outcomes are the stops of
+/// an errand, handed to Google Maps or Waze. Jeeves plans no route.
 library;
 
 import 'package:flutter/material.dart';
@@ -15,6 +17,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../providers/place_page_provider.dart';
+import 'navigate_sheet.dart';
 import '../../widgets/async_list.dart';
 import '../../widgets/outcome_multi_select.dart';
 
@@ -74,6 +77,17 @@ class _PlacePageScreenState extends ConsumerState<PlacePageScreen> {
                   allIds: visibleIds,
                   onClear: _clear,
                   onSelectAll: () => setState(() => _selectedIds = visibleIds),
+                  extraActions: [
+                    SelectionBarAction(
+                      key: const Key('place_page_navigate'),
+                      icon: Icons.directions,
+                      label: 'Navigate',
+                      onTap: () => showNavigateSheet(
+                        context,
+                        errandStopsFrom(groups.value ?? const [], _selectedIds),
+                      ),
+                    ),
+                  ],
                 ),
               Expanded(
                 child: AsyncList<PlacePageGroup>(

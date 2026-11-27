@@ -2729,14 +2729,15 @@ void main() {
           );
     }
 
-    test('a v15 sync store opens at 16 and keeps every row', () async {
+    test('a v15 sync store upgrades to the current version and keeps every row',
+        () async {
       final directory = Directory.systemTemp.createTempSync('sync-v15-');
       addTearDown(() => directory.deleteSync(recursive: true));
       final file = File('${directory.path}/sync.sqlite');
 
       final seed = SyncDatabase(NativeDatabase(file));
       // A v15 store is the one the take-upstream work shipped: it holds the
-      // projection marker and none of the accepted-chain-holes table.
+      // projection marker and neither of the tables that came after it.
       await dropColumnsAddedAfter(seed, 15);
       await seed.customStatement(
         'INSERT INTO integrity_alarms (workspace_id, kind, detail, '
@@ -2754,7 +2755,7 @@ void main() {
 
       final upgraded = SyncDatabase(NativeDatabase(file));
       addTearDown(upgraded.close);
-      expect(upgraded.schemaVersion, 16);
+      expect(upgraded.schemaVersion, SyncDatabase.supportedSchemaVersion);
 
       final alarm = await upgraded.select(upgraded.integrityAlarms).getSingle();
       expect(alarm.kind, IntegrityAlarmKind.ownWritesRollback.code);

@@ -11,6 +11,7 @@ library;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../models/errand_route.dart';
 import '../models/nearby_places.dart';
 import '../models/place_area.dart';
 import 'database_provider.dart';
@@ -23,10 +24,11 @@ typedef PlacePageGroup = ({
   List<PlacePageSection> places,
 });
 
-/// One Place on the place page: its name, and the Outcomes at it.
+/// One Place on the place page: its name, where it is, and the Outcomes at it.
 typedef PlacePageSection = ({
   String placeId,
   String label,
+  PlaceArea area,
   List<PlacePageRow> rows,
 });
 
@@ -95,6 +97,7 @@ final placePageGroupsProvider = StreamProvider<List<PlacePageGroup>>((ref) {
             (
               placeId: section.placeId,
               label: section.label,
+              area: section.area,
               rows: section.rows,
             ),
         ]),
@@ -108,4 +111,30 @@ int _compareSections(_PlaceSection a, _PlaceSection b) {
   final byLabel = a.label.compareTo(b.label);
   if (byLabel != 0) return byLabel;
   return a.placeId.compareTo(b.placeId);
+}
+
+/// The stops of an errand: the Places that have at least one of the chosen
+/// Outcomes, one stop per Place, in the order the page draws them.
+///
+/// The result is one list per group of nearby Places, and groups with no
+/// chosen Outcome are left out. The order is the page order, which is not a
+/// route: Jeeves does not plan routes.
+List<List<ErrandStop>> errandStopsFrom(
+  List<PlacePageGroup> groups,
+  Set<String> selectedOutcomeIds,
+) {
+  final stopsByGroup = <List<ErrandStop>>[];
+  for (final group in groups) {
+    final stops = [
+      for (final place in group.places)
+        if (place.rows.any((row) => selectedOutcomeIds.contains(row.todo.id)))
+          ErrandStop(
+            placeId: place.placeId,
+            label: place.label,
+            area: place.area,
+          ),
+    ];
+    if (stops.isNotEmpty) stopsByGroup.add(stops);
+  }
+  return stopsByGroup;
 }

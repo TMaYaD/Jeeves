@@ -44,9 +44,16 @@ Future<void> dropColumnsAddedAfter(SyncDatabase database, int version) async {
   if (version < 13) {
     await database.customStatement('DROP TABLE IF EXISTS vault_page_bases');
   }
-  // v16 added the accepted chain holes; a store from before it does not hold
-  // them, and the upgrade would fail on a table that already exists.
+  // v16 added the record of reduced entities that still need projecting; a
+  // store from before it does not hold it.
   if (version < 16) {
+    await database.customStatement(
+      'DROP TABLE IF EXISTS entities_awaiting_projection',
+    );
+  }
+  // v17 added the accepted chain holes; a store from before it does not hold
+  // them, and the upgrade would fail on a table that already exists.
+  if (version < 17) {
     await database.customStatement('DROP TABLE IF EXISTS accepted_chain_holes');
   }
   for (final entry in columnsAddedAt.entries) {

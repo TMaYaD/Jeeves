@@ -33,6 +33,7 @@ import 'package:jeeves/services/notification_service.dart';
 import 'package:jeeves/sync/collection_codecs.dart';
 import 'package:jeeves/sync/domain_projector.dart';
 import 'package:jeeves/sync/hlc.dart';
+import 'package:jeeves/sync/ids.dart' show defaultWorkspaceId;
 import 'package:jeeves/sync/op_payload.dart';
 import 'package:jeeves/sync/reducer.dart';
 import 'package:jeeves/sync/sync_database.dart';
@@ -100,6 +101,8 @@ void main() {
     reducer = Reducer(
       sync,
       nowMs: () => DateTime.now().millisecondsSinceEpoch,
+      workspaceId: defaultWorkspaceId(_userId),
+      userId: _userId,
     );
     projector = DomainProjector(registry: registry, domain: db);
     // The Now screen's own providers are the real ones: the Sprints must reach

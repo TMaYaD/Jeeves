@@ -28,11 +28,16 @@ const int nearbyGroupMaxSpreadMeters = 2000;
 /// distance to the nearest item outside it. The second half is what keeps a
 /// nearer Place out of another group while two further ones share one: the
 /// group is cut until it holds.
+///
+/// When [maxMembers] is given, a group is also cut until it holds at most that
+/// many members, at the latest down to single items. A route that a map app
+/// can take only so many stops of (#60) uses it.
 List<List<T>> groupNearby<T>(
   List<T> items, {
   required PlaceArea Function(T item) areaOf,
   required int Function(T a, T b) compare,
   int maxSpreadMeters = nearbyGroupMaxSpreadMeters,
+  int? maxMembers,
 }) {
   if (items.isEmpty) return [];
   final sorted = [...items]..sort(compare);
@@ -47,7 +52,8 @@ List<List<T>> groupNearby<T>(
       final spreadMeters = _spreadMeters(group, distances);
       final closeEnough = spreadMeters <= maxSpreadMeters;
       final noNearerOutsider = spreadMeters <= _gapMeters(group, distances);
-      if (closeEnough && noNearerOutsider) continue;
+      final fewEnough = maxMembers == null || group.length <= maxMembers;
+      if (closeEnough && noNearerOutsider && fewEnough) continue;
       final longest = _longestLinkIn(group, links);
       if (longest == null) continue;
       if (cut == null || _isLaterLink(longest, cut)) cut = longest;

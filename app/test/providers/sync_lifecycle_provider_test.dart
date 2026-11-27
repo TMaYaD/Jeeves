@@ -111,7 +111,12 @@ void main() {
           identity: identity,
           database: database,
           clock: clock,
-          reducer: Reducer(database, nowMs: () => _nowMs),
+          reducer: Reducer(
+            database,
+            nowMs: () => _nowMs,
+            workspaceId: workspaceId,
+            userId: _userId,
+          ),
           now: () => DateTime.fromMillisecondsSinceEpoch(_nowMs, isUtc: true),
         );
     gtdClient = clientFor(defaultWorkspaceId(_userId));
