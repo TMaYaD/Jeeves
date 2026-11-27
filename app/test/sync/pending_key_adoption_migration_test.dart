@@ -1,6 +1,6 @@
 /// The sync store's upgrade path, with the pending key adoption in it.
 ///
-/// v17 added one table: `pending_key_adoptions`, the record of an enrolment
+/// v18 added one table: `pending_key_adoptions`, the record of an enrolment
 /// that stopped before it adopted a Workspace's epoch keys (#993). The upgrade
 /// must add that table and touch nothing else — a device that already holds a
 /// log keeps every byte of it.
@@ -68,7 +68,7 @@ void main() {
     // The version is set back after the store is opened, so the downgrade is
     // never read as an upgrade in progress.
     await current.customStatement('DROP TABLE pending_key_adoptions');
-    await current.customStatement('PRAGMA user_version = 16');
+    await current.customStatement('PRAGMA user_version = 17');
     await closeCurrent();
 
     final upgraded = SyncDatabase(NativeDatabase(file));
