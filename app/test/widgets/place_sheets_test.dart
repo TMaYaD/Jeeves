@@ -53,6 +53,8 @@ NamedPlaceWithUse _aPlace() => (
         radiusMeters: 150,
       )!,
       useCount: 0,
+      hoursLabel: null,
+      hours: (timeWindowId: null, ownHoursText: null, timeZone: null),
     );
 
 void main() {
