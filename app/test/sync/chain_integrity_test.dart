@@ -32,6 +32,7 @@ import 'package:jeeves/sync/hlc.dart';
 import 'package:jeeves/sync/host/merge_state.dart';
 import 'package:jeeves/sync/ids.dart';
 import 'package:jeeves/sync/prune_payload.dart';
+import 'package:jeeves/sync/reducer.dart';
 import 'package:jeeves/sync/sync_database.dart';
 import 'package:jeeves/sync/sync_transport.dart';
 import 'package:sqlite3/common.dart' show SqliteException;
@@ -1669,6 +1670,76 @@ void main() {
       final header =
           OpHeader.parse(splitEnvelope(heldBefore.single.envelope).header);
       expect(holes.single.lastMissingEnvelopeHash, header.prevAuthorHash);
+    });
+
+    test('a successor the log refused is not applied again when the clock '
+        'moves on', () async {
+      // Accepting the hole releases the held successor through the ordinary
+      // pipeline, so the log records it. A change whose wall time is beyond
+      // the skew bound is refused there, under its own name — and that refusal
+      // is a *record*, not a cache of a re-runnable decision. Once the clock
+      // has moved on the guard would pass, and the held path must not be a
+      // second chance at it: the rebuild skips the row for exactly this
+      // reason, and a device that recovered and a device that rebuilt have to
+      // agree.
+      final first = await _op(workspace, peer, 'one');
+      final withheld = await _op(workspace, peer, 'two');
+      final beyondTheBound =
+          workspace.clock.nowMs + defaultFutureSkewBoundMs * 2;
+      final third = await peer.nextEnvelope(
+        workspace.workspaceId,
+        payloadJson: jsonEncode({
+          'collection': _harnessCollection,
+          'id': _docId(workspace),
+          'fields': {
+            'step': {'v': 'three'},
+          },
+          'hlc': [beyondTheBound, 0, memberIdToHex(peer.memberId)],
+        }),
+      );
+      final appended = await peerSession.postOps(
+        workspace.workspaceId,
+        [first, withheld, third],
+      );
+      workspace.server.omitSeqs.add(appended[1].seq);
+      await a.sync();
+
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      await a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+
+      // The release logged the successor, and the log refused it.
+      final refused = (await a.loggedOps()).singleWhere(
+            (row) => row.authorSeq == firstPeerContentAuthorSeq + 2,
+          );
+      expect(refused.refusedReason, SyncRejectionReason.hlcInTheFuture.code);
+      expect(refused.appliedAt, isNull, reason: 'logged as evidence, never applied');
+      expect(await _doc(a, workspace), {'step': 'one'});
+
+      // The decision is recorded, but the change has not reached the domain
+      // store: the row is still owed a projection, and that is what the
+      // recovery picks it up for. Without this the case below would pass for
+      // the wrong reason — a row nobody looks at is not applied either.
+      final heldRow = (await a.client.quarantined()).singleWhere(
+            (row) => row.resolution == AlarmResolution.tookUpstream.code,
+          );
+      expect(heldRow.resolutionProjectedAt, isNull);
+
+      // Time passes, so the guard that fired would no longer fire.
+      workspace.clock.advance(defaultFutureSkewBoundMs * 4);
+      await a.sync();
+
+      expect(
+        await _doc(a, workspace),
+        {'step': 'one'},
+        reason: 'the refusal is a record; the clock is not re-consulted',
+      );
+      expect(
+        (await a.loggedOps())
+            .singleWhere((row) => row.authorSeq == firstPeerContentAuthorSeq + 2)
+            .refusedReason,
+        SyncRejectionReason.hlcInTheFuture.code,
+      );
     });
 
     test('a tampered later change is refused under its own name', () async {

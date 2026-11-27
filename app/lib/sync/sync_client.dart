@@ -4303,6 +4303,13 @@ class SyncClient {
   /// still owns it: if the missing change ever arrives, the log heals and this
   /// re-apply is a no-op.
   ///
+  /// A change the log *has* refused is not applied here either, though it is
+  /// logged: the release that put it there went through the ordinary pipeline,
+  /// and the refusal it recorded is the verdict. Re-evaluating it would be a
+  /// second chance at a decision that was already made — the clock is not
+  /// re-consulted for anything already judged — and it would leave a device
+  /// that recovered in a state a rebuilt device could not reach.
+  ///
   /// Returns the entities the change touched. An **empty set means the change
   /// did not apply**: a refusal — corrupt bytes, a missing key, a revoked Grant
   /// — leaves the row exactly as it was.
@@ -4337,6 +4344,25 @@ class SyncClient {
       // A held row with no transport seq has no position to read a Grant at,
       // and no position to be the log's own.
       if (seq == null) return const {};
+      // A change the log has already refused is not one this helper may
+      // apply. `refused_reason` is a **record**, not a cache of a re-runnable
+      // decision: a change refused for a wall time beyond the skew bound would
+      // pass the guard once the clock has moved on, and applying it then would
+      // leave the device in a state a rebuild cannot reproduce — the rebuild
+      // skips the row for exactly this reason, so the two have to agree.
+      //
+      // The grant re-check below is untouched: a change refused for want of a
+      // Grant is the one refusal the User can undo by restoring the Grant, so
+      // it is re-asked rather than taken as recorded.
+      final loggedOp = await (_db.select(_db.opLog)
+            ..where((logRow) =>
+                logRow.workspaceId.equals(workspaceId) & logRow.seq.equals(seq)))
+          .getSingleOrNull();
+      if (loggedOp != null &&
+          loggedOp.refusedReason != null &&
+          loggedOp.refusedReason != SyncRejectionReason.noLiveGrant.code) {
+        return const {};
+      }
       // The Grant is read at the change's **own** server seq, never against
       // current control state — the same rule the receive path follows.
       final authorization = (await grantsView()).verdictFor(
