@@ -176,14 +176,75 @@ class _QuarantineGate extends QueryInterceptor {
   }
 }
 
+/// Holds the release scan's first question — which quarantined rows claim the
+/// position just past the head — so a decision can be run while a scan for the
+/// same author is in flight.
+///
+/// The hold is **above the store**: the statement has not been sent, so the
+/// scan is paused with its author marked as being scanned and no lock held.
+/// That is the shape of the race a pull and a decision make for one author's
+/// chain: the scan is running, so a second scan for that author is refused —
+/// and a refusal is not a verdict.
+class _ChainScanGate extends QueryInterceptor {
+  /// The hold to wait on, or null when there is none armed.
+  Completer<void>? hold;
+
+  /// Completes when the release scan has reached the hold.
+  final Completer<void> reached = Completer<void>();
+
+  bool _fired = false;
+
+  @override
+  Future<List<Map<String, Object?>>> runSelect(
+    QueryExecutor executor,
+    String statement,
+    List<Object?> args,
+  ) async {
+    final gate = hold;
+    if (gate != null && !_fired && _asksWhichRowsClaimAPosition(statement)) {
+      _fired = true;
+      if (!reached.isCompleted) reached.complete();
+      await gate.future;
+    }
+    return super.runSelect(executor, statement, args);
+  }
+
+  /// Whether this statement asks which quarantined rows claim one position.
+  ///
+  /// Matched on the filter, not on the table alone: the quarantine table is
+  /// read in several places, and only this one asks about a position. The
+  /// spacing and the quoting are normalised away, because how drift spells the
+  /// statement is not what this case is about.
+  bool _asksWhichRowsClaimAPosition(String statement) {
+    final text = statement
+        .toLowerCase()
+        .replaceAll(RegExp(r'["\s]'), '');
+    return text.contains('quarantined_ops') && text.contains('author_seq=?');
+  }
+}
+
 /// The statement-level seams this file uses, in one interceptor.
 ///
 /// The arrival seam runs a callback in the middle of the next write to the
-/// accusation table; the quarantine gate holds the next quarantine insert.
-/// Drift calls one interceptor, so the two live together here.
+/// accusation table; the quarantine gate holds the next quarantine insert; the
+/// chain-scan gate holds the release scan's first question. Drift calls one
+/// interceptor, so they live together here.
 class _StoreInterceptors extends QueryInterceptor {
   final _ArrivalDuringResolution arrival = _ArrivalDuringResolution();
   final _QuarantineGate quarantine = _QuarantineGate();
+  final _ChainScanGate chainScan = _ChainScanGate();
+
+  /// The fault to inject: the next update of [table] that sets [column].
+  ({String table, String column})? _updateFault;
+
+  /// Arm a storage fault: the next update of [table] that sets [column] throws
+  /// once, then disarms.
+  ///
+  /// The atomicity of a decision can only be asserted by killing a write
+  /// *inside* it and proving nothing was half-applied, so the fault names the
+  /// durable effect it interrupts rather than how drift spells the statement.
+  void failNextUpdateOf(String table, String column) =>
+      _updateFault = (table: table, column: column);
 
   @override
   Future<int> runInsert(
@@ -198,8 +259,39 @@ class _StoreInterceptors extends QueryInterceptor {
     QueryExecutor executor,
     String statement,
     List<Object?> args,
+  ) {
+    final fault = _updateFault;
+    if (fault != null && _setsColumn(statement, fault)) {
+      _updateFault = null;
+      throw SqliteException(
+        extendedResultCode: 10,
+        message: 'fault injected before updating ${fault.table}.${fault.column}',
+        operation: 'executing a statement',
+        causingStatement: statement,
+      );
+    }
+    return arrival.runUpdate(executor, statement, args);
+  }
+
+  /// Whether this statement updates [fault]'s table and sets its column.
+  ///
+  /// Matched on the value, not on the assignment: drift orders the columns of
+  /// an update by the table's own order, so "resolution" is not always the
+  /// first name after `set`. The other resolution columns carry their own
+  /// names, so they never match.
+  bool _setsColumn(String statement, ({String table, String column}) fault) {
+    final text = statement.toLowerCase().replaceAll(RegExp(r'["\s]'), '');
+    return text.contains('update${fault.table.toLowerCase()}') &&
+        text.contains('${fault.column.toLowerCase()}=?');
+  }
+
+  @override
+  Future<List<Map<String, Object?>>> runSelect(
+    QueryExecutor executor,
+    String statement,
+    List<Object?> args,
   ) =>
-      arrival.runUpdate(executor, statement, args);
+      chainScan.runSelect(executor, statement, args);
 }
 
 /// A projector that fails the first time it is asked to project, and works
@@ -2307,6 +2399,143 @@ void main() {
       expect(fork.quarantineOpRowId, rivalRow.id);
       expect(rivalRow.releasedAt, isNull);
       expect(await _doc(a, workspace), {'step': 'one'});
+    });
+
+    test('a release scan that overlaps the decision does not leave the change '
+        'out of the log', () async {
+      await withholdTheMiddleChange();
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      final held = (await a.client.quarantined()).single;
+
+      // A release for this author was interrupted: the row carries the marker
+      // that says a release began and never finished. The next pull re-arms
+      // the scan for that author, and the scan is held at its first question
+      // — the rows that claim the position just past the head.
+      await (a.database.update(a.database.quarantinedOps)
+            ..where((row) => row.id.equals(held.id)))
+          .write(QuarantinedOpsCompanion(
+        releaseStartedAt: Value(workspace.clock.asDateTime),
+      ));
+      final gate = Completer<void>();
+      seams.chainScan.hold = gate;
+      final pull = a.sync();
+      await seams.chainScan.reached.future.timeout(
+        const Duration(seconds: 30),
+      );
+
+      // The decision runs while that scan is in flight. A scan refuses to run
+      // twice for one author, so the decision's own scan comes back empty —
+      // and empty is not a verdict: it says the question was not asked. The
+      // rows it never examined are not rows that could not be released, and
+      // they must not fall to the held-change path, which merges them without
+      // writing the log.
+      final decision =
+          a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      gate.complete();
+      await pull;
+      await decision;
+
+      // The change the decision took upstream went through the ordinary
+      // receive path: it is in the log, applied.
+      final logged = (await a.loggedOps()).singleWhere(
+            (row) => row.authorSeq == firstPeerContentAuthorSeq + 2,
+          );
+      expect(logged.appliedAt, isNotNull);
+    });
+
+    test('a gap that arrives after the answer was read is not decided by it',
+        () async {
+      final first = await _op(workspace, peer, 'one');
+      final withheld = await _op(workspace, peer, 'two');
+      final third = await _op(workspace, peer, 'three');
+      final appended = await peerSession.postOps(
+        workspace.workspaceId,
+        [first, withheld, third],
+      );
+      workspace.server.omitSeqs.add(appended[1].seq);
+      await a.sync();
+
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+
+      // One more change of that author's chain is on its way, and it is
+      // refused as a gap like the third one. Its quarantine insert is held at
+      // the gate, so the row is not in the table while the User answers.
+      await _op(workspace, peer, 'four'); // minted, never delivered
+      final fifth = await _op(workspace, peer, 'five');
+      final gate = Completer<void>();
+      seams.quarantine.hold = gate;
+      workspace.server.injectUnchecked(workspace.workspaceId, fifth);
+      final pull = a.sync();
+      await seams.quarantine.reached.future.timeout(
+        const Duration(seconds: 30),
+      );
+
+      // The decision runs now: the accusation it is about is the one the User
+      // was shown, and the gaps it covers are the ones that were held when it
+      // was read.
+      final decision =
+          a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      gate.complete();
+      await pull;
+      try {
+        await decision;
+      } on StateError {
+        // The accusation was raised again while the User was answering, so the
+        // answer is refused. What it did before it was refused is what this
+        // case is about.
+      }
+
+      // The gap that arrived later is not bridged: no hole covers the range
+      // in front of it, and the change behind it is still held. The answer
+      // covers the gaps that belonged to it.
+      final holes =
+          await a.client.acceptedChainHoles(authorMemberId: peer.memberId);
+      expect(
+        holes.where((hole) =>
+            hole.firstMissingAuthorSeq == firstPeerContentAuthorSeq + 3),
+        isEmpty,
+        reason: 'a gap that arrived after the answer was read is not decided '
+            'by that answer',
+      );
+      final fifthRow = (await a.client.quarantined(includeReleased: false))
+          .singleWhere((row) => sameBytes(row.envelope, fifth));
+      expect(fifthRow.releasedAt, isNull);
+      expect(
+        (await a.loggedOps())
+            .where((row) => row.authorSeq == firstPeerContentAuthorSeq + 4),
+        isEmpty,
+      );
+    });
+
+    test('the hole and the decision on the row commit together', () async {
+      await withholdTheMiddleChange();
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      final held = (await a.client.quarantined()).single;
+
+      // The write that records the decision on the row fails: a storage fault
+      // in the middle of the decision.
+      seams.failNextUpdateOf('quarantined_ops', 'resolution');
+
+      await expectLater(
+        a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream),
+        throwsA(isA<SqliteException>()),
+      );
+
+      // Nothing is half-applied. A hole without the decision beside it would
+      // say the User accepted a range they never answered for, and a decision
+      // without the hole would release a change the chain cannot account for.
+      expect(
+        await a.client.acceptedChainHoles(authorMemberId: peer.memberId),
+        isEmpty,
+      );
+      final row =
+          (await a.client.quarantined()).singleWhere((r) => r.id == held.id);
+      expect(row.resolution, isNull);
     });
 
     test('a held change whose bytes were corrupted stays held, and the alarm stands',

@@ -302,6 +302,18 @@ class SyncClient {
   /// the case the flat loop already covers.
   final Set<String> _releasingChainOfAuthors = <String>{};
 
+  /// The release scan in flight for each author, so a decision that lands while
+  /// one is running can wait for it.
+  ///
+  /// A scan for an author that is already being scanned returns nothing rather
+  /// than running twice. That empty result is not a verdict — it says the
+  /// question was not asked — and a decision that read it as one would send
+  /// releasable rows down the held-change path, which merges them without
+  /// writing the log. The completion is what lets the decision wait for the
+  /// scan in flight and ask the question itself.
+  final Map<String, Future<void>> _chainReleaseCompletion =
+      <String, Future<void>>{};
+
   /// The pull in flight, and whether another pull was asked for while it ran.
   ///
   /// **One pull at a time** (#989). A pull reads the cursor, fetches a page and
@@ -2546,6 +2558,8 @@ class SyncClient {
     // 500 stack frames.
     if (_releasingChainOfAuthors.contains(authorMemberId)) return const {};
     _releasingChainOfAuthors.add(authorMemberId);
+    final completion = Completer<void>();
+    _chainReleaseCompletion[authorMemberId] = completion.future;
     final affected = <AffectedEntity>{};
     var releasedAny = false;
     try {
@@ -2685,8 +2699,27 @@ class SyncClient {
       }
     } finally {
       _releasingChainOfAuthors.remove(authorMemberId);
+      _chainReleaseCompletion.remove(authorMemberId);
+      if (!completion.isCompleted) completion.complete();
     }
     return affected;
+  }
+
+  /// Wait for a release scan for [authorMemberId] that is already running.
+  ///
+  /// The scan refuses to run while another scan for the same author is in
+  /// flight: it is the same question, asked twice, and the flat loop already
+  /// covers it. That refusal is not a verdict — it says the question was not
+  /// asked. A decision that read it as one would send rows the scan never
+  /// examined down the held-change path, which merges them without writing the
+  /// log, and settle the accusation over a change the log does not hold. So the
+  /// decision waits for the scan in flight and asks the question itself.
+  Future<void> _awaitChainRelease(String authorMemberId) async {
+    while (_releasingChainOfAuthors.contains(authorMemberId)) {
+      final pending = _chainReleaseCompletion[authorMemberId];
+      if (pending == null) return;
+      await pending;
+    }
   }
 
   /// Every row that could now be chain-valid at one position — still a point
@@ -4412,6 +4445,19 @@ class SyncClient {
   /// that arrives after it is a change that came after the decision, and the
   /// release scan judges it as it judges any other contested position.
   ///
+  /// **The answer covers the gaps that belonged to it.** The rows it bridges
+  /// are the ones that were held when the User answered: a change the server
+  /// sends while they are answering is a new question, it raises the
+  /// accusation again, and this answer neither records a hole for it nor
+  /// releases it.
+  ///
+  /// **The decision waits for a release scan that is already running.** The
+  /// scan refuses to run twice for one author and returns nothing when it
+  /// does, and nothing is not a verdict — it says the question was not asked.
+  /// Read as one, the rows the scan never examined would fall to the
+  /// held-change path, which merges them without writing the log, and the
+  /// accusation would be settled over a change the log does not hold.
+  ///
   /// A row the receive path would refuse is not a successor of anything: the
   /// change it holds is not one of this Workspace's chain, or does not sit at
   /// the position its row claims, so it cannot define the range in front of it.
@@ -4436,14 +4482,30 @@ class SyncClient {
     if (bridgedAuthor != null) {
       final unreleasedBefore = await _unreleasedGapRows(bridgedAuthor);
       final rememberedRowIds = [for (final row in unreleasedBefore) row.id];
+      // **The rows this answer is about are the ones held when it was read.**
+      // A change the server sends while the User is answering is a new
+      // question: it raises the accusation again, and this answer must not
+      // decide it. The rows it brought are not in this set, so the bridge does
+      // not record a hole for them and does not release them.
+      final rememberedRowIdSet = rememberedRowIds.toSet();
       for (var round = 0; round <= rememberedRowIds.length; round++) {
+        // A release scan for this author that is already running makes this
+        // scan return nothing, and nothing is not a verdict: it says the
+        // question was not asked. Waiting for that scan keeps the rows it never
+        // examined out of the held-change path, which merges them without
+        // writing the log.
+        await _awaitChainRelease(bridgedAuthor);
         affected.addAll(
           await _releaseChainSuccessors(
             bridgedAuthor,
             attestationBridged: true,
           ),
         );
-        final decision = await _recordAcceptedHole(bridgedAuthor, now);
+        final decision = await _recordAcceptedHole(
+          bridgedAuthor,
+          now,
+          eligibleRowIds: rememberedRowIdSet,
+        );
         if (decision == _HoleDecision.nothingHeld) break;
         if (decision == _HoleDecision.contested) {
           stoppedOnAmbiguousSuccessor = true;
@@ -4589,20 +4651,48 @@ class SyncClient {
   /// two byte-different signed changes held at that position record nothing,
   /// `author_chain_fork` is raised against the second one, and the decision
   /// stops there.
+  ///
+  /// **The answer covers the gaps that belonged to it, and no others.**
+  /// [eligibleRowIds] is the set of rows that were held when the User's answer
+  /// was read. A change the server sends while they are answering is a new
+  /// question — it raises the accusation again — so this answer does not record
+  /// a hole for it and does not release it. The *candidates* are still every
+  /// row held at the position, including one that arrived later: a rival is a
+  /// rival whether it was there when the User answered or not, and a hole taken
+  /// from a contested position is exactly what must not happen.
+  ///
+  /// The rows are the witness, and not the accusation's occurrence count: the
+  /// count is raised *after* the refused change is written to the quarantine
+  /// table, so a check that read it inside this lock could see the old count
+  /// for a gap that arrived a moment earlier. The rows are durable and they say
+  /// which gaps the User was shown.
   Future<_HoleDecision> _recordAcceptedHole(
     String authorMemberId,
-    DateTime now,
-  ) =>
+    DateTime now, {
+    Set<int>? eligibleRowIds,
+  }) =>
       _runQuarantineExclusive(() async {
         final head = await effectiveChainHeadSeq(authorMemberId);
+        final held = await _unreleasedGapRows(authorMemberId);
         final beyond = [
-          for (final row in await _unreleasedGapRows(authorMemberId))
-            if (row.authorSeq != null && row.authorSeq! > head + 1) row,
+          for (final row in held)
+            if (row.authorSeq != null &&
+                row.authorSeq! > head + 1 &&
+                (eligibleRowIds == null || eligibleRowIds.contains(row.id)))
+              row,
         ];
         if (beyond.isEmpty) return _HoleDecision.nothingHeld;
         final lowestSeq = beyond.first.authorSeq!;
+        // **The candidates are every row held at that position**, not only the
+        // ones this answer is about: a rival that arrived after the User
+        // answered is still a rival, and the hash a hole stores is what every
+        // later change of that author is verified against.
+        final heldAtPosition = [
+          for (final row in held)
+            if (row.authorSeq == lowestSeq) row,
+        ];
         final candidates = <({QuarantineRow row, OpHeader header})>[];
-        for (final row in beyond.where((r) => r.authorSeq == lowestSeq)) {
+        for (final row in heldAtPosition) {
           if (row.seq == null) continue;
           try {
             final header =
@@ -4641,32 +4731,49 @@ class SyncClient {
           );
           return _HoleDecision.contested;
         }
-        await _db.into(_db.acceptedChainHoles).insert(
-              AcceptedChainHolesCompanion.insert(
-                workspaceId: workspaceId,
-                authorMemberId: authorMemberId,
-                firstMissingAuthorSeq: head + 1,
-                lastMissingAuthorSeq: lowestSeq - 1,
-                lastMissingEnvelopeHash: defining.header.prevAuthorHash,
-                definingQuarantineOpRowId: defining.row.id,
-                decidedAt: now,
-              ),
-            );
-        // **The decision is recorded before the scan that releases the row.**
-        // The release scan closes a gap accusation once the author has no
-        // unreleased gap row left and no take upstream waiting for the screen;
-        // while the change the bridge is taking upstream is still waiting, the
-        // accusation has to keep standing — the answer is only complete when
-        // the change has reached the domain store. So the row the hole is
-        // defined by carries the decision now, and the scan that releases it
-        // in the next round sees the work that is still owed.
-        await (_db.update(_db.quarantinedOps)
-              ..where((row) =>
-                  row.id.equals(defining.row.id) & row.resolution.isNull()))
-            .write(QuarantinedOpsCompanion(
-          resolution: Value(AlarmResolution.tookUpstream.code),
-          resolutionDecidedAt: Value(now),
-        ));
+        // **The hole, the decision it carries and the obligation it creates
+        // commit together.** The stamp on the defining row says the change
+        // after the hole is being taken upstream, and the marker beside it says
+        // the change still has to be released. A stamp without the marker
+        // would leave a row that says "decided" and nothing that says "still
+        // owed", and the recovery would then merge that change without
+        // writing it to the log — a device that cannot rebuild itself.
+        await _db.transaction(() async {
+          await _db.into(_db.acceptedChainHoles).insert(
+                AcceptedChainHolesCompanion.insert(
+                  workspaceId: workspaceId,
+                  authorMemberId: authorMemberId,
+                  firstMissingAuthorSeq: head + 1,
+                  lastMissingAuthorSeq: lowestSeq - 1,
+                  lastMissingEnvelopeHash: defining.header.prevAuthorHash,
+                  definingQuarantineOpRowId: defining.row.id,
+                  decidedAt: now,
+                ),
+              );
+          // **The decision is recorded before the scan that releases the row.**
+          // The release scan closes a gap accusation once the author has no
+          // unreleased gap row left and no take upstream waiting for the screen;
+          // while the change the bridge is taking upstream is still waiting, the
+          // accusation has to keep standing — the answer is only complete when
+          // the change has reached the domain store. So the row the hole is
+          // defined by carries the decision now, and the scan that releases it
+          // in the next round sees the work that is still owed.
+          //
+          // **The marker beside it is the obligation.** It is the same marker
+          // the release scan writes before it releases a row, and it says the
+          // same thing: a release was begun and has not finished. A restart
+          // that finds it re-arms the scan, and the change goes through the
+          // ordinary receive path — into the log — instead of being merged by
+          // the recovery with nothing behind it.
+          await (_db.update(_db.quarantinedOps)
+                ..where((row) =>
+                    row.id.equals(defining.row.id) & row.resolution.isNull()))
+              .write(QuarantinedOpsCompanion(
+            resolution: Value(AlarmResolution.tookUpstream.code),
+            resolutionDecidedAt: Value(now),
+            releaseStartedAt: Value(now),
+          ));
+        });
         return _HoleDecision.recorded;
       });
 
@@ -4719,6 +4826,14 @@ class SyncClient {
       // control branch took away, bytes that cannot be read — applies nothing,
       // and **stays pending**: it is not stamped, so the accusation it holds
       // open is not closed over a change that is not there.
+      //
+      // **A row the release scan still owes is not applied here.** The marker
+      // says a release was begun and has not finished, so the scan owns that
+      // row: it re-arms on the next pull and puts the change through the
+      // ordinary receive path, which writes it to the log. The held-change path
+      // does not: it merges the change and leaves nothing behind it, so a
+      // device that merged it that way cannot rebuild itself from its own log.
+      if (row.releasedAt == null && row.releaseStartedAt != null) continue;
       final touched = await _applyHeldChange(row);
       if (touched.isEmpty) continue;
       touchedByRow[row.id] = touched;
