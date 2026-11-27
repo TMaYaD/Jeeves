@@ -4070,13 +4070,19 @@ class SyncClient {
     // The user may have permanently rejected this op via quarantined_ops.resolution.
     // Re-read it in this transaction; if set, the decision is final and the op
     // stays refused.
+    //
+    // Read every row at this seq, not one: a server that hands out the same
+    // transport seq twice leaves two refusals here, and the decision belongs to
+    // the row for *these* bytes — a decision about another op at the same seq
+    // is about another op.
     final quarantined = await (_db.select(_db.quarantinedOps)
           ..where((row) =>
               row.workspaceId.equals(workspaceId) &
               row.seq.equals(pulled.seq) &
               row.reason.equals(SyncRejectionReason.controlChainBreak.code)))
-        .getSingleOrNull();
-    if (quarantined != null && quarantined.resolution != null) {
+        .get();
+    if (quarantined.any((row) =>
+        sameBytes(row.envelope, pulled.envelope) && row.resolution != null)) {
       return false;
     }
     await _clearRefused(pulled.seq);

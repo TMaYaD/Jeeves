@@ -512,6 +512,67 @@ void main() {
       expect(b.client.directory.isChained(d.memberId), isTrue);
     });
 
+    test('a second refusal at the same seq does not stop the first being '
+        'reclaimed', () async {
+      final scene = await _scene();
+      final b = scene.workspace.b;
+      final dId = scene.dFixture.memberId;
+
+      final held = (await _breakRows(scene.broken)).singleWhere(
+          (row) => row.authorMemberId == dId && row.releasedAt == null);
+      final predecessor = ControlPayload.decode(
+        parseBody(splitEnvelope(held.envelope).body),
+      ).prevControlHash;
+
+      // A second op refused at the same transport seq. The quarantine is filed
+      // per **op**, not per slot, so a server that spends one seq twice leaves
+      // two rows here — and the row that is examined first is the one whose
+      // bytes the slot holds.
+      final e = await AuthorFixture.create(
+        seed: Uint8List.fromList(List<int>.filled(32, 0x67)),
+      );
+      final root = await scene.workspace.recoverRoot();
+      final otherEnvelope = await memberRegisterEnvelope(
+        device: e,
+        workspaceId: scene.workspace.workspaceId,
+        root: root,
+        prevControlHash: predecessor,
+        wallMs: scene.workspace.clock.nowMs,
+      );
+      final store = scene.workspace.b.syncStore;
+      root.drop();
+      await store.into(store.quarantinedOps).insert(
+            QuarantinedOpsCompanion.insert(
+              workspaceId: scene.broken.workspaceId,
+              seq: Value(held.seq),
+              reason: _breakCode,
+              detail: 'a second op refused at the same transport seq',
+              envelope: otherEnvelope,
+              detectedAt: DateTime.now(),
+              authorMemberId: Value(e.memberId),
+              authorSeq: const Value(1),
+            ),
+          );
+
+      final fixed = await b.reopenSyncStore(attachTransport: true);
+      await fixed.pull();
+      await fixed.pull();
+
+      // The first row's op is applied: the second row at the same seq does not
+      // stop it, and the second row is left alone.
+      expect(fixed.directory.isChained(dId), isTrue);
+      expect(
+        (await _applied(b)).where((r) =>
+            r.controlType == controlTypeMemberRegister &&
+            ControlPayload.decode(r.payloadBytes).certificate().memberId == dId),
+        hasLength(1),
+      );
+      final other = (await _breakRows(fixed))
+          .singleWhere((row) => row.authorMemberId == e.memberId);
+      expect(other.releasedAt, isNull);
+      expect(fixed.directory.isChained(e.memberId), isFalse);
+    });
+
     test('the release is visible on Sync Health', () async {
       final scene = await _scene();
       final b = scene.workspace.b;
