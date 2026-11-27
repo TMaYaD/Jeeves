@@ -6,12 +6,16 @@
 /// be watching without a phone.
 library;
 
-import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
-import 'package:native_geofence/native_geofence.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 
-import 'arrival_background_entry_point.dart';
 import 'arrival_snapshot.dart';
 import 'location_source.dart';
+
+// The platform's registrar and whether arrivals exist there, by conditional
+// export: the web build never reaches the native geofence plugin.
+export 'geofence_registrar_stub.dart'
+    if (dart.library.io) 'geofence_registrar_io.dart'
+    show arrivalNotificationsSupported, createGeofenceRegistrar;
 
 /// The OS's list of Places to watch.
 abstract class GeofenceRegistrar {
@@ -29,74 +33,6 @@ abstract class GeofenceRegistrar {
 /// The prefix of a Place's geofence id, so Jeeves never mistakes another
 /// geofence for one of its Places.
 const String arrivalGeofenceIdPrefix = 'place:';
-
-/// The registrar that talks to Android's geofencing through `native_geofence`.
-class NativeGeofenceRegistrar implements GeofenceRegistrar {
-  NativeGeofenceRegistrar();
-
-  Future<void>? _initialized;
-
-  Future<NativeGeofenceManager> _manager() async {
-    final manager = NativeGeofenceManager.instance;
-    await (_initialized ??= manager.initialize());
-    return manager;
-  }
-
-  @override
-  Future<Set<String>> registeredIds() async {
-    final ids = await (await _manager()).getRegisteredGeofenceIds();
-    return {
-      for (final id in ids)
-        if (id.startsWith(arrivalGeofenceIdPrefix))
-          id.substring(arrivalGeofenceIdPrefix.length),
-    };
-  }
-
-  @override
-  Future<void> register(ArrivalPlace place) async {
-    await (await _manager()).createGeofence(
-      Geofence(
-        id: '$arrivalGeofenceIdPrefix${place.id}',
-        location: Location(
-          latitude: place.latitudeMicrodegrees / 1e6,
-          longitude: place.longitudeMicrodegrees / 1e6,
-        ),
-        radiusMeters: place.radiusMeters.toDouble(),
-        triggers: {GeofenceEvent.enter, GeofenceEvent.exit},
-        iosSettings: const IosGeofenceSettings(initialTrigger: false),
-        // No initial trigger: turning the switch on while standing in the
-        // Place is not an arrival.
-        androidSettings: const AndroidGeofenceSettings(
-          initialTriggers: <GeofenceEvent>{},
-        ),
-      ),
-      handleArrivalGeofenceEvent,
-    );
-  }
-
-  @override
-  Future<void> remove(String id) async {
-    await (await _manager()).removeGeofenceById('$arrivalGeofenceIdPrefix$id');
-  }
-}
-
-/// The registrar of a platform with no geofences: it watches nothing.
-class WebGeofenceRegistrar implements GeofenceRegistrar {
-  const WebGeofenceRegistrar();
-
-  @override
-  Future<Set<String>> registeredIds() async => const <String>{};
-
-  @override
-  Future<void> register(ArrivalPlace place) async {}
-
-  @override
-  Future<void> remove(String id) async {}
-}
-
-/// The registrar for this platform.
-GeofenceRegistrar createGeofenceRegistrar() =>
-    kIsWeb ? const WebGeofenceRegistrar() : NativeGeofenceRegistrar();
 
 /// What the area of a Place is, in one string: when it changes, the OS's
 /// geofence is the wrong shape and must be made again.

@@ -55,7 +55,9 @@ abstract class ArrivalNotificationSink {
 
 /// The notification's id: stable per Place, so a second arrival at the same
 /// Place replaces the first instead of stacking beside it.
-int arrivalNotificationId(String placeId) => fnv1a32('arrival:$placeId');
+int arrivalNotificationId(String placeId) =>
+    // The plugin takes a signed 32-bit id; the hash is unsigned.
+    fnv1a32('arrival:$placeId').toSigned(32);
 
 /// The payload a body tap routes by.
 String arrivalNotificationPayload(String placeId) =>
@@ -149,20 +151,33 @@ Future<void> handleArrivalEvent({
     nowUtc: nowUtc,
     somethingDue: place.dueCount > 0,
   );
+  final before = visits[placeId];
   visits[placeId] = result.visit;
   await files.writeVisits(visits);
 
   if (!result.notify) return;
-  await sink.show(
-    id: arrivalNotificationId(placeId),
-    title: place.name,
-    body: arrivalNotificationBody(
-      dueCount: place.dueCount,
-      dueTitles: place.dueTitles,
-      random: random,
-    ),
-    payload: arrivalNotificationPayload(placeId),
-  );
+  try {
+    await sink.show(
+      id: arrivalNotificationId(placeId),
+      title: place.name,
+      body: arrivalNotificationBody(
+        dueCount: place.dueCount,
+        dueTitles: place.dueTitles,
+        random: random,
+      ),
+      payload: arrivalNotificationPayload(placeId),
+    );
+  } catch (_) {
+    // The user was not told, so this visit has not told them: put the record
+    // back as it was, and the next arrival event tries again.
+    if (before == null) {
+      visits.remove(placeId);
+    } else {
+      visits[placeId] = before;
+    }
+    await files.writeVisits(visits);
+    rethrow;
+  }
 }
 
 /// The sink that shows through `flutter_local_notifications`, in the headless

@@ -132,6 +132,9 @@ class _PlacePageScreenState extends ConsumerState<PlacePageScreen> {
                   emptySubtitle:
                       'Outcomes you give a place to are listed here.',
                   dataBuilder: (context, entries) => CustomScrollView(
+                    // A new requested Place starts a new scroll view, so the
+                    // old offset does not carry over to it.
+                    key: ValueKey('place_page_scroll_${widget.focusPlaceId}'),
                     // The section the page opens at is the scroll view's
                     // centre, pinned at the top: what is above it sits above
                     // the top, and the user reaches it by scrolling up.

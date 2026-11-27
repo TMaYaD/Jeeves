@@ -47,8 +47,10 @@ class ArrivalPlaceIdsNotifier extends AsyncNotifier<Set<String>> {
   /// Writes the record, keeping the stored ids and the ones Jeeves is
   /// changing in step.
   Future<void> _write(Set<String> Function(Set<String> ids) change) async {
-    final current = state.asData?.value ?? await future;
-    final next = change(current);
+    // Read the state after the load, not before: a change that started
+    // earlier may have resumed first, and this one must build on its result.
+    await future;
+    final next = change(state.value ?? const <String>{});
     state = AsyncData(Set<String>.unmodifiable(next));
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList(

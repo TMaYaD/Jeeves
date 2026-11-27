@@ -10,7 +10,6 @@
 /// longer watches is a visit nobody acts on.
 library;
 
-import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -57,7 +56,7 @@ final geofenceRegistrarProvider = Provider<GeofenceRegistrar>((ref) {
 /// every rebuild would not know what it had already written.
 final arrivalSnapshotWriterProvider = Provider<ArrivalSnapshotWriter?>((ref) {
   // The web has no arrival notification, so it has no snapshot to keep.
-  if (kIsWeb) return null;
+  if (!arrivalNotificationsSupported) return null;
 
   final writer = ArrivalSnapshotWriter(
     files: ref.watch(arrivalFilesProvider.future),
@@ -86,18 +85,31 @@ final arrivalSnapshotWriterProvider = Provider<ArrivalSnapshotWriter?>((ref) {
 /// preferences), the named Places, the Outcomes on Next, and the Place each
 /// Outcome carries.
 final arrivalSnapshotReconcilerProvider = Provider<void>((ref) {
-  if (kIsWeb) return;
+  if (!arrivalNotificationsSupported) return;
 
   final writer = ref.watch(arrivalSnapshotWriterProvider);
   if (writer == null) return;
 
+  final switchedOn = ref.watch(arrivalPlaceIdsProvider);
+  final named = ref.watch(namedPlacesProvider);
+  final next = ref.watch(nextOutcomesProvider);
+  final current = ref.watch(currentPlacesProvider);
+
+  // Until all four have answered, what is known is not what is true: an
+  // empty fallback would read as "nothing is switched on" and the visit
+  // record would be pruned away. The provider is rebuilt as each one lands.
+  if (!switchedOn.hasValue ||
+      !named.hasValue ||
+      !next.hasValue ||
+      !current.hasValue) {
+    return;
+  }
+
   writer.reconcile(
-    switchedOnPlaceIds:
-        ref.watch(arrivalPlaceIdsProvider).value ?? const <String>{},
-    namedPlaces: ref.watch(namedPlacesProvider).value ?? const <Place>[],
-    nextOutcomes: ref.watch(nextOutcomesProvider).value ?? const <Todo>[],
-    currentPlaces: ref.watch(currentPlacesProvider).value ??
-        const <String, ActionPlace>{},
+    switchedOnPlaceIds: switchedOn.requireValue,
+    namedPlaces: named.requireValue,
+    nextOutcomes: next.requireValue,
+    currentPlaces: current.requireValue,
   );
 });
 

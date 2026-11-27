@@ -52,6 +52,9 @@ Future<bool> turnOnArrivalNotification(
   String placeId,
 ) async {
   final source = ref.read(locationSourceProvider);
+  // Read before the first await: the caller's surface may be gone by the time
+  // the phone answers, and a grant must still be kept.
+  final arrivalIds = ref.read(arrivalPlaceIdsProvider.notifier);
 
   // The web has no location prompt at all.
   if (!source.supportsPermissionPrompt) return false;
@@ -72,11 +75,11 @@ Future<bool> turnOnArrivalNotification(
   final permission = await source.requestAllTheTime();
 
   // The OS's standing has changed: whoever was reading it must read it again.
-  ref.invalidate(locationPermissionProvider);
+  if (context.mounted) ref.invalidate(locationPermissionProvider);
 
   if (permission != LocationPermission.always) return false;
 
-  await ref.read(arrivalPlaceIdsProvider.notifier).turnOn(placeId);
+  await arrivalIds.turnOn(placeId);
   return true;
 }
 

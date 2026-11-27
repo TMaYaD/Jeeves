@@ -81,7 +81,8 @@ class PlaceEditorSheet extends ConsumerStatefulWidget {
   ConsumerState<PlaceEditorSheet> createState() => _PlaceEditorSheetState();
 }
 
-class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
+class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet>
+    with WidgetsBindingObserver {
   late final TextEditingController _name =
       TextEditingController(text: widget.place?.name ?? '');
 
@@ -128,6 +129,7 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     final place = widget.place;
     if (place != null) {
       _point = (
@@ -149,6 +151,7 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _name.dispose();
     super.dispose();
   }
@@ -267,6 +270,13 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
     final place = widget.place!;
     if (_arrivalPlaceIds.contains(place.id)) return true;
     return _arrivalAskDidNotTake;
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // The user may have allowed the location in the phone's settings and come
+    // back: the switch must read it again.
+    if (state == AppLifecycleState.resumed) _readPermission();
   }
 
   /// Reads what the OS says about the location, afresh.
@@ -437,10 +447,13 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
       },
     );
     if (confirmed != true || !mounted) return;
+    // Read before the first await: the sheet may be dismissed while the
+    // delete is in flight, and the notifier must outlive it.
     final db = ref.read(databaseProvider);
+    final arrivalIds = ref.read(arrivalPlaceIdsProvider.notifier);
     await db.placeDao.deletePlace(place.id);
     // The Place is gone: its id must not come back with the next write.
-    await ref.read(arrivalPlaceIdsProvider.notifier).forget(place.id);
+    await arrivalIds.forget(place.id);
     if (!mounted) return;
     // A deleted Place is not a saved Place: the editor answers nothing.
     Navigator.pop(context);

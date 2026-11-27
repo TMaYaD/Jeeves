@@ -27,7 +27,20 @@ class GeolocatorLocationSource implements LocationSource {
   @override
   Future<LocationPermission> permission() async {
     try {
-      return _map(await geo.Geolocator.checkPermission());
+      final mapped = _map(await geo.Geolocator.checkPermission());
+      if (mapped != LocationPermission.always) return mapped;
+      // An arrival needs the precise location: a phone that allows "all the
+      // time" but only the approximate location cannot watch a Place, so it
+      // reads as short of "all the time".
+      try {
+        final accuracy = await geo.Geolocator.getLocationAccuracy();
+        if (accuracy == geo.LocationAccuracyStatus.reduced) {
+          return LocationPermission.whileInUse;
+        }
+      } on Object {
+        // An accuracy the phone cannot report is taken as precise.
+      }
+      return mapped;
     } on Object {
       // A platform with no location plugin answers "not asked".
       return LocationPermission.notAsked;
@@ -61,9 +74,11 @@ class GeolocatorLocationSource implements LocationSource {
     if (status == LocationPermission.always) return status;
     // The phone allows the location only while the app is open. Asking again
     // now — with the background permission declared — is the ask for "all the
-    // time".
+    // time". The answer is read back through [permission], which also
+    // holds an approximate-only grant short of "all the time".
     try {
-      return _map(await geo.Geolocator.requestPermission());
+      await geo.Geolocator.requestPermission();
+      return await permission();
     } on Object {
       return LocationPermission.notAsked;
     }

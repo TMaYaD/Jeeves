@@ -54,6 +54,19 @@ class _RecordingSink implements ArrivalNotificationSink {
   }
 }
 
+/// A sink whose notification cannot be posted.
+class _FailingSink implements ArrivalNotificationSink {
+  @override
+  Future<void> show({
+    required int id,
+    required String title,
+    required String body,
+    required String payload,
+  }) async {
+    throw StateError('the phone refused the notification');
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(configureSqliteForTests);
@@ -156,6 +169,47 @@ void main() {
     await event(storeId, enter: false, atMinute: 20);
     await event(storeId, enter: true, atMinute: 51);
     expect(sink.shown, hasLength(2));
+  });
+
+  test('a notification that could not be posted is tried again', () async {
+    final storeId = await switchedOnStore();
+
+    await expectLater(
+      handleArrivalEvent(
+        geofenceId: '$arrivalGeofenceIdPrefix$storeId',
+        isEnter: true,
+        nowUtc: start,
+        files: files,
+        sink: _FailingSink(),
+      ),
+      throwsStateError,
+    );
+
+    // The user was not told, so the next arrival event tells them.
+    await event(storeId, enter: true, atMinute: 1);
+    expect(sink.shown, hasLength(1));
+  });
+
+  test('the notification id fits the plugin\'s signed 32-bit range', () {
+    for (var i = 0; i < 2000; i++) {
+      final id = arrivalNotificationId('place-$i');
+      expect(id, inInclusiveRange(-0x80000000, 0x7fffffff));
+    }
+  });
+
+  test('two changes made before the record loads both survive', () async {
+    SharedPreferences.setMockInitialValues({
+      arrivalNotificationPlaceIdsKey: ['a'],
+    });
+    final fresh = ProviderContainer();
+    addTearDown(fresh.dispose);
+    final notifier = fresh.read(arrivalPlaceIdsProvider.notifier);
+    final turnedOn = notifier.turnOn('b');
+    final forgotten = notifier.forget('a');
+    await Future.wait([turnedOn, forgotten]);
+    expect(await fresh.read(arrivalPlaceIdsProvider.future), {'b'});
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getStringList(arrivalNotificationPlaceIdsKey), ['b']);
   });
 
   test('a Place switched off says nothing', () async {

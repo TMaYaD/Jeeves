@@ -17,11 +17,14 @@ Future<void> handleArrivalGeofenceEvent(GeofenceCallbackParams params) async {
   final isEnter = params.event == GeofenceEvent.enter;
   if (!isEnter && params.event != GeofenceEvent.exit) return;
   final files = await ArrivalFiles.inApplicationSupport();
+  // The OS can start this callback after the event happened; the event's own
+  // time is the one the 30-minute rule must use. Absent on some platforms.
+  final eventTimeUtc = (params.triggeredAt ?? DateTime.now()).toUtc();
   for (final geofence in params.geofences) {
     await handleArrivalEvent(
       geofenceId: geofence.id,
       isEnter: isEnter,
-      nowUtc: DateTime.now().toUtc(),
+      nowUtc: eventTimeUtc,
       files: files,
       sink: LocalArrivalNotificationSink(),
     );

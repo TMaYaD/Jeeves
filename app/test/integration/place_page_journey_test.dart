@@ -123,7 +123,10 @@ bool _atTop(WidgetTester tester, String name) {
   final header = find.text(name);
   if (header.evaluate().isEmpty) return false;
   final list = tester.getRect(find.byType(CustomScrollView));
-  return tester.getRect(header).top - list.top < 50;
+  final offset = tester.getRect(header).top - list.top;
+  // Not above the top either: a header scrolled out of sight is not "at the
+  // top".
+  return offset >= 0 && offset < 50;
 }
 
 /// Scrolls the list up until the header is on the screen.
