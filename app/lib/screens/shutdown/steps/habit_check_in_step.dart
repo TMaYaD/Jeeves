@@ -13,6 +13,7 @@ import '../../../models/habit_commitment.dart'
     show habitDateFromDayKey, habitDayKey;
 import '../../../providers/clock_provider.dart';
 import '../../../providers/habit_progress_provider.dart';
+import '../../../providers/place_gate_provider.dart';
 import '../../../providers/shutdown_habits_provider.dart';
 import '../../../widgets/habit_check_in_mark.dart';
 import '../../../models/habit_progress.dart' show HabitProgress;
@@ -91,6 +92,11 @@ class _BinaryRow extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // A Habit is never hidden by its Place: the Place is said, not a gate.
+    final placeLine = habitPlaceLine(
+      placeName: ref.watch(habitPlaceNamesProvider)[open.habit.id],
+      line: null,
+    );
     return ListTile(
       contentPadding: EdgeInsets.zero,
       leading: HabitCheckInMark(
@@ -103,6 +109,7 @@ class _BinaryRow extends ConsumerWidget {
             .toggleBinary(open.habit.id, closingDay),
       ),
       title: Text(open.habit.title),
+      subtitle: placeLine.isEmpty ? null : Text(placeLine),
     );
   }
 }
@@ -140,7 +147,12 @@ class _MeasurableRowState extends ConsumerState<_MeasurableRow> {
         children: [
           Text(widget.open.habit.title, style: theme.textTheme.titleMedium),
           Text(
-            habitAmountLine(widget.progress),
+            // A Habit is never hidden by its Place: the Place is said, not a
+            // gate.
+            habitPlaceLine(
+              placeName: ref.watch(habitPlaceNamesProvider)[habitId],
+              line: habitAmountLine(widget.progress),
+            ),
             key: Key('shutdown_habit_amount_$habitId'),
           ),
           Row(

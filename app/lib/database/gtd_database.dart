@@ -208,7 +208,7 @@ class GtdDatabase extends _$GtdDatabase {
   /// build refuses it: opening it would relabel the file with a version it
   /// does not understand, and the newer build would then find a store it
   /// believes is old.
-  static const int supportedSchemaVersion = 17;
+  static const int supportedSchemaVersion = 18;
 
   /// Completes with the [OpeningDetails] of this store's one open.
   ///
@@ -546,13 +546,25 @@ class GtdDatabase extends _$GtdDatabase {
               await m.createIndex(idxHabitTimeLogsHabit);
             }
           }
-          // v17 (issue #1074): the hours a named place carries, and the zone
+          // v17 (issue #1075): `habits.place_id`, the Place a Habit is at. A
+          // nullable `ADD COLUMN` — no table rebuild, every existing Habit
+          // reads NULL (no place), nothing is lost. Guarded on the column's
+          // absence like v7.
+          if (from < 17) {
+            final existing = await m.database
+                .customSelect('PRAGMA table_info(habits)')
+                .get();
+            if (!existing.any((row) => row.read<String>('name') == 'place_id')) {
+              await m.addColumn(habits, habits.placeId);
+            }
+          }
+          // v18 (issue #1074): the hours a named place carries, and the zone
           // they are read on. Three nullable `ADD COLUMN`s, guarded on their
           // absence like v7 and v15: every existing place reads NULL (no
           // window, no own hours, no zone), and nothing is lost. There is no
           // backfill — a place had no hours before this build, so there is
           // nothing to backfill *from*.
-          if (from < 17) {
+          if (from < 18) {
             final existing = await m.database
                 .customSelect('PRAGMA table_info(places)')
                 .get();

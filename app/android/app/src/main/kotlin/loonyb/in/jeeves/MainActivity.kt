@@ -71,6 +71,32 @@ class MainActivity : FlutterFragmentActivity() {
                 }
             }
 
+        // A Google Maps route, asked for by lib/services/navigation_app_opener.dart.
+        // The intent is bound to the Maps package, so a browser can never take
+        // the link and quietly keep three waypoints (issue #60). No Maps app
+        // means false, and the Dart side says so instead of dropping stops.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, NAVIGATION_APP_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "openInGoogleMaps" -> {
+                        val url = call.argument<String>("url")
+                        val opened = try {
+                            startActivity(
+                                Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                                    setPackage(GOOGLE_MAPS_PACKAGE)
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                            )
+                            true
+                        } catch (error: Exception) {
+                            false
+                        }
+                        result.success(opened)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
         // The name the platform gives this device, asked for by
         // lib/services/platform_device_name.dart. The OS device name is what
         // the user calls the phone ("Galaxy S23", or whatever they renamed it
@@ -109,5 +135,7 @@ class MainActivity : FlutterFragmentActivity() {
         const val SECURE_SCREEN_CHANNEL = "jeeves/secure_screen"
         const val DEVICE_NAME_CHANNEL = "jeeves/device_name"
         const val APP_SETTINGS_CHANNEL = "jeeves/app_settings"
+        const val NAVIGATION_APP_CHANNEL = "jeeves/navigation_app"
+        const val GOOGLE_MAPS_PACKAGE = "com.google.android.apps.maps"
     }
 }

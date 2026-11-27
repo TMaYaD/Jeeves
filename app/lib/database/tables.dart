@@ -907,6 +907,17 @@ class Habits extends Table {
   /// time rather than stored, and a chain that would loop is refused too.
   TextColumn get anchorHabitId => text().nullable().references(Habits, #id)();
 
+  /// The Place this Habit is at (issue #1075): a `places.id`.
+  ///
+  /// NULL = no place. **No SQL foreign key**, like [Actions.placeId]: the
+  /// log has none, and a reference to a Place that no longer exists must be
+  /// representable — it reads as "no place" rather than hiding the Habit.
+  ///
+  /// One column carries both kinds of Place, a named one and a one-time pin,
+  /// so last-write-wins on a single field keeps "at most one place per Habit"
+  /// true even when two devices disagree.
+  TextColumn get placeId => text().named('place_id').nullable()();
+
   /// When the Habit was created (an instant).
   TextColumn get createdAt => text()();
 

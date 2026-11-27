@@ -356,7 +356,8 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
       'place_id': placeId,
       'updated_at': encodeInstant(ts),
     });
-    final placesChanged = await _dropPinIfAny(row.placeId);
+    final placesChanged =
+        await attachedDatabase.placeDao.dropPinIfAny(row.placeId);
     return (changed: true, placesChanged: placesChanged);
   }
 
@@ -414,33 +415,11 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     if (row == null) {
       return (pinId: null, changed: false, placesChanged: false);
     }
-    final pinId = uuid.v4();
-    await into(places).insert(
-      PlacesCompanion(
-        id: Value(pinId),
-        userId: Value(row.userId),
-        kind: const Value(pinPlaceKind),
-        name: Value(pinName),
-        latitudeMicrodegrees: Value(area.latitudeMicrodegrees),
-        longitudeMicrodegrees: Value(area.longitudeMicrodegrees),
-        radiusMeters: Value(area.radiusMeters),
-        createdAt: Value(ts),
-      ),
-    );
-    // Creation asserts the whole row, so a peer that has never seen the pin
-    // can build it.
-    attachedDatabase.opCapture.write(
-      collection: placesCollection,
-      entityId: pinId,
-      fields: {
-        'user_id': row.userId,
-        'kind': pinPlaceKind,
-        'name': pinName,
-        'latitude_microdegrees': area.latitudeMicrodegrees,
-        'longitude_microdegrees': area.longitudeMicrodegrees,
-        'radius_meters': area.radiusMeters,
-        'created_at': encodeInstant(ts),
-      },
+    final pinId = await attachedDatabase.placeDao.insertPin(
+      userId: row.userId,
+      area: area,
+      name: pinName,
+      ts: ts,
     );
     await (update(actions)..where((a) => a.id.equals(actionId))).write(
       ActionsCompanion(
@@ -452,7 +431,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
       'place_id': pinId,
       'updated_at': encodeInstant(ts),
     });
-    await _dropPinIfAny(row.placeId);
+    await attachedDatabase.placeDao.dropPinIfAny(row.placeId);
     return (pinId: pinId, changed: true, placesChanged: true);
   }
 
@@ -566,26 +545,6 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
       'time_context': null,
       'updated_at': encodeInstant(ts),
     });
-    return true;
-  }
-
-  /// Deletes the one-time pin row [placeId] names, when it is a pin.
-  ///
-  /// A pin belongs to the one Action that points at it, so a reference that
-  /// moves away takes the pin with it. The row goes and a tombstone says so, so
-  /// a replayed create cannot bring it back.
-  ///
-  /// Returns whether a pin row was dropped.
-  Future<bool> _dropPinIfAny(String? placeId) async {
-    if (placeId == null) return false;
-    final place = await (select(places)..where((p) => p.id.equals(placeId)))
-        .getSingleOrNull();
-    if (place == null || place.kind != pinPlaceKind) return false;
-    await (delete(places)..where((p) => p.id.equals(placeId))).go();
-    attachedDatabase.opCapture.tombstone(
-      collection: placesCollection,
-      entityId: placeId,
-    );
     return true;
   }
 

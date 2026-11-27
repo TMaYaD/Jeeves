@@ -57,12 +57,17 @@ class OutcomeSelectionBar extends ConsumerWidget {
     required this.allIds,
     required this.onClear,
     required this.onSelectAll,
+    this.extraActions = const [],
   });
 
   final Set<String> selectedIds;
   final Set<String> allIds;
   final VoidCallback onClear;
   final VoidCallback onSelectAll;
+
+  /// Actions of the screen's own, after the three bulk ones. Most screens
+  /// have none.
+  final List<Widget> extraActions;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -134,12 +139,36 @@ class OutcomeSelectionBar extends ConsumerWidget {
                     child: const _BarButton(
                         icon: Icons.flag_outlined, label: 'Status'),
                   ),
+                  ...extraActions,
                 ],
               ),
             ],
           ),
         ),
       ),
+    );
+  }
+}
+
+/// An action of a screen's own on the selection bar, drawn like the bulk ones.
+class SelectionBarAction extends StatelessWidget {
+  const SelectionBarAction({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: onTap,
+      child: _BarButton(icon: icon, label: label),
     );
   }
 }

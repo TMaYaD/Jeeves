@@ -31,6 +31,9 @@ const Map<int, List<(String, String)>> columnsAddedAt = {
   15: [
     ('quarantined_ops', 'resolution_projected_at'),
   ],
+  17: [
+    ('sync_cursors', 'rebuild_required_at'),
+  ],
 };
 
 /// Take out of [database] every column that a store at [version] did not have,
@@ -43,6 +46,13 @@ Future<void> dropColumnsAddedAfter(SyncDatabase database, int version) async {
   // v13 added the vault's table; a store from before it does not hold it.
   if (version < 13) {
     await database.customStatement('DROP TABLE IF EXISTS vault_page_bases');
+  }
+  // v16 added the record of reduced entities that still need projecting; a
+  // store from before it does not hold it.
+  if (version < 16) {
+    await database.customStatement(
+      'DROP TABLE IF EXISTS entities_awaiting_projection',
+    );
   }
   for (final entry in columnsAddedAt.entries) {
     if (entry.key <= version) continue;

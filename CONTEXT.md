@@ -96,7 +96,7 @@ A predicate over current world state ("is *now* a moment when this action is doa
 _Avoid_: Constraint, Filter, Gate
 
 **Place**:
-A point plus an area: where an Action is. Named, or a one-time pin it owns; at most one per Action. The current location is never stored. Detail in REQUIREMENTS.
+A point plus an area: where an Action or Habit is. Named, or a one-time pin it owns; one at most. The current location is never stored. Detail in REQUIREMENTS.
 _Avoid_: Location, Geofence, Venue
 
 **Time window**:

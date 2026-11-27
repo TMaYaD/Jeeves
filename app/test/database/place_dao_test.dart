@@ -166,6 +166,30 @@ void main() {
     }
   });
 
+  test('a delete detaches the Habit that used the place', () async {
+    final id = await createHardwareStore();
+    // A Habit pointing at the Place, written straight into the column — the
+    // Habit-side setter has its own suite.
+    await db.into(db.habits).insert(HabitsCompanion.insert(
+          id: const Value('h1'),
+          userId: _userId,
+          title: 'Read a book',
+          createdAt: '2026-11-24T09:00:00.000Z',
+          placeId: Value(id),
+        ));
+    capture.clear();
+
+    await db.placeDao.deletePlace(id!, now: _ts);
+
+    final habit = await (db.select(db.habits)..where((h) => h.id.equals('h1')))
+        .getSingle();
+    expect(habit.placeId, isNull);
+    // The Habit tables are device-local, so the detach authors no op: the
+    // Place's tombstone is the only op there is.
+    expect(capture.recorded, hasLength(1));
+    expect(capture.forCollection(placesCollection).single.tombstone, isTrue);
+  });
+
   test('an out-of-range radius and a blank or over-long name are refused and '
       'write nothing', () async {
     expect(await createHardwareStore(radiusMeters: 49), isNull);
