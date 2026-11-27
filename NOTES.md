@@ -118,3 +118,7 @@ Format: `- <date>: Instinct: X. Here: Y — <why>.`
 
 ## 2026-11-21 (build hosts stay out of the repo)
 - 2026-11-21: Instinct: document the machine that builds the app next to the code that uses it — its address, account, port-forward, a VM runbook, probes tuned to its host. Here: the repo is public and must not care where it compiles; that setup lives with the machine and its operator. What belongs here passes one test — would a developer on a different machine, network and continent use it unchanged? `infra/builder` does (CI proves it on a bare container); an inventory, a hypervisor config or a host's measurements never do.
+
+## 2026-11-27 (#1032 — two traps in staging a sync test)
+- 2026-11-27: Instinct: an op withheld from a page can be served again by re-serving the log. Here: the client skips any op at or below its own cursor and the server serves only the ops above the `since` it asked with, so withholding one op from the middle of the log puts the cursor past it and it is never delivered again — `ignoreSinceParameter` re-serves the log, it does not un-skip the ops below the cursor. Withhold the op and everything above it, or post it after the cursor's last op.
+- 2026-11-27: Instinct: a `DateTime` column holds a unix-seconds integer. Here: drift stores a `DateTime` as ISO-8601 text, so a raw integer written into one reads back as a `FormatException` — write timestamps through drift's own API, not through `customStatement`.
