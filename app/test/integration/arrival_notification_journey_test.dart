@@ -54,6 +54,20 @@ class _RecordingSink implements ArrivalNotificationSink {
   }
 }
 
+/// A sink that takes a moment to post, so overlapping events can interleave.
+class _SlowSink extends _RecordingSink {
+  @override
+  Future<void> show({
+    required int id,
+    required String title,
+    required String body,
+    required String payload,
+  }) async {
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    await super.show(id: id, title: title, body: body, payload: payload);
+  }
+}
+
 /// A sink whose notification cannot be posted.
 class _FailingSink implements ArrivalNotificationSink {
   @override
@@ -169,6 +183,20 @@ void main() {
     await event(storeId, enter: false, atMinute: 20);
     await event(storeId, enter: true, atMinute: 51);
     expect(sink.shown, hasLength(2));
+  });
+
+  test('two enters that overlap tell the user once', () async {
+    final storeId = await switchedOnStore();
+    final slow = _SlowSink();
+    Future<void> enter() => handleArrivalEvent(
+          geofenceId: '$arrivalGeofenceIdPrefix$storeId',
+          isEnter: true,
+          nowUtc: start,
+          files: files,
+          sink: slow,
+        );
+    await Future.wait([enter(), enter()]);
+    expect(slow.shown, hasLength(1));
   });
 
   test('a notification that could not be posted is tried again', () async {

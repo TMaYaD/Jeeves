@@ -128,6 +128,30 @@ Future<void> handleArrivalEvent({
   required ArrivalFiles files,
   required ArrivalNotificationSink sink,
   Random? random,
+}) {
+  // One event at a time in this isolate: a later enter must read the visit
+  // record an earlier enter wrote, or one visit could notify twice.
+  final run = _arrivalEventTail.then((_) => _handleArrivalEventNow(
+        geofenceId: geofenceId,
+        isEnter: isEnter,
+        nowUtc: nowUtc,
+        files: files,
+        sink: sink,
+        random: random,
+      ));
+  _arrivalEventTail = run.then<void>((_) {}, onError: (Object _) {});
+  return run;
+}
+
+Future<void> _arrivalEventTail = Future<void>.value();
+
+Future<void> _handleArrivalEventNow({
+  required String geofenceId,
+  required bool isEnter,
+  required DateTime nowUtc,
+  required ArrivalFiles files,
+  required ArrivalNotificationSink sink,
+  Random? random,
 }) async {
   if (!geofenceId.startsWith(arrivalGeofenceIdPrefix)) return;
   final placeId = geofenceId.substring(arrivalGeofenceIdPrefix.length);
