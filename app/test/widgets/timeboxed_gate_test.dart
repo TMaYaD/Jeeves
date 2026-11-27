@@ -175,7 +175,7 @@ void main() {
     expect(find.text('Sprints past the limit so far: 0'), findsOneWidget);
   });
 
-  testWidgets('"Right ho" starts nothing', (tester) async {
+  testWidgets('"Right ho" starts nothing and asks what is next', (tester) async {
     await makeTimeboxed();
     await logTime(const Duration(minutes: 50));
     var started = false;
@@ -186,9 +186,14 @@ void main() {
     await tester.tap(find.byKey(const Key('timeboxed_gate_stop')));
     await settle(tester);
 
-    // The sheet closes and the Sprint does not start.
+    // The gate closes, the Sprint does not start, and the "Approach stopped"
+    // sheet opens: the approach stops at its limit and the user is asked what
+    // is next for the Outcome (issue #49).
     expect(started, isFalse);
     expect(find.byKey(const Key('timeboxed_gate_stop')), findsNothing);
+    expect(find.text('Approach stopped'), findsOneWidget);
+    expect(find.text('Outcome achieved'), findsOneWidget);
+    expect(find.text('More to do…'), findsOneWidget);
   });
 
   testWidgets('"Another sprint, regardless" asks once more, then starts', (
