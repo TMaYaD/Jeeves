@@ -219,6 +219,25 @@ Future<TimeboxedLimitStatus?> readTimeboxedLimitStatus(
   return _status(limitMinutes: limit!, logs: logs, sprints: sprints);
 }
 
+/// The time logged on [actionId] by [now], breaks included.
+///
+/// The same reading the limit is measured against, so the two can never
+/// disagree: a raise has to beat the time logged, and the limit it moves is
+/// measured against the same stints.
+Future<Duration> readLoggedOnAction(
+  GtdDatabase db,
+  String actionId,
+  DateTime now,
+) async {
+  final logs = await (db.select(
+    db.timeLogs,
+  )..where((t) => t.actionId.equals(actionId))).get();
+  return loggedDurationOn([
+    for (final log in logs)
+      TimeLogInterval(startedAt: log.startedAt, endedAt: log.endedAt),
+  ], now);
+}
+
 /// The status of one Timeboxed Action, from its stints and its Sprints.
 TimeboxedLimitStatus _status({
   required int limitMinutes,

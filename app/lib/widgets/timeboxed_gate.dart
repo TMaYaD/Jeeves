@@ -97,10 +97,10 @@ void _closeGateSheet(int sheetId) {
 /// "Right ho" starts nothing: the sheet closes and the user stays where they
 /// were. "Another sprint, regardless" asks once more and then starts the
 /// Sprint, leaving the estimate exactly as it was. "Raise the estimate…"
-/// opens the estimate sheet one step up; if the raised estimate moves the
-/// limit out of the way the Sprint starts after all, and if it does not, the
-/// gate asks again with the figures as they now stand. Nothing here is
-/// locked.
+/// opens the estimate sheet on the first step above the time already logged;
+/// if the raised estimate moves the limit out of the way the Sprint starts
+/// after all, and if it does not, the gate asks again with the figures as they
+/// now stand. Nothing here is locked.
 Future<void> guardSprintPastLimit(
   BuildContext context,
   WidgetRef ref, {
@@ -179,12 +179,12 @@ Future<void> guardSprintPastLimit(
   }
 }
 
-/// Opens the estimate sheet for [outcomeId]'s current Action, one step above
-/// the estimate it has.
+/// Opens the estimate sheet for [outcomeId]'s current Action, on the first
+/// step above the time already logged.
 ///
 /// Returns whether the sheet was saved. The change is permanent, which is what
-/// the gate promises; raising the estimate clears the Timeboxed switch only if
-/// the estimate is cleared altogether (the estimate sheet's own rule).
+/// the gate promises; the raise keeps the Action Timeboxed and moves the
+/// limit with the estimate.
 Future<bool> _raiseTheEstimate(
   BuildContext context,
   WidgetRef ref, {
@@ -194,21 +194,35 @@ Future<bool> _raiseTheEstimate(
   final action = await db.actionDao.getCurrentAction(outcomeId);
   if (action == null) return false;
   if (!context.mounted) return false;
+  // One clock for the whole read: the time logged and the figures the sheet
+  // shows are counted from the same instant.
+  final now = ref.read(clockProvider)().toUtc();
+  final logged = await readLoggedOnAction(db, action.id, now);
+  if (!context.mounted) return false;
+  // The sheet names the Outcome, as the design does.
+  final todo = await db.todoDao.getTodo(outcomeId);
+  if (!context.mounted) return false;
   final notifier = ref.read(taskDetailNotifierProvider(outcomeId));
   return showOutcomeTimeEstimateSheet(
     context,
     notifier,
     current: action.timeEstimate,
-    // One step up the ladder: the sheet opens on the raised value, so the
-    // user confirms it rather than reaching for it.
-    initial: stepEstimateUp(action.timeEstimate),
+    // The first step above the time logged, not above the old estimate: the
+    // raise has to beat the work already done. At the top of the ladder there
+    // is no step above, so the sheet opens on the top and cannot be saved.
+    initial: stepEstimateUp(logged.inMinutes) ?? kMaxEstimateMinutes,
     actionText: action.actionText,
     actionId: action.id,
     // The switch reads as the limit does: on only when there is an estimate
-    // to limit.
+    // to limit. The raise keeps it on — the sheet does not show it.
     timeboxed: isTimeboxedAction(
       timeboxed: action.timeboxed,
       timeEstimate: action.timeEstimate,
+    ),
+    raise: EstimateRaise(
+      outcomeTitle: todo?.title ?? '',
+      limitMinutes: action.timeEstimate ?? 0,
+      logged: logged,
     ),
   );
 }

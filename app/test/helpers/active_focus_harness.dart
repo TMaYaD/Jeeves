@@ -126,8 +126,10 @@ Widget focusHarness(
   Stream<Todo?>? todoStream,
   // The Timeboxed limit status the screen shows. Stubbed, like the todo
   // subject: it is a live Drift watch, and a widget test cannot let one
-  // deliver. Pass a status to exercise the limit strip and the red dots.
+  // deliver. Pass a status to exercise the limit strip and the red dots, or
+  // a stream for a test whose limit moves while the screen is up.
   TimeboxedLimitStatus? timeboxedLimit,
+  Stream<TimeboxedLimitStatus?>? timeboxedLimitStream,
   // Extra overrides, e.g. a fixed `focusSettingsProvider` for tests that run the
   // real sprint timer and must not open the synced-preferences watch.
   List<Override> overrides = const [],
@@ -164,7 +166,9 @@ Widget focusHarness(
       // it is stubbed here, and a test that needs the limit strip or the red
       // dots passes the status it wants to see.
       timeboxedLimitStatusProvider(todo.id)
-          .overrideWith((_) => Stream.value(timeboxedLimit)),
+          .overrideWith(
+            (_) => timeboxedLimitStream ?? Stream.value(timeboxedLimit),
+          ),
       ...overrides,
     ],
     child: MaterialApp.router(routerConfig: router),

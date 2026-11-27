@@ -78,11 +78,17 @@ class TimeWindowManagementScreen extends ConsumerWidget {
                   '${row.useCount}',
                   style: const TextStyle(color: Color(0xFF9CA3AF)),
                 ),
-                onTap: () => showTimeWindowEditorSheet(
-                  context,
-                  window: row.window,
-                  useCount: row.useCount,
-                ),
+                onTap: () async {
+                  final placeUseCount = await ref.read(
+                      timeWindowPlaceUseCountProvider(row.window.id).future);
+                  if (!context.mounted) return;
+                  await showTimeWindowEditorSheet(
+                    context,
+                    window: row.window,
+                    useCount: row.useCount,
+                    placeUseCount: placeUseCount,
+                  );
+                },
               );
             },
           );

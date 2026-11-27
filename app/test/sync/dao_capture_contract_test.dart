@@ -27,6 +27,7 @@ import 'package:jeeves/models/intent.dart';
 import 'package:jeeves/models/place_area.dart';
 import 'package:jeeves/models/routing_kind.dart';
 import 'package:jeeves/models/time_context.dart';
+import 'package:jeeves/models/time_window_hours.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/sync/collection_codecs.dart';
 import 'package:jeeves/sync/domain_op_capture.dart';
@@ -538,6 +539,156 @@ void main() {
       final reopened = logOps.values.firstWhere((op) => op.entityId != openLogId);
       expect(reopened.fields['ended_at'], isNull);
       expect(reopened.fields['task_id'], id);
+    });
+  });
+
+  group('place_dao', () {
+    /// A named place, and the id it got.
+    Future<String> seedPlace({String name = 'Hardware store'}) async {
+      final id = await db.placeDao.createNamedPlace(
+        name: name,
+        latitudeDegrees: 52.3702,
+        longitudeDegrees: 4.8952,
+        userId: _userId,
+        now: _ts,
+      );
+      return id!;
+    }
+
+    Future<String> seedWindow() async {
+      final id = await db.timeWindowDao.createTimeWindow(
+        name: 'Weekday hours',
+        hours: {
+          for (var day = 1; day <= 5; day++)
+            day: (startMinute: 11 * 60, endMinute: 20 * 60),
+        },
+        userId: _userId,
+        now: _ts,
+      );
+      return id!;
+    }
+
+    test('creation asserts the whole row, so a peer can build the place',
+        () async {
+      final id = await seedPlace();
+
+      final op = only(placesCollection);
+      expect(op.entityId, id);
+      expect(op.tombstone, isFalse);
+      expect(op.fields['user_id'], _userId);
+      expect(op.fields['kind'], 'named');
+      expect(op.fields['name'], 'Hardware store');
+      expect(op.fields['latitude_microdegrees'], 52370200);
+      expect(op.fields['longitude_microdegrees'], 4895200);
+      expect(op.fields['radius_meters'], 150);
+      expect(op.fields['created_at'], '2026-07-28T09:00:00.000Z');
+    });
+
+    test('setPlaceHours asserts all three fields in one op', () async {
+      // Issue #1074: a place's hours travel as one write, so a peer never
+      // sees a window and own hours side by side.
+      final placeId = await seedPlace();
+      final windowId = await seedWindow();
+      capture.clear();
+
+      final written = await db.placeDao.setPlaceHours(
+        placeId: placeId,
+        timeWindowId: windowId,
+        timeZone: 'Europe/Berlin',
+        now: _ts,
+      );
+
+      expect(written, isTrue);
+      final op = only(placesCollection);
+      expect(op.entityId, placeId);
+      expect(op.tombstone, isFalse);
+      expect(op.fields.keys.toSet(),
+          {'time_window_id', 'hours', 'time_zone', 'updated_at'});
+      expect(op.fields['time_window_id'], windowId);
+      expect(op.fields['hours'], isNull);
+      expect(op.fields['time_zone'], 'Europe/Berlin');
+      expect(op.fields['updated_at'], '2026-07-28T09:00:00.000Z');
+    });
+
+    test('clearing the hours asserts the three fields as null', () async {
+      final placeId = await seedPlace();
+      final windowId = await seedWindow();
+      await db.placeDao.setPlaceHours(
+        placeId: placeId,
+        timeWindowId: windowId,
+        timeZone: 'Europe/Berlin',
+        now: _ts,
+      );
+      capture.clear();
+
+      await db.placeDao.setPlaceHours(placeId: placeId, now: _ts);
+
+      final op = only(placesCollection);
+      expect(op.fields['time_window_id'], isNull);
+      expect(op.fields['hours'], isNull);
+      expect(op.fields['time_zone'], isNull);
+    });
+
+    test('deleting a window detaches each place that uses it, then tombstones',
+        () async {
+      // Issue #1074: a peer must see every place lose its hours before it
+      // sees the window go.
+      final windowId = await seedWindow();
+      final first = await seedPlace(name: 'Hardware store');
+      final second = await seedPlace(name: 'Garden centre');
+      for (final placeId in [first, second]) {
+        await db.placeDao.setPlaceHours(
+          placeId: placeId,
+          timeWindowId: windowId,
+          timeZone: 'Europe/Amsterdam',
+          now: _ts,
+        );
+      }
+      capture.clear();
+
+      await db.timeWindowDao.deleteTimeWindow(windowId, now: _ts);
+
+      final placeOps = capture.forCollection(placesCollection);
+      expect(placeOps.map((op) => op.entityId), unorderedEquals([first, second]));
+      for (final op in placeOps) {
+        expect(op.tombstone, isFalse);
+        expect(op.fields['time_window_id'], isNull);
+        expect(op.fields['hours'], isNull);
+        expect(op.fields['time_zone'], isNull);
+      }
+      final order = capture.recorded.map((op) => op.collection).toList();
+      expect(order.lastIndexOf(placesCollection),
+          lessThan(order.indexOf(timeWindowsCollection)));
+      expect(only(timeWindowsCollection).tombstone, isTrue);
+    });
+
+    test('a refused write authors no op', () async {
+      final placeId = await seedPlace();
+      final windowId = await seedWindow();
+      capture.clear();
+
+      // A window that names no window, and both kinds of hours at once.
+      expect(
+        await db.placeDao.setPlaceHours(
+          placeId: placeId,
+          timeWindowId: 'no-such-window',
+          now: _ts,
+        ),
+        isFalse,
+      );
+      expect(
+        await db.placeDao.setPlaceHours(
+          placeId: placeId,
+          timeWindowId: windowId,
+          hours: TimeWindowHours.create({
+            1: (startMinute: 11 * 60, endMinute: 20 * 60),
+          }),
+          now: _ts,
+        ),
+        isFalse,
+      );
+
+      expect(capture.recorded, isEmpty);
     });
   });
 
