@@ -487,6 +487,13 @@ const Map<String, CollectionCodec> collectionCodecs = {
       'radius_meters': FieldKind.integer,
       'created_at': FieldKind.instant,
       'updated_at': FieldKind.instant,
+      // The hours a named place carries (issue #1074): the window that gives
+      // them, or the place's own hours, and the zone they are read on. All
+      // three are optional, so an older peer skips them and reads a place
+      // with no hours — which hides nothing.
+      'time_window_id': FieldKind.text,
+      'hours': FieldKind.text,
+      'time_zone': FieldKind.text,
     },
     requiredColumns: {
       'user_id',

@@ -216,4 +216,76 @@ void main() {
       await tester.pumpAndSettle();
     }
   }, timeout: const Timeout(Duration(seconds: 120)));
+
+  testWidgets('place hours group Outcomes by place and show when it opens',
+      (tester) async {
+    // Create place with hours.
+    final placeId = await db.placeDao.createNamedPlace(
+      name: 'Hardware store',
+      latitudeDegrees: 52.37,
+      longitudeDegrees: 4.89,
+      radiusMeters: 150,
+      userId: _userId,
+      now: DateTime.now(),
+    );
+    expect(placeId, isNotNull);
+    await db.placeDao.setPlaceHours(
+      placeId: placeId!,
+      hours: TimeWindowHours.create(_storeHours),
+      now: DateTime.now(),
+    );
+
+    // Create Outcome with place but no own time.
+    final placeAction = await _seedOutcome(db, 'at-place');
+    await db.actionDao.setNamedPlace(placeAction, placeId);
+
+    // Create Outcome with own window (should not be grouped with place).
+    final workId = await db.timeWindowDao.createTimeWindow(
+      name: 'Work hours',
+      hours: _workHours,
+      userId: _userId,
+    );
+    expect(workId, isNotNull);
+    final workAction = await _seedOutcome(db, 'at-work');
+    await db.actionDao.setTimeWindow(workAction, workId);
+
+    final router = GoRouter(
+      initialLocation: '/time',
+      routes: [
+        GoRoute(path: '/time', builder: (_, _) => const TimePageScreen()),
+        GoRoute(
+          path: '/task/:id',
+          builder: (_, state) =>
+              TaskDetailScreen(todoId: state.pathParameters['id']!),
+        ),
+      ],
+    );
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    try {
+      await _settle(tester);
+
+      // Both Outcomes are on the page.
+      expect(find.text('Outcome at-place'), findsOneWidget);
+      expect(find.text('Outcome at-work'), findsOneWidget);
+
+      // Grouped separately: place group and work hours group.
+      expect(find.text('Hardware store'), findsOneWidget);
+      expect(find.text('Work hours'), findsOneWidget);
+
+      // Place hours are shown in the header.
+      expect(find.text('Mon–Fri 11:00–20:00'), findsOneWidget);
+
+      // The place is closed now (10:00 is before 11:00), so marker shows opening.
+      expect(find.text('opens 11:00'), findsOneWidget);
+    } finally {
+      container.dispose();
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+    }
+  }, timeout: const Timeout(Duration(seconds: 120)));
 }

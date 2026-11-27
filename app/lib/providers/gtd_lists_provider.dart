@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../database/gtd_database.dart';
 import 'database_provider.dart';
 import 'place_gate_provider.dart';
+import 'place_hours_provider.dart';
 import 'tag_filter_provider.dart';
 import 'time_context_provider.dart';
 import 'time_window_provider.dart';
@@ -18,6 +19,10 @@ export '../database/gtd_database.dart' show Capture, Todo;
 /// whose current Action's named time window is closed right now, are hidden
 /// ([outsideTimeContextOutcomeIdsProvider],
 /// [outsideTimeWindowOutcomeIdsProvider]); they come back on their own.
+///
+/// Outcomes whose current Action is at a Place that carries hours are hidden
+/// while those hours are closed ([outsidePlaceHoursOutcomeIdsProvider]); they
+/// come back when the Place opens.
 ///
 /// Outcomes whose current Action is at a Place the user is not at are hidden
 /// too ([awayFromPlaceOutcomeIdsProvider]); they come back when the user
@@ -35,14 +40,15 @@ final nextProvider = StreamProvider<List<Todo>>((ref) {
 });
 
 /// The Outcome ids that keep an Outcome off the Next list right now: a Time
-/// context that is not satisfied, a named time window that is closed, or a
-/// Place the user is not at.
+/// context that is not satisfied, a named time window that is closed, a named
+/// Place whose hours are closed, or a Place the user is not at.
 ///
 /// One union, read by the Next list and by [nextAllHiddenProvider] alike, so
 /// the two can never disagree about what hides an Outcome.
 Set<String> _hiddenOutcomeIds(Ref ref) => {
       ...ref.watch(outsideTimeContextOutcomeIdsProvider),
       ...ref.watch(outsideTimeWindowOutcomeIdsProvider),
+      ...ref.watch(outsidePlaceHoursOutcomeIdsProvider),
       ...ref.watch(awayFromPlaceOutcomeIdsProvider),
     };
 
