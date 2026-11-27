@@ -6,7 +6,7 @@ This document outlines the testing methodology and standards for the Jeeves proj
 
 ## Development Methodology: TDD (Top-Down)
 
-We follow a strict TDD cycle, top-down: define the expected behavior with a failing test before adding any feature.
+We follow a strict Test-Driven Development (TDD) cycle in a Top-Down approach. The fundamental step before adding any new feature is to define its expected behavior via a failing test.
 
 ### Testing Hierarchy
 
@@ -66,7 +66,7 @@ Why these tiers exist, and the measurements behind them: [#440](https://github.c
 
 ### Frontend (Flutter)
 
-- **Framework**: `flutter_test`.
+- **Framework**: `flutter_test`. There is no `integration_test` dependency — see the Testing Hierarchy above.
 - **Journey**: `test/integration/`, driving a real route against a real database, headless and in the ordinary run.
 - **Unit/Widget**: Widget tests and standard Dart unit tests for Riverpod providers and logic.
 - **The store probe opens read-only first.** A read-write open folds an uncheckpointed log into the store, changing the file the gate promises to leave alone; read-write is only the fallback.
@@ -153,7 +153,7 @@ Why these tiers exist, and the measurements behind them: [#440](https://github.c
 
   `.githooks/tests/test-prepare-commit-msg-hook.sh` covers every shape above through a **real `git commit`** in a throwaway repo, with `core.hooksPath` pointed at a directory holding only this hook (the real `.githooks` would drag in `pre-commit`'s whole gauntlet). Going through git is what makes `$COMMIT_SOURCE` real, and every assertion is on the message git recorded (`git log -1`), never on hook stdout — a hook that exits 0 having done nothing and one that exits 0 having done the right thing are indistinguishable by status. Exit 0 is asserted on every case, since "appends nothing" has to be silent *and* successful. The editor cases drive a scripted **`GIT_EDITOR`** — one that quits without writing, one that types a subject — because that is the only way to reach `$COMMIT_SOURCE=""`; the quit case asserts on the **commit count**, not just the exit status, since a hook that fabricates a message makes git succeed. The autosquash cases (#675) go one step further than the subject assertion: they drive a real `git rebase --autosquash` and assert the fixup collapses — the commit count drops and no `fixup!`/`squash!` subject survives. Like the pre-commit suite, it runs each case under **`sh`, `dash`, `bash` and `zsh`** by rewriting the copied hook's shebang; `dash` is not redundant with `sh`, because CI's `/bin/sh` is dash while macOS's is bash in POSIX mode.
 
-- **The location, the permission and the geocoder have fakes.** The ports: `locationSourceProvider`, `addressGeocoderProvider`, `appSettingsOpenerProvider`; the fakes are in `test/helpers/fake_location_source.dart` — `FakeLocationSource` answers what the test says and records calls, `FakeAddressGeocoder` answers canned addresses, `FakeAppSettingsOpener` counts settings openings, `FixedLocationNotifier` never moves, `FakeGeofenceRegistrar` (`test/helpers/fake_geofence_registrar.dart`) records the Places watched. **A read never asks** — only `requestWhileUsing()` and `requestAllTheTime()` do, and only the arrival switch may call the latter: `allTheTimeRequests` counts that ask alone and `allTheTimeResult` is the phone's answer. **The fake answers as the phone does**: the plugin says "denied" for a phone never asked or refused once, and only a request's result says "denied for good" — so `permissionState` defaults to "denied", `requestResult` answers a refusal for good, and `freshFixGate`, `requestGate`, `lookupGate` hold a read open.
+- **The location, the permission and the geocoder have fakes.** The ports: `locationSourceProvider`, `addressGeocoderProvider`, `appSettingsOpenerProvider`; the fakes are in `test/helpers/fake_location_source.dart` — `FakeLocationSource` answers what the test says and records calls, `FakeAddressGeocoder` answers a canned address, `FakeAppSettingsOpener` counts settings openings, `FixedLocationNotifier` never moves, `FakeGeofenceRegistrar` records Places. **A read never asks for permission** — only `requestWhileUsing()` and `requestAllTheTime()` do. **The fake answers as the phone does**: the plugin says "denied" for a phone never asked or refused once; only a request's result says "denied for good" — so `permissionState` defaults to "denied", `requestResult` answers a refusal for good, and `freshFixGate`, `requestGate`, `lookupGate` hold a read open.
 
 ### Backend (FastAPI)
 
