@@ -782,6 +782,29 @@ class Places extends Table {
   /// Null while the place has never been edited.
   DateTimeColumn get updatedAt => dateTime().nullable()();
 
+  // The hours a place carries (issue #1074). They are declared last on
+  // purpose: the v16 migration appends these three columns, so a store
+  // upgraded from v15 ends up holding them in the order a fresh one does.
+
+  /// The named time window that gives the place its hours, or null when the
+  /// place takes its hours from somewhere else.
+  ///
+  /// Exclusive with [hours]: a place has one source of hours, and one write
+  /// sets one and clears the other. Null means "no hours".
+  TextColumn get timeWindowId => text().nullable()();
+
+  /// The place's own hours, as canonical JSON (see
+  /// `models/time_window_hours.dart`).
+  ///
+  /// Exclusive with [timeWindowId]. Null means "no hours".
+  TextColumn get hours => text().nullable()();
+
+  /// The IANA name of the zone the hours are read on (`Europe/Berlin`), or
+  /// null to read them on the phone's clock.
+  ///
+  /// Only a named place carries one; a one-time pin has no hours to read.
+  TextColumn get timeZone => text().nullable()();
+
   @override
   Set<Column<Object>> get primaryKey => {id};
 }

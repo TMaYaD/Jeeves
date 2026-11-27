@@ -5,10 +5,12 @@ import 'package:jeeves/widgets/outcome_multi_select.dart';
 import 'package:jeeves/widgets/outcome_row.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jeeves/providers/current_action_provider.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:jeeves/providers/inbox_provider.dart';
 import 'package:jeeves/providers/place_gate_provider.dart';
+import 'package:jeeves/providers/place_hours_provider.dart';
 import 'package:jeeves/screens/common/gtd_list_screen.dart';
 import 'package:jeeves/providers/gtd_lists_provider.dart';
 import 'package:jeeves/screens/next/next_screen.dart';
@@ -53,11 +55,19 @@ void main() {
         await tester.pumpWidget(ProviderScope(
           overrides: [
             nextProvider.overrideWith((_) => Stream.value([])),
+            // The Next empty state reads the list before time and place hide
+            // anything, to tell an empty Next from one where everything on
+            // it is waiting (issue #1076).
+            nextBeforeHidingProvider.overrideWith((_) => Stream.value([])),
             somedayMaybeProvider.overrideWith((_) => Stream.value([])),
             inboxItemsProvider.overrideWith((_) => Stream.value([])),
             // The Next screen reads the places for the rows and for the calm
             // line about not knowing where the user is.
             currentPlacesProvider.overrideWith((_) => Stream.value(const {})),
+            placeHoursProvider.overrideWith((_) => Stream.value(const {})),
+            // The hours read the current Actions to drop a replaced Action's, one more
+            // live row stream, stubbed for the same reason.
+            currentActionsProvider.overrideWith((_) => Stream.value(const {})),
           ],
           child: MaterialApp(home: entry.$1),
         ));

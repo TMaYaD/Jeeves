@@ -148,13 +148,44 @@ void main() {
       expect(find.text('Opening hours'), findsOneWidget);
       expect(find.text('Store hours'), findsNothing);
 
-      // Delete it: the confirm says how many actions lose the window, and they
-      // do.
+      // Two named places take their hours from it (issue #1074).
+      final placeIds = <String>[];
+      for (final name in ['Hardware store', 'Garden centre']) {
+        final placeId = await _real(
+          tester,
+          () => db.placeDao.createNamedPlace(
+            name: name,
+            latitudeDegrees: 52.37,
+            longitudeDegrees: 4.89,
+            userId: _userId,
+          ),
+        );
+        await _real(
+          tester,
+          () => db.placeDao.setPlaceHours(
+            placeId: placeId!,
+            timeWindowId: windows.single.id,
+            timeZone: 'Europe/Amsterdam',
+          ),
+        );
+        placeIds.add(placeId!);
+      }
+      expect(
+        await _real(tester,
+            () => db.timeWindowDao.placeUseCount(windows.single.id)),
+        2,
+      );
+
+      // Delete it: the confirm says how many actions lose the window and how
+      // many places lose their hours, and they do.
       await tester.tap(find.byKey(Key('time_window_row_${windows.single.id}')));
       await _settle(tester);
       await tester.tap(find.byKey(const Key('time_window_delete')));
       await _settle(tester);
-      expect(find.text('1 action loses this window.'), findsOneWidget);
+      expect(
+        find.text('1 action loses this window. 2 places lose their hours.'),
+        findsOneWidget,
+      );
       await tester.tap(find.byKey(const Key('time_window_delete_confirm')));
       await _settle(tester);
 
@@ -162,6 +193,13 @@ void main() {
       final action = await _real(
           tester, () => db.select(db.actions).getSingle());
       expect(action.timeWindowId, isNull);
+      final places = await _real(tester, () => db.select(db.places).get());
+      expect(places.map((p) => p.id), unorderedEquals(placeIds));
+      for (final place in places) {
+        expect(place.timeWindowId, isNull);
+        expect(place.hours, isNull);
+        expect(place.timeZone, isNull);
+      }
       expect(find.byKey(const Key('time_window_management_empty')),
           findsOneWidget);
     } finally {

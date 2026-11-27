@@ -976,6 +976,7 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
           ? null
           : TimeContext.tryParse(action.timeContext);
       result[entry.key] = (
+        actionId: action.id,
         actionText: action.actionText,
         timeWindow: namedWindow,
         timeContext: timeContext,
@@ -1051,6 +1052,71 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
           area: area,
           name: row.readNullable<String>('place_name'),
           isPin: row.read<String>('place_kind') == pinPlaceKind,
+        );
+      }
+      return result;
+    });
+  }
+
+  /// The hours of the Place each Outcome's current Action carries, keyed by
+  /// Outcome id (issue #1074).
+  ///
+  /// Only a **named** Place carries hours: a one-time pin never does, so it
+  /// is absent here even when the row says it has hours. The winning current
+  /// Action decides, as everywhere else — a Place on a losing current row
+  /// does not count.
+  ///
+  /// A Place whose hours the app cannot read — a window that is gone, hours
+  /// that do not parse, a zone the tz database does not know — is absent: a
+  /// value the app cannot read never hides an Outcome.
+  ///
+  /// Re-emits when the Place is written and when the window it uses is
+  /// written: the hours are part of the answer.
+  Stream<Map<String, ActionPlaceHours>> watchCurrentPlaceHours() {
+    return customSelect(
+      'SELECT actions.outcome_id AS outcome_id, actions.id AS action_id, '
+      'places.id AS place_id, places.name AS place_name, '
+      'places.time_window_id AS time_window_id, '
+      'places.hours AS own_hours, places.time_zone AS time_zone, '
+      'time_windows.name AS time_window_name, '
+      'time_windows.hours AS time_window_hours '
+      'FROM actions INNER JOIN places ON places.id = actions.place_id '
+      "AND places.kind = '$namedPlaceKind' "
+      'LEFT OUTER JOIN time_windows '
+      'ON time_windows.id = places.time_window_id '
+      "WHERE actions.role = 'current' "
+      // An Action's own time replaces the Place's hours, so an Action that
+      // names a window or holds a Time context carries none — however
+      // readable the value is. The raw columns decide, so a window that is
+      // gone, or a context the app cannot parse, never lets the Place's
+      // hours apply, and nothing waits for another stream to emit first.
+      'AND actions.time_window_id IS NULL AND actions.time_context IS NULL '
+      'AND actions.id = ('
+      'SELECT mca.id FROM actions mca '
+      'WHERE mca.outcome_id = actions.outcome_id AND mca.role = \'current\' '
+      // The same rule [_winnerFirst] applies, spelled for the subquery's
+      // alias: greatest COALESCE(updated_at, created_at), then smallest id.
+      'ORDER BY COALESCE(mca.updated_at, mca.created_at) DESC, mca.id ASC '
+      'LIMIT 1)',
+      readsFrom: {actions, places, timeWindows},
+    ).watch().map((rows) {
+      final result = <String, ActionPlaceHours>{};
+      for (final row in rows) {
+        final hours = resolvePlaceHours(
+          timeWindowId: row.readNullable<String>('time_window_id'),
+          timeWindowName: row.readNullable<String>('time_window_name'),
+          timeWindowHoursText: row.readNullable<String>('time_window_hours'),
+          ownHoursText: row.readNullable<String>('own_hours'),
+          timeZoneName: row.readNullable<String>('time_zone'),
+        );
+        // A Place whose hours the app cannot read has no hours, and a Place
+        // with no hours hides nothing.
+        if (hours == null) continue;
+        result[row.read<String>('outcome_id')] = (
+          actionId: row.read<String>('action_id'),
+          placeId: row.read<String>('place_id'),
+          placeName: row.readNullable<String>('place_name') ?? '',
+          hours: hours,
         );
       }
       return result;

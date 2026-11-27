@@ -208,7 +208,7 @@ class GtdDatabase extends _$GtdDatabase {
   /// build refuses it: opening it would relabel the file with a version it
   /// does not understand, and the newer build would then find a store it
   /// believes is old.
-  static const int supportedSchemaVersion = 18;
+  static const int supportedSchemaVersion = 19;
 
   /// Completes with the [OpeningDetails] of this store's one open.
   ///
@@ -558,12 +558,34 @@ class GtdDatabase extends _$GtdDatabase {
               await m.addColumn(habits, habits.placeId);
             }
           }
-          // v18 (issue #49): `actions.stopped_at_limit_at`, the mark that says
+          // v18 (issue #1074): the hours a named place carries, and the zone
+          // they are read on. Three nullable `ADD COLUMN`s, guarded on their
+          // absence like v7 and v15: every existing place reads NULL (no
+          // window, no own hours, no zone), and nothing is lost. There is no
+          // backfill — a place had no hours before this build, so there is
+          // nothing to backfill *from*.
+          if (from < 18) {
+            final existing = await m.database
+                .customSelect('PRAGMA table_info(places)')
+                .get();
+            bool has(String name) =>
+                existing.any((row) => row.read<String>('name') == name);
+            if (!has('time_window_id')) {
+              await m.addColumn(places, places.timeWindowId);
+            }
+            if (!has('hours')) {
+              await m.addColumn(places, places.hours);
+            }
+            if (!has('time_zone')) {
+              await m.addColumn(places, places.timeZone);
+            }
+          }
+          // v19 (issue #49): `actions.stopped_at_limit_at`, the mark that says
           // an Action was stopped at its Timeboxed limit rather than completed
           // or replaced. A nullable `ADD COLUMN` — no table rebuild, every
           // existing Action reads NULL (not stopped at a limit), nothing is
           // lost. Guarded on the column's absence like v7.
-          if (from < 18) {
+          if (from < 19) {
             final existing = await m.database
                 .customSelect('PRAGMA table_info(actions)')
                 .get();

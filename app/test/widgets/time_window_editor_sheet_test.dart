@@ -233,6 +233,46 @@ void main() {
     );
   });
 
+  testWidgets('the hours-only editor answers the hours and writes no window',
+      (tester) async {
+    TimeWindowHours? answer;
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [databaseProvider.overrideWithValue(db)],
+        child: MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: TextButton(
+                onPressed: () async {
+                  answer = await showTimeWindowHoursSheet(context);
+                },
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    // Hours alone need no name, and there is nothing to delete.
+    expect(find.byKey(const Key('time_window_name')), findsNothing);
+    expect(find.byKey(const Key('time_window_delete')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('time_window_day_1')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('time_window_save')));
+    await settle(tester);
+
+    // The hours came back, and no time window was written.
+    expect(answer, isNotNull);
+    expect(answer!.hoursForDay(1), (startMinute: 9 * 60, endMinute: 17 * 60));
+    final windows =
+        await tester.runAsync(() => db.select(db.timeWindows).get());
+    expect(windows, isEmpty);
+  });
+
   testWidgets('switching to the same hours applies them to every day',
       (tester) async {
     final window = await windowNamed('Store hours', {
