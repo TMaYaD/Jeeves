@@ -16,6 +16,12 @@
 /// `docs/TESTING.md`). The Next list is a live Drift watch, and a live watch
 /// keeps `pumpAndSettle` spinning to its timeout, so the frames are pumped
 /// one at a time — the way the other list journeys do it.
+///
+/// The journey runs twice: once against the folder as it is, and once against
+/// a folder whose every operation takes real time. The slow half is the point
+/// of the wait's shape — a wait that counted rounds instead of seconds gave a
+/// busy machine less time than the work needed, and the journey failed at
+/// random in CI.
 @TestOn('!browser')
 library;
 
@@ -40,12 +46,20 @@ import 'package:jeeves/services/notification_service.dart';
 import 'package:jeeves/sync/collection_codecs.dart';
 import 'package:jeeves/sync/sync_database.dart';
 import 'package:jeeves/sync/vault/page_codec.dart';
+import 'package:jeeves/sync/vault/vault_folder.dart';
+import 'package:jeeves/sync/vault/vault_folder_factory.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../test_helpers.dart';
 
 const String _outcomeId = '3f2d1c4e-5a6b-4c8d-9e0f-1a2b3c4d5e6f';
 const String _userId = 'vault-user';
+
+/// The delay every operation on the folder takes in the slow journey.
+///
+/// Real time: the point is a folder that is slow the way a busy machine or a
+/// slow disk makes it, not one that spends the test's budget.
+const Duration _slowFolderDelay = Duration(milliseconds: 400);
 
 void main() {
   setUpAll(configureSqliteForTests);
@@ -55,9 +69,14 @@ void main() {
   late GtdDatabase db;
   late SyncDatabase syncDb;
 
+  /// The delay every operation on the folder takes. Zero for the ordinary
+  /// journey, real for the slow one.
+  late Duration folderDelay;
+
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
     vault = await Directory.systemTemp.createTemp('vault-sync-journey');
+    folderDelay = Duration.zero;
     // The vault's tile is offered to a device that has not enrolled for the op
     // log; a signed-out device is the steady state the vault is offered in.
     sessionGateNotifier.value = SessionGate.signedOut;
@@ -79,6 +98,11 @@ void main() {
       notificationServiceProvider.overrideWithValue(StubNotificationService()),
       // The picker is a system dialog; the folder it would return is a path.
       vaultFolderPickerProvider.overrideWithValue(() async => vault.path),
+      // The folder the vault works through. The slow journey makes every
+      // operation on it take real time.
+      vaultFolderFactoryProvider.overrideWithValue(
+        (reference) => _SlowFolder(openVaultFolder(reference), folderDelay),
+      ),
     ]);
     // The capture the host drains is the same one the store writes through.
     db = GtdDatabase(
@@ -97,135 +121,158 @@ void main() {
   testWidgets('a page edited by hand reaches the app when it comes forward', (
     tester,
   ) async {
-    // The whole Settings list fits on the surface, so the vault's tile is on
-    // the screen without a scroll.
-    tester.view.physicalSize = const Size(1200, 6000);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.reset);
-
-    final router = GoRouter(
-      initialLocation: '/settings',
-      routes: [
-        GoRoute(path: '/', builder: (_, _) => GtdListScreen(provider: nextProvider)),
-        GoRoute(path: '/settings', builder: (_, _) => const SettingsScreen()),
-      ],
-    );
-    addTearDown(router.dispose);
-    await tester.pumpWidget(UncontrolledProviderScope(
-      container: container,
-      child: MaterialApp.router(routerConfig: router),
-    ));
-    try {
-      await _settle(tester);
-
-      // The vault is turned on from Settings, the way a person turns it on.
-      final tile = find.byKey(const Key('vault_folder_tile'));
-      expect(tile, findsOneWidget);
-      await tester.tap(tile);
-      await _settleUntil(
-        tester,
-        () => find.text('Stop syncing through this folder').evaluate().isNotEmpty,
-      );
-      expect(find.text('Stop syncing through this folder'), findsOneWidget);
-
-      // The plugin attaches: the vault is running, not merely configured.
-      Object? pluginError;
-      var pluginAttached = false;
-      unawaited(
-        container.read(vaultPluginProvider.future).then(
-          (plugin) => pluginAttached = plugin != null,
-          onError: (Object error) => pluginError = error,
-        ),
-      );
-      await _settleUntil(tester, () {
-        final error = pluginError;
-        if (error != null) fail('the vault plugin did not start: $error');
-        return pluginAttached;
-      });
-
-      // An Outcome created in the app.
-      //
-      // The write is started here and not awaited: the app's write path waits
-      // for the host's drain, and the drain waits for the store's own
-      // watchers — continuations that run on the test's clock. Awaiting the
-      // write would stop the clock it is waiting on. So the test keeps the
-      // clock moving and watches the folder for the page the write produces.
-      Object? writeError;
-      var written = false;
-      unawaited(
-        db.todoDao
-            .insertOutcome(id: _outcomeId, title: 'Old title', userId: _userId)
-            .then(
-              (_) => written = true,
-              onError: (Object error) => writeError = error,
-            ),
-      );
-      await _settleUntil(tester, () {
-        final error = writeError;
-        if (error != null) fail('the app write failed: $error');
-        return written && _pagesIn(vault).isNotEmpty;
-      });
-
-      // Its page is in the folder.
-      final path = _pagePath(vault);
-      final page = File(path).readAsStringSync();
-      expect(page, contains('title: Old title'));
-
-      // The block says what the app wrote: the title's digest, at the clock
-      // that write stamped.
-      final writtenTitle = _titleEntry(page);
-      expect(writtenTitle, isNotNull,
-          reason: 'the page carries the title in its block');
-      final writtenEntry = writtenTitle!;
-      expect(writtenEntry.digest, digestOf('Old title'));
-
-      // The app is on the list, showing the Outcome.
-      router.go('/');
-      await _settle(tester);
-      expect(find.text('Old title'), findsOneWidget);
-
-      // A person edits the page in another tool.
-      await tester.runAsync(
-        () => File(path).writeAsString(
-          page.replaceFirst('title: Old title', 'title: New title'),
-        ),
-      );
-
-      // The app comes forward.
-      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-
-      // The edit reaches the app, and the app shows it.
-      await _settleUntil(
-        tester,
-        () => find.text('New title').evaluate().isNotEmpty,
-      );
-      expect(find.text('New title'), findsOneWidget);
-      expect(find.text('Old title'), findsNothing);
-
-      // And the host wrote the merged page back: the block carries the new
-      // title's digest, at a clock of its own. The page's frontmatter alone
-      // would not say so — the hand edit put that there.
-      await _settleUntil(tester, () {
-        final entry = _titleEntry(File(path).readAsStringSync());
-        return entry != null && entry.digest == digestOf('New title');
-      });
-      final rewritten = _titleEntry(File(path).readAsStringSync());
-      expect(rewritten, isNotNull,
-          reason: 'the page still carries the title in its block');
-      final rewrittenEntry = rewritten!;
-      expect(rewrittenEntry.digest, digestOf('New title'),
-          reason: 'the host wrote the merged page back');
-      expect(rewrittenEntry.hlc, isNot(writtenEntry.hlc),
-          reason: 'the hand edit carries a clock of its own');
-    } finally {
-      // The tree comes down first, so the watchers let go of the store, and the
-      // container goes in the real zone, where the vault's own teardown can
-      // finish.
-      await tester.pumpWidget(const SizedBox.shrink());
-      await tester.pump();
-      await tester.runAsync(() async => container.dispose());
-    }
+    await _journey(tester, container: container, db: db, vault: vault);
   });
+
+  testWidgets('the journey settles when every folder operation is slow', (
+    tester,
+  ) async {
+    // The folder is slow the way a busy machine makes it: every operation on
+    // it takes real time. The journey must still settle — a wait that counted
+    // rounds rather than seconds did not.
+    folderDelay = _slowFolderDelay;
+    await _journey(tester, container: container, db: db, vault: vault);
+  });
+}
+
+/// The journey, from the Settings screen to the edit on screen.
+///
+/// The vault is turned on, an Outcome is written and lands in the folder, the
+/// page is edited by hand, and the app shows the edit when it comes forward.
+Future<void> _journey(
+  WidgetTester tester, {
+  required ProviderContainer container,
+  required GtdDatabase db,
+  required Directory vault,
+}) async {
+  // The whole Settings list fits on the surface, so the vault's tile is on
+  // the screen without a scroll.
+  tester.view.physicalSize = const Size(1200, 6000);
+  tester.view.devicePixelRatio = 1;
+  addTearDown(tester.view.reset);
+
+  final router = GoRouter(
+    initialLocation: '/settings',
+    routes: [
+      GoRoute(path: '/', builder: (_, _) => GtdListScreen(provider: nextProvider)),
+      GoRoute(path: '/settings', builder: (_, _) => const SettingsScreen()),
+    ],
+  );
+  addTearDown(router.dispose);
+  await tester.pumpWidget(UncontrolledProviderScope(
+    container: container,
+    child: MaterialApp.router(routerConfig: router),
+  ));
+  try {
+    await _settle(tester);
+
+    // The vault is turned on from Settings, the way a person turns it on.
+    final tile = find.byKey(const Key('vault_folder_tile'));
+    expect(tile, findsOneWidget);
+    await tester.tap(tile);
+    await _settleUntil(
+      tester,
+      () => find.text('Stop syncing through this folder').evaluate().isNotEmpty,
+    );
+    expect(find.text('Stop syncing through this folder'), findsOneWidget);
+
+    // The plugin attaches: the vault is running, not merely configured.
+    Object? pluginError;
+    var pluginAttached = false;
+    unawaited(
+      container.read(vaultPluginProvider.future).then(
+        (plugin) => pluginAttached = plugin != null,
+        onError: (Object error) => pluginError = error,
+      ),
+    );
+    await _settleUntil(tester, () {
+      final error = pluginError;
+      if (error != null) fail('the vault plugin did not start: $error');
+      return pluginAttached;
+    });
+
+    // An Outcome created in the app.
+    //
+    // The write is started here and not awaited: the app's write path waits
+    // for the host's drain, and the drain waits for the store's own
+    // watchers — continuations that run on the test's clock. Awaiting the
+    // write would stop the clock it is waiting on. So the test keeps the
+    // clock moving and watches the folder for the page the write produces.
+    Object? writeError;
+    var written = false;
+    unawaited(
+      db.todoDao
+          .insertOutcome(id: _outcomeId, title: 'Old title', userId: _userId)
+          .then(
+            (_) => written = true,
+            onError: (Object error) => writeError = error,
+          ),
+    );
+    await _settleUntil(tester, () {
+      final error = writeError;
+      if (error != null) fail('the app write failed: $error');
+      return written && _pagesIn(vault).isNotEmpty;
+    });
+
+    // Its page is in the folder.
+    final path = _pagePath(vault);
+    final page = File(path).readAsStringSync();
+    expect(page, contains('title: Old title'));
+
+    // The block says what the app wrote: the title's digest, at the clock
+    // that write stamped.
+    final writtenTitle = _titleEntry(page);
+    expect(writtenTitle, isNotNull,
+        reason: 'the page carries the title in its block');
+    final writtenEntry = writtenTitle!;
+    expect(writtenEntry.digest, digestOf('Old title'));
+
+    // The app is on the list, showing the Outcome.
+    router.go('/');
+    await _settle(tester);
+    expect(find.text('Old title'), findsOneWidget);
+
+    // A person edits the page in another tool.
+    await tester.runAsync(
+      () => File(path).writeAsString(
+        page.replaceFirst('title: Old title', 'title: New title'),
+      ),
+    );
+
+    // The app comes forward.
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+
+    // The edit reaches the app, and the app shows it.
+    await _settleUntil(
+      tester,
+      () => find.text('New title').evaluate().isNotEmpty,
+    );
+    expect(find.text('New title'), findsOneWidget);
+    expect(find.text('Old title'), findsNothing);
+
+    // And the host wrote the merged page back: the block carries the new
+    // title's digest, at a clock of its own. The page's frontmatter alone
+    // would not say so — the hand edit put that there.
+    await _settleUntil(tester, () {
+      final entry = _titleEntry(File(path).readAsStringSync());
+      return entry != null && entry.digest == digestOf('New title');
+    });
+    final rewritten = _titleEntry(File(path).readAsStringSync());
+    expect(rewritten, isNotNull,
+        reason: 'the page still carries the title in its block');
+    final rewrittenEntry = rewritten!;
+    expect(rewrittenEntry.digest, digestOf('New title'),
+        reason: 'the host wrote the merged page back');
+    expect(rewrittenEntry.hlc, isNot(writtenEntry.hlc),
+        reason: 'the hand edit carries a clock of its own');
+  } finally {
+    // The tree comes down first, so the watchers let go of the store, and the
+    // container goes in the real zone, where the vault's own teardown can
+    // finish.
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    await tester.runAsync(() async => container.dispose());
+  }
 }
 
 /// The pages in the vault's Outcomes folder.
@@ -268,7 +315,16 @@ Future<void> _settle(WidgetTester tester) async {
 ///
 /// [done] is asked in the test's own zone and answers from what the test can
 /// see without touching the store: the widget tree, or the folder on disk.
-Future<void> _settleUntil(WidgetTester tester, bool Function() done) async {
+///
+/// **The budget is real time.** A wait that counted rounds measured the test's
+/// own clock, not the wall clock the files are slow on, and the vault's file
+/// I/O is real: forty rounds were worth less than a second, so a machine that
+/// stalled for a few hundred milliseconds ran the budget out and the journey
+/// failed at random. When the budget runs out, the wait says what it saw.
+Future<void> _settleUntil(
+  WidgetTester tester,
+  bool Function() done,
+) async {
   for (var round = 0; round < 40; round++) {
     for (var i = 0; i < 2; i++) {
       await tester.runAsync(() => pumpEventQueue());
@@ -277,6 +333,47 @@ Future<void> _settleUntil(WidgetTester tester, bool Function() done) async {
     if (done()) return;
   }
   fail('the vault did not settle in time');
+}
+
+/// A folder whose every operation takes real time.
+///
+/// The delay is the root zone's, so it is the machine's clock and not the
+/// test's: a slow folder is a slow disk, and the wait must give it the
+/// seconds it takes.
+class _SlowFolder implements VaultFolder {
+  _SlowFolder(this._inner, this._delay);
+
+  final VaultFolder _inner;
+  final Duration _delay;
+
+  Future<void> _slow() async {
+    if (_delay <= Duration.zero) return;
+    await Zone.root.run(() => Future<void>.delayed(_delay));
+  }
+
+  @override
+  Future<List<String>> listMarkdownFiles(String subfolder) async {
+    await _slow();
+    return _inner.listMarkdownFiles(subfolder);
+  }
+
+  @override
+  Future<String?> read(String relativePath) async {
+    await _slow();
+    return _inner.read(relativePath);
+  }
+
+  @override
+  Future<void> writeAtomically(String relativePath, String text) async {
+    await _slow();
+    await _inner.writeAtomically(relativePath, text);
+  }
+
+  @override
+  Future<void> remove(String relativePath) async {
+    await _slow();
+    await _inner.remove(relativePath);
+  }
 }
 
 /// The block's entry for the Outcome's title, or null when the page carries
