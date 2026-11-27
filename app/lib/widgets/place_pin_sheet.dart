@@ -1,7 +1,8 @@
-/// The sheet for dropping a one-time pin on an Action (issue #55).
+/// The sheet for dropping a one-time pin on an Action or a Habit
+/// (issues #55 and #1075).
 ///
-/// A pin is a Place of that one Action: it is never listed anywhere, and it
-/// goes when the Action stops pointing at it. It may carry a short name of
+/// A pin is a Place of that one owner: it is never listed anywhere, and it
+/// goes when the owner stops pointing at it. It may carry a short name of
 /// its own; without one it reads as "Pin".
 library;
 
@@ -18,18 +19,27 @@ typedef PinChoice = ({PlaceArea area, String? name});
 
 /// Opens the pin sheet and answers the pin the user chose, or null when they
 /// backed out.
-Future<PinChoice?> showPlacePinSheet(BuildContext context) {
+///
+/// [ownerName] is what the owner of the pin is called, so the sheet says
+/// whose pin it is: an action, a Habit.
+Future<PinChoice?> showPlacePinSheet(
+  BuildContext context, {
+  String ownerName = 'action',
+}) {
   return showModalBottomSheet<PinChoice>(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.white,
-    builder: (_) => const PlacePinSheet(),
+    builder: (_) => PlacePinSheet(ownerName: ownerName),
   );
 }
 
 /// The pin sheet.
 class PlacePinSheet extends StatefulWidget {
-  const PlacePinSheet({super.key});
+  const PlacePinSheet({super.key, this.ownerName = 'action'});
+
+  /// What the owner of the pin is called: "action", "Habit".
+  final String ownerName;
 
   @override
   State<PlacePinSheet> createState() => _PlacePinSheetState();
@@ -80,9 +90,9 @@ class _PlacePinSheetState extends State<PlacePinSheet> {
               const Text('Drop a pin',
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
               const SizedBox(height: 4),
-              const Text(
-                'A pin belongs to this action alone.',
-                style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
+              Text(
+                'A pin belongs to this ${widget.ownerName} alone.',
+                style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
               ),
               const SizedBox(height: 16),
               TextField(

@@ -17,14 +17,21 @@ import 'package:jeeves/database/daos/habit_dao.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/habit_commitment.dart';
 import 'package:jeeves/providers/clock_provider.dart';
+import 'package:jeeves/providers/current_location_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
+import 'package:jeeves/providers/location_source_provider.dart';
 import 'package:jeeves/screens/planning/focus_session_planning_screen.dart';
 import 'package:jeeves/services/notification_service.dart';
 
+import '../helpers/fake_location_source.dart';
+import '../helpers/settle.dart';
 import '../test_helpers.dart';
 
 const _userId = 'local';
+
+/// The user is somewhere else: far outside every Place in this test.
+const _elsewhere = (latitudeDegrees: 52.0, longitudeDegrees: 4.0);
 
 Future<void> _settle(WidgetTester tester, [int frames = 6]) async {
   for (var i = 0; i < frames; i++) {
@@ -38,6 +45,7 @@ void main() {
 
   late GtdDatabase db;
   late ProviderContainer container;
+  late FakeLocationSource location;
   // Wednesday 18 Nov 2026, 09:30 local.
   final now = DateTime(2026, 11, 18, 9, 30);
   const mon = '2026-11-16';
@@ -85,15 +93,22 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     db = GtdDatabase(NativeDatabase.memory());
+    location = FakeLocationSource()..freshPoint = _elsewhere;
     container = ProviderContainer(overrides: [
       databaseProvider.overrideWithValue(db),
       clockProvider.overrideWithValue(() => now),
       notificationServiceProvider.overrideWithValue(StubNotificationService()),
       activeSessionProvider.overrideWith((_) => Stream.value(null)),
+      locationSourceProvider.overrideWithValue(location),
+      // The phone knows the user is elsewhere. A Place never hides a Habit.
+      currentLocationProvider.overrideWith(
+        () => FixedLocationNotifier(const LocationKnown(_elsewhere)),
+      ),
     ]);
   });
 
   tearDown(() async {
+    await location.dispose();
     await db.close();
   });
 
@@ -180,6 +195,41 @@ void main() {
       expect(find.text('0 of 2 done'), findsOneWidget);
       expect(find.text('Not part of the plan and not counted in capacity.'),
           findsOneWidget);
+    } finally {
+      await closeApp(tester);
+    }
+  });
+
+  testWidgets('a Habit at a Place shows the Place\'s name, and is not hidden '
+      'by it', (tester) async {
+    final placeId = await tester.runAsync(() => db.placeDao.createNamedPlace(
+          name: 'Home',
+          latitudeDegrees: 52.3702,
+          longitudeDegrees: 4.8952,
+          radiusMeters: 150,
+          userId: _userId,
+        ));
+    final atHome = await seed(tester, 'Stretch');
+    await tester.runAsync(() => db.habitDao.setNamedPlace(
+          atHome,
+          placeId!,
+          now: now,
+        ));
+    final noPlace = await seed(tester, 'Read');
+    await checkInOn(tester, noPlace, mon);
+    await checkInOn(tester, noPlace, tue);
+
+    await openBuildPlan(tester);
+    try {
+      // The user is elsewhere, and the Habit is still listed.
+      expect(find.text('Stretch'), findsOneWidget);
+      // Its Place is said, on the line beside the streak number. The Place
+      // list is a live Drift stream, so it needs a turn of its own.
+      await pumpUntilFound(tester, find.text('Home · 0 days'));
+      expect(find.text('Home · 0 days'), findsOneWidget);
+      // A Habit with no Place says nothing about one.
+      expect(find.text('2 days'), findsOneWidget);
+      expect(find.text('Home'), findsNothing);
     } finally {
       await closeApp(tester);
     }

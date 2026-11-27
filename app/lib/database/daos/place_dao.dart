@@ -2,17 +2,19 @@
 ///
 /// A Place is a point plus an area (see `models/place_area.dart`). The named
 /// ones are the user's own list; a one-time pin belongs to the single Action
-/// that points at it and is never listed anywhere.
+/// or Habit that points at it and is never listed anywhere.
 ///
 /// Every write runs inside [GtdDatabase.capturing] and describes its effect to
 /// the op log, so a Place made on one device reaches the others.
 ///
-/// **There is no SQL foreign key from `actions.place_id` to `places.id`** — the
-/// log has none, and a reference to a Place that no longer exists has to stay
-/// representable (a dangling reference reads as "no place"; it never hides
-/// anything). So the delete path detaches by hand: every Action that points
-/// at the Place gets `place_id = null` and an op saying so, and only then does
-/// the row go — with a tombstone, so a replayed create cannot bring it back.
+/// **There is no SQL foreign key from `actions.place_id` or `habits.place_id`
+/// to `places.id`** — the log has none, and a reference to a Place that no
+/// longer exists has to stay representable (a dangling reference reads as "no
+/// place"; it never hides anything). So the delete path detaches by hand:
+/// every Action that points at the Place gets `place_id = null` and an op
+/// saying so, every Habit that points at it gets `place_id = null` and no op
+/// (the habit tables are device-local), and only then does the row go — with
+/// a tombstone, so a replayed create cannot bring it back.
 library;
 
 import 'package:drift/drift.dart';
@@ -30,7 +32,7 @@ const String namedPlaceKind = 'named';
 /// The `kind` a one-time pin carries.
 const String pinPlaceKind = 'pin';
 
-@DriftAccessor(tables: [Places, Actions])
+@DriftAccessor(tables: [Places, Actions, Habits])
 class PlaceDao extends DatabaseAccessor<GtdDatabase> with _$PlaceDaoMixin {
   PlaceDao(super.db);
 
@@ -212,7 +214,7 @@ class PlaceDao extends DatabaseAccessor<GtdDatabase> with _$PlaceDaoMixin {
   }
 
   /// Deletes the Place with [placeId] — a named place or a one-time pin — and
-  /// detaches it from every Action that used it.
+  /// detaches it from every Action and every Habit that used it.
   ///
   /// The detach is by hand: every Action that points at this Place gets
   /// `place_id = null` and an op saying so, and only then does the row go,
@@ -242,6 +244,19 @@ class PlaceDao extends DatabaseAccessor<GtdDatabase> with _$PlaceDaoMixin {
         );
       }
       detached = attached.length;
+      // The Habits that point at the Place are detached the same way, but
+      // without an op: the habit tables are device-local.
+      final attachedHabits = await (select(habits)
+            ..where((h) => h.placeId.equals(placeId)))
+          .get();
+      for (final habit in attachedHabits) {
+        await (update(habits)..where((h) => h.id.equals(habit.id))).write(
+          HabitsCompanion(
+            placeId: const Value(null),
+            updatedAt: Value(encodeInstant(ts)),
+          ),
+        );
+      }
       await (delete(places)..where((p) => p.id.equals(placeId))).go();
       attachedDatabase.opCapture.tombstone(
         collection: placesCollection,
@@ -251,6 +266,73 @@ class PlaceDao extends DatabaseAccessor<GtdDatabase> with _$PlaceDaoMixin {
     });
     if (detached > 0) attachedDatabase.notifyActionsViewWrite();
     if (deleted) attachedDatabase.notifyPlacesViewWrite();
+  }
+
+  /// Inserts a one-time pin — a Place row of kind `pin` — and returns its id.
+  ///
+  /// The pin is never listed anywhere: it belongs to the one thing that
+  /// points at it, and it goes when that reference moves away. Creation
+  /// asserts the whole row, so a peer that has never seen the pin can build
+  /// it.
+  ///
+  /// A transaction-body helper: the caller owns the transaction, so the pin
+  /// row and the reference to it commit — or roll back — together.
+  Future<String> insertPin({
+    required String userId,
+    required PlaceArea area,
+    String? name,
+    required DateTime ts,
+  }) async {
+    final pinId = uuid.v4();
+    await into(places).insert(
+      PlacesCompanion(
+        id: Value(pinId),
+        userId: Value(userId),
+        kind: const Value(pinPlaceKind),
+        name: Value(name),
+        latitudeMicrodegrees: Value(area.latitudeMicrodegrees),
+        longitudeMicrodegrees: Value(area.longitudeMicrodegrees),
+        radiusMeters: Value(area.radiusMeters),
+        createdAt: Value(ts),
+      ),
+    );
+    attachedDatabase.opCapture.write(
+      collection: placesCollection,
+      entityId: pinId,
+      fields: {
+        'user_id': userId,
+        'kind': pinPlaceKind,
+        'name': name,
+        'latitude_microdegrees': area.latitudeMicrodegrees,
+        'longitude_microdegrees': area.longitudeMicrodegrees,
+        'radius_meters': area.radiusMeters,
+        'created_at': encodeInstant(ts),
+      },
+    );
+    return pinId;
+  }
+
+  /// Deletes the one-time pin row [placeId] names, when it is a pin.
+  ///
+  /// A pin belongs to the one thing that points at it, so a reference that
+  /// moves away takes the pin with it. The row goes and a tombstone says so,
+  /// so a replayed create cannot bring it back.
+  ///
+  /// A transaction-body helper: the caller owns the transaction, so the pin
+  /// row and the reference that pointed at it commit together.
+  ///
+  /// Returns whether a pin row was dropped.
+  Future<bool> dropPinIfAny(String? placeId) async {
+    if (placeId == null) return false;
+    final place = await (select(places)..where((p) => p.id.equals(placeId)))
+        .getSingleOrNull();
+    if (place == null || place.kind != pinPlaceKind) return false;
+    await (delete(places)..where((p) => p.id.equals(placeId))).go();
+    attachedDatabase.opCapture.tombstone(
+      collection: placesCollection,
+      entityId: placeId,
+    );
+    return true;
   }
 
   /// The user's named places, each with the number of live Outcomes that use

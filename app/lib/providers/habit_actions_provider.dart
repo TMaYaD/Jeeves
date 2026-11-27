@@ -6,6 +6,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/daos/habit_dao.dart';
 import '../models/habit_commitment.dart';
+import '../models/place_area.dart';
+import '../widgets/place_pin_sheet.dart' show PinChoice;
 import 'auth_provider.dart';
 import 'clock_provider.dart';
 import 'database_provider.dart';
@@ -24,6 +26,8 @@ class HabitDraftValues {
     required this.anchorHabitId,
     required this.areaTagId,
     required this.labelTagIds,
+    this.placeId,
+    this.pin,
   });
 
   final String title;
@@ -37,6 +41,12 @@ class HabitDraftValues {
   final String? anchorHabitId;
   final String? areaTagId;
   final List<String> labelTagIds;
+
+  /// The named Place the new Habit will carry, or null for none.
+  final String? placeId;
+
+  /// The one-time pin the new Habit will carry, written with it.
+  final PinChoice? pin;
 }
 
 /// The Habit screens' writes. Each reads the user and the clock when called.
@@ -66,6 +76,9 @@ class HabitActions {
         today: today,
         now: now,
         firstCommitment: draft.commitment,
+        placeId: draft.placeId,
+        pinArea: draft.pin?.area,
+        pinName: draft.pin?.name,
       );
       if (notes.isNotEmpty ||
           draft.energyLevel != null ||
@@ -198,6 +211,33 @@ class HabitActions {
 
   Future<void> unassignLabel(String habitId, String tagId) =>
       _dao.unassignLabel(habitId: habitId, userId: _userId, tagId: tagId);
+
+  /// Sets the named Place of the Habit, or clears it when [placeId] is null
+  /// (issue #1075).
+  ///
+  /// A Place that does not exist, or a one-time pin, is refused: a pin is
+  /// set with [setPin]. A Habit that already carries that Place is left as it
+  /// is.
+  Future<void> setNamedPlace(String habitId, String? placeId) async {
+    await _dao.setNamedPlace(habitId, placeId, now: _now);
+  }
+
+  /// Drops a one-time pin for the Habit — a Place of this Habit's own.
+  ///
+  /// Answers whether the pin was written: a pin that was not written is no
+  /// Place saved, so nothing follows it.
+  Future<bool> setPin(String habitId, PlaceArea area, {String? name}) async {
+    final pinId = await _dao.setPin(habitId, area, name: name, now: _now);
+    return pinId != null;
+  }
+
+  /// Takes the Habit's Place away.
+  ///
+  /// A one-time pin the Habit carried goes with it: the pin belongs to the
+  /// one thing that points at it. A named Place stays in the user's list.
+  Future<void> clearPlace(String habitId) async {
+    await _dao.setNamedPlace(habitId, null, now: _now);
+  }
 
   Future<void> pause(String habitId, {String? resumesOn}) => _dao.pause(
     habitId: habitId,

@@ -19,16 +19,23 @@ import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/estimate.dart';
 import 'package:jeeves/models/habit_commitment.dart';
 import 'package:jeeves/providers/clock_provider.dart';
+import 'package:jeeves/providers/current_location_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/habit_progress_provider.dart';
+import 'package:jeeves/providers/location_source_provider.dart';
 import 'package:jeeves/screens/app_shell.dart';
 import 'package:jeeves/screens/habits/habit_detail_pane.dart';
 import 'package:jeeves/screens/habits/habits_screen.dart';
 import 'package:jeeves/widgets/tag_text.dart';
 
+import '../helpers/fake_location_source.dart';
+import '../helpers/settle.dart';
 import '../test_helpers.dart';
 
 const _userId = 'local';
+
+/// The user is somewhere else: far outside every Place in this test.
+const _elsewhere = (latitudeDegrees: 52.0, longitudeDegrees: 4.0);
 
 Future<void> _settle(WidgetTester tester, [int frames = 6]) async {
   for (var i = 0; i < frames; i++) {
@@ -43,6 +50,7 @@ void main() {
   late GtdDatabase db;
   late ProviderContainer container;
   late GoRouter router;
+  late FakeLocationSource location;
   final today = habitDayKey(DateTime.now());
 
   var seedCount = 0;
@@ -62,10 +70,12 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     db = GtdDatabase(NativeDatabase.memory());
+    location = FakeLocationSource()..freshPoint = _elsewhere;
   });
 
   tearDown(() async {
     router.dispose();
+    await location.dispose();
     await db.close();
   });
 
@@ -82,6 +92,11 @@ void main() {
       overrides: [
         databaseProvider.overrideWithValue(db),
         if (clock != null) clockProvider.overrideWithValue(clock),
+        locationSourceProvider.overrideWithValue(location),
+        // The phone knows the user is elsewhere. A Place never hides a Habit.
+        currentLocationProvider.overrideWith(
+          () => FixedLocationNotifier(const LocationKnown(_elsewhere)),
+        ),
       ],
     );
     router = GoRouter(
@@ -180,6 +195,42 @@ void main() {
       expect(top('Run'), lessThan(top('Guitar')));
       expect(find.text('PAUSED'), findsOneWidget);
       expect(find.text('ARCHIVED'), findsOneWidget);
+    } finally {
+      await closeApp(tester);
+    }
+  });
+
+  testWidgets('a Habit at a Place shows the Place\'s name, and is not hidden '
+      'by it', (tester) async {
+    final placeId = await db.placeDao.createNamedPlace(
+      name: 'Home',
+      latitudeDegrees: 52.3702,
+      longitudeDegrees: 4.8952,
+      radiusMeters: 150,
+      userId: _userId,
+    );
+    final atHome = await seed('Stretch');
+    await db.habitDao.setNamedPlace(
+      atHome,
+      placeId!,
+      now: DateTime.now(),
+    );
+    final noPlace = await seed('Journal');
+    await openApp(tester);
+    try {
+      Finder inRow(String id, String text) => find.descendant(
+            of: find.byKey(Key('habit_row_$id')),
+            matching: find.text(text),
+          );
+      // The user is elsewhere, and the Habit is still listed.
+      expect(find.byKey(Key('habit_row_$atHome')), findsOneWidget);
+      // Its Place is said, on the line under its title. The Place list is a
+      // live Drift stream, so it needs a turn of its own.
+      await pumpUntilFound(tester, inRow(atHome, 'Home · Not yet'));
+      expect(inRow(atHome, 'Home · Not yet'), findsOneWidget);
+      // A Habit with no Place says nothing about one.
+      expect(inRow(noPlace, 'Not yet'), findsOneWidget);
+      expect(inRow(noPlace, 'Home'), findsNothing);
     } finally {
       await closeApp(tester);
     }
@@ -796,6 +847,11 @@ void main() {
       await _settle(tester);
       await tester.tap(find.text('High'));
       await _settle(tester);
+      // The Place row sits above Energy, so the estimate row is now below the
+      // fold on a phone. A tap on a row below the fold silently does nothing
+      // (docs/TESTING.md): scroll it into view first.
+      await tester.ensureVisible(find.byKey(const Key('habit_row_estimate')));
+      await tester.pump();
       await tester.tap(find.byKey(const Key('habit_row_estimate')));
       await _settle(tester);
       // The Outcome estimate sheet, without its Timeboxed switch.
