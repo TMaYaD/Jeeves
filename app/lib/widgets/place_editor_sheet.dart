@@ -136,13 +136,18 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
     super.dispose();
   }
 
-  bool get _canSave =>
+  /// Whether Save is on. [windows] is the list of named windows once it has
+  /// loaded, null before.
+  bool _canSaveWith(List<TimeWindow>? windows) =>
       _name.text.trim().isNotEmpty &&
       _point != null &&
       !_saving &&
-      // A window choice with no window yet is an incomplete answer.
+      // A window choice needs a window that still exists: one deleted while
+      // this editor is open is no answer, whatever id it left behind.
       !(_hoursChoice == _PlaceHoursChoice.timeWindow &&
-          _timeWindowId == null);
+          (_timeWindowId == null ||
+              (windows != null &&
+                  !windows.any((window) => window.id == _timeWindowId))));
 
   /// The zone the Place's hours are read on: the one the user named, or the
   /// phone's own zone until they name another one.
@@ -235,6 +240,25 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
             chosenZone == null
         ? ref.read(phoneTimeZoneNameProvider.future)
         : null;
+    // A window that went missing since Save was enabled is refused before
+    // anything is written: a new Place must not be created and then lose the
+    // hours the user chose, and the editor stays open for another choice.
+    if (hoursTouched &&
+        hoursChoice == _PlaceHoursChoice.timeWindow &&
+        timeWindowId != null) {
+      final windowStillThere = await db.timeWindowDao.timeWindowExists(
+        timeWindowId,
+      );
+      if (!windowStillThere) {
+        if (mounted) {
+          setState(() {
+            _saving = false;
+            _timeWindowId = null;
+          });
+        }
+        return;
+      }
+    }
     String? placeId;
     var saved = false;
     if (place == null) {
@@ -469,8 +493,8 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
   @override
   Widget build(BuildContext context) {
     final isNew = widget.place == null;
-    final windows =
-        ref.watch(timeWindowsProvider).value ?? const <TimeWindow>[];
+    final loadedWindows = ref.watch(timeWindowsProvider).value;
+    final windows = loadedWindows ?? const <TimeWindow>[];
     final phoneZone = ref.watch(phoneTimeZoneNameProvider).value;
     return SafeArea(
       child: Padding(
@@ -546,7 +570,7 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet> {
                     ),
                   FilledButton(
                     key: const Key('place_editor_save'),
-                    onPressed: _canSave ? _save : null,
+                    onPressed: _canSaveWith(loadedWindows) ? _save : null,
                     child: const Text('Save'),
                   ),
                 ],

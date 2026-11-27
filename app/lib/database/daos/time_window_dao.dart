@@ -41,6 +41,13 @@ class TimeWindowDao extends DatabaseAccessor<GtdDatabase>
         .watch();
   }
 
+  /// Whether the named time window [id] still exists.
+  Future<bool> timeWindowExists(String id) async {
+    final row = await (select(timeWindows)..where((w) => w.id.equals(id)))
+        .getSingleOrNull();
+    return row != null;
+  }
+
   /// The user's named time windows with the number of current Actions of
   /// active Outcomes that use each, in name order.
   ///

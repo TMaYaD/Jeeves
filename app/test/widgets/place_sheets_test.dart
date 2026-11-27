@@ -418,4 +418,65 @@ void main() {
     expect(saved!.single.name, 'Bakery');
     expect((await answer.future)!.name, 'Bakery');
   });
+
+  testWidgets('the editor refuses a chosen window that was deleted while it '
+      'was open', (tester) async {
+    final now = DateTime.utc(2026, 1, 1);
+    final store = TimeWindow(
+      id: 'w1',
+      userId: 'local',
+      name: 'Store hours',
+      hours: '',
+      createdAt: now,
+      updatedAt: now,
+    );
+    final windows = StreamController<List<TimeWindow>>();
+    addTearDown(windows.close);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          databaseProvider.overrideWithValue(db),
+          timeWindowsProvider.overrideWith((_) => windows.stream),
+          phoneTimeZoneNameProvider
+              .overrideWith((ref) async => 'Europe/Amsterdam'),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => ElevatedButton(
+                onPressed: () => showPlaceEditorSheet(context),
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    windows.add([store]);
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    await tester.showKeyboard(find.byKey(const Key('place_editor_name')));
+    tester.testTextInput.enterText('Bakery');
+    await tester.pumpAndSettle();
+    await tester.showKeyboard(
+        find.byKey(const Key('place_point_coordinates')));
+    tester.testTextInput.enterText('52.3702, 4.8952');
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const Key('place_hours_choice_window')));
+    await tester.tap(find.byKey(const Key('place_hours_choice_window')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('place_hours_window_picker')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Store hours').last);
+    await tester.pumpAndSettle();
+    bool saveOn() => tester
+            .widget<FilledButton>(find.byKey(const Key('place_editor_save')))
+            .onPressed !=
+        null;
+    expect(saveOn(), isTrue);
+
+    windows.add(const []);
+    await tester.pumpAndSettle();
+    expect(saveOn(), isFalse);
+  });
 }
