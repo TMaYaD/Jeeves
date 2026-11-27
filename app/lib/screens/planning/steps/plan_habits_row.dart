@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../models/habit_progress.dart' show HabitTodayState;
 import '../../../providers/habit_progress_provider.dart';
+import '../../../providers/place_gate_provider.dart';
 import '../../habits/habit_copy.dart';
 
 class PlanHabitsRow extends ConsumerWidget {
@@ -120,6 +121,8 @@ class _HabitEntry extends ConsumerWidget {
         .firstWhere((h) => h.id == habitId);
     final progress = ref.watch(activeHabitProgressProvider)[habitId]!;
     final commitment = ref.watch(habitTodayEntriesProvider(habitId))?.commitment;
+    // A Habit is never hidden by its Place: the Place is said, not a gate.
+    final placeName = ref.watch(habitPlaceNamesProvider)[habitId];
     final theme = Theme.of(context);
     final done = progress.todayState == HabitTodayState.done;
     return Padding(
@@ -140,8 +143,13 @@ class _HabitEntry extends ConsumerWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: theme.textTheme.bodyMedium),
-                Text(habitPlanningNumber(progress, commitment),
-                    style: theme.textTheme.labelSmall),
+                Text(
+                  habitPlaceLine(
+                    placeName: placeName,
+                    line: habitPlanningNumber(progress, commitment),
+                  ),
+                  style: theme.textTheme.labelSmall,
+                ),
               ],
             ),
           ),

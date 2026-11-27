@@ -137,6 +137,8 @@ void main() {
     await tester.tap(find.text('Outcome o2'));
     await _settle(tester);
     expect(find.text('2 selected'), findsOneWidget);
+    // Navigate is the place page's own action, not a bulk action of the bar.
+    expect(find.text('Navigate'), findsNothing);
     expect(lastRoute, '/next');
 
     // Set Project.

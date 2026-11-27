@@ -40,7 +40,8 @@ void main() {
       ['vault', 7],
     );
 
-    // The store as a device that has not upgraded yet: v15, without the table.
+    // The store as a device that has not upgraded yet: v15, without the table
+    // and without whatever a later version added to a table it still has.
     await dropColumnsAddedAfter(current, 15);
     await current.customStatement('PRAGMA user_version = 15');
     await closeCurrent();

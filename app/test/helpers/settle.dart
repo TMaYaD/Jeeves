@@ -1,5 +1,22 @@
 import 'package:flutter_test/flutter_test.dart';
 
+/// Pumps bounded frames until [finder] matches.
+///
+/// A live Drift stream's first emission lands on the real event loop, so a
+/// surface that only reads it once its own data has arrived needs a turn of
+/// its own. [rounds] bounds the wait, so a stream that never delivers fails
+/// the test rather than hanging it.
+Future<void> pumpUntilFound(
+  WidgetTester tester,
+  Finder finder, {
+  int rounds = 20,
+}) async {
+  for (var i = 0; i < rounds && finder.evaluate().isEmpty; i++) {
+    await tester.runAsync(() => pumpEventQueue());
+    await tester.pump(const Duration(milliseconds: 50));
+  }
+}
+
 /// Deterministic, wall-clock-free replacement for the ceremony tests' old
 /// `runAsync(Future.delayed(200ms))` settle.
 ///

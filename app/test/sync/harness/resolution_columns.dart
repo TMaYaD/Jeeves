@@ -31,6 +31,9 @@ const Map<int, List<(String, String)>> columnsAddedAt = {
   15: [
     ('quarantined_ops', 'resolution_projected_at'),
   ],
+  17: [
+    ('sync_cursors', 'rebuild_required_at'),
+  ],
 };
 
 /// Take out of [database] every column that a store at [version] did not have,
