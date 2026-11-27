@@ -15,6 +15,7 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart' hide Intent, Action;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jeeves/providers/current_action_provider.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -120,6 +121,9 @@ void main() {
           // stubbed like the others above, for the same reason.
           currentPlacesProvider.overrideWith((_) => Stream.value(const {})),
           placeHoursProvider.overrideWith((_) => Stream.value(const {})),
+          // The hours read the current Actions to drop a replaced Action's, one more
+          // live row stream, stubbed for the same reason.
+          currentActionsProvider.overrideWith((_) => Stream.value(const {})),
           plannedActionsProvider('o1')
               .overrideWith((_) => Stream.value(seeded.planned)),
           terminatedActionsProvider('o1')

@@ -7,6 +7,7 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart' hide Intent, Action;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jeeves/providers/current_action_provider.dart';
 import 'package:go_router/go_router.dart';
 
 import 'package:jeeves/database/daos/action_dao.dart' show TerminatedAction;
@@ -152,6 +153,9 @@ Future<void> _seedRunningSprint(GtdDatabase db, String taskId) async {
       // like the others above, for the same reason.
       currentPlacesProvider.overrideWith((_) => Stream.value(const {})),
       placeHoursProvider.overrideWith((_) => Stream.value(const {})),
+      // The hours read the current Actions to drop a replaced Action's, one more
+      // live row stream, stubbed for the same reason.
+      currentActionsProvider.overrideWith((_) => Stream.value(const {})),
       plannedActionsProvider(todoId)
           .overrideWith((_) => plannedActionsStream ?? Stream.value([])),
       terminatedActionsProvider(todoId).overrideWith(
