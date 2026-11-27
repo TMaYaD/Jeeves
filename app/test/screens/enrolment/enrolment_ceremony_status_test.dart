@@ -22,6 +22,7 @@ final Uint8List _rootPk = Uint8List.fromList([
 
 EnrolmentCeremonyStatus _derive({
   List<String> founded = const [],
+  List<String> pendingKeyAdoption = const [],
   String? memberId,
   Uint8List? pinnedRootPk,
   int escrowVersion = 0,
@@ -29,6 +30,7 @@ EnrolmentCeremonyStatus _derive({
     deriveEnrolmentCeremonyStatus(
       workspaceIds: _workspaces,
       registeredWorkspaceIds: founded,
+      pendingKeyAdoptionWorkspaceIds: pendingKeyAdoption,
       storedMemberId: memberId,
       pinnedRootPk: pinnedRootPk,
       highestEscrowVersionSeen: escrowVersion,
@@ -89,6 +91,37 @@ void main() {
       expect(status.escrowVersion, 2);
       // Reported in ceremony order regardless of the order they were observed in.
       expect(status.registeredWorkspaceIds, _workspaces);
+    });
+
+    test('a Workspace whose keys this device never adopted is half-founded',
+        () {
+      // Registered everywhere, and still not enrolled: the ceremony registers
+      // first and adopts the epoch keys second, so a device stopped between the
+      // two holds no key for the Workspace it stopped in (#993).
+      final status = _derive(
+        memberId: 'member-1',
+        pinnedRootPk: _rootPk,
+        founded: _workspaces,
+        pendingKeyAdoption: const ['preferences-workspace'],
+        escrowVersion: 1,
+      );
+      expect(status.state, EnrolmentState.foundingIncomplete);
+      expect(status.registeredWorkspaceIds, _workspaces,
+          reason: 'the registration did land; only the key plane is missing');
+    });
+
+    test('a pending key adoption in a Workspace that was never registered in '
+        'is still half-founded', () {
+      expect(
+        _derive(
+          memberId: 'member-1',
+          pinnedRootPk: _rootPk,
+          founded: const ['default-workspace'],
+          pendingKeyAdoption: const ['preferences-workspace'],
+          escrowVersion: 1,
+        ).state,
+        EnrolmentState.foundingIncomplete,
+      );
     });
   });
 

@@ -23,7 +23,7 @@ enum EnrolmentState {
   /// which founding is allowed.
   notEnrolled,
 
-  /// The ceremony started and did not finish. Two shapes reach here, and both
+  /// The ceremony started and did not finish. Three shapes reach here, and all
   /// are recovered the same way — re-enter with the passphrase:
   ///
   /// - **Keys present, and a Workspace this device has not registered in.** The
@@ -33,10 +33,15 @@ enum EnrolmentState {
   ///   the account's escrow claimed by a device that cannot prove it. Founding
   ///   again could only ever return `escrow_version_regression`, which is why
   ///   this is not [notEnrolled].
+  /// - **Keys present, registered everywhere, and a Workspace whose epoch keys
+  ///   this device never adopted** (#993). The ceremony registers first and
+  ///   adopts the keys second, so a crash between the two leaves a device that
+  ///   looks registered everywhere and can read nothing in the Workspace it
+  ///   stopped in.
   foundingIncomplete,
 
-  /// Keys stored and this device's own registration applied in every derivable
-  /// Workspace.
+  /// Keys stored, this device's own registration applied in every derivable
+  /// Workspace, and no Workspace left with a pending key adoption.
   enrolled,
 }
 
@@ -75,14 +80,21 @@ class EnrolmentCeremonyStatus {
 
 /// Derive the state from what the store holds. Pure, so the branch table is
 /// asserted directly rather than through four staged ceremony failures.
+///
+/// A Workspace counts as done only when this device's own registration is
+/// applied in it **and** no key adoption is pending there: the ceremony
+/// registers first and adopts the epoch keys second, so a device can be
+/// registered everywhere and still hold no key for the Workspace it stopped in.
 EnrolmentCeremonyStatus deriveEnrolmentCeremonyStatus({
   required List<String> workspaceIds,
   required List<String> registeredWorkspaceIds,
+  required List<String> pendingKeyAdoptionWorkspaceIds,
   required String? storedMemberId,
   required Uint8List? pinnedRootPk,
   required int highestEscrowVersionSeen,
 }) {
   final registered = registeredWorkspaceIds.toSet();
+  final pendingKeyAdoption = pendingKeyAdoptionWorkspaceIds.toSet();
   final EnrolmentState state;
   if (storedMemberId == null) {
     // Keys are ceremony step 3 of 7, so their absence alone says nothing about
@@ -92,7 +104,11 @@ EnrolmentCeremonyStatus deriveEnrolmentCeremonyStatus({
         ? EnrolmentState.notEnrolled
         : EnrolmentState.foundingIncomplete;
   } else {
-    state = workspaceIds.every(registered.contains)
+    state = workspaceIds.every(
+          (workspaceId) =>
+              registered.contains(workspaceId) &&
+              !pendingKeyAdoption.contains(workspaceId),
+        )
         ? EnrolmentState.enrolled
         : EnrolmentState.foundingIncomplete;
   }

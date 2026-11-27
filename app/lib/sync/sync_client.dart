@@ -368,6 +368,49 @@ class SyncClient {
         );
   }
 
+  // --- Pending key adoption --------------------------------------------------
+
+  /// Whether this device's enrolment in this Workspace has not finished its
+  /// key plane — it is registered there and holds none of the Workspace's epoch
+  /// keys.
+  ///
+  /// Read from the record and not derived from the key store: the absence of a
+  /// key says nothing about whether the Workspace is encrypted, so the fact
+  /// that the ceremony is unfinished has to be recorded (see
+  /// `PendingKeyAdoptions`).
+  Future<bool> isKeyAdoptionPending() async {
+    final row = await (_db.select(_db.pendingKeyAdoptions)
+          ..where((row) =>
+              row.workspaceId.equals(workspaceId) &
+              row.userId.equals(userId)))
+        .getSingleOrNull();
+    return row != null;
+  }
+
+  /// Record that this device's enrolment in this Workspace has not finished its
+  /// key plane yet.
+  ///
+  /// The record is a **set**: writing it twice is the same fact written twice,
+  /// so a second write is ignored rather than made into a second row.
+  Future<void> markKeyAdoptionPending() async {
+    await _db.into(_db.pendingKeyAdoptions).insert(
+          PendingKeyAdoptionsCompanion.insert(
+            workspaceId: workspaceId,
+            userId: userId,
+          ),
+          mode: InsertMode.insertOrIgnore,
+        );
+  }
+
+  /// Clear the record: the ceremony finished this Workspace's key plane.
+  Future<void> clearKeyAdoptionPending() async {
+    await (_db.delete(_db.pendingKeyAdoptions)
+          ..where((row) =>
+              row.workspaceId.equals(workspaceId) &
+              row.userId.equals(userId)))
+        .go();
+  }
+
   // --- Capture --------------------------------------------------------------
 
   /// Author an op: mint its HLC, sign it, queue it, and reduce it locally.

@@ -40,9 +40,13 @@ const Map<int, List<(String, String)>> columnsAddedAt = {
 /// so the store it holds is the shape a device from before [version] would
 /// have.
 ///
-/// The tables a later version added are the fixture's own business — it drops
-/// them by hand, because only the fixture knows which table it is about.
+/// Shared later tables are removed here too. Each fixture removes any other
+/// tables absent from its target version before it opens the store again.
 Future<void> dropColumnsAddedAfter(SyncDatabase database, int version) async {
+  // v18 added the enrolment's pending key-adoption record.
+  if (version < 18) {
+    await database.customStatement('DROP TABLE IF EXISTS pending_key_adoptions');
+  }
   // v13 added the vault's table; a store from before it does not hold it.
   if (version < 13) {
     await database.customStatement('DROP TABLE IF EXISTS vault_page_bases');

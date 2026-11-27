@@ -204,11 +204,12 @@ The op-log stack (`app/lib/sync/`, `backend/app/sync/`) is built to be runnable 
 A `SimDevice` is a whole device: a `SyncDatabase` (the convergence substrate), a `GtdDatabase` wired with the production `WorkspaceRoutingOpCapture` (so the real DAOs author real ops, and a DAO-path preference write routes into the preferences Workspace rather than the GTD one), and a `DomainProjector` feeding the domain store back from reduced state. It enrols at construction; `harness/stack_phone.dart` is the sibling for cases that need a device that is *not* yet enrolled, built over a real `SyncStack`. Two consequences worth knowing before writing a case:
 
 - **The sync host has its own harness.** `app/test/sync/host/` drives two host-only devices through a relay plugin over real stores (`host_harness.dart`), and `StackPhone.create(hosted: true)` wires a phone the way production does, with the op-log client on the host bridge.
-- **Entity ids must be canonical lowercase UUIDs.** The payload codec rejects anything else rather than normalising it, and since #573 authoring runs that same codec: a fixture id like `'outcome-1'` throws `SyncRejection(malformed_payload)` out of the `capture()` call itself, with nothing queued, reduced or signed. The failure names the cause at the line that caused it. Derive fixture ids (`uuid5`) instead of spelling them — a loosened codec is never the fix.
-- **Cross-device row comparison excludes no column.** Every column on the domain tables is either synced through the op log or derived at read time, so two converged devices hold byte-identical rows and `domainRows` is called with no `exclude` set. (The former exception, `todos.time_spent_minutes`, was a dead cache dropped in #604.)
+- **Entity ids must be canonical lowercase UUIDs.** The payload codec rejects anything else rather than normalising it, and since #573 authoring runs that same codec: a fixture id like `'outcome-1'` throws `SyncRejection(malformed_payload)` out of the `capture()` call itself, with nothing queued, reduced or signed. Derive fixture ids (`uuid5`) instead of spelling them — a loosened codec is never the fix.
+- **Cross-device row comparison excludes no column.** Every column on the domain tables is either synced through the op log or derived at read time, so two converged devices hold byte-identical rows and `domainRows` is called with no `exclude` set.
 
 - `harness/` — `FakeSyncServer` (the in-process contract double, with `connectAsUser` / `connectAsMember` mirroring the real credential split, and both the signal socket and the `GET /w/{w}/members` read hanging off the *member* session as they do on the server — the double models endpoints no client calls, because that is what lets a twin pin the credential a route requires, plus the key plane — the three wrap routes, `rotate` materialisation and the stale-epoch refusal, with `keyWrapRecipients` and `keyedEpochs` so a test asserts on the server's *own* rows rather than on what a ceremony believed it uploaded — and `injectUnchecked`, `poisonRegistry`, `poisonGrantLiveness` and a Dart mirror of the signal hub for playing a hostile server), `SimDevice` (both stores, its own `WorkspaceKeyStore`, identity, HLC, `SignalListener`, `goOffline()`, `goSilent()` for a half-open socket, a gated/failing pull, a lost-POST-response fault, and a real enrolment ceremony), `SimWorkspace` (N devices of one User, `enrolFixture` for a chained granted Device and `enrolServiceFixture` for the one Member kind no epoch key can be wrapped to), `SimTimers` (a manually advanced timer wheel), `AuthorFixture` (the twin of `backend/tests/sync/builders.py`), `reduced_state.dart` (`canonicalReducedState`, the deterministic byte string convergence is asserted over, and `domainRows` for full-row table comparison), `signal_probe.dart` (`pumpEvents`, `PokeRecorder`), `rejection_matcher.dart` (`throwsRejection`, shared so a codec suite and a harness suite cannot assert a refusal to different strictnesses).
 - **A `SimDevice` enrols the way a real one does.** Device A generates the passphrase and Root; every later device is handed *the passphrase string and nothing else* — no keypair, no store, no session. That is what makes "a second device enrols with the passphrase alone" a demonstration rather than an assumption, and it is why a test that needs a chained author calls `SimWorkspace.enrolFixture` instead of poking the registry. Argon2id runs for real at reduced costs, injected as **both** the parameters and the floor, so the floor check still runs on every blob and only the cost is smaller (`harnessKdfParameters`).
+- **The epoch-key fetch has a fault seam.** `DeviceLink.failNextEpochKeysForWorkspaceId` fails one Workspace's epoch-key fetch, once, before it leaves the device — the step an enrolment does *after* it registers there, so it stops a ceremony between the registration and the adoption (#993).
 - `fake_sync_server_contract_test.dart` — the twin of `backend/tests/sync/test_ops_routes.py`, `test_recovery_escrow_routes.py`, `test_member_auth_routes.py`, `test_keywrap_routes.py` and `test_signal_socket.py`, case-for-case under the same names, asserting on the structured `detail.code` rather than on messages. **Keep them in step:** a convergence test is only evidence about the real system if the double behaves like the real server, and a missing twin is how that stops being true. The file's header lists the handful of backend cases that deliberately have none, and why — including the refresh-token cases, which the fake cannot express because it issues no bearer tokens at all.
 - `realtime_signal_test.dart` — the payload-free signal end to end: an edit on A reaching B with no poll on B, a late-enrolling member's ops landing rather than quarantining, poke coalescing, the sync-failure policy, and the whole reconnect ladder (backoff schedule, `authParked`, terminal `failed`, idle deadline, protocol violation). Nothing in it sleeps: keepalives, the idle deadline and backoff all run on `SimTimers`. **No test in this file may use a real delay** — a wall-clock wait here is a flake waiting to be filed.
 - `backend/tests/sync/test_signal_socket.py` — the binding no-payload assertion, over a real WebSocket via `httpx-ws`'s `ASGIWebSocketTransport`, plus the token cases the fake has no model for (including that a valid *user* session is refused with 4401, so the socket is not the weak door). Every session there runs the full enrolment ceremony, because the socket takes a member credential — from the shared `Session` / `open_session` / `found_workspace` helpers in `backend/tests/sync/builders.py`, which `test_ops_routes.py` and `test_grants_routes.py` use too, so the three cannot drift on what "a founded Workspace" means. Two harness quirks are load-bearing and documented in the file: the WS client is opened inside the test body (pytest-asyncio runs fixture setup and teardown in different tasks, which its anyio task group refuses), and a test must consume the handshake poke before issuing an HTTP request, because both share the one transaction-bound session. The keepalive interval and auth-frame deadline are `Settings` fields so those cases run in milliseconds.
@@ -286,11 +287,12 @@ status has to be answerable offline:
 
 - *not enrolled* — no stored keys **and** no pinned Root. The state the two doors above
   arbitrate between.
-- *half-founded* — either keys with a Workspace this device has not registered in, or **a
-  pinned Root with no keys at all**. The second is the one that is easy to get wrong:
+- *half-founded* — keys with a Workspace this device has not registered in; **a Workspace
+  whose epoch keys it never adopted**; or **a pinned Root with no keys at all**. The last is
+  the one that is easy to get wrong:
   `enrolFirstDevice` writes the escrow and pins Root *before* it stores the keypairs, so a
   crash in that window leaves the account's escrow claimed by a device that cannot prove
-  it, and founding again can only ever return `escrow_version_regression`. Both are
+  it, and founding again can only ever return `escrow_version_regression`. All three are
   recovered by re-entering the passphrase ("Enrol with the passphrase").
 - *enrolled* — keys stored; registered in every derivable Workspace. No founding control is
   rendered, and the runner refuses a second founding below the UI as well.
@@ -354,12 +356,10 @@ Automated coverage:
   reaches the app, and deliberate navigation to the ceremony still works. `runAsync` is
   load-bearing — the launch waits on real Dio/SQLite/KDF timers that fake time never fires.
 
-**The blind spot these close, and the setup that caused it.** The enrolment-routing failure shipped
-because the state it depended on was one the tests could not produce: every case covering
-an unverified session ran *without* a sync stack, so the enrolment read could not reach a
-store, failed open, and reported an enrolled-looking answer. The combination that mattered
-— unverified session over a store that genuinely says "not enrolled" — was therefore never
-exercised, and the arm looked covered while being untested.
+**The blind spot these close.** A case covering an unverified session ran *without* a sync
+stack, so the enrolment read could not reach a store, failed open, and reported an
+enrolled-looking answer: unverified session over a store that genuinely says "not enrolled"
+was never exercised, and the arm looked covered while being untested.
 
 Two standing requirements follow, and neither may be dropped while enrolment stays opt-in:
 
