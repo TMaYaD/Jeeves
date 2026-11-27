@@ -33,19 +33,47 @@ export '../database/gtd_database.dart' show Capture, Todo;
 final nextProvider = StreamProvider<List<Todo>>((ref) {
   final db = ref.watch(databaseProvider);
   final tagIds = ref.watch(tagFilterProvider);
-  final outside = {
-    ...ref.watch(outsideTimeContextOutcomeIdsProvider),
-    ...ref.watch(outsideTimeWindowOutcomeIdsProvider),
-    ...ref.watch(outsidePlaceHoursOutcomeIdsProvider),
-  };
-  final away = ref.watch(awayFromPlaceOutcomeIdsProvider);
-  return db.todoDao.watchNext(tagIds: tagIds).map((all) =>
-      away.isEmpty && outside.isEmpty
-          ? all
-          : all
-              .where((t) => !outside.contains(t.id) && !away.contains(t.id))
-              .toList());
+  final hidden = _hiddenOutcomeIds(ref);
+  return db.todoDao.watchNext(tagIds: tagIds).map((all) => hidden.isEmpty
+      ? all
+      : all.where((t) => !hidden.contains(t.id)).toList());
+});
 
+/// The Outcome ids that keep an Outcome off the Next list right now: a Time
+/// context that is not satisfied, a named time window that is closed, a named
+/// Place whose hours are closed, or a Place the user is not at.
+///
+/// One union, read by the Next list and by [nextAllHiddenProvider] alike, so
+/// the two can never disagree about what hides an Outcome.
+Set<String> _hiddenOutcomeIds(Ref ref) => {
+      ...ref.watch(outsideTimeContextOutcomeIdsProvider),
+      ...ref.watch(outsideTimeWindowOutcomeIdsProvider),
+      ...ref.watch(outsidePlaceHoursOutcomeIdsProvider),
+      ...ref.watch(awayFromPlaceOutcomeIdsProvider),
+    };
+
+/// The Next list before time and place hide anything: the Outcomes the Next
+/// list would show, with the user's Label filter applied, but with none of
+/// them taken off it.
+///
+/// Only the empty state reads it. It is what tells "there is nothing on Next"
+/// from "everything on Next is waiting for its time or its place" (#1076).
+final nextBeforeHidingProvider = StreamProvider<List<Todo>>((ref) {
+  final db = ref.watch(databaseProvider);
+  final tagIds = ref.watch(tagFilterProvider);
+  return db.todoDao.watchNext(tagIds: tagIds);
+});
+
+/// Whether every Outcome on Next is hidden by time or by place (#1076).
+///
+/// True only when there is at least one Outcome on Next before hiding and
+/// every one of them is hidden. A Label filter that matches no Outcome keeps
+/// the ordinary empty state: the user is filtering, not waiting.
+final nextAllHiddenProvider = Provider<bool>((ref) {
+  final before = ref.watch(nextBeforeHidingProvider).value ?? const <Todo>[];
+  if (before.isEmpty) return false;
+  final hidden = _hiddenOutcomeIds(ref);
+  return before.every((t) => hidden.contains(t.id));
 });
 
 /// Stream of waiting-for todos (todos with at least one person-typed tag).

@@ -54,6 +54,10 @@ void main() {
         await tester.pumpWidget(ProviderScope(
           overrides: [
             nextProvider.overrideWith((_) => Stream.value([])),
+            // The Next empty state reads the list before time and place hide
+            // anything, to tell an empty Next from one where everything on
+            // it is waiting (issue #1076).
+            nextBeforeHidingProvider.overrideWith((_) => Stream.value([])),
             somedayMaybeProvider.overrideWith((_) => Stream.value([])),
             inboxItemsProvider.overrideWith((_) => Stream.value([])),
             // The Next screen reads the places for the rows and for the calm
