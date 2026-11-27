@@ -202,15 +202,25 @@ void main() {
                   r.workspaceId.equals(workspace.workspaceId) & r.seq.equals(seq)))
             .getSingle();
 
-    /// The fork staged so the winning control op is the only thing pull 2 serves,
-    /// and pull 2's tail rebuild is the first thing to write a reduced field:
-    /// the rebuild's first replay insert faults, so `pull()` throws mid-rebuild.
+    /// The fork, staged so that the winning control op resolves it on the
+    /// second pull and the rebuild it forces throws.
+    ///
+    /// The ops are posted in the order their seqs need: the losing branch, its
+    /// content, the winning branch, its content. The losing content has to land
+    /// before the winning branch is posted, so that the winning branch's seq is
+    /// above the cursor the first pull leaves behind — an op below the cursor is
+    /// never served again, and the fork would never be resolved.
+    ///
+    /// The second pull serves the winning **content before the winning grant**,
+    /// so the content is refused `no_live_grant` first and only the rebuild can
+    /// undo that verdict. The rebuild's replay of it is the write that faults,
+    /// so the pull throws with the obligation still owed.
     Future<
         ({
           int loserContent,
           int winnerContent,
+          String loserTodo,
           String winnerTodo,
-          FaultInjectingInterceptor faults,
         })> stageFailedRebuild() async {
       final faults = FaultInjectingInterceptor();
       await workspace.close();
@@ -233,12 +243,6 @@ void main() {
         prevControlHash: head,
         certWallMs: simulationStartWallMs + 8000,
       );
-      final winner = await branch(
-        author: winningAuthor,
-        grantee: winningGrantee,
-        prevControlHash: head,
-        certWallMs: simulationStartWallMs + 2000,
-      );
       final loserTodo = preferenceEntityId(workspace.workspaceId, 'from-loser');
       final winnerTodo = preferenceEntityId(workspace.workspaceId, 'from-winner');
       final loserContent =
@@ -246,29 +250,42 @@ void main() {
         await _todoOp(
             workspace, losingGrantee.fixture, loserTodo, 'authored on the loser'),
       ])).single.seq;
+      final winner = await branch(
+        author: winningAuthor,
+        grantee: winningGrantee,
+        prevControlHash: head,
+        certWallMs: simulationStartWallMs + 2000,
+      );
       final winnerContent =
           (await winningGrantee.session.postOps(workspace.workspaceId, [
         await _todoOp(
             workspace, winningGrantee.fixture, winnerTodo, 'authored on the winner'),
       ])).single.seq;
 
-      // Pull 1: the winner's Grant is withheld, so its content is refused
-      // `no_live_grant` and the loser's content applies.
-      workspace.server.omitSeqs.add(winner.seq);
+      // Pull 1: the losing branch and its content land, and the winning branch
+      // is withheld. The content the losing branch authorized applies, so the
+      // domain holds it — the row the rebuild later has to take away.
+      workspace.server.omitSeqs
+        ..add(winner.seq)
+        ..add(winnerContent);
       await workspace.a.client.pull();
-      expect(
-        (await logRow(workspace.a.syncStore, winnerContent)).refusedReason,
-        'no_live_grant',
-      );
+      expect((await logRow(workspace.a.syncStore, loserContent)).refusedReason,
+          isNull);
       expect(await reducedTodoIds(workspace.a.syncStore), {loserTodo});
-      expect(await markerOn(workspace.a.syncStore), isNull);
+      expect(
+        {for (final row in await _todoRows(workspace.a)) row['id']},
+        {loserTodo},
+      );
+      expect(await markerOn(workspace.a.syncStore), isNull,
+          reason: 'nothing is owed before the fork');
 
-      // Pull 2 serves the winner again (the log is re-served from the start, so
-      // everything else is a logged no-op). It resolves the fork, which owes the
-      // rebuild, and the rebuild's first replay write faults.
+      // Pull 2: the winning content is served before the winning grant, so it
+      // is refused `no_live_grant`; the winning grant then resolves the fork,
+      // which owes the rebuild. The rebuild's replay of the winning content is
+      // the first write into the reduced state, and it faults.
       workspace.server
         ..omitSeqs.clear()
-        ..ignoreSinceParameter = true;
+        ..serveOrder = [winnerContent, winner.seq];
       faults.failNextInsertInto('reduced_fields');
       await expectLater(
         workspace.a.client.pull(),
@@ -280,8 +297,8 @@ void main() {
       return (
         loserContent: loserContent,
         winnerContent: winnerContent,
+        loserTodo: loserTodo,
         winnerTodo: winnerTodo,
-        faults: faults,
       );
     }
 
@@ -291,8 +308,8 @@ void main() {
       ({
         int loserContent,
         int winnerContent,
+        String loserTodo,
         String winnerTodo,
-        FaultInjectingInterceptor faults,
       }) staged,
     ) async {
       expect(await reducedTodoIds(store), {staged.winnerTodo});
@@ -303,11 +320,11 @@ void main() {
       expect(winnerRow.appliedAt, isNotNull);
       expect(await markerOn(store), isNull,
           reason: 'cleared once the rebuild and its projection finished');
-      expect(
-        {for (final row in await _todoRows(device)) row['id']},
-        {staged.winnerTodo},
-        reason: 'the projection shows the winning branch only',
-      );
+      final todoIds = {for (final row in await _todoRows(device)) row['id']};
+      expect(todoIds, {staged.winnerTodo},
+          reason: 'the projection shows the winning branch only');
+      expect(todoIds, isNot(contains(staged.loserTodo)),
+          reason: 'the row the losing branch put there is gone');
     }
 
     test('a restart before the rebuild finishes still gets it on the first pull',

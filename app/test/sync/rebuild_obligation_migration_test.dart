@@ -8,6 +8,7 @@ library;
 
 import 'dart:io';
 
+import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/sync/sync_database.dart';
@@ -31,11 +32,16 @@ void main() {
     }
 
     addTearDown(closeCurrent);
-    await current.customStatement(
-      'INSERT INTO sync_cursors (workspace_id, last_seq, last_sync_completed_at) '
-      'VALUES (?, ?, ?)',
-      ['workspace-1', 42, 1700000000],
-    );
+    // Written through drift, so the timestamp is stored the way this build
+    // stores one — as the ISO-8601 text drift reads back.
+    final lastSyncCompletedAt = DateTime.utc(2023, 11, 14, 22, 13, 20);
+    await current.into(current.syncCursors).insert(
+          SyncCursorsCompanion.insert(
+            workspaceId: 'workspace-1',
+            lastSeq: 42,
+            lastSyncCompletedAt: Value(lastSyncCompletedAt),
+          ),
+        );
 
     // The store as a device that has not upgraded yet: v16, without the column.
     await dropColumnsAddedAfter(current, 16);
@@ -54,7 +60,8 @@ void main() {
     final rows = await upgraded.select(upgraded.syncCursors).get();
     expect(rows, hasLength(1));
     expect(rows.single.lastSeq, 42, reason: 'the cursor survives the upgrade');
-    expect(rows.single.lastSyncCompletedAt, isNotNull);
+    expect(rows.single.lastSyncCompletedAt, lastSyncCompletedAt,
+        reason: 'the timestamp survives the upgrade');
     expect(rows.single.rebuildRequiredAt, isNull,
         reason: 'nothing a previous build held in memory is recoverable');
 
