@@ -169,11 +169,16 @@ Future<void> handleArrivalEvent({
     );
   } catch (_) {
     // The user was not told, so this visit has not told them: put the record
-    // back as it was, and the next arrival event tries again.
+    // back as it was, with the visit marked as not yet announced, and the
+    // next arrival event tries again.
     if (before == null) {
       visits.remove(placeId);
     } else {
-      visits[placeId] = before;
+      visits[placeId] = (
+        inside: before.inside,
+        lastExitAtUtc: before.lastExitAtUtc,
+        notifiedThisVisit: false,
+      );
     }
     await files.writeVisits(visits);
     rethrow;

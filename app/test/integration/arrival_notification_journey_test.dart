@@ -190,6 +190,30 @@ void main() {
     expect(sink.shown, hasLength(1));
   });
 
+  test('a failed notification leaves the earlier visit not yet announced',
+      () async {
+    final storeId = await switchedOnStore();
+    await event(storeId, enter: true, atMinute: 0);
+    await event(storeId, enter: false, atMinute: 5);
+
+    // A new visit, whose notification cannot be posted.
+    await expectLater(
+      handleArrivalEvent(
+        geofenceId: '$arrivalGeofenceIdPrefix$storeId',
+        isEnter: true,
+        nowUtc: start.add(const Duration(minutes: 60)),
+        files: files,
+        sink: _FailingSink(),
+      ),
+      throwsStateError,
+    );
+
+    final visit = (await files.readVisits())[storeId]!;
+    expect(visit.inside, isFalse);
+    expect(visit.notifiedThisVisit, isFalse);
+    expect(visit.lastExitAtUtc, start.add(const Duration(minutes: 5)));
+  });
+
   test('the notification id fits the plugin\'s signed 32-bit range', () {
     for (var i = 0; i < 2000; i++) {
       final id = arrivalNotificationId('place-$i');

@@ -188,8 +188,10 @@ class ArrivalSnapshotWriter {
   final Future<LocationPermission> Function() permission;
 
   /// The snapshot most recently built, so the OS's list can be checked again
-  /// without waiting for something to change.
-  ArrivalSnapshot _latest = emptyArrivalSnapshot;
+  /// without waiting for something to change. Null until the first one is
+  /// built: an empty stand-in would make a resume remove every registered
+  /// Place from the OS.
+  ArrivalSnapshot? _latest;
 
   /// The snapshot as last written, so that an unchanged one is not written
   /// again.
@@ -221,9 +223,11 @@ class ArrivalSnapshotWriter {
   /// Checks the OS's list of Places against the latest snapshot again.
   void reconcileGeofencesAgain() {
     _enqueue(() async {
+      final latest = _latest;
+      if (latest == null) return;
       final arrivalFiles = await _resolveFiles();
       if (arrivalFiles == null) return;
-      await _reconcileGeofences(arrivalFiles, _latest);
+      await _reconcileGeofences(arrivalFiles, latest);
     });
   }
 
