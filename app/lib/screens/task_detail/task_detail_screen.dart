@@ -9,7 +9,7 @@ import 'package:go_router/go_router.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../../database/daos/action_dao.dart' show TerminatedAction;
+import '../../database/daos/action_dao.dart' show ActionDao, TerminatedAction;
 import '../../database/gtd_database.dart';
 import '../../models/timeboxed.dart';
 import '../../providers/focus_session_provider.dart';
@@ -903,25 +903,50 @@ class _ActionHistorySection extends ConsumerWidget {
     return Padding(
       key: Key('history_action_${action.id}'),
       padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Column(
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            action.actionText,
-            style: const TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
-              color: Color(0xFF374151),
-            ),
+          // The kind of ending is carried by an icon as well as by the words:
+          // colour alone would not say it, and the words alone put the burden
+          // of reading on the shape of the line below.
+          Padding(
+            padding: const EdgeInsets.only(top: 1),
+            child: Icon(_historyIcon(action), size: 16, color: _muted),
           ),
-          const SizedBox(height: 2),
-          Text(
-            _terminalLabel(entry),
-            style: const TextStyle(fontSize: 12, color: _muted),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  action.actionText,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: Color(0xFF374151),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  _terminalLabel(entry),
+                  style: const TextStyle(fontSize: 12, color: _muted),
+                ),
+              ],
+            ),
           ),
         ],
       ),
     );
+  }
+
+  /// The icon that says how the Action ended.
+  ///
+  /// The three endings are told apart by shape, not by colour alone.
+  static IconData _historyIcon(Action action) {
+    if (ActionDao.isStoppedAtLimit(action)) return Icons.timer_off_outlined;
+    return action.role == 'done'
+        ? Icons.check_circle_outline
+        : Icons.remove_circle_outline;
   }
 
   /// `Done 2026-03-04` / `Abandoned 2026-03-02`, with ` · 25m` appended when the
@@ -935,6 +960,9 @@ class _ActionHistorySection extends ConsumerWidget {
   /// same shape the "Captured from…" section uses.
   static String _terminalLabel(TerminatedAction entry) {
     final action = entry.action;
+    if (ActionDao.isStoppedAtLimit(action)) {
+      return _stoppedAtLimitLabel(entry);
+    }
     final verb = action.role == 'done' ? 'Done' : 'Abandoned';
     final at =
         (action.doneAt ?? action.updatedAt ?? action.createdAt).toLocal();
@@ -944,5 +972,26 @@ class _ActionHistorySection extends ConsumerWidget {
     final minutes =
         entry.loggedMinutes > 0 ? ' · ${formatMinutesLabel(entry.loggedMinutes)}' : '';
     return '$verb $y-$m-$d$minutes';
+  }
+
+  /// `Stopped at the limit 2026-11-27 · limit 1h · logged 1h 22m`.
+  ///
+  /// An Action stopped at its Timeboxed limit was neither completed nor
+  /// replaced: the approach ran out of time and the user said so. Its own
+  /// limit and the time it logged are both worth keeping, so both are named
+  /// — the limit is left out only when the Action carried no estimate.
+  static String _stoppedAtLimitLabel(TerminatedAction entry) {
+    final action = entry.action;
+    final at =
+        (action.stoppedAtLimitAt ?? action.updatedAt ?? action.createdAt)
+            .toLocal();
+    final y = at.year.toString().padLeft(4, '0');
+    final m = at.month.toString().padLeft(2, '0');
+    final d = at.day.toString().padLeft(2, '0');
+    final limit = action.timeEstimate;
+    final limitPart =
+        limit != null ? ' · limit ${formatMinutesLabel(limit)}' : '';
+    return 'Stopped at the limit $y-$m-$d$limitPart'
+        ' · logged ${formatMinutesLabel(entry.loggedMinutes)}';
   }
 }

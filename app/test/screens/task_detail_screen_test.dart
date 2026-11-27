@@ -1688,6 +1688,51 @@ void main() {
           reason: 'zero logged minutes are omitted, not rendered as 0m');
     });
 
+    testWidgets('a row for an Action stopped at its limit says so, with its '
+        'own icon', (tester) async {
+      final todo = await _insertAt(db, id: 'hist5', title: 'Stopped outcome');
+      final stopped = _historyAction(
+        id: 'h-stopped',
+        text: 'ran out of time',
+        role: 'superseded',
+        updatedAt: DateTime.utc(2026, 3, 2, 12),
+        stoppedAtLimitAt: DateTime.utc(2026, 3, 2, 12),
+        timeEstimate: 30,
+      );
+      final done = _historyAction(
+        id: 'h-done',
+        text: 'shipped it',
+        role: 'done',
+        doneAt: DateTime.utc(2026, 3, 4, 12),
+      );
+      final (widget, router) = _buildScreen(
+        db,
+        'hist5',
+        initialTodo: todo,
+        terminatedActions: <TerminatedAction>[
+          (action: done, loggedMinutes: 125),
+          (action: stopped, loggedMinutes: 25),
+        ],
+      );
+      await _showTaskDetail(tester, widget, router, 'hist5');
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('action_history_section')));
+      await tester.pumpAndSettle();
+
+      final stoppedLabel = _localDateLabel(DateTime.utc(2026, 3, 2, 12));
+      expect(
+        find.text('Stopped at the limit $stoppedLabel · limit 30m · logged 25m'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Abandoned '), findsNothing,
+          reason: 'a stopped approach was not abandoned');
+
+      // The kind of ending is carried by an icon as well as by the words.
+      expect(find.byIcon(Icons.timer_off_outlined), findsOneWidget);
+      expect(find.byIcon(Icons.check_circle_outline), findsOneWidget);
+      expect(find.byIcon(Icons.remove_circle_outline), findsNothing);
+    });
+
     testWidgets('the replace path lands the retired Action in history',
         (tester) async {
       final todo = await _insertAt(db, id: 'hist4', title: 'Replace outcome');
@@ -2111,6 +2156,8 @@ Action _historyAction({
   required String role,
   DateTime? doneAt,
   DateTime? updatedAt,
+  DateTime? stoppedAtLimitAt,
+  int? timeEstimate,
 }) =>
     Action(
       id: id,
@@ -2121,6 +2168,8 @@ Action _historyAction({
       createdAt: DateTime.utc(2026, 1, 1),
       updatedAt: updatedAt,
       doneAt: doneAt,
+      stoppedAtLimitAt: stoppedAtLimitAt,
+      timeEstimate: timeEstimate,
     );
 
 String _localDateLabel(DateTime utc) {
