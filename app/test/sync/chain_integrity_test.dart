@@ -29,7 +29,6 @@ import 'package:jeeves/sync/domain_projector.dart';
 import 'package:jeeves/sync/enrolment_state.dart';
 import 'package:jeeves/sync/envelope.dart';
 import 'package:jeeves/sync/hlc.dart';
-import 'package:jeeves/sync/host/merge_state.dart';
 import 'package:jeeves/sync/ids.dart';
 import 'package:jeeves/sync/prune_payload.dart';
 import 'package:jeeves/sync/reducer.dart';
