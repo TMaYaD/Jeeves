@@ -455,7 +455,7 @@ void main() {
 
       final base = workspace.server.storedOps
           .where((op) => op.workspaceId == workspace.workspaceId)
-          .map((op) -> op.seq)
+          .map((op) => op.seq)
           .fold(0, (highest, seq) => seq > highest ? seq : highest);
       root.drop();
       workspace.server.injectUnchecked(
@@ -501,7 +501,7 @@ void main() {
           .singleWhere((row) => row.authorMemberId == e.memberId);
       expect(fBreak.reason, _breakCode);
       expect(fBreak.releasedAt, isNull);
-      final fSlot = (await b.syncStore.select(b.syncStore.opLog)
+      final fSlot = await (b.syncStore.select(b.syncStore.opLog)
             ..where((r) =>
                 r.workspaceId.equals(b.client.workspaceId) &
                 r.seq.equals(fBreak.seq!)))
