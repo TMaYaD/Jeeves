@@ -273,6 +273,49 @@ void main() {
     expect(find.text('Logged so far: 50m, breaks included'), findsOneWidget);
   });
 
+  testWidgets('ten hours logged is the top of the ladder, and cannot be '
+      'raised past', (tester) async {
+    await makeTimeboxed();
+    await logTime(const Duration(hours: 10));
+    await tester.pumpWidget(harness(onStart: () {}));
+
+    await tester.tap(find.byKey(const Key('open_gate')));
+    await settle(tester);
+    await tester.tap(find.byKey(const Key('timeboxed_gate_raise')));
+    await settle(tester);
+
+    // Ten hours is the top of the ladder, so there is no step above it: the
+    // sheet opens on the top of the ladder and cannot be saved.
+    expect(
+      tester.widget<Text>(find.byKey(const Key('estimate_sheet_value'))).data,
+      '10h',
+    );
+    expect(find.text('Logged so far: 10h, breaks included'), findsOneWidget);
+    expect(
+      tester.widget<FilledButton>(find.byKey(const Key('estimate_sheet_save')))
+          .onPressed,
+      isNull,
+    );
+    // There is nowhere to step up to either.
+    expect(
+      tester.widget<IconButton>(find.byKey(const Key('estimate_sheet_more')))
+          .onPressed,
+      isNull,
+    );
+    expect(
+      find.text('Must be more than the 10h already logged.'),
+      findsOneWidget,
+    );
+
+    // Cancel is the only way out of the sheet.
+    await tester.tap(find.byKey(const Key('estimate_sheet_cancel')));
+    await settle(tester);
+
+    expect(find.byKey(const Key('estimate_sheet_value')), findsNothing);
+    expect(find.byKey(const Key('timeboxed_gate_stop')), findsOneWidget);
+    expect(await storedEstimate(), 30);
+  });
+
   testWidgets('cancelling the estimate sheet returns to the gate', (
     tester,
   ) async {
