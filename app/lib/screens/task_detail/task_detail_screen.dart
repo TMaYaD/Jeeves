@@ -673,7 +673,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     }
     // A Sprint that would start past a Timeboxed limit goes past the gate
     // first, before the engagement opens a TimeLog (issue #923).
-    await guardSprintPastLimit(
+    final verdict = await guardSprintPastLimit(
       context,
       ref,
       outcomeId: todo.id,
@@ -682,6 +682,19 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
         if (mounted) context.push('/focus/active');
       },
     );
+    // A verdict means the approach was stopped at its limit: the Sprint never
+    // started. The session carries on from here, and lands on the focus list
+    // the way Done does (issue #49).
+    if (verdict == null) return;
+    if (!mounted) return;
+    await showApproachStoppedLanding(
+      context,
+      ref,
+      outcomeId: todo.id,
+      verdict: verdict,
+    );
+    if (!mounted) return;
+    context.go('/focus');
   }
 
   Widget _buildInfoSection({required IconData icon, required Color iconBg, required Color iconColor, required String title, required Widget contentWidget, VoidCallback? onTap}) {
