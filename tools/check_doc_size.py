@@ -37,6 +37,13 @@ ARCHITECTURE_CEILING = 3_000  # the country map: regions and the roads between
 DESIGN_DOC_CEILING = 3_500  # city maps: one region, canals and watersheds
 VOCABULARY_CEILING = 10_000  # the core words the project is thought in
 
+# SYNC.md carries more ground than the other city maps: the op log, the merge
+# rules, the alarms and their resolutions, and the plugins that sit on the
+# host. It is the one design doc that holds the whole protocol surface, and it
+# needs the room for it.
+
+SYNC_DOC_CEILING = 3_600
+
 # Two documents are registers rather than maps, and a map's ceiling is the wrong
 # instrument for them. A register is an enumeration whose length tracks an
 # inventory out in the world, not the scale of the thing being drawn: it grows
@@ -52,7 +59,7 @@ CEILINGS: dict[str, int] = {
     "CONTEXT.md": VOCABULARY_CEILING,
     "docs/ARCHITECTURE.md": ARCHITECTURE_CEILING,
     "docs/CEREMONIES.md": DESIGN_DOC_CEILING,
-    "docs/SYNC.md": DESIGN_DOC_CEILING,
+    "docs/SYNC.md": SYNC_DOC_CEILING,
     "docs/BACKEND_GUIDELINES.md": DESIGN_DOC_CEILING,
     "docs/DESIGN.md": DESIGN_SYSTEM_CEILING,
     "docs/TESTING.md": TEST_REGISTER_CEILING,
