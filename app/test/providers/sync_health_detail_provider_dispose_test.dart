@@ -8,7 +8,7 @@
 /// * The disposal hook has to be registered *before* the first await. Registered
 ///   after, it runs against a dead `ref` and throws, so the Drift watches the
 ///   body just opened are never cancelled and the controller is never closed:
-///   two live subscriptions per Workspace, leaked on every open-and-close of a
+///   three live subscriptions per Workspace, leaked on every open-and-close of a
 ///   screen the user did not wait for.
 /// * The body has to stop at each await rather than carry on. `ref` is unusable
 ///   once the element is gone, so a resumed body that reaches the next
