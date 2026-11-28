@@ -4,6 +4,8 @@ import 'package:jeeves/database/daos/sprint_dao.dart'
 import 'package:jeeves/database/gtd_database.dart' show Todo;
 import 'package:jeeves/models/autoflow.dart';
 import 'package:jeeves/models/day_timeline.dart';
+import 'package:jeeves/models/time_context.dart';
+import 'package:jeeves/models/time_window_hours.dart';
 
 Todo _todo(String id, {int? estimate, String? doneAt}) => Todo(
       id: id,
@@ -25,6 +27,32 @@ DayTimelineEntry _entry(String id, int minutes,
       estimateMinutes: minutes,
       pinnedStartAt: pinned,
       isEngaged: engaged,
+    );
+
+final _storeHours = TimeWindowHours.create({
+  for (var d = 1; d <= 7; d++) d: (startMinute: 11 * 60, endMinute: 20 * 60),
+})!;
+
+DayTimelineEntry _windowed(String id, int minutes, TimeWindowHours hours,
+        {TimeContext? timeContext}) =>
+    DayTimelineEntry(
+      outcomeId: id,
+      title: id,
+      estimateMinutes: minutes,
+      timeWindowHours: hours,
+      timeContext: timeContext,
+    );
+
+DayLayout _flowWith(List<DayTimelineEntry> entries,
+        {int availableMinutes = 660}) =>
+    flowDay(
+      scope: 'day',
+      last: LastDayLayout(),
+      now: _at(9),
+      flowOrigin: _at(9),
+      availableMinutes: availableMinutes,
+      chunkUnitMinutes: 23,
+      entries: entries,
     );
 
 DayLayout _flow(LastDayLayout last, List<DayTimelineEntry> entries,

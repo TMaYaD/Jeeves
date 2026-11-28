@@ -2,6 +2,7 @@ import 'package:flutter/material.dart' show TimeOfDay;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/models/planned_day.dart';
 import 'package:jeeves/models/time_context.dart';
+import 'package:jeeves/models/time_window_hours.dart';
 
 /// November 2026: the 23rd is a Monday, the 25th a Wednesday.
 DateTime _at(int day, int hour, [int minute = 0]) =>
@@ -69,6 +70,62 @@ void main() {
     test('a time that starts today is open now', () {
       final today = TimeContext.create(fromDate: DateTime(2026, 11, 23))!;
       expect(firstOpen(today, _at(23, 9)), _at(23, 9));
+    });
+  });
+  group('firstOpenStretchInPlannedDay', () {
+    TimeWindowHours hours(Map<int, DayHours> byDay) =>
+        TimeWindowHours.create(byDay)!;
+    final everyDayEleven = hours({
+      for (var d = 1; d <= 7; d++) d: (startMinute: 11 * 60, endMinute: 20 * 60),
+    });
+
+    ({DateTime start, DateTime end})? stretch(
+            TimeWindowHours window, DateTime from, DateTime until) =>
+        firstOpenStretchInPlannedDay(
+          isOpenAt: window.isOpenAt,
+          nextTransitionAfter: window.nextTransitionAfter,
+          from: from,
+          until: until,
+        );
+
+    test('a window that opens later today gives its opening and closing', () {
+      final result = stretch(everyDayEleven, _at(23, 9), _at(24, 0))!;
+      expect(result.start, _at(23, 11));
+      expect(result.end, _at(23, 20));
+    });
+
+    test('a window open now starts now', () {
+      final result = stretch(everyDayEleven, _at(23, 12), _at(24, 0))!;
+      expect(result.start, _at(23, 12));
+      expect(result.end, _at(23, 20));
+    });
+
+    test('a window that does not open in the day gives null', () {
+      final wednesdayOnly =
+          hours({3: (startMinute: 11 * 60, endMinute: 20 * 60)});
+      expect(stretch(wednesdayOnly, _at(23, 9), _at(24, 0)), isNull);
+    });
+
+    test('a window past midnight runs into the next day', () {
+      final lateMonday =
+          hours({1: (startMinute: 22 * 60, endMinute: 2 * 60)});
+      final result = stretch(lateMonday, _at(23, 9), _at(24, 3))!;
+      expect(result.start, _at(23, 22));
+      expect(result.end, _at(24, 2));
+    });
+
+    test('the tail of last night\'s window is open now', () {
+      final lateMonday =
+          hours({1: (startMinute: 22 * 60, endMinute: 2 * 60)});
+      final result = stretch(lateMonday, _at(24, 1), _at(24, 3))!;
+      expect(result.start, _at(24, 1));
+      expect(result.end, _at(24, 2));
+    });
+
+    test('a window still open at the search end is cut at it', () {
+      final result = stretch(everyDayEleven, _at(23, 9), _at(23, 15))!;
+      expect(result.start, _at(23, 11));
+      expect(result.end, _at(23, 15));
     });
   });
 }

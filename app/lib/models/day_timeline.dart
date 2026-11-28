@@ -10,7 +10,9 @@ library;
 import '../database/daos/sprint_dao.dart' show SprintOutcomeRecord;
 import '../database/gtd_database.dart' show Todo;
 import 'autoflow.dart';
+import 'planned_day.dart';
 import 'time_context.dart';
+import 'time_window_hours.dart';
 
 /// One Plan entry as the timeline draws it.
 class DayTimelineEntry {
@@ -20,6 +22,7 @@ class DayTimelineEntry {
     required this.estimateMinutes,
     this.isDefaultEstimate = false,
     this.timeContext,
+    this.timeWindowHours,
     this.pinnedStartAt,
     this.isDone = false,
     this.isRunning = false,
@@ -37,6 +40,10 @@ class DayTimelineEntry {
   final int estimateMinutes;
   final bool isDefaultEstimate;
   final TimeContext? timeContext;
+
+  /// The hours of the named time window the Outcome's Action is attached to.
+  /// It governs over [timeContext], as everywhere else.
+  final TimeWindowHours? timeWindowHours;
 
   /// The time the user set ("Set by you"); null when Jeeves places it.
   final DateTime? pinnedStartAt;
@@ -69,6 +76,7 @@ class DayTimelineEntry {
         outcomeId,
         estimateMinutes,
         timeContext?.encode() ?? '',
+        timeWindowHours?.encode() ?? '',
         pinnedStartAt?.toUtc().toIso8601String() ?? '',
         isEngaged || isDone || isRunning,
         contextTags.map((tag) => tag.id).join(','),
@@ -95,6 +103,7 @@ List<DayTimelineEntry> dayTimelineEntriesFor({
   required int defaultEstimateMinutes,
   required DateTime now,
   Map<String, TimeContext> timeContexts = const {},
+  Map<String, TimeWindowHours> timeWindows = const {},
   Map<String, DateTime> pinnedStarts = const {},
   Set<String> engagedTaskIds = const {},
   String? runningTaskId,
@@ -117,6 +126,7 @@ List<DayTimelineEntry> dayTimelineEntriesFor({
               estimate != null && estimate > 0 ? estimate : defaultEstimateMinutes,
           isDefaultEstimate: estimate == null || estimate <= 0,
           timeContext: timeContexts[task.id],
+          timeWindowHours: timeWindows[task.id],
           pinnedStartAt:
               pinned != null && !pinned.isBefore(startOfToday) ? pinned : null,
           isDone: isDone,
@@ -269,16 +279,36 @@ DayLayout flowDay({
     }
   }
 
+  // The window search runs to the later of the day's end and the next
+  // midnight, so a window that opens after the available time ends reads as
+  // "no free time", not as "allows no time today". Autoflow clamps each
+  // interval to the day itself.
+  final nextMidnight =
+      DateTime(flowOrigin.year, flowOrigin.month, flowOrigin.day + 1);
+  final windowSearchEnd = dayEnd.isAfter(nextMidnight) ? dayEnd : nextMidnight;
+
   final inputs = [
     for (final entry in entries)
       () {
-        final interval = entry.timeContext?.allowedIntervalOn(flowOrigin);
+        final hours = entry.timeWindowHours;
+        final ({DateTime start, DateTime end})? stretch = hours == null
+            ? null
+            : firstOpenStretchInPlannedDay(
+                isOpenAt: hours.isOpenAt,
+                nextTransitionAfter: hours.nextTransitionAfter,
+                from: flowOrigin,
+                until: windowSearchEnd,
+              );
+        final interval = hours != null
+            ? stretch
+            : entry.timeContext?.allowedIntervalOn(flowOrigin);
         return PlanEntryInput(
           outcomeId: entry.outcomeId,
           estimateMinutes: entry.estimateMinutes,
           isDefaultEstimate: entry.isDefaultEstimate,
           allowedInterval: interval,
-          allowedToday: entry.timeContext == null || interval != null,
+          allowedToday:
+              (hours == null && entry.timeContext == null) || interval != null,
           pinnedStartAt: entry.pinnedStartAt,
         );
       }(),

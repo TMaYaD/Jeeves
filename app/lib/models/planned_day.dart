@@ -53,3 +53,37 @@ DateTime? firstOpenInPlannedDay({
   }
   return null;
 }
+
+/// The first stretch in [from]..[until] during which the Outcome's time is
+/// open, or null when it does not open in that span.
+///
+/// The start is [firstOpenInPlannedDay]'s answer, so a placement inside the
+/// stretch always agrees with the moment Up Next marks as "from 11:00". The
+/// end is the first transition after the start at which the time is no longer
+/// open, or [until] when it is still open there. The walk is bounded like
+/// [firstOpenInPlannedDay]'s, and when it runs out while still open the end is
+/// the last transition reached.
+({DateTime start, DateTime end})? firstOpenStretchInPlannedDay({
+  required bool Function(DateTime) isOpenAt,
+  required DateTime? Function(DateTime) nextTransitionAfter,
+  required DateTime from,
+  required DateTime until,
+}) {
+  final start = firstOpenInPlannedDay(
+    isOpenAt: isOpenAt,
+    nextTransitionAfter: nextTransitionAfter,
+    now: from,
+    dayEnd: until,
+  );
+  if (start == null) return null;
+  var cursor = start;
+  for (var step = 0; step < 4; step++) {
+    final candidate = nextTransitionAfter(cursor);
+    if (candidate == null) return (start: start, end: until);
+    if (!candidate.isAfter(cursor)) return (start: start, end: until);
+    if (!candidate.isBefore(until)) return (start: start, end: until);
+    if (!isOpenAt(candidate)) return (start: start, end: candidate);
+    cursor = candidate;
+  }
+  return (start: start, end: cursor);
+}
