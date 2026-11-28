@@ -253,8 +253,6 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    final actionId =
-        (await _real(tester, () => db.actionDao.getCurrentAction('o1')))!.id;
     await tester.pumpWidget(
       UncontrolledProviderScope(
         container: container,
@@ -262,12 +260,7 @@ void main() {
           home: Scaffold(
             body: Builder(
               builder: (context) => TextButton(
-                onPressed: () => showTimeContextSheet(
-                  context,
-                  container.read(taskDetailNotifierProvider('o1')),
-                  actionId,
-                  null,
-                ),
+                onPressed: () => showTimeContextSheet(context),
                 child: const Text('open'),
               ),
             ),

@@ -10,6 +10,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/gtd_database.dart' show TimeWindow;
 import '../models/action_place_and_time_window.dart';
+import '../models/time_choice.dart';
 import '../models/time_context.dart';
 import '../models/time_window_hours.dart';
 import '../providers/place_hours_provider.dart';
@@ -51,14 +52,28 @@ class TimeContextChip extends ConsumerWidget {
     return InkWell(
       key: const Key('time_context_chip'),
       borderRadius: BorderRadius.circular(4),
-      onTap: () => showTimeContextSheet(
-        context,
-        ref.read(taskDetailNotifierProvider(outcomeId)),
-        action.id,
-        parsed,
-        window: window,
-        hasStoredValue: isSet,
-      ),
+      onTap: () async {
+        // The sheet writes nothing; the choice is applied to the Action the
+        // chip was showing when it was tapped.
+        final notifier = ref.read(taskDetailNotifierProvider(outcomeId));
+        final actionId = action.id;
+        final choice = await showTimeContextSheet(
+          context,
+          current: parsed,
+          selectedWindowId: window?.id,
+          canClear: isSet,
+        );
+        switch (choice) {
+          case null:
+            break;
+          case TimeWindowDraft(:final windowId):
+            await notifier.setTimeWindow(windowId, actionId: actionId);
+          case OneTimeDraft(:final value):
+            await notifier.setTimeContext(value, actionId: actionId);
+          case ClearTimeChoice():
+            await notifier.clearTime(actionId: actionId);
+        }
+      },
       child: MetaChip(
         icon: Icons.event_repeat_outlined,
         label: label,
@@ -68,50 +83,41 @@ class TimeContextChip extends ConsumerWidget {
   }
 }
 
-Future<void> showTimeContextSheet(
-  BuildContext context,
-  TaskDetailNotifier notifier,
-  String actionId,
-  TimeContext? current, {
-  ActionTimeWindow? window,
-  bool hasStoredValue = false,
+/// Opens the time sheet and returns what the user chose; null when it was
+/// dismissed. Writes nothing. [canClear] shows "Clear time context".
+Future<TimeChoice?> showTimeContextSheet(
+  BuildContext context, {
+  TimeContext? current,
+  String? selectedWindowId,
+  bool canClear = false,
 }) {
-  return showModalBottomSheet<void>(
+  return showModalBottomSheet<TimeChoice>(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.white,
     builder: (ctx) => _TimeContextSheet(
-      notifier: notifier,
-      actionId: actionId,
       current: current,
-      window: window,
-      hasStoredValue: hasStoredValue || current != null || window != null,
+      selectedWindowId: selectedWindowId,
+      canClear: canClear || current != null || selectedWindowId != null,
     ),
   );
 }
 
 /// Which kind of time the sheet is offering.
-enum _TimeChoice { window, oneTime }
+enum _TimeKind { window, oneTime }
 
 class _TimeContextSheet extends ConsumerStatefulWidget {
   const _TimeContextSheet({
-    required this.notifier,
-    required this.actionId,
     required this.current,
-    required this.window,
-    required this.hasStoredValue,
+    required this.selectedWindowId,
+    required this.canClear,
   });
 
-  final TaskDetailNotifier notifier;
-
-  /// The Action the sheet was opened for; saves and clears target them, not
-  /// whatever is current when the user confirms.
-  final String actionId;
   final TimeContext? current;
 
-  /// The named window the Action carries, if any.
-  final ActionTimeWindow? window;
-  final bool hasStoredValue;
+  /// The named window already chosen, if any.
+  final String? selectedWindowId;
+  final bool canClear;
 
   @override
   ConsumerState<_TimeContextSheet> createState() => _TimeContextSheetState();
@@ -120,7 +126,7 @@ class _TimeContextSheet extends ConsumerStatefulWidget {
 class _TimeContextSheetState extends ConsumerState<_TimeContextSheet> {
   static const _dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-  late _TimeChoice _choice;
+  late _TimeKind _choice;
   DateTime? _fromDate;
   final Set<int> _days = {};
   int? _startMinute;
@@ -139,7 +145,7 @@ class _TimeContextSheetState extends ConsumerState<_TimeContextSheet> {
     // A named window leads: the user chose it last, and the one-time controls
     // are still there behind the other choice.
     _choice =
-        widget.window != null ? _TimeChoice.window : _TimeChoice.oneTime;
+        widget.selectedWindowId != null ? _TimeKind.window : _TimeKind.oneTime;
   }
 
   TimeContext? get _value => TimeContext.create(
@@ -201,39 +207,26 @@ class _TimeContextSheetState extends ConsumerState<_TimeContextSheet> {
     });
   }
 
-  Future<void> _save() async {
+  void _save() {
     final value = _value;
     if (value == null) return;
-    Navigator.pop(context);
-    await widget.notifier.setTimeContext(value, actionId: widget.actionId);
+    Navigator.pop<TimeChoice>(context, OneTimeDraft(value));
   }
 
-  /// Clears every kind of time the Action carries: the named window and the
-  /// one-time Time context.
-  ///
-  /// Both go in one write, and the write does not care which of them the
-  /// Action carried when the sheet opened: the time on the Action now is the
-  /// time the user is clearing, whatever a peer did to it while the sheet was
-  /// open.
-  Future<void> _clear() async {
-    Navigator.pop(context);
-    await widget.notifier.clearTime(actionId: widget.actionId);
-  }
+  /// Clears every kind of time: the named window and the one-time Time
+  /// context. Whoever applies the choice clears both in one write.
+  void _clear() => Navigator.pop<TimeChoice>(context, const ClearTimeChoice());
 
-  /// Attaches the named window and closes the sheet. A window and a one-time
-  /// Time context are exclusive: the write clears the other.
-  Future<void> _chooseWindow(String windowId) async {
-    Navigator.pop(context);
-    await widget.notifier.setTimeWindow(windowId, actionId: widget.actionId);
-  }
+  /// Chooses the named window and closes the sheet. A window and a one-time
+  /// Time context are exclusive: applying it clears the other.
+  void _chooseWindow(String windowId) =>
+      Navigator.pop<TimeChoice>(context, TimeWindowDraft(windowId));
 
-  /// Makes a new window in the editor, then attaches it.
+  /// Makes a new window in the editor, then chooses it.
   Future<void> _newWindow() async {
     final id = await showTimeWindowEditorSheet(context);
     if (id == null || !mounted) return;
-    await widget.notifier.setTimeWindow(id, actionId: widget.actionId);
-    if (!mounted) return;
-    Navigator.pop(context);
+    Navigator.pop<TimeChoice>(context, TimeWindowDraft(id));
   }
 
   @override
@@ -263,16 +256,16 @@ class _TimeContextSheetState extends ConsumerState<_TimeContextSheet> {
                 style: TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
               ),
               const SizedBox(height: 16),
-              SegmentedButton<_TimeChoice>(
+              SegmentedButton<_TimeKind>(
                 key: const Key('time_context_choice'),
                 segments: const [
                   ButtonSegment(
-                    value: _TimeChoice.window,
+                    value: _TimeKind.window,
                     label: Text('Time window',
                         key: Key('time_context_choice_window')),
                   ),
                   ButtonSegment(
-                    value: _TimeChoice.oneTime,
+                    value: _TimeKind.oneTime,
                     label: Text('One-time',
                         key: Key('time_context_choice_one_time')),
                   ),
@@ -282,7 +275,7 @@ class _TimeContextSheetState extends ConsumerState<_TimeContextSheet> {
                     setState(() => _choice = selection.first),
               ),
               const SizedBox(height: 12),
-              if (_choice == _TimeChoice.window) ...[
+              if (_choice == _TimeKind.window) ...[
                 if (windows.isEmpty)
                   const Padding(
                     padding: EdgeInsets.symmetric(vertical: 8),
@@ -302,7 +295,7 @@ class _TimeContextSheetState extends ConsumerState<_TimeContextSheet> {
                       style: const TextStyle(
                           fontSize: 12, color: Color(0xFF9CA3AF)),
                     ),
-                    trailing: widget.window?.id == window.id
+                    trailing: widget.selectedWindowId == window.id
                         ? const Icon(Icons.check, size: 18)
                         : null,
                     onTap: () => _chooseWindow(window.id),
@@ -396,14 +389,14 @@ class _TimeContextSheetState extends ConsumerState<_TimeContextSheet> {
               const SizedBox(height: 12),
               Row(
                 children: [
-                  if (widget.hasStoredValue)
+                  if (widget.canClear)
                     TextButton(
                       key: const Key('time_context_clear'),
                       onPressed: _clear,
                       child: const Text('Clear time context'),
                     ),
                   const Spacer(),
-                  if (_choice == _TimeChoice.oneTime)
+                  if (_choice == _TimeKind.oneTime)
                     FilledButton(
                       key: const Key('time_context_save'),
                       onPressed: _value == null ? null : _save,
