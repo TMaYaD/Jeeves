@@ -20,7 +20,7 @@ Deletion in `user_preferences` is modelled as a **tombstone** — a present row 
 
 > A genuinely **absent** value can only mean "no device has ever written this key." A real cross-device **delete** arrives as a present tombstone, not an absence.
 
-So a key that reads as absent is a key nobody has set, and "absent → keep whatever is local" can never swallow a legitimate delete. A delete is a value, not a gap.
+So "absent → keep whatever is local" can never swallow a legitimate delete.
 
 The same shape holds at the entity level: the reducer tombstones an entity rather than forgetting it, so a rebuild of the domain read model from the log deletes a row it has to rather than silently resurrecting it (`sync/domain_rebuild.dart`).
 
@@ -42,7 +42,7 @@ ResolvedPreference resolveWithStrategy(...);          // strategy-explicit varia
 ### Strategies
 
 - **`lww` (default, non-destructive).** The later write wins, ordered by **HLC** — not by `updated_at`, which is an ordinary replicated field a device could write out of order. Correct for scalars where the latest intent on any device should win. Ties break on member id, deterministically, so two devices never disagree about a tie.
-- **`maxTimestampValue`.** For snooze "until" floors. Among two live writes the later *value* (parsed as a timestamp) wins, so a stale write can never regress an active snooze and re-fire a notification the user silenced. A **tombstone (clear/un-snooze) is arbitrated against a live value by LWW** — a clear silences the snooze, but a later re-snooze survives a stale clear, and a stale clear does not undo a fresher re-snooze. Any key ending in `snoozed_until` is classified here automatically.
+- **`maxTimestampValue`.** For snooze "until" floors. Among two live writes the later *value* (parsed as a timestamp) wins, so a stale write can never regress an active snooze and re-fire a notification the user silenced. A **tombstone (clear/un-snooze) is arbitrated against a live value by LWW** — a clear silences the snooze, but a later re-snooze survives a stale clear. Any key ending in `snoozed_until` is classified here automatically.
 - **`minTimestampValue`.** For the Sprint end (`sprints.ended_at`), the mirror of `maxTimestampValue`: any end beats a still-open Sprint, and of two ends the **earlier** wins, whichever device wrote last. An end can only move earlier and is never cleared. Chosen from the change's collection and field, never from stored state.
 - **`setMerge`.** Union of the two JSON-list values so concurrent additions on two devices both survive. **No production key uses this today**; it is provisioned so a new list/set-shaped key (filter selections, pinned items) cannot ship under naive LWW that would drop concurrent additions. New set keys **must** be registered as `setMerge` before use; an ordered, capped list (recent searches) is the explicit `lww` case, because a union would sort it, grow it past the cap and resurrect removed entries.
 
@@ -91,7 +91,6 @@ Every current key, grouped by family:
 | `planning_notification_snoozed_until`, `shutdown_notification_snoozed_until`, `periodic_review_notification_snoozed_until` | datetime | `maxTimestampValue` | Snooze floor must never regress; un-snooze is a tombstone |
 | *(none today)* | list/set | `setMerge` | Provisioned for future filter/pin selections |
 
-**Snooze arbitration departs from the blanket LWW default**; the `maxTimestampValue` bullet above states the rule.
 
 ### Sprints
 
@@ -134,7 +133,7 @@ clocks and merges its own writes, under a random device node id; once enrolled, 
 member id takes over as the tie-break so the wire is unchanged. Clocks stamped under
 the device node id are never ops, so the enrolment upload does not skip them, a
 rebuild from the log carries them across, and an account's later sign-in authors
-those made since its upload completed — creates, edits and deletes, not preferences. A change stamped under a member id that is then never authored — a write made before session restore answered "signed out" — has its clock handed back to the device node id, so the same three paths cover it. A change merged under a member id is kept in the sync store until the op-log bridge has authored it or handed it back, so a process killed in between authors it on the next launch. See [sync-plugins](proposals/sync-plugins.md).
+those made since its upload completed — creates, edits, deletes and carried settings. A change stamped under a member id that is then never authored — a write made before session restore answered "signed out" — has its clock handed back to the device node id, so the same three paths cover it. A change merged under a member id is kept in the sync store until the op-log bridge has authored it or handed it back, so a process killed in between authors it on the next launch. See [sync-plugins](proposals/sync-plugins.md).
 
 Rows that predate the host are seeded into merge state once per device, before any
 plugin can attach, so `snapshot()` holds the whole local dataset. Seeding inserts
@@ -245,7 +244,7 @@ through.
 | `own_writes_divergence` | reported | **Keep ours** (no upload) | Ours is already on the log. Records that the other copy is refused for good. |
 | `author_chain_fork` | reported | **Reject permanently** | Stamps every continuation proven against the head, including every claimant at the position the accusation names. If no undecided held change of that device remains, the `author_chain_gap` alarm they were holding open resolves too. |
 | `signature_invalid`, `aead_failure`, `plaintext_at_encrypted_epoch`, `no_live_grant`, `prev_author_hash_mismatch`, `author_chain_rewrite`, `duplicate_op_id_divergence` | reported | **Reject permanently** | Stamps the refused bytes as final. No state changes; the bytes stay. |
-| Refused change with no alarm kind (codec and certificate reasons) | reported | **Reject permanently**, per row | Same, on that one row. |
+| Refused change with no alarm kind (codec, certificate and chain-break reasons) | reported | **Reject permanently**, per row | Same, on that one row — unless the log has since applied the change, which then has nothing left to decide: the offer goes, and a decision that arrives anyway is refused rather than ignored. |
 | `own_write_refused_permanently` | actionable | none — #647 | Needs the outbox to drain past an op that can never be posted. |
 | `epoch_key_set_unpublishable` | actionable | none — #661 | Needs an in-app way to rotate keys again. |
 | `author_stream_reordered`, `stale_prefix_served`, `control_chain_fork`, `author_chain_slot_collision` | reported | none — #656, #657, #658, #659 | The app already settled these; they should resolve themselves. |
@@ -256,12 +255,12 @@ Decisions are recorded; bytes are kept.
 
 ## What is asserted, and where
 
-- **Merge semantics**: `app/test/sync/merge_strategy_test.dart`, `app/test/services/user_preferences_conflict_test.dart`, and the golden vectors in `spec/sync/reducer_v1_vectors.json` (shared with the server's Python reducer, so a divergence is caught cross-language).
-- **Sprints**: `app/test/sync/host/sprint_record_convergence_test.dart` (two devices through the relay plugin), the lattice cases in `merge_strategy_test.dart`, and `app/test/database/sprint_dao_test.dart` (derived end, TimeLog close sites).
-- **Device names**: `app/test/sync/device_names_test.dart` (the key, the normaliser, ensure and rename) and `app/test/sync/host/device_name_convergence_test.dart` (two devices through the relay plugin).
-- **Convergence end to end**: `app/test/sync/convergence_test.dart` and `full_day_convergence_test.dart` run two simulated devices through enrol → write → sign → append → pull → verify → reduce and assert byte-identical reduced state.
-- **Projection**: `app/test/sync/projector_view_notify_test.dart` (a reduced-in row reaches the watching queries) and `domain_rebuild_test.dart` (a fresh domain store rebuilt from the log, tombstones included).
-- **One refusal, one row**: `app/test/sync/quarantine_once_test.dart` — two pulls that fetch the same refused op file it once, and two different ops refused at one seq stay two rows.
-- **Unknown-key refusals heal**: `app/test/sync/unchained_refusal_release_test.dart` — a change refused as `member_not_chained_to_root` is re-received once this device knows the author's key, and a key Root never vouched for stays refused.
-- **A removal reaches the peer**: `app/test/sync/dao_capture_contract_test.dart` (each of the task detail's four removal paths describes the drop it makes, in the deletion's own transaction) and `app/test/sync/tag_convergence_test.dart` (a context, a person, the delegate set and the Project removed on one device are each gone on the other after the sync).
-- **The vault**: `app/test/sync/vault/` — two devices sharing a folder (`vault_plugin_journey_test.dart`), the plugin's own behaviour (`vault_plugin_behaviour_test.dart`), the page codec (`page_codec_test.dart`) and the store's upgrade path (`vault_migration_test.dart`); the journey through the app's own route is `app/test/integration/vault_sync_journey_test.dart`. The derived ids a hand edit relies on are pinned in `app/test/sync/ids_vectors_test.dart`.
+- **Merge semantics**: `app/test/sync/merge_strategy_test.dart`, `app/test/services/user_preferences_conflict_test.dart` and the golden vectors in `spec/sync/reducer_v1_vectors.json` (the server's Python reducer shares them).
+- **Sprints**: `app/test/sync/host/sprint_record_convergence_test.dart` (two devices through the relay plugin), lattice cases in `merge_strategy_test.dart` and `app/test/database/sprint_dao_test.dart` (derived end, TimeLog close sites).
+- **Device names**: `app/test/sync/device_names_test.dart` (key, normaliser, ensure, rename) and `app/test/sync/host/device_name_convergence_test.dart`.
+- **Convergence end to end**: `app/test/sync/convergence_test.dart` and `full_day_convergence_test.dart` run two simulated devices through the whole pipeline, asserting byte-identical state.
+- **Projection**: `app/test/sync/projector_view_notify_test.dart` (a reduced-in row reaches the watching queries) and `domain_rebuild_test.dart` (a domain store rebuilt from the log, tombstones included).
+- **One refusal, one row**: `app/test/sync/quarantine_once_test.dart` — a refused op fetched twice files one row; two ops at one seq stay two rows.
+- **Refused ops heal**: `app/test/sync/unchained_refusal_release_test.dart` — one refused as `member_not_chained_to_root` is re-received once the author's key is known; a row whose op stays unapplied keeps its refusal; a key Root never vouched for stays refused; `app/test/sync/control_chain_break_release_test.dart` — a control op refused as `control_chain_break` applies once its predecessor does; one naming no real predecessor or served below its predecessor stays refused; one refused for another reason releases its break row, the new refusal unreleased; one whose new refusal a fault lost has it filed, the break row retired, the op unapplied; a lost accusation raised, an answered one left alone; an answered break has its replacement filed, its accusation raised; an applied change offers no decision (`app/test/sync/sync_health_detail_test.dart`, `app/test/providers/sync_health_detail_provider_test.dart`); a device that lost its epoch key fetches it again.
+- **A removal reaches the peer**: `app/test/sync/dao_capture_contract_test.dart` (the task detail's four removal paths each describe their drop, in the deletion's own transaction) and `app/test/sync/tag_convergence_test.dart` (a context, a person, the delegate set and the Project removed on one device are each gone on the other).
+- **The vault**: `app/test/sync/vault/` — two devices sharing a folder (`vault_plugin_journey_test.dart`), the plugin's behaviour (`vault_plugin_behaviour_test.dart`), the page codec (`page_codec_test.dart`) and the store's upgrade path (`vault_migration_test.dart`); app-route journeys: `app/test/integration/vault_sync_journey_test.dart` and `app/test/integration/vault_sync_slow_folder_journey_test.dart`. Derived ids are pinned in `app/test/sync/ids_vectors_test.dart`.

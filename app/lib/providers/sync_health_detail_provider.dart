@@ -84,13 +84,17 @@ final syncHealthDetailProvider =
   final controller = StreamController<List<SyncHealthCondition>>();
   final alarms = <String, List<IntegrityAlarmRow>>{};
   final refusals = <String, List<QuarantineRow>>{};
+  /// The Workspace's applied-ID set, once its watch has answered. Absent until
+  /// then: the refused rows wait for it, because the set decides whether a row
+  /// offers a decision at all.
+  final appliedRefusals = <String, Set<int>>{};
   final subscriptions = <StreamSubscription<void>>[];
 
   // Registered **before the first `await`**. Riverpod does not cancel a
   // suspended async generator on dispose: the body resumes regardless, so a hook
   // registered after the awaits runs against a dead `ref` and throws
   // `UnmountedRefException` instead — leaving the subscriptions the body just
-  // opened uncancelled and the controller unclosed. Two live Drift watches per
+  // opened uncancelled and the controller unclosed. Three live Drift watches per
   // Workspace, leaked on every open-and-close of a screen the user did not wait
   // for.
   ref.onDispose(() {
@@ -116,6 +120,16 @@ final syncHealthDetailProvider =
           workspaceId: workspaceId,
           alarms: alarms[workspaceId] ?? const [],
           refusals: refusals[workspaceId] ?? const [],
+          // Null until the Workspace's applied-ID watch has answered: the
+          // refused rows are held until then, because the set decides whether a
+          // row offers a decision, and a row whose change the log has applied
+          // offers none. A Workspace with no refused rows has nothing to hold,
+          // so it does not wait.
+          appliedRefusalRowIds: appliedRefusals.containsKey(workspaceId)
+              ? appliedRefusals[workspaceId]
+              : (refusals[workspaceId] ?? const <QuarantineRow>[]).isEmpty
+                  ? const <int>{}
+                  : null,
         ),
     ]);
   }
@@ -139,6 +153,17 @@ final syncHealthDetailProvider =
     subscriptions.add(client.watchQuarantined().listen(
       (rows) {
         refusals[workspaceId] = rows;
+        emit();
+      },
+      onError: fail,
+    ));
+    // The refused rows whose change the log has since applied. A row in that
+    // set is still listed — it is the evidence that the change arrived out of
+    // order — but it offers no decision: the change is in, and no later
+    // rebuild would check a decision about it.
+    subscriptions.add(client.watchAppliedRefusalRowIds().listen(
+      (ids) {
+        appliedRefusals[workspaceId] = ids;
         emit();
       },
       onError: fail,

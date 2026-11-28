@@ -6,6 +6,8 @@
 /// its Sprints, so the assertions read the rows the app reads.
 library;
 
+import 'dart:async';
+
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart'
@@ -15,8 +17,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/focus_settings.dart';
+import 'package:jeeves/models/timeboxed.dart';
 import 'package:jeeves/providers/focus_settings_provider.dart';
 import 'package:jeeves/providers/sprint_timer_provider.dart';
+import 'package:jeeves/providers/timeboxed_limit_provider.dart';
+import 'package:jeeves/widgets/timeboxed_limit_strip.dart';
 
 import '../helpers/active_focus_harness.dart';
 import '../test_helpers.dart';
@@ -156,5 +161,70 @@ void main() {
 
     // The Sprint ran: it is recorded.
     expect(await sprintCount(), 1);
+  });
+
+  testWidgets('a raise past the limit starts the Sprint, and the limit strip '
+      'goes', (tester) async {
+    final todo = await seedPastLimit();
+    // The limit status the screen shows, read from the rows: the strip shows
+    // while the limit has been passed, and goes once the raise has moved it.
+    final limits = StreamController<TimeboxedLimitStatus?>();
+    addTearDown(limits.close);
+
+    await tester.pumpWidget(
+      focusHarness(
+        db,
+        todo: todo,
+        sprintTimer: () => FixedSprintTimerNotifier(
+          const SprintTimerState(
+            phase: SprintPhase.break_,
+            activeTaskId: 'o1',
+            sprintNumber: 1,
+            totalSprints: 1,
+          ),
+        ),
+        timeboxedLimitStream: limits.stream,
+        overrides: [
+          focusSettingsProvider.overrideWith(() => _FixedFocusSettings()),
+        ],
+      ),
+    );
+    limits.add(
+      await tester.runAsync<TimeboxedLimitStatus?>(
+        () => readTimeboxedLimitStatus(db, 'o1'),
+      ),
+    );
+    await pumpFocusFrames(tester);
+
+    // The limit has been passed, so the screen says so.
+    expect(find.byType(TimeboxedLimitStrip), findsOneWidget);
+
+    await tester.tap(skipControl());
+    await pumpFocusFrames(tester);
+    await tester.tap(find.byKey(const Key('timeboxed_gate_raise')));
+    await pumpFocusFrames(tester);
+    // The sheet opened on the step above the 50 minutes logged: 60.
+    expect(
+      tester.widget<Text>(find.byKey(const Key('estimate_sheet_value'))).data,
+      '1h',
+    );
+    await tester.tap(find.byKey(const Key('estimate_sheet_save')));
+    await pumpFocusFrames(tester);
+
+    // The Sprint ran: it is recorded.
+    expect(await sprintCount(), 1);
+
+    // The raise moved the limit, so the Action is within it again — and the
+    // strip has nothing to say.
+    final action =
+        await tester.runAsync(() => db.actionDao.getCurrentAction('o1'));
+    expect(action!.timeEstimate, 60);
+    limits.add(
+      await tester.runAsync<TimeboxedLimitStatus?>(
+        () => readTimeboxedLimitStatus(db, 'o1'),
+      ),
+    );
+    await pumpFocusFrames(tester);
+    expect(find.byType(TimeboxedLimitStrip), findsNothing);
   });
 }

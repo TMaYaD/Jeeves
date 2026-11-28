@@ -6,8 +6,9 @@
 /// real implementation asks the OS, the fake answers what the test says and
 /// remembers every call.
 ///
-/// **A read never asks for permission.** Only [requestWhileUsing] asks, and
-/// only an explicit tap by the user may call it.
+/// **A read never asks for permission.** Only [requestWhileUsing] and
+/// [LocationSource.requestAllTheTime] ask, and only an explicit tap by the
+/// user may call them.
 library;
 
 /// A point on the globe, in degrees.
@@ -67,7 +68,23 @@ abstract class LocationSource {
   ///
   /// The result is the only place a refusal "for good" can be seen: a
   /// standing check never says it.
+  ///
+  /// **A phone that has already allowed the location is not asked again.**
+  /// The plugin asks for background as well as foreground once the manifest
+  /// declares background location, so a call here on a phone that already
+  /// allows the location would put up the "all the time" prompt — and only
+  /// the arrival switch may do that.
   Future<LocationPermission> requestWhileUsing();
+
+  /// Asks the OS for "location all the time" and answers what it granted.
+  ///
+  /// **Only the arrival switch may call this.** It is the one moment Jeeves
+  /// asks for the location beyond the screen it is on, so it is behind an
+  /// explanation the user has to accept first.
+  ///
+  /// A phone that allows the location only while the app is open must be
+  /// asked again for this: that second ask is the "all the time" one.
+  Future<LocationPermission> requestAllTheTime();
 
   /// The OS's last known position, however old. Null when there is none.
   /// Never asks for permission.

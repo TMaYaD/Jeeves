@@ -24,7 +24,7 @@ library;
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:drift/drift.dart' show BooleanExpressionOperators;
+import 'package:drift/drift.dart' show BooleanExpressionOperators, Value;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/sync/chain_verifier.dart';
 import 'package:jeeves/sync/control_payload.dart';
@@ -186,6 +186,81 @@ void main() {
           reason: 'the row keeps the reason it was filed under');
       expect(released.releasedAt, isNotNull,
           reason: 'the release is recorded on the row itself');
+    });
+
+    test('a row whose op is logged and refused keeps its refusal', () async {
+      final workspace = await _pair();
+      final a = workspace.a;
+      final b = workspace.b;
+
+      // The change A made is in the server's stream; B has not pulled it.
+      await _write(a, _firstDocId);
+      await a.sync();
+      final stored = workspace.server.storedOps.lastWhere(
+        (op) => op.header?.authorMemberId == a.identity.memberId,
+      );
+
+      // The state a storage fault leaves behind, staged at the store level:
+      //
+      //  * the change is in the log and refused — the stamp the receive
+      //    transaction committed;
+      //  * the refusal that stamp belongs to was **not** filed: the fault hit
+      //    `_refuse`'s own insert, so nothing records that the change was
+      //    refused;
+      //  * the row the scan examines is the one filed when the directory did
+      //    not know A's key, which is the row that would be released.
+      //
+      // The re-examination finds the change already in the log, so it does
+      // nothing at all: the op stays unapplied, and the only record that says
+      // so is the row the scan is holding.
+      final store = b.syncStore;
+      await store.into(store.opLog).insert(
+            OpLogCompanion.insert(
+              seq: stored.seq,
+              workspaceId: b.client.workspaceId,
+              envelope: stored.envelope,
+              opId: stored.header!.opId,
+              authorMemberId: a.identity.memberId,
+              authorSeq: stored.header!.authorSeq,
+              receivedAt: workspace.clock.asDateTime,
+              refusedReason: Value(SyncRejectionReason.noLiveGrant.code),
+            ),
+          );
+      await store.into(store.quarantinedOps).insert(
+            QuarantinedOpsCompanion.insert(
+              workspaceId: b.client.workspaceId,
+              seq: Value(stored.seq),
+              reason: SyncRejectionReason.memberNotChainedToRoot.code,
+              detail: 'no Root-signed registration for the author',
+              envelope: stored.envelope,
+              detectedAt: workspace.clock.asDateTime,
+              authorMemberId: Value(a.identity.memberId),
+              authorSeq: Value(stored.header!.authorSeq),
+            ),
+          );
+
+      final reopened = await b.reopenSyncStore(attachTransport: true);
+      await reopened.pull();
+
+      // The row is still there: the op is unapplied and nothing else refuses
+      // it, so releasing the row would leave the change applied to nothing and
+      // refused by no record — and the User nothing to answer.
+      final held = await _rowsFor(reopened, a.identity.memberId,
+          includeReleased: false);
+      expect(held, hasLength(1));
+      expect(
+        held.single.reason,
+        SyncRejectionReason.memberNotChainedToRoot.code,
+      );
+      expect(held.single.releasedAt, isNull);
+
+      // The change did not apply, and it was not applied by accident either.
+      final slot = await (b.syncStore.select(b.syncStore.opLog)
+            ..where((r) =>
+                r.workspaceId.equals(reopened.workspaceId) &
+                r.seq.equals(stored.seq)))
+          .getSingle();
+      expect(slot.appliedAt, isNull);
     });
 
     test('a successor held as a chain gap follows its predecessor', () async {

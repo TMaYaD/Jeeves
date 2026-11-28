@@ -160,6 +160,8 @@ void main() {
     expect(location.permissionRequests, 1);
     // The OS may still ask, so the app's settings are not opened.
     expect(settings.opens, 0);
+    // Only the arrival switch may ask for "all the time".
+    expect(location.allTheTimeRequests, 0);
   });
 
   testWidgets('where the OS will not ask again, the app\'s settings open',

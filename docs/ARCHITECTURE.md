@@ -79,6 +79,10 @@ to.
 they name change. A write that mutates a table its own query does not name must
 notify explicitly, or the surface will not refresh.
 
+**The arrival path never opens the store.** The OS watches the Places the user
+asked to hear about (`GeofenceRegistrar`); while Jeeves is closed the background
+code reads the device-local arrival snapshot the foreground app keeps.
+
 ## Two stores
 
 Every device holds two SQLite files, deliberately not one.

@@ -257,9 +257,8 @@ void main() {
     expect(find.byKey(const Key('timeboxed_gate_confirm')), findsNothing);
   });
 
-  testWidgets('"Raise the estimate…" opens the estimate sheet one step up', (
-    tester,
-  ) async {
+  testWidgets('"Raise the estimate…" opens the estimate sheet on the first '
+      'step above the time logged', (tester) async {
     await makeTimeboxed();
     await logTime(const Duration(minutes: 50));
     await tester.pumpWidget(harness(onStart: () {}));
@@ -270,8 +269,56 @@ void main() {
     await settle(tester);
 
     expect(find.byKey(const Key('estimate_sheet_value')), findsOneWidget);
-    // The estimate is 30; the sheet opens on the step above it.
-    expect(find.text('45m'), findsOneWidget);
+    // 50 minutes are logged, so the sheet opens on the step above that — not
+    // on the step above the 30 minute estimate.
+    expect(
+      tester.widget<Text>(find.byKey(const Key('estimate_sheet_value'))).data,
+      '1h',
+    );
+    expect(find.text('Logged so far: 50m, breaks included'), findsOneWidget);
+  });
+
+  testWidgets('ten hours logged is the top of the ladder, and cannot be '
+      'raised past', (tester) async {
+    await makeTimeboxed();
+    await logTime(const Duration(hours: 10));
+    await tester.pumpWidget(harness(onStart: () {}));
+
+    await tester.tap(find.byKey(const Key('open_gate')));
+    await settle(tester);
+    await tester.tap(find.byKey(const Key('timeboxed_gate_raise')));
+    await settle(tester);
+
+    // Ten hours is the top of the ladder, so there is no step above it: the
+    // sheet opens on the top of the ladder and cannot be saved.
+    expect(
+      tester.widget<Text>(find.byKey(const Key('estimate_sheet_value'))).data,
+      '10h',
+    );
+    expect(find.text('Logged so far: 10h, breaks included'), findsOneWidget);
+    expect(
+      tester.widget<FilledButton>(find.byKey(const Key('estimate_sheet_save')))
+          .onPressed,
+      isNull,
+    );
+    // There is nowhere to step up to either.
+    expect(
+      tester.widget<IconButton>(find.byKey(const Key('estimate_sheet_more')))
+          .onPressed,
+      isNull,
+    );
+    expect(
+      find.text('Must be more than the 10h already logged.'),
+      findsOneWidget,
+    );
+
+    // Cancel is the only way out of the sheet.
+    await tester.tap(find.byKey(const Key('estimate_sheet_cancel')));
+    await settle(tester);
+
+    expect(find.byKey(const Key('estimate_sheet_value')), findsNothing);
+    expect(find.byKey(const Key('timeboxed_gate_stop')), findsOneWidget);
+    expect(await storedEstimate(), 30);
   });
 
   testWidgets('cancelling the estimate sheet returns to the gate', (
@@ -307,12 +354,29 @@ void main() {
     await settle(tester);
     await tester.tap(find.byKey(const Key('timeboxed_gate_raise')));
     await settle(tester);
-    // The sheet opened one step up: 30 becomes 45, and 50 minutes are logged —
-    // the limit is still passed.
+    // The sheet opened on the step above the 50 minutes logged: 60, which is
+    // enough.
+    expect(
+      tester.widget<Text>(find.byKey(const Key('estimate_sheet_value'))).data,
+      '1h',
+    );
+
+    // More work is logged while the sheet is up — a peer, or a stint that
+    // ran on. The 60 minutes chosen a moment ago are short of it now.
+    await tester.runAsync(() async {
+      final now = DateTime.now().toUtc();
+      await db.timeLogDao.openLog(
+        taskId: 't1',
+        userId: _userId,
+        now: now.subtract(const Duration(minutes: 20)),
+      );
+      await db.timeLogDao.closeLog(taskId: 't1', now: now);
+    });
+
     await tester.tap(find.byKey(const Key('estimate_sheet_save')));
     await settle(tester);
 
-    expect(await storedEstimate(), 45);
+    expect(await storedEstimate(), 60);
     expect(started, isFalse);
     // The gate asks again, with the figures as they now stand.
     expect(find.byKey(const Key('timeboxed_gate_stop')), findsOneWidget);
@@ -331,10 +395,8 @@ void main() {
     await settle(tester);
     await tester.tap(find.byKey(const Key('timeboxed_gate_raise')));
     await settle(tester);
-    // One step further: 45 becomes 60, and 50 minutes are logged — the limit
-    // is no longer passed.
-    await tester.tap(find.byKey(const Key('estimate_sheet_more')));
-    await tester.pump();
+    // The sheet opened on the step above the 50 minutes logged: 60, and 50
+    // minutes are logged — the limit is no longer passed.
     await tester.tap(find.byKey(const Key('estimate_sheet_save')));
     await settle(tester);
 

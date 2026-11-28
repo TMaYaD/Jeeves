@@ -1,5 +1,5 @@
 /// The Place sheets lay out at 320 dp, and the picker answers the choice
-/// (issue #55, #1078).
+/// (issues #55, #1078 and #1092).
 ///
 /// The phone is 320 dp wide; a sheet that overflows there is a sheet the user
 /// cannot use. The picker writes nothing: it hands back what the user chose.
@@ -14,20 +14,23 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/database/daos/place_dao.dart' show NamedPlaceWithUse;
+import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/place_area.dart';
 import 'package:jeeves/models/place_choice.dart';
 import 'package:jeeves/models/time_window_hours.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/location_permission_flow.dart';
 import 'package:jeeves/providers/phone_time_zone_provider.dart';
+import 'package:jeeves/providers/arrival_permission_flow.dart';
+import 'package:jeeves/providers/location_source_provider.dart';
 import 'package:jeeves/providers/places_provider.dart';
 import 'package:jeeves/providers/time_window_provider.dart';
 import 'package:jeeves/widgets/place_editor_sheet.dart';
 import 'package:jeeves/widgets/place_pin_sheet.dart';
 import 'package:jeeves/widgets/place_picker_sheet.dart';
 
+import '../helpers/fake_location_source.dart';
 import '../test_helpers.dart';
 
 /// Settles the tree and lets real async work finish: a Drift write inside a
@@ -39,6 +42,20 @@ Future<void> _settle(WidgetTester tester) async {
     await tester.pump(const Duration(milliseconds: 150));
   }
 }
+
+/// A Place that already exists, so the editor carries the arrival switch.
+NamedPlaceWithUse _aPlace() => (
+      id: 'p1',
+      name: 'Hardware store',
+      area: PlaceArea.create(
+        latitudeDegrees: 52.3702,
+        longitudeDegrees: 4.8952,
+        radiusMeters: 150,
+      )!,
+      useCount: 0,
+      hoursLabel: null,
+      hours: (timeWindowId: null, ownHoursText: null, timeZone: null),
+    );
 
 void main() {
   setUpAll(configureSqliteForTests);
@@ -177,6 +194,50 @@ void main() {
     await tester.pump();
 
     expect(find.byKey(const Key('place_picker_search')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('the arrival switch lays out at 320 dp', (tester) async {
+    tester.view.physicalSize = const Size(320, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          databaseProvider.overrideWithValue(db),
+          locationSourceProvider.overrideWithValue(FakeLocationSource()),
+          timeWindowsProvider.overrideWith((_) => Stream.value(const [])),
+          phoneTimeZoneNameProvider
+              .overrideWith((ref) async => 'Europe/Amsterdam'),
+        ],
+        child: MaterialApp(
+          home: Scaffold(body: PlaceEditorSheet(place: _aPlace())),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byKey(const Key('place_arrival_switch')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('the arrival explanation lays out at 320 dp', (tester) async {
+    tester.view.physicalSize = const Size(320, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(body: ArrivalPermissionSheet()),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byKey(const Key('arrival_permission_continue')), findsOneWidget);
+    expect(find.byKey(const Key('arrival_permission_not_now')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
