@@ -1,5 +1,5 @@
-/// The place page: every Outcome with a Place, grouped by the Places that are
-/// near each other (issue #1090).
+/// The place page: every Outcome and Habit with a Place, grouped by the Places
+/// that are near each other (issues #1090, #1094).
 ///
 /// This is where an Outcome hidden because the user is somewhere else can be
 /// found. It has no map yet.
@@ -9,6 +9,9 @@
 /// above the list carries the bulk actions. On this page the bar also has
 /// Navigate (issue #60): the Places of the chosen Outcomes are the stops of
 /// an errand, handed to Google Maps or Waze. Jeeves plans no route.
+///
+/// A Habit is listed under its Place, marked as a Habit. It is not an Outcome:
+/// a tap opens it, and it cannot be selected or become an errand stop.
 library;
 
 import 'package:flutter/material.dart';
@@ -16,10 +19,13 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../database/daos/habit_dao.dart' show HabitState;
 import '../../providers/place_page_provider.dart';
+import '../habits/habit_routes.dart';
 import 'navigate_sheet.dart';
 import '../../widgets/async_list.dart';
 import '../../widgets/outcome_multi_select.dart';
+import '../../widgets/outcome_row.dart';
 
 /// The list of every Outcome with a Place.
 class PlacePageScreen extends ConsumerStatefulWidget {
@@ -130,7 +136,7 @@ class _PlacePageScreenState extends ConsumerState<PlacePageScreen> {
                   emptyIcon: Icons.place_outlined,
                   emptyTitle: 'Nothing at a place',
                   emptySubtitle:
-                      'Outcomes you give a place to are listed here.',
+                      'Outcomes and Habits you give a place to are listed here.',
                   dataBuilder: (context, entries) => CustomScrollView(
                     // A new requested Place starts a new scroll view, so the
                     // old offset does not carry over to it.
@@ -179,6 +185,35 @@ class _PlacePageScreenState extends ConsumerState<PlacePageScreen> {
                               childCount: place.rows.length,
                             ),
                           ),
+                          if (place.habits.isNotEmpty)
+                            SliverList(
+                              delegate: SliverChildBuilderDelegate(
+                                (_, i) {
+                                  final row = place.habits[i];
+                                  final paused =
+                                      row.state == HabitState.paused;
+                                  return OutcomeRow(
+                                    key: Key(
+                                        'place_page_habit_row_${row.habit.id}'),
+                                    title: row.habit.title,
+                                    energyLevel: row.habit.energyLevel,
+                                    timeEstimateMinutes:
+                                        row.habit.timeEstimateMinutes,
+                                    leading: const Icon(Icons.repeat),
+                                    secondary: HabitMarker(paused: paused),
+                                    muted: paused,
+                                    // A Habit is not an Outcome: it cannot be
+                                    // selected, so it does nothing while a
+                                    // selection is going.
+                                    onTap: selectionActive
+                                        ? null
+                                        : () => openHabitDetail(
+                                            context, row.habit.id),
+                                  );
+                                },
+                                childCount: place.habits.length,
+                              ),
+                            ),
                         ],
                       ],
                       const SliverToBoxAdapter(child: SizedBox(height: 24)),
@@ -218,6 +253,33 @@ class PlaceMarker extends StatelessWidget {
         const SizedBox(width: 4),
         Text(
           isOnNext ? 'On Next' : 'Elsewhere',
+          style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+        ),
+      ],
+    );
+  }
+}
+
+/// The marker of a Habit's row: "Habit", or "Paused Habit".
+///
+/// A Habit is never on Next, so it carries this in place of [PlaceMarker]. The
+/// words carry the state, not the colour.
+class HabitMarker extends StatelessWidget {
+  const HabitMarker({super.key, required this.paused});
+
+  /// Whether the Habit is paused.
+  final bool paused;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      key: const Key('place_marker_habit'),
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Icon(Icons.repeat, size: 14, color: Color(0xFF9CA3AF)),
+        const SizedBox(width: 4),
+        Text(
+          paused ? 'Paused Habit' : 'Habit',
           style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
         ),
       ],

@@ -12,7 +12,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:jeeves/database/daos/habit_dao.dart';
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/habit_commitment.dart';
 import 'package:jeeves/models/place_area.dart';
 import 'package:jeeves/models/time_context.dart';
 import 'package:jeeves/providers/database_provider.dart';
@@ -22,6 +24,7 @@ import 'package:jeeves/providers/place_page_provider.dart';
 import 'package:jeeves/screens/place_page/place_page_screen.dart';
 import 'package:jeeves/services/location_source.dart';
 import 'package:jeeves/services/notification_service.dart';
+import 'package:jeeves/widgets/outcome_multi_select.dart';
 
 import '../helpers/fake_location_source.dart';
 import '../test_helpers.dart';
@@ -66,6 +69,40 @@ Future<String> _insertOutcome(GtdDatabase db, String id) async {
       outcomeId: id, text: 'work on $id', userId: _userId);
   return (await db.actionDao.getCurrentAction(id))!.id;
 }
+
+/// Creates a Habit, at the named Place or pin when given.
+Future<String> _insertHabit(
+  GtdDatabase db,
+  String title, {
+  String? placeId,
+  PlaceArea? pinArea,
+  String? pinName,
+}) {
+  final now = DateTime.now();
+  return db.habitDao.createHabit(
+    userId: _userId,
+    title: title,
+    today: habitDayKey(now),
+    now: now,
+    firstCommitment: defaultNewHabitCommitment,
+    placeId: placeId,
+    pinArea: pinArea,
+    pinName: pinName,
+  );
+}
+
+Future<String> _namedPlace(GtdDatabase db, String name) async =>
+    (await db.placeDao.createNamedPlace(
+      name: name,
+      latitudeDegrees: _home.latitudeDegrees,
+      longitudeDegrees: _home.longitudeDegrees,
+      radiusMeters: 150,
+      userId: _userId,
+    ))!;
+
+/// The titles of a section's Habits.
+List<String> _habitTitles(PlacePageSection place) =>
+    [for (final row in place.habits) row.habit.title];
 
 /// The labels of every Place on the page, in the order they are drawn.
 List<String> _labels(List<PlacePageGroup> groups) => [
@@ -149,6 +186,7 @@ void main() {
   setUp(() async {
     db = GtdDatabase(NativeDatabase.memory());
     location = FakeLocationSource();
+    container = null;
   });
 
   tearDown(() async {
@@ -178,6 +216,107 @@ void main() {
     }
     return sub.read().value ?? const [];
   }
+
+  ProviderContainer makeContainer() => container = ProviderContainer(overrides: [
+        databaseProvider.overrideWithValue(db),
+        locationSourceProvider.overrideWithValue(location),
+        notificationServiceProvider
+            .overrideWithValue(StubNotificationService()),
+      ]);
+
+  /// Ready once the sections hold [habitCount] Habits between them.
+  bool Function(List<PlacePageGroup>) habitsReady(int habitCount) =>
+      (listed) =>
+          listed.fold<int>(
+              0,
+              (sum, group) =>
+                  sum +
+                  group.places.fold<int>(0, (n, p) => n + p.habits.length)) ==
+          habitCount;
+
+  test('a Habit with a Place is listed under it, after the Outcomes',
+      () async {
+    final pool = await _namedPlace(db, 'Pool');
+    final action = await _insertOutcome(db, 'pool-outcome');
+    await db.actionDao.setNamedPlace(action, pool);
+    await _insertHabit(db, 'Swim', placeId: pool);
+    makeContainer();
+
+    final listed = await groups(ready: habitsReady(1));
+    expect(_labels(listed), ['Pool']);
+    final section = listed.single.places.single;
+    expect(section.rows.single.todo.id, 'pool-outcome');
+    expect(_habitTitles(section), ['Swim']);
+    expect(section.habits.single.state, HabitState.active);
+  });
+
+  test('a Place only a Habit uses is a section with no Outcomes', () async {
+    final gym = await _namedPlace(db, 'Gym');
+    await _insertHabit(db, 'Lift', placeId: gym);
+    makeContainer();
+
+    final listed = await groups(ready: habitsReady(1));
+    expect(_labels(listed), ['Gym']);
+    expect(listed.single.places.single.rows, isEmpty);
+    expect(_habitTitles(listed.single.places.single), ['Lift']);
+  });
+
+  test('a Habit with no Place, and an archived Habit, are not listed',
+      () async {
+    final pool = await _namedPlace(db, 'Pool');
+    await _insertHabit(db, 'Floss');
+    final archivedId = await _insertHabit(db, 'Old swim', placeId: pool);
+    await _insertHabit(db, 'Swim', placeId: pool);
+    final now = DateTime.now();
+    await db.habitDao.archive(
+        habitId: archivedId,
+        userId: _userId,
+        today: habitDayKey(now),
+        now: now);
+    makeContainer();
+
+    final listed = await groups(ready: habitsReady(1));
+    expect(_labels(listed), ['Pool']);
+    expect(_habitTitles(listed.single.places.single), ['Swim']);
+  });
+
+  test('a paused Habit is listed, and says it is paused', () async {
+    final pool = await _namedPlace(db, 'Pool');
+    final habitId = await _insertHabit(db, 'Swim', placeId: pool);
+    final now = DateTime.now();
+    await db.habitDao.pause(
+        habitId: habitId,
+        userId: _userId,
+        today: habitDayKey(now),
+        now: now);
+    makeContainer();
+
+    final listed = await groups(ready: habitsReady(1));
+    expect(listed.single.places.single.habits.single.state,
+        HabitState.paused);
+  });
+
+  test('a Habit with a pin is listed under the pin\'s name', () async {
+    final area = PlaceArea.create(
+      latitudeDegrees: 52.3000,
+      longitudeDegrees: 4.8000,
+      radiusMeters: 150,
+    )!;
+    await _insertHabit(db, 'Post letters', pinArea: area, pinName: 'Post office');
+    makeContainer();
+
+    final listed = await groups(ready: habitsReady(1));
+    expect(_labels(listed), ['Post office']);
+  });
+
+  test('a Place only a Habit uses is no errand stop', () async {
+    final gym = await _namedPlace(db, 'Gym');
+    await _insertHabit(db, 'Lift', placeId: gym);
+    makeContainer();
+
+    final listed = await groups(ready: habitsReady(1));
+    expect(errandStopsFrom(listed, {'anything'}), isEmpty);
+  });
 
   test('an Outcome hidden by a Place is listed, and says where it stands',
       () async {
@@ -497,6 +636,10 @@ void main() {
       // The widget tree goes with the test; the container is disposed by the
       // tear-down, with the store.
       await tester.pumpWidget(const SizedBox.shrink());
+      // The Habit list holds the day-rollover timer; it goes with the
+      // container, inside the body, or the test fails its timer check.
+      container?.dispose();
+      container = null;
       await tester.pumpAndSettle();
     }
   }, timeout: const Timeout(Duration(seconds: 120)));
@@ -530,7 +673,144 @@ void main() {
       expect(_atTop(tester, 'Alpha'), isTrue);
     } finally {
       await tester.pumpWidget(const SizedBox.shrink());
+      // The Habit list holds the day-rollover timer; it goes with the
+      // container, inside the body, or the test fails its timer check.
+      container?.dispose();
+      container = null;
       await tester.pumpAndSettle();
     }
   }, timeout: const Timeout(Duration(seconds: 120)));
+
+  group('Habits on the page', () {
+    /// Pumps the page, with a stand-in for the Habit's detail route.
+    Future<GoRouter> pumpPage(WidgetTester tester) async {
+      makeContainer();
+      final router = GoRouter(
+        initialLocation: '/places',
+        routes: [
+          GoRoute(path: '/places', builder: (_, _) => const PlacePageScreen()),
+          GoRoute(
+            path: '/habits/:id',
+            builder: (_, _) => const Scaffold(body: Text('habit detail')),
+          ),
+        ],
+      );
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container!,
+          child: MaterialApp.router(routerConfig: router),
+        ),
+      );
+      await _settle(tester);
+      return router;
+    }
+
+    Future<void> tearDownTree(WidgetTester tester) async {
+      await tester.pumpWidget(const SizedBox.shrink());
+      // The Habit list holds the day-rollover timer; it goes with the
+      // container, inside the body, or the test fails its timer check.
+      container?.dispose();
+      container = null;
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('a Habit is under its Place, marked as a Habit',
+        (tester) async {
+      final pool = await _namedPlace(db, 'Pool');
+      final action = await _insertOutcome(db, 'pool-outcome');
+      await db.actionDao.setNamedPlace(action, pool);
+      final habitId = await _insertHabit(db, 'Swim', placeId: pool);
+      await _insertHabit(db, 'Floss');
+      await pumpPage(tester);
+      try {
+        expect(find.byKey(Key('place_page_place_$pool')), findsOneWidget);
+        expect(find.byKey(Key('place_page_habit_row_$habitId')),
+            findsOneWidget);
+        expect(find.text('Swim'), findsOneWidget);
+        expect(find.text('Floss'), findsNothing,
+            reason: 'a Habit without a Place is not on the page');
+        expect(find.byKey(const Key('place_marker_habit')), findsOneWidget);
+        expect(find.text('Habit'), findsOneWidget);
+        // The Outcome at the same Place still says where it stands.
+        expect(
+            find.byKey(const Key('place_marker_on_next')).evaluate().length +
+                find.byKey(const Key('place_marker_elsewhere')).evaluate().length,
+            1);
+      } finally {
+        await tearDownTree(tester);
+      }
+    }, timeout: const Timeout(Duration(seconds: 120)));
+
+    testWidgets('a paused Habit says so', (tester) async {
+      final pool = await _namedPlace(db, 'Pool');
+      final habitId = await _insertHabit(db, 'Swim', placeId: pool);
+      final now = DateTime.now();
+      await db.habitDao.pause(
+          habitId: habitId,
+          userId: _userId,
+          today: habitDayKey(now),
+          now: now);
+      await pumpPage(tester);
+      try {
+        expect(find.text('Paused Habit'), findsOneWidget);
+      } finally {
+        await tearDownTree(tester);
+      }
+    }, timeout: const Timeout(Duration(seconds: 120)));
+
+    testWidgets('a tap opens the Habit', (tester) async {
+      final pool = await _namedPlace(db, 'Pool');
+      final habitId = await _insertHabit(db, 'Swim', placeId: pool);
+      await pumpPage(tester);
+      try {
+        await tester.tap(find.byKey(Key('place_page_habit_row_$habitId')));
+        await _settle(tester);
+        // The detail is pushed, so it is the page on top.
+        expect(find.text('habit detail'), findsOneWidget);
+      } finally {
+        await tearDownTree(tester);
+      }
+    }, timeout: const Timeout(Duration(seconds: 120)));
+
+    testWidgets('a Habit cannot be selected; Select all takes Outcomes only',
+        (tester) async {
+      final pool = await _namedPlace(db, 'Pool');
+      final action = await _insertOutcome(db, 'pool-outcome');
+      await db.actionDao.setNamedPlace(action, pool);
+      final habitId = await _insertHabit(db, 'Swim', placeId: pool);
+      await pumpPage(tester);
+      try {
+        await tester.longPress(find.textContaining('pool-outcome').first);
+        await _settle(tester);
+        expect(find.byType(OutcomeSelectionBar), findsOneWidget);
+
+        // While a selection is going the Habit row does nothing: it cannot be
+        // selected and it does not open.
+        await tester.tap(find.byKey(Key('place_page_habit_row_$habitId')));
+        await _settle(tester);
+        expect(find.text('habit detail'), findsNothing);
+        expect(find.byType(OutcomeSelectionBar), findsOneWidget);
+
+        // The one Outcome is everything that can be selected: the Habit is not
+        // counted, so there is nothing left for Select all to add.
+        expect(find.text('1 selected'), findsOneWidget);
+        expect(find.text('Select all'), findsNothing);
+        expect(find.byType(Checkbox), findsOneWidget);
+      } finally {
+        await tearDownTree(tester);
+      }
+    }, timeout: const Timeout(Duration(seconds: 120)));
+
+    testWidgets('with nothing at a place, the empty state names both',
+        (tester) async {
+      await pumpPage(tester);
+      try {
+        expect(
+            find.text('Outcomes and Habits you give a place to are listed here.'),
+            findsOneWidget);
+      } finally {
+        await tearDownTree(tester);
+      }
+    }, timeout: const Timeout(Duration(seconds: 120)));
+  });
 }
