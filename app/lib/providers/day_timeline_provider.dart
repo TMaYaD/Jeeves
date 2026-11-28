@@ -13,6 +13,7 @@ import 'focus_session_planning_provider.dart'
 import 'focus_session_planning_settings_provider.dart';
 import 'focus_settings_provider.dart';
 import 'synced_preferences_provider.dart' show syncedPreferencesProvider;
+import 'time_window_provider.dart' show currentTimeWindowsProvider;
 
 /// The last layout worked out. Memory only: it is never stored, synced or
 /// cached on the device, so it is gone when the app is (the layout is then
@@ -132,6 +133,7 @@ class NowTimelineExtras {
     this.pinnedStarts = const {},
     this.engagedTaskIds = const {},
     this.timeContexts = const {},
+    this.timeWindows = const {},
     this.contextTags = const {},
     this.batchState = const {},
     this.sprintMarks = const [],
@@ -142,6 +144,10 @@ class NowTimelineExtras {
   final Map<String, DateTime> pinnedStarts;
   final Set<String> engagedTaskIds;
   final Map<String, TimeContext> timeContexts;
+
+  /// Each Outcome's named time window, so a picked Outcome keeps the time
+  /// the planning timeline gave it.
+  final Map<String, ActionTimeWindow> timeWindows;
 
   /// Each Plan Outcome's context tags, for the small-task suggestion.
   final Map<String, List<({String id, String name})>> contextTags;
@@ -173,6 +179,8 @@ final nowTimelineExtrasProvider = Provider<NowTimelineExtras>((ref) {
             const {},
     timeContexts:
         ref.watch(currentTimeContextsProvider).asData?.value ?? const {},
+    timeWindows:
+        ref.watch(currentTimeWindowsProvider).asData?.value ?? const {},
     contextTags:
         ref.watch(activeSessionContextTagsProvider).asData?.value ?? const {},
     batchState:

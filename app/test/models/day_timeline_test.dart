@@ -286,6 +286,55 @@ void main() {
     });
   });
 
+  group('flowDay with a named time window', () {
+    test('an entry is placed inside its window, not at the flow origin', () {
+      final layout = _flowWith([_windowed('a', 60, _storeHours)]);
+      expect(layout.entryFor('a').pieces.single.start, _at(11));
+    });
+
+    test('a plain entry before it keeps the origin; the window entry follows',
+        () {
+      final layout = _flowWith([
+        _entry('plain', 150),
+        _windowed('a', 60, _storeHours),
+      ]);
+      expect(layout.entryFor('plain').pieces.single.start, _at(9));
+      expect(layout.entryFor('a').pieces.single.start, _at(11, 30));
+    });
+
+    test('the window wins over a Time context', () {
+      final elsewhere = TimeContext.create(
+          days: {1, 2, 3, 4, 5, 6, 7}, startMinute: 15 * 60, endMinute: 18 * 60);
+      final layout = _flowWith(
+          [_windowed('a', 60, _storeHours, timeContext: elsewhere)]);
+      expect(layout.entryFor('a').pieces.single.start, _at(11));
+    });
+
+    test('a window that does not open that day leaves the entry unplaced', () {
+      final saturdayOnly = TimeWindowHours.create(
+          {6: (startMinute: 11 * 60, endMinute: 20 * 60)})!;
+      final entry = _flowWith([_windowed('a', 60, saturdayOnly)]).entryFor('a');
+      expect(entry.status, PlacementStatus.unplaced);
+      expect(entry.reason, UnplacedReason.outsideTimeContext);
+    });
+
+    test('available time that ends before the window opens is no free time',
+        () {
+      final entry = _flowWith([_windowed('a', 60, _storeHours)],
+          availableMinutes: 60).entryFor('a');
+      expect(entry.status, PlacementStatus.unplaced);
+      expect(entry.reason, UnplacedReason.noGap);
+    });
+
+    test('editing a window changes the layout signature', () {
+      final evening = TimeWindowHours.create({
+        for (var d = 1; d <= 7; d++) d: (startMinute: 18 * 60, endMinute: 20 * 60),
+      })!;
+      expect(_windowed('a', 60, _storeHours).layoutSignature,
+          isNot(_windowed('a', 60, evening).layoutSignature));
+    });
+  });
+
   group('sprint marks', () {
     test('a recorded Sprint becomes a mark naming its Outcome', () {
       final marks = tileSprintMarks([_sprint('s1', 'a')]);

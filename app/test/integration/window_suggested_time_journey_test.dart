@@ -12,7 +12,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/time_context.dart';
-import 'package:jeeves/models/time_window_hours.dart';
 import 'package:jeeves/providers/calendar_timeline_provider.dart';
 import 'package:jeeves/providers/clock_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';

@@ -590,6 +590,10 @@ class _NowTimeline extends ConsumerWidget {
       defaultEstimateMinutes: extras.settings.defaultEstimateMinutes,
       now: ref.read(clockProvider)(),
       timeContexts: extras.timeContexts,
+      timeWindows: {
+        for (final entry in extras.timeWindows.entries)
+          entry.key: entry.value.hours
+      },
       pinnedStarts: extras.pinnedStarts,
       engagedTaskIds: extras.engagedTaskIds,
       contextTags: extras.contextTags,
