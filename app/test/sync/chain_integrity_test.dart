@@ -227,12 +227,14 @@ class _ChainScanGate extends QueryInterceptor {
 ///
 /// The arrival seam runs a callback in the middle of the next write to the
 /// accusation table; the quarantine gate holds the next quarantine insert; the
-/// chain-scan gate holds the release scan's first question. Drift calls one
+/// chain-scan gate holds the release scan's first question; the scope gate
+/// holds the read of the rows an answer is about. Drift calls one
 /// interceptor, so they live together here.
 class _StoreInterceptors extends QueryInterceptor {
   final _ArrivalDuringResolution arrival = _ArrivalDuringResolution();
   final _QuarantineGate quarantine = _QuarantineGate();
   final _ChainScanGate chainScan = _ChainScanGate();
+  final _ScopeGate scope = _ScopeGate();
 
   /// The fault to inject: the next update of [table] that sets [column].
   ({String table, String column})? _updateFault;
@@ -319,8 +321,49 @@ class _StoreInterceptors extends QueryInterceptor {
     QueryExecutor executor,
     String statement,
     List<Object?> args,
-  ) =>
-      chainScan.runSelect(executor, statement, args);
+  ) async {
+    await scope.waitIfArmed(statement);
+    return chainScan.runSelect(executor, statement, args);
+  }
+}
+
+/// Holds the read of the rows an answer is about.
+///
+/// The read is the moment an answer's scope is fixed, so a case that needs a
+/// gap to land inside it holds the read, lets the gap arrive, and lets the
+/// read go on.
+class _ScopeGate {
+  /// The hold to wait on, or null when there is none armed.
+  Completer<void>? hold;
+
+  /// Completes when the read of the rows an answer is about has reached the
+  /// hold.
+  final Completer<void> reached = Completer<void>();
+
+  bool _fired = false;
+
+  /// Waits at the read of one author's held gap rows, when one is armed.
+  Future<void> waitIfArmed(String statement) async {
+    final gate = hold;
+    if (gate == null || _fired || !_asksForHeldGapRows(statement)) return;
+    _fired = true;
+    if (!reached.isCompleted) reached.complete();
+    await gate.future;
+  }
+
+  /// Whether this statement reads one author's held gap rows.
+  ///
+  /// Matched on the filter, not on the table alone: the quarantine table is
+  /// read in several places, and this is the one that asks which gaps an
+  /// answer is about. The `limit 1` variant — the standing-gap question — is
+  /// a different read and is left alone.
+  bool _asksForHeldGapRows(String statement) {
+    final text = statement.toLowerCase().replaceAll(RegExp(r'["\s]'), '');
+    return text.contains('fromquarantined_ops') &&
+        text.contains('author_member_id=?') &&
+        text.contains('reason=?') &&
+        !text.contains('limit1');
+  }
 }
 
 /// A projector that fails the first time it is asked to project, and works
@@ -2745,6 +2788,13 @@ void main() {
           .singleWhere((row) => sameBytes(row.envelope, three));
       expect(lateRow.releasedAt, isNotNull);
       expect(
+        lateRow.resolution,
+        isNull,
+        reason: 'the answer does not decide a gap the User was not shown: '
+            'the release is the ordinary receive path\'s work, not the '
+            'answer\'s',
+      );
+      expect(
         (await a.loggedOps())
             .singleWhere(
                 (row) => row.authorSeq == firstPeerContentAuthorSeq + 2)
@@ -2752,6 +2802,133 @@ void main() {
         isNotNull,
       );
       expect(await _doc(a, workspace), {'step': 'four'});
+    });
+
+    test('a gap that arrives between the accusation and the answer\'s rows is '
+        'not decided by it', () async {
+      // The server withholds the second and the third change of that author's
+      // chain, so the fourth is held as a gap and the accusation stands.
+      final first = await _op(workspace, peer, 'one');
+      final withheld = await _op(workspace, peer, 'two');
+      final alsoWithheld = await _op(workspace, peer, 'three');
+      final fourth = await _op(workspace, peer, 'four');
+      final appended = await peerSession.postOps(
+        workspace.workspaceId,
+        [first, withheld, alsoWithheld, fourth],
+      );
+      workspace.server.omitSeqs.add(appended[1].seq);
+      workspace.server.omitSeqs.add(appended[2].seq);
+      await a.sync();
+
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      final held = (await a.client.quarantined()).single;
+      expect(held.authorSeq, firstPeerContentAuthorSeq + 3);
+
+      // The answer reads the accusation and then the rows it is about. The
+      // read of the rows is held, so a gap that arrives in between lands
+      // after the accusation was read and before the rows were.
+      final scopeGate = Completer<void>();
+      seams.scope.hold = scopeGate;
+      final decision =
+          a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+      await seams.scope.reached.future.timeout(const Duration(seconds: 30));
+
+      // The third change arrives now, and it is refused as a gap like the
+      // fourth one. Its row and the count of the accusation it raises commit
+      // together, so the count says the accusation stands again.
+      workspace.server.injectUnchecked(workspace.workspaceId, alsoWithheld);
+      await a.sync();
+      expect(
+        (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!
+            .occurrenceCount,
+        gap.occurrenceCount + 1,
+      );
+
+      // The answer's rows are read now, and they hold the gap that arrived
+      // after the accusation was read.
+      scopeGate.complete();
+      await expectLater(
+        decision,
+        throwsA(isA<StateError>()),
+        reason: 'the accusation the User was shown is not the one that stands',
+      );
+
+      // Nothing is decided by an answer that was refused: no hole is
+      // recorded, and neither the gap that arrived nor the one the User was
+      // shown carries a decision.
+      expect(
+        await a.client.acceptedChainHoles(authorMemberId: peer.memberId),
+        isEmpty,
+      );
+      final rows = await a.client.quarantined();
+      expect(
+        rows.every((row) => row.resolution == null),
+        isTrue,
+        reason: 'an answer that was refused decides nothing',
+      );
+      expect(
+        (await a.loggedOps())
+            .where((row) => row.authorSeq == firstPeerContentAuthorSeq + 3),
+        isEmpty,
+        reason: 'the change the answer was about never reached the log',
+      );
+    });
+
+    test('a rebuild does not merge a change the release still owes', () async {
+      await withholdTheMiddleChange();
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      final held = (await a.client.quarantined()).single;
+
+      // The release that follows the hole fails, so the marker the decision
+      // wrote is the only record of the obligation: the hole is committed and
+      // the change after it still has to go through the ordinary receive
+      // path.
+      seams.failUpdateOf('quarantined_ops', 'release_started_at', occurrence: 2);
+      await expectLater(
+        a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream),
+        throwsA(isA<SqliteException>()),
+      );
+      final row =
+          (await a.client.quarantined()).singleWhere((r) => r.id == held.id);
+      expect(row.releaseStartedAt, isNotNull);
+      expect(row.releasedAt, isNull);
+      expect(
+        (await a.client.acceptedChainHoles(authorMemberId: peer.memberId))
+            .length,
+        1,
+      );
+
+      // A rebuild wipes the merge state and replays the log — and the log
+      // does not hold this change, because the release that would have put it
+      // there failed. So the rebuild must not merge it either: the
+      // held-change path merges without writing the log, and a device that
+      // merged it that way cannot rebuild itself from its own log.
+      await a.client.rebuildFromOpLog();
+      expect(
+        await _doc(a, workspace),
+        {'step': 'one'},
+        reason: 'the change is not in the log, so a rebuild does not produce '
+            'it',
+      );
+      expect(
+        (await a.loggedOps())
+            .where((row) => row.authorSeq == firstPeerContentAuthorSeq + 2),
+        isEmpty,
+      );
+
+      // And the obligation is still owed: the next pull releases the change
+      // through the ordinary receive path, and the log holds it.
+      await a.sync();
+      expect(
+        (await a.loggedOps())
+            .singleWhere(
+                (row) => row.authorSeq == firstPeerContentAuthorSeq + 2)
+            .appliedAt,
+        isNotNull,
+      );
+      expect(await _doc(a, workspace), {'step': 'three'});
     });
 
     test('a change the log refused for good does not keep the accusation open',

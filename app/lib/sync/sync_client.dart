@@ -4457,6 +4457,20 @@ class SyncClient {
   /// did not apply**: a refusal — corrupt bytes, a missing key, a revoked Grant
   /// — leaves the row exactly as it was.
   Future<Set<AffectedEntity>> _applyHeldChange(QuarantineRow row) async {
+    // **A row that still owes ordinary receipt is not applied here.** The
+    // marker says a release was begun and has not finished, so the release
+    // scan owns that row: it re-arms on the next pull and puts the change
+    // through the ordinary receive path, which writes it to the log. This path
+    // does not: it merges the change and leaves nothing behind it, so a device
+    // that merged it that way cannot rebuild itself from its own log. The rule
+    // is here rather than at one caller, because every caller of this method
+    // merges a change without writing the log — the rebuild that replays the
+    // rows the User took upstream, the answer that applies the rows the
+    // bridge could not release, and the recovery that puts on screen a
+    // decision whose projection never reached the domain store.
+    if (row.releasedAt == null && row.releaseStartedAt != null) {
+      return const {};
+    }
     try {
       final parts = splitEnvelope(row.envelope);
       final header = OpHeader.parse(parts.header);
@@ -4569,6 +4583,14 @@ class SyncClient {
   /// stops before its position, so the change is not stranded below the chain
   /// floor.
   ///
+  /// **And the accusation is read with the rows.** The accusation and the rows
+  /// this answer is about are read one after the other, and a refusal
+  /// quarantined in between would be in the rows without having been shown to
+  /// the User. The count of the accusation is the witness — a refusal that
+  /// raises an accusation raises its count — so an accusation whose count has
+  /// moved says the answer is about a question that has changed, and the
+  /// answer is refused rather than deciding a gap the User never saw.
+  ///
   /// **The decision waits for a release scan that is already running.** The
   /// scan refuses to run twice for one author and returns nothing when it
   /// does, and nothing is not a verdict — it says the question was not asked.
@@ -4606,6 +4628,26 @@ class SyncClient {
       // decide it. The rows it brought are not in this set, so the bridge does
       // not record a hole for them and does not release them.
       final rememberedRowIdSet = rememberedRowIds.toSet();
+      // **And the accusation must still be the one the User was shown.** The
+      // accusation and the rows were read one after the other, so a refusal
+      // quarantined in between would raise the accusation again and still be
+      // in the rows this answer is about — and this answer would decide a gap
+      // the User was never shown. The count of the accusation is the witness:
+      // a refusal that raises an accusation raises its count (see [_refuse]),
+      // so a count that has moved says a refusal landed between the two reads,
+      // and the answer is about a question that has changed.
+      //
+      // The check is here, before the bridge does anything, because a refusal
+      // that lands afterwards is a different case: it is not in the rows this
+      // answer is about, so the answer still covers what it was asked about,
+      // and the accusation stands again for the new gap.
+      final currentAlarm = await _alarmRow(alarm.id);
+      if (currentAlarm == null ||
+          currentAlarm.occurrenceCount != alarm.occurrenceCount) {
+        throw StateError(
+          'the accusation changed after it was shown; ask again',
+        );
+      }
       // **Each round records at most one hole, and each hole needs a witness
       // row of its own.** A row that arrived while the User was answering can
       // add one — it is the successor of a shorter range — so the bound is
@@ -5062,13 +5104,10 @@ class SyncClient {
       // and **stays pending**: it is not stamped, so the accusation it holds
       // open is not closed over a change that is not there.
       //
-      // **A row the release scan still owes is not applied here.** The marker
-      // says a release was begun and has not finished, so the scan owns that
-      // row: it re-arms on the next pull and puts the change through the
-      // ordinary receive path, which writes it to the log. The held-change path
-      // does not: it merges the change and leaves nothing behind it, so a
-      // device that merged it that way cannot rebuild itself from its own log.
-      if (row.releasedAt == null && row.releaseStartedAt != null) continue;
+      // **A row the release scan still owes is not applied here either** — it
+      // applies nothing and stays pending. The rule lives in
+      // [_applyHeldChange], so that every caller of this path keeps it — the
+      // rebuild that replays the rows the User took upstream among them.
       final touched = await _applyHeldChange(row);
       if (touched.isEmpty) continue;
       touchedByRow[row.id] = touched;
