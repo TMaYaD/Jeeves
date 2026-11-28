@@ -2802,6 +2802,13 @@ class SyncClient {
   /// for ever, over a projection that cannot happen — and a second answer
   /// would return normally while the accusation was still in front of the
   /// User.
+  ///
+  /// **A change the log refused at its slot is not work waiting to be done
+  /// either.** The change was released through the ordinary receive path and
+  /// the log would not take it, because another change holds that slot; the
+  /// receive path accused the collision under its own name. The change can
+  /// never reach the domain store, and counting it would leave the accusation
+  /// standing for ever with nothing to wait for.
   Future<bool> _hasUnprojectedTakeUpstream(String authorMemberId) async {
     final rows = await (_db.select(_db.quarantinedOps)
           ..where((row) =>
@@ -4398,10 +4405,25 @@ class SyncClient {
   /// A change refused for want of a Grant is **not** finished: that is the one
   /// refusal the User can undo by restoring the Grant, so it is re-asked
   /// rather than taken as recorded.
+  ///
+  /// **A released change the log does not hold is finished too.** The release
+  /// put the change through the ordinary receive path, and the log is where
+  /// that path writes it; a change that is not there was refused at the slot it
+  /// would have taken, and the receive path said so under its own name
+  /// ([IntegrityAlarmKind.authorChainSlotCollision]). Such a change can never
+  /// reach the domain store — the held-change path refuses to merge what the
+  /// log does not hold, because a rebuild from the log would not reproduce it
+  /// — so no projection is owed for it, and the accusation the decision was
+  /// holding open must not wait for one that cannot happen. The slot-collision
+  /// alarm stands in its own right.
+  ///
+  /// A change that is **still held** and not in the log is not finished: the
+  /// release is still owed, and until it is made the change may yet reach the
+  /// log.
   Future<bool> _finishedByReceipt(QuarantineRow row) async {
     final receipt = await _logReceipt(row);
-    return receipt.holds &&
-        receipt.refusalCode != null &&
+    if (!receipt.holds) return row.releasedAt != null;
+    return receipt.refusalCode != null &&
         receipt.refusalCode != SyncRejectionReason.noLiveGrant.code;
   }
 

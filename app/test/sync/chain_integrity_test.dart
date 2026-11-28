@@ -2584,11 +2584,20 @@ void main() {
         isEmpty,
         reason: 'the change the release could not write is not in the log',
       );
-      // And the accusation is still in front of the User: the change it was
-      // about is not in the log, so there is nothing to settle.
-      final standing =
+      // And the accusation about the missing change is settled: the hole was
+      // accepted, and the change the release could not write is refused at the
+      // slot it would have taken. The receive path said so under its own name,
+      // and nothing is owed for a change that can never reach the domain
+      // store — so the accusation must not stand for ever over a projection
+      // that cannot happen.
+      final settled =
           (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
-      expect(standing.resolvedAt, isNull);
+      expect(settled.resolution, AlarmResolution.tookUpstream.code);
+      expect(settled.resolvedAt, isNotNull);
+      // The collision is its own accusation, and it stands.
+      final collision = (await a.alarmsByKind())[
+          IntegrityAlarmKind.authorChainSlotCollision.code]!;
+      expect(collision.resolvedAt, isNull);
       expect((await a.client.health()).clean, isFalse);
     });
 
