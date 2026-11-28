@@ -193,10 +193,15 @@ typedef AuthorChainHead = ({int authorSeq, Uint8List envelopeHash});
 /// holes *inside* an author's chain rather than truncating a prefix, so a device may
 /// hold positions 1-2 and need to verify position 53 across attested holes; a rule
 /// that always preferred the derived head could never bridge them. It is sound
-/// because the caller only ever supplies a floor walked contiguously forward from
-/// the real head, filling each step from the log or from a per-position, hash-linked
-/// attestation — there is no gap in it to hide anything in. Below the head the floor
-/// is ignored, because there the log is the better evidence.
+/// because the caller only ever supplies a floor walked forward from the real head,
+/// filling each step from the log, from a per-position, hash-linked attestation, or
+/// from a hole the User accepted (#975) — in which case only the *last* position of
+/// the range has a known hash, and it comes from the signed header of the change
+/// after the hole. A hole is the one place the walk is not contiguous, and what it
+/// gives up is the content of the missing range and the hash link across it; the
+/// change after the hole is admitted on its author's signed statement of what came
+/// before it. Below the head the floor is ignored, because there the log is the
+/// better evidence.
 typedef VerifiedChainFloor = ({int seq, Uint8List envelopeHash});
 
 /// One op's stored twin, as the caller read it out of `op_log`.
@@ -210,6 +215,19 @@ typedef StoredChainOp = ({int authorSeq, Uint8List envelope});
 /// a chatty server re-offering pruned bytes from a server offering *different*
 /// bytes at a position it claims were removed.
 typedef PrunedPositionAttestation = ({int authorSeq, Uint8List envelopeHash});
+
+/// The hashes a hole the User accepted (#975) pins down around one position inside
+/// it, when the log holds nothing at that position.
+///
+/// [predecessorEnvelopeHash] is the hash of the logged envelope at `authorSeq - 1`,
+/// and [successorPrevAuthorHash] is what the change at `authorSeq + 1` named as its
+/// predecessor — taken from the logged envelope there, or, for the last position of
+/// the hole, from the signed header that defined it. Either may be null: then that
+/// link is simply not checkable.
+typedef AcceptedHoleNeighbours = ({
+  Uint8List? predecessorEnvelopeHash,
+  Uint8List? successorPrevAuthorHash,
+});
 
 /// What the chain rules say about one received op.
 enum ChainOutcome {
@@ -279,6 +297,10 @@ final Uint8List _zeroPrevAuthorHash = Uint8List(prevAuthorHashBytes);
 /// attestations account for, and [storedAttestation] what a prune attested at the
 /// arriving op's own position when the log holds nothing there.
 ///
+/// An empty position below the head is a rewrite, unless it lies in an accepted
+/// hole ([acceptedHole]) and hash-links to what the log holds around it: a missing
+/// change that arrives late fills the hole, and nothing else does.
+///
 /// No latching anywhere: a refusal never moves the head, so the author's stream
 /// is judged against the last position this device actually verified rather than
 /// against whatever the server last claimed.
@@ -290,6 +312,7 @@ ChainVerdict chainVerdict({
   StoredChainOp? storedUnderOpId,
   VerifiedChainFloor? verifiedFloor,
   PrunedPositionAttestation? storedAttestation,
+  AcceptedHoleNeighbours? acceptedHole,
 }) {
   // Checked first and independently of position: an op id the log already holds
   // under a *different* position, or under the same one with different bytes, is
@@ -366,6 +389,24 @@ ChainVerdict chainVerdict({
       ),
       IntegrityAlarmKind.pruneAttestationDivergence,
     );
+  }
+  // An empty position inside a hole the User accepted. The change fills the hole
+  // when it links to what the log holds around it: at least one link has to be
+  // checkable, and every checkable link has to hold.
+  if (storedAtAuthorSeq == null && acceptedHole != null) {
+    final predecessorHash = header.authorSeq == 1
+        ? _zeroPrevAuthorHash
+        : acceptedHole.predecessorEnvelopeHash;
+    final successorPrev = acceptedHole.successorPrevAuthorHash;
+    final predecessorHolds =
+        predecessorHash != null && sameBytes(predecessorHash, header.prevAuthorHash);
+    final successorHolds =
+        successorPrev != null && sameBytes(successorPrev, envelopeHash(envelope));
+    final predecessorFails = predecessorHash != null && !predecessorHolds;
+    final successorFails = successorPrev != null && !successorHolds;
+    if ((predecessorHolds || successorHolds) && !predecessorFails && !successorFails) {
+      return const ChainVerdict.accept();
+    }
   }
   return ChainVerdict.refuse(
     SyncRejection(

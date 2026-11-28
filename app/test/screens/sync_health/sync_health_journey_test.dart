@@ -681,6 +681,57 @@ void main() {
     });
   });
 
+  group('E1c a device whose missing change was accepted is not asked about again',
+      () {
+    late SimWorkspace workspace;
+    late DeviceReport report;
+
+    setUp(() async {
+      workspace = await SimWorkspace.create();
+      await workspace.syncAll();
+      final b = workspace.b;
+      await b.authorLocal('one');
+      await b.authorLocal('two');
+      await b.sync();
+      final peerContent = [
+        for (final op in workspace.server.storedOps)
+          if (op.workspaceId == workspace.workspaceId &&
+              op.header?.opClass == opClassContent &&
+              op.header?.authorMemberId == b.identity.memberId)
+            op.seq,
+      ]..sort();
+      workspace.server.omitSeqs.add(peerContent.first);
+      await workspace.a.sync();
+      // The user takes what arrived, through the real client.
+      final gap = (await workspace.a.client.integrityAlarms()).singleWhere(
+        (alarm) => alarm.kind == IntegrityAlarmKind.authorChainGap.code,
+      );
+      await workspace.a.client
+          .resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+      // The device keeps writing; the missing change never arrives.
+      await b.authorLocal('three');
+      await b.sync();
+      await workspace.a.sync();
+      report = await _reportFor(workspace.a);
+    });
+
+    tearDown(() async => workspace.close());
+
+    testWidgets('the status is not error and the tile is not tappable',
+        (tester) async {
+      expect(report.indication.status, isNot(SyncStatus.error));
+      expect(report.indication.hasSomethingToReport, isFalse);
+      expect(report.conditions, isEmpty);
+
+      await _openDrawerOver(tester, report);
+      expect(
+        _inIndicator(find.byType(InkWell)),
+        findsNothing,
+        reason: 'a device with nothing to report offers no way in',
+      );
+    });
+  });
+
   group('E2 a clean device has no entry point', () {
     late SimWorkspace workspace;
     late DeviceReport report;

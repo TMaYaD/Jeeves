@@ -163,6 +163,124 @@ void main() {
       expect(verdict.rejection!.reason, SyncRejectionReason.authorChainRewrite);
     });
 
+    group('a position inside an accepted hole', () {
+      late _Op missing;
+      late Uint8List missingHash;
+
+      setUp(() async {
+        // Position 1 is logged, 2 is the hole, 3 is logged.
+        await _mint(author);
+        missing = await _mint(author, advance: false);
+        missingHash = envelopeHash(missing.envelope);
+      });
+
+      ChainVerdict judge({AcceptedHoleNeighbours? hole, StoredChainOp? stored}) =>
+          chainVerdict(
+            header: missing.header,
+            envelope: missing.envelope,
+            head: (authorSeq: 3, envelopeHash: _someHash(0x33)),
+            storedAtAuthorSeq: stored,
+            acceptedHole: hole,
+          );
+
+      test('a predecessor link that holds fills the hole', () {
+        expect(
+          judge(
+            hole: (
+              predecessorEnvelopeHash: missing.header.prevAuthorHash,
+              successorPrevAuthorHash: null,
+            ),
+          ).outcome,
+          ChainOutcome.accept,
+        );
+      });
+
+      test('a successor link that holds fills the hole', () {
+        expect(
+          judge(
+            hole: (
+              predecessorEnvelopeHash: null,
+              successorPrevAuthorHash: missingHash,
+            ),
+          ).outcome,
+          ChainOutcome.accept,
+        );
+      });
+
+      test('both links holding fill the hole', () {
+        expect(
+          judge(
+            hole: (
+              predecessorEnvelopeHash: missing.header.prevAuthorHash,
+              successorPrevAuthorHash: missingHash,
+            ),
+          ).outcome,
+          ChainOutcome.accept,
+        );
+      });
+
+      test('a successor naming another hash is a rewrite', () {
+        final verdict = judge(
+          hole: (
+            predecessorEnvelopeHash: missing.header.prevAuthorHash,
+            successorPrevAuthorHash: _someHash(0x44),
+          ),
+        );
+        expect(verdict.rejection!.reason, SyncRejectionReason.authorChainRewrite);
+      });
+
+      test('a predecessor link that fails is a rewrite', () {
+        final verdict = judge(
+          hole: (
+            predecessorEnvelopeHash: _someHash(0x55),
+            successorPrevAuthorHash: missingHash,
+          ),
+        );
+        expect(verdict.rejection!.reason, SyncRejectionReason.authorChainRewrite);
+      });
+
+      test('with neither neighbour known it is a rewrite', () {
+        final verdict = judge(
+          hole: (predecessorEnvelopeHash: null, successorPrevAuthorHash: null),
+        );
+        expect(verdict.rejection!.reason, SyncRejectionReason.authorChainRewrite);
+      });
+
+      test('with no accepted hole supplied it is a rewrite', () {
+        expect(
+          judge().rejection!.reason,
+          SyncRejectionReason.authorChainRewrite,
+        );
+      });
+
+      test('a stored op at the position still wins', () async {
+        final hole = (
+          predecessorEnvelopeHash: missing.header.prevAuthorHash,
+          successorPrevAuthorHash: missingHash,
+        );
+        expect(
+          judge(
+            hole: hole,
+            stored: (authorSeq: missing.header.authorSeq, envelope: missing.envelope),
+          ).outcome,
+          ChainOutcome.idempotentSkip,
+        );
+        final other = await _mint(
+          author,
+          authorSeq: missing.header.authorSeq,
+          advance: false,
+          payloadJson: '{"collection":"other"}',
+        );
+        expect(
+          judge(
+            hole: hole,
+            stored: (authorSeq: other.header.authorSeq, envelope: other.envelope),
+          ).rejection!.reason,
+          SyncRejectionReason.authorChainRewrite,
+        );
+      });
+    });
+
     test('the same op id at a different position is a divergent duplicate',
         () async {
       // F13: deduping by op id is what makes a retry safe, and it must not

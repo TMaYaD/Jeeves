@@ -396,5 +396,53 @@ void main() {
         reason: 'nothing has been projected, so nothing has been stamped',
       );
     });
+
+    test('a v15 sync store upgrades to the current version and keeps every row',
+        () async {
+      final directory = Directory.systemTemp.createTempSync('sync-v15-');
+      addTearDown(() => directory.deleteSync(recursive: true));
+      final file = File('${directory.path}/sync.sqlite');
+
+      final seed = SyncDatabase(NativeDatabase(file));
+      // A v15 store is the one the take-upstream work shipped: it holds the
+      // projection marker and neither of the tables that came after it.
+      await dropColumnsAddedAfter(seed, 15);
+      await seed.customStatement(
+        'INSERT INTO integrity_alarms (workspace_id, kind, detail, '
+        'occurrence_count, first_detected_at, last_detected_at) '
+        "VALUES ('workspace-1', 'own_writes_rollback', 'the server lost a write', "
+        "1, '2026-08-01T00:00:00.000Z', '2026-08-01T00:00:00.000Z')",
+      );
+      await seed.customStatement(
+        'INSERT INTO quarantined_ops (workspace_id, reason, detail, envelope, '
+        "detected_at) VALUES ('workspace-1', 'bad_signature', 'forged', X'', "
+        "'2026-08-01T00:00:00.000Z')",
+      );
+      await seed.customStatement('PRAGMA user_version = 15');
+      await seed.close();
+
+      final upgraded = SyncDatabase(NativeDatabase(file));
+      addTearDown(upgraded.close);
+      expect(upgraded.schemaVersion, SyncDatabase.supportedSchemaVersion);
+
+      final alarm = await upgraded.select(upgraded.integrityAlarms).getSingle();
+      expect(alarm.kind, IntegrityAlarmKind.ownWritesRollback.code);
+      expect(alarm.detail, 'the server lost a write');
+      expect(alarm.occurrenceCount, 1);
+
+      final quarantine =
+          await upgraded.select(upgraded.quarantinedOps).getSingle();
+      expect(quarantine.reason, SyncRejectionReason.badSignature.code);
+      expect(quarantine.detail, 'forged');
+
+      // The table the accepted chain holes live in exists, and holds nothing:
+      // a store that predates the decision has accepted no hole.
+      final holes = await upgraded.select(upgraded.acceptedChainHoles).get();
+      expect(
+        holes,
+        isEmpty,
+        reason: 'no hole was accepted before the table existed',
+      );
+    });
   });
 }

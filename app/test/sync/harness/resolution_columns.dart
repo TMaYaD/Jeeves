@@ -54,6 +54,11 @@ Future<void> dropColumnsAddedAfter(SyncDatabase database, int version) async {
       'DROP TABLE IF EXISTS entities_awaiting_projection',
     );
   }
+  // v18 added the accepted chain holes; a store from before it does not hold
+  // them, and the upgrade would fail on a table that already exists.
+  if (version < 18) {
+    await database.customStatement('DROP TABLE IF EXISTS accepted_chain_holes');
+  }
   for (final entry in columnsAddedAt.entries) {
     if (entry.key <= version) continue;
     for (final (table, column) in entry.value) {
