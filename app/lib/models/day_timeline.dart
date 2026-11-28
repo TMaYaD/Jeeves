@@ -256,22 +256,31 @@ List<PlacedPiece> _withCarriedOnPiece(
   if (existing.any((p) => p.carriedOnAt == sprint.carriedOnAt)) return existing;
   final stretchEnd =
       sprint.carriedOnAt.add(Duration(minutes: chunkUnitMinutes));
-  var stretchStart = sprint.carriedOnAt;
-  for (final piece in existing) {
-    if (piece.start.isBefore(stretchEnd) && piece.end.isAfter(stretchStart)) {
-      stretchStart = piece.end;
-    }
+  // Every free stretch of [carriedOnAt, stretchEnd) outside the Outcome's own
+  // pieces is reserved, so a gap before a later piece is not left for others.
+  final overlapping = existing
+      .where((p) =>
+          p.start.isBefore(stretchEnd) && p.end.isAfter(sprint.carriedOnAt))
+      .toList()
+    ..sort((a, b) => a.start.compareTo(b.start));
+  final freeStretches = <(DateTime, DateTime)>[];
+  var cursor = sprint.carriedOnAt;
+  for (final piece in overlapping) {
+    if (piece.start.isAfter(cursor)) freeStretches.add((cursor, piece.start));
+    if (piece.end.isAfter(cursor)) cursor = piece.end;
   }
-  if (!stretchStart.isBefore(stretchEnd)) return existing;
+  if (cursor.isBefore(stretchEnd)) freeStretches.add((cursor, stretchEnd));
+  if (freeStretches.isEmpty) return existing;
   final all = [
     ...existing,
-    PlacedPiece(
-      outcomeId: sprint.outcomeId,
-      start: stretchStart,
-      minutes: stretchEnd.difference(stretchStart).inMinutes,
-      part: 0,
-      carriedOnAt: sprint.carriedOnAt,
-    ),
+    for (final stretch in freeStretches)
+      PlacedPiece(
+        outcomeId: sprint.outcomeId,
+        start: stretch.$1,
+        minutes: stretch.$2.difference(stretch.$1).inMinutes,
+        part: 0,
+        carriedOnAt: sprint.carriedOnAt,
+      ),
   ]..sort((a, b) => a.start.compareTo(b.start));
   return [
     for (var i = 0; i < all.length; i++)

@@ -304,18 +304,7 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
               !knownCarriedOnAts.contains(piece.carriedOnAt))
             placement.outcomeId,
     };
-    if (newlyCarriedOnIds.isNotEmpty) {
-      _moveReason = _MoveReason.carriedOn;
-      _moves = [
-        for (final placement in _layout.entries)
-          if (placement.pieces.isNotEmpty &&
-              !newlyCarriedOnIds.contains(placement.outcomeId) &&
-              lastStarts[placement.outcomeId] != null &&
-              !placement.pieces.first.isPinned &&
-              lastStarts[placement.outcomeId] != placement.pieces.first.start)
-            _Move(placement.outcomeId, lastStarts[placement.outcomeId]!),
-      ];
-    } else if (_eventsChanged && _layoutReady) {
+    if (_eventsChanged && _layoutReady) {
       _moveReason = _MoveReason.calendar;
       _moves = [
         for (final placement in _layout.entries)
@@ -333,6 +322,20 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
                 piece.overlapsEvent(_events) &&
                 !previousConflicts.contains(placement.outcomeId))
               placement.outcomeId,
+      ];
+    }
+    // A carry-on in the same recompute wins the wording of the moved notice;
+    // the calendar conflict detection above runs regardless.
+    if (newlyCarriedOnIds.isNotEmpty) {
+      _moveReason = _MoveReason.carriedOn;
+      _moves = [
+        for (final placement in _layout.entries)
+          if (placement.pieces.isNotEmpty &&
+              !newlyCarriedOnIds.contains(placement.outcomeId) &&
+              lastStarts[placement.outcomeId] != null &&
+              !placement.pieces.first.isPinned &&
+              lastStarts[placement.outcomeId] != placement.pieces.first.start)
+            _Move(placement.outcomeId, lastStarts[placement.outcomeId]!),
       ];
     }
     _batchSuggestion = _workOutBatchSuggestion();

@@ -317,9 +317,32 @@ void main() {
       final a = layout.entryFor('a').pieces;
       expect(a.last.start, _at(9, 30));
       expect(a.last.minutes, 13);
-      expect(layout.entryFor('b').pieces.first.start,
-          anyOf(_at(9, 30), _at(9, 43)),
-          reason: 'b had started at 9:30 so it keeps its place');
+      expect(layout.entryFor('b').pieces.first.start, _at(9, 43),
+          reason: 'b would start at 9:30, still ahead of 9:20, so it moves '
+              'past the extra Sprint');
+    });
+
+    test('reserves a free gap before the Outcome\'s own later piece', () {
+      final last = LastDayLayout()
+        ..scope = 'day'
+        ..pieces = {
+          'a': [
+            PlacedPiece(
+                outcomeId: 'a', start: _at(9), minutes: 10, part: 1),
+            PlacedPiece(
+                outcomeId: 'a', start: _at(9, 20), minutes: 30, part: 2),
+          ],
+        };
+      final layout = flowCarried(
+          last,
+          [_entry('a', 40, engaged: true)],
+          [CarriedOnSprint(outcomeId: 'a', carriedOnAt: _at(9, 10))],
+          now: _at(9, 10));
+      final a = layout.entryFor('a').pieces;
+      expect(a.map((p) => p.start), [_at(9), _at(9, 10), _at(9, 20)]);
+      expect(a[1].minutes, 10);
+      expect(a[1].carriedOnAt, _at(9, 10));
+      expect(a.map((p) => p.part), [1, 2, 3]);
     });
 
     test('running again with the same input adds no second piece', () {
