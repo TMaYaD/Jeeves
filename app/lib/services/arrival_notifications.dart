@@ -14,6 +14,7 @@ import 'dart:math';
 
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
+import '../models/habit_commitment.dart' show habitDayKey;
 import 'arrival_snapshot.dart';
 import 'arrival_visit_rule.dart';
 import 'geofence_registrar.dart' show arrivalGeofenceIdPrefix;
@@ -32,8 +33,9 @@ const String arrivalNotificationChannelDescription =
 /// The prefix of an arrival notification's payload.
 const String arrivalNotificationPayloadPrefix = 'arrival:';
 
-/// Jeeves's lead-in to what is due. `{count}` is the number of Outcomes with
-/// its noun ("Two Outcomes"), and `{await}` is the verb that agrees with it.
+/// Jeeves's lead-in to what is due. `{count}` is the number of Habits and
+/// Outcomes with their nouns ("One Habit and two Outcomes"), and `{await}` is
+/// the verb that agrees with it.
 const arrivalNotificationPool = <String>[
   '{count} {await} you here, sir:',
   'A word, sir. {count} {await} you at this very spot:',
@@ -89,27 +91,53 @@ const _countNames = <int, String>{
   9: 'Nine',
 };
 
-/// The notification's body: a line from [arrivalNotificationPool], the count,
-/// and the titles the snapshot carries — "Two Outcomes await you here, sir:
+/// "One Habit", "Two Outcomes": a count with its noun. The count word is
+/// capitalised when it starts the sentence and lower case after "and".
+String _countPhrase(int count, String noun, {required bool startsSentence}) {
+  final name = _countNames[count] ?? '$count';
+  final word = startsSentence ? name : name.toLowerCase();
+  return count == 1 ? '$word $noun' : '$word ${noun}s';
+}
+
+/// The notification's body: a line from [arrivalNotificationPool], the counts,
+/// and the titles — "One Habit and two Outcomes await you here, sir: Workout,
 /// Buy screws, Return the drill."
 ///
-/// When more are due than the titles name, the rest are counted: "…, and 2
-/// more."
+/// Habits are named before Outcomes, because a Habit is due today only while
+/// an Outcome stays due. [outcomeTitles] are the Outcome titles the snapshot
+/// carries, [outcomeCount] how many Outcomes are due in all. At most
+/// [arrivalDueTitlesLimit] titles are named; when more are due, the rest are
+/// counted: "…, and 2 more."
 String arrivalNotificationBody({
-  required int dueCount,
-  required List<String> dueTitles,
+  required int outcomeCount,
+  required List<String> outcomeTitles,
+  required List<String> habitTitles,
   Random? random,
 }) {
   final line =
       arrivalNotificationPool[(random ?? Random()).nextInt(arrivalNotificationPool.length)];
-  final countName = _countNames[dueCount] ?? '$dueCount';
-  final countPhrase = dueCount == 1 ? '$countName Outcome' : '$countName Outcomes';
+  final habitCount = habitTitles.length;
+
+  final String countPhrase;
+  final bool awaits;
+  if (habitCount > 0 && outcomeCount > 0) {
+    countPhrase = '${_countPhrase(habitCount, 'Habit', startsSentence: true)}'
+        ' and ${_countPhrase(outcomeCount, 'Outcome', startsSentence: false)}';
+    awaits = false;
+  } else if (habitCount > 0) {
+    countPhrase = _countPhrase(habitCount, 'Habit', startsSentence: true);
+    awaits = habitCount == 1;
+  } else {
+    countPhrase = _countPhrase(outcomeCount, 'Outcome', startsSentence: true);
+    awaits = outcomeCount == 1;
+  }
   final lead = line
       .replaceAll('{count}', countPhrase)
-      .replaceAll('{await}', dueCount == 1 ? 'awaits' : 'await');
+      .replaceAll('{await}', awaits ? 'awaits' : 'await');
 
-  final unnamed = dueCount - dueTitles.length;
-  final titles = dueTitles.join(', ');
+  final named = [...habitTitles, ...outcomeTitles].take(arrivalDueTitlesLimit).toList();
+  final unnamed = habitCount + outcomeCount - named.length;
+  final titles = named.join(', ');
   if (titles.isEmpty) return lead.replaceFirst(RegExp(r':$'), '.');
   return unnamed > 0 ? '$lead $titles, and $unnamed more.' : '$lead $titles.';
 }
@@ -163,6 +191,14 @@ Future<void> _handleArrivalEventNow({
   }
   if (place == null) return;
 
+  // The phone's own calendar day, the same as the Habit days the foreground
+  // wrote. The `timezone` package is not initialised in this engine.
+  final todayKey = habitDayKey(nowUtc.toLocal());
+  final habitTitlesToday = [
+    for (final habit in place.dueHabits)
+      if (habit.forDayKeys.contains(todayKey)) habit.title,
+  ];
+
   final visits = await files.readVisits();
   if (!isEnter) {
     visits[placeId] = onExit(visits[placeId], nowUtc: nowUtc);
@@ -173,7 +209,7 @@ Future<void> _handleArrivalEventNow({
   final result = onEnter(
     visits[placeId],
     nowUtc: nowUtc,
-    somethingDue: place.dueCount > 0,
+    somethingDue: place.dueCount > 0 || habitTitlesToday.isNotEmpty,
   );
   final before = visits[placeId];
   visits[placeId] = result.visit;
@@ -185,8 +221,9 @@ Future<void> _handleArrivalEventNow({
       id: arrivalNotificationId(placeId),
       title: place.name,
       body: arrivalNotificationBody(
-        dueCount: place.dueCount,
-        dueTitles: place.dueTitles,
+        outcomeCount: place.dueCount,
+        outcomeTitles: place.dueTitles,
+        habitTitles: habitTitlesToday,
         random: random,
       ),
       payload: arrivalNotificationPayload(placeId),

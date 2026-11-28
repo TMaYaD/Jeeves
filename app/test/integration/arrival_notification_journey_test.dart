@@ -19,7 +19,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:jeeves/database/daos/habit_dao.dart' show HabitCommitmentDraft;
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/habit_commitment.dart'
+    show HabitRepeatKind, habitDayKey;
+import 'package:jeeves/providers/clock_provider.dart';
 import 'package:jeeves/providers/arrival_notification_settings.dart';
 import 'package:jeeves/providers/arrival_snapshot_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
@@ -104,6 +108,8 @@ void main() {
       locationSourceProvider.overrideWithValue(
           FakeLocationSource()..permissionState = LocationPermission.always),
       databaseProvider.overrideWithValue(db),
+      // The foreground writes the snapshot for the day the events arrive on.
+      clockProvider.overrideWithValue(() => start.toLocal()),
       notificationServiceProvider.overrideWithValue(StubNotificationService()),
       arrivalFilesProvider.overrideWith((ref) async => files),
     ]);
@@ -281,6 +287,104 @@ void main() {
     await event(storeId, enter: false, atMinute: 0);
     await event(storeId, enter: true, atMinute: 31);
     expect(sink.shown, isEmpty);
+  });
+
+  group('Habits due at the Place', () {
+    final todayKey = habitDayKey(start.toLocal());
+
+    Future<String> createHabitAt(
+      String title,
+      String placeId, {
+      HabitCommitmentDraft commitment =
+          const HabitCommitmentDraft(repeatKind: HabitRepeatKind.everyDay),
+    }) async {
+      final habitId = await db.habitDao.createHabit(
+        userId: _userId,
+        title: title,
+        today: todayKey,
+        now: start,
+        firstCommitment: commitment,
+      );
+      await db.habitDao.setNamedPlace(habitId, placeId, now: start);
+      return habitId;
+    }
+
+    Future<String> switchedOnGym() async {
+      final gymId = await createPlace('Gym', 52.3702);
+      return gymId;
+    }
+
+    test('the notification names the Habit with the Outcomes due', () async {
+      final storeId = await createPlace('Hardware store', 52.3702);
+      await createOutcomeAt('o-screws', 'Buy screws', storeId);
+      await createHabitAt('Workout', storeId);
+      await container.read(arrivalPlaceIdsProvider.notifier).turnOn(storeId);
+      await waitForSnapshot((s) =>
+          s.places.any((p) => p.dueCount == 1 && p.dueHabits.isNotEmpty));
+
+      await event(storeId, enter: true, atMinute: 0);
+
+      expect(sink.shown, hasLength(1));
+      expect(sink.shown.single.body, contains('One Habit and one Outcome await'));
+      expect(sink.shown.single.body, contains('Workout, Buy screws'));
+    });
+
+    test('a Habit alone is enough, and the visit rule is unchanged', () async {
+      final gymId = await switchedOnGym();
+      await createHabitAt('Workout', gymId);
+      await container.read(arrivalPlaceIdsProvider.notifier).turnOn(gymId);
+      await waitForSnapshot((s) => s.places.any((p) => p.dueHabits.isNotEmpty));
+
+      await event(gymId, enter: true, atMinute: 0);
+      expect(sink.shown, hasLength(1));
+      expect(sink.shown.single.title, 'Gym');
+      expect(sink.shown.single.body, contains('One Habit awaits'));
+      expect(sink.shown.single.body, endsWith('Workout.'));
+
+      // The same visit: out, and back within half an hour.
+      await event(gymId, enter: false, atMinute: 5);
+      await event(gymId, enter: true, atMinute: 15);
+      expect(sink.shown, hasLength(1));
+    });
+
+    test('a Habit that is not for today says nothing', () async {
+      final gymId = await switchedOnGym();
+      // Chosen weekdays, none of them the day the user arrives on.
+      final otherWeekday = start.toLocal().weekday % 7 + 1;
+      await createHabitAt(
+        'Swim',
+        gymId,
+        commitment: HabitCommitmentDraft(
+          repeatKind: HabitRepeatKind.chosenWeekdays,
+          chosenWeekdays: [otherWeekday],
+        ),
+      );
+      await container.read(arrivalPlaceIdsProvider.notifier).turnOn(gymId);
+      await waitForSnapshot((s) => s.places.any((p) => p.dueHabits.isNotEmpty));
+
+      await event(gymId, enter: true, atMinute: 0);
+      expect(sink.shown, isEmpty);
+    });
+
+    test('a Habit checked in today says nothing', () async {
+      final gymId = await switchedOnGym();
+      final habitId = await createHabitAt('Workout', gymId);
+      await container.read(arrivalPlaceIdsProvider.notifier).turnOn(gymId);
+      await waitForSnapshot((s) => s.places.any(
+          (p) => p.dueHabits.any((h) => h.forDayKeys.contains(todayKey))));
+
+      await db.habitDao.addCheckIn(
+        habitId: habitId,
+        userId: _userId,
+        countsForDay: todayKey,
+        now: start,
+      );
+      await waitForSnapshot((s) => s.places.any(
+          (p) => p.dueHabits.every((h) => !h.forDayKeys.contains(todayKey))));
+
+      await event(gymId, enter: true, atMinute: 0);
+      expect(sink.shown, isEmpty);
+    });
   });
 
   testWidgets('tapping the notification opens the place page at that Place',
