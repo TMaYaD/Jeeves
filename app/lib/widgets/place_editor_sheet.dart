@@ -285,6 +285,8 @@ class _PlaceEditorSheetState extends ConsumerState<PlaceEditorSheet>
     final permission = await source.permission();
     if (!mounted) return;
     setState(() => _permission = permission);
+    // The Places list reads the same answer through a cached provider.
+    ref.invalidate(locationPermissionProvider);
   }
 
   /// The user moved the arrival switch.

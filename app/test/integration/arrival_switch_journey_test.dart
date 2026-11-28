@@ -285,6 +285,38 @@ void main() {
     expect(find.byKey(const Key('place_arrival_settings_line')), findsOneWidget);
   });
 
+  testWidgets('the row stops saying it tells you once the editor sees the '
+      'permission go', (tester) async {
+    location.permissionState = LocationPermission.whileInUse;
+    await openManagePlaces(tester);
+    final placeId = await savePlace(
+      tester,
+      name: 'Hardware store',
+      coordinates: '52.3702, 4.8952',
+    );
+    await openPlaceEditor(tester, placeId);
+    await tapSwitch(tester);
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('arrival_permission_continue')));
+    await _settle(tester);
+    expect(switchValue(tester), isTrue);
+
+    // The user takes the permission away in the phone's settings and comes
+    // back to the open editor.
+    location.permissionState = LocationPermission.whileInUse;
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await _settle(tester);
+    expect(switchValue(tester), isFalse);
+
+    await tester.ensureVisible(find.byKey(const Key('place_editor_save')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('place_editor_save')));
+    await _settle(tester);
+
+    // The list read the permission afresh, not from its cache.
+    expect(find.text('Tells you on arrival'), findsNothing);
+  });
+
   testWidgets('deleting the Place forgets it', (tester) async {
     location.permissionState = LocationPermission.whileInUse;
     await openManagePlaces(tester);
