@@ -71,6 +71,7 @@ class PlacedPiece {
     required this.minutes,
     required this.part,
     this.isPinned = false,
+    this.carriedOnAt,
   });
 
   final String outcomeId;
@@ -78,6 +79,10 @@ class PlacedPiece {
   final int minutes;
   final int part;
   final bool isPinned;
+
+  /// When the user carried on past a Timeboxed limit and this piece made room
+  /// for the extra Sprint; null on an ordinary piece.
+  final DateTime? carriedOnAt;
 
   DateTime get end => start.add(Duration(minutes: minutes));
 

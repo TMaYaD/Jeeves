@@ -232,6 +232,60 @@ class LastDayLayout {
   }
 }
 
+/// A Sprint the user carried on with past a Timeboxed limit ("Another sprint,
+/// regardless", or a saved raise that started the Sprint). A fact held in
+/// memory only: [flowDay] makes room for it on the day.
+class CarriedOnSprint {
+  const CarriedOnSprint({required this.outcomeId, required this.carriedOnAt});
+
+  final String outcomeId;
+
+  /// When the user carried on, in local time.
+  final DateTime carriedOnAt;
+}
+
+/// The pieces of [existing] with a piece added for [sprint]: one Sprint plus its
+/// short break from the carry-on instant, trimmed to the part past the Outcome's
+/// own pieces. Unchanged when this carry-on already has its piece or none of
+/// the stretch is left. Parts are numbered in time order.
+List<PlacedPiece> _withCarriedOnPiece(
+  List<PlacedPiece> existing,
+  CarriedOnSprint sprint,
+  int chunkUnitMinutes,
+) {
+  if (existing.any((p) => p.carriedOnAt == sprint.carriedOnAt)) return existing;
+  final stretchEnd =
+      sprint.carriedOnAt.add(Duration(minutes: chunkUnitMinutes));
+  var stretchStart = sprint.carriedOnAt;
+  for (final piece in existing) {
+    if (piece.start.isBefore(stretchEnd) && piece.end.isAfter(stretchStart)) {
+      stretchStart = piece.end;
+    }
+  }
+  if (!stretchStart.isBefore(stretchEnd)) return existing;
+  final all = [
+    ...existing,
+    PlacedPiece(
+      outcomeId: sprint.outcomeId,
+      start: stretchStart,
+      minutes: stretchEnd.difference(stretchStart).inMinutes,
+      part: 0,
+      carriedOnAt: sprint.carriedOnAt,
+    ),
+  ]..sort((a, b) => a.start.compareTo(b.start));
+  return [
+    for (var i = 0; i < all.length; i++)
+      PlacedPiece(
+        outcomeId: all[i].outcomeId,
+        start: all[i].start,
+        minutes: all[i].minutes,
+        part: i + 1,
+        isPinned: all[i].isPinned,
+        carriedOnAt: all[i].carriedOnAt,
+      ),
+  ];
+}
+
 /// Works the day out.
 ///
 /// With no last layout for [scope] the layout is rebuilt from [flowOrigin] with
@@ -239,6 +293,10 @@ class LastDayLayout {
 /// that has started before [now] and every engaged entry, so a past or engaged
 /// tile never moves. The mere passing of time re-flows nothing: callers call
 /// this only when an input changed.
+///
+/// A [carriedOn] Sprint (at or after [flowOrigin]) on an Outcome with a last
+/// layout freezes that Outcome and adds a piece for the extra Sprint, so the
+/// entries that are not frozen or pinned flow around it.
 DayLayout flowDay({
   required String scope,
   required LastDayLayout last,
@@ -248,6 +306,7 @@ DayLayout flowDay({
   required int chunkUnitMinutes,
   required List<DayTimelineEntry> entries,
   List<BusyInterval> events = const [],
+  List<CarriedOnSprint> carriedOn = const [],
 }) {
   final hasLast = last.scope == scope && last.pieces.isNotEmpty;
   final flowFrom = hasLast && now.isAfter(flowOrigin) ? now : flowOrigin;
@@ -259,13 +318,26 @@ DayLayout flowDay({
       final pieces = last.pieces[entry.outcomeId];
       if (pieces == null || pieces.isEmpty) continue;
       final pinned = entry.pinnedStartAt;
-      if (pinned != null && pinned != pieces.first.start) continue;
+      final firstOrdinaryPiece = pieces.firstWhere(
+          (p) => p.carriedOnAt == null,
+          orElse: () => pieces.first);
+      if (pinned != null && pinned != firstOrdinaryPiece.start) continue;
+      final entryCarriedOn = [
+        for (final sprint in carriedOn)
+          if (sprint.outcomeId == entry.outcomeId &&
+              !sprint.carriedOnAt.isBefore(flowOrigin))
+            sprint,
+      ]..sort((a, b) => a.carriedOnAt.compareTo(b.carriedOnAt));
       final placedMinutes = pieces.fold<int>(0, (sum, p) => sum + p.minutes);
       final started = pieces.any((p) => p.start.isBefore(now));
-      final engaged = entry.isEngaged;
+      final engaged = entry.isEngaged || entryCarriedOn.isNotEmpty;
       if (!(started || engaged)) continue;
       if (placedMinutes != entry.estimateMinutes && !engaged) continue;
-      frozen[entry.outcomeId] = pieces;
+      var framed = pieces;
+      for (final sprint in entryCarriedOn) {
+        framed = _withCarriedOnPiece(framed, sprint, chunkUnitMinutes);
+      }
+      frozen[entry.outcomeId] = framed;
     }
   }
 

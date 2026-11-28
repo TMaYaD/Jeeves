@@ -258,6 +258,135 @@ void main() {
     });
   });
 
+  group('flowDay with a Sprint carried on past a limit', () {
+    DayLayout flowCarried(LastDayLayout last, List<DayTimelineEntry> entries,
+            List<CarriedOnSprint> carriedOn,
+            {required DateTime now}) =>
+        flowDay(
+          scope: 'day',
+          last: last,
+          now: now,
+          flowOrigin: _at(9),
+          availableMinutes: 240,
+          chunkUnitMinutes: 23,
+          entries: entries,
+          carriedOn: carriedOn,
+        );
+
+    // a (engaged, 9:00-9:30), b (9:30-10:00), c pinned 10:00-10:30, d (10:30).
+    List<DayTimelineEntry> plan() => [
+          _entry('a', 30, engaged: true),
+          _entry('b', 30),
+          _entry('c', 30, pinned: _at(10)),
+          _entry('d', 30),
+        ];
+
+    LastDayLayout lastLayout() {
+      final last = LastDayLayout();
+      _flow(last, plan(), now: _at(9));
+      return last;
+    }
+
+    final sprint = CarriedOnSprint(outcomeId: 'a', carriedOnAt: _at(9, 40));
+
+    test('adds a piece for the extra Sprint and moves later times', () {
+      final layout =
+          flowCarried(lastLayout(), plan(), [sprint], now: _at(9, 40));
+      final a = layout.entryFor('a').pieces;
+      expect(a, hasLength(2));
+      expect(a.last.start, _at(9, 40));
+      expect(a.last.minutes, 23);
+      expect(a.last.carriedOnAt, _at(9, 40));
+      expect(a.map((p) => p.part), [1, 2]);
+      // b started at 9:30 so it stays; d (not started) moves past the stretch.
+      expect(layout.entryFor('b').pieces.single.start, _at(9, 30));
+      expect(layout.entryFor('c').pieces.single.start, _at(10));
+      expect(layout.entryFor('d').pieces.single.start, _at(10, 30));
+    });
+
+    test('moves a suggested time that overlaps the stretch', () {
+      final last = LastDayLayout();
+      _flow(last, [_entry('a', 30, engaged: true), _entry('b', 60)],
+          now: _at(9));
+      final layout = flowCarried(
+          last,
+          [_entry('a', 30, engaged: true), _entry('b', 60)],
+          [CarriedOnSprint(outcomeId: 'a', carriedOnAt: _at(9, 20))],
+          now: _at(9, 20));
+      // a's own piece ends 9:30; the new piece covers 9:30-9:43.
+      final a = layout.entryFor('a').pieces;
+      expect(a.last.start, _at(9, 30));
+      expect(a.last.minutes, 13);
+      expect(layout.entryFor('b').pieces.first.start,
+          anyOf(_at(9, 30), _at(9, 43)),
+          reason: 'b had started at 9:30 so it keeps its place');
+    });
+
+    test('running again with the same input adds no second piece', () {
+      final last = lastLayout();
+      flowCarried(last, plan(), [sprint], now: _at(9, 40));
+      final layout = flowCarried(last, plan(), [sprint], now: _at(9, 45));
+      expect(layout.entryFor('a').pieces, hasLength(2));
+    });
+
+    test('a stretch inside the Outcome\'s own piece adds nothing', () {
+      final layout = flowCarried(
+          lastLayout(),
+          plan(),
+          [CarriedOnSprint(outcomeId: 'a', carriedOnAt: _at(9, 5))],
+          now: _at(9, 5));
+      expect(layout.entryFor('a').pieces, hasLength(1));
+    });
+
+    test('a carry-on before the flow origin or with no last piece is ignored',
+        () {
+      final layout = flowCarried(
+          lastLayout(),
+          plan(),
+          [
+            CarriedOnSprint(outcomeId: 'a', carriedOnAt: _at(8)),
+            CarriedOnSprint(outcomeId: 'zzz', carriedOnAt: _at(9, 40)),
+          ],
+          now: _at(9, 40));
+      expect(layout.entryFor('a').pieces, hasLength(1));
+    });
+
+    test('an entry with no room left is flagged and kept', () {
+      final last = LastDayLayout();
+      List<DayTimelineEntry> entries() =>
+          [_entry('a', 30, engaged: true), _entry('b', 30)];
+      flowDay(
+          scope: 'day',
+          last: last,
+          now: _at(9),
+          flowOrigin: _at(9),
+          availableMinutes: 60,
+          chunkUnitMinutes: 23,
+          entries: entries());
+      final layout = flowDay(
+          scope: 'day',
+          last: last,
+          now: _at(9, 40),
+          flowOrigin: _at(9),
+          availableMinutes: 60,
+          chunkUnitMinutes: 23,
+          entries: [_entry('a', 30, engaged: true), _entry('b', 45)],
+          carriedOn: [sprint]);
+      expect(layout.entries.map((e) => e.outcomeId), ['a', 'b']);
+      expect(layout.entryFor('b').status, isNot(PlacementStatus.placed));
+    });
+
+    test('a pinned running entry stays frozen with a carried-on piece', () {
+      final last = LastDayLayout();
+      final entries = [_entry('a', 30, pinned: _at(9, 10), engaged: true)];
+      _flow(last, entries, now: _at(9));
+      final layout = flowCarried(last, entries, [sprint], now: _at(9, 50));
+      final a = layout.entryFor('a').pieces;
+      expect(a.first.start, _at(9, 10));
+      expect(a.last.carriedOnAt, _at(9, 40));
+    });
+  });
+
   group('sprint marks', () {
     test('a recorded Sprint becomes a mark naming its Outcome', () {
       final marks = tileSprintMarks([_sprint('s1', 'a')]);
