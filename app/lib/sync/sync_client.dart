@@ -3868,6 +3868,12 @@ class SyncClient {
   /// under the true reason; this row is then stamped released, so the scan does
   /// not examine it again.
   ///
+  /// The row is released only when the op is **in**, or when a refusal for
+  /// these bytes stands behind it ([_opIsAppliedOrRefused]). A row released
+  /// while its op is unapplied and unrefused is a refusal that disappeared: the
+  /// op would be applied to nothing and refused by no record, and the User
+  /// would have nothing to answer.
+  ///
   /// A **control** op re-admitted here carries two follow-ons the content path
   /// gets for free and the control path does not: its authority can change the
   /// grant verdict of content already judged, and it occupies a position in its
@@ -3897,6 +3903,12 @@ class SyncClient {
         continue;
       }
       affected.addAll(await _receive(PulledOp(seq: seq, envelope: row.envelope)));
+      // The row is released only when the op is in, or when a refusal for these
+      // bytes stands behind it. A row that leaves this scan with the op
+      // unapplied and nothing refusing it is an op nobody can see: the refusal
+      // the User would answer is gone, and no other row says the op was
+      // refused.
+      if (!await _opIsAppliedOrRefused(seq, row)) continue;
       // A control op admitted late does two things the content path gets for
       // free and the control path does not. Both run **before** the row is
       // stamped released: the unreleased row is the durable record that they
@@ -3919,6 +3931,32 @@ class SyncClient {
       await _markReleased(row.id);
     }
     return affected;
+  }
+
+  /// Whether [row]'s op is applied, or a refusal for the same bytes at the same
+  /// position stands behind it.
+  ///
+  /// The registration scan releases a row when the op is in, or when the refusal
+  /// that replaced it stands. The one case where neither holds is an op that was
+  /// logged, refused, and had the refusal row lost to a storage fault: the slot
+  /// carries the verdict, no row says so, and releasing the row would leave the
+  /// op applied to nothing and refused by no record.
+  Future<bool> _opIsAppliedOrRefused(int seq, QuarantineRow row) async {
+    final slot = await _opLogRowAt(seq);
+    if (slot != null &&
+        sameBytes(slot.envelope, row.envelope) &&
+        slot.appliedAt != null) {
+      return true;
+    }
+    final rows = await (_db.select(_db.quarantinedOps)
+          ..where((r) =>
+              r.workspaceId.equals(workspaceId) & r.seq.equals(seq)))
+        .get();
+    for (final other in rows) {
+      if (other.id == row.id) continue;
+      if (sameBytes(other.envelope, row.envelope)) return true;
+    }
+    return false;
   }
 
   /// Re-receive the control ops refused because their predecessor was not applied.
@@ -3962,6 +4000,10 @@ class SyncClient {
   ///
   /// A row the User has refused for good is not examined at all: their decision
   /// is the end of the question, so the scan skips it and the op stays refused.
+  /// It is reached for one thing only — the recovery below — because a verdict
+  /// that replaced the break is lost evidence whether or not the User has
+  /// answered the break, and the accusation it stands for is a fork, which no
+  /// answer to the break takes away.
   ///
   /// A row whose slot carries a verdict **other** than the break is not asked
   /// about again: the re-examination reached one, and the row is the break it
@@ -3975,7 +4017,6 @@ class SyncClient {
           ..where((row) =>
               row.workspaceId.equals(workspaceId) &
               row.releasedAt.isNull() &
-              row.resolution.isNull() &
               row.reason.equals(SyncRejectionReason.controlChainBreak.code))
           ..orderBy([(row) => OrderingTerm(expression: row.id)]))
         .get();
@@ -4005,6 +4046,20 @@ class SyncClient {
       // verdict for ever.
       final slot = await _opLogRowAt(seq);
       if (slot == null || !sameBytes(slot.envelope, row.envelope)) continue;
+      if (row.resolution != null) {
+        // The User has answered this break, so their decision ends the question:
+        // the op is not admitted and not examined again. It does not end the
+        // recovery, though. A verdict that replaced the break is evidence the
+        // User never saw, and the accusation it stands for is a fork — a chain
+        // event, not a decision about these bytes. So the replacement is
+        // recovered, and only that.
+        final answeredVerdict = slot.refusedReason;
+        if (answeredVerdict != null &&
+            answeredVerdict != SyncRejectionReason.controlChainBreak.code) {
+          await _replaceRefusedBreak(row, answeredVerdict, payload, header);
+        }
+        continue;
+      }
       if (slot.appliedAt != null) {
         // Applied already (a stop between the receive commit and the stamp, or a
         // failed read-back): nothing to apply, but the rebuild is still owed.
@@ -4108,14 +4163,19 @@ class SyncClient {
     } else {
       // The refusal is filed. The alarm it raises is a second step of
       // `_refuse`, and a fault between the two leaves the accusation unraised:
-      // raise it now, with the detail the filed refusal carries — and only when
-      // no alarm for it was ever raised, so an answer the User has already
-      // given is not taken back. A refusal the User has answered raises
-      // nothing, which is the rule `_refuse` follows.
+      // raise it now, with the detail the filed refusal carries.
+      //
+      // **The rule is `_refuse`'s own**, so the recovery and the uninterrupted
+      // path reach the same state: a refusal the User has answered raises
+      // nothing, and an unanswered one raises its accusation. The alarm is one
+      // row per kind and author, so raising it again counts another occurrence
+      // and re-opens it; an answer it carried is stale after that, and the store
+      // refuses a stale answer (`resolveAlarm`'s expected occurrence count).
+      // The answer to the **refusal row** — about these bytes — is never taken
+      // back: the row keeps it, and a refusal the User has answered raises
+      // nothing either way.
       final kind = alarmForRejection(reason);
-      if (kind != null &&
-          replacement.resolution == null &&
-          !await _hasRaisedAlarm(kind, header.authorMemberId)) {
+      if (kind != null && replacement.resolution == null) {
         await _raiseAlarm(
           kind,
           detail: replacement.detail,
@@ -4164,26 +4224,6 @@ class SyncClient {
       if (sameBytes(row.envelope, envelope)) return row;
     }
     return null;
-  }
-
-  /// Whether an alarm of [kind] has ever been raised for [authorMemberId].
-  ///
-  /// Unlike [_standingAlarm], a resolved alarm counts: this asks whether the
-  /// accusation was ever made, not whether it still stands. A User's answer is
-  /// not taken back because a scan recovered the refusal it was raised for.
-  Future<bool> _hasRaisedAlarm(
-    IntegrityAlarmKind kind,
-    String? authorMemberId,
-  ) async {
-    final rows = await (_db.select(_db.integrityAlarms)
-          ..where((row) =>
-              row.workspaceId.equals(workspaceId) &
-              row.kind.equals(kind.code) &
-              (authorMemberId == null
-                  ? row.authorMemberId.isNull()
-                  : row.authorMemberId.equals(authorMemberId))))
-        .get();
-    return rows.isNotEmpty;
   }
 
   /// Whether [envelope], held at [seq], is a control op that names a predecessor

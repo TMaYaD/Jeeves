@@ -947,6 +947,192 @@ void main() {
       expect(retired.releasedAt, isNotNull);
     });
 
+    test('an answered break whose replacement refusal was never filed is '
+        'filed, and the accusation is raised', () async {
+      final workspace =
+          await SimWorkspace.create(deviceCount: 3, fileBacked: true);
+      addTearDown(workspace.close);
+      final b = workspace.b;
+      await workspace.a.enrolment.turnOnEncryption(
+        passphrase: workspace.passphrase,
+      );
+      await workspace.syncAll();
+
+      final applied = await _applied(b);
+
+      final root = await workspace.recoverRoot();
+      final x = await AuthorFixture.create(
+        seed: Uint8List.fromList(List<int>.filled(32, 0x7c)),
+      );
+      final envelope = await memberRegisterEnvelope(
+        device: x,
+        workspaceId: workspace.workspaceId,
+        root: root,
+        prevControlHash: applied[applied.length - 2].payloadHash,
+        wallMs: workspace.clock.nowMs,
+      );
+      root.drop();
+      final header = OpHeader.parse(splitEnvelope(envelope).header);
+
+      // The state a fault leaves behind, with the User's answer on top: the
+      // slot carries the verdict the re-examination reached, the refusal it
+      // reached was never filed, and the break row is still open — answered.
+      final seq = applied.last.seq + 1;
+      final store = b.syncStore;
+      await store.into(store.opLog).insert(
+            OpLogCompanion.insert(
+              seq: seq,
+              workspaceId: b.client.workspaceId,
+              envelope: envelope,
+              opId: header.opId,
+              authorMemberId: header.authorMemberId,
+              authorSeq: header.authorSeq,
+              receivedAt: workspace.clock.asDateTime,
+              refusedReason: Value(SyncRejectionReason.controlChainFork.code),
+            ),
+          );
+      await store.into(store.quarantinedOps).insert(
+            QuarantinedOpsCompanion.insert(
+              workspaceId: b.client.workspaceId,
+              seq: Value(seq),
+              reason: _breakCode,
+              detail: 'refused for the missing predecessor',
+              envelope: envelope,
+              detectedAt: workspace.clock.asDateTime,
+              authorMemberId: Value(x.memberId),
+              authorSeq: Value(header.authorSeq),
+              resolution: Value(AlarmResolution.rejectedPermanently.code),
+              resolutionDecidedAt: Value(workspace.clock.asDateTime),
+            ),
+          );
+
+      // The scan runs on the first pull after a launch.
+      final reopened = await b.reopenSyncStore(attachTransport: true);
+      await reopened.pull();
+
+      // The answer was about the break, not about the fork: the replacement is
+      // filed and the accusation is raised, so the fork is not lost with it.
+      final replacement = (await reopened.quarantined(includeReleased: false))
+          .singleWhere((row) => row.seq == seq && row.reason != _breakCode);
+      expect(replacement.reason, SyncRejectionReason.controlChainFork.code);
+      expect(replacement.releasedAt, isNull);
+      expect(
+        (await reopened.integrityAlarms())
+            .where((alarm) => alarm.kind == IntegrityAlarmKind.controlChainFork.code),
+        hasLength(1),
+      );
+
+      // The op itself is untouched: it stays refused and unapplied.
+      final slot = await (b.syncStore.select(b.syncStore.opLog)
+            ..where((r) =>
+                r.workspaceId.equals(reopened.workspaceId) &
+                r.seq.equals(seq)))
+          .getSingle();
+      expect(slot.appliedAt, isNull);
+      expect(slot.refusedReason, SyncRejectionReason.controlChainFork.code);
+    });
+
+    test('an alarm of that kind raised before does not silence the accusation '
+        'for another refusal', () async {
+      final workspace =
+          await SimWorkspace.create(deviceCount: 3, fileBacked: true);
+      addTearDown(workspace.close);
+      final b = workspace.b;
+      await workspace.a.enrolment.turnOnEncryption(
+        passphrase: workspace.passphrase,
+      );
+      await workspace.syncAll();
+
+      final applied = await _applied(b);
+
+      final root = await workspace.recoverRoot();
+      final x = await AuthorFixture.create(
+        seed: Uint8List.fromList(List<int>.filled(32, 0x7d)),
+      );
+      final envelope = await memberRegisterEnvelope(
+        device: x,
+        workspaceId: workspace.workspaceId,
+        root: root,
+        prevControlHash: applied[applied.length - 2].payloadHash,
+        wallMs: workspace.clock.nowMs,
+      );
+      root.drop();
+      final header = OpHeader.parse(splitEnvelope(envelope).header);
+
+      // The state a fault leaves behind when it hits **between** the two steps
+      // of `_refuse`: the refusal is filed, and the alarm it raises is not.
+      final seq = applied.last.seq + 1;
+      final store = b.syncStore;
+      await store.into(store.opLog).insert(
+            OpLogCompanion.insert(
+              seq: seq,
+              workspaceId: b.client.workspaceId,
+              envelope: envelope,
+              opId: header.opId,
+              authorMemberId: header.authorMemberId,
+              authorSeq: header.authorSeq,
+              receivedAt: workspace.clock.asDateTime,
+              refusedReason: Value(SyncRejectionReason.controlChainFork.code),
+            ),
+          );
+      await store.into(store.quarantinedOps).insert(
+            QuarantinedOpsCompanion.insert(
+              workspaceId: b.client.workspaceId,
+              seq: Value(seq),
+              reason: _breakCode,
+              detail: 'refused for the missing predecessor',
+              envelope: envelope,
+              detectedAt: workspace.clock.asDateTime,
+              authorMemberId: Value(x.memberId),
+              authorSeq: Value(header.authorSeq),
+            ),
+          );
+      await store.into(store.quarantinedOps).insert(
+            QuarantinedOpsCompanion.insert(
+              workspaceId: b.client.workspaceId,
+              seq: Value(seq),
+              reason: SyncRejectionReason.controlChainFork.code,
+              detail: 'lost the fork tie-break',
+              envelope: envelope,
+              detectedAt: workspace.clock.asDateTime,
+              authorMemberId: Value(x.memberId),
+              authorSeq: Value(header.authorSeq),
+            ),
+          );
+
+      // An accusation of that kind for the same author, from an **earlier**
+      // refusal, that the User has already answered. The alarm is one row per
+      // kind and author, so this is the row the recovery would find.
+      await store.into(store.integrityAlarms).insert(
+            IntegrityAlarmsCompanion.insert(
+              workspaceId: b.client.workspaceId,
+              kind: IntegrityAlarmKind.controlChainFork.code,
+              authorMemberId: Value(x.memberId),
+              detail: 'an earlier fork',
+              occurrenceCount: 1,
+              firstDetectedAt: workspace.clock.asDateTime,
+              lastDetectedAt: workspace.clock.asDateTime,
+              resolvedAt: Value(workspace.clock.asDateTime),
+              resolution: Value(AlarmResolution.rejectedPermanently.code),
+              resolutionDecidedAt: Value(workspace.clock.asDateTime),
+            ),
+          );
+
+      // The scan runs on the first pull after a launch.
+      final reopened = await b.reopenSyncStore(attachTransport: true);
+      await reopened.pull();
+
+      // The accusation for **this** refusal is raised, exactly as the
+      // uninterrupted path would raise it: the alarm counts another occurrence
+      // and stands again. The answer it carried is stale after that, and the
+      // store refuses a stale answer.
+      final alarm = (await reopened.integrityAlarms())
+          .singleWhere((a) => a.kind == IntegrityAlarmKind.controlChainFork.code);
+      expect(alarm.occurrenceCount, 2);
+      expect(alarm.resolvedAt, isNull);
+      expect(alarm.resolution, isNull);
+    });
+
     test('the release is visible on Sync Health', () async {
       final scene = await _scene();
       final b = scene.workspace.b;
