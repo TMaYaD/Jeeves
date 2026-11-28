@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jeeves/models/action_draft.dart';
 import 'package:jeeves/models/time_choice.dart';
 import 'package:jeeves/models/time_context.dart';
 
@@ -23,6 +24,27 @@ void main() {
     test('clear equals clear and nothing else', () {
       expect(const ClearTimeChoice(), const ClearTimeChoice());
       expect(const ClearTimeChoice() == const TimeWindowDraft('w1'), isFalse);
+    });
+  });
+
+  group('ActionDraft.time', () {
+    const base = ActionDraft(text: 'Buy hinges');
+
+    test('copyWith keeps, replaces and clears the time', () {
+      final withWindow = base.copyWith(time: const TimeWindowDraft('w1'));
+      expect(withWindow.time, const TimeWindowDraft('w1'));
+      expect(withWindow.copyWith(text: 'Buy screws').time,
+          const TimeWindowDraft('w1'));
+      expect(withWindow.copyWith(time: const TimeWindowDraft('w2')).time,
+          const TimeWindowDraft('w2'));
+      expect(withWindow.copyWith(clearTime: true).time, isNull);
+    });
+
+    test('equality includes the time', () {
+      expect(base.copyWith(time: const TimeWindowDraft('w1')),
+          base.copyWith(time: const TimeWindowDraft('w1')));
+      expect(
+          base.copyWith(time: const TimeWindowDraft('w1')) == base, isFalse);
     });
   });
 }

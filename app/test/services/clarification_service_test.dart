@@ -15,7 +15,11 @@ import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/action_draft.dart';
 import 'package:jeeves/models/place_area.dart';
 import 'package:jeeves/models/place_choice.dart';
+import 'package:jeeves/models/follow_up_change.dart';
 import 'package:jeeves/models/routing_kind.dart';
+import 'package:jeeves/models/time_choice.dart';
+import 'package:jeeves/models/time_context.dart';
+import 'package:jeeves/models/time_window_hours.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/services/clarification_service.dart';
 import 'package:jeeves/sync/collection_codecs.dart'
@@ -71,6 +75,21 @@ Future<String> _namedPlace(GtdDatabase db, String name) async {
     userId: _userId,
   );
   expect(id, isNotNull, reason: 'the named Place must be created');
+  return id!;
+}
+
+/// A named time window ("Work hours", Monday to Friday), for a test that
+/// needs one to point at.
+Future<String> _workHoursWindow(GtdDatabase db) async {
+  final id = await db.timeWindowDao.createTimeWindow(
+    name: 'Work hours',
+    hours: {
+      for (var day = 1; day <= 5; day++)
+        day: (startMinute: 9 * 60, endMinute: 17 * 60),
+    },
+    userId: _userId,
+  );
+  expect(id, isNotNull, reason: 'the time window must be created');
   return id!;
 }
 
@@ -636,6 +655,152 @@ void main() {
       // reference to nothing — and the clarify still lands.
       expect((await db.actionDao.getCurrentAction(outcomeId))!.placeId, isNull);
       expect((await _row(db, outcomeId)).title, 'Buy hinges');
+    });
+
+
+    group('the draft\'s time', () {
+      Future<String> clarify(
+        RoutingKind to,
+        ActionTimeDraft? time, {
+        FollowUpChange? followUp,
+      }) async {
+        await db.captureDao
+            .insertCapture(_captureRow(id: 'c1', title: 'Buy hinges'));
+        return service.clarifyCaptureToOutcome(
+          'c1',
+          to: to,
+          userId: _userId,
+          title: 'Buy hinges',
+          action: ActionDraft(text: 'Buy hinges', time: time),
+          followUp: followUp,
+        );
+      }
+
+      test('to Next puts a named window on the Action it mints', () async {
+        final windowId = await _workHoursWindow(db);
+        final outcomeId =
+            await clarify(RoutingKind.nextAction, TimeWindowDraft(windowId));
+
+        final action = await db.actionDao.getCurrentAction(outcomeId);
+        expect(action!.timeWindowId, windowId);
+        expect(action.timeContext, isNull);
+      });
+
+      test('to Next puts a one-time time on the Action it mints', () async {
+        final value = TimeContext.create(
+          fromDate: DateTime(2026, 12, 1),
+          days: {6, 7},
+          startMinute: 9 * 60,
+          endMinute: 12 * 60,
+        )!;
+        final outcomeId =
+            await clarify(RoutingKind.nextAction, OneTimeDraft(value));
+
+        final action = await db.actionDao.getCurrentAction(outcomeId);
+        expect(TimeContext.tryParse(action!.timeContext), value);
+        expect(action.timeWindowId, isNull);
+      });
+
+      test('with no time the Action carries none', () async {
+        final outcomeId = await clarify(RoutingKind.nextAction, null);
+
+        final action = await db.actionDao.getCurrentAction(outcomeId);
+        expect(action!.timeWindowId, isNull);
+        expect(action.timeContext, isNull);
+      });
+
+      test('to Someday drops the time', () async {
+        final windowId = await _workHoursWindow(db);
+        final outcomeId =
+            await clarify(RoutingKind.maybe, TimeWindowDraft(windowId));
+
+        expect(await db.actionDao.getCurrentAction(outcomeId), isNull);
+        expect(await db.select(db.actions).get(), isEmpty);
+      });
+
+      test('a window deleted before the verdict lands the Outcome without '
+          'a time', () async {
+        final windowId = await _workHoursWindow(db);
+        await db.timeWindowDao.deleteTimeWindow(windowId);
+
+        final outcomeId =
+            await clarify(RoutingKind.nextAction, TimeWindowDraft(windowId));
+
+        final action = await db.actionDao.getCurrentAction(outcomeId);
+        expect(action!.timeWindowId, isNull);
+        expect((await _row(db, outcomeId)).title, 'Buy hinges');
+      });
+
+      test('to Waiting For with a follow-up date: a one-time time keeps its '
+          'days and hours and takes the date as its From', () async {
+        final outcomeId = await clarify(
+          RoutingKind.waitingFor,
+          OneTimeDraft(TimeContext.create(
+            fromDate: DateTime(2026, 12, 1),
+            days: {1, 2},
+            startMinute: 9 * 60,
+            endMinute: 17 * 60,
+          )!),
+          followUp: FollowUpChange.set(DateTime(2026, 12, 10)),
+        );
+
+        final action = await db.actionDao.getCurrentAction(outcomeId);
+        expect(
+          TimeContext.tryParse(action!.timeContext),
+          TimeContext.create(
+            fromDate: DateTime(2026, 12, 10),
+            days: {1, 2},
+            startMinute: 9 * 60,
+            endMinute: 17 * 60,
+          ),
+        );
+      });
+
+      test('to Waiting For with a follow-up date: a named window is not '
+          'written and the date is kept', () async {
+        final windowId = await _workHoursWindow(db);
+        final outcomeId = await clarify(
+          RoutingKind.waitingFor,
+          TimeWindowDraft(windowId),
+          followUp: FollowUpChange.set(DateTime(2026, 12, 10)),
+        );
+
+        final action = await db.actionDao.getCurrentAction(outcomeId);
+        expect(action!.timeWindowId, isNull);
+        expect(
+          TimeContext.tryParse(action.timeContext),
+          TimeContext.create(fromDate: DateTime(2026, 12, 10)),
+        );
+      });
+
+      test('to Waiting For without a follow-up date takes the window',
+          () async {
+        final windowId = await _workHoursWindow(db);
+        final outcomeId =
+            await clarify(RoutingKind.waitingFor, TimeWindowDraft(windowId));
+
+        expect(
+            (await db.actionDao.getCurrentAction(outcomeId))!.timeWindowId,
+            windowId);
+      });
+
+      test('the Capture row is unchanged by the time', () async {
+        final windowId = await _workHoursWindow(db);
+        await db.captureDao
+            .insertCapture(_captureRow(id: 'c1', title: 'Buy hinges'));
+        final before = await db.captureDao.getCapture('c1');
+        await service.clarifyCaptureToOutcome(
+          'c1',
+          to: RoutingKind.nextAction,
+          userId: _userId,
+          title: 'Buy hinges',
+          action: ActionDraft(
+              text: 'Buy hinges', time: TimeWindowDraft(windowId)),
+        );
+        final after = await db.captureDao.getCapture('c1');
+        expect(after!.title, before!.title);
+        expect(after.notes, before.notes);
+      });
     });
 
     test('the Capture keeps exactly what was captured', () async {

@@ -29,6 +29,8 @@ import '../database/gtd_database.dart';
 import '../models/action_draft.dart';
 import '../models/follow_up_change.dart';
 import '../models/place_choice.dart';
+import '../models/time_choice.dart';
+import '../models/time_context.dart';
 import '../models/routing_kind.dart';
 import '../providers/database_provider.dart';
 
@@ -343,7 +345,7 @@ class DaoClarificationService implements ClarificationService {
     }
     final id = outcomeId ?? uuid.v4();
     final ts = (now ?? DateTime.now()).toUtc();
-    var placeChanged = false;
+    var actionChanged = false;
     var placesChanged = false;
     await _db.capturing(() async {
       // Require the Capture at commit time, inside the transaction: the
@@ -415,16 +417,50 @@ class DaoClarificationService implements ClarificationService {
               changed = pin.changed;
               placesMoved = pin.placesChanged;
           }
-          placeChanged = changed;
+          actionChanged = actionChanged || changed;
           placesChanged = placesMoved;
+        }
+      }
+      // The time lands the same way. The Waiting For follow-up date is stored
+      // as the Action's one-time time, so it wins its field: a one-time draft
+      // keeps its days and hours and takes the date as its From, and a named
+      // window (which would clear the date) is not written.
+      final time = action?.time;
+      if (time != null &&
+          (to == RoutingKind.nextAction || to == RoutingKind.waitingFor)) {
+        final current = await _db.actionDao.getCurrentAction(id);
+        if (current != null) {
+          final followUpDate = followUp?.date;
+          var changed = false;
+          switch (time) {
+            case OneTimeDraft(:final value):
+              final merged = followUpDate == null
+                  ? value
+                  : TimeContext.create(
+                      fromDate: followUpDate,
+                      days: value.days,
+                      startMinute: value.startMinute,
+                      endMinute: value.endMinute,
+                    );
+              changed = await _db.actionDao
+                  .applySetTimeContext(current.id, merged, ts: ts);
+            case TimeWindowDraft(:final windowId):
+              // A window that has since been deleted is refused by the write,
+              // and the Outcome lands without a time.
+              if (followUpDate == null) {
+                changed = await _db.actionDao
+                    .applySetTimeWindow(current.id, windowId, ts: ts);
+              }
+          }
+          actionChanged = actionChanged || changed;
         }
       }
       await _db.captureDao.linkOutcome(captureId, id, userId, at: now);
       await _db.captureDao.stampClarified(captureId, at: now);
     });
-    // The Place write touched the Action row (and, for a pin, a `places` row),
+    // The Place and time writes touched the Action row (and, for a pin, a `places` row),
     // so the watchers that read across those tables refresh after the commit.
-    if (placeChanged) {
+    if (actionChanged) {
       _db.notifyActionsViewWrite();
       _db.notifyTodosViewWrite();
     }

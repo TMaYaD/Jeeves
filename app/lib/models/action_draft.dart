@@ -1,4 +1,5 @@
 import 'place_choice.dart';
+import 'time_choice.dart';
 
 /// The editable attributes of an **Action** as a UI/service-boundary value.
 ///
@@ -25,6 +26,7 @@ class ActionDraft {
     this.energyLevel,
     this.timeEstimateMinutes,
     this.place,
+    this.time,
   });
 
   /// The Action's phrase.
@@ -53,8 +55,12 @@ class ActionDraft {
   /// long it takes.
   final ActionPlaceDraft? place;
 
+  /// The time the Action can be done: a named time window or a one-time Time
+  /// context, or null when it carries none.
+  final ActionTimeDraft? time;
+
   /// Returns a copy with the named fields replaced. `null` means "keep";
-  /// use [clearEnergyLevel] / [clearTimeEstimate] / [clearPlace] to null a
+  /// use [clearEnergyLevel] / [clearTimeEstimate] / [clearPlace] / [clearTime] to null a
   /// value, matching the `clear*` convention of `TodoDao.updateFields` and
   /// `ActionDao.editAction`.
   ActionDraft copyWith({
@@ -62,9 +68,11 @@ class ActionDraft {
     String? energyLevel,
     int? timeEstimateMinutes,
     ActionPlaceDraft? place,
+    ActionTimeDraft? time,
     bool clearEnergyLevel = false,
     bool clearTimeEstimate = false,
     bool clearPlace = false,
+    bool clearTime = false,
   }) {
     return ActionDraft(
       text: text ?? this.text,
@@ -73,6 +81,7 @@ class ActionDraft {
           ? null
           : (timeEstimateMinutes ?? this.timeEstimateMinutes),
       place: clearPlace ? null : (place ?? this.place),
+      time: clearTime ? null : (time ?? this.time),
     );
   }
 
@@ -83,13 +92,14 @@ class ActionDraft {
           other.text == text &&
           other.energyLevel == energyLevel &&
           other.timeEstimateMinutes == timeEstimateMinutes &&
-          other.place == place;
+          other.place == place &&
+          other.time == time;
 
   @override
   int get hashCode =>
-      Object.hash(text, energyLevel, timeEstimateMinutes, place);
+      Object.hash(text, energyLevel, timeEstimateMinutes, place, time);
 
   @override
   String toString() => 'ActionDraft(text: $text, energyLevel: $energyLevel, '
-      'timeEstimateMinutes: $timeEstimateMinutes, place: $place)';
+      'timeEstimateMinutes: $timeEstimateMinutes, place: $place, time: $time)';
 }
