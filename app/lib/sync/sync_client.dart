@@ -2943,8 +2943,7 @@ class SyncClient {
         _ControlPosition.quarantineThis) {
       throw SyncRejection(
         SyncRejectionReason.controlChainFork,
-        'control op at seq ${pulled.seq} lost the fork tie-break for '
-        'prev_control_hash ${_hex(payload.prevControlHash)}',
+        _forkRefusalDetail(pulled.seq, payload.prevControlHash),
       );
     }
 
@@ -2982,6 +2981,14 @@ class SyncClient {
     await _appendAppliedControlOp(pulled, payload, header, verified.payloadBytes);
     return learned;
   }
+
+  /// The detail of a control op that lost the fork tie-break.
+  ///
+  /// Shared with [_replaceRefusedBreak], so a refusal the scan recovers says
+  /// the same thing as the one the receive filed.
+  String _forkRefusalDetail(int seq, Uint8List prevControlHash) =>
+      'control op at seq $seq lost the fork tie-break for '
+      'prev_control_hash ${_hex(prevControlHash)}';
 
   /// The registering pair's binding steps: the certificate must be *about* this
   /// author, and its own key must have signed this envelope.
@@ -3955,6 +3962,14 @@ class SyncClient {
   ///
   /// A row the User has refused for good is not examined at all: their decision
   /// is the end of the question, so the scan skips it and the op stays refused.
+  ///
+  /// A row whose slot carries a verdict **other** than the break is not asked
+  /// about again: the re-examination reached one, and the row is the break it
+  /// replaced. The refusal that replaced it is filed by `_receive`, in a second
+  /// transaction after the receive transaction commits, so a storage fault
+  /// between the two can leave the slot carrying the verdict, the refusal
+  /// unfiled and this row unreleased — which is what
+  /// [_replaceRefusedBreak] recovers.
   Future<Set<AffectedEntity>> _releaseOpsAwaitingControlPredecessor() async {
     final rows = await (_db.select(_db.quarantinedOps)
           ..where((row) =>
@@ -3968,12 +3983,15 @@ class SyncClient {
     for (final row in rows) {
       final seq = row.seq;
       if (seq == null) continue;
-      // Parse the control op to get its author for chain successor release.
+      // Parse the control op to get its author for chain successor release, and
+      // the predecessor it names, for the detail a replaced break is filed
+      // under.
       final OpHeader header;
+      final ControlPayload payload;
       try {
         final parts = splitEnvelope(row.envelope);
         header = OpHeader.parse(parts.header);
-        ControlPayload.decode(parseBody(parts.body));
+        payload = ControlPayload.decode(parseBody(parts.body));
       } on SyncRejection {
         continue;
       }
@@ -3996,9 +4014,17 @@ class SyncClient {
         affected.addAll(await _releaseChainSuccessors(header.authorMemberId));
         continue;
       }
-      if (slot.refusedReason != SyncRejectionReason.controlChainBreak.code) {
-        // The slot holds these bytes but does not carry this refusal: it is not
-        // the positional break this scan heals, and the row is left alone.
+      final slotVerdict = slot.refusedReason;
+      if (slotVerdict != null &&
+          slotVerdict != SyncRejectionReason.controlChainBreak.code) {
+        // The slot holds these bytes and carries a verdict **other** than the
+        // break: the re-examination reached one, and this row is the break it
+        // replaced. The verdict is stamped inside the receive transaction and
+        // the refusal it reached is filed in a second one, so a storage fault
+        // between the two leaves the slot carrying the verdict, the refusal
+        // unfiled and this row unreleased — and a guard on the reason would
+        // skip the row for ever. So the row is reached here.
+        await _replaceRefusedBreak(row, slotVerdict, payload, header);
         continue;
       }
       if (!await _namesAppliedPredecessor(row.envelope, seq)) continue;
@@ -4039,6 +4065,123 @@ class SyncClient {
       await _markReleased(row.id);
     }
     return affected;
+  }
+
+  /// Retire a break row that a later verdict replaced, filing that verdict if
+  /// it was never filed.
+  ///
+  /// The re-examination's verdict is stamped on the `op_log` slot inside the
+  /// receive transaction, and the refusal it reached is filed in a second one
+  /// ([_refuse]). A storage fault between the two leaves the slot carrying the
+  /// new verdict, the replacement refusal unfiled and the break row unreleased
+  /// — and the scan would then skip the row for ever, because the slot no
+  /// longer carries the break it is here to heal.
+  ///
+  /// So the row is reached: the replacement refusal is filed from the verdict
+  /// the slot carries — the stamp the receive transaction committed, which is
+  /// the verdict the re-examination reached — and the break row is retired.
+  /// The op itself is not touched: it stays refused, and the refusal that
+  /// replaced the break says why.
+  Future<void> _replaceRefusedBreak(
+    QuarantineRow row,
+    String verdictCode,
+    ControlPayload payload,
+    OpHeader header,
+  ) async {
+    final seq = row.seq;
+    if (seq == null) return;
+    final reason = SyncRejectionReason.values
+        .where((candidate) => candidate.code == verdictCode)
+        .firstOrNull;
+    // A code this build does not know: the stamp is not a verdict it can file,
+    // and the row is left alone rather than retired on a guess.
+    if (reason == null) return;
+    final replacement = await _refusalRowAt(seq, reason, row.envelope);
+    if (replacement == null) {
+      // The replacement was never filed: the fault hit `_refuse`'s own insert.
+      // File it now, under the verdict the slot carries.
+      await _refuse(
+        PulledOp(seq: seq, envelope: row.envelope),
+        SyncRejection(reason, _verdictDetail(seq, reason, payload)),
+        header,
+      );
+    } else {
+      // The refusal is filed. The alarm it raises is a second step of
+      // `_refuse`, and a fault between the two leaves the accusation unraised:
+      // raise it now, with the detail the filed refusal carries — and only when
+      // no alarm for it was ever raised, so an answer the User has already
+      // given is not taken back.
+      final kind = alarmForRejection(reason);
+      if (kind != null &&
+          !await _hasRaisedAlarm(kind, header.authorMemberId)) {
+        await _raiseAlarm(
+          kind,
+          detail: replacement.detail,
+          authorMemberId: header.authorMemberId,
+          quarantineOpRowId: replacement.id,
+        );
+      }
+    }
+    // The break is answered: the op cannot apply, and the refusal that
+    // replaced it is filed. Retiring the row keeps the scan from asking about
+    // it again.
+    await _markReleased(row.id);
+  }
+
+  /// The detail a refusal filed under [reason] carries.
+  ///
+  /// The fork's detail is the receive path's own text, so an accusation the
+  /// User reads says the same thing whether the refusal was filed by the
+  /// receive or recovered by the scan.
+  String _verdictDetail(
+    int seq,
+    SyncRejectionReason reason,
+    ControlPayload payload,
+  ) =>
+      reason == SyncRejectionReason.controlChainFork
+          ? _forkRefusalDetail(seq, payload.prevControlHash)
+          : 'control op at seq $seq was refused as ${reason.code}';
+
+  /// The refusal filed for these bytes under [reason] at [seq], released or not.
+  ///
+  /// Released rows count: a refusal the User has already dealt with was still
+  /// filed, and filing it again would accuse a second time about a change that
+  /// has already been answered.
+  Future<QuarantineRow?> _refusalRowAt(
+    int seq,
+    SyncRejectionReason reason,
+    Uint8List envelope,
+  ) async {
+    final rows = await (_db.select(_db.quarantinedOps)
+          ..where((row) =>
+              row.workspaceId.equals(workspaceId) &
+              row.seq.equals(seq) &
+              row.reason.equals(reason.code)))
+        .get();
+    for (final row in rows) {
+      if (sameBytes(row.envelope, envelope)) return row;
+    }
+    return null;
+  }
+
+  /// Whether an alarm of [kind] has ever been raised for [authorMemberId].
+  ///
+  /// Unlike [_standingAlarm], a resolved alarm counts: this asks whether the
+  /// accusation was ever made, not whether it still stands. A User's answer is
+  /// not taken back because a scan recovered the refusal it was raised for.
+  Future<bool> _hasRaisedAlarm(
+    IntegrityAlarmKind kind,
+    String? authorMemberId,
+  ) async {
+    final rows = await (_db.select(_db.integrityAlarms)
+          ..where((row) =>
+              row.workspaceId.equals(workspaceId) &
+              row.kind.equals(kind.code) &
+              (authorMemberId == null
+                  ? row.authorMemberId.isNull()
+                  : row.authorMemberId.equals(authorMemberId))))
+        .get();
+    return rows.isNotEmpty;
   }
 
   /// Whether [envelope], held at [seq], is a control op that names a predecessor

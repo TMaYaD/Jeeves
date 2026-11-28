@@ -663,6 +663,102 @@ void main() {
       );
     });
 
+    test('a break whose replacement refusal was never filed is filed, and the '
+        'break is retired', () async {
+      final workspace =
+          await SimWorkspace.create(deviceCount: 3, fileBacked: true);
+      addTearDown(workspace.close);
+      final b = workspace.b;
+      await workspace.a.enrolment.turnOnEncryption(
+        passphrase: workspace.passphrase,
+      );
+      await workspace.syncAll();
+
+      final applied = await _applied(b);
+
+      // A control op naming an **earlier** applied op: a fork candidate, the
+      // shape that reaches the tie-break and can lose it.
+      final root = await workspace.recoverRoot();
+      final x = await AuthorFixture.create(
+        seed: Uint8List.fromList(List<int>.filled(32, 0x79)),
+      );
+      final envelope = await memberRegisterEnvelope(
+        device: x,
+        workspaceId: workspace.workspaceId,
+        root: root,
+        prevControlHash: applied[applied.length - 2].payloadHash,
+        wallMs: workspace.clock.nowMs,
+      );
+      root.drop();
+      final header = OpHeader.parse(splitEnvelope(envelope).header);
+
+      // The state a storage fault leaves behind. The re-examination reached a
+      // verdict and the receive transaction stamped it on the slot; the refusal
+      // it reached is filed in a second transaction, and that insert faulted.
+      // So the slot carries the fork, the refusal is not filed, and the break
+      // row is still unreleased.
+      //
+      // **Staged at the store level**, because the fault itself cannot be
+      // staged in a served stream — the same way the re-examination's verdict
+      // is staged above.
+      final seq = applied.last.seq + 1;
+      final store = b.syncStore;
+      await store.into(store.opLog).insert(
+            OpLogCompanion.insert(
+              seq: seq,
+              workspaceId: b.client.workspaceId,
+              envelope: envelope,
+              opId: header.opId,
+              authorMemberId: header.authorMemberId,
+              authorSeq: header.authorSeq,
+              receivedAt: workspace.clock.asDateTime,
+              refusedReason: Value(SyncRejectionReason.controlChainFork.code),
+            ),
+          );
+      await store.into(store.quarantinedOps).insert(
+            QuarantinedOpsCompanion.insert(
+              workspaceId: b.client.workspaceId,
+              seq: Value(seq),
+              reason: _breakCode,
+              detail: 'refused for the missing predecessor',
+              envelope: envelope,
+              detectedAt: workspace.clock.asDateTime,
+              authorMemberId: Value(x.memberId),
+              authorSeq: Value(header.authorSeq),
+            ),
+          );
+
+      // The scan runs on the first pull after a launch.
+      final reopened = await b.reopenSyncStore(attachTransport: true);
+      await reopened.pull();
+
+      // The replacement refusal is filed, and the break row is retired: the op
+      // cannot apply, and the refusal that replaced the break says why.
+      final replacement = (await reopened.quarantined(includeReleased: false))
+          .singleWhere((row) => row.seq == seq && row.reason != _breakCode);
+      expect(replacement.reason, SyncRejectionReason.controlChainFork.code);
+      expect(replacement.releasedAt, isNull);
+      final retired = (await _breakRows(reopened)).singleWhere((row) => row.seq == seq);
+      expect(retired.releasedAt, isNotNull);
+
+      // The accusation stands: a fork is not a row the User can read and
+      // ignore, it is an alarm.
+      expect(
+        (await reopened.integrityAlarms())
+            .where((alarm) => alarm.kind == IntegrityAlarmKind.controlChainFork.code),
+        hasLength(1),
+      );
+
+      // The op itself is untouched: it stays refused and unapplied.
+      final slot = await (b.syncStore.select(b.syncStore.opLog)
+            ..where((r) =>
+                r.workspaceId.equals(reopened.workspaceId) &
+                r.seq.equals(seq)))
+          .getSingle();
+      expect(slot.appliedAt, isNull);
+      expect(slot.refusedReason, SyncRejectionReason.controlChainFork.code);
+    });
+
     test('the release is visible on Sync Health', () async {
       final scene = await _scene();
       final b = scene.workspace.b;
