@@ -577,6 +577,9 @@ class _NowTimeline extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final extras = ref.watch(nowTimelineExtrasProvider);
+    // Wait for the named windows: laid out without them, a windowed Outcome
+    // would start before its window opens and stay there once started.
+    if (!extras.timeWindowsLoaded) return const SizedBox.shrink();
     // Which Outcomes are Timeboxed (issue #923): their tile carries the
     // heavier bottom edge. Absent from the map == not Timeboxed, and the map
     // is empty until the first emission lands, so no tile shows the edge

@@ -8,6 +8,8 @@
 @TestOn('!browser')
 library;
 
+import 'dart:async';
+
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -16,8 +18,10 @@ import 'package:go_router/go_router.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/action_place_and_time_window.dart';
 import 'package:jeeves/providers/clock_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/providers/time_window_provider.dart';
 import 'package:jeeves/screens/focus_screen.dart';
 import 'package:jeeves/services/notification_service.dart';
 
@@ -116,6 +120,43 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.runAsync(() => pumpEventQueue());
       container.dispose();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 10));
+    }
+  });
+
+  testWidgets('the Now timeline waits for the windows before placing anything',
+      (tester) async {
+    final windows = StreamController<Map<String, ActionTimeWindow>>();
+    final realWindows = (await tester
+        .runAsync(() => db.actionDao.getCurrentTimeWindows()))!;
+    final held = ProviderContainer(overrides: [
+      databaseProvider.overrideWithValue(db),
+      clockProvider.overrideWithValue(
+          () => _sessionStart.add(const Duration(minutes: 5))),
+      notificationServiceProvider.overrideWithValue(StubNotificationService()),
+      currentTimeWindowsProvider.overrideWith((_) => windows.stream),
+    ]);
+    try {
+      await tester.pumpWidget(UncontrolledProviderScope(
+        container: held,
+        child: MaterialApp.router(routerConfig: router),
+      ));
+      await _pumpFrames(tester, frames: 20);
+      // No window data yet: no tile is drawn, so none can start at 09:00.
+      expect(find.byKey(const Key('day_timeline_tile_store_1')), findsNothing);
+
+      windows.add(realWindows);
+      await _pumpFrames(tester, frames: 20);
+      double top(String id) => tester
+          .getTopLeft(find.byKey(Key('day_timeline_tile_${id}_1')))
+          .dy;
+      expect(top('store') - top('plain'), greaterThanOrEqualTo(120));
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.runAsync(() => pumpEventQueue());
+      held.dispose();
+      await windows.close();
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 10));
     }

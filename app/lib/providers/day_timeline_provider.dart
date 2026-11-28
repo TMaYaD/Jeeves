@@ -134,6 +134,7 @@ class NowTimelineExtras {
     this.engagedTaskIds = const {},
     this.timeContexts = const {},
     this.timeWindows = const {},
+    this.timeWindowsLoaded = true,
     this.contextTags = const {},
     this.batchState = const {},
     this.sprintMarks = const [],
@@ -148,6 +149,11 @@ class NowTimelineExtras {
   /// Each Outcome's named time window, so a picked Outcome keeps the time
   /// the planning timeline gave it.
   final Map<String, ActionTimeWindow> timeWindows;
+
+  /// False until the first read of [timeWindows] lands. The Now timeline waits
+  /// for it: laid out without windows, a windowed Outcome would start before
+  /// its window opens, and a started piece does not move when they arrive.
+  final bool timeWindowsLoaded;
 
   /// Each Plan Outcome's context tags, for the small-task suggestion.
   final Map<String, List<({String id, String name})>> contextTags;
@@ -181,6 +187,7 @@ final nowTimelineExtrasProvider = Provider<NowTimelineExtras>((ref) {
         ref.watch(currentTimeContextsProvider).asData?.value ?? const {},
     timeWindows:
         ref.watch(currentTimeWindowsProvider).asData?.value ?? const {},
+    timeWindowsLoaded: ref.watch(currentTimeWindowsProvider).hasValue,
     contextTags:
         ref.watch(activeSessionContextTagsProvider).asData?.value ?? const {},
     batchState:
