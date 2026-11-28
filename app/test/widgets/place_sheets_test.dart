@@ -208,6 +208,9 @@ void main() {
         overrides: [
           databaseProvider.overrideWithValue(db),
           locationSourceProvider.overrideWithValue(FakeLocationSource()),
+          timeWindowsProvider.overrideWith((_) => Stream.value(const [])),
+          phoneTimeZoneNameProvider
+              .overrideWith((ref) async => 'Europe/Amsterdam'),
         ],
         child: MaterialApp(
           home: Scaffold(body: PlaceEditorSheet(place: _aPlace())),

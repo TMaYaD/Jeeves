@@ -219,6 +219,10 @@ void main() {
     expect(find.byKey(const Key('place_arrival_settings_line')), findsOneWidget);
 
     // The button opens the phone's settings, once.
+    await tester.ensureVisible(
+      find.byKey(const Key('place_arrival_open_settings')),
+    );
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('place_arrival_open_settings')));
     await _settle(tester);
     expect(settings.opens, 1);
