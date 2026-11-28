@@ -31,6 +31,13 @@ bool sameSnapshot(ArrivalSnapshot a, ArrivalSnapshot b) {
     for (var title = 0; title < first.dueTitles.length; title++) {
       if (first.dueTitles[title] != second.dueTitles[title]) return false;
     }
+    if (first.dueHabits.length != second.dueHabits.length) return false;
+    for (var habit = 0; habit < first.dueHabits.length; habit++) {
+      final a = first.dueHabits[habit];
+      final b = second.dueHabits[habit];
+      if (a.title != b.title) return false;
+      if (a.forDayKeys.join(',') != b.forDayKeys.join(',')) return false;
+    }
   }
   return true;
 }
@@ -60,6 +67,9 @@ void main() {
           radiusMeters: 150,
           dueCount: 2,
           dueTitles: ['Buy screws', 'Return the drill'],
+          dueHabits: [
+            (title: 'Workout', forDayKeys: ['2026-11-28', '2026-11-30']),
+          ],
         ),
         (
           id: 'place-2',
@@ -69,6 +79,7 @@ void main() {
           radiusMeters: 300,
           dueCount: 0,
           dueTitles: [],
+          dueHabits: [],
         ),
       ],
     );
@@ -82,6 +93,29 @@ void main() {
       expect(decodeArrivalSnapshot('this is not a snapshot'),
           emptyArrivalSnapshot);
       expect(decodeArrivalSnapshot('{"places": 7}'), emptyArrivalSnapshot);
+    });
+
+    test('reads a snapshot written before Habits as having no Habits', () {
+      final decoded = decodeArrivalSnapshot(
+        '{"version": 1, "places": [{"id": "place-1", "name": "Home", '
+        '"dueCount": 1, "dueTitles": ["Buy screws"]}]}',
+      );
+
+      expect(decoded.places.single.dueHabits, isEmpty);
+      expect(decoded.places.single.dueTitles, ['Buy screws']);
+    });
+
+    test('skips a Habit without a title and a day that is not a string', () {
+      final decoded = decodeArrivalSnapshot(
+        '{"places": [{"id": "place-1", "dueHabits": ['
+        '{"forDayKeys": ["2026-11-28"]}, '
+        '{"title": "Workout", "forDayKeys": ["2026-11-28", 7]}]}]}',
+      );
+
+      final habits = decoded.places.single.dueHabits;
+      expect(habits, hasLength(1));
+      expect(habits.single.title, 'Workout');
+      expect(habits.single.forDayKeys, ['2026-11-28']);
     });
 
     test('skips a Place that cannot be read, and keeps the rest', () {
@@ -157,6 +191,7 @@ void main() {
             radiusMeters: 150,
             dueCount: 1,
             dueTitles: ['Buy screws'],
+            dueHabits: [],
           ),
         ],
       );

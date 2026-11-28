@@ -1,5 +1,5 @@
 /// Keeps the device-local arrival snapshot in step with the switched-on Places
-/// and the Outcomes due at them (issue #1092).
+/// and the Outcomes and Habits due at them (issues #1092, #1095).
 ///
 /// The snapshot is what the background arrival code reads while Jeeves is
 /// closed. It is written here, in the foreground, from the store — and from
@@ -15,12 +15,18 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../database/gtd_database.dart';
 import '../models/action_place_and_time_window.dart';
+import '../models/habit_commitment.dart';
+import '../models/habit_days.dart';
+import '../models/habit_for_day.dart';
+import '../models/habit_progress.dart';
 import '../services/arrival_snapshot.dart';
 import '../services/arrival_visit_rule.dart';
 import '../services/geofence_registrar.dart';
 import '../services/location_source.dart';
 import 'arrival_notification_settings.dart';
 import 'database_provider.dart';
+import 'habit_progress_provider.dart'
+    show habitHistoriesProvider, habitTodayProvider;
 import 'location_source_provider.dart';
 import 'place_gate_provider.dart';
 
@@ -80,10 +86,10 @@ final arrivalSnapshotWriterProvider = Provider<ArrivalSnapshotWriter?>((ref) {
 /// run. On the web it does nothing at all: there is no arrival notification
 /// there, so there is no snapshot to keep.
 ///
-/// Each of the four things it reads is watched, so the snapshot is rewritten
+/// Each of the things it reads is watched, so the snapshot is rewritten
 /// whenever any of them changes: the switched-on Places (in shared
-/// preferences), the named Places, the Outcomes on Next, and the Place each
-/// Outcome carries.
+/// preferences), the named Places, the Outcomes on Next, the Place each
+/// Outcome carries, the Habits with their days, and today.
 final arrivalSnapshotReconcilerProvider = Provider<void>((ref) {
   if (!arrivalNotificationsSupported) return;
 
@@ -94,14 +100,17 @@ final arrivalSnapshotReconcilerProvider = Provider<void>((ref) {
   final named = ref.watch(namedPlacesProvider);
   final next = ref.watch(nextOutcomesProvider);
   final current = ref.watch(currentPlacesProvider);
+  final habitHistories = ref.watch(habitHistoriesProvider);
+  final habitToday = ref.watch(habitTodayProvider);
 
-  // Until all four have answered, what is known is not what is true: an
+  // Until all five have answered, what is known is not what is true: an
   // empty fallback would read as "nothing is switched on" and the visit
   // record would be pruned away. The provider is rebuilt as each one lands.
   if (!switchedOn.hasValue ||
       !named.hasValue ||
       !next.hasValue ||
-      !current.hasValue) {
+      !current.hasValue ||
+      !habitHistories.hasValue) {
     return;
   }
 
@@ -110,6 +119,8 @@ final arrivalSnapshotReconcilerProvider = Provider<void>((ref) {
     namedPlaces: named.requireValue,
     nextOutcomes: next.requireValue,
     currentPlaces: current.requireValue,
+    habitHistories: habitHistories.requireValue,
+    today: parseHabitDay(habitToday)!,
   );
 });
 
@@ -123,11 +134,17 @@ final arrivalSnapshotReconcilerProvider = Provider<void>((ref) {
 ///
 /// A one-time pin is never in the snapshot: it belongs to a single Action and
 /// is never listed, so no Place id of the snapshot is ever a pin's.
+///
+/// A Habit is due at a Place when it carries that Place; the snapshot records
+/// the days over the next [arrivalHabitHorizonDays] it is for, by the same rule
+/// the Habit notification uses. [today] is a UTC calendar day.
 ArrivalSnapshot buildArrivalSnapshot({
   required Set<String> switchedOnPlaceIds,
   required List<Place> namedPlaces,
   required List<Todo> nextOutcomes,
   required Map<String, ActionPlace> currentPlaces,
+  required List<HabitHistory> habitHistories,
+  required DateTime today,
 }) {
   final places = <ArrivalPlace>[];
   for (final place in namedPlaces) {
@@ -140,6 +157,21 @@ ArrivalSnapshot buildArrivalSnapshot({
       titles.add(outcome.title);
     }
 
+    final habits = <ArrivalHabit>[];
+    for (final history in habitHistories) {
+      if (history.habit.placeId != place.id) continue;
+      final todayProgress = computeHabitProgress(history, today);
+      final forDayKeys = <String>[];
+      for (var offset = 0; offset < arrivalHabitHorizonDays; offset++) {
+        final day = DateTime.utc(today.year, today.month, today.day + offset);
+        if (isHabitForDay(history, todayProgress, day: day, today: today)) {
+          forDayKeys.add(habitDayKey(day));
+        }
+      }
+      if (forDayKeys.isEmpty) continue;
+      habits.add((title: history.habit.title, forDayKeys: forDayKeys));
+    }
+
     places.add((
       id: place.id,
       // A named Place always has a name; the column is nullable only because
@@ -150,6 +182,7 @@ ArrivalSnapshot buildArrivalSnapshot({
       radiusMeters: place.radiusMeters,
       dueCount: titles.length,
       dueTitles: titles.take(arrivalDueTitlesLimit).toList(growable: false),
+      dueHabits: habits,
     ));
   }
   return (places: places);
@@ -211,12 +244,16 @@ class ArrivalSnapshotWriter {
     required List<Place> namedPlaces,
     required List<Todo> nextOutcomes,
     required Map<String, ActionPlace> currentPlaces,
+    required List<HabitHistory> habitHistories,
+    required DateTime today,
   }) {
     _enqueue(() => _write(
           switchedOnPlaceIds: switchedOnPlaceIds,
           namedPlaces: namedPlaces,
           nextOutcomes: nextOutcomes,
           currentPlaces: currentPlaces,
+          habitHistories: habitHistories,
+          today: today,
         ));
   }
 
@@ -248,12 +285,16 @@ class ArrivalSnapshotWriter {
     required List<Place> namedPlaces,
     required List<Todo> nextOutcomes,
     required Map<String, ActionPlace> currentPlaces,
+    required List<HabitHistory> habitHistories,
+    required DateTime today,
   }) async {
     final snapshot = buildArrivalSnapshot(
       switchedOnPlaceIds: switchedOnPlaceIds,
       namedPlaces: namedPlaces,
       nextOutcomes: nextOutcomes,
       currentPlaces: currentPlaces,
+      habitHistories: habitHistories,
+      today: today,
     );
 
     _latest = snapshot;
@@ -331,6 +372,16 @@ bool _sameSnapshot(ArrivalSnapshot a, ArrivalSnapshot b) {
     if (first.dueTitles.length != second.dueTitles.length) return false;
     for (var title = 0; title < first.dueTitles.length; title++) {
       if (first.dueTitles[title] != second.dueTitles[title]) return false;
+    }
+    if (first.dueHabits.length != second.dueHabits.length) return false;
+    for (var habit = 0; habit < first.dueHabits.length; habit++) {
+      final a = first.dueHabits[habit];
+      final b = second.dueHabits[habit];
+      if (a.title != b.title) return false;
+      if (a.forDayKeys.length != b.forDayKeys.length) return false;
+      for (var key = 0; key < a.forDayKeys.length; key++) {
+        if (a.forDayKeys[key] != b.forDayKeys[key]) return false;
+      }
     }
   }
   return true;
