@@ -5036,32 +5036,67 @@ class SyncClient {
   /// The same rules as [resolveAlarm]: a decision the reason does not offer
   /// throws [StateError], another Workspace's row throws [StateError], and
   /// nothing is written either way.
+  ///
+  /// **A change the log has since applied is not offered a decision, and does
+  /// not take one.** The refusal stamp is gone by then, so no later rebuild
+  /// checks the decision: recording it would be recording a refusal of
+  /// something that is already in, and the row would drop out of the screen
+  /// saying the user had answered it. The same rule the rebuild follows when it
+  /// admits a change the log had refused — an applied change has nothing left
+  /// to decide ([_retireAdmittedRefusal]).
+  ///
+  /// The decision and the admission read each other's state inside one
+  /// transaction, so the two are serialized: a decision recorded first keeps
+  /// the change refused (the admission reads the decision, and skips the row),
+  /// and an admission that lands first leaves the decision with nothing to
+  /// decide (this method reads the admission, and refuses).
   Future<void> resolveRefusedItem(
     int quarantineRowId,
     AlarmResolution resolution,
   ) async {
-    final row = await (_db.select(_db.quarantinedOps)
-          ..where((r) => r.id.equals(quarantineRowId)))
-        .getSingleOrNull();
-    if (row == null) {
-      throw StateError('no refused change with row id $quarantineRowId');
-    }
-    if (row.workspaceId != workspaceId) {
-      throw StateError(
-        'refused change $quarantineRowId belongs to another Workspace',
-      );
-    }
-    if (!resolutionsForRefusalCode(row.reason).contains(resolution)) {
-      throw StateError(
-        'a ${row.reason} refusal offers no ${resolution.code} resolution',
-      );
-    }
-    await (_db.update(_db.quarantinedOps)
-          ..where((r) => r.id.equals(row.id)))
-        .write(QuarantinedOpsCompanion(
-      resolution: Value(resolution.code),
-      resolutionDecidedAt: Value(_now()),
-    ));
+    await _db.transaction(() async {
+      final row = await (_db.select(_db.quarantinedOps)
+            ..where((r) => r.id.equals(quarantineRowId)))
+          .getSingleOrNull();
+      if (row == null) {
+        throw StateError('no refused change with row id $quarantineRowId');
+      }
+      if (row.workspaceId != workspaceId) {
+        throw StateError(
+          'refused change $quarantineRowId belongs to another Workspace',
+        );
+      }
+      if (!resolutionsForRefusalCode(row.reason).contains(resolution)) {
+        throw StateError(
+          'a ${row.reason} refusal offers no ${resolution.code} resolution',
+        );
+      }
+      if (await _refusalApplied(row)) {
+        throw StateError(
+          'refused change $quarantineRowId has been applied; there is nothing '
+          'left to refuse',
+        );
+      }
+      await (_db.update(_db.quarantinedOps)
+            ..where((r) => r.id.equals(row.id)))
+          .write(QuarantinedOpsCompanion(
+        resolution: Value(resolution.code),
+        resolutionDecidedAt: Value(_now()),
+      ));
+    });
+  }
+
+  /// Whether the change a refused row holds has since been applied.
+  ///
+  /// The bytes are compared, not just the transport `seq`: a server that hands
+  /// the same `seq` out twice leaves two ops at one position, and a decision
+  /// about one of them is not a decision about the other.
+  Future<bool> _refusalApplied(QuarantineRow row) async {
+    final seq = row.seq;
+    if (seq == null) return false;
+    final op = await _opLogRowAt(seq);
+    if (op == null || op.appliedAt == null) return false;
+    return sameBytes(op.envelope, row.envelope);
   }
 
   /// The refused changes an alarm covers.
@@ -5538,6 +5573,37 @@ SELECT
             ? row.workspaceId.equals(workspaceId)
             : row.workspaceId.equals(workspaceId) & row.releasedAt.isNull())
         ..orderBy([(row) => OrderingTerm(expression: row.id)]);
+
+  /// The refused rows whose change the log has since applied.
+  ///
+  /// A refusal the log has since applied has nothing left to decide — the
+  /// change is in, the refusal stamp is gone, and no later rebuild checks a
+  /// decision about it (see [resolveRefusedItem]). The row stays: it is the
+  /// evidence that the change arrived out of order. What goes is the offer.
+  ///
+  /// The join is on the transport `seq`, which a server that hands the same
+  /// `seq` out twice repeats, and the bytes are compared here rather than in
+  /// the query: one op's application is never read as another's.
+  Stream<Set<int>> watchAppliedRefusalRowIds() {
+    final query = _db.select(_db.quarantinedOps).join([
+      innerJoin(
+        _db.opLog,
+        _db.opLog.seq.equalsExp(_db.quarantinedOps.seq) &
+            _db.opLog.workspaceId.equalsExp(_db.quarantinedOps.workspaceId),
+      ),
+    ])
+      ..where(_db.quarantinedOps.workspaceId.equals(workspaceId) &
+          _db.opLog.appliedAt.isNotNull());
+    return query.watch().map((rows) {
+      final ids = <int>{};
+      for (final row in rows) {
+        final refusal = row.readTable(_db.quarantinedOps);
+        final op = row.readTable(_db.opLog);
+        if (sameBytes(refusal.envelope, op.envelope)) ids.add(refusal.id);
+      }
+      return ids;
+    });
+  }
 
   /// Watchable so the UI can surface "something arrived that we refused" rather
   /// than swallowing it. Counts what still stands refused.

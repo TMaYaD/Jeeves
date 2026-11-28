@@ -594,6 +594,52 @@ void main() {
           reason: 'a refusal that healed is marked, not hidden');
     });
 
+    test('a refusal whose change has been applied offers no decision', () async {
+      final scene = await _scene();
+      final b = scene.workspace.b;
+      final dId = scene.dFixture.memberId;
+
+      // The projection fails, so the pull that admits the registration ends
+      // before the row is stamped released. The change is applied and the
+      // refusal is still standing: the window in which the two disagree.
+      final fixed = await b.reopenSyncStore(attachTransport: true);
+      fixed.projector = _FailingOnceProjector(fixed.projector!);
+      await expectLater(fixed.pull(), throwsA(isA<StateError>()));
+
+      final row = (await _breakRows(fixed))
+          .singleWhere((r) => r.authorMemberId == dId);
+      expect(row.releasedAt, isNull,
+          reason: 'the row waits for the projection before it is released');
+      expect(fixed.directory.isChained(dId), isTrue,
+          reason: 'the registration is applied');
+
+      final applied = await fixed.watchAppliedRefusalRowIds().first;
+      expect(applied, contains(row.id),
+          reason: 'the refusal is listed as one the log has applied');
+
+      final conditions = syncHealthConditionsFor(
+        workspaceId: fixed.workspaceId,
+        alarms: await fixed.integrityAlarms(),
+        refusals: await fixed.quarantined(),
+        appliedRefusalRowIds: applied,
+      );
+      final condition = conditions.singleWhere((c) => c.rowId == row.id);
+      expect(condition.resolutions, isEmpty,
+          reason: 'a change that is in has nothing left to decide');
+
+      // The decision is refused as well, so it cannot be recorded and ignored.
+      await expectLater(
+        fixed.resolveRefusedItem(
+          row.id,
+          AlarmResolution.rejectedPermanently,
+        ),
+        throwsA(isA<StateError>()),
+      );
+      expect((await _breakRows(fixed)).singleWhere((r) => r.id == row.id).resolution,
+          isNull,
+          reason: 'nothing was written');
+    });
+
     test('a late registration re-verdicts the content behind it', () async {
       // D is a device, not a fixture: it writes at the Workspace's current
       // epoch, which is what the content behind a late grant is written at.

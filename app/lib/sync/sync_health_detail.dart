@@ -103,10 +103,16 @@ class SyncHealthCondition {
 /// (`alarm_resolution.dart`), never from the screen: a kind that offers no
 /// decision offers no button, and the row cannot be asked for one the store
 /// would refuse.
+///
+/// [appliedRefusalRowIds] names the refused rows whose change the log has
+/// since applied. Such a row is listed — it is the evidence that the change
+/// arrived out of order — but it offers no decision: the change is in, and no
+/// later rebuild would check a decision about it.
 List<SyncHealthCondition> syncHealthConditionsFor({
   required String workspaceId,
   required List<IntegrityAlarmRow> alarms,
   required List<QuarantineRow> refusals,
+  Set<int> appliedRefusalRowIds = const {},
 }) =>
     [
       for (final row in alarms)
@@ -141,7 +147,8 @@ List<SyncHealthCondition> syncHealthConditionsFor({
             memberId: row.authorMemberId,
             // A refused change that was applied later has nothing left to
             // decide; one that is still held may be refused for good.
-            resolutions: row.releasedAt == null
+            resolutions: row.releasedAt == null &&
+                    !appliedRefusalRowIds.contains(row.id)
                 ? resolutionsForRefusalCode(row.reason)
                 : const <AlarmResolution>[],
           ),

@@ -245,7 +245,7 @@ through.
 | `own_writes_divergence` | reported | **Keep ours** (no upload) | Ours is already on the log. Records that the other copy is refused for good. |
 | `author_chain_fork` | reported | **Reject permanently** | Stamps every continuation proven against the head, including every claimant at the position the accusation names. If no undecided held change of that device remains, the `author_chain_gap` alarm they were holding open resolves too. |
 | `signature_invalid`, `aead_failure`, `plaintext_at_encrypted_epoch`, `no_live_grant`, `prev_author_hash_mismatch`, `author_chain_rewrite`, `duplicate_op_id_divergence` | reported | **Reject permanently** | Stamps the refused bytes as final. No state changes; the bytes stay. |
-| Refused change with no alarm kind (codec and certificate reasons) | reported | **Reject permanently**, per row | Same, on that one row. |
+| Refused change with no alarm kind (codec, certificate and chain-break reasons) | reported | **Reject permanently**, per row | Same, on that one row — unless the log has since applied the change. An applied change has nothing left to decide: the offer goes, and a decision that arrives anyway is refused rather than recorded and ignored. |
 | `own_write_refused_permanently` | actionable | none — #647 | Needs the outbox to drain past an op that can never be posted. |
 | `epoch_key_set_unpublishable` | actionable | none — #661 | Needs an in-app way to rotate keys again. |
 | `author_stream_reordered`, `stale_prefix_served`, `control_chain_fork`, `author_chain_slot_collision` | reported | none — #656, #657, #658, #659 | The app already settled these; they should resolve themselves. |
