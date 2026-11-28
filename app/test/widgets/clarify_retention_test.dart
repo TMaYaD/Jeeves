@@ -13,6 +13,7 @@ library;
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/models/place_choice.dart';
+import 'package:jeeves/models/time_choice.dart';
 import 'package:jeeves/widgets/clarify_retention.dart';
 
 /// A draft the user has typed into: [title] differs from its baseline.
@@ -216,6 +217,24 @@ void main() {
       );
 
       expect(seeded.place, const NamedPlaceDraft('p1', 'Hardware store'));
+    });
+
+    test('a chosen time survives the unmount', () {
+      final retained = RetainedClarifyDraft(
+        title: 'seeded title',
+        notes: 'seeded notes',
+        baselineTitle: 'seeded title',
+        baselineNotes: 'seeded notes',
+        time: const TimeWindowDraft('w1'),
+      );
+
+      final seeded = RetainedClarifyDraft.seedFrom(
+        retained,
+        incomingTitle: 'incoming title',
+        incomingNotes: 'incoming notes',
+      );
+
+      expect(seeded.time, const TimeWindowDraft('w1'));
     });
 
     test('no retained Place seeds none', () {

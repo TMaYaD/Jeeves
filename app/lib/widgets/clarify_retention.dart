@@ -20,6 +20,7 @@
 library;
 
 import '../models/place_choice.dart';
+import '../models/time_choice.dart';
 
 /// One Capture's in-progress clarify draft, plus the row values it was typed
 /// against.
@@ -37,6 +38,7 @@ class RetainedClarifyDraft {
     this.timeEstimateMinutes,
     this.dueDate,
     this.place,
+    this.time,
   });
 
   /// What the user has typed. Untrimmed — it goes straight back into the
@@ -65,6 +67,11 @@ class RetainedClarifyDraft {
   /// for a Place either, so there is no baseline and nothing to reconcile
   /// against — it is simply carried across the unmount.
   final ActionPlaceDraft? place;
+
+  /// The time the user chose for the Action this clarification will create —
+  /// a named window or a one-time time — or null when they chose none.
+  /// Draft-only, like [place].
+  final ActionTimeDraft? time;
 
   /// Whether the title has been edited since it was last reconciled.
   bool get titleIsDirty => title.trim() != baselineTitle;
@@ -118,6 +125,7 @@ class RetainedClarifyDraft {
       timeEstimateMinutes: retained.timeEstimateMinutes,
       dueDate: retained.dueDate,
       place: retained.place,
+      time: retained.time,
     );
   }
 }

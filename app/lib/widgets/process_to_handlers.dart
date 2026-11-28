@@ -22,6 +22,7 @@ import '../database/gtd_database.dart';
 import '../models/action_draft.dart';
 import '../models/follow_up_change.dart';
 import '../models/place_choice.dart';
+import '../models/time_choice.dart';
 import '../models/routing_kind.dart';
 import '../models/time_context.dart';
 import '../providers/auth_provider.dart';
@@ -218,6 +219,7 @@ class ClarifyDraft {
     required String? energyLevel,
     required int? timeEstimateMinutes,
     required ActionPlaceDraft? place,
+    required ActionTimeDraft? time,
   }) {
     final trimmedTitle = title.trim();
     final trimmedNotes = notes.trim();
@@ -243,7 +245,8 @@ class ClarifyDraft {
       // effort values travel to the Outcome columns either way (D3).
       //
       // The Place rides the same Action grain: it says where the step
-      // happens, so it belongs to the Action rather than to the Outcome.
+      // happens, so it belongs to the Action rather than to the Outcome. The
+      // time (when it can be done) rides it for the same reason.
       // A blank title nulls the whole Action and the Place with it — the
       // destinations that mint an Action are disabled while the title is
       // blank, so no chosen Place is lost.
@@ -254,6 +257,7 @@ class ClarifyDraft {
               energyLevel: energyLevel,
               timeEstimateMinutes: timeEstimateMinutes,
               place: place,
+              time: time,
             ),
     );
   }

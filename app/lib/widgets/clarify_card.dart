@@ -45,12 +45,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../database/gtd_database.dart';
 import '../models/clarify_mode.dart';
 import '../models/place_choice.dart';
+import '../models/time_choice.dart';
 import '../providers/auth_provider.dart';
 import '../providers/clarify_mode_provider.dart';
 import '../providers/database_provider.dart';
 import '../providers/location_permission_flow.dart';
 import '../providers/location_source_provider.dart';
 import '../providers/task_detail_provider.dart';
+import '../providers/time_window_provider.dart';
 import 'async_subject.dart';
 import 'capture_outcomes_section.dart';
 import 'clarify_retention.dart';
@@ -60,6 +62,7 @@ import 'context_tag_picker.dart';
 import 'place_picker_sheet.dart';
 import 'process_to_handlers.dart';
 import 'project_picker.dart';
+import 'time_context_sheet.dart';
 
 /// Shown when the pre-verdict save of an Outcome's own text fails. The verdict
 /// itself landed, so "try again" would be wrong advice — what is lost is the
@@ -272,6 +275,11 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
   /// one.
   ActionPlaceDraft? _place;
 
+  /// The time the user chose for the Action the clarification will create: a
+  /// named window or a one-time time. Draft-only like [_place], and shown on
+  /// the Capture shape only for the same reasons.
+  ActionTimeDraft? _time;
+
   bool _initialised = false;
   // Mirrors `_titleCtrl.text.trim().isEmpty` for build-time gating of the
   // routing buttons. Updated synchronously in `_onTextChanged` so the user
@@ -360,6 +368,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     // The Place is draft-only: it comes from the retained draft or from
     // nowhere. A Capture has no column to reconcile it against.
     _place = seed.place;
+    _time = seed.time;
     _baselineEnergy = _energyLevel;
     _baselineTimeEstimate = _timeEstimate;
     _baselineDueDate = _dueDate;
@@ -376,6 +385,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     timeEstimateMinutes: _timeEstimate,
     dueDate: _dueDate,
     place: _place,
+    time: _time,
   );
 
   /// Drops this Capture's retained draft when [action] was a verdict: the
@@ -844,6 +854,7 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
     energyLevel: _energyLevel,
     timeEstimateMinutes: _timeEstimate,
     place: _place,
+    time: _time,
   );
 
   Widget _buildBody(
@@ -1041,6 +1052,10 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
           const ClarifyFieldLabel('PLACE'),
           const SizedBox(height: 8),
           _placeChip(),
+          const SizedBox(height: 20),
+          const ClarifyFieldLabel('TIME'),
+          const SizedBox(height: 8),
+          _timeChip(),
         ],
         const SizedBox(height: 28),
 
@@ -1120,6 +1135,61 @@ class _ClarifyCardState extends ConsumerState<ClarifyCard> {
             : const Color(0xFF4A5568),
       ),
     );
+  }
+
+  /// The Capture shape's Time chip: the same chip as Outcome detail's Time
+  /// context chip, holding the draft's time until the Action exists.
+  ///
+  /// Quiet "Time context" when nothing is chosen; the window's name for a
+  /// named window ("Time window" while the list has not loaded it); the
+  /// one-time value's description otherwise.
+  Widget _timeChip() {
+    final time = _time;
+    final windows = ref.watch(timeWindowsProvider).asData?.value ??
+        const <TimeWindow>[];
+    final String label;
+    switch (time) {
+      case null:
+        label = 'Time context';
+      case TimeWindowDraft(:final windowId):
+        label = [
+          for (final w in windows)
+            if (w.id == windowId) w.name,
+        ].firstOrNull ?? 'Time window';
+      case OneTimeDraft(:final value):
+        label = value.describe();
+    }
+    return InkWell(
+      key: const Key('clarify_time_chip'),
+      borderRadius: BorderRadius.circular(4),
+      onTap: _chooseTime,
+      child: MetaChip(
+        icon: Icons.event_repeat_outlined,
+        label: label,
+        color: time == null
+            ? const Color(0xFF9CA3AF)
+            : const Color(0xFF0F766E),
+      ),
+    );
+  }
+
+  /// Opens the time sheet and applies the choice to the draft. The sheet
+  /// writes nothing; the Action does not exist yet.
+  Future<void> _chooseTime() async {
+    final time = _time;
+    final choice = await showTimeContextSheet(
+      context,
+      current: time is OneTimeDraft ? time.value : null,
+      selectedWindowId: time is TimeWindowDraft ? time.windowId : null,
+      canClear: time != null,
+    );
+    if (choice == null || !mounted) return;
+    switch (choice) {
+      case ActionTimeDraft draft:
+        setState(() => _time = draft);
+      case ClearTimeChoice():
+        setState(() => _time = null);
+    }
   }
 
   /// Opens the place picker and applies the choice to the draft.

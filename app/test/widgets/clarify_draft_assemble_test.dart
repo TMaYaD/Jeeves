@@ -11,6 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/place_area.dart';
 import 'package:jeeves/models/place_choice.dart';
+import 'package:jeeves/models/time_choice.dart';
 import 'package:jeeves/widgets/process_to_handlers.dart';
 
 const _userId = 'local';
@@ -30,6 +31,7 @@ ClarifyDraft _assemble({
   String? energyLevel,
   int? timeEstimateMinutes,
   ActionPlaceDraft? place,
+  ActionTimeDraft? time,
 }) =>
     ClarifyDraft.assemble(
       title: title,
@@ -40,6 +42,7 @@ ClarifyDraft _assemble({
       energyLevel: energyLevel,
       timeEstimateMinutes: timeEstimateMinutes,
       place: place,
+      time: time,
     );
 
 void main() {
@@ -114,6 +117,18 @@ void main() {
         place: NamedPlaceDraft('p1', 'Hardware store'),
       );
 
+      expect(draft.action, isNull);
+    });
+  });
+
+  group('ClarifyDraft.assemble — the time', () {
+    test('rides the Action next to the title', () {
+      final draft = _assemble(time: const TimeWindowDraft('w1'));
+      expect(draft.action?.time, const TimeWindowDraft('w1'));
+    });
+
+    test('a blank title nulls the Action and the time with it', () {
+      final draft = _assemble(title: '  ', time: const TimeWindowDraft('w1'));
       expect(draft.action, isNull);
     });
   });
