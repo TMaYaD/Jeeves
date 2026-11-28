@@ -274,6 +274,8 @@ void main() {
 
     await tester.tap(find.byKey(const Key('clarify_time_chip')));
     await _pumpFrames(tester);
+    await tester.tap(find.byKey(const Key('time_context_choice_window')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(Key('time_context_window_${window.id}')));
     await _pumpFrames(tester);
     expect(find.text('Work hours'), findsOneWidget);
@@ -320,6 +322,8 @@ void main() {
 
     await tester.tap(find.byKey(const Key('clarify_time_chip')));
     await _pumpFrames(tester);
+    await tester.tap(find.byKey(const Key('time_context_choice_window')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(Key('time_context_window_${window.id}')));
     await _pumpFrames(tester);
 

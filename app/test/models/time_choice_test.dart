@@ -23,7 +23,8 @@ void main() {
 
     test('clear equals clear and nothing else', () {
       expect(const ClearTimeChoice(), const ClearTimeChoice());
-      expect(const ClearTimeChoice() == const TimeWindowDraft('w1'), isFalse);
+      const Object other = TimeWindowDraft('w1');
+      expect(const ClearTimeChoice() == other, isFalse);
     });
   });
 

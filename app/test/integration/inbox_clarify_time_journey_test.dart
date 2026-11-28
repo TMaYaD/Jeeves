@@ -207,6 +207,8 @@ void main() {
     await openClarify(tester);
     try {
       await openTimeChip(tester);
+      await tester.tap(find.byKey(const Key('time_context_choice_window')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(Key('time_context_window_$workHoursId')));
       await _settle(tester);
 
@@ -230,6 +232,8 @@ void main() {
     await openClarify(tester);
     try {
       await openTimeChip(tester);
+      await tester.tap(find.byKey(const Key('time_context_choice_window')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(Key('time_context_window_$workHoursId')));
       await _settle(tester);
 

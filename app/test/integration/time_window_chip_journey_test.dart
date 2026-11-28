@@ -20,7 +20,6 @@ import 'package:jeeves/models/time_context.dart';
 import 'package:jeeves/models/time_window_hours.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/nudge_clock_provider.dart';
-import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/screens/task_detail/task_detail_screen.dart';
 import 'package:jeeves/services/notification_service.dart';
 import 'package:jeeves/widgets/outcome_peek_sheet.dart';
