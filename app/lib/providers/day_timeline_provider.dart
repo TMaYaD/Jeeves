@@ -20,6 +20,20 @@ import 'synced_preferences_provider.dart' show syncedPreferencesProvider;
 final dayTimelineLastLayoutProvider =
     Provider<LastDayLayout>((ref) => LastDayLayout());
 
+/// The Sprints the user carried on with past a Timeboxed limit. Memory only,
+/// like [dayTimelineLastLayoutProvider]: the day timeline makes room for each
+/// one and says so, and nothing is stored or synced.
+class CarriedOnSprintsNotifier extends Notifier<List<CarriedOnSprint>> {
+  @override
+  List<CarriedOnSprint> build() => const [];
+
+  void add(CarriedOnSprint sprint) => state = [...state, sprint];
+}
+
+final carriedOnSprintsProvider =
+    NotifierProvider<CarriedOnSprintsNotifier, List<CarriedOnSprint>>(
+        CarriedOnSprintsNotifier.new);
+
 /// Start times the user set on the open session's Plan entries.
 final activeSessionPinnedStartsProvider =
     StreamProvider<Map<String, DateTime>>((ref) {

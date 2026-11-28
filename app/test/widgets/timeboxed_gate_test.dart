@@ -15,13 +15,19 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/day_timeline.dart' show CarriedOnSprint;
+import 'package:jeeves/providers/clock_provider.dart';
 import 'package:jeeves/providers/database_provider.dart';
+import 'package:jeeves/providers/day_timeline_provider.dart';
 import 'package:jeeves/widgets/timeboxed_gate.dart';
 import 'package:jeeves/widgets/timeboxed_limit_strip.dart';
 
 import '../test_helpers.dart';
 
 const _userId = 'local';
+
+/// The instant the gate's clock reads, so the recorded carry-on is exact.
+final _fixedNow = DateTime.now();
 
 /// Lets the gate's real database reads and writes finish, then settles the
 /// sheet's animation.
@@ -94,7 +100,10 @@ void main() {
     void Function(BuildContext context, WidgetRef ref)? capture,
   }) {
     return ProviderScope(
-      overrides: [databaseProvider.overrideWithValue(db)],
+      overrides: [
+        databaseProvider.overrideWithValue(db),
+        clockProvider.overrideWithValue(() => _fixedNow),
+      ],
       child: MaterialApp(
         home: _GateHarness(onStart: onStart, capture: capture),
       ),
@@ -410,5 +419,78 @@ void main() {
     // The Sprint does not start: the screen that would have started it is
     // gone, and a start would reach through a screen that is no longer there.
     expect(started, isFalse);
+  });
+
+  List<CarriedOnSprint> carriedOn(WidgetTester tester) =>
+      ProviderScope.containerOf(tester.element(find.byKey(const Key('open_gate'))))
+          .read(carriedOnSprintsProvider);
+
+  group('remembering a Sprint carried on past the limit', () {
+    testWidgets('"regardless", confirmed, records one carry-on', (tester) async {
+      await makeTimeboxed();
+      await logTime(const Duration(minutes: 50));
+      await tester.pumpWidget(harness(onStart: () {}));
+
+      await tester.tap(find.byKey(const Key('open_gate')));
+      await settle(tester);
+      await tester.tap(find.byKey(const Key('timeboxed_gate_regardless')));
+      await settle(tester);
+      await tester.tap(find.byKey(const Key('timeboxed_gate_confirm')));
+      await settle(tester);
+
+      final recorded = carriedOn(tester);
+      expect(recorded, hasLength(1));
+      expect(recorded.single.outcomeId, 't1');
+      expect(recorded.single.carriedOnAt, _fixedNow);
+    });
+
+    testWidgets('a saved raise that starts the Sprint records one carry-on', (
+      tester,
+    ) async {
+      await makeTimeboxed();
+      await logTime(const Duration(minutes: 50));
+      await tester.pumpWidget(harness(onStart: () {}));
+
+      await tester.tap(find.byKey(const Key('open_gate')));
+      await settle(tester);
+      await tester.tap(find.byKey(const Key('timeboxed_gate_raise')));
+      await settle(tester);
+      await tester.tap(find.byKey(const Key('estimate_sheet_more')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('estimate_sheet_save')));
+      await settle(tester);
+
+      expect(carriedOn(tester), hasLength(1));
+    });
+
+    testWidgets('"Right ho" and "Never mind" record nothing', (tester) async {
+      await makeTimeboxed();
+      await logTime(const Duration(minutes: 50));
+      await tester.pumpWidget(harness(onStart: () {}));
+
+      await tester.tap(find.byKey(const Key('open_gate')));
+      await settle(tester);
+      await tester.tap(find.byKey(const Key('timeboxed_gate_stop')));
+      await settle(tester);
+      expect(carriedOn(tester), isEmpty);
+
+      await tester.tap(find.byKey(const Key('open_gate')));
+      await settle(tester);
+      await tester.tap(find.byKey(const Key('timeboxed_gate_regardless')));
+      await settle(tester);
+      await tester.tap(find.byKey(const Key('timeboxed_gate_cancel')));
+      await settle(tester);
+      expect(carriedOn(tester), isEmpty);
+    });
+
+    testWidgets('a Sprint inside its limit records nothing', (tester) async {
+      await makeTimeboxed();
+      await tester.pumpWidget(harness(onStart: () {}));
+
+      await tester.tap(find.byKey(const Key('open_gate')));
+      await settle(tester);
+
+      expect(carriedOn(tester), isEmpty);
+    });
   });
 }

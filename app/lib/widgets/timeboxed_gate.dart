@@ -12,10 +12,13 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../models/day_timeline.dart' show CarriedOnSprint;
 import '../models/estimate.dart';
 import '../models/timeboxed.dart';
 import '../providers/clock_provider.dart';
 import '../providers/database_provider.dart';
+import '../providers/day_timeline_provider.dart'
+    show carriedOnSprintsProvider;
 import '../providers/task_detail_provider.dart';
 import '../providers/timeboxed_limit_provider.dart';
 import 'meta_chip.dart' show formatMinutesLabel;
@@ -154,6 +157,7 @@ Future<void> guardSprintPastLimit(
       // moment, and a limit that passed during it must still ask.
       now = ref.read(clockProvider)().toUtc();
       if (after == null || !after.hasPassedAt(now)) {
+        _rememberCarriedOn(ref, outcomeId);
         await start();
         return;
       }
@@ -175,8 +179,21 @@ Future<void> guardSprintPastLimit(
     if (!context.mounted) return;
   }
   if (choice == TimeboxedGateChoice.regardless) {
+    _rememberCarriedOn(ref, outcomeId);
     await start();
   }
+}
+
+/// Records that the user carried on past the limit, so the day timeline can
+/// make room for the extra Sprint. Called just before `start`, which may
+/// navigate away and leave [ref] unusable.
+void _rememberCarriedOn(WidgetRef ref, String outcomeId) {
+  ref.read(carriedOnSprintsProvider.notifier).add(
+        CarriedOnSprint(
+          outcomeId: outcomeId,
+          carriedOnAt: ref.read(clockProvider)(),
+        ),
+      );
 }
 
 /// Opens the estimate sheet for [outcomeId]'s current Action, one step above
