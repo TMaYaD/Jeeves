@@ -1,4 +1,4 @@
-/// The recording stand-ins for the OS's location (issue #55).
+/// The recording stand-ins for the OS's location (issues #55 and #1092).
 ///
 /// [FakeLocationSource] answers what the test says and remembers every call,
 /// so a journey can prove that Jeeves reads the location only while it is on
@@ -11,6 +11,10 @@
 /// the result of a request can say the last. The fake's default is therefore
 /// "denied", and a test that wants the refusal for good sets
 /// [requestResult] to it.
+///
+/// The arrival switch is the only thing that may ask for "location all the
+/// time", so [allTheTimeRequests] counts that ask on its own: a journey that
+/// never touches the switch expects it to stay at zero.
 ///
 /// [FakeAddressGeocoder] stands in for the platform geocoder, which is what
 /// turns a typed address into a point.
@@ -59,6 +63,15 @@ class FakeLocationSource implements LocationSource {
   /// is where a read can start too late.
   Completer<void>? requestGate;
 
+  /// What `requestAllTheTime()` answers.
+  ///
+  /// The phone's answer to "allow this app to use your location all the
+  /// time". It is "always" by default: a phone that is asked and says yes.
+  /// Set it to [LocationPermission.whileInUse] for a phone that allows the
+  /// location only while Jeeves is open, or to
+  /// [LocationPermission.deniedForever] for one that will not ask again.
+  LocationPermission allTheTimeResult = LocationPermission.always;
+
   /// The point the OS's last known position returns. Null stands for a phone
   /// that has never had a fix.
   GeoPoint? lastKnownPoint;
@@ -71,6 +84,12 @@ class FakeLocationSource implements LocationSource {
 
   /// How many times Jeeves asked the OS for permission.
   int permissionRequests = 0;
+
+  /// How many times Jeeves asked the OS for "location all the time".
+  ///
+  /// The arrival switch is the only thing that may ask for it, so a journey
+  /// that never touches the switch expects this to stay at zero.
+  int allTheTimeRequests = 0;
 
   final StreamController<GeoPoint> _positions =
       StreamController<GeoPoint>.broadcast();
@@ -97,6 +116,25 @@ class FakeLocationSource implements LocationSource {
         ? LocationPermission.denied
         : requestResult;
     return requestResult;
+  }
+
+  /// The phone's answer to "allow this app to use your location all the
+  /// time".
+  ///
+  /// The phone grants it or it does not; it never asks a second question.
+  /// A granted answer becomes the standing, so a later standing check sees
+  /// it, and a refusal for good leaves the standing at "denied" — as the
+  /// plugin does.
+  @override
+  Future<LocationPermission> requestAllTheTime() async {
+    calls.add('requestAllTheTime');
+    allTheTimeRequests++;
+    final gate = requestGate;
+    if (gate != null) await gate.future;
+    permissionState = allTheTimeResult == LocationPermission.deniedForever
+        ? LocationPermission.denied
+        : allTheTimeResult;
+    return allTheTimeResult;
   }
 
   @override

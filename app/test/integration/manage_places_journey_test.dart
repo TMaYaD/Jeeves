@@ -209,6 +209,8 @@ void main() {
     expect(find.byKey(const Key('place_editor_name')), findsOneWidget);
     expect(location.permissionRequests, 0);
     expect(location.calls, isNot(contains('requestWhileUsing')));
+    // Only the arrival switch may ask for "all the time".
+    expect(location.allTheTimeRequests, 0);
 
     // The first save is where Jeeves may ask.
     await savePlace(tester, name: 'Home', coordinates: '52.3702, 4.8952');

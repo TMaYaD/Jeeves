@@ -204,6 +204,8 @@ void main() {
     await tester.tap(find.byKey(const Key('location_permission_allow')));
     await _settle(tester);
     expect(location.permissionRequests, 1);
+    // Only the arrival switch may ask for "all the time".
+    expect(location.allTheTimeRequests, 0);
     expect(find.text('Post office on Mill St'), findsOneWidget);
 
     // The pin is not in the user's list of places.

@@ -164,9 +164,10 @@ final appRouter = GoRouter(
         ),
         GoRoute(path: '/next', builder: (context, state) => const NextScreen()),
         // Every Outcome with a Place, grouped by Place (issue #55).
+        // "?place=<id>" opens the page at that Place.
         GoRoute(
           path: '/places',
-          builder: (context, state) => const PlacePageScreen(),
+          builder: PlacePageScreen.buildRoute,
         ),
         GoRoute(
           path: '/time',
