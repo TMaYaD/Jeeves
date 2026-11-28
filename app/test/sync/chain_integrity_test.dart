@@ -237,6 +237,9 @@ class _StoreInterceptors extends QueryInterceptor {
   /// The fault to inject: the next update of [table] that sets [column].
   ({String table, String column})? _updateFault;
 
+  /// How many matching updates still have to pass before the fault fires.
+  int _updateFaultCountdown = 0;
+
   /// Arm a storage fault: the next update of [table] that sets [column] throws
   /// once, then disarms.
   ///
@@ -244,7 +247,20 @@ class _StoreInterceptors extends QueryInterceptor {
   /// *inside* it and proving nothing was half-applied, so the fault names the
   /// durable effect it interrupts rather than how drift spells the statement.
   void failNextUpdateOf(String table, String column) =>
-      _updateFault = (table: table, column: column);
+      failUpdateOf(table, column);
+
+  /// Arm a storage fault on the [occurrence]-th update of [table] that sets
+  /// [column] to a value.
+  ///
+  /// The count is over the statements that **set** the column, so the updates
+  /// that clear it — a release scan's cleanup — are not counted. That is what
+  /// lets a case reach the write it means: the release marker is set by the
+  /// decision and by the scan, and cleared by the scan's cleanup, and only the
+  /// first two are the ones a case is about.
+  void failUpdateOf(String table, String column, {int occurrence = 1}) {
+    _updateFault = (table: table, column: column);
+    _updateFaultCountdown = occurrence;
+  }
 
   @override
   Future<int> runInsert(
@@ -261,14 +277,18 @@ class _StoreInterceptors extends QueryInterceptor {
     List<Object?> args,
   ) {
     final fault = _updateFault;
-    if (fault != null && _setsColumn(statement, fault)) {
-      _updateFault = null;
-      throw SqliteException(
-        extendedResultCode: 10,
-        message: 'fault injected before updating ${fault.table}.${fault.column}',
-        operation: 'executing a statement',
-        causingStatement: statement,
-      );
+    if (fault != null && _setsColumn(statement, args, fault)) {
+      _updateFaultCountdown -= 1;
+      if (_updateFaultCountdown <= 0) {
+        _updateFault = null;
+        throw SqliteException(
+          extendedResultCode: 10,
+          message:
+              'fault injected before updating ${fault.table}.${fault.column}',
+          operation: 'executing a statement',
+          causingStatement: statement,
+        );
+      }
     }
     return arrival.runUpdate(executor, statement, args);
   }
@@ -279,10 +299,19 @@ class _StoreInterceptors extends QueryInterceptor {
   /// an update by the table's own order, so "resolution" is not always the
   /// first name after `set`. The other resolution columns carry their own
   /// names, so they never match.
-  bool _setsColumn(String statement, ({String table, String column}) fault) {
+  ///
+  /// **A statement that clears the column does not count.** Drift puts the
+  /// values it sets first and the filter's values after them, so the first
+  /// argument is the value being written.
+  bool _setsColumn(
+    String statement,
+    List<Object?> args,
+    ({String table, String column}) fault,
+  ) {
     final text = statement.toLowerCase().replaceAll(RegExp(r'["\s]'), '');
-    return text.contains('update${fault.table.toLowerCase()}') &&
-        text.contains('${fault.column.toLowerCase()}=?');
+    if (!text.contains('update${fault.table.toLowerCase()}')) return false;
+    if (!text.contains('${fault.column.toLowerCase()}=?')) return false;
+    return args.isEmpty || args.first != null;
   }
 
   @override
@@ -2508,6 +2537,348 @@ void main() {
         (await a.loggedOps())
             .where((row) => row.authorSeq == firstPeerContentAuthorSeq + 4),
         isEmpty,
+      );
+
+      // **The answer was a scoped one, not a discarded one.** The gap it was
+      // about was accepted, and the change behind it went through the
+      // ordinary receive path. A test that only checked what did *not* happen
+      // would pass just as well if the answer had been thrown away before it
+      // did anything at all.
+      expect(holes.length, 1);
+      expect(holes.single.firstMissingAuthorSeq, firstPeerContentAuthorSeq + 1);
+      expect(holes.single.lastMissingAuthorSeq, firstPeerContentAuthorSeq + 1);
+      expect(
+        (await a.loggedOps())
+            .singleWhere(
+                (row) => row.authorSeq == firstPeerContentAuthorSeq + 2)
+            .appliedAt,
+        isNotNull,
+        reason: 'the change behind the accepted gap is in the log, applied',
+      );
+      expect(fifthRow.resolution, isNull);
+    });
+
+    test('a released change the log does not hold is not applied', () async {
+      await withholdTheMiddleChange();
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      final held = (await a.client.quarantined()).single;
+
+      // The transport slot the held change would take is spent by another
+      // operation, so the release cannot write this one: the log holds a
+      // different change at that seq.
+      final occupying = (await a.loggedOps())
+          .singleWhere((row) => row.authorSeq == firstPeerContentAuthorSeq);
+      await (a.database.update(a.database.opLog)
+            ..where((row) => row.seq.equals(occupying.seq)))
+          .write(OpLogCompanion(seq: Value(held.seq!)));
+
+      await a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+
+      // The change was never written to the log, so the held-change path must
+      // not merge it either: a rebuild from the log would not reproduce it.
+      expect(await _doc(a, workspace), {'step': 'one'});
+      expect(
+        (await a.loggedOps())
+            .where((row) => row.authorSeq == firstPeerContentAuthorSeq + 2),
+        isEmpty,
+        reason: 'the change the release could not write is not in the log',
+      );
+      // And the accusation is still in front of the User: the change it was
+      // about is not in the log, so there is nothing to settle.
+      final standing =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(standing.resolvedAt, isNull);
+      expect((await a.client.health()).clean, isFalse);
+    });
+
+    test('a fork the User refused for good does not choose the next gap',
+        () async {
+      final first = await _op(workspace, peer, 'one');
+      final withheld = await _op(workspace, peer, 'two');
+      final third = await _op(workspace, peer, 'three', advance: false);
+      final rival = await _op(workspace, peer, 'three as well', advance: false);
+      // The two claimants sit at the position the chain has reached. Put the
+      // fixture back, so the next change is the one after them and chains from
+      // one of the two — which is what an author that forked its own chain
+      // would have written.
+      peer.nextAuthorSeq = 6;
+      peer.lastEnvelopeHash = envelopeHash(third);
+      final appended = await peerSession.postOps(
+        workspace.workspaceId,
+        [first, withheld, third],
+      );
+      workspace.server.omitSeqs.add(appended[1].seq);
+      await a.sync();
+
+      // A second, different signed change at the same position: the fork.
+      workspace.server.injectUnchecked(workspace.workspaceId, rival);
+      await a.sync();
+
+      // The answer is asked about the gap, and it finds the fork instead:
+      // nothing is accepted, and the fork is accused.
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      await a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+      final fork =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainFork.code]!;
+      expect(fork.resolvedAt, isNull);
+
+      // The User refuses that fork for good.
+      await a.client.resolveAlarm(
+        fork.id,
+        AlarmResolution.rejectedPermanently,
+      );
+      expect(
+        (await a.alarmsByKind())[IntegrityAlarmKind.authorChainFork.code]!
+            .resolvedAt,
+        isNotNull,
+      );
+
+      // A later change of the same author goes missing, and raises a new
+      // accusation.
+      final fourth = await _op(workspace, peer, 'four');
+      final fifth = await _op(workspace, peer, 'five');
+      final later = await peerSession.postOps(
+        workspace.workspaceId,
+        [fourth, fifth],
+      );
+      workspace.server.omitSeqs.add(later[0].seq);
+      await a.sync();
+
+      final again =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(again.resolvedAt, isNull);
+
+      await a.client.resolveAlarm(again.id, AlarmResolution.tookUpstream);
+
+      // **The refused fork does not answer the new gap.** The two changes the
+      // User refused for good are never applied, so their position is not a
+      // gap this answer can close — and letting them choose the successor
+      // would put the answer back in front of the fork.
+      final holes =
+          await a.client.acceptedChainHoles(authorMemberId: peer.memberId);
+      expect(holes.length, 1);
+      expect(holes.single.firstMissingAuthorSeq, firstPeerContentAuthorSeq + 1);
+      expect(holes.single.lastMissingAuthorSeq, firstPeerContentAuthorSeq + 3);
+      expect(await _doc(a, workspace), {'step': 'five'});
+      expect(
+        (await a.alarmsByKind())[IntegrityAlarmKind.authorChainFork.code]!
+            .resolvedAt,
+        isNotNull,
+        reason: 'the fork the User refused is not raised again',
+      );
+    });
+
+    test('a change that arrives while the answer is being read is not accepted '
+        'as missing', () async {
+      final first = await _op(workspace, peer, 'one');
+      await peerSession.postOps(workspace.workspaceId, [first]);
+      await a.sync();
+
+      // Two changes of that author's chain never arrive, and a third one is
+      // held behind them.
+      final withheld = await _op(workspace, peer, 'two');
+      final three = await _op(workspace, peer, 'three'); // delivered late
+      final fourth = await _op(workspace, peer, 'four');
+      final appended = await peerSession.postOps(
+        workspace.workspaceId,
+        [first, withheld, three, fourth],
+      );
+      workspace.server.omitSeqs.add(appended[1].seq);
+      workspace.server.omitSeqs.add(appended[2].seq);
+      await a.sync();
+
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+
+      // The change at the position in front of the held one arrives while the
+      // User is answering. Its quarantine is held at the gate, so the row is
+      // not in the table while the answer is read — and it is in the table
+      // when the decision writes the hole.
+      final gate = Completer<void>();
+      seams.quarantine.hold = gate;
+      workspace.server.injectUnchecked(workspace.workspaceId, three);
+      final pull = a.sync();
+      await seams.quarantine.reached.future.timeout(
+        const Duration(seconds: 30),
+      );
+
+      final decision =
+          a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      gate.complete();
+      await pull;
+      try {
+        await decision;
+      } on StateError {
+        // The accusation was raised again while the User was answering, so
+        // the answer is refused. What it did before it was refused is what
+        // this case is about.
+      }
+
+      // **The range stops before the position the client holds a change for.**
+      // Accepting that position as missing would strand the change below the
+      // chain floor for ever: the device would have the bytes and never apply
+      // them, and a rebuild would not produce them either.
+      final holes =
+          await a.client.acceptedChainHoles(authorMemberId: peer.memberId);
+      expect(holes.length, 1);
+      expect(holes.single.firstMissingAuthorSeq, firstPeerContentAuthorSeq + 1);
+      expect(
+        holes.single.lastMissingAuthorSeq,
+        firstPeerContentAuthorSeq + 1,
+        reason: 'the position the client holds a change for is not missing',
+      );
+      // And the change that arrived late is applied, through the ordinary
+      // receive path.
+      final lateRow = (await a.client.quarantined())
+          .singleWhere((row) => sameBytes(row.envelope, three));
+      expect(lateRow.releasedAt, isNotNull);
+      expect(
+        (await a.loggedOps())
+            .singleWhere(
+                (row) => row.authorSeq == firstPeerContentAuthorSeq + 2)
+            .appliedAt,
+        isNotNull,
+      );
+      expect(await _doc(a, workspace), {'step': 'four'});
+    });
+
+    test('a change the log refused for good does not keep the accusation open',
+        () async {
+      // The change after the hole is beyond the skew bound, so the ordinary
+      // receive path refuses it and records the verdict. It will never be
+      // applied — the rebuild honours the verdict without re-evaluating it —
+      // so no projection is owed for it, and the accusation must not wait for
+      // one that cannot happen.
+      final first = await _op(workspace, peer, 'one');
+      final withheld = await _op(workspace, peer, 'two');
+      final beyondTheBound =
+          workspace.clock.nowMs + defaultFutureSkewBoundMs * 2;
+      final third = await peer.nextEnvelope(
+        workspace.workspaceId,
+        payloadJson: jsonEncode({
+          'collection': _harnessCollection,
+          'id': _docId(workspace),
+          'fields': {
+            'step': {'v': 'three'},
+          },
+          'hlc': [beyondTheBound, 0, memberIdToHex(peer.memberId)],
+        }),
+      );
+      final appended = await peerSession.postOps(
+        workspace.workspaceId,
+        [first, withheld, third],
+      );
+      workspace.server.omitSeqs.add(appended[1].seq);
+      await a.sync();
+
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      await a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream);
+
+      // The refusal is recorded, and stays recorded: it is a verdict, not a
+      // cache of a re-runnable decision.
+      final refused = (await a.loggedOps()).singleWhere(
+            (row) => row.authorSeq == firstPeerContentAuthorSeq + 2,
+          );
+      expect(refused.refusedReason, SyncRejectionReason.hlcInTheFuture.code);
+
+      // And the accusation is settled. Nothing is owed for a change that will
+      // never be applied, so the gap does not stand for ever over a projection
+      // that cannot happen.
+      final settled =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      expect(settled.resolvedAt, isNotNull);
+    });
+
+    test('a defining row that already carries a decision still carries the '
+        'release obligation', () async {
+      await withholdTheMiddleChange();
+      final gap =
+          (await a.alarmsByKind())[IntegrityAlarmKind.authorChainGap.code]!;
+      final held = (await a.client.quarantined()).single;
+
+      // An upgraded store can hold a row the old merge path already marked as
+      // taken upstream. The answer uses that row to define the hole, so the
+      // obligation to release it still has to be written — and the decision it
+      // already carries is left exactly as it is.
+      await (a.database.update(a.database.quarantinedOps)
+            ..where((row) => row.id.equals(held.id)))
+          .write(QuarantinedOpsCompanion(
+        resolution: Value(AlarmResolution.tookUpstream.code),
+        resolutionDecidedAt: Value(workspace.clock.asDateTime),
+      ));
+      final decidedBefore = (await a.client.quarantined())
+          .singleWhere((row) => row.id == held.id)
+          .resolutionDecidedAt;
+      workspace.clock.advance(60000);
+
+      // The release that follows the hole fails, so the marker the decision
+      // wrote is the only record of the obligation. The first write of the
+      // marker is the decision's; the second is the scan's.
+      seams.failUpdateOf('quarantined_ops', 'release_started_at', occurrence: 2);
+      await expectLater(
+        a.client.resolveAlarm(gap.id, AlarmResolution.tookUpstream),
+        throwsA(isA<SqliteException>()),
+      );
+
+      // The hole was committed, and the change after it still carries the
+      // obligation to be released.
+      final holes =
+          await a.client.acceptedChainHoles(authorMemberId: peer.memberId);
+      expect(holes.length, 1);
+      final row =
+          (await a.client.quarantined()).singleWhere((r) => r.id == held.id);
+      expect(
+        row.releaseStartedAt,
+        isNotNull,
+        reason: 'the obligation to release the change is written, even though '
+            'the row already carried a decision',
+      );
+      expect(
+        row.resolutionDecidedAt,
+        decidedBefore,
+        reason: 'the decision the row already carried is left alone',
+      );
+
+      // And the obligation is found: the next pull re-arms the release, and
+      // the change goes through the ordinary receive path, into the log.
+      await a.sync();
+      expect(
+        (await a.loggedOps())
+            .singleWhere(
+                (row) => row.authorSeq == firstPeerContentAuthorSeq + 2)
+            .appliedAt,
+        isNotNull,
+      );
+    });
+
+    test('a release marker on a row the scan did not examine survives the scan',
+        () async {
+      await withholdTheMiddleChange();
+      final held = (await a.client.quarantined()).single;
+
+      // The marker says a release was begun and has not finished. The scan
+      // looks at the position just past the head, and this row is above it, so
+      // the scan never examines it: the obligation the marker carries is
+      // still owed, and clearing it would lose it.
+      await (a.database.update(a.database.quarantinedOps)
+            ..where((row) => row.id.equals(held.id)))
+          .write(QuarantinedOpsCompanion(
+        releaseStartedAt: Value(workspace.clock.asDateTime),
+      ));
+
+      await a.sync();
+
+      final row =
+          (await a.client.quarantined()).singleWhere((r) => r.id == held.id);
+      expect(
+        row.releaseStartedAt,
+        isNotNull,
+        reason: 'a scan that did not examine the row does not clear its '
+            'marker',
       );
     });
 
