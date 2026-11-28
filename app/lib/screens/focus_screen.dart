@@ -607,6 +607,7 @@ class _NowTimeline extends ConsumerWidget {
       availableMinutes: extras.availableMinutes,
       chunkUnitMinutes: extras.settings.chunkUnitMinutes,
       sprintMarks: extras.sprintMarks,
+      carriedOnSprints: ref.watch(carriedOnSprintsProvider),
       onAcceptBatch: (startByOutcomeId) => ref
           .read(databaseProvider)
           .focusSessionDao

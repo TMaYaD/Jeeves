@@ -41,6 +41,7 @@ class DayTimeline extends ConsumerStatefulWidget {
     required this.onSetPinnedStart,
     this.events = const [],
     this.sprintMarks = const [],
+    this.carriedOnSprints = const [],
     this.onAcceptBatch,
     this.onDeclineBatch,
   });
@@ -67,6 +68,10 @@ class DayTimeline extends ConsumerStatefulWidget {
   /// tile it ran on.
   final List<TileSprintMark> sprintMarks;
 
+  /// The Sprints the user carried on with past a Timeboxed limit. The day makes
+  /// room for each, and the later suggested times that move are announced.
+  final List<CarriedOnSprint> carriedOnSprints;
+
   /// The small-task suggestion (issue #407). Called with the start time of each
   /// accepted member; null on a timeline that stores nothing, which then shows
   /// no suggestion.
@@ -81,6 +86,9 @@ class DayTimeline extends ConsumerStatefulWidget {
 }
 
 enum _TileState { upcoming, running, done, notStarted }
+
+/// Why suggested times moved, which chooses the notice's wording.
+enum _MoveReason { calendar, carriedOn }
 
 /// One suggested time that a re-flow moved, with where it was.
 class _Move {
@@ -123,6 +131,7 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
 
   /// What the last re-flow did to suggested times, until the user answers.
   List<_Move> _moves = const [];
+  _MoveReason _moveReason = _MoveReason.calendar;
   List<String> _conflictedPinnedIds = const [];
   Timer? _rereadTimer;
 
@@ -243,6 +252,8 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
         widget.chunkUnitMinutes,
         for (final entry in widget.entries) entry.layoutSignature,
         _eventsKey(_events),
+        for (final sprint in widget.carriedOnSprints)
+          '${sprint.outcomeId}@${sprint.carriedOnAt.millisecondsSinceEpoch}',
       ].join(';');
 
   void _recompute() {
@@ -259,17 +270,53 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
             if (piece.isPinned && piece.overlapsEvent(_previousEvents))
               placement.outcomeId,
     };
+    // The baseline for a carried-on Sprint is the shared last layout, not
+    // [_layout]: the user may have carried on while this widget was not
+    // mounted (in Focus Mode), and the change is still announced.
+    final lastLayout = ref.read(dayTimelineLastLayoutProvider);
+    final lastPieces = lastLayout.scope == widget.scope
+        ? Map<String, List<PlacedPiece>>.of(lastLayout.pieces)
+        : <String, List<PlacedPiece>>{};
+    final lastStarts = {
+      for (final entry in lastPieces.entries)
+        if (entry.value.isNotEmpty) entry.key: entry.value.first.start,
+    };
+    final knownCarriedOnAts = {
+      for (final pieces in lastPieces.values)
+        for (final piece in pieces)
+          if (piece.carriedOnAt != null) piece.carriedOnAt!,
+    };
     _layout = flowDay(
       scope: widget.scope,
-      last: ref.read(dayTimelineLastLayoutProvider),
+      last: lastLayout,
       now: ref.read(clockProvider)(),
       flowOrigin: widget.flowOrigin,
       availableMinutes: _availableMinutes,
       chunkUnitMinutes: widget.chunkUnitMinutes,
       entries: widget.entries,
       events: _events,
+      carriedOn: widget.carriedOnSprints,
     );
-    if (_eventsChanged && _layoutReady) {
+    final newlyCarriedOnIds = {
+      for (final placement in _layout.entries)
+        for (final piece in placement.pieces)
+          if (piece.carriedOnAt != null &&
+              !knownCarriedOnAts.contains(piece.carriedOnAt))
+            placement.outcomeId,
+    };
+    if (newlyCarriedOnIds.isNotEmpty) {
+      _moveReason = _MoveReason.carriedOn;
+      _moves = [
+        for (final placement in _layout.entries)
+          if (placement.pieces.isNotEmpty &&
+              !newlyCarriedOnIds.contains(placement.outcomeId) &&
+              lastStarts[placement.outcomeId] != null &&
+              !placement.pieces.first.isPinned &&
+              lastStarts[placement.outcomeId] != placement.pieces.first.start)
+            _Move(placement.outcomeId, lastStarts[placement.outcomeId]!),
+      ];
+    } else if (_eventsChanged && _layoutReady) {
+      _moveReason = _MoveReason.calendar;
       _moves = [
         for (final placement in _layout.entries)
           if (placement.pieces.isNotEmpty &&
@@ -753,23 +800,33 @@ class _DayTimelineState extends ConsumerState<DayTimeline>
   Widget _moveNotice() {
     if (_moves.isEmpty) return const SizedBox.shrink();
     final count = _moves.length;
-    return _banner(
-      const Key('day_timeline_moved_notice'),
-      count == 1
-          ? 'Your calendar changed, so I have moved one suggested time.'
-          : 'Your calendar changed, so I have moved $count suggested times.',
-      [
-        TextButton(
-          key: const Key('day_timeline_moved_ok'),
-          onPressed: () => setState(() => _moves = const []),
-          child: const Text('Very good'),
-        ),
-        TextButton(
-          key: const Key('day_timeline_moved_undo'),
-          onPressed: _undoMoves,
-          child: const Text('Undo'),
-        ),
-      ],
+    final cause = _moveReason == _MoveReason.carriedOn
+        ? 'You carried on, sir'
+        : 'Your calendar changed';
+    final buttonStyle = TextButton.styleFrom(minimumSize: const Size(48, 48));
+    return Semantics(
+      container: true,
+      liveRegion: true,
+      child: _banner(
+        const Key('day_timeline_moved_notice'),
+        count == 1
+            ? '$cause, so I have moved one suggested time.'
+            : '$cause, so I have moved $count suggested times.',
+        [
+          TextButton(
+            style: buttonStyle,
+            key: const Key('day_timeline_moved_ok'),
+            onPressed: () => setState(() => _moves = const []),
+            child: const Text('Very good'),
+          ),
+          TextButton(
+            style: buttonStyle,
+            key: const Key('day_timeline_moved_undo'),
+            onPressed: _undoMoves,
+            child: const Text('Undo'),
+          ),
+        ],
+      ),
     );
   }
 
