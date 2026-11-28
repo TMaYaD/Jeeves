@@ -105,6 +105,8 @@ class _ScheduledReviewStepState extends ConsumerState<ScheduledReviewStep> {
     final settings = ref.watch(dayTimelineSettingsProvider);
     final timeContexts =
         ref.watch(planningTimeContextsProvider).asData?.value ?? const {};
+    final timeWindows =
+        ref.watch(planningTimeWindowsProvider).asData?.value ?? const {};
     // The Sprints done, read from the record: the same lane the Now screen
     // draws, so the two timelines of one day read alike.
     final sprintMarks =
@@ -120,6 +122,9 @@ class _ScheduledReviewStepState extends ConsumerState<ScheduledReviewStep> {
       defaultEstimateMinutes: settings.defaultEstimateMinutes,
       now: _flowOrigin,
       timeContexts: timeContexts,
+      timeWindows: {
+        for (final entry in timeWindows.entries) entry.key: entry.value.hours
+      },
       pinnedStarts: planning.pinnedStartByTaskId,
       timeboxedTaskIds: {
         for (final entry in timeboxedIds.entries)

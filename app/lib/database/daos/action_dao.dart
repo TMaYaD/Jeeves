@@ -885,6 +885,12 @@ class ActionDao extends DatabaseAccessor<GtdDatabase> with _$ActionDaoMixin {
     return watchCurrentActions().map(_windowsOf);
   }
 
+  /// One-shot sibling of [watchCurrentTimeWindows], for a surface that reads
+  /// the named windows once when it opens and must not hold a live query.
+  Future<Map<String, ActionTimeWindow>> getCurrentTimeWindows() async {
+    return _windowsOf(await getCurrentActions());
+  }
+
   /// The current Action of every Outcome, with the text it carries and the
   /// time it governs, keyed by Outcome id (issue #1073).
   ///

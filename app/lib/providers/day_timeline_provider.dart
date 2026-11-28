@@ -4,6 +4,7 @@ library;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../models/action_place_and_time_window.dart' show ActionTimeWindow;
 import '../models/day_timeline.dart';
 import '../models/time_context.dart';
 import 'database_provider.dart';
@@ -81,6 +82,14 @@ final dayTimelineSprintsProvider =
 final planningTimeContextsProvider =
     FutureProvider.autoDispose<Map<String, TimeContext>>((ref) {
   return ref.watch(databaseProvider).actionDao.getCurrentTimeContexts();
+});
+
+/// The named time windows' hours of each Outcome, read once when the planning
+/// completion screen opens, for the same reason as
+/// [planningTimeContextsProvider].
+final planningTimeWindowsProvider =
+    FutureProvider.autoDispose<Map<String, ActionTimeWindow>>((ref) {
+  return ref.watch(databaseProvider).actionDao.getCurrentTimeWindows();
 });
 
 /// The recorded Sprints, read once when the planning completion screen opens,

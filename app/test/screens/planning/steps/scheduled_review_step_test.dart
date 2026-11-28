@@ -50,6 +50,7 @@ void main() {
       ProviderScope(
         overrides: [
           planningTimeContextsProvider.overrideWith((_) async => const {}),
+          planningTimeWindowsProvider.overrideWith((_) async => const {}),
           planningSprintMarksProvider.overrideWith((_) async => const []),
           // Which Outcomes are Timeboxed (issue #923). Stubbed: a live Drift
           // watch would outlive the test.
@@ -100,6 +101,7 @@ void main() {
       ProviderScope(
         overrides: [
           planningTimeContextsProvider.overrideWith((_) async => const {}),
+          planningTimeWindowsProvider.overrideWith((_) async => const {}),
           planningSprintMarksProvider.overrideWith((_) async => const []),
           // Which Outcomes are Timeboxed (issue #923). Stubbed: a live Drift
           // watch would outlive the test.
@@ -145,6 +147,7 @@ void main() {
       ProviderScope(
         overrides: [
           planningTimeContextsProvider.overrideWith((_) async => const {}),
+          planningTimeWindowsProvider.overrideWith((_) async => const {}),
           planningSprintMarksProvider.overrideWith((_) async => const []),
           currentTimeboxedProvider
               .overrideWith((_) => Stream.value(const {'bounded': true})),
@@ -177,6 +180,7 @@ void main() {
         ProviderScope(
           overrides: [
             planningTimeContextsProvider.overrideWith((_) async => const {}),
+            planningTimeWindowsProvider.overrideWith((_) async => const {}),
             planningSprintMarksProvider.overrideWith((_) async => const []),
             // Which Outcomes are Timeboxed (issue #923). Stubbed: a live Drift
             // watch would outlive the test.
