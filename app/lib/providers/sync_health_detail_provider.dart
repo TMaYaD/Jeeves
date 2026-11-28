@@ -84,6 +84,9 @@ final syncHealthDetailProvider =
   final controller = StreamController<List<SyncHealthCondition>>();
   final alarms = <String, List<IntegrityAlarmRow>>{};
   final refusals = <String, List<QuarantineRow>>{};
+  /// The Workspace's applied-ID set, once its watch has answered. Absent until
+  /// then: the refused rows wait for it, because the set decides whether a row
+  /// offers a decision at all.
   final appliedRefusals = <String, Set<int>>{};
   final subscriptions = <StreamSubscription<void>>[];
 
@@ -117,7 +120,16 @@ final syncHealthDetailProvider =
           workspaceId: workspaceId,
           alarms: alarms[workspaceId] ?? const [],
           refusals: refusals[workspaceId] ?? const [],
-          appliedRefusalRowIds: appliedRefusals[workspaceId] ?? const {},
+          // Null until the Workspace's applied-ID watch has answered: the
+          // refused rows are held until then, because the set decides whether a
+          // row offers a decision, and a row whose change the log has applied
+          // offers none. A Workspace with no refused rows has nothing to hold,
+          // so it does not wait.
+          appliedRefusalRowIds: appliedRefusals.containsKey(workspaceId)
+              ? appliedRefusals[workspaceId]
+              : (refusals[workspaceId] ?? const <QuarantineRow>[]).isEmpty
+                  ? const <int>{}
+                  : null,
         ),
     ]);
   }

@@ -108,11 +108,18 @@ class SyncHealthCondition {
 /// since applied. Such a row is listed — it is the evidence that the change
 /// arrived out of order — but it offers no decision: the change is in, and no
 /// later rebuild would check a decision about it.
+///
+/// **Null means the set is not known yet**, and the refused rows are withheld
+/// until it is: a row whose change the log has applied offers no decision, and
+/// offering one for a row that is in fact applied is a decision the store
+/// would refuse. The rows are withheld rather than shown without their
+/// decisions, because a refusal the User can act on is worth showing and one
+/// they cannot is not. An empty set means the set is known and holds nothing.
 List<SyncHealthCondition> syncHealthConditionsFor({
   required String workspaceId,
   required List<IntegrityAlarmRow> alarms,
   required List<QuarantineRow> refusals,
-  Set<int> appliedRefusalRowIds = const {},
+  Set<int>? appliedRefusalRowIds = const {},
 }) =>
     [
       for (final row in alarms)
@@ -131,27 +138,30 @@ List<SyncHealthCondition> syncHealthConditionsFor({
             resolutions: resolutionsOfferedForAlarmRow(row),
             resolutionInFlight: row.resolution != null && row.resolvedAt == null,
           ),
-      for (final row in refusals)
-        if (classOfRefusalCode(row.reason) != SyncConditionClass.transient &&
-            row.resolution == null)
-          SyncHealthCondition(
-            workspaceId: workspaceId,
-            source: SyncConditionSource.refusedItem,
-            code: row.reason,
-            firstSeenAt: row.detectedAt,
-            lastSeenAt: row.releasedAt ?? row.detectedAt,
-            occurrenceCount: 1,
-            reAdmitted: row.releasedAt != null,
-            rowId: row.id,
-            detail: row.detail,
-            memberId: row.authorMemberId,
-            // A refused change that was applied later has nothing left to
-            // decide; one that is still held may be refused for good.
-            resolutions: row.releasedAt == null &&
-                    !appliedRefusalRowIds.contains(row.id)
-                ? resolutionsForRefusalCode(row.reason)
-                : const <AlarmResolution>[],
-          ),
+      // The refused rows are withheld while the applied set is unknown: see
+      // the parameter's contract above.
+      if (appliedRefusalRowIds != null)
+        for (final row in refusals)
+          if (classOfRefusalCode(row.reason) != SyncConditionClass.transient &&
+              row.resolution == null)
+            SyncHealthCondition(
+              workspaceId: workspaceId,
+              source: SyncConditionSource.refusedItem,
+              code: row.reason,
+              firstSeenAt: row.detectedAt,
+              lastSeenAt: row.releasedAt ?? row.detectedAt,
+              occurrenceCount: 1,
+              reAdmitted: row.releasedAt != null,
+              rowId: row.id,
+              detail: row.detail,
+              memberId: row.authorMemberId,
+              // A refused change that was applied later has nothing left to
+              // decide; one that is still held may be refused for good.
+              resolutions: row.releasedAt == null &&
+                      !appliedRefusalRowIds.contains(row.id)
+                  ? resolutionsForRefusalCode(row.reason)
+                  : const <AlarmResolution>[],
+            ),
     ];
 
 /// The class the screen groups a condition under.
