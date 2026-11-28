@@ -28,6 +28,9 @@ import '../../../providers/task_detail_provider.dart';
 ///   "Roll Over to Tomorrow" for an ordinary shutdown, and plain "Roll Over"
 ///   when Daily Planning launched this shutdown ([shutdownThenPlanProvider]),
 ///   because the next plan is then minutes away, not tomorrow's.
+///   When the Outcome's time window does not open on that day, the Roll Over
+///   choice says so ([rolloverTimeNotOpenOutcomeIdsProvider]); the rollover is
+///   unchanged.
 /// - Return to Next → clears the daily selection; task reappears in
 ///   tomorrow's planning session.
 /// - Defer until a later day → moves the task to Someday/Maybe.
@@ -133,6 +136,12 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
         false;
     final currentAction = ref.watch(currentActionProvider(current.id)).value;
     final launchedByDailyPlanning = ref.watch(shutdownThenPlanProvider);
+    // The Outcome's time does not open on the day it rolls over to: say so on
+    // the choice, while the user is choosing (GitHub #1099). Rolling over is
+    // unchanged.
+    final rolloverTimeNotOpen = ref
+        .watch(rolloverTimeNotOpenOutcomeIdsProvider)
+        .contains(current.id);
     return OutcomeReviewCard(
       key: ValueKey(current.id),
       todo: current,
@@ -167,6 +176,11 @@ class _UnfinishedTasksStepState extends ConsumerState<UnfinishedTasksStep> {
                 : "Add to tomorrow's plan",
             icon: Icons.center_focus_strong_outlined,
             color: const Color(0xFF2563EB),
+            note: rolloverTimeNotOpen
+                ? (launchedByDailyPlanning
+                    ? 'Its time window does not open before Evening Shutdown'
+                    : 'Its time window does not open tomorrow')
+                : null,
             onTap: () => notifier.rolloverTask(current.id),
             isPreviouslySelected: dispositions[current.id] == 'rollover',
           ),
@@ -206,10 +220,15 @@ class _ResolutionButton extends StatelessWidget {
     required this.color,
     required this.onTap,
     this.isPreviouslySelected = false,
+    this.note,
   });
 
   final String label;
   final String subtitle;
+
+  /// An extra line under the subtitle, with an outlined clock glyph; no colour
+  /// carries its meaning.
+  final String? note;
   final IconData icon;
   final Color color;
   final VoidCallback onTap;
@@ -267,6 +286,26 @@ class _ResolutionButton extends StatelessWidget {
                         color: color.withAlpha(180),
                       ),
                     ),
+                    if (note != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.schedule_outlined,
+                                size: 12, color: Color(0xFF4B5563)),
+                            const SizedBox(width: 4),
+                            Expanded(
+                              child: Text(
+                                note!,
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Color(0xFF4B5563),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                   ],
                 ),
               ),
