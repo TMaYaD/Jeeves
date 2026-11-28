@@ -24,6 +24,7 @@ import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/gtd_lists_provider.dart';
 import 'package:jeeves/providers/synced_preferences_provider.dart';
 import 'package:jeeves/providers/time_page_provider.dart';
+import 'package:jeeves/providers/time_window_provider.dart';
 import 'package:jeeves/router.dart';
 import 'package:jeeves/services/notification_service.dart';
 
@@ -252,6 +253,13 @@ void main() {
       expect(group.rows.firstWhere((r) => r.todo.id == id).isOnNext, isFalse,
           reason: 'it is Saturday and Work hours is Monday to Friday');
 
+      // Next hides by this set, so wait until it holds the Outcome. An
+      // absent Outcome on a list that has not yet refreshed proves nothing.
+      await eventually<Set<String>>(
+        tester,
+        outsideTimeWindowOutcomeIdsProvider,
+        (v) => v.contains(id),
+      );
       final next = await eventually<AsyncValue<List<Todo>>>(
         tester,
         nextProvider,
