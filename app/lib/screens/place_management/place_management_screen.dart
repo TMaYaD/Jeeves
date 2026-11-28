@@ -1,6 +1,7 @@
 /// Settings → Manage → Places: the user's named places (issue #55).
 ///
-/// Each row names a Place, its area and how many live Actions use it.
+/// Each row names a Place, its area and how many live Actions use it. A Place
+/// the user asked to hear about on arrival says so, in words.
 library;
 
 import 'dart:math';
@@ -8,7 +9,10 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../providers/arrival_notification_settings.dart';
+import '../../providers/location_source_provider.dart';
 import '../../providers/places_provider.dart';
+import '../../services/location_source.dart';
 import '../../widgets/app_title_bar/app_title_bar.dart';
 import '../../widgets/place_editor_sheet.dart';
 
@@ -45,6 +49,12 @@ class _PlaceManagementScreenState extends ConsumerState<PlaceManagementScreen> {
   @override
   Widget build(BuildContext context) {
     final places = ref.watch(namedPlacesWithUseCountProvider);
+    // The arrival switch is on only when the user asked for it and the phone
+    // still allows the location at all times.
+    final arrivalIds =
+        ref.watch(arrivalPlaceIdsProvider).asData?.value ?? const <String>{};
+    final permission = ref.watch(locationPermissionProvider).asData?.value;
+    final tellsOnArrival = permission == LocationPermission.always;
     return Scaffold(
       appBar: AppTitleBar(
         title: 'Places',
@@ -86,12 +96,24 @@ class _PlaceManagementScreenState extends ConsumerState<PlaceManagementScreen> {
                   style: const TextStyle(
                       fontWeight: FontWeight.w500, color: Color(0xFF374151)),
                 ),
-                subtitle: Text(
-                  row.hoursLabel == null
-                      ? '${row.area.radiusMeters} m'
-                      : '${row.area.radiusMeters} m · ${row.hoursLabel}',
-                  style:
-                      const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+                subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      row.hoursLabel == null
+                          ? '${row.area.radiusMeters} m'
+                          : '${row.area.radiusMeters} m · ${row.hoursLabel}',
+                      style: const TextStyle(
+                          fontSize: 12, color: Color(0xFF9CA3AF)),
+                    ),
+                    if (arrivalIds.contains(row.id) && tellsOnArrival)
+                      Text(
+                        'Tells you on arrival',
+                        key: Key('place_management_arrival_${row.id}'),
+                        style: const TextStyle(
+                            fontSize: 12, color: Color(0xFF9CA3AF)),
+                      ),
+                  ],
                 ),
                 trailing: Text(
                   '${row.useCount}',

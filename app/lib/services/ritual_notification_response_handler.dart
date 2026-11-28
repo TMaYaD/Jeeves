@@ -2,6 +2,8 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import '../models/ritual.dart';
 import '../providers/nudge_action_outbox.dart';
+import 'arrival_notifications.dart'
+    show arrivalPlaceIdFromPayload, arrivalPlaceRoute;
 import 'due_date_notifications.dart' show outcomeIdFromNotificationPayload;
 import 'follow_up_notifications.dart'
     show followUpOutcomeIdFromNotificationPayload;
@@ -37,8 +39,11 @@ Future<void> handleRitualNotificationResponse(
     if (ritualAction != null) {
       navigate(ritualNotificationRoute(ritualAction.ritual));
     } else if (actionId == null) {
+      final arrivalPlaceId = arrivalPlaceIdFromPayload(response.payload);
       if (response.payload == 'focus') {
         navigate('/focus/active');
+      } else if (arrivalPlaceId != null) {
+        navigate(arrivalPlaceRoute(arrivalPlaceId));
       } else {
         final outcomeId = outcomeIdFromNotificationPayload(response.payload) ??
             followUpOutcomeIdFromNotificationPayload(response.payload);

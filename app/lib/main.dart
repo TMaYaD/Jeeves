@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'capture/share_inbox_host.dart';
 import 'database/store_refusal_error.dart';
 import 'database/store_schema.dart';
+import 'providers/arrival_snapshot_provider.dart';
 import 'providers/auth_provider.dart';
 import 'providers/database_provider.dart';
 import 'providers/habit_check_in_outbox.dart';
@@ -218,6 +219,11 @@ class JeevesApp extends ConsumerWidget {
     // Keeps the Ritual notifications equal to the projection of the Nudge
     // queue over the coming week. Nothing else reads it.
     ref.watch(nudgeNotificationSchedulerProvider);
+    // Keeps the device-local arrival snapshot — what is due at each Place the
+    // user asked to hear about on arrival — in step with the store. The
+    // background arrival code reads that snapshot and may not open the store.
+    // Nothing else reads it.
+    ref.watch(arrivalSnapshotReconcilerProvider);
     // Keeps the first-launch card dismissal in step across devices.
     ref.watch(onboardingSyncProvider);
     // Materialises the vault plugin when this device has a vault folder set,

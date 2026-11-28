@@ -2,8 +2,9 @@
 ///
 /// Jeeves asks once, after the first Place is saved — never at launch, never
 /// when a sheet opens, never when a list is drawn. "Use where I am" is the
-/// one other thing that may ask: the user tapped it, so they are asking for
-/// their own location.
+/// one other thing that may ask for the location while using: the user tapped
+/// it, so they are asking for their own location. The arrival switch asks
+/// too, but for "all the time" and behind its own explanation (issue #1092).
 ///
 /// The record of the ask is device-local (shared preferences): the permission
 /// belongs to this phone, and nothing about it is synced.
