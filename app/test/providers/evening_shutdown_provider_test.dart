@@ -1144,13 +1144,27 @@ void main() {
       await db.actionDao.setTimeWindow(actionId, windowId);
     }
 
+    // Waits for the stream's first value, keeping the listener open (awaiting
+    // `.future` through `container.read` can hang; see docs/TESTING.md).
+    Future<void> firstValue<T>(StreamProvider<T> provider) {
+      final ready = Completer<void>();
+      final sub = container.listen(provider, (_, next) {
+        if (next.hasValue && !ready.isCompleted) ready.complete();
+      }, fireImmediately: true);
+      addTearDown(sub.close);
+      return ready.future.timeout(const Duration(seconds: 5));
+    }
+
     Future<Set<String>> read() async {
       final sub = container.listen(rolloverTimeNotOpenOutcomeIdsProvider,
           (_, _) {});
       addTearDown(sub.close);
       container.listen(currentTimeWindowsProvider, (_, _) {});
       container.listen(currentTimeContextsProvider, (_, _) {});
-      await Future<void>.delayed(const Duration(milliseconds: 200));
+      await Future.wait([
+        firstValue(currentTimeWindowsProvider),
+        firstValue(currentTimeContextsProvider),
+      ]);
       return sub.read();
     }
 
@@ -1176,12 +1190,19 @@ void main() {
 
     test('follows Daily Planning\'s day when it launched the shutdown',
         () async {
-      container.read(shutdownThenPlanProvider.notifier).set(true);
+      // Monday-only, 21:00-23:00: still to come in the Monday being planned,
+      // but Tuesday (an ordinary shutdown's "tomorrow") has no hours. Only the
+      // Daily Planning rule leaves it out of the set.
+      final mondayOnly = await outcomeWithAction('mon');
+      await attachWindow(
+          mondayOnly, {1: (startMinute: 21 * 60, endMinute: 23 * 60)});
       final wednesdayOnly = await outcomeWithAction('wed');
       await attachWindow(
           wednesdayOnly, {3: (startMinute: 16 * 60, endMinute: 20 * 60)});
       await outcomeWithAction('plain');
 
+      expect(await read(), {'mon', 'wed'});
+      container.read(shutdownThenPlanProvider.notifier).set(true);
       expect(await read(), {'wed'});
     });
   });

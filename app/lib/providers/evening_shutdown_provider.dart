@@ -545,7 +545,11 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
 /// ([plannedDayTimeProvider]). A named window and a one-time Time context are
 /// the same rule; an Outcome with no time, or whose time cannot be read, is
 /// never in the set. A Place's hours are not counted, as in Daily Planning.
-final rolloverTimeNotOpenOutcomeIdsProvider = Provider<Set<String>>((ref) {
+///
+/// Auto-disposed so each visit to the Resolve step reads the clock afresh: a
+/// process that outlives midnight never shows the previous day's note.
+final rolloverTimeNotOpenOutcomeIdsProvider =
+    Provider.autoDispose<Set<String>>((ref) {
   if (ref.watch(shutdownThenPlanProvider)) {
     return ref.watch(plannedDayTimeProvider).notInPlannedDay;
   }
