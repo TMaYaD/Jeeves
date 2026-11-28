@@ -139,6 +139,8 @@ void main() {
   Future<void> unmount(WidgetTester tester) async {
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pumpAndSettle();
+    // Daily Planning's day-end timer lives as long as the container does.
+    container.invalidate(plannedDayTimeProvider);
   }
 
   testWidgets('forgotten shutdown launched by Daily Planning says "Roll Over"',

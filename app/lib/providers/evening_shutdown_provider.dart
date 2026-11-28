@@ -23,12 +23,19 @@ import '../database/daos/focus_session_dao.dart' show SessionSettlement;
 import '../database/gtd_database.dart';
 import '../models/habit_commitment.dart' show habitDayKey;
 import '../models/routing_kind.dart';
+import '../models/time_opens_on_day.dart';
 import '../utils/snapshot_nav.dart';
 import 'clock_provider.dart';
 import 'database_provider.dart';
 import 'focus_session_planning_provider.dart'
-    show activeSessionSettlementsProvider, planningToday;
+    show
+        activeSessionSettlementsProvider,
+        planningToday,
+        plannedDayTimeProvider,
+        shutdownThenPlanProvider;
 import 'synced_preferences_provider.dart';
+import 'time_context_provider.dart';
+import 'time_window_provider.dart';
 
 // Re-export Todo so UI consumers (e.g. unfinished_tasks_step.dart) can use
 // the type without taking a direct dependency on the database layer.
@@ -528,3 +535,29 @@ class EveningShutdownNotifier extends Notifier<EveningShutdownState> {
     }
   }
 }
+
+/// The Outcome ids whose time does not open on the day a rolled-over Outcome
+/// lands (GitHub #1099): Roll Over says so on the Resolve unfinished card.
+///
+/// An ordinary shutdown rolls over to tomorrow, the phone's next calendar day.
+/// When Daily Planning launched the shutdown the next plan is minutes away, so
+/// Daily Planning's own rule for the day being planned answers instead
+/// ([plannedDayTimeProvider]). A named window and a one-time Time context are
+/// the same rule; an Outcome with no time, or whose time cannot be read, is
+/// never in the set. A Place's hours are not counted, as in Daily Planning.
+final rolloverTimeNotOpenOutcomeIdsProvider = Provider<Set<String>>((ref) {
+  if (ref.watch(shutdownThenPlanProvider)) {
+    return ref.watch(plannedDayTimeProvider).notInPlannedDay;
+  }
+  final now = ref.watch(clockProvider)();
+  final tomorrow = DateTime(now.year, now.month, now.day + 1);
+  final windows = ref.watch(currentTimeWindowsProvider).value ?? const {};
+  final contexts = ref.watch(currentTimeContextsProvider).value ?? const {};
+  return {
+    for (final entry in windows.entries)
+      if (!timeOpensOnDay(windowHours: entry.value.hours, day: tomorrow))
+        entry.key,
+    for (final entry in contexts.entries)
+      if (!timeOpensOnDay(timeContext: entry.value, day: tomorrow)) entry.key,
+  };
+});

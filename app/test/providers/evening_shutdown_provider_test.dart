@@ -14,9 +14,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/models/routing_kind.dart';
+import 'package:jeeves/models/time_context.dart';
+import 'package:jeeves/models/time_window_hours.dart';
+import 'package:jeeves/providers/clock_provider.dart';
 import 'package:jeeves/providers/evening_shutdown_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart'
-    show activeSessionSettlementsProvider;
+    show shutdownThenPlanProvider, activeSessionSettlementsProvider;
+import 'package:jeeves/providers/time_context_provider.dart';
+import 'package:jeeves/providers/time_window_provider.dart';
 import 'package:jeeves/services/notification_service.dart';
 import '../test_helpers.dart';
 
@@ -1103,6 +1108,81 @@ void main() {
       final n = container.read(eveningShutdownProvider.notifier);
       expect(() => n.recordVerdict('a', RoutingKind.trash),
           throwsArgumentError);
+    });
+  });
+
+  group('rolloverTimeNotOpenOutcomeIdsProvider', () {
+    late GtdDatabase db;
+    late ProviderContainer container;
+
+    setUp(() async {
+      SharedPreferences.setMockInitialValues({});
+      db = GtdDatabase(NativeDatabase.memory());
+      // 2026-11-23 is a Monday: tomorrow is Tuesday.
+      container = ProviderContainer(overrides: [
+        databaseProvider.overrideWithValue(db),
+        notificationServiceProvider
+            .overrideWithValue(StubNotificationService()),
+        clockProvider.overrideWithValue(() => DateTime(2026, 11, 23, 20)),
+      ]);
+    });
+
+    tearDown(() async {
+      container.dispose();
+      await db.close();
+    });
+
+    Future<String> outcomeWithAction(String id) async {
+      await _insertTodo(db, id: id);
+      await seedCurrentAction(db, outcomeId: id, text: 'work', userId: _uid);
+      return (await db.actionDao.getCurrentAction(id))!.id;
+    }
+
+    Future<void> attachWindow(String actionId, Map<int, DayHours> hours) async {
+      final windowId = await db.timeWindowDao
+          .createTimeWindow(name: 'W$actionId', hours: hours, userId: _uid);
+      await db.actionDao.setTimeWindow(actionId, windowId);
+    }
+
+    Future<Set<String>> read() async {
+      final sub = container.listen(rolloverTimeNotOpenOutcomeIdsProvider,
+          (_, _) {});
+      addTearDown(sub.close);
+      container.listen(currentTimeWindowsProvider, (_, _) {});
+      container.listen(currentTimeContextsProvider, (_, _) {});
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      return sub.read();
+    }
+
+    test('names the Outcomes whose time does not open tomorrow', () async {
+      final wednesdayOnly = await outcomeWithAction('wed');
+      await attachWindow(
+          wednesdayOnly, {3: (startMinute: 16 * 60, endMinute: 20 * 60)});
+      final tuesdayOpen = await outcomeWithAction('tue');
+      await attachWindow(
+          tuesdayOpen, {2: (startMinute: 9 * 60, endMinute: 17 * 60)});
+      final contextWednesday = await outcomeWithAction('ctx');
+      await db.actionDao
+          .setTimeContext(contextWednesday, TimeContext.create(days: {3})!);
+      await outcomeWithAction('plain');
+
+      expect(await read(), {'wed', 'ctx'});
+    });
+
+    test('is empty when no Outcome has a time', () async {
+      await outcomeWithAction('plain');
+      expect(await read(), isEmpty);
+    });
+
+    test('follows Daily Planning\'s day when it launched the shutdown',
+        () async {
+      container.read(shutdownThenPlanProvider.notifier).set(true);
+      final wednesdayOnly = await outcomeWithAction('wed');
+      await attachWindow(
+          wednesdayOnly, {3: (startMinute: 16 * 60, endMinute: 20 * 60)});
+      await outcomeWithAction('plain');
+
+      expect(await read(), {'wed'});
     });
   });
 }
