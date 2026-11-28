@@ -393,7 +393,7 @@ Settings → Manage lists the user's named time windows beside the label, projec
 | Manage list | One row per window: its name, its hours in words ("Mon–Fri 09:00–17:00"), and the number of actions using it. The title bar's New action makes one; tapping a row edits it. An empty list says so in Jeeves's voice, from a pool. |
 | Editor | A name, and the hours of each day: the same on chosen days, or day by day. An end before the start is the next day, and is labelled so. |
 | Save and Delete | Save stays disabled until the name and the hours are acceptable. Delete asks how many actions and places lose the window; the places lose their hours, and the window goes. |
-| Chip | The Time context chip reads the window's name, or "from <place>" when the Action's place supplies the hours, and its sheet offers the user's windows beside the one-time time. Picking a window attaches it; a one-time time replaces it. |
+| Chip | The Time context chip reads the window's name, or "from <place>" when the Action's place supplies the hours, and its sheet offers the user's windows beside the one-time time. Picking a window attaches it; a one-time time replaces it. The clarify card's Capture shape has the same chip (TIME field) and sheet. |
 | Time page | A drawer page, in the Waiting For idiom: one group per named window, its hours in the header, then a "One-time" group. Each row says "On Next", or when its time opens — the glyph and the words carry it, never a colour. |
 
 ### Ceremony back navigation
