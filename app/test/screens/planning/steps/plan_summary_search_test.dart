@@ -14,6 +14,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
+import 'package:jeeves/providers/place_gate_provider.dart';
 import 'package:jeeves/providers/habit_progress_provider.dart';
 import 'package:jeeves/providers/task_detail_provider.dart';
 import 'package:jeeves/screens/planning/steps/plan_summary_step.dart';
@@ -47,7 +48,10 @@ final _offUpNext = <OffUpNextCandidate>[
       reason: OffUpNextReason.someday),
 ];
 
-Widget _harness(GtdDatabase db) {
+Widget _harness(
+  GtdDatabase db, {
+  Map<String, String> placeNames = const <String, String>{},
+}) {
   final everything = [..._upNext, ..._offUpNext.map((c) => c.todo)];
   return ProviderScope(
     overrides: [
@@ -60,6 +64,7 @@ Widget _harness(GtdDatabase db) {
       // The step reads when each Outcome's time opens; that provider watches
       // drift's Time contexts, so stub it rather than hold a live watch
       // (TESTING.md).
+      currentPlaceNamesProvider.overrideWithValue(placeNames),
       plannedDayTimeProvider.overrideWithValue((
         notInPlannedDay: const <String>{},
         opensLaterAt: const <String, DateTime>{},
@@ -102,8 +107,12 @@ Widget _harness(GtdDatabase db) {
   );
 }
 
-Future<void> _pump(WidgetTester tester, GtdDatabase db) async {
-  await tester.pumpWidget(_harness(db));
+Future<void> _pump(
+  WidgetTester tester,
+  GtdDatabase db, {
+  Map<String, String> placeNames = const <String, String>{},
+}) async {
+  await tester.pumpWidget(_harness(db, placeNames: placeNames));
   await tester.pumpAndSettle();
 }
 
@@ -193,6 +202,16 @@ void main() {
     expect(find.text('1 selected'), findsNothing);
   });
 
+  testWidgets('an Up Next match at a Place shows the Place\'s name',
+      (tester) async {
+    await _pump(tester, db, placeNames: {'n1': 'Hardware store'});
+    await _search(tester, 'report');
+
+    expect(find.text('Write report'), findsOneWidget);
+    expect(find.text('Hardware store'), findsOneWidget);
+    expect(find.byIcon(Icons.place_outlined), findsOneWidget);
+  });
+
   testWidgets('the field is disabled while multi-select is active',
       (tester) async {
     await _pump(tester, db);
@@ -216,6 +235,7 @@ void main() {
         // The step reads when each Outcome's time opens; that provider
         // watches drift's Time contexts, so stub it rather than hold a live
         // watch (TESTING.md).
+        currentPlaceNamesProvider.overrideWithValue(const <String, String>{}),
         plannedDayTimeProvider.overrideWithValue((
           notInPlannedDay: const <String>{},
           opensLaterAt: const <String, DateTime>{},

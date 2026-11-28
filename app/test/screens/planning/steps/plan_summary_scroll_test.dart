@@ -30,6 +30,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/providers/database_provider.dart';
 import 'package:jeeves/providers/focus_session_planning_provider.dart';
+import 'package:jeeves/providers/place_gate_provider.dart';
 import 'package:jeeves/providers/habit_progress_provider.dart';
 import 'package:jeeves/screens/planning/steps/plan_summary_step.dart';
 
@@ -92,6 +93,7 @@ Widget _harness(GtdDatabase db, List<Todo> todos) {
       // The step reads when each Outcome's time opens; that provider watches
       // drift's Time contexts, so stub it rather than hold a live watch
       // (TESTING.md).
+      currentPlaceNamesProvider.overrideWithValue(const <String, String>{}),
       plannedDayTimeProvider.overrideWithValue((
         notInPlannedDay: const <String>{},
         opensLaterAt: const <String, DateTime>{},

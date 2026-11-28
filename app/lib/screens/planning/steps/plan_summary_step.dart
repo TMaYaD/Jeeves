@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../providers/focus_session_planning_provider.dart';
 import '../../../providers/focus_session_planning_settings_provider.dart';
+import '../../../providers/place_gate_provider.dart';
 import '../../../widgets/capacity_bar.dart';
 import '../../../widgets/meta_chip.dart';
 import '../../../widgets/outcome_row.dart';
@@ -112,6 +113,8 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
     // row can say when its window opens.
     final opensLaterAt =
         ref.watch(plannedDayTimeProvider.select((t) => t.opensLaterAt));
+    // The Place each Outcome is at, so an Up Next row says where it can be done.
+    final placeNames = ref.watch(currentPlaceNamesProvider);
 
     // Split the capacity into real-estimate minutes and default-counted
     // minutes so the bar can render them as two segments. The summary total is
@@ -210,6 +213,7 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
                     matchingSkipped,
                     offUpNext,
                     opensLaterAt,
+                    placeNames,
                   ),
 
                 // Today's tasks (selected)
@@ -235,6 +239,7 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
                   ...pendingTasks.map((t) => _planOutcomeRow(
                         todo: t,
                         opensAt: opensLaterAt[t.id],
+                        placeName: placeNames[t.id],
                         onSelect: () => _handleSelect(t),
                         onSkip: () => _handleSkip(t),
                         selectionMode: _selectionMode,
@@ -291,6 +296,7 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
     List<Todo> skipped,
     List<OffUpNextCandidate> offUpNext,
     Map<String, DateTime> opensLaterAt,
+    Map<String, String> placeNames,
   ) {
     final upNextCount = pending.length + skipped.length;
     return [
@@ -300,6 +306,7 @@ class _PlanSummaryStepState extends ConsumerState<PlanSummaryStep> {
         ...pending.map((t) => _planOutcomeRow(
               todo: t,
               opensAt: opensLaterAt[t.id],
+              placeName: placeNames[t.id],
               onSelect: () => _handleSelect(t),
               onSkip: () => _handleSkip(t),
               onPeek: () => OutcomePeekSheet.show(context, t),
@@ -512,6 +519,9 @@ class _MultiSelectActionBar extends StatelessWidget {
 /// [opensAt] — the instant the Outcome's time opens in the day being planned,
 /// when that is later than now. The row then says when its window opens, so a
 /// reader knows it cannot be done yet. Only Up Next rows carry it.
+///
+/// [placeName] — the Place of the Outcome's current Action, when it has one.
+/// Only Up Next rows carry it.
 Widget _planOutcomeRow({
   required Todo todo,
   bool isSelected = false,
@@ -526,6 +536,7 @@ Widget _planOutcomeRow({
   VoidCallback? onPeek,
   OffUpNextReason? offUpNextReason,
   DateTime? opensAt,
+  String? placeName,
 }) {
   return OutcomeRow(
     title: todo.title,
@@ -569,6 +580,7 @@ Widget _planOutcomeRow({
           muted: isSkipped,
           energyLevel: todo.energyLevel,
           timeEstimateMinutes: todo.timeEstimate,
+          placeName: placeName,
         ),
       ],
     ),
