@@ -14,6 +14,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:jeeves/database/daos/place_dao.dart' show pinPlaceKind;
 import 'package:jeeves/database/gtd_database.dart';
 import 'package:jeeves/models/place_area.dart';
+import 'package:jeeves/models/time_window_hours.dart';
 import 'package:jeeves/sync/collection_codecs.dart';
 import 'package:jeeves/sync/domain_op_capture.dart';
 
@@ -330,5 +331,224 @@ void main() {
     final byName = {for (final row in listed) row.name: row.useCount};
     expect(byName['Hardware store'], 0);
     expect(byName['Bike shop'], 1);
+  });
+
+  group('the hours a place carries (issue #1074)', () {
+    /// Mon–Fri 11:00–20:00 — the hardware store's hours.
+    final monToFri = <int, DayHours>{
+      for (var day = 1; day <= 5; day++)
+        day: (startMinute: 11 * 60, endMinute: 20 * 60),
+    };
+
+    Future<String> createWindow({String name = 'Weekday hours'}) async {
+      final id = await db.timeWindowDao.createTimeWindow(
+        name: name,
+        hours: monToFri,
+        userId: _userId,
+        now: _ts,
+      );
+      return id!;
+    }
+
+    Future<Place> placeRow(String placeId) =>
+        (db.select(db.places)..where((p) => p.id.equals(placeId))).getSingle();
+
+    Future<String> seedPin() async {
+      await db.into(db.places).insert(PlacesCompanion(
+            id: const Value('pin-1'),
+            userId: const Value(_userId),
+            kind: const Value(pinPlaceKind),
+            name: const Value('Dropped pin'),
+            latitudeMicrodegrees: const Value(52370200),
+            longitudeMicrodegrees: const Value(4895200),
+            radiusMeters: const Value(150),
+            createdAt: Value(_ts),
+          ));
+      return 'pin-1';
+    }
+
+    test('a window gives the place its hours and a zone', () async {
+      final placeId = await createHardwareStore();
+      final windowId = await createWindow();
+      capture.clear();
+
+      final written = await db.placeDao.setPlaceHours(
+        placeId: placeId!,
+        timeWindowId: windowId,
+        timeZone: 'Europe/Berlin',
+        now: _ts,
+      );
+
+      expect(written, isTrue);
+      final place = await placeRow(placeId);
+      expect(place.timeWindowId, windowId);
+      expect(place.hours, isNull);
+      expect(place.timeZone, 'Europe/Berlin');
+
+      // One op, all three fields: a peer never sees a window and own hours
+      // side by side.
+      final op = capture.forCollection(placesCollection).single;
+      expect(op.entityId, placeId);
+      expect(op.fields.keys.toSet(),
+          {'time_window_id', 'hours', 'time_zone', 'updated_at'});
+      expect(op.fields['time_window_id'], windowId);
+      expect(op.fields['hours'], isNull);
+      expect(op.fields['time_zone'], 'Europe/Berlin');
+      expect(op.fields['updated_at'], '2026-11-24T09:00:00.000Z');
+    });
+
+    test('hours of the place\'s own are written as the canonical JSON',
+        () async {
+      final placeId = await createHardwareStore();
+      final hours = TimeWindowHours.create(monToFri)!;
+      capture.clear();
+
+      final written = await db.placeDao.setPlaceHours(
+        placeId: placeId!,
+        hours: hours,
+        timeZone: 'Europe/Berlin',
+        now: _ts,
+      );
+
+      expect(written, isTrue);
+      final place = await placeRow(placeId);
+      expect(place.timeWindowId, isNull);
+      expect(place.hours, hours.encode());
+      expect(place.timeZone, 'Europe/Berlin');
+
+      final op = capture.forCollection(placesCollection).single;
+      expect(op.fields['time_window_id'], isNull);
+      expect(op.fields['hours'], hours.encode());
+      expect(op.fields['time_zone'], 'Europe/Berlin');
+    });
+
+    test('a pin carries no hours', () async {
+      final pinId = await seedPin();
+      capture.clear();
+
+      final written = await db.placeDao.setPlaceHours(
+        placeId: pinId,
+        hours: TimeWindowHours.create(monToFri),
+        now: _ts,
+      );
+
+      expect(written, isFalse);
+      final place = await placeRow(pinId);
+      expect(place.hours, isNull);
+      expect(place.timeZone, isNull);
+      expect(capture.recorded, isEmpty);
+    });
+
+    test('both kinds of hours at once are refused', () async {
+      final placeId = await createHardwareStore();
+      final windowId = await createWindow();
+      capture.clear();
+
+      final written = await db.placeDao.setPlaceHours(
+        placeId: placeId!,
+        timeWindowId: windowId,
+        hours: TimeWindowHours.create(monToFri),
+        now: _ts,
+      );
+
+      expect(written, isFalse);
+      final place = await placeRow(placeId);
+      expect(place.timeWindowId, isNull);
+      expect(place.hours, isNull);
+      expect(capture.recorded, isEmpty);
+    });
+
+    test('a window id that names no window is refused', () async {
+      final placeId = await createHardwareStore();
+      capture.clear();
+
+      final written = await db.placeDao.setPlaceHours(
+        placeId: placeId!,
+        timeWindowId: 'no-such-window',
+        now: _ts,
+      );
+
+      expect(written, isFalse);
+      final place = await placeRow(placeId);
+      expect(place.timeWindowId, isNull);
+      expect(capture.recorded, isEmpty);
+    });
+
+    test('a place that does not exist is refused', () async {
+      final windowId = await createWindow();
+      capture.clear();
+
+      final written = await db.placeDao.setPlaceHours(
+        placeId: 'no-such-place',
+        timeWindowId: windowId,
+        now: _ts,
+      );
+
+      expect(written, isFalse);
+      expect(capture.recorded, isEmpty);
+    });
+
+    test('clearing writes nulls for all three fields', () async {
+      final placeId = await createHardwareStore();
+      final windowId = await createWindow();
+      await db.placeDao.setPlaceHours(
+        placeId: placeId!,
+        timeWindowId: windowId,
+        timeZone: 'Europe/Berlin',
+        now: _ts,
+      );
+      capture.clear();
+
+      final written = await db.placeDao.setPlaceHours(placeId: placeId, now: _ts);
+
+      expect(written, isTrue);
+      final place = await placeRow(placeId);
+      expect(place.timeWindowId, isNull);
+      expect(place.hours, isNull);
+      expect(place.timeZone, isNull);
+
+      final op = capture.forCollection(placesCollection).single;
+      expect(op.fields['time_window_id'], isNull);
+      expect(op.fields['hours'], isNull);
+      expect(op.fields['time_zone'], isNull);
+    });
+
+    test('a write that changes nothing authors nothing', () async {
+      final placeId = await createHardwareStore();
+      final windowId = await createWindow();
+      await db.placeDao.setPlaceHours(
+        placeId: placeId!,
+        timeWindowId: windowId,
+        timeZone: 'Europe/Berlin',
+        now: _ts,
+      );
+      capture.clear();
+
+      final written = await db.placeDao.setPlaceHours(
+        placeId: placeId,
+        timeWindowId: windowId,
+        timeZone: 'Europe/Berlin',
+        now: _ts,
+      );
+
+      expect(written, isFalse);
+      expect(capture.recorded, isEmpty);
+    });
+
+    test('a zone with no hours is not stored', () async {
+      final placeId = await createHardwareStore();
+      capture.clear();
+
+      final written = await db.placeDao.setPlaceHours(
+        placeId: placeId!,
+        timeZone: 'Europe/Berlin',
+        now: _ts,
+      );
+
+      expect(written, isFalse);
+      final place = await placeRow(placeId);
+      expect(place.timeZone, isNull);
+      expect(capture.recorded, isEmpty);
+    });
   });
 }

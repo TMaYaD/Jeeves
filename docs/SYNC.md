@@ -20,7 +20,7 @@ Deletion in `user_preferences` is modelled as a **tombstone** — a present row 
 
 > A genuinely **absent** value can only mean "no device has ever written this key." A real cross-device **delete** arrives as a present tombstone, not an absence.
 
-So a key that reads as absent is a key nobody has set, and "absent → keep whatever is local" can never swallow a legitimate delete. A delete is a value, not a gap.
+So "absent → keep whatever is local" can never swallow a legitimate delete.
 
 The same shape holds at the entity level: the reducer tombstones an entity rather than forgetting it, so a rebuild of the domain read model from the log deletes a row it has to rather than silently resurrecting it (`sync/domain_rebuild.dart`).
 
@@ -91,7 +91,6 @@ Every current key, grouped by family:
 | `planning_notification_snoozed_until`, `shutdown_notification_snoozed_until`, `periodic_review_notification_snoozed_until` | datetime | `maxTimestampValue` | Snooze floor must never regress; un-snooze is a tombstone |
 | *(none today)* | list/set | `setMerge` | Provisioned for future filter/pin selections |
 
-**Snooze arbitration departs from the blanket LWW default**; the `maxTimestampValue` bullet above states the rule.
 
 ### Sprints
 
@@ -134,7 +133,7 @@ clocks and merges its own writes, under a random device node id; once enrolled, 
 member id takes over as the tie-break so the wire is unchanged. Clocks stamped under
 the device node id are never ops, so the enrolment upload does not skip them, a
 rebuild from the log carries them across, and an account's later sign-in authors
-those made since its upload completed — creates, edits and deletes, not preferences. A change stamped under a member id that is then never authored — a write made before session restore answered "signed out" — has its clock handed back to the device node id, so the same three paths cover it. A change merged under a member id is kept in the sync store until the op-log bridge has authored it or handed it back, so a process killed in between authors it on the next launch. See [sync-plugins](proposals/sync-plugins.md).
+those made since its upload completed — creates, edits, deletes and carried settings. A change stamped under a member id that is then never authored — a write made before session restore answered "signed out" — has its clock handed back to the device node id, so the same three paths cover it. A change merged under a member id is kept in the sync store until the op-log bridge has authored it or handed it back, so a process killed in between authors it on the next launch. See [sync-plugins](proposals/sync-plugins.md).
 
 Rows that predate the host are seeded into merge state once per device, before any
 plugin can attach, so `snapshot()` holds the whole local dataset. Seeding inserts
@@ -261,7 +260,7 @@ Decisions are recorded; bytes are kept.
 - **Device names**: `app/test/sync/device_names_test.dart` (key, normaliser, ensure, rename) and `app/test/sync/host/device_name_convergence_test.dart` (two devices through the relay plugin).
 - **Convergence end to end**: `app/test/sync/convergence_test.dart` and `full_day_convergence_test.dart` run two simulated devices through enrol → write → sign → append → pull → verify → reduce and assert byte-identical state.
 - **Projection**: `app/test/sync/projector_view_notify_test.dart` (a reduced-in row reaches the watching queries) and `domain_rebuild_test.dart` (a fresh domain store rebuilt from the log, tombstones included).
-- **One refusal, one row**: `app/test/sync/quarantine_once_test.dart` — two pulls fetching the same refused op file it once; two ops refused at one seq stay two rows.
-- **Refused ops heal**: `app/test/sync/unchained_refusal_release_test.dart` — a change refused as `member_not_chained_to_root` is re-received once it knows the author's key, and a key Root never vouched for stays refused; `app/test/sync/control_chain_break_release_test.dart` — a control op refused as `control_chain_break` applies once its predecessor does, one naming no real predecessor stays refused, one served below the op it names stays refused, and a device that lost its epoch key fetches it again.
-- **A removal reaches the peer**: `app/test/sync/dao_capture_contract_test.dart` (the task detail's four removal paths drop it in the deletion's own transaction) and `app/test/sync/tag_convergence_test.dart` (a context, a person, the delegate set and the Project removed on one device are each gone on the other).
-- **The vault**: `app/test/sync/vault/` — two devices sharing a folder (`vault_plugin_journey_test.dart`), the plugin's behaviour (`vault_plugin_behaviour_test.dart`), the page codec (`page_codec_test.dart`) and its upgrade path (`vault_migration_test.dart`); the app's own route is `app/test/integration/vault_sync_journey_test.dart`. Derived ids are pinned in `app/test/sync/ids_vectors_test.dart`.
+- **One refusal, one row**: `app/test/sync/quarantine_once_test.dart` — two pulls that fetch the same refused op file it once, and two different ops refused at one seq stay two rows.
+- **Refused ops heal**: `app/test/sync/unchained_refusal_release_test.dart` — a change refused as `member_not_chained_to_root` is re-received once this device knows the author's key, and a key Root never vouched for stays refused; `app/test/sync/control_chain_break_release_test.dart` — a control op refused as `control_chain_break` applies once its predecessor does, one naming no real predecessor stays refused, one served below the op it names stays refused, a change the log has since applied offers no decision, and a device that lost its epoch key fetches it again.
+- **A removal reaches the peer**: `app/test/sync/dao_capture_contract_test.dart` (each of the task detail's four removal paths describes the drop it makes, in the deletion's own transaction) and `app/test/sync/tag_convergence_test.dart` (a context, a person, the delegate set and the Project removed on one device are each gone on the other after the sync).
+- **The vault**: `app/test/sync/vault/` — two devices sharing a folder (`vault_plugin_journey_test.dart`), the plugin's own behaviour (`vault_plugin_behaviour_test.dart`), the page codec (`page_codec_test.dart`) and the store's upgrade path (`vault_migration_test.dart`); the journeys through the app's own route are `app/test/integration/vault_sync_journey_test.dart` and `app/test/integration/vault_sync_slow_folder_journey_test.dart`. The derived ids a hand edit relies on are pinned in `app/test/sync/ids_vectors_test.dart`.

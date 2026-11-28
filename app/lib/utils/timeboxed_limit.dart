@@ -46,26 +46,7 @@ class TimeLogInterval {
 DateTime? limitPassedAt(int limitMinutes, List<TimeLogInterval> intervals) {
   if (intervals.isEmpty) return null;
   final limit = Duration(minutes: limitMinutes);
-  final ordered = <({DateTime startedAt, DateTime? endedAt})>[];
-  for (final interval in intervals) {
-    final startedAt = _parseInstant(interval.startedAt);
-    if (startedAt == null) continue;
-    ordered.add((
-      startedAt: startedAt,
-      endedAt: _parseInstant(interval.endedAt),
-    ));
-  }
-  ordered.sort((a, b) {
-    final byStart = a.startedAt.compareTo(b.startedAt);
-    if (byStart != 0) return byStart;
-    // The same start: the stint that ends first is read first, and a stint
-    // that is still open — it runs on — is read last.
-    final aEnd = a.endedAt;
-    final bEnd = b.endedAt;
-    if (aEnd == null) return bEnd == null ? 0 : 1;
-    if (bEnd == null) return -1;
-    return aEnd.compareTo(bEnd);
-  });
+  final ordered = _orderedStints(intervals);
 
   var logged = Duration.zero;
   for (final entry in ordered) {
@@ -86,8 +67,68 @@ DateTime? limitPassedAt(int limitMinutes, List<TimeLogInterval> intervals) {
   return null;
 }
 
+/// The time logged on an Action by [now] — every stint, breaks included.
+///
+/// The same reading [limitPassedAt] reads it: the same stints, the same skips,
+/// an open stint counted on to [now]. The two therefore cannot disagree — for
+/// any value V, V minutes is more than the time logged exactly when the limit
+/// of V minutes has not passed by [now].
+///
+/// The walk stops at the first stint that is still open, as it does in
+/// [limitPassedAt]: a stint that is still running is the end of the story,
+/// and the work logged after it cannot be counted without counting the run
+/// twice.
+Duration loggedDurationOn(List<TimeLogInterval> intervals, DateTime now) {
+  var logged = Duration.zero;
+  for (final entry in _orderedStints(intervals)) {
+    final endedAt = entry.endedAt;
+    if (endedAt == null) {
+      // Still open: it runs on, so the time logged grows with the clock.
+      final running = now.toUtc().difference(entry.startedAt);
+      if (!running.isNegative) logged += running;
+      break;
+    }
+    final length = endedAt.difference(entry.startedAt);
+    if (length.isNegative) continue;
+    logged += length;
+  }
+  return logged;
+}
+
 /// Parses a stored instant; null for an absent or unparseable value.
 DateTime? _parseInstant(String? value) {
   if (value == null) return null;
   return DateTime.tryParse(value)?.toUtc();
+}
+
+/// The stints, in the order they are read: by start, then by end.
+///
+/// The order is fixed so that the answer does not depend on the order the
+/// stints arrive in. Dart's sort does not promise to keep equal elements
+/// where they were, and two devices that read the same stints in different
+/// orders would disagree about the instant the limit passed.
+List<({DateTime startedAt, DateTime? endedAt})> _orderedStints(
+  List<TimeLogInterval> intervals,
+) {
+  final ordered = <({DateTime startedAt, DateTime? endedAt})>[];
+  for (final interval in intervals) {
+    final startedAt = _parseInstant(interval.startedAt);
+    if (startedAt == null) continue;
+    ordered.add((
+      startedAt: startedAt,
+      endedAt: _parseInstant(interval.endedAt),
+    ));
+  }
+  ordered.sort((a, b) {
+    final byStart = a.startedAt.compareTo(b.startedAt);
+    if (byStart != 0) return byStart;
+    // The same start: the stint that ends first is read first, and a stint
+    // that is still open — it runs on — is read last.
+    final aEnd = a.endedAt;
+    final bEnd = b.endedAt;
+    if (aEnd == null) return bEnd == null ? 0 : 1;
+    if (bEnd == null) return -1;
+    return aEnd.compareTo(bEnd);
+  });
+  return ordered;
 }

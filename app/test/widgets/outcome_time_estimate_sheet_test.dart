@@ -85,8 +85,18 @@ void main() {
   });
   tearDown(() async => db.close());
 
-  Widget harness({int? current, bool timeboxed = false}) {
+  Widget harness({
+    int? current,
+    bool timeboxed = false,
+    int? initial,
+    EstimateRaise? raise,
+    TextScaler textScaler = TextScaler.noScaling,
+  }) {
     return MaterialApp(
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context).copyWith(textScaler: textScaler),
+        child: child!,
+      ),
       home: Scaffold(
         body: Builder(
           builder: (context) => Center(
@@ -95,9 +105,11 @@ void main() {
                 context,
                 notifier,
                 current: current,
+                initial: initial,
                 actionText: 'Draft',
                 actionId: actionId,
                 timeboxed: timeboxed,
+                raise: raise,
               ),
               child: const Text('open'),
             ),
@@ -147,10 +159,16 @@ void main() {
     WidgetTester tester, {
     int? current,
     bool timeboxed = false,
+    int? initial,
+    EstimateRaise? raise,
+    TextScaler textScaler = TextScaler.noScaling,
   }) async {
     await tester.pumpWidget(harness(
       current: current,
       timeboxed: timeboxed,
+      initial: initial,
+      raise: raise,
+      textScaler: textScaler,
     ));
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
@@ -407,5 +425,166 @@ void main() {
     expect(held.writeCalls, 1);
     expect(find.byKey(const Key('estimate_sheet_save')), findsNothing);
     expect(find.byKey(const Key('open_sheet')), findsOneWidget);
+  });
+
+  group('raise mode', () {
+    /// The raise the gate opens: 60 minutes of limit, 82 minutes logged.
+    final raise = EstimateRaise(
+      outcomeTitle: 'Write the report',
+      limitMinutes: 60,
+      logged: const Duration(minutes: 82),
+    );
+
+    testWidgets('it names the Outcome, the limit and the time logged', (
+      tester,
+    ) async {
+      await openSheet(tester, current: 30, initial: 90, raise: raise);
+
+      expect(find.text('Write the report'), findsOneWidget);
+      expect(find.text('Current limit: 1h'), findsOneWidget);
+      expect(
+        find.text('Logged so far: 1h 22m, breaks included'),
+        findsOneWidget,
+      );
+      expect(find.text('I shall re-flow the rest of the day.'), findsOneWidget);
+    });
+
+    testWidgets('Save is unavailable until the value beats the time logged', (
+      tester,
+    ) async {
+      await openSheet(tester, current: 30, initial: 90, raise: raise);
+
+      // 90 minutes is more than the 82 logged, so the sheet can be saved.
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const Key('estimate_sheet_save')))
+            .onPressed,
+        isNotNull,
+      );
+      expect(
+        find.text('Must be more than the 1h 22m already logged.'),
+        findsNothing,
+      );
+
+      // One step down is 60 minutes — short of the time logged.
+      await tester.tap(find.byKey(const Key('estimate_sheet_less')));
+      await tester.pump();
+
+      expect(find.text('1h'), findsOneWidget);
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const Key('estimate_sheet_save')))
+            .onPressed,
+        isNull,
+      );
+      expect(
+        find.text('Must be more than the 1h 22m already logged.'),
+        findsOneWidget,
+      );
+
+      // Back up, and the sheet can be saved again.
+      await tester.tap(find.byKey(const Key('estimate_sheet_more')));
+      await tester.pump();
+
+      expect(find.text('1h 30m'), findsOneWidget);
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const Key('estimate_sheet_save')))
+            .onPressed,
+        isNotNull,
+      );
+      expect(
+        find.text('Must be more than the 1h 22m already logged.'),
+        findsNothing,
+      );
+    });
+
+    testWidgets('the refusal is plain text, not an error', (tester) async {
+      await openSheet(tester, current: 30, initial: 90, raise: raise);
+
+      await tester.tap(find.byKey(const Key('estimate_sheet_less')));
+      await tester.pump();
+
+      final style = tester
+          .widget<Text>(
+            find.text('Must be more than the 1h 22m already logged.'),
+          )
+          .style;
+      final theme = Theme.of(
+        tester.element(find.byKey(const Key('estimate_sheet_value'))),
+      );
+      expect(style?.color, isNot(theme.colorScheme.error));
+      expect(style?.color, isNot(const Color(0xFFDC2626)));
+    });
+
+    testWidgets('the Timeboxed switch is not shown', (tester) async {
+      await openSheet(tester, current: 30, initial: 90, raise: raise);
+
+      expect(find.byKey(const Key('estimate_sheet_timeboxed')), findsNothing);
+    });
+
+    testWidgets('a raise writes the estimate and leaves the Action '
+        'Timeboxed', (tester) async {
+      await db.todoDao.updateFields('t1', timeboxed: true, now: _ts);
+      await openSheet(
+        tester,
+        current: 30,
+        initial: 90,
+        timeboxed: true,
+        raise: raise,
+      );
+
+      await save(tester);
+
+      expect(await storedEstimate(tester), 90);
+      expect(await storedTimeboxed(tester), isTrue);
+    });
+
+    testWidgets('the sheet carries a screen-reader label', (tester) async {
+      final handle = tester.ensureSemantics();
+      await openSheet(tester, current: 30, initial: 90, raise: raise);
+
+      expect(
+        find.bySemanticsLabel('Raise the estimate for Draft'),
+        findsOneWidget,
+      );
+      handle.dispose();
+    });
+
+    testWidgets('the touch targets are at least 48dp', (tester) async {
+      final handle = tester.ensureSemantics();
+      await openSheet(tester, current: 30, initial: 90, raise: raise);
+
+      await expectLater(tester, meetsGuideline(androidTapTargetGuideline));
+      handle.dispose();
+    });
+
+    testWidgets('the buttons are not truncated at a large text scale', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(360, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+
+      await openSheet(
+        tester,
+        current: 30,
+        initial: 90,
+        raise: raise,
+        textScaler: const TextScaler.linear(2.0),
+      );
+
+      expect(find.text('Cancel'), findsOneWidget);
+      expect(find.text('Very good'), findsOneWidget);
+    });
+
+    testWidgets('without a raise none of the new lines show', (tester) async {
+      await openSheet(tester, current: 30);
+
+      expect(find.text('Current limit: 1h'), findsNothing);
+      expect(find.textContaining('Logged so far'), findsNothing);
+      expect(find.text('I shall re-flow the rest of the day.'), findsNothing);
+      expect(find.byKey(const Key('estimate_sheet_timeboxed')), findsOneWidget);
+    });
   });
 }

@@ -130,6 +130,35 @@ Future<void> _logTime(GtdDatabase db, Duration logged) async {
   await db.timeLogDao.closeLog(taskId: _outcomeId, now: now);
 }
 
+/// Logs [first] and then [second] minutes on the Action, as two pieces,
+/// ending now.
+///
+/// Two pieces, because a raise has to beat every piece of the work: one long
+/// stint would not show that. One clock for both, so the total is exactly
+/// what it says.
+Future<void> _logTimeInTwoPieces(
+  GtdDatabase db,
+  Duration first,
+  Duration second,
+) async {
+  final base = DateTime.now().toUtc();
+  await db.timeLogDao.openLog(
+    taskId: _outcomeId,
+    userId: _userId,
+    now: base.subtract(first + second),
+  );
+  await db.timeLogDao.closeLog(
+    taskId: _outcomeId,
+    now: base.subtract(second),
+  );
+  await db.timeLogDao.openLog(
+    taskId: _outcomeId,
+    userId: _userId,
+    now: base.subtract(second),
+  );
+  await db.timeLogDao.closeLog(taskId: _outcomeId, now: base);
+}
+
 /// The TimeLogs still running.
 Future<int> _openLogCount(GtdDatabase db) async {
   final rows = await db.customSelect(
@@ -396,8 +425,13 @@ void main() {
     await tester.runAsync(
       () => _seed(db, timeEstimate: 30, timeboxed: true),
     );
+    // 50 minutes of work, in two pieces: the raise has to beat all of it.
     await tester.runAsync(
-      () => _logTime(db, const Duration(minutes: 50)),
+      () => _logTimeInTwoPieces(
+        db,
+        const Duration(minutes: 20),
+        const Duration(minutes: 30),
+      ),
     );
 
     await _withApp(tester, db, () async {
@@ -408,15 +442,14 @@ void main() {
       await tester.tap(find.byKey(const Key('timeboxed_gate_raise')));
       await _settle(tester);
 
-      // The sheet opens one step up: 30 becomes 45.
+      // The sheet says what has been logged, and opens above it — not above
+      // the 30 minute estimate.
+      expect(find.text('Logged so far: 50m, breaks included'), findsOneWidget);
       expect(
         tester.widget<Text>(find.byKey(const Key('estimate_sheet_value'))).data,
-        '45m',
+        '1h',
       );
 
-      // One step further: 60, above the 50 minutes logged.
-      await tester.tap(find.byKey(const Key('estimate_sheet_more')));
-      await tester.pump();
       await tester.tap(find.byKey(const Key('estimate_sheet_save')));
       await _settle(tester);
 
@@ -430,6 +463,53 @@ void main() {
       ))!;
       expect(action.timeEstimate, 60);
       expect(action.timeboxed, isTrue);
+    });
+  });
+
+  testWidgets('a raise below the time logged cannot be saved', (tester) async {
+    await tester.runAsync(
+      () => _seed(db, timeEstimate: 30, timeboxed: true),
+    );
+    await tester.runAsync(
+      () => _logTimeInTwoPieces(
+        db,
+        const Duration(minutes: 20),
+        const Duration(minutes: 30),
+      ),
+    );
+
+    await _withApp(tester, db, () async {
+      await _settle(tester);
+
+      await tapBarAction(tester, const Key('task_detail_start_focus'));
+      await _settle(tester);
+      await tester.tap(find.byKey(const Key('timeboxed_gate_raise')));
+      await _settle(tester);
+
+      // One step down from 60 is 45 — short of the 50 minutes logged, so the
+      // sheet says so and cannot be saved.
+      await tester.tap(find.byKey(const Key('estimate_sheet_less')));
+      await tester.pump();
+      expect(find.text('45m'), findsOneWidget);
+      expect(
+        find.text('Must be more than the 50m already logged.'),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const Key('estimate_sheet_save')))
+            .onPressed,
+        isNull,
+      );
+
+      // Cancel returns to the gate, and the estimate is untouched.
+      await tester.tap(find.byKey(const Key('estimate_sheet_cancel')));
+      await _settle(tester);
+      expect(find.byKey(const Key('timeboxed_gate_stop')), findsOneWidget);
+      final action = (await tester.runAsync(
+        () => db.actionDao.getCurrentAction(_outcomeId),
+      ))!;
+      expect(action.timeEstimate, 30);
     });
   });
 }

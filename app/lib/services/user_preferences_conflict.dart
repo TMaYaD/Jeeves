@@ -231,6 +231,64 @@ ResolvedPreference _maxTimestampValue(
   return _lww(local, server);
 }
 
+/// Reduces any number of rows for one snooze-floor key (a
+/// [ConflictStrategy.maxTimestampValue] key) to the one that holds, in a way
+/// that does not depend on the order of [rows].
+///
+/// This is the rule the sync merge itself applies to these keys: the greatest
+/// live value ever written wins and "no value" ranks below every live value, so
+/// a clear never replaces a live snooze. A caller that wrote a clear here would
+/// have it undone by the host, so the device's own reductions follow the same
+/// rule instead of inventing a stronger one.
+///
+///   * live rows (a non-null value) always beat clears;
+///   * among live rows the later snooze value wins, ties going to the later
+///     write and then to the lexically greater value; a value that is not a
+///     timestamp counts as the lowest;
+///   * with no live row the newest clear is the result.
+///
+/// Returns null only when [rows] is empty. The returned row is one of [rows].
+PreferenceRow? resolveSnoozeFloorAmong(Iterable<PreferenceRow> rows) {
+  PreferenceRow? newestClear;
+  PreferenceRow? best;
+  DateTime? bestUntil;
+  for (final row in rows) {
+    if (row.isTombstone) {
+      if (newestClear == null ||
+          (row.updatedAt ?? _epoch).isAfter(newestClear.updatedAt ?? _epoch)) {
+        newestClear = row;
+      }
+      continue;
+    }
+    final until = _parseTimestampValue(row.value);
+    if (best == null) {
+      best = row;
+      bestUntil = until;
+      continue;
+    }
+    final bool wins;
+    if (until != null && bestUntil == null) {
+      wins = true;
+    } else if (until == null && bestUntil != null) {
+      wins = false;
+    } else if (until != null && bestUntil != null && until != bestUntil) {
+      wins = until.isAfter(bestUntil);
+    } else {
+      final rowAt = row.updatedAt ?? _epoch;
+      final bestAt = best.updatedAt ?? _epoch;
+      // Equal writes (two unreadable values, say) go to the lexically greater
+      // value, so the result never depends on which row was read first.
+      wins = rowAt.isAfter(bestAt) ||
+          (rowAt == bestAt && (row.value ?? '').compareTo(best.value ?? '') > 0);
+    }
+    if (wins) {
+      best = row;
+      bestUntil = until;
+    }
+  }
+  return best ?? newestClear;
+}
+
 ResolvedPreference _setMerge(PreferenceRow local, PreferenceRow server) {
   // A tombstone means the set was cleared. Unioning it with a live list would
   // resurrect deleted members, so tombstone-vs-live (and two tombstones)
