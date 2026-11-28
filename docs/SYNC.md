@@ -239,7 +239,7 @@ through.
 
 | Kind | Class | Resolution | What the decision does on the device |
 |---|---|---|---|
-| `author_chain_gap` | actionable | **Take upstream** | The range of that device's chain that never arrived is recorded as an accepted hole, with the predecessor hash the next change names. The held changes are released through the ordinary receive pipeline, so they are logged, grant-checked and merged; later changes from that device then verify against the log as usual. A change that could not be released is merged without being logged, as before. The alarm is settled once the change has reached the records, or once the log has refused that change for good. Also settles that device's `author_chain_fork` — except when two different signed changes are held just past the missing range: then nothing is recorded or merged, `author_chain_fork` is raised, and both alarms stand. |
+| `author_chain_gap` | actionable | **Take upstream** (accepts a hole) | The range of that device's chain that never arrived is recorded as an accepted hole, with the predecessor hash the next change names. What is given up is that range's content and the hash link across it; every change after the hole verifies against the log as usual. The held changes are released through the ordinary receive pipeline, so they are logged, grant-checked and merged; a change that could not be released is merged without being logged, as before. The alarm is settled once the change has reached the records, or once the log has refused that change for good. A further missing change is a new gap and asks again; a missing change that arrives later is accepted when it hash-links to its logged neighbours. A hole is recorded only from an unambiguous successor: two different signed changes held just past the missing range record nothing, `author_chain_fork` is raised, and both alarms stand. |
 | `own_writes_rollback` (server lost writes it had acknowledged) | actionable | **Keep ours** | Marks this device's own outbox rows from the position the server expects as unsent, so the next flush re-sends the same signed bytes. Nothing is re-numbered or re-signed. The alarm is *decided* at once and *resolved* when the re-send is acknowledged — every row from that position onwards sent. An answer about an accusation that has changed since it was asked is refused: nothing is queued and the new accusation stays open. |
 | `own_writes_rollback` (server holds a position this device never wrote) | actionable | none — #974 | Needs a new device key or re-enrolment. |
 | `own_writes_divergence` | reported | **Keep ours** (no upload) | Ours is already on the log. Records that the other copy is refused for good. |
@@ -252,7 +252,7 @@ through.
 | `prune_attestation_divergence` | reported | none — #660 | No mechanism exists to contest a compactor's attestation. |
 | Unknown code, self-healing refusal | — | none | Listed (unknown) or hidden (self-healing), as the classification says. |
 
-Decisions are recorded; bytes are kept. Taking upstream accepts a hole in that device's chain and resumes chain verification after it, giving up the content of the missing range and the hash link across it. A hole is recorded only when exactly one signed change is held just past it. A further missing change is a new gap and asks again. A missing change that arrives later is accepted when it hash-links to its logged neighbours.
+Decisions are recorded; bytes are kept.
 
 ## What is asserted, and where
 
