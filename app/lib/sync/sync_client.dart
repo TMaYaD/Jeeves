@@ -4110,9 +4110,11 @@ class SyncClient {
       // `_refuse`, and a fault between the two leaves the accusation unraised:
       // raise it now, with the detail the filed refusal carries — and only when
       // no alarm for it was ever raised, so an answer the User has already
-      // given is not taken back.
+      // given is not taken back. A refusal the User has answered raises
+      // nothing, which is the rule `_refuse` follows.
       final kind = alarmForRejection(reason);
       if (kind != null &&
+          replacement.resolution == null &&
           !await _hasRaisedAlarm(kind, header.authorMemberId)) {
         await _raiseAlarm(
           kind,

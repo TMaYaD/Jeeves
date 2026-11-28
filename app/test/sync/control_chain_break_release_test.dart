@@ -759,6 +759,194 @@ void main() {
       expect(slot.refusedReason, SyncRejectionReason.controlChainFork.code);
     });
 
+    test('a replacement refusal whose accusation was lost has it raised, and '
+        'the break is retired', () async {
+      final workspace =
+          await SimWorkspace.create(deviceCount: 3, fileBacked: true);
+      addTearDown(workspace.close);
+      final b = workspace.b;
+      await workspace.a.enrolment.turnOnEncryption(
+        passphrase: workspace.passphrase,
+      );
+      await workspace.syncAll();
+
+      final applied = await _applied(b);
+
+      final root = await workspace.recoverRoot();
+      final x = await AuthorFixture.create(
+        seed: Uint8List.fromList(List<int>.filled(32, 0x7a)),
+      );
+      final envelope = await memberRegisterEnvelope(
+        device: x,
+        workspaceId: workspace.workspaceId,
+        root: root,
+        prevControlHash: applied[applied.length - 2].payloadHash,
+        wallMs: workspace.clock.nowMs,
+      );
+      root.drop();
+      final header = OpHeader.parse(splitEnvelope(envelope).header);
+
+      // The state a fault leaves behind when it hits **between** the two steps
+      // of `_refuse`: the refusal is filed, and the alarm it raises is not.
+      // Staged at the store level, like the case above.
+      final seq = applied.last.seq + 1;
+      final store = b.syncStore;
+      await store.into(store.opLog).insert(
+            OpLogCompanion.insert(
+              seq: seq,
+              workspaceId: b.client.workspaceId,
+              envelope: envelope,
+              opId: header.opId,
+              authorMemberId: header.authorMemberId,
+              authorSeq: header.authorSeq,
+              receivedAt: workspace.clock.asDateTime,
+              refusedReason: Value(SyncRejectionReason.controlChainFork.code),
+            ),
+          );
+      await store.into(store.quarantinedOps).insert(
+            QuarantinedOpsCompanion.insert(
+              workspaceId: b.client.workspaceId,
+              seq: Value(seq),
+              reason: _breakCode,
+              detail: 'refused for the missing predecessor',
+              envelope: envelope,
+              detectedAt: workspace.clock.asDateTime,
+              authorMemberId: Value(x.memberId),
+              authorSeq: Value(header.authorSeq),
+            ),
+          );
+      await store.into(store.quarantinedOps).insert(
+            QuarantinedOpsCompanion.insert(
+              workspaceId: b.client.workspaceId,
+              seq: Value(seq),
+              reason: SyncRejectionReason.controlChainFork.code,
+              detail: 'lost the fork tie-break',
+              envelope: envelope,
+              detectedAt: workspace.clock.asDateTime,
+              authorMemberId: Value(x.memberId),
+              authorSeq: Value(header.authorSeq),
+            ),
+          );
+
+      // No alarm for the fork was ever raised: the fault ate it.
+      expect(
+        await (b.syncStore.select(b.syncStore.integrityAlarms)
+              ..where((r) =>
+                  r.workspaceId.equals(b.client.workspaceId) &
+                  r.kind.equals(IntegrityAlarmKind.controlChainFork.code)))
+            .get(),
+        isEmpty,
+      );
+
+      // The scan runs on the first pull after a launch.
+      final reopened = await b.reopenSyncStore(attachTransport: true);
+      await reopened.pull();
+
+      // The accusation the fault ate is raised, and the break row is retired.
+      expect(
+        (await reopened.integrityAlarms())
+            .where((alarm) => alarm.kind == IntegrityAlarmKind.controlChainFork.code),
+        hasLength(1),
+      );
+      final retired = (await _breakRows(reopened)).singleWhere((row) => row.seq == seq);
+      expect(retired.releasedAt, isNotNull);
+      // The refusal that was already filed is not filed a second time.
+      expect(
+        (await reopened.quarantined())
+            .where((row) => row.seq == seq && row.reason != _breakCode),
+        hasLength(1),
+      );
+    });
+
+    test('a replacement refusal the user has answered raises nothing, and the '
+        'break is retired', () async {
+      final workspace =
+          await SimWorkspace.create(deviceCount: 3, fileBacked: true);
+      addTearDown(workspace.close);
+      final b = workspace.b;
+      await workspace.a.enrolment.turnOnEncryption(
+        passphrase: workspace.passphrase,
+      );
+      await workspace.syncAll();
+
+      final applied = await _applied(b);
+
+      final root = await workspace.recoverRoot();
+      final x = await AuthorFixture.create(
+        seed: Uint8List.fromList(List<int>.filled(32, 0x7b)),
+      );
+      final envelope = await memberRegisterEnvelope(
+        device: x,
+        workspaceId: workspace.workspaceId,
+        root: root,
+        prevControlHash: applied[applied.length - 2].payloadHash,
+        wallMs: workspace.clock.nowMs,
+      );
+      root.drop();
+      final header = OpHeader.parse(splitEnvelope(envelope).header);
+
+      // The same state as the case above — the slot carries the verdict, the
+      // break row is unreleased — except that the user has answered the
+      // replacement refusal. An answer is the end of the question, so nothing
+      // is raised for it.
+      final seq = applied.last.seq + 1;
+      final store = b.syncStore;
+      await store.into(store.opLog).insert(
+            OpLogCompanion.insert(
+              seq: seq,
+              workspaceId: b.client.workspaceId,
+              envelope: envelope,
+              opId: header.opId,
+              authorMemberId: header.authorMemberId,
+              authorSeq: header.authorSeq,
+              receivedAt: workspace.clock.asDateTime,
+              refusedReason: Value(SyncRejectionReason.controlChainFork.code),
+            ),
+          );
+      await store.into(store.quarantinedOps).insert(
+            QuarantinedOpsCompanion.insert(
+              workspaceId: b.client.workspaceId,
+              seq: Value(seq),
+              reason: _breakCode,
+              detail: 'refused for the missing predecessor',
+              envelope: envelope,
+              detectedAt: workspace.clock.asDateTime,
+              authorMemberId: Value(x.memberId),
+              authorSeq: Value(header.authorSeq),
+            ),
+          );
+      await store.into(store.quarantinedOps).insert(
+            QuarantinedOpsCompanion.insert(
+              workspaceId: b.client.workspaceId,
+              seq: Value(seq),
+              reason: SyncRejectionReason.controlChainFork.code,
+              detail: 'lost the fork tie-break',
+              envelope: envelope,
+              detectedAt: workspace.clock.asDateTime,
+              authorMemberId: Value(x.memberId),
+              authorSeq: Value(header.authorSeq),
+              resolution: Value(AlarmResolution.rejectedPermanently.code),
+              resolutionDecidedAt: Value(workspace.clock.asDateTime),
+            ),
+          );
+
+      // The scan runs on the first pull after a launch.
+      final reopened = await b.reopenSyncStore(attachTransport: true);
+      await reopened.pull();
+
+      // The answer is not taken back: no accusation is raised for a refusal the
+      // user has already answered.
+      expect(
+        (await reopened.integrityAlarms())
+            .where((alarm) => alarm.kind == IntegrityAlarmKind.controlChainFork.code),
+        isEmpty,
+      );
+      // The break is answered either way: the op cannot apply, so the row is
+      // retired.
+      final retired = (await _breakRows(reopened)).singleWhere((row) => row.seq == seq);
+      expect(retired.releasedAt, isNotNull);
+    });
+
     test('the release is visible on Sync Health', () async {
       final scene = await _scene();
       final b = scene.workspace.b;
