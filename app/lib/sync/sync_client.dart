@@ -1922,9 +1922,18 @@ class SyncClient {
   /// own bytes and [_logReceived] would treat a second receipt as a re-serve and
   /// skip it. With the flag, the control branch takes that slot back instead —
   /// see [_reclaimRefusedControlSlot] — and every check after it runs unchanged.
+  ///
+  /// [onRefused] is told the refusal the op ended in, when it ended in one.
+  /// [_releaseOpsAwaitingControlPredecessor] needs it: the `op_log` slot cannot
+  /// always say what the re-examination decided, because a refusal raised
+  /// **before** the transaction — a signature, a certificate, a grant, an
+  /// authority — leaves the slot holding the verdict that refused the op the
+  /// first time. The verdict is told here rather than read back, because it is
+  /// the verdict this receive reached.
   Future<Set<AffectedEntity>> _receive(
     PulledOp pulled, {
     bool reclaimRefusedControlSlot = false,
+    void Function(SyncRejection refusal)? onRefused,
   }) async {
     OpHeader? header;
     try {
@@ -2095,6 +2104,10 @@ class SyncClient {
         ...await _releaseChainSuccessors(contentHeader.authorMemberId),
       };
     } on SyncRejection catch (rejection) {
+      // The verdict this op reached, for the caller that asked for it. Every
+      // refusal ends here — the ones raised while verifying, before the
+      // transaction, and the ones raised while applying, after it.
+      onRefused?.call(rejection);
       await _refuse(pulled, rejection, header);
       return const {};
     } on SqliteException {
@@ -3909,15 +3922,18 @@ class SyncClient {
   /// and never passes the gate.
   ///
   /// The gate decides only *whether to ask again*; it verifies nothing. The row's
-  /// `prev_control_hash` must name an op in the applied control log, and the row
-  /// must sit above the op it names: the applied log is ordered by transport
-  /// `seq` and its last row is the chain head, so an op slotted *under* the op
-  /// it names would leave `applied.last` reading as that op rather than as the
-  /// new tip. What happens to the row then is decided where it would be live:
-  /// an op naming the head is an ordinary append, and an op naming an earlier
-  /// applied op takes the fork path and is settled by tie-break, so that a
-  /// device which saw it before its rival and a device which saw it after keep
-  /// the same branch.
+  /// `op_log` slot must hold the op's own bytes, unapplied and refused for this
+  /// reason — a positional break is *logged but refused*, and a row refused
+  /// before it was logged is not this scan's row. The row's `prev_control_hash`
+  /// must then name an op in the applied control log, and the row must sit
+  /// above the op it names: the applied log is ordered by transport `seq` and
+  /// its last row is the chain head, so an op slotted *under* the op it names
+  /// would leave `applied.last` reading as that op rather than as the new tip.
+  /// What happens to the row then is decided where it would be live: an op
+  /// naming the head is an ordinary append, and an op naming an earlier applied
+  /// op takes the fork path and is settled by tie-break, so that a device which
+  /// saw it before its rival and a device which saw it after keep the same
+  /// branch.
   ///
   /// Calling [_receive] on the row is not enough. A positional break is
   /// logged-but-refused, so the `op_log` slot holds the op's own bytes and
@@ -3928,10 +3944,14 @@ class SyncClient {
   /// again.
   ///
   /// `_receive` comes before `_markReleased`, for the reason
-  /// [_releaseOpsAwaitingEpochKeys] gives. What the re-receive decided is read
-  /// back from `op_log`: still a positional break leaves the row unreleased; an
-  /// applied op, or a different refusal (which `_receive` has already filed under
-  /// its true reason), stamps it released.
+  /// [_releaseOpsAwaitingEpochKeys] gives. What the re-receive decided is
+  /// **told** by `_receive`, not read back from `op_log`: a refusal raised
+  /// while verifying — a signature, a certificate, a grant, an authority —
+  /// never reaches the transaction, so the slot keeps the verdict that
+  /// refused the op the first time and cannot say what the second attempt
+  /// found. Still a positional break leaves the row unreleased; an applied op,
+  /// or a different refusal (which `_receive` has already filed under its true
+  /// reason), stamps it released.
   ///
   /// A row the User has refused for good is not examined at all: their decision
   /// is the end of the question, so the scan skips it and the op stays refused.
@@ -3957,34 +3977,44 @@ class SyncClient {
       } on SyncRejection {
         continue;
       }
-      // Applied already (a stop between the receive commit and the stamp, or a
-      // failed read-back): nothing to apply, but the rebuild is still owed.
-      final alreadyHeld = await _opLogRowAt(seq);
-      if (alreadyHeld != null &&
-          alreadyHeld.appliedAt != null &&
-          sameBytes(alreadyHeld.envelope, row.envelope)) {
+      // The `op_log` slot is what makes this row worth re-examining. A control
+      // op refused at the position check is *logged but refused*, so the slot
+      // holds the op's own bytes with the refusal stamped on it. A row refused
+      // before it was logged — a shape break, or a registering op that is not
+      // its author's first — has no slot at all, and shares this row's reason
+      // with a break that can heal. It is not this scan's row: it was never
+      // waiting for a predecessor, and asking again would re-run the same
+      // verdict for ever.
+      final slot = await _opLogRowAt(seq);
+      if (slot == null || !sameBytes(slot.envelope, row.envelope)) continue;
+      if (slot.appliedAt != null) {
+        // Applied already (a stop between the receive commit and the stamp, or a
+        // failed read-back): nothing to apply, but the rebuild is still owed.
         await _requireRebuild();
         _releaseAfterRebuild.add(row.id);
         // Control op already applied; release its author's chain successors.
         affected.addAll(await _releaseChainSuccessors(header.authorMemberId));
         continue;
       }
+      if (slot.refusedReason != SyncRejectionReason.controlChainBreak.code) {
+        // The slot holds these bytes but does not carry this refusal: it is not
+        // the positional break this scan heals, and the row is left alone.
+        continue;
+      }
       if (!await _namesAppliedPredecessor(row.envelope, seq)) continue;
+      // The verdict the re-examination reaches, told by `_receive` rather than
+      // read back from the slot.
+      SyncRejection? refusal;
       affected.addAll(await _receive(
         PulledOp(seq: seq, envelope: row.envelope),
         reclaimRefusedControlSlot: true,
+        onRefused: (verdict) => refusal = verdict,
       ));
       final after = await _opLogRowAt(seq);
       if (after == null) continue;
       // Verify the envelope identity: the read-back op_log row must be for the
       // same envelope we're examining, or its verdict is for a different op.
       if (!sameBytes(after.envelope, row.envelope)) continue;
-      if (after.appliedAt == null &&
-          after.refusedReason == SyncRejectionReason.controlChainBreak.code) {
-        // Refused for the same reason again: the slot was not in the state the
-        // reclaim needs, or the position check still fails. Not released.
-        continue;
-      }
       if (after.appliedAt != null) {
         // Its authority can change the grant verdict of content already judged at
         // a later `seq`; the tail's `rebuildFromOpLog` recomputes that verdict.
@@ -3994,6 +4024,18 @@ class SyncClient {
         affected.addAll(await _releaseChainSuccessors(header.authorMemberId));
         continue;
       }
+      final verdict = refusal;
+      if (verdict == null ||
+          verdict.reason == SyncRejectionReason.controlChainBreak) {
+        // No verdict, or the same positional break again: the slot was not in the
+        // state the reclaim needs, or the position check still fails. The op is
+        // still waiting for its predecessor, so it stays in the set.
+        continue;
+      }
+      // A different guard refused it. The break is answered — the op cannot
+      // apply — and the row `_receive` filed carries the true reason. This row
+      // is released, or the scan would ask again on every pull that applies a
+      // control op, and re-run the accusation each time.
       await _markReleased(row.id);
     }
     return affected;

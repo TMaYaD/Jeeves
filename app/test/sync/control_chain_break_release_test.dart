@@ -573,6 +573,96 @@ void main() {
       expect(fixed.directory.isChained(e.memberId), isFalse);
     });
 
+    test('a break whose re-examination is refused for another reason is '
+        'released, and is not asked about again', () async {
+      final workspace =
+          await SimWorkspace.create(deviceCount: 3, fileBacked: true);
+      addTearDown(workspace.close);
+      final b = workspace.b;
+      await workspace.a.enrolment.turnOnEncryption(
+        passphrase: workspace.passphrase,
+      );
+      await workspace.syncAll();
+
+      // A control op authored by a member this device has never seen: its
+      // re-examination is refused for want of the author's key, which is a
+      // different reason from the one that refused it the first time.
+      final x = await AuthorFixture.create(
+        seed: Uint8List.fromList(List<int>.filled(32, 0x78)),
+      );
+      final head = (await _applied(b)).last;
+      final root = await workspace.recoverRoot();
+      final envelope = await grantEnvelope(
+        device: x,
+        workspaceId: workspace.workspaceId,
+        root: root,
+        prevControlHash: head.payloadHash,
+        memberId: x.memberId,
+        wallMs: workspace.clock.nowMs,
+      );
+      root.drop();
+      final header = OpHeader.parse(splitEnvelope(envelope).header);
+
+      // The shape the scan reads: the op is logged and refused for the missing
+      // predecessor, and the refusal is filed. **Staged at the store level**,
+      // because a served stream cannot produce it: an op is logged only once
+      // its author is known, and the directory is restored whole from the
+      // applied control log, so a re-examination cannot fail for want of a key
+      // the device had. What it can do — against a server that serves an op
+      // the chain would not — is fail for a reason the slot does not carry.
+      final seq = head.seq + 1;
+      final store = b.syncStore;
+      await store.into(store.opLog).insert(
+            OpLogCompanion.insert(
+              seq: seq,
+              workspaceId: b.client.workspaceId,
+              envelope: envelope,
+              opId: header.opId,
+              authorMemberId: header.authorMemberId,
+              authorSeq: header.authorSeq,
+              receivedAt: workspace.clock.asDateTime,
+              refusedReason: Value(_breakCode),
+            ),
+          );
+      await store.into(store.quarantinedOps).insert(
+            QuarantinedOpsCompanion.insert(
+              workspaceId: b.client.workspaceId,
+              seq: Value(seq),
+              reason: _breakCode,
+              detail: 'refused for the missing predecessor',
+              envelope: envelope,
+              detectedAt: workspace.clock.asDateTime,
+              authorMemberId: Value(x.memberId),
+              authorSeq: Value(header.authorSeq),
+            ),
+          );
+
+      // The scan runs on the first pull after a launch.
+      final reopened = await b.reopenSyncStore(attachTransport: true);
+      await reopened.pull();
+
+      // The break is answered: the row is released, and the reason the
+      // re-examination found is the one the fresh row carries.
+      final released =
+          (await _breakRows(reopened)).singleWhere((row) => row.seq == seq);
+      expect(released.releasedAt, isNotNull);
+      final fresh = (await reopened.quarantined(includeReleased: false))
+          .singleWhere((row) => row.seq == seq && row.reason != _breakCode);
+      expect(fresh.reason, SyncRejectionReason.memberNotChainedToRoot.code);
+      expect(fresh.releasedAt, isNull);
+      expect(b.client.directory.isChained(x.memberId), isFalse);
+
+      // And it is not asked about again: the row has left the scan set, so a
+      // later pull neither retries it nor raises its accusation a second time.
+      final alarmsBefore = (await reopened.integrityAlarms()).length;
+      await reopened.pull();
+      expect((await reopened.integrityAlarms()).length, alarmsBefore);
+      expect(
+        (await _breakRows(reopened)).singleWhere((row) => row.seq == seq).releasedAt,
+        released.releasedAt,
+      );
+    });
+
     test('the release is visible on Sync Health', () async {
       final scene = await _scene();
       final b = scene.workspace.b;
