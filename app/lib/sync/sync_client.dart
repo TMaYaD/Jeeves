@@ -157,6 +157,31 @@ class _VerifiedControlOp {
   final RegistrationCertificate? learned;
 }
 
+/// The head of this Workspace's applied control log: the op every control op
+/// chains on, and the transport `seq` it was logged at.
+///
+/// Both halves, because the two answer different questions. The hash is what an
+/// arriving op names, and the `seq` is the boundary an arriving op has to sit
+/// above: the log is ordered by transport `seq`, so its last row is the chain
+/// head, and an op slotted under it would leave `applied.last` no longer the
+/// head.
+class _AppliedControlHead {
+  const _AppliedControlHead({required this.seq, required this.payloadHash});
+
+  final int seq;
+  final Uint8List payloadHash;
+}
+
+/// The head of a Workspace that has applied no control op yet.
+///
+/// A value rather than null, so "this Workspace has no head" is a state the
+/// scan compares against like any other — and not the same as "the scan has
+/// not run yet", which is a different thing entirely: the first pull after a
+/// launch runs the scan, and every pull after that must not. The `seq` sits
+/// below every op's, so the empty head is never equal to a real one.
+final _AppliedControlHead _noAppliedControlHead =
+    _AppliedControlHead(seq: -1, payloadHash: zeroPrevControlHash);
+
 /// What one [SyncClient.flushOutbox] concluded.
 ///
 /// A return value rather than an exception because none of the three is an
@@ -319,6 +344,16 @@ class SyncClient {
   /// scan in flight and ask the question itself.
   final Map<String, Future<void>> _chainReleaseCompletion =
       <String, Future<void>>{};
+
+  /// Quarantine rows of control ops applied late by
+  /// [_releaseOpsAwaitingControlPredecessor], stamped released only after the
+  /// pull-tail [rebuildFromOpLog] has recomputed the grant verdicts they change
+  /// and projection has succeeded.
+  ///
+  /// The unreleased row is the durable record that the rebuild is owed: a process
+  /// exit before the stamp makes the next scan find the op already applied, raise
+  /// the rebuild obligation again and retry.
+  final Set<int> _releaseAfterRebuild = <int>{};
 
   /// The pull in flight, and whether another pull was asked for while it ran.
   ///
@@ -1402,18 +1437,47 @@ class SyncClient {
     // Placed first on the tail so that whatever a re-received op sets in
     // motion — a `missing_epoch_key` refusal, a raised epoch floor,
     // the stored rebuild marker — is picked up by the blocks below in the same pull.
-    final knownSigningKeyCount = directory.knownSigningKeyCount;
-    if (knownSigningKeyCount != _knownSigningKeyCountAtLastUnchainedScan) {
-      affected.addAll(await _releaseOpsAwaitingMemberRegistration());
-      // Stored only after the scan returns, so a storage fault mid-scan — or a
-      // key learned during it — re-arms the next pull.
-      _knownSigningKeyCountAtLastUnchainedScan = knownSigningKeyCount;
+    //
+    // A control op refused because its predecessor was not applied yet is
+    // re-examined once the applied control head has moved (or on the first pull
+    // after a launch). The two refusals feed each other — an unchained revoke
+    // re-admitted below moves the head, which lets the registration refused
+    // behind it in, which teaches a key, which lets that device's unchained grant
+    // in — so the two scans run in one loop until neither has anything new to
+    // look at. It terminates: each gate value is read *before* its scan and only
+    // changes when a scan admits a row, an admitted row is stamped released and
+    // leaves both scans' sets, and the rows are finite.
+    while (true) {
+      var scanned = false;
+      final knownSigningKeyCount = directory.knownSigningKeyCount;
+      if (knownSigningKeyCount != _knownSigningKeyCountAtLastUnchainedScan) {
+        affected.addAll(await _releaseOpsAwaitingMemberRegistration());
+        // Stored only after the scan returns, so a storage fault mid-scan — or a
+        // key learned during it — re-arms the next pull.
+        _knownSigningKeyCountAtLastUnchainedScan = knownSigningKeyCount;
+        scanned = true;
+      }
+      final appliedControlHead = await _appliedControlHeadState();
+      final headAtLastScan = _appliedControlHeadAtLastBreakScan;
+      if (headAtLastScan == null || !_sameAppliedControlHead(appliedControlHead, headAtLastScan)) {
+        affected.addAll(await _releaseOpsAwaitingControlPredecessor());
+        _appliedControlHeadAtLastBreakScan = appliedControlHead;
+        scanned = true;
+      }
+      if (!scanned) break;
     }
     // A rotation landed, or something is still waiting on a wrap. Either way the
     // fetch is bounded — one round-trip per pull, never one per op — and the
     // freshness race F14b names (the wraps PUT landing moments after the rotate op)
     // resolves on the next pull rather than as a mystery decryption failure.
-    if (_epochKeyRefreshRequired || await _hasOpsAwaitingEpochKeys()) {
+    //
+    // The third trigger is the state-based one: this device is at a keyed epoch
+    // it does not hold the key for. The flag is memory, so a device that exited
+    // between a rotate applying and its fetch comes back without it, and with
+    // nothing quarantined to fetch on either — see [_lacksCurrentEpochKey].
+    if (_epochKeyRefreshRequired ||
+        await _hasOpsAwaitingEpochKeys() ||
+        await _lacksCurrentEpochKey()) {
       await refreshEpochKeys();
       // Cleared only once the fetch has actually happened. A rotate can raise this
       // flag while nothing is quarantined yet — no content at the new epoch has
@@ -1470,6 +1534,10 @@ class SyncClient {
       // the right ones.
       affected.addAll(await rebuildFromOpLog());
     }
+    // Keep the whole batch durable until projection succeeds, including entities
+    // removed by the rebuild. An empty pull (or a new client) must retry them.
+    if (projector != null) await _recordAwaitingProjection(affected);
+    final toRelease = _releaseAfterRebuild.toList();
     // Projection is the tail of the receive order, one pass per batch: an
     // entity touched by three ops in one pull is projected once, from the
     // reduced state all three produced. It reads the durable record of reduced
@@ -1481,6 +1549,12 @@ class SyncClient {
         : await _entitiesAwaitingProjection();
     affected.addAll(recorded);
     final touched = await projector?.project(affected);
+    // A late control op still owes both its rebuild and projection until this
+    // point. Its unreleased row re-arms the rebuild after a process exit.
+    for (final rowId in toRelease) {
+      await _markReleased(rowId);
+      _releaseAfterRebuild.remove(rowId);
+    }
     if (recorded.isNotEmpty) await _clearAwaitingProjection(recorded);
     if (rebuildRequiredSince != null) {
       await _clearRebuildRequirement(rebuildRequiredSince);
@@ -1642,6 +1716,9 @@ class SyncClient {
     // Derived state only. The op log, the outbox, the applied control log and the
     // quarantine are all evidence, and evidence is not edited.
     await _db.transaction(() async {
+      // Once wiped, an entity removed by replay cannot be rediscovered from
+      // reduced state. Queue it atomically with the wipe for projection retry.
+      if (projector != null) await _recordAwaitingProjection(reducedBefore);
       final preferences = isPreferencesWorkspace;
       Expression<bool> owned(GeneratedColumn<String> collection) => preferences
           ? collection.equals(userPreferencesCollection)
@@ -1897,7 +1974,26 @@ class SyncClient {
   /// against the same negative vectors, so the two stay in step. A refusal
   /// quarantines the op and the stream continues: one bad op from a server
   /// must not be able to stall a device.
-  Future<Set<AffectedEntity>> _receive(PulledOp pulled) async {
+  ///
+  /// [reclaimRefusedControlSlot] is set only by
+  /// [_releaseOpsAwaitingControlPredecessor]. A control op refused at the
+  /// position check is *logged-but-refused*, so its `op_log` slot is taken by its
+  /// own bytes and [_logReceived] would treat a second receipt as a re-serve and
+  /// skip it. With the flag, the control branch takes that slot back instead —
+  /// see [_reclaimRefusedControlSlot] — and every check after it runs unchanged.
+  ///
+  /// [onRefused] is told the refusal the op ended in, when it ended in one.
+  /// [_releaseOpsAwaitingControlPredecessor] needs it: the `op_log` slot cannot
+  /// always say what the re-examination decided, because a refusal raised
+  /// **before** the transaction — a signature, a certificate, a grant, an
+  /// authority — leaves the slot holding the verdict that refused the op the
+  /// first time. The verdict is told here rather than read back, because it is
+  /// the verdict this receive reached.
+  Future<Set<AffectedEntity>> _receive(
+    PulledOp pulled, {
+    bool reclaimRefusedControlSlot = false,
+    void Function(SyncRejection refusal)? onRefused,
+  }) async {
     OpHeader? header;
     try {
       final parts = splitEnvelope(pulled.envelope);
@@ -1937,7 +2033,10 @@ class SyncClient {
           // wrote nothing and returns false; on a genuine collision it wrote the
           // alarm and returns false. Returning normally (never throwing) commits
           // either way — the alarm, when there is one, must persist.
-          if (!await _logReceived(pulled, controlHeader)) return false;
+          final slotClaimed = reclaimRefusedControlSlot
+              ? await _reclaimRefusedControlSlot(pulled)
+              : await _logReceived(pulled, controlHeader);
+          if (!slotClaimed) return false;
           try {
             learned = await _applyControlOp(pulled, controlHeader, verified);
           } on SyncRejection catch (rejection) {
@@ -2064,6 +2163,10 @@ class SyncClient {
         ...await _releaseChainSuccessors(contentHeader.authorMemberId),
       };
     } on SyncRejection catch (rejection) {
+      // The verdict this op reached, for the caller that asked for it. Every
+      // refusal ends here — the ones raised while verifying, before the
+      // transaction, and the ones raised while applying, after it.
+      onRefused?.call(rejection);
       await _refuse(pulled, rejection, header);
       return const {};
     } on SqliteException {
@@ -3033,8 +3136,7 @@ class SyncClient {
         _ControlPosition.quarantineThis) {
       throw SyncRejection(
         SyncRejectionReason.controlChainFork,
-        'control op at seq ${pulled.seq} lost the fork tie-break for '
-        'prev_control_hash ${_hex(payload.prevControlHash)}',
+        _forkRefusalDetail(pulled.seq, payload.prevControlHash),
       );
     }
 
@@ -3072,6 +3174,14 @@ class SyncClient {
     await _appendAppliedControlOp(pulled, payload, header, verified.payloadBytes);
     return learned;
   }
+
+  /// The detail of a control op that lost the fork tie-break.
+  ///
+  /// Shared with [_replaceRefusedBreak], so a refusal the scan recovers says
+  /// the same thing as the one the receive filed.
+  String _forkRefusalDetail(int seq, Uint8List prevControlHash) =>
+      'control op at seq $seq lost the fork tie-break for '
+      'prev_control_hash ${_hex(prevControlHash)}';
 
   /// The registering pair's binding steps: the certificate must be *about* this
   /// author, and its own key must have signed this envelope.
@@ -3286,6 +3396,27 @@ class SyncClient {
                 : row.workspaceId.equals(workspaceId) & row.quarantinedAt.isNull())
             ..orderBy([(row) => OrderingTerm(expression: row.seq)]))
           .get();
+
+  /// The head of the applied control log, or [_noAppliedControlHead] for a
+  /// Workspace that has applied no control op yet.
+  ///
+  /// Read from the log rather than from [appliedControlHead], because the two can
+  /// part company: a fork resolution quarantines a branch, and the log's head is
+  /// then a row the chain state has not caught up with yet.
+  Future<_AppliedControlHead> _appliedControlHeadState() async {
+    final applied = await _appliedControlLog();
+    if (applied.isEmpty) return _noAppliedControlHead;
+    final head = applied.last;
+    return _AppliedControlHead(seq: head.seq, payloadHash: head.payloadHash);
+  }
+
+  /// Whether two applied control heads are the same head.
+  ///
+  /// Both halves are compared: the scan's gate asks whether the head *moved*,
+  /// and the head's transport `seq` moves the boundary a refused op has to sit
+  /// above even when the payload hash does not change.
+  bool _sameAppliedControlHead(_AppliedControlHead a, _AppliedControlHead b) =>
+      a.seq == b.seq && sameBytes(a.payloadHash, b.payloadHash);
 
   /// Whether the chained-member directory has been refilled from the applied
   /// control log yet.
@@ -3719,6 +3850,22 @@ class SyncClient {
   /// [SyncStack.assemble] has already restored the directory by then.
   int? _knownSigningKeyCountAtLastUnchainedScan;
 
+  /// The applied control head at the last
+  /// [_releaseOpsAwaitingControlPredecessor] scan.
+  ///
+  /// Null until that scan has run, so the first pull after any launch runs it and
+  /// heals the rows an earlier build left behind. A Workspace with no applied
+  /// control op has no head, and that is [_noAppliedControlHead] rather than
+  /// null: the scan has run, and found nothing to work on.
+  ///
+  /// The head is remembered as a **sequence and a payload hash**, not as the hash
+  /// alone: the scan's own gate asks whether a refused op sits above the head, and
+  /// that is a question about the head's transport `seq`. A head whose hash did not
+  /// change but whose `seq` did — the same control op read at another position —
+  /// moves that boundary, so a scan gated on the hash alone would skip an op the
+  /// new head now admits.
+  _AppliedControlHead? _appliedControlHeadAtLastBreakScan;
+
   /// Set when this pull applied a `rotate` that actually **raised** the epoch floor.
   ///
   /// The trigger for [_releaseOpsAwaitingEpoch], the floor-keyed healer for
@@ -3914,6 +4061,12 @@ class SyncClient {
   /// under the true reason; this row is then stamped released, so the scan does
   /// not examine it again.
   ///
+  /// The row is released only when the op is **in**, or when a refusal for
+  /// these bytes stands behind it ([_opIsAppliedOrRefused]). A row released
+  /// while its op is unapplied and unrefused is a refusal that disappeared: the
+  /// op would be applied to nothing and refused by no record, and the User
+  /// would have nothing to answer.
+  ///
   /// A **control** op re-admitted here carries two follow-ons the content path
   /// gets for free and the control path does not: its authority can change the
   /// grant verdict of content already judged, and it occupies a position in its
@@ -3943,6 +4096,12 @@ class SyncClient {
         continue;
       }
       affected.addAll(await _receive(PulledOp(seq: seq, envelope: row.envelope)));
+      // The row is released only when the op is in, or when a refusal for these
+      // bytes stands behind it. A row that leaves this scan with the op
+      // unapplied and nothing refusing it is an op nobody can see: the refusal
+      // the User would answer is gone, and no other row says the op was
+      // refused.
+      if (!await _opIsAppliedOrRefused(seq, row)) continue;
       // A control op admitted late does two things the content path gets for
       // free and the control path does not. Both run **before** the row is
       // stamped released: the unreleased row is the durable record that they
@@ -3965,6 +4124,412 @@ class SyncClient {
       await _markReleased(row.id);
     }
     return affected;
+  }
+
+  /// Whether [row]'s op is applied, or a refusal for the same bytes at the same
+  /// position stands behind it.
+  ///
+  /// The registration scan releases a row when the op is in, or when the refusal
+  /// that replaced it stands. The one case where neither holds is an op that was
+  /// logged, refused, and had the refusal row lost to a storage fault: the slot
+  /// carries the verdict, no row says so, and releasing the row would leave the
+  /// op applied to nothing and refused by no record.
+  Future<bool> _opIsAppliedOrRefused(int seq, QuarantineRow row) async {
+    final slot = await _opLogRowAt(seq);
+    if (slot != null &&
+        sameBytes(slot.envelope, row.envelope) &&
+        slot.appliedAt != null) {
+      return true;
+    }
+    final rows = await (_db.select(_db.quarantinedOps)
+          ..where((r) =>
+              r.workspaceId.equals(workspaceId) & r.seq.equals(seq)))
+        .get();
+    for (final other in rows) {
+      if (other.id == row.id) continue;
+      if (sameBytes(other.envelope, row.envelope)) return true;
+    }
+    return false;
+  }
+
+  /// Re-receive the control ops refused because their predecessor was not applied.
+  ///
+  /// The healing half of the *positional* [SyncRejectionReason.controlChainBreak]:
+  /// a control op naming a predecessor this device had not applied yet. A zero
+  /// link or a genesis with a link is a shape break, permanent by construction,
+  /// and never passes the gate.
+  ///
+  /// The gate decides only *whether to ask again*; it verifies nothing. The row's
+  /// `op_log` slot must hold the op's own bytes, unapplied and refused for this
+  /// reason — a positional break is *logged but refused*, and a row refused
+  /// before it was logged is not this scan's row. The row's `prev_control_hash`
+  /// must then name an op in the applied control log, and the row must sit
+  /// above the op it names: the applied log is ordered by transport `seq` and
+  /// its last row is the chain head, so an op slotted *under* the op it names
+  /// would leave `applied.last` reading as that op rather than as the new tip.
+  /// What happens to the row then is decided where it would be live: an op
+  /// naming the head is an ordinary append, and an op naming an earlier applied
+  /// op takes the fork path and is settled by tie-break, so that a device which
+  /// saw it before its rival and a device which saw it after keep the same
+  /// branch.
+  ///
+  /// Calling [_receive] on the row is not enough. A positional break is
+  /// logged-but-refused, so the `op_log` slot holds the op's own bytes and
+  /// [_logReceived] would read a second receipt as a re-serve and skip it —
+  /// the row would be stamped released with nothing applied. The scan passes
+  /// `reclaimRefusedControlSlot`, which takes the slot back inside the receive
+  /// transaction. Verification, authority, position and fork resolution all run
+  /// again.
+  ///
+  /// `_receive` comes before `_markReleased`, for the reason
+  /// [_releaseOpsAwaitingEpochKeys] gives. What the re-receive decided is
+  /// **told** by `_receive`, not read back from `op_log`: a refusal raised
+  /// while verifying — a signature, a certificate, a grant, an authority —
+  /// never reaches the transaction, so the slot keeps the verdict that
+  /// refused the op the first time and cannot say what the second attempt
+  /// found. Still a positional break leaves the row unreleased; an applied op,
+  /// or a different refusal (which `_receive` has already filed under its true
+  /// reason), stamps it released.
+  ///
+  /// A row the User has refused for good is not examined at all: their decision
+  /// is the end of the question, so the scan skips it and the op stays refused.
+  /// It is reached for one thing only — the recovery below — because a verdict
+  /// that replaced the break is lost evidence whether or not the User has
+  /// answered the break, and the accusation it stands for is a fork, which no
+  /// answer to the break takes away.
+  ///
+  /// A row whose slot carries a verdict **other** than the break is not asked
+  /// about again: the re-examination reached one, and the row is the break it
+  /// replaced. The refusal that replaced it is filed by `_receive`, in a second
+  /// transaction after the receive transaction commits, so a storage fault
+  /// between the two can leave the slot carrying the verdict, the refusal
+  /// unfiled and this row unreleased — which is what
+  /// [_replaceRefusedBreak] recovers.
+  Future<Set<AffectedEntity>> _releaseOpsAwaitingControlPredecessor() async {
+    final rows = await (_db.select(_db.quarantinedOps)
+          ..where((row) =>
+              row.workspaceId.equals(workspaceId) &
+              row.releasedAt.isNull() &
+              row.reason.equals(SyncRejectionReason.controlChainBreak.code))
+          ..orderBy([(row) => OrderingTerm(expression: row.id)]))
+        .get();
+    final affected = <AffectedEntity>{};
+    for (final row in rows) {
+      final seq = row.seq;
+      if (seq == null) continue;
+      // Parse the control op to get its author for chain successor release, and
+      // the predecessor it names, for the detail a replaced break is filed
+      // under.
+      final OpHeader header;
+      final ControlPayload payload;
+      try {
+        final parts = splitEnvelope(row.envelope);
+        header = OpHeader.parse(parts.header);
+        payload = ControlPayload.decode(parseBody(parts.body));
+      } on SyncRejection {
+        continue;
+      }
+      // The `op_log` slot is what makes this row worth re-examining. A control
+      // op refused at the position check is *logged but refused*, so the slot
+      // holds the op's own bytes with the refusal stamped on it. A row refused
+      // before it was logged — a shape break, or a registering op that is not
+      // its author's first — has no slot at all, and shares this row's reason
+      // with a break that can heal. It is not this scan's row: it was never
+      // waiting for a predecessor, and asking again would re-run the same
+      // verdict for ever.
+      final slot = await _opLogRowAt(seq);
+      if (slot == null || !sameBytes(slot.envelope, row.envelope)) continue;
+      if (row.resolution != null) {
+        // The User has answered this break, so their decision ends the question:
+        // the op is not admitted and not examined again. It does not end the
+        // recovery, though. A verdict that replaced the break is evidence the
+        // User never saw, and the accusation it stands for is a fork — a chain
+        // event, not a decision about these bytes. So the replacement is
+        // recovered, and only that.
+        final answeredVerdict = slot.refusedReason;
+        if (answeredVerdict != null &&
+            answeredVerdict != SyncRejectionReason.controlChainBreak.code) {
+          await _replaceRefusedBreak(row, answeredVerdict, payload, header);
+        }
+        continue;
+      }
+      if (slot.appliedAt != null) {
+        // Applied already (a stop between the receive commit and the stamp, or a
+        // failed read-back): nothing to apply, but the rebuild is still owed.
+        await _requireRebuild();
+        _releaseAfterRebuild.add(row.id);
+        // Control op already applied; release its author's chain successors.
+        affected.addAll(await _releaseChainSuccessors(header.authorMemberId));
+        continue;
+      }
+      final slotVerdict = slot.refusedReason;
+      if (slotVerdict != null &&
+          slotVerdict != SyncRejectionReason.controlChainBreak.code) {
+        // The slot holds these bytes and carries a verdict **other** than the
+        // break: the re-examination reached one, and this row is the break it
+        // replaced. The verdict is stamped inside the receive transaction and
+        // the refusal it reached is filed in a second one, so a storage fault
+        // between the two leaves the slot carrying the verdict, the refusal
+        // unfiled and this row unreleased — and a guard on the reason would
+        // skip the row for ever. So the row is reached here.
+        await _replaceRefusedBreak(row, slotVerdict, payload, header);
+        continue;
+      }
+      if (!await _namesAppliedPredecessor(row.envelope, seq)) continue;
+      // The verdict the re-examination reaches, told by `_receive` rather than
+      // read back from the slot.
+      SyncRejection? refusal;
+      affected.addAll(await _receive(
+        PulledOp(seq: seq, envelope: row.envelope),
+        reclaimRefusedControlSlot: true,
+        onRefused: (verdict) => refusal = verdict,
+      ));
+      final after = await _opLogRowAt(seq);
+      if (after == null) continue;
+      // Verify the envelope identity: the read-back op_log row must be for the
+      // same envelope we're examining, or its verdict is for a different op.
+      if (!sameBytes(after.envelope, row.envelope)) continue;
+      if (after.appliedAt != null) {
+        // Its authority can change the grant verdict of content already judged at
+        // a later `seq`; the tail's `rebuildFromOpLog` recomputes that verdict.
+        // Control op newly admitted; release its author's chain successors.
+        await _requireRebuild();
+        _releaseAfterRebuild.add(row.id);
+        affected.addAll(await _releaseChainSuccessors(header.authorMemberId));
+        continue;
+      }
+      final verdict = refusal;
+      if (verdict == null ||
+          verdict.reason == SyncRejectionReason.controlChainBreak) {
+        // No verdict, or the same positional break again: the slot was not in the
+        // state the reclaim needs, or the position check still fails. The op is
+        // still waiting for its predecessor, so it stays in the set.
+        continue;
+      }
+      // A different guard refused it. The break is answered — the op cannot
+      // apply — and the row `_receive` filed carries the true reason. This row
+      // is released, or the scan would ask again on every pull that applies a
+      // control op, and re-run the accusation each time.
+      await _markReleased(row.id);
+    }
+    return affected;
+  }
+
+  /// Retire a break row that a later verdict replaced, filing that verdict if
+  /// it was never filed.
+  ///
+  /// The re-examination's verdict is stamped on the `op_log` slot inside the
+  /// receive transaction, and the refusal it reached is filed in a second one
+  /// ([_refuse]). A storage fault between the two leaves the slot carrying the
+  /// new verdict, the replacement refusal unfiled and the break row unreleased
+  /// — and the scan would then skip the row for ever, because the slot no
+  /// longer carries the break it is here to heal.
+  ///
+  /// So the row is reached: the replacement refusal is filed from the verdict
+  /// the slot carries — the stamp the receive transaction committed, which is
+  /// the verdict the re-examination reached — and the break row is retired.
+  /// The op itself is not touched: it stays refused, and the refusal that
+  /// replaced the break says why.
+  Future<void> _replaceRefusedBreak(
+    QuarantineRow row,
+    String verdictCode,
+    ControlPayload payload,
+    OpHeader header,
+  ) async {
+    final seq = row.seq;
+    if (seq == null) return;
+    final reason = SyncRejectionReason.values
+        .where((candidate) => candidate.code == verdictCode)
+        .firstOrNull;
+    // A code this build does not know: the stamp is not a verdict it can file,
+    // and the row is left alone rather than retired on a guess.
+    if (reason == null) return;
+    final replacement = await _refusalRowAt(seq, reason, row.envelope);
+    if (replacement == null) {
+      // The replacement was never filed: the fault hit `_refuse`'s own insert.
+      // File it now, under the verdict the slot carries.
+      await _refuse(
+        PulledOp(seq: seq, envelope: row.envelope),
+        SyncRejection(reason, _verdictDetail(seq, reason, payload)),
+        header,
+      );
+    } else {
+      // The refusal is filed. The alarm it raises is a second step of
+      // `_refuse`, and a fault between the two leaves the accusation unraised:
+      // raise it now, with the detail the filed refusal carries.
+      //
+      // **The rule is `_refuse`'s own**, so the recovery and the uninterrupted
+      // path reach the same state: a refusal the User has answered raises
+      // nothing, and an unanswered one raises its accusation. The alarm is one
+      // row per kind and author, so raising it again counts another occurrence
+      // and re-opens it; an answer it carried is stale after that, and the store
+      // refuses a stale answer (`resolveAlarm`'s expected occurrence count).
+      // The answer to the **refusal row** — about these bytes — is never taken
+      // back: the row keeps it, and a refusal the User has answered raises
+      // nothing either way.
+      final kind = alarmForRejection(reason);
+      if (kind != null && replacement.resolution == null) {
+        await _raiseAlarm(
+          kind,
+          detail: replacement.detail,
+          authorMemberId: header.authorMemberId,
+          quarantineOpRowId: replacement.id,
+        );
+      }
+    }
+    // The break is answered: the op cannot apply, and the refusal that
+    // replaced it is filed. Retiring the row keeps the scan from asking about
+    // it again.
+    await _markReleased(row.id);
+  }
+
+  /// The detail a refusal filed under [reason] carries.
+  ///
+  /// The fork's detail is the receive path's own text, so an accusation the
+  /// User reads says the same thing whether the refusal was filed by the
+  /// receive or recovered by the scan.
+  String _verdictDetail(
+    int seq,
+    SyncRejectionReason reason,
+    ControlPayload payload,
+  ) =>
+      reason == SyncRejectionReason.controlChainFork
+          ? _forkRefusalDetail(seq, payload.prevControlHash)
+          : 'control op at seq $seq was refused as ${reason.code}';
+
+  /// The refusal filed for these bytes under [reason] at [seq], released or not.
+  ///
+  /// Released rows count: a refusal the User has already dealt with was still
+  /// filed, and filing it again would accuse a second time about a change that
+  /// has already been answered.
+  Future<QuarantineRow?> _refusalRowAt(
+    int seq,
+    SyncRejectionReason reason,
+    Uint8List envelope,
+  ) async {
+    final rows = await (_db.select(_db.quarantinedOps)
+          ..where((row) =>
+              row.workspaceId.equals(workspaceId) &
+              row.seq.equals(seq) &
+              row.reason.equals(reason.code)))
+        .get();
+    for (final row in rows) {
+      if (sameBytes(row.envelope, envelope)) return row;
+    }
+    return null;
+  }
+
+  /// Whether [envelope], held at [seq], is a control op that names a predecessor
+  /// this device has applied. Advisory only: see
+  /// [_releaseOpsAwaitingControlPredecessor].
+  ///
+  /// The predecessor's being applied is what makes the op worth asking about
+  /// again. What happens to it is **not** decided here. Two things are, and both
+  /// are about **order**:
+  ///
+  ///  * The op has to sit **above** the op it names. The applied log is ordered
+  ///    by transport `seq` and its last row is the chain head, so an op slotted
+  ///    under the op it names would leave `applied.last` reading as that op
+  ///    rather than as the new tip — and every op chained after it would then be
+  ///    refused, because the head this device offers is one step behind the one
+  ///    the chain is on. A server that hands out a lower `seq` for an op than
+  ///    the op it names produces exactly that, and the op stays refused.
+  ///  * Nothing about the fork. An op naming the **head** is an ordinary
+  ///    append; an op naming an **earlier** applied op is a fork candidate, and
+  ///    the tie-break in [_resolveControlPosition] settles it: the branch it
+  ///    beats is quarantined, and the branch it loses is quarantined instead.
+  ///
+  /// Refusing every fork candidate here would decide the fork wrongly: a device
+  /// that saw the op *before* its rival would keep the rival's branch for ever,
+  /// while a device that saw it after would take the op's. The tie-break is
+  /// total and order-independent, so it is the one place that decides, and it is
+  /// the same answer whichever order the two ops arrived in.
+  Future<bool> _namesAppliedPredecessor(Uint8List envelope, int seq) async {
+    final ControlPayload payload;
+    try {
+      final parts = splitEnvelope(envelope);
+      final header = OpHeader.parse(parts.header);
+      if (header.opClass != opClassControl) return false;
+      payload = ControlPayload.decode(parseBody(parts.body));
+    } on SyncRejection {
+      return false;
+    }
+    final applied = await _appliedControlLog(includeQuarantined: false);
+    if (applied.isEmpty) return false;
+    // The applied op this one names: its predecessor.
+    final predecessor = applied
+        .where((row) => sameBytes(row.payloadHash, payload.prevControlHash))
+        .firstOrNull;
+    if (predecessor == null) return false;
+    // It has to sit above the op it names. Above the head, when it names the
+    // head — the ordinary append — and above an earlier op, when it names one:
+    // the tie-break settles which of the two branches survives, and the winner
+    // becomes the new head, so the winner has to be the last row of the log.
+    return seq > predecessor.seq;
+  }
+
+  Future<OpLogRow?> _opLogRowAt(int seq) => (_db.select(_db.opLog)
+        ..where((row) => row.workspaceId.equals(workspaceId) & row.seq.equals(seq)))
+      .getSingleOrNull();
+
+  /// Take back the `op_log` slot of a control op refused as a positional
+  /// [SyncRejectionReason.controlChainBreak], so it can be applied.
+  ///
+  /// Returns true only when the slot holds exactly this op's bytes, unapplied,
+  /// refused for that reason; the refusal stamp is then cleared and the caller
+  /// goes on to apply it. Any other state returns false and the op ends there, as
+  /// a taken slot does. Runs inside the receive transaction.
+  Future<bool> _reclaimRefusedControlSlot(PulledOp pulled) async {
+    final existing = await _opLogRowAt(pulled.seq);
+    if (existing == null ||
+        !sameBytes(existing.envelope, pulled.envelope) ||
+        existing.appliedAt != null ||
+        existing.refusedReason != SyncRejectionReason.controlChainBreak.code) {
+      return false;
+    }
+    // The user may have permanently rejected this op via quarantined_ops.resolution.
+    // Re-read it in this transaction; if set, the decision is final and the op
+    // stays refused.
+    //
+    // Read every row at this seq, not one: a server that hands out the same
+    // transport seq twice leaves two refusals here, and the decision belongs to
+    // the row for *these* bytes — a decision about another op at the same seq
+    // is about another op.
+    final quarantined = await (_db.select(_db.quarantinedOps)
+          ..where((row) =>
+              row.workspaceId.equals(workspaceId) &
+              row.seq.equals(pulled.seq) &
+              row.reason.equals(SyncRejectionReason.controlChainBreak.code)))
+        .get();
+    if (quarantined.any((row) =>
+        sameBytes(row.envelope, pulled.envelope) && row.resolution != null)) {
+      return false;
+    }
+    await _clearRefused(pulled.seq);
+    return true;
+  }
+
+  /// Whether this device is at a keyed epoch whose key it does not hold — the
+  /// state-based half of the refresh trigger, and the restart-safe form of
+  /// [_epochKeyRefreshRequired].
+  ///
+  /// A `rotate` raises the floor and sets that flag in memory, and the pull tail
+  /// fetches the wraps on the strength of it. A device that exits between the
+  /// rotate applying and the fetch comes back with the flag cleared, and with no
+  /// quarantine row to fetch from either: nothing has been received at the new
+  /// epoch yet, so nothing has been refused for a missing key. The device would
+  /// sit at its own current epoch without the key for it, and every local
+  /// capture would be refused as `missing_epoch_key`, until some peer's op
+  /// happened to quarantine and fetch.
+  ///
+  /// So the obligation is read from the state rather than remembered: a floor
+  /// above zero means this device's own control log established a keyed epoch,
+  /// and the key for it is a wrap the server holds for this Member. The fetch is
+  /// one round-trip per pull, the same bound the flag-triggered fetch has.
+  Future<bool> _lacksCurrentEpochKey() async {
+    final floor = await epochFloor();
+    if (floor <= 0) return false;
+    return await workspaceKeys.keyFor(workspaceId, floor) == null;
   }
 
   /// Whether anything is still waiting on a key — the state-based half of the
@@ -5404,32 +5969,67 @@ class SyncClient {
   /// The same rules as [resolveAlarm]: a decision the reason does not offer
   /// throws [StateError], another Workspace's row throws [StateError], and
   /// nothing is written either way.
+  ///
+  /// **A change the log has since applied is not offered a decision, and does
+  /// not take one.** The refusal stamp is gone by then, so no later rebuild
+  /// checks the decision: recording it would be recording a refusal of
+  /// something that is already in, and the row would drop out of the screen
+  /// saying the user had answered it. The same rule the rebuild follows when it
+  /// admits a change the log had refused — an applied change has nothing left
+  /// to decide ([_retireAdmittedRefusal]).
+  ///
+  /// The decision and the admission read each other's state inside one
+  /// transaction, so the two are serialized: a decision recorded first keeps
+  /// the change refused (the admission reads the decision, and skips the row),
+  /// and an admission that lands first leaves the decision with nothing to
+  /// decide (this method reads the admission, and refuses).
   Future<void> resolveRefusedItem(
     int quarantineRowId,
     AlarmResolution resolution,
   ) async {
-    final row = await (_db.select(_db.quarantinedOps)
-          ..where((r) => r.id.equals(quarantineRowId)))
-        .getSingleOrNull();
-    if (row == null) {
-      throw StateError('no refused change with row id $quarantineRowId');
-    }
-    if (row.workspaceId != workspaceId) {
-      throw StateError(
-        'refused change $quarantineRowId belongs to another Workspace',
-      );
-    }
-    if (!resolutionsForRefusalCode(row.reason).contains(resolution)) {
-      throw StateError(
-        'a ${row.reason} refusal offers no ${resolution.code} resolution',
-      );
-    }
-    await (_db.update(_db.quarantinedOps)
-          ..where((r) => r.id.equals(row.id)))
-        .write(QuarantinedOpsCompanion(
-      resolution: Value(resolution.code),
-      resolutionDecidedAt: Value(_now()),
-    ));
+    await _db.transaction(() async {
+      final row = await (_db.select(_db.quarantinedOps)
+            ..where((r) => r.id.equals(quarantineRowId)))
+          .getSingleOrNull();
+      if (row == null) {
+        throw StateError('no refused change with row id $quarantineRowId');
+      }
+      if (row.workspaceId != workspaceId) {
+        throw StateError(
+          'refused change $quarantineRowId belongs to another Workspace',
+        );
+      }
+      if (!resolutionsForRefusalCode(row.reason).contains(resolution)) {
+        throw StateError(
+          'a ${row.reason} refusal offers no ${resolution.code} resolution',
+        );
+      }
+      if (await _refusalApplied(row)) {
+        throw StateError(
+          'refused change $quarantineRowId has been applied; there is nothing '
+          'left to refuse',
+        );
+      }
+      await (_db.update(_db.quarantinedOps)
+            ..where((r) => r.id.equals(row.id)))
+          .write(QuarantinedOpsCompanion(
+        resolution: Value(resolution.code),
+        resolutionDecidedAt: Value(_now()),
+      ));
+    });
+  }
+
+  /// Whether the change a refused row holds has since been applied.
+  ///
+  /// The bytes are compared, not just the transport `seq`: a server that hands
+  /// the same `seq` out twice leaves two ops at one position, and a decision
+  /// about one of them is not a decision about the other.
+  Future<bool> _refusalApplied(QuarantineRow row) async {
+    final seq = row.seq;
+    if (seq == null) return false;
+    final op = await _opLogRowAt(seq);
+    if (op == null || op.appliedAt == null) return false;
+    return sameBytes(op.envelope, row.envelope);
   }
 
   /// The refused changes an alarm covers.
@@ -5907,6 +6507,37 @@ SELECT
             ? row.workspaceId.equals(workspaceId)
             : row.workspaceId.equals(workspaceId) & row.releasedAt.isNull())
         ..orderBy([(row) => OrderingTerm(expression: row.id)]);
+
+  /// The refused rows whose change the log has since applied.
+  ///
+  /// A refusal the log has since applied has nothing left to decide — the
+  /// change is in, the refusal stamp is gone, and no later rebuild checks a
+  /// decision about it (see [resolveRefusedItem]). The row stays: it is the
+  /// evidence that the change arrived out of order. What goes is the offer.
+  ///
+  /// The join is on the transport `seq`, which a server that hands the same
+  /// `seq` out twice repeats, and the bytes are compared here rather than in
+  /// the query: one op's application is never read as another's.
+  Stream<Set<int>> watchAppliedRefusalRowIds() {
+    final query = _db.select(_db.quarantinedOps).join([
+      innerJoin(
+        _db.opLog,
+        _db.opLog.seq.equalsExp(_db.quarantinedOps.seq) &
+            _db.opLog.workspaceId.equalsExp(_db.quarantinedOps.workspaceId),
+      ),
+    ])
+      ..where(_db.quarantinedOps.workspaceId.equals(workspaceId) &
+          _db.opLog.appliedAt.isNotNull());
+    return query.watch().map((rows) {
+      final ids = <int>{};
+      for (final row in rows) {
+        final refusal = row.readTable(_db.quarantinedOps);
+        final op = row.readTable(_db.opLog);
+        if (sameBytes(refusal.envelope, op.envelope)) ids.add(refusal.id);
+      }
+      return ids;
+    });
+  }
 
   /// Watchable so the UI can surface "something arrived that we refused" rather
   /// than swallowing it. Counts what still stands refused.
