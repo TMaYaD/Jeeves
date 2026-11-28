@@ -82,16 +82,16 @@ void main() {
   setUpAll(configureSqliteForTests);
 
   group('schema version', () {
-    test('is 18 — seventeen onUpgrade steps behind the fresh baseline', () async {
+    test('is 19 — eighteen onUpgrade steps behind the fresh baseline', () async {
       final db = _openInMemory();
       addTearDown(db.close);
-      expect(db.schemaVersion, 18);
+      expect(db.schemaVersion, 19);
       // A fresh file runs onCreate at the current version, not the ladder.
       expect(
         await db.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        18,
+        19,
       );
     });
   });
@@ -302,7 +302,7 @@ void main() {
       await seed.customStatement('PRAGMA user_version = 1');
       await seed.close();
 
-      // Open 2: Drift sees user_version=1 and schemaVersion=18, so it runs the
+      // Open 2: Drift sees user_version=1 and schemaVersion=19, so it runs the
       // whole ladder — the v2 drop asserted here, and the v3 `tags` recreate the
       // group below owns.
       final upgraded = GtdDatabase(
@@ -314,7 +314,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        18,
+        19,
       );
       expect(await _columnNames(upgraded, 'todos'),
           isNot(contains('time_spent_minutes')),
@@ -441,7 +441,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        18,
+        19,
       );
       expect(await _uniqueConstraintIndexes(upgraded, 'tags'), isEmpty,
           reason: 'v3 drops UNIQUE (name, type)');
@@ -501,7 +501,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        18,
+        19,
       );
       expect(await _objects(upgraded, 'table'), contains('capture_attachments'));
       expect(await _rows(upgraded, 'captures'), hasLength(1));
@@ -606,7 +606,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        18,
+        19,
       );
       expect(await _columnNames(upgraded, 'todos'), isNot(contains('clarified')),
           reason: 'v5 drops the dead flag');
@@ -707,7 +707,7 @@ void main() {
           await upgraded.customSelect('PRAGMA user_version').getSingle().then(
                 (r) => r.read<int>('user_version'),
               ),
-          18,
+          19,
         );
         expect(await _rows(upgraded, 'todos'), todosBefore);
         expect(await _rows(upgraded, 'captures'), capturesBefore);
@@ -1278,7 +1278,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        18,
+        19,
       );
 
       for (final entry in habitTables.entries) {
@@ -1508,7 +1508,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        18,
+        19,
       );
 
       for (final entry in placeTables.entries) {
@@ -1604,7 +1604,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        18,
+        19,
       );
       expect(await _columnNames(upgraded, 'habit_time_logs'),
           {'id', 'user_id', 'habit_id', 'started_at', 'ended_at'});
@@ -1685,7 +1685,7 @@ void main() {
         await upgraded.customSelect('PRAGMA user_version').getSingle().then(
               (r) => r.read<int>('user_version'),
             ),
-        18,
+        19,
       );
 
       expect(await _columnNames(upgraded, 'habits'),
@@ -1816,6 +1816,103 @@ void main() {
       expect(await _objects(upgraded, 'table'), contains('places'));
       expect(await _columnNames(upgraded, 'places'),
           containsAll(placeHoursColumns));
+    });
+  });
+
+  group('v19 onUpgrade adds actions.stopped_at_limit_at', () {
+    test('adds a nullable column and keeps every existing Action row',
+        () async {
+      final raw = sqlite3.openInMemory();
+      addTearDown(raw.close);
+
+      final seed = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      var seedClosed = false;
+      Future<void> closeSeed() async {
+        if (seedClosed) return;
+        seedClosed = true;
+        await seed.close();
+      }
+
+      addTearDown(closeSeed);
+
+      // A v18 `actions` table: the current declaration with the v18 column cut
+      // out of the CREATE statement Drift itself emitted.
+      final createSql = (await seed
+              .customSelect("SELECT sql FROM sqlite_master "
+                  "WHERE type = 'table' AND name = 'actions'")
+              .getSingle())
+          .read<String>('sql');
+      final v18Sql = createSql.replaceFirst(
+        RegExp(r',\s*"?stopped_at_limit_at"?\s+\w+\s+NULL', caseSensitive: false),
+        '',
+      );
+      expect(v18Sql, isNot(contains('stopped_at_limit_at')),
+          reason: 'the fixture is only a v18 store without the column');
+      await seed.customStatement('DROP TABLE actions');
+      await seed.customStatement(v18Sql);
+
+      await seed.customStatement(
+        'INSERT INTO todos (id, user_id, title, created_at) '
+        "VALUES ('t1', 'u1', 'Ship it', '2026-11-26T09:00:00.000Z')",
+      );
+      await seed.customStatement(
+        'INSERT INTO actions (id, outcome_id, user_id, text, role, created_at) '
+        "VALUES ('a1', 't1', 'u1', 'Draft the work', 'current', "
+        "'2026-11-26T09:00:00.000Z')",
+      );
+      await seed.customStatement('PRAGMA user_version = 18');
+      await closeSeed();
+
+      final upgraded = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      addTearDown(upgraded.close);
+      final fresh = GtdDatabase(NativeDatabase.memory());
+      addTearDown(fresh.close);
+
+      expect(
+        await upgraded.customSelect('PRAGMA user_version').getSingle().then(
+              (r) => r.read<int>('user_version'),
+            ),
+        19,
+      );
+
+      expect(await _columnNames(upgraded, 'actions'),
+          await _columnNames(fresh, 'actions'),
+          reason: 'the upgraded store matches a fresh one');
+
+      // The Action from before the column existed is still there, and reads as
+      // not stopped at a limit.
+      final actions = await upgraded.select(upgraded.actions).get();
+      expect(actions, hasLength(1));
+      expect(actions.single.id, 'a1');
+      expect(actions.single.actionText, 'Draft the work');
+      expect(actions.single.role, 'current');
+      expect(actions.single.stoppedAtLimitAt, isNull,
+          reason: 'an existing Action was not stopped at a limit');
+    });
+
+    test('a store that already carries the column upgrades without failing',
+        () async {
+      final raw = sqlite3.openInMemory();
+      addTearDown(raw.close);
+
+      final seed = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      await seed.customStatement('SELECT 1');
+      await seed.customStatement('PRAGMA user_version = 18');
+      await seed.close();
+
+      final upgraded = GtdDatabase(
+        NativeDatabase.opened(raw, closeUnderlyingOnClose: false),
+      );
+      addTearDown(upgraded.close);
+
+      expect(await _columnNames(upgraded, 'actions'),
+          contains('stopped_at_limit_at'));
     });
   });
 }

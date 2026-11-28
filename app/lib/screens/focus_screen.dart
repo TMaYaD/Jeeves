@@ -414,7 +414,7 @@ class _StartButton extends ConsumerWidget {
         // A Sprint that would start past a Timeboxed limit goes past the gate
         // first, before the engagement opens a TimeLog (issue #923).
         if (!context.mounted) return;
-        unawaited(guardSprintPastLimit(
+        final verdict = await guardSprintPastLimit(
           context,
           ref,
           outcomeId: todoId,
@@ -424,7 +424,17 @@ class _StartButton extends ConsumerWidget {
               context.push('/focus/active');
             }
           },
-        ));
+        );
+        // A verdict means the approach was stopped at its limit: the Sprint
+        // never started, and the session carries on from here (issue #49).
+        if (verdict == null) return;
+        if (!context.mounted) return;
+        await showApproachStoppedLanding(
+          context,
+          ref,
+          outcomeId: todoId,
+          verdict: verdict,
+        );
       },
       style: FilledButton.styleFrom(
         backgroundColor: const Color(0xFF2667B7),

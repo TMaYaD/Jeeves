@@ -126,7 +126,9 @@ void main() {
     expect(await sprintCount(), 0);
   });
 
-  testWidgets('"Right ho" leaves the break alone', (tester) async {
+  testWidgets('"Right ho" asks what is next and leaves the break alone', (
+    tester,
+  ) async {
     final todo = await seedPastLimit();
     await pumpInBreak(tester, todo);
 
@@ -135,8 +137,13 @@ void main() {
     await tester.tap(find.byKey(const Key('timeboxed_gate_stop')));
     await pumpFocusFrames(tester);
 
-    // The sheet closes, the break carries on, and no Sprint was recorded.
+    // The gate closes and the "Approach stopped" sheet opens: the approach
+    // stops at its limit and the user is asked what is next for the Outcome
+    // (issue #49).
     expect(find.byKey(const Key('timeboxed_gate_stop')), findsNothing);
+    expect(find.text('Approach stopped'), findsOneWidget);
+
+    // The break carries on, and no Sprint was recorded.
     expect(skipControl(), findsOneWidget);
     expect(await sprintCount(), 0);
   });

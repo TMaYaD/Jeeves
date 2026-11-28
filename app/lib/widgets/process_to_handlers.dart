@@ -311,8 +311,17 @@ sealed class ClarifySubject {
 /// Outcome (ADR-0001 story 3), and each surface already has it in the snapshot
 /// it loaded. Pass null when the Outcome is Actionless (or when the callsite
 /// genuinely has nothing to prefill).
+///
+/// [stopsActionAtLimitId] names the Action to close as **stopped at its
+/// Timeboxed limit** when the verdict commits (issue #49). The stop rides the
+/// verdict's own write, so dismissing the sheet writes nothing and the Action
+/// stays current.
 final class OutcomeSubject extends ClarifySubject {
-  const OutcomeSubject(this.todo, {this.currentActionText});
+  const OutcomeSubject(
+    this.todo, {
+    this.currentActionText,
+    this.stopsActionAtLimitId,
+  });
 
   final Todo todo;
 
@@ -324,6 +333,10 @@ final class OutcomeSubject extends ClarifySubject {
 
   @override
   final String? currentActionText;
+
+  /// The Action to close at its limit, or null to leave the Outcome's Action
+  /// alone (issue #49).
+  final String? stopsActionAtLimitId;
 }
 
 /// An Inbox Capture being clarified for the first time.
@@ -717,12 +730,13 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     FollowUpChange? followUp,
   }) async {
     switch (widget.subject) {
-      case OutcomeSubject(:final todo):
+      case OutcomeSubject(:final todo, :final stopsActionAtLimitId):
         return _clarification.clarifyToOutcome(
           todo.id,
           to: to,
           actionText: actionText,
           actionTextIfActionless: actionTextIfActionless,
+          stopAtLimitActionId: stopsActionAtLimitId,
           personTagIds: personTagIds,
           followUp: followUp,
           userId: personTagIds != null ? ref.read(currentUserIdProvider) : null,
@@ -993,14 +1007,20 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     // a Capture (its queue is always empty), so this is defensively no-op there.
     if (widget.subject is! OutcomeSubject) return;
     final outcomeId = widget.subject.id;
+    final stopsAtLimitId =
+        (widget.subject as OutcomeSubject).stopsActionAtLimitId;
 
     // Load the current Action fresh: the queue snapshot is from dialog-open
     // time, and a `current` may have synced in since. It only decides whether
     // to confirm; the write re-checks it inside the transaction.
     final current = await _clarification.getCurrentAction(outcomeId);
-    if (current != null) {
+    if (current != null && stopsAtLimitId == null) {
       // Replacing a current Action is an explicit act: the shared "Replace
       // current action" confirm, never a silent supersede.
+      //
+      // A stop at the limit is not a replacement: the Action is being closed,
+      // not swapped, so there is nothing to confirm. The write supersedes it
+      // and promotes the chosen Action in the same transaction.
       if (!mounted) return;
       final chosen = planned.where((a) => a.id == actionId);
       final confirmed = await showReplaceCurrentActionSheet(
@@ -1014,11 +1034,15 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     // the current Action while the sheet was open the write throws rather than
     // retire an Action the user never saw. With no current shown, the write
     // refuses if one has since appeared.
+    //
+    // With a stop at the limit there is no current to replace: the stop closes
+    // it first, and the promotion then lands on an Actionless Outcome.
     final landed = await _clarification.clarifyToOutcome(
       outcomeId,
       to: RoutingKind.nextAction,
       promotePlannedActionId: actionId,
-      replacingCurrentActionId: current?.id,
+      replacingCurrentActionId: stopsAtLimitId == null ? current?.id : null,
+      stopAtLimitActionId: stopsAtLimitId,
     );
     if (!landed) return;
     await _notifyAfterRoute(ProcessAction.nextActionDialog);
@@ -1042,10 +1066,17 @@ class _ProcessToHandlersState extends ConsumerState<ProcessToHandlers> {
     // left to write.
     // The follow-up row starts from the date the Outcome's current Action
     // already carries (re-clarifying a Waiting For item).
+    //
+    // A stop at the limit reads no follow-up from the Action it closes: the
+    // Action is going away, so its date is not the one the follow-up should
+    // start from (issue #49).
     final existingFollowUp = switch (widget.subject) {
-      OutcomeSubject(:final todo) => TimeContext.tryParse(
-        (await _clarification.getCurrentAction(todo.id))?.timeContext,
-      )?.fromDate,
+      OutcomeSubject(:final todo, :final stopsActionAtLimitId) =>
+        stopsActionAtLimitId != null
+            ? null
+            : TimeContext.tryParse(
+                (await _clarification.getCurrentAction(todo.id))?.timeContext,
+              )?.fromDate,
       CaptureSubject() => null,
     };
     if (!mounted) return;

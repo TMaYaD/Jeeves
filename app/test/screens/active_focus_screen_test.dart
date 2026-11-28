@@ -661,4 +661,55 @@ void main() {
       }
     });
   });
+
+  group('focusAdvanceMessage — a stopped approach says so (issue #49)', () {
+    Todo todo(String id, String title) => Todo(
+          id: id,
+          title: title,
+          createdAt: DateTime.now(),
+          intent: 'next',
+          userId: _userId,
+        );
+
+    test('a remaining task yields the "Stopped there. Next up" advance', () {
+      expect(
+        focusAdvanceMessage(
+          nextTask: todo('t2', 'Second'),
+          verdict: ProcessAction.nextActionDialog,
+          stoppedAtLimit: true,
+        ),
+        'Stopped there. Next up: Second',
+      );
+    });
+
+    test('nothing planned and the Outcome achieved still claims "All done"', () {
+      expect(
+        focusAdvanceMessage(
+          nextTask: null,
+          verdict: ProcessAction.done,
+          stoppedAtLimit: true,
+        ),
+        'All done for today!',
+      );
+    });
+
+    test('nothing planned otherwise says nothing else is planned', () {
+      for (final verdict in <ProcessAction?>[
+        ProcessAction.nextActionDialog,
+        ProcessAction.waitingFor,
+        ProcessAction.someday,
+        null,
+      ]) {
+        expect(
+          focusAdvanceMessage(
+            nextTask: null,
+            verdict: verdict,
+            stoppedAtLimit: true,
+          ),
+          'Stopped there. Nothing else planned.',
+          reason: 'verdict $verdict is not an achievement',
+        );
+      }
+    });
+  });
 }

@@ -1207,6 +1207,7 @@ AND (
     String? actionTextIfActionless,
     String? promotePlannedActionId,
     String? replacingCurrentActionId,
+    String? stopAtLimitActionId,
     Set<String>? personTagIds,
     FollowUpChange? followUp,
     String? userId,
@@ -1228,6 +1229,16 @@ AND (
     } else if (replacingCurrentActionId != null) {
       throw ArgumentError(
           'replacingCurrentActionId requires promotePlannedActionId');
+    }
+    if (stopAtLimitActionId != null) {
+      if (replacingCurrentActionId != null) {
+        throw ArgumentError('stopAtLimitActionId is mutually exclusive with '
+            'replacingCurrentActionId');
+      }
+      if (to == RoutingKind.trash) {
+        throw ArgumentError.value(to, 'to',
+            'stopAtLimitActionId is not valid for trash');
+      }
     }
     if (actionTextIfActionless != null) {
       if (to != RoutingKind.nextAction && to != RoutingKind.waitingFor) {
@@ -1262,6 +1273,7 @@ AND (
         actionTextIfActionless: actionTextIfActionless,
         promotePlannedActionId: promotePlannedActionId,
         replacingCurrentActionId: replacingCurrentActionId,
+        stopAtLimitActionId: stopAtLimitActionId,
         personTagIds: personTagIds,
         followUp: followUp,
         userId: userId,
@@ -1338,12 +1350,38 @@ AND (
     String? actionTextIfActionless,
     String? promotePlannedActionId,
     String? replacingCurrentActionId,
+    String? stopAtLimitActionId,
     Set<String>? personTagIds,
     FollowUpChange? followUp,
     String? userId,
   }) async {
     final tsIso = ts.toIso8601String();
     if (!await _todoRowExists(todoId)) return false;
+    if (promotePlannedActionId != null && stopAtLimitActionId != null) {
+      // The promote must be viable before anything is written. With a stop at
+      // the limit in front of it, "the route did not land" has to mean
+      // "nothing was written": the Action stays current, so the user can try
+      // again (issue #49). Read inside this transaction, so the answer and the
+      // write that follows it are one decision.
+      final promotable = await attachedDatabase.actionDao
+          .isPromotablePlannedAction(promotePlannedActionId);
+      if (!promotable) return false;
+    }
+    if (stopAtLimitActionId != null) {
+      // The Action is closed at its limit *before* the verdict's own writes, so
+      // every verdict below sees an Actionless Outcome — exactly as the Done
+      // sheet's verdicts do after `completeCurrentAction`. One transaction:
+      // a verdict that fails to land leaves the Action current, so the user
+      // can try again (issue #49).
+      final effect = await attachedDatabase.actionDao
+          .applyStopCurrentActionAtLimit(
+        todoId,
+        expectedActionId: stopAtLimitActionId,
+        ts: ts,
+      );
+      effects.stoppedAtLimit = effects.stoppedAtLimit || effect.changed;
+      effects.logChanged = effects.logChanged || effect.logChanged;
+    }
     if (promotePlannedActionId != null) {
       // The queue promote shares this transaction, so a failed route write
       // rolls the promote (and any supersede) back (#788). Runs before the
@@ -1532,7 +1570,8 @@ AND (
         effects.actionTerminated ||
         effects.wroteFallbackAction ||
         effects.timeContextChanged ||
-        effects.promotedPlannedAction) {
+        effects.promotedPlannedAction ||
+        effects.stoppedAtLimit) {
       attachedDatabase.notifyActionsViewWrite();
     }
     // A supersede or completion in the cascade closes the current Action's open
@@ -1897,6 +1936,10 @@ class _RoutingEffects {
   bool logChanged = false;
   bool promotedPlannedAction = false;
   bool timeContextChanged = false;
+
+  /// An Action was closed at its Timeboxed limit (issue #49). The `actions`
+  /// row changed, so the actions view must be notified.
+  bool stoppedAtLimit = false;
 }
 
 /// Thrown by [TodoDao.applyRoutingToOutcomes] when a requested Person no

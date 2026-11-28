@@ -9,6 +9,7 @@ library;
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -80,6 +81,56 @@ Future<List<ProcessAction?>> _pumpAndOpen(
               child: ElevatedButton(
                 onPressed: () async {
                   results.add(await ReclarifyPromptSheet.show(context, todo));
+                },
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  await tester.tap(find.text('open'));
+  await tester.pumpAndSettle();
+  return results;
+}
+
+/// Pumps a screen with a single button that floats the "Approach stopped"
+/// sheet for [seeded]'s Outcome, and records the resolved [ProcessAction] (or
+/// null on dismiss).
+///
+/// The Jeeves line is fixed, so the test can name it.
+Future<List<ProcessAction?>> _pumpAndOpenStopped(
+  WidgetTester tester,
+  GtdDatabase db, {
+  required ({Todo todo, String actionId, DateTime? lastClarifiedAt}) seeded,
+  TextScaler textScaler = TextScaler.noScaling,
+}) async {
+  final results = <ProcessAction?>[];
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [databaseProvider.overrideWithValue(db)],
+      child: MaterialApp(
+        // The sheet is a bottom sheet on the root navigator, so the scale has
+        // to be set above it.
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context).copyWith(textScaler: textScaler),
+          child: child!,
+        ),
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => Center(
+              child: ElevatedButton(
+                onPressed: () async {
+                  results.add(
+                    await ReclarifyPromptSheet.showApproachStopped(
+                      context,
+                      seeded.todo,
+                      stoppingActionId: seeded.actionId,
+                      jeevesLine: 'That approach has had its time, sir. '
+                          'Where does the matter stand?',
+                    ),
+                  );
                 },
                 child: const Text('open'),
               ),
@@ -254,5 +305,194 @@ void main() {
     expect(row?.doneAt, isNull);
     expect(row?.lastClarifiedAt, isNull);
     expect(results, [null]);
+  });
+
+  group('the approach-stopped sheet', () {
+    /// An Outcome with a current Action that has logged time — an approach
+    /// that ran out of time.
+    Future<({Todo todo, String actionId, DateTime? lastClarifiedAt})>
+        seedStopped({
+      required String id,
+    }) async {
+      final now = DateTime.now().toUtc();
+      await db.todoDao.insertOutcome(
+        id: id,
+        title: 'Write the report',
+        userId: _userId,
+        now: now,
+      );
+      await db.actionDao.setCurrentAction(
+        id,
+        'Draft the report',
+        timeEstimate: 30,
+        now: now,
+      );
+      await db.timeLogDao.openLog(
+        taskId: id,
+        userId: _userId,
+        now: now.subtract(const Duration(minutes: 25)),
+      );
+      await db.timeLogDao.closeLog(taskId: id, now: now);
+      final action = (await db.actionDao.getCurrentAction(id))!;
+      final todo = (await db.todoDao.getTodo(id))!;
+      return (
+        todo: todo,
+        actionId: action.id,
+        lastClarifiedAt: todo.lastClarifiedAt,
+      );
+    }
+
+    testWidgets('heads "Approach stopped" and offers the Done sheet\'s four '
+        'choices', (tester) async {
+      final seeded = await seedStopped(id: 's1');
+      await _pumpAndOpenStopped(tester, db, seeded: seeded);
+
+      expect(find.text('Approach stopped'), findsOneWidget);
+      // A Jeeves line, from the pool, under the heading.
+      expect(
+        find.text('That approach has had its time, sir. '
+            'Where does the matter stand?'),
+        findsOneWidget,
+      );
+      expect(find.text('Outcome achieved'), findsOneWidget);
+      expect(find.text('More to do…'), findsOneWidget);
+      expect(find.text('Waiting on someone…'), findsOneWidget);
+      expect(find.text('Defer to Someday'), findsOneWidget);
+      expect(find.text('Trash'), findsNothing);
+    });
+
+    testWidgets('the four choices carry the Done sheet\'s icons and colours',
+        (tester) async {
+      final seeded = await seedStopped(id: 's2');
+      await _pumpAndOpenStopped(tester, db, seeded: seeded);
+
+      Future<void> expectChoice(
+        String label,
+        IconData icon,
+        Color colour,
+      ) async {
+        final button = find.widgetWithText(OutlinedButton, label);
+        expect(button, findsOneWidget);
+        final found = tester.widget<Icon>(
+          find.descendant(of: button, matching: find.byIcon(icon)),
+        );
+        expect(found.color, colour, reason: 'the icon for "$label"');
+      }
+
+      await expectChoice(
+          'Outcome achieved', Icons.task_alt_outlined, const Color(0xFF16A34A));
+      await expectChoice(
+          'More to do…', Icons.check_circle_outline, const Color(0xFF2563EB));
+      await expectChoice(
+          'Waiting on someone…', Icons.person_outlined, const Color(0xFF7C3AED));
+      await expectChoice(
+          'Defer to Someday', Icons.star_border, const Color(0xFF6B7280));
+    });
+
+    testWidgets('the sheet announces itself to a screen reader',
+        (tester) async {
+      final seeded = await seedStopped(id: 's3');
+      await _pumpAndOpenStopped(tester, db, seeded: seeded);
+
+      expect(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is Semantics &&
+              widget.properties.label == 'Approach stopped',
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('the four choices meet the tap-target guideline',
+        (tester) async {
+      final seeded = await seedStopped(id: 's4');
+      await _pumpAndOpenStopped(tester, db, seeded: seeded);
+
+      await expectLater(tester, meetsGuideline(androidTapTargetGuideline));
+    });
+
+    testWidgets('the four choices still fit at a doubled text scale',
+        (tester) async {
+      final seeded = await seedStopped(id: 's5');
+      await _pumpAndOpenStopped(
+        tester,
+        db,
+        seeded: seeded,
+        textScaler: const TextScaler.linear(2.0),
+      );
+
+      // Nothing overflowed, and no label was cut short.
+      expect(tester.takeException(), isNull);
+      for (final label in const [
+        'Outcome achieved',
+        'More to do…',
+        'Waiting on someone…',
+        'Defer to Someday',
+      ]) {
+        final paragraph = tester.renderObject<RenderParagraph>(
+          find.text(label),
+        );
+        expect(paragraph.didExceedMaxLines, isFalse, reason: label);
+      }
+    });
+
+    testWidgets('the verdict closes the Action at its limit and keeps its '
+        'logged time', (tester) async {
+      final seeded = await seedStopped(id: 's6');
+      final results = await _pumpAndOpenStopped(tester, db, seeded: seeded);
+
+      await tester.tap(find.text('Outcome achieved'));
+      await tester.pumpAndSettle();
+
+      final action = (await db.actionDao.getCurrentAction('s6'));
+      expect(action, isNull, reason: 'the Outcome has no current Action now');
+      final history = await db.actionDao.getTerminatedActions('s6');
+      expect(history, hasLength(1));
+      expect(history.single.action.id, seeded.actionId);
+      // Superseded, not done: the approach ran out of time.
+      expect(history.single.action.role, 'superseded');
+      expect(history.single.action.stoppedAtLimitAt, isNotNull);
+      // The time it logged is still its own.
+      expect(history.single.loggedMinutes, 25);
+      expect(results, [ProcessAction.done]);
+    });
+
+    testWidgets('Outcome achieved records the Completion and leaves the '
+        'Action stopped at the limit', (tester) async {
+      final seeded = await seedStopped(id: 's7');
+      await _pumpAndOpenStopped(tester, db, seeded: seeded);
+
+      await tester.tap(find.text('Outcome achieved'));
+      await tester.pumpAndSettle();
+
+      final row = await db.todoDao.getTodo('s7');
+      expect(row?.doneAt, isNotNull, reason: 'the Outcome is achieved');
+      final history = await db.actionDao.getTerminatedActions('s7');
+      expect(history.single.action.role, 'superseded',
+          reason: 'the Action itself was not done');
+      expect(history.single.action.doneAt, isNull);
+    });
+
+    testWidgets('dismissing the sheet writes nothing: the Action stays '
+        'current', (tester) async {
+      final seeded = await seedStopped(id: 's8');
+      final results = await _pumpAndOpenStopped(tester, db, seeded: seeded);
+
+      // Tap the modal barrier above the sheet to dismiss it.
+      await tester.tapAt(const Offset(400, 20));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(ReclarifyPromptSheet), findsNothing);
+      final current = await db.actionDao.getCurrentAction('s8');
+      expect(current, isNotNull, reason: 'the Action is still current');
+      expect(current!.id, seeded.actionId);
+      expect(current.stoppedAtLimitAt, isNull);
+      final row = await db.todoDao.getTodo('s8');
+      expect(row?.doneAt, isNull);
+      expect(row?.lastClarifiedAt, seeded.lastClarifiedAt,
+          reason: 'the Outcome was not re-clarified');
+      expect(results, [null]);
+    });
   });
 }

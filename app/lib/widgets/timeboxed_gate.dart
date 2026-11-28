@@ -1,8 +1,9 @@
 /// The gate before a Sprint started past a Timeboxed limit (issue #923).
 ///
 /// Nothing is locked. Jeeves advises, and the user chooses: carry on, carry
-/// on regardless (asked once more, then it starts), or raise the estimate,
-/// which moves the limit with it and for good.
+/// on regardless (asked once more, then it starts), raise the estimate,
+/// which moves the limit with it and for good, or stop the approach at its
+/// limit and say what is next for the Outcome (issue #49).
 ///
 /// The gate reads the limit fresh rather than trusting a cached value: a
 /// Sprint can pass the limit while nobody is looking at the surface that
@@ -16,16 +17,21 @@ import '../models/estimate.dart';
 import '../models/timeboxed.dart';
 import '../providers/clock_provider.dart';
 import '../providers/database_provider.dart';
+import '../providers/focus_session_planning_provider.dart'
+    show activeSessionSettlementsProvider, activeSessionTasksProvider;
 import '../providers/task_detail_provider.dart';
 import '../providers/timeboxed_limit_provider.dart';
+import 'focus_advance.dart';
 import 'meta_chip.dart' show formatMinutesLabel;
 import 'outcome_attribute_editors.dart';
+import 'process_to_handlers.dart' show ProcessAction;
+import 'reclarify_prompt_sheet.dart';
 import 'timeboxed_limit_strip.dart';
 
 /// What the user chose at the gate.
 enum TimeboxedGateChoice {
-  /// "Right ho" — the sheet closes and the Sprint does not start. Nothing is
-  /// written: the user stays where they were.
+  /// "Right ho" — the approach stops at its limit and the user is asked what
+  /// is next for the Outcome (issue #49). The Sprint does not start.
   stop,
 
   /// "Yes, another sprint" — confirmed a second time; the Sprint starts and
@@ -94,14 +100,20 @@ void _closeGateSheet(int sheetId) {
 /// limit has already been passed — in which case Jeeves advises first and the
 /// user chooses.
 ///
-/// "Right ho" starts nothing: the sheet closes and the user stays where they
-/// were. "Another sprint, regardless" asks once more and then starts the
-/// Sprint, leaving the estimate exactly as it was. "Raise the estimate…"
-/// opens the estimate sheet on the first step above the time already logged;
-/// if the raised estimate moves the limit out of the way the Sprint starts
-/// after all, and if it does not, the gate asks again with the figures as they
-/// now stand. Nothing here is locked.
-Future<void> guardSprintPastLimit(
+/// "Right ho" stops the approach at its limit and opens the "Approach
+/// stopped" sheet, which asks what is next for the Outcome (issue #49). The
+/// verdict it collects is returned: the [ProcessAction] that committed, or
+/// null when the user dismissed the sheet without choosing. Nothing is
+/// written until a verdict commits, so a dismissed sheet leaves the Action
+/// current and past its limit, and the next Start asks again.
+///
+/// "Another sprint, regardless" asks once more and then starts the Sprint,
+/// leaving the estimate exactly as it was. "Raise the estimate…" opens the
+/// estimate sheet on the first step above the time already logged; if the
+/// raised estimate moves the limit out of the way the Sprint starts after
+/// all, and if it does not, the gate asks again with the figures as they now
+/// stand. Nothing here is locked.
+Future<ProcessAction?> guardSprintPastLimit(
   BuildContext context,
   WidgetRef ref, {
   required String outcomeId,
@@ -109,57 +121,57 @@ Future<void> guardSprintPastLimit(
 }) async {
   // The screen may already be gone: there is nothing to read the limit for,
   // and nothing to start the Sprint from.
-  if (!context.mounted) return;
+  if (!context.mounted) return null;
   final db = ref.read(databaseProvider);
   final initial = await readTimeboxedLimitStatus(db, outcomeId);
   // The screen may have gone while the status was being read. Starting the
   // Sprint then would reach through a screen that is no longer there.
-  if (!context.mounted) return;
+  if (!context.mounted) return null;
   if (initial == null) {
     await start();
-    return;
+    return null;
   }
   var now = ref.read(clockProvider)().toUtc();
   if (!initial.hasPassedAt(now)) {
     await start();
-    return;
+    return null;
   }
   var status = initial;
   var action = await db.actionDao.getCurrentAction(outcomeId);
   // The sheet names the Outcome, as the design does; the Action's own text is
   // the fallback for an Outcome whose title has gone.
   final todo = await db.todoDao.getTodo(outcomeId);
-  if (!context.mounted) return;
+  if (!context.mounted) return null;
   var choice = await showTimeboxedSprintGate(
     context,
     actionText: todo?.title ?? action?.actionText ?? '',
     status: status,
     now: now,
   );
-  if (!context.mounted) return;
+  if (!context.mounted) return null;
   // "Raise the estimate…" opens the estimate sheet. Whatever happens there —
   // saved or cancelled — the gate asks again with the figures as they now
   // stand, so the user is never left without a way on.
   while (choice == TimeboxedGateChoice.raise) {
-    if (!context.mounted) return;
+    if (!context.mounted) return null;
     final saved = await _raiseTheEstimate(context, ref, outcomeId: outcomeId);
-    if (!context.mounted) return;
+    if (!context.mounted) return null;
     if (saved) {
       // A raised estimate moves the limit with it. If the limit is no longer
       // passed, the Sprint starts after all; if it is still passed, the gate
       // asks again with the new figures.
       final after = await readTimeboxedLimitStatus(db, outcomeId);
-      if (!context.mounted) return;
+      if (!context.mounted) return null;
       // The clock is read after the status is loaded: the read takes a
       // moment, and a limit that passed during it must still ask.
       now = ref.read(clockProvider)().toUtc();
       if (after == null || !after.hasPassedAt(now)) {
         await start();
-        return;
+        return null;
       }
       status = after;
       action = await db.actionDao.getCurrentAction(outcomeId);
-      if (!context.mounted) return;
+      if (!context.mounted) return null;
     } else {
       // The estimate sheet was open for a while, and the limit may have passed
       // while it was. The figures the sheet shows are counted from this
@@ -172,11 +184,76 @@ Future<void> guardSprintPastLimit(
       status: status,
       now: now,
     );
-    if (!context.mounted) return;
+    if (!context.mounted) return null;
   }
   if (choice == TimeboxedGateChoice.regardless) {
     await start();
+    return null;
   }
+  if (choice == TimeboxedGateChoice.stop) {
+    return _askWhatIsNext(context, ref, outcomeId: outcomeId);
+  }
+  return null;
+}
+
+/// Opens the "Approach stopped" sheet and returns the verdict it collected.
+///
+/// The Action the user was working on is closed at its limit by the verdict's
+/// own write, so a sheet dismissed without a choice writes nothing and the
+/// Action stays current (issue #49).
+Future<ProcessAction?> _askWhatIsNext(
+  BuildContext context,
+  WidgetRef ref, {
+  required String outcomeId,
+}) async {
+  final db = ref.read(databaseProvider);
+  final action = await db.actionDao.getCurrentAction(outcomeId);
+  if (action == null) return null;
+  final todo = await db.todoDao.getTodo(outcomeId);
+  if (todo == null) return null;
+  if (!context.mounted) return null;
+  // The verdict is read from the write, not from the sheet's own result: a
+  // sheet dismissed while its write was still pending commits the verdict
+  // anyway, and that verdict still counts.
+  ProcessAction? committed;
+  await ReclarifyPromptSheet.showApproachStopped(
+    context,
+    todo,
+    stoppingActionId: action.id,
+    onVerdictCommitted: (verdict) => committed = verdict,
+  );
+  return committed;
+}
+
+/// Lands the user after a verdict on an approach stopped at its limit, where
+/// there is no Focus session to carry on in (issue #49).
+///
+/// The Focus list and the Outcome's own screen both start a Sprint through
+/// the gate, so both land here: the same transition message the Active Focus
+/// screen shows after Done, over the Plan's next member. The Outcome just
+/// handled is not offered back — the user has answered for it.
+Future<void> showApproachStoppedLanding(
+  BuildContext context,
+  WidgetRef ref, {
+  required String outcomeId,
+  required ProcessAction? verdict,
+}) async {
+  final sessionTasks = await ref.read(activeSessionTasksProvider.future);
+  if (!context.mounted) return;
+  final settlements = await ref.read(activeSessionSettlementsProvider.future);
+  if (!context.mounted) return;
+  showFocusAdvanceSnackBar(
+    context,
+    focusAdvanceMessage(
+      nextTask: focusNextTask(
+        sessionTasks: sessionTasks,
+        completedTodoId: outcomeId,
+        settlements: settlements,
+      ),
+      verdict: verdict,
+      stoppedAtLimit: true,
+    ),
+  );
 }
 
 /// Opens the estimate sheet for [outcomeId]'s current Action, on the first
@@ -314,9 +391,10 @@ class _TimeboxedGateSheetState extends State<_TimeboxedGateSheet> {
   /// The first ask: Jeeves advises, and the user may stop, carry on
   /// regardless, or raise the estimate.
   ///
-  /// "Right ho" puts stopping first, as the design does: it closes the sheet
-  /// and the Sprint does not start. "Another sprint, regardless" is the way
-  /// on, and it asks once more before it starts anything.
+  /// "Right ho" puts stopping first, as the design does: it stops the
+  /// approach at its limit and asks what is next for the Outcome (issue #49).
+  /// "Another sprint, regardless" is the way on, and it asks once more before
+  /// it starts anything.
   List<Widget> _firstAsk(TimeboxedAdvice advice) {
     return [
       _jeevesPair(advice),

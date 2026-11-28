@@ -25,9 +25,12 @@
 /// next DPR's review step (`TodoDao.getNeedsReview`).
 library;
 
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 
 import '../database/gtd_database.dart';
+import '../models/timeboxed.dart';
 import 'process_to_handlers.dart';
 
 class ReclarifyPromptSheet extends StatelessWidget {
@@ -35,6 +38,10 @@ class ReclarifyPromptSheet extends StatelessWidget {
     super.key,
     required this.todo,
     this.onVerdictCommitted,
+    this.heading = 'Action complete',
+    this.lead,
+    this.semanticsLabel = 'Re-clarify outcome',
+    this.stopsActionAtLimitId,
   });
 
   final Todo todo;
@@ -43,6 +50,21 @@ class ReclarifyPromptSheet extends StatelessWidget {
   /// dismissed while that write was still pending (the sheet's own pop is then
   /// skipped, so the [show] result would be `null` for a verdict that landed).
   final void Function(ProcessAction verdict)? onVerdictCommitted;
+
+  /// The sheet's heading. "Action complete" for the Done sheet, "Approach
+  /// stopped" for the one the Timeboxed gate opens (issue #49).
+  final String heading;
+
+  /// The line under the heading. Null keeps the Done sheet's question about
+  /// the Outcome; the stopped sheet puts a Jeeves line there instead.
+  final String? lead;
+
+  /// The screen-reader label for the sheet.
+  final String semanticsLabel;
+
+  /// The Action to close at its Timeboxed limit when the verdict commits
+  /// (issue #49). Null leaves the Outcome's Action alone.
+  final String? stopsActionAtLimitId;
 
   /// Floats the re-clarify prompt for [todo]. Resolves to the chosen
   /// [ProcessAction] once a verdict commits, or `null` when the user dismisses
@@ -67,10 +89,45 @@ class ReclarifyPromptSheet extends StatelessWidget {
     );
   }
 
+  /// Floats the "Approach stopped" sheet for [todo] — the sheet the Timeboxed
+  /// gate's "Right ho" opens when an approach has run out of time (issue #49).
+  ///
+  /// The choices are the Done sheet's four, unchanged, so their labels, colours
+  /// and icons match. The subject carries the Action to close at its limit, so
+  /// the verdict's own write closes it: dismissing the sheet writes nothing and
+  /// the Action stays current.
+  ///
+  /// [jeevesLine] is the line under the heading; one is drawn from the pool
+  /// when it is not given. Tests pass one to keep the sheet's copy fixed.
+  static Future<ProcessAction?> showApproachStopped(
+    BuildContext context,
+    Todo todo, {
+    required String stoppingActionId,
+    String? jeevesLine,
+    void Function(ProcessAction verdict)? onVerdictCommitted,
+  }) {
+    return showModalBottomSheet<ProcessAction>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(6)),
+      ),
+      builder: (_) => ReclarifyPromptSheet(
+        todo: todo,
+        heading: 'Approach stopped',
+        lead: jeevesLine ?? approachStoppedLine(Random()),
+        semanticsLabel: 'Approach stopped',
+        stopsActionAtLimitId: stoppingActionId,
+        onVerdictCommitted: onVerdictCommitted,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Semantics(
-      label: 'Re-clarify outcome',
+      label: semanticsLabel,
       container: true,
       child: SafeArea(
         child: Padding(
@@ -93,9 +150,9 @@ class ReclarifyPromptSheet extends StatelessWidget {
               ),
               // Header: names the just-finished *Action*, disambiguating from
               // the Outcome-Done verdict below (and #457's shutdown Done).
-              const Text(
-                'Action complete',
-                style: TextStyle(
+              Text(
+                heading,
+                style: const TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.w600,
                   color: Color(0xFF1A1A2E),
@@ -103,7 +160,7 @@ class ReclarifyPromptSheet extends StatelessWidget {
               ),
               const SizedBox(height: 4),
               Text(
-                "While it's fresh — where does '${todo.title}' stand now?",
+                lead ?? "While it's fresh — where does '${todo.title}' stand now?",
                 style: const TextStyle(
                   fontSize: 14,
                   height: 1.4,
@@ -118,7 +175,10 @@ class ReclarifyPromptSheet extends StatelessWidget {
               // promotion when there is one (issue #723). The current Action's
               // cursor was already cleared by `completeCurrentAction`.
               ProcessToHandlers(
-                subject: OutcomeSubject(todo),
+                subject: OutcomeSubject(
+                  todo,
+                  stopsActionAtLimitId: stopsActionAtLimitId,
+                ),
                 except: const {ProcessAction.trash},
                 labels: const {
                   // The one branch that records an Outcome Completion — same

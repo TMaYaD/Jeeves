@@ -28,6 +28,7 @@ import 'batch_break_screen.dart';
 import '../widgets/app_title_bar/app_title_bar.dart';
 import '../widgets/capture/capture_action.dart';
 import '../widgets/elapsed_timer_widget.dart';
+import '../widgets/focus_advance.dart';
 import '../widgets/meta_chip.dart' show formatMinutesLabel;
 import '../widgets/process_to_handlers.dart' show ProcessAction;
 import '../widgets/reclarify_prompt_sheet.dart';
@@ -35,50 +36,10 @@ import '../widgets/sprint_ring.dart';
 import '../widgets/timeboxed_gate.dart' show guardSprintPastLimit;
 import '../widgets/timeboxed_limit_strip.dart';
 
-/// The focus-list transition message shown after a Focus "Done" verdict
-/// resolves.
-///
-/// "All done for today!" is claimed **only** on a genuine achieved-and-last
-/// verdict. This keys on the achieved verdict specifically ([ProcessAction.done]),
-/// not on any truthy resolution: every "More to do" save resolves as
-/// [ProcessAction.nextActionDialog] — whether the user typed a phrase or left
-/// it empty and took the title-as-action fallback — and neither
-/// achieves the Outcome, so neither may claim "All done". A `null` verdict
-/// (the prompt was dismissed) is likewise not an achievement.
-@visibleForTesting
-String focusAdvanceMessage({
-  required Todo? nextTask,
-  required ProcessAction? verdict,
-}) {
-  if (nextTask != null) return 'Done! Next up: ${nextTask.title}';
-  return verdict == ProcessAction.done
-      ? 'All done for today!'
-      : 'Sprint logged — nothing else planned.';
-}
-
-/// The task the session advances to after a Focus "Done" verdict on
-/// [completedTodoId] — the first Plan member still owed attention.
-///
-/// Extracted for the same reason as [focusAdvanceMessage]: `_onComplete`'s tail
-/// awaits a Riverpod stream-provider future that a fake-clock `pump` cannot get
-/// past, so the decision is pinned here rather than through the screen.
-///
-/// A **Settled** task is skipped (#693 AC2): the user has already answered for
-/// it this session, so re-presenting it as "next up" would hand back work they
-/// are done with. `doneAt` stays as the cheap guard — a Settled done row is in
-/// [settlements] anyway.
-@visibleForTesting
-Todo? focusNextTask({
-  required List<Todo> sessionTasks,
-  required String completedTodoId,
-  required Map<String, SessionSettlement> settlements,
-}) =>
-    sessionTasks
-        .where((t) =>
-            t.id != completedTodoId &&
-            t.doneAt == null &&
-            !settlements.containsKey(t.id))
-        .firstOrNull;
+// The transition helpers live in `widgets/focus_advance.dart` now that the
+// Timeboxed gate's landing shares them, but they are still part of this
+// screen's surface: the tests reach for them here.
+export '../widgets/focus_advance.dart' show focusAdvanceMessage, focusNextTask;
 
 /// The Outcome Focus goes straight on to after Done on [completedTodoId], when
 /// that Outcome belongs to an accepted small-task batch: the first other member
@@ -198,7 +159,21 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
     // (or process death mid-prompt) can never lose the Done.
     final verdict = await ReclarifyPromptSheet.show(context, todo);
     if (!mounted) return;
+    await _advanceAfterVerdict(todoId, verdict);
+  }
 
+  /// The landing half of a Focus verdict: what comes next, what it says, and
+  /// where Focus goes.
+  ///
+  /// Split out of [_onComplete] because an approach stopped at its Timeboxed
+  /// limit lands here too (issue #49): the gate's "Right ho" collects a
+  /// verdict for an Action closed at its limit, and the session then moves on
+  /// exactly as it does after Done.
+  Future<void> _advanceAfterVerdict(
+    String todoId,
+    ProcessAction? verdict, {
+    bool stoppedAtLimit = false,
+  }) async {
     final allSessionTasks = await ref.read(activeSessionTasksProvider.future);
     if (!mounted) return;
     final settlements =
@@ -230,29 +205,18 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
             settlements: settlements,
           );
 
-    final message = focusAdvanceMessage(nextTask: nextTask, verdict: verdict);
+    final message = focusAdvanceMessage(
+      nextTask: nextTask,
+      verdict: verdict,
+      stoppedAtLimit: stoppedAtLimit,
+    );
 
     // Show the transition snackbar and end the session while the screen is
     // still active, *before* endFocus() nulls activeTodoId. endFocus() would
     // otherwise trip the build redirect to /focus and unmount this screen,
     // dropping the snackbar. The snackbar lives on the root ScaffoldMessenger,
     // so it survives the subsequent navigation.
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            const Icon(Icons.check_circle, color: Colors.white, size: 20),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(message, overflow: TextOverflow.ellipsis),
-            ),
-          ],
-        ),
-        duration: const Duration(seconds: 3),
-        behavior: SnackBarBehavior.floating,
-        backgroundColor: const Color(0xFF2667B7),
-      ),
-    );
+    showFocusAdvanceSnackBar(context, message);
 
     var advancedToNextMember = false;
     if (batchNextId != null) {
@@ -260,7 +224,7 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
       // its screen starts its Sprint. A next member whose Timeboxed limit has
       // passed goes past the gate first, like any Sprint; declining it leaves
       // the member on the list to start later.
-      await guardSprintPastLimit(
+      final memberVerdict = await guardSprintPastLimit(
         context,
         ref,
         outcomeId: batchNextId,
@@ -281,6 +245,28 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
         return;
       }
       if (!mounted) return;
+      if (memberVerdict != null) {
+        // The next member's approach was stopped at its limit, so it does not
+        // come into Focus. Say what is next instead: the member is not offered
+        // back, because the user has just answered for it.
+        final stoppedTasks = await ref.read(activeSessionTasksProvider.future);
+        if (!mounted) return;
+        final stoppedSettlements =
+            await ref.read(activeSessionSettlementsProvider.future);
+        if (!mounted) return;
+        showFocusAdvanceSnackBar(
+          context,
+          focusAdvanceMessage(
+            nextTask: focusNextTask(
+              sessionTasks: stoppedTasks,
+              completedTodoId: batchNextId,
+              settlements: stoppedSettlements,
+            ),
+            verdict: memberVerdict,
+            stoppedAtLimit: true,
+          ),
+        );
+      }
     }
 
     // The last member of a batch is followed by the one Break (a member left
@@ -297,6 +283,31 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
         MaterialPageRoute<void>(builder: (_) => const BatchBreakScreen()),
       ));
     }
+  }
+
+  /// Skips the Break, going past the Timeboxed gate first (issue #923).
+  ///
+  /// "Right ho" stops the approach at its limit and asks what is next for the
+  /// Outcome (issue #49). The verdict's own write closes the Action at its
+  /// limit — which closes its TimeLog with the time kept — and the session
+  /// then lands as it does after Done.
+  Future<void> _skipBreakPastLimit(Todo todo) async {
+    final verdict = await guardSprintPastLimit(
+      context,
+      ref,
+      outcomeId: todo.id,
+      start: () async => ref.read(sprintTimerProvider.notifier).skipBreak(),
+    );
+    // No verdict means the Sprint started (or the sheet was dismissed without
+    // a choice, which writes nothing and leaves the Break standing).
+    if (verdict == null) return;
+    if (!mounted) return;
+    _notificationTimer?.cancel();
+    NotificationService.instance.cancelFocusNotification();
+    // The TimeLog is already closed by the stop, so the Sprint ends with it.
+    await ref.read(sprintTimerProvider.notifier).stopSprint();
+    if (!mounted) return;
+    await _advanceAfterVerdict(todo.id, verdict, stoppedAtLimit: true);
   }
 
   /// Stops the sprint and returns to the focus list without completing the task.
@@ -351,6 +362,7 @@ class _ActiveFocusScreenState extends ConsumerState<ActiveFocusScreen>
               todo: todo,
               onComplete: () => _onComplete(todo),
               onStop: () => _onStop(todo.id),
+              onSkipBreak: () => _skipBreakPastLimit(todo),
             );
           },
         ),
@@ -369,11 +381,17 @@ class _FocusBody extends ConsumerStatefulWidget {
     required this.todo,
     required this.onComplete,
     required this.onStop,
+    required this.onSkipBreak,
   });
 
   final Todo todo;
   final VoidCallback onComplete;
   final VoidCallback onStop;
+
+  /// Skips the Break. The screen that owns the session handles it: a Break
+  /// skipped past a Timeboxed limit may stop the approach outright, and the
+  /// landing belongs with the rest of the session (issue #49).
+  final VoidCallback onSkipBreak;
 
   @override
   ConsumerState<_FocusBody> createState() => _FocusBodyState();
@@ -473,12 +491,7 @@ class _FocusBodyState extends ConsumerState<_FocusBody>
                         if (isBreak) {
                           // Skipping the break starts the next Sprint, so
                           // it goes past the same gate (issue #923).
-                          unawaited(guardSprintPastLimit(
-                            context,
-                            ref,
-                            outcomeId: todo.id,
-                            start: () async => notifier.skipBreak(),
-                          ));
+                          widget.onSkipBreak();
                         } else {
                           notifier.startBreak();
                         }

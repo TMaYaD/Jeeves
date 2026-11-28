@@ -248,6 +248,12 @@ abstract class ClarificationService {
   /// replacing — the incumbent is superseded first; the write throws if sync
   /// changed the current meanwhile. Next only; see [TodoDao.applyRouting].
   ///
+  /// [stopAtLimitActionId] closes the current Action as **stopped at its
+  /// Timeboxed limit** in the same transaction as the route (issue #49). The
+  /// route then lands on an Actionless Outcome, exactly as it does after the
+  /// Done sheet's `completeCurrentAction`. A route that fails to land leaves
+  /// the Action current, so the user can choose again.
+  ///
   /// Returns whether the routing landed. The Outcome's presence is checked
   /// inside the write's own transaction; a vanished Outcome writes nothing and
   /// returns `false`.
@@ -258,6 +264,7 @@ abstract class ClarificationService {
     String? actionTextIfActionless,
     String? promotePlannedActionId,
     String? replacingCurrentActionId,
+    String? stopAtLimitActionId,
     Set<String>? personTagIds,
     FollowUpChange? followUp,
     String? userId,
@@ -608,6 +615,7 @@ class DaoClarificationService implements ClarificationService {
     String? actionTextIfActionless,
     String? promotePlannedActionId,
     String? replacingCurrentActionId,
+    String? stopAtLimitActionId,
     Set<String>? personTagIds,
     FollowUpChange? followUp,
     String? userId,
@@ -619,6 +627,7 @@ class DaoClarificationService implements ClarificationService {
         actionTextIfActionless: actionTextIfActionless,
         promotePlannedActionId: promotePlannedActionId,
         replacingCurrentActionId: replacingCurrentActionId,
+        stopAtLimitActionId: stopAtLimitActionId,
         personTagIds: personTagIds,
         followUp: followUp,
         userId: userId,

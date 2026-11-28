@@ -49,18 +49,18 @@ _Avoid_: Folder, Initiative, Umbrella; "project" for a multi-Action Outcome
 **Action**:
 A physical, visible activity that moves an Outcome forward. A first-class entity with its own identity and lifecycle, distinct from the Outcome it belongs to. An Action carries one of four roles at any time:
 
-- `planned` — captured as part of the user's externalised thinking about the Outcome, but not yet eligible to be acted on. Multiple `planned` Actions may exist for one Outcome.
+- `planned` — captured as part of the user's externalised thinking about the Outcome, but not yet eligible to be acted on.
 - `current` — the single Action eligible for engagement right now. Surfaced to the user as the GTD "Next Action."
 - `done` — completed by the user (stamps `done_at`).
-- `superseded` — replaced before completion. Carries **no** linkage metadata: no `superseded_by_id` and no dedicated `superseded_at` — its termination time is read from `updated_at`. Editing the current Action's text is an in-place edit (a refinement of the same Action), not a supersession; supersession happens only through explicit affordances (Abandon, or re-clarifying to a new or promoted Action without completing the old one).
+- `superseded` — replaced before completion, or stopped at its Timeboxed limit. Carries **no** linkage metadata: no `superseded_by_id` and no dedicated `superseded_at` — its termination time is read from `updated_at`. Editing the current Action's text is an in-place edit (a refinement of the same Action), not a supersession; supersession happens only through explicit affordances (Abandon, stopping at the limit, or re-clarifying to a new or promoted Action without completing the old one).
 
 Terminated Actions (`done` or `superseded`) stay attached to their Outcome — the time-ordered chain of terminated Action rows is the Outcome's history, and it is user-visible: the Outcome detail view renders it newest-first, read-only, under the Plan.
 
-The history chain is honest about *what* terminated, not about *who* terminated it: a row retired by the startup reconciliation sweep reads as "Abandoned", like one the user abandoned deliberately. A marker column would amend the no-linkage-metadata rule above for a case that only arises from repair.
+The history chain is honest about *what* terminated, not about *who* terminated it: a row retired by the startup reconciliation sweep reads as "Abandoned", like one the user abandoned deliberately. An Action stopped at its limit reads as "Stopped at the limit": an approach that ran out of time, never "Abandoned" and never "Done". The mark that says so is not linkage — it names the ending, not the successor.
 
-**The Action rows are the only grain.** The `actions` table is the only thing the app reads or writes to answer "what is this Outcome's next move?". No Outcome column holds a next-action phrase, and no invariant ties one to the Action rows. An Outcome reduced in from a client predating the Actions table renders Actionless until re-clarified. An accidental multi-`current` set is repaired by the writers as it is encountered, never by a startup sweep.
+**The Action rows are the only grain.** The `actions` table is the only thing the app reads or writes to answer "what is this Outcome's next move?". No Outcome column holds a next-action phrase. An Outcome reduced in from a client predating the Actions table renders Actionless until re-clarified. An accidental multi-`current` set is repaired by the writers as it is encountered, never by a startup sweep.
 
-Energy level and time estimate are Action-grain for the same reason: they describe the *action of doing*, so a replacement Action never inherits the estimate of the one it replaced. The Outcome columns remain the draft store while an Outcome is Actionless, and reads fall back to them per field. A *planned* Action carries its own effort from the moment it is written down, and through promotion — the user judging "that will be a big one" about a step not yet started is exactly the externalised thinking the plan is for.
+Energy level and time estimate are Action-grain for the same reason: they describe the *action of doing*, so a replacement Action never inherits the estimate of the one it replaced. The Outcome columns remain the draft store while an Outcome is Actionless, and reads fall back to them per field. A *planned* Action carries its own effort from the moment it is written down, and through promotion.
 _Avoid_: Task (when referring to the action), Step, TodoStep, Subtask, Cursor, NextAction (provisional code name — see ambiguities)
 
 **Intent**:

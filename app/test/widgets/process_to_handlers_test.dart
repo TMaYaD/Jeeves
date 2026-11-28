@@ -77,6 +77,7 @@ class _FailingClarificationService extends DaoClarificationService {
     String? actionTextIfActionless,
     String? promotePlannedActionId,
     String? replacingCurrentActionId,
+    String? stopAtLimitActionId,
     Set<String>? personTagIds,
     FollowUpChange? followUp,
     String? userId,

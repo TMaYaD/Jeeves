@@ -5,6 +5,8 @@
 /// number is said in words rather than left to the reader to count.
 library;
 
+import 'dart:math';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:jeeves/models/timeboxed.dart';
@@ -104,6 +106,36 @@ void main() {
       expect(englishOrdinal(21), '21st');
       expect(englishOrdinal(22), '22nd');
       expect(englishOrdinal(23), '23rd');
+    });
+  });
+
+  group('the stopped-approach lines', () {
+    test('are in the app\'s voice: first person, "sir", dry', () {
+      expect(approachStoppedLines, isNotEmpty);
+      for (final line in approachStoppedLines) {
+        expect(line, contains('sir'));
+        expect(line, isNot(contains('!')));
+      }
+    });
+
+    test('carry no emoji', () {
+      for (final line in approachStoppedLines) {
+        // Emoji live outside the BMP; the basic multilingual plane holds
+        // none of them.
+        expect(
+          line.runes.any((rune) => rune > 0xFFFF),
+          isFalse,
+          reason: 'the app does not use emoji: $line',
+        );
+      }
+    });
+
+    test('are drawn from the pool, and the pool is all of them', () {
+      final drawn = <String>{};
+      for (var i = 0; i < 50; i++) {
+        drawn.add(approachStoppedLine(Random(i)));
+      }
+      expect(drawn, approachStoppedLines.toSet());
     });
   });
 

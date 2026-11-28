@@ -301,13 +301,24 @@ void main() {
       expect(find.text('The limit has run its course, sir.'), findsOneWidget);
       expect(find.text('Sprints past the limit so far: 0'), findsOneWidget);
 
-      // "Right ho" starts nothing: no TimeLog, no Sprint, no Focus Mode.
+      // "Right ho" starts nothing: no TimeLog, no Sprint, no Focus Mode. It
+      // asks what is next for the Outcome instead (issue #49).
       await tester.tap(find.byKey(const Key('timeboxed_gate_stop')));
       await _settle(tester);
       expect(find.byKey(const Key('timeboxed_gate_stop')), findsNothing);
+      expect(find.text('Approach stopped'), findsOneWidget);
       expect(find.text('Active focus'), findsNothing);
       expect(await tester.runAsync(() => _openLogCount(db)), 0);
       expect(await tester.runAsync(() => _sprintCount(db)), 0);
+
+      // Dismissing that sheet writes nothing: the Action is still current.
+      await tester.tapAt(const Offset(400, 20));
+      await _settle(tester);
+      final stillCurrent = await tester.runAsync(
+        () => db.actionDao.getCurrentAction(_outcomeId),
+      );
+      expect(stillCurrent, isNotNull);
+      expect(stillCurrent!.stoppedAtLimitAt, isNull);
 
       // Start again: "regardless" asks once more before it starts anything.
       await tapBarAction(tester, const Key('task_detail_start_focus'));

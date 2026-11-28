@@ -9,6 +9,8 @@
 /// raising the estimate moves it with no second write.
 library;
 
+import 'dart:math';
+
 /// Whether an Action is Timeboxed: the switch is on **and** it has an
 /// estimate.
 ///
@@ -166,3 +168,18 @@ String englishOrdinal(int n) {
   };
   return '$n$suffix';
 }
+
+/// The lines Jeeves says when an approach is stopped at its Timeboxed limit
+/// (issue #49).
+///
+/// The voice is the app's: first person, "sir", dry. No exclamation marks and
+/// no emoji. More lines may be added in the same voice.
+const List<String> approachStoppedLines = [
+  'That approach has had its time, sir. Where does the matter stand?',
+  'We gave it the time we agreed, sir. What now for this?',
+  'Enough of that line, sir. How stands the Outcome?',
+];
+
+/// One line from [approachStoppedLines], drawn at random.
+String approachStoppedLine(Random random) =>
+    approachStoppedLines[random.nextInt(approachStoppedLines.length)];
