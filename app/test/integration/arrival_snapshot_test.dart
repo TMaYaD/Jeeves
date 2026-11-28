@@ -16,7 +16,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:jeeves/database/daos/habit_dao.dart' show HabitCommitmentDraft;
 import 'package:jeeves/database/gtd_database.dart';
+import 'package:jeeves/models/habit_commitment.dart' show HabitRepeatKind;
+import 'package:jeeves/providers/clock_provider.dart';
 import 'package:jeeves/models/place_area.dart';
 import 'package:jeeves/providers/arrival_notification_settings.dart';
 import 'package:jeeves/providers/arrival_snapshot_provider.dart';
@@ -44,6 +47,10 @@ const double _shopLongitude = 4.8960;
 const double _pinLatitude = 52.3720;
 const double _pinLongitude = 4.8970;
 
+/// Saturday 28 November 2026, midday: the day every Habit test runs on, so
+/// nothing here depends on the day the suite runs.
+final DateTime _clockNow = DateTime(2026, 11, 28, 12);
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(configureSqliteForTests);
@@ -67,6 +74,7 @@ void main() {
       geofenceRegistrarProvider.overrideWithValue(registrar),
       locationSourceProvider.overrideWithValue(location),
       databaseProvider.overrideWithValue(db),
+      clockProvider.overrideWithValue(() => _clockNow),
       arrivalFilesProvider.overrideWith((ref) async => files),
     ]);
     addTearDown(container.dispose);
@@ -281,6 +289,155 @@ void main() {
     // The visit at a Place Jeeves no longer watches is gone too.
     final visits = await waitForVisits((visits) => !visits.containsKey(storeId));
     expect(visits, isEmpty);
+  });
+
+  group('the Habits due at a Place', () {
+    const everyDay = HabitCommitmentDraft(repeatKind: HabitRepeatKind.everyDay);
+
+    /// Creates a Habit and returns its id.
+    Future<String> createHabit(
+      String title, {
+      HabitCommitmentDraft commitment = everyDay,
+    }) =>
+        db.habitDao.createHabit(
+          userId: _userId,
+          title: title,
+          today: '2026-11-28',
+          now: _clockNow,
+          firstCommitment: commitment,
+        );
+
+    Future<void> switchOn(String placeId) =>
+        container.read(arrivalPlaceIdsProvider.notifier).turnOn(placeId);
+
+    test('an every-day Habit is in the snapshot with every day of the week',
+        () async {
+      final gymId = await createPlace('Gym', _storeLatitude, _storeLongitude);
+      final habitId = await createHabit('Workout');
+      await db.habitDao.setNamedPlace(habitId, gymId, now: _clockNow);
+      await switchOn(gymId);
+
+      final snapshot = await waitForSnapshot(
+        (snapshot) => (placeIn(snapshot, gymId)?.dueHabits ?? []).isNotEmpty,
+      );
+
+      final gym = placeIn(snapshot, gymId)!;
+      expect(gym.dueCount, 0);
+      expect(gym.dueHabits.single.title, 'Workout');
+      expect(gym.dueHabits.single.forDayKeys, [
+        '2026-11-28',
+        '2026-11-29',
+        '2026-11-30',
+        '2026-12-01',
+        '2026-12-02',
+        '2026-12-03',
+        '2026-12-04',
+      ]);
+    });
+
+    test('a Habit at a switched-off Place or at a pin is not in the snapshot',
+        () async {
+      final gymId = await createPlace('Gym', _storeLatitude, _storeLongitude);
+      final shopId = await createPlace('Corner shop', _shopLatitude, _shopLongitude);
+      final shopHabit = await createHabit('Buy bread');
+      await db.habitDao.setNamedPlace(shopHabit, shopId, now: _clockNow);
+      final pinHabit = await createHabit('Stretch');
+      await db.habitDao.setPin(
+        pinHabit,
+        PlaceArea.create(
+            latitudeDegrees: _pinLatitude, longitudeDegrees: _pinLongitude)!,
+        now: _clockNow,
+      );
+      await switchOn(gymId);
+
+      final snapshot = await waitForSnapshot((s) => placeIn(s, gymId) != null);
+      await container.read(arrivalSnapshotWriterProvider)!.settled();
+
+      expect(snapshot.places, hasLength(1));
+      expect(placeIn(snapshot, gymId)!.dueHabits, isEmpty);
+    });
+
+    test('a Habit on chosen weekdays has only those days', () async {
+      final gymId = await createPlace('Gym', _storeLatitude, _storeLongitude);
+      // Monday and Wednesday.
+      final habitId = await createHabit(
+        'Swim',
+        commitment: const HabitCommitmentDraft(
+          repeatKind: HabitRepeatKind.chosenWeekdays,
+          chosenWeekdays: [1, 3],
+        ),
+      );
+      await db.habitDao.setNamedPlace(habitId, gymId, now: _clockNow);
+      await switchOn(gymId);
+
+      final snapshot = await waitForSnapshot(
+        (snapshot) => (placeIn(snapshot, gymId)?.dueHabits ?? []).isNotEmpty,
+      );
+
+      expect(placeIn(snapshot, gymId)!.dueHabits.single.forDayKeys,
+          ['2026-11-30', '2026-12-02']);
+    });
+
+    test('a Check-in today takes today out, and the file is rewritten',
+        () async {
+      final gymId = await createPlace('Gym', _storeLatitude, _storeLongitude);
+      final habitId = await createHabit('Workout');
+      await db.habitDao.setNamedPlace(habitId, gymId, now: _clockNow);
+      await switchOn(gymId);
+      await waitForSnapshot((s) =>
+          placeIn(s, gymId)?.dueHabits.singleOrNull?.forDayKeys.first ==
+          '2026-11-28');
+
+      await db.habitDao.addCheckIn(
+        habitId: habitId,
+        userId: _userId,
+        countsForDay: '2026-11-28',
+        now: _clockNow,
+      );
+
+      final snapshot = await waitForSnapshot((s) =>
+          placeIn(s, gymId)?.dueHabits.singleOrNull?.forDayKeys.first ==
+          '2026-11-29');
+      expect(
+          placeIn(snapshot, gymId)!.dueHabits.single.forDayKeys, hasLength(6));
+    });
+
+    test('a pause leaves no day key in the paused days, and a Habit paused '
+        'for the whole horizon is not in the snapshot', () async {
+      final gymId = await createPlace('Gym', _storeLatitude, _storeLongitude);
+      final pausedBriefly = await createHabit('Workout');
+      await db.habitDao.setNamedPlace(pausedBriefly, gymId, now: _clockNow);
+      await db.habitDao.pause(
+        habitId: pausedBriefly,
+        userId: _userId,
+        today: '2026-11-29',
+        now: _clockNow,
+        resumesOn: '2026-12-02',
+      );
+      final pausedAlways = await createHabit('Swim');
+      await db.habitDao.setNamedPlace(pausedAlways, gymId, now: _clockNow);
+      await db.habitDao.pause(
+        habitId: pausedAlways,
+        userId: _userId,
+        today: '2026-11-28',
+        now: _clockNow,
+      );
+      await switchOn(gymId);
+
+      final snapshot = await waitForSnapshot(
+        (snapshot) => (placeIn(snapshot, gymId)?.dueHabits ?? []).isNotEmpty,
+      );
+
+      final habits = placeIn(snapshot, gymId)!.dueHabits;
+      expect(habits, hasLength(1));
+      expect(habits.single.title, 'Workout');
+      expect(habits.single.forDayKeys, [
+        '2026-11-28',
+        '2026-12-02',
+        '2026-12-03',
+        '2026-12-04',
+      ]);
+    });
   });
 
   /// Waits until [done] holds, or fails with [what].

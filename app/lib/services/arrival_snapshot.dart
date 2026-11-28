@@ -1,5 +1,5 @@
-/// The device-local arrival snapshot — what is due at each Place the user
-/// asked to hear about on arrival (issue #1092).
+/// The device-local arrival snapshot — the Outcomes and Habits due at each
+/// Place the user asked to hear about on arrival (issues #1092, #1095).
 ///
 /// The arrival notification is raised while Jeeves is closed, and the
 /// background code may not open the store. So the foreground app writes down
@@ -41,7 +41,16 @@ const String arrivalGeofencesFileName = 'arrival_geofences.json';
 /// The version of the format this build writes.
 const int arrivalSnapshotFormatVersion = 1;
 
+/// One Habit due at a Place, and the days over the horizon it is for.
+///
+/// A day key is a local calendar day, `YYYY-MM-DD`. The arrival can come days
+/// after Jeeves was last open, so the snapshot carries the days ahead and the
+/// background code picks today's.
+typedef ArrivalHabit = ({String title, List<String> forDayKeys});
+
 /// One Place the user asked to hear about, and what is due there.
+///
+/// [dueCount] and [dueTitles] are the Outcomes due; [dueHabits] are the Habits.
 typedef ArrivalPlace = ({
   String id,
   String name,
@@ -50,6 +59,7 @@ typedef ArrivalPlace = ({
   int radiusMeters,
   int dueCount,
   List<String> dueTitles,
+  List<ArrivalHabit> dueHabits,
 });
 
 /// The switched-on Places, and what is due at each of them.
@@ -60,6 +70,9 @@ const ArrivalSnapshot emptyArrivalSnapshot = (places: <ArrivalPlace>[]);
 
 /// How many titles the snapshot carries for one Place.
 const int arrivalDueTitlesLimit = 3;
+
+/// How many days ahead, today included, the snapshot says which Habits are for.
+const int arrivalHabitHorizonDays = 7;
 
 /// Encodes a snapshot as the text of `arrival_snapshot.json`.
 String encodeArrivalSnapshot(ArrivalSnapshot snapshot) => jsonEncode({
@@ -74,6 +87,10 @@ String encodeArrivalSnapshot(ArrivalSnapshot snapshot) => jsonEncode({
             'radiusMeters': place.radiusMeters,
             'dueCount': place.dueCount,
             'dueTitles': place.dueTitles,
+            'dueHabits': [
+              for (final habit in place.dueHabits)
+                {'title': habit.title, 'forDayKeys': habit.forDayKeys},
+            ],
           },
       ],
     });
@@ -103,6 +120,7 @@ ArrivalSnapshot decodeArrivalSnapshot(String source) {
       radiusMeters: _readInt(entry['radiusMeters']),
       dueCount: _readInt(entry['dueCount']),
       dueTitles: _readStringList(entry['dueTitles']),
+      dueHabits: _readHabits(entry['dueHabits']),
     ));
   }
   if (places.isEmpty) return emptyArrivalSnapshot;
@@ -260,6 +278,20 @@ List<String> _readStringList(Object? value) {
     for (final entry in value)
       if (entry is String) entry,
   ];
+}
+
+/// The Habits [value] holds. A missing field, or an entry without a title,
+/// reads as no Habit; a day that is not a string is skipped.
+List<ArrivalHabit> _readHabits(Object? value) {
+  if (value is! List) return const <ArrivalHabit>[];
+  final habits = <ArrivalHabit>[];
+  for (final entry in value) {
+    if (entry is! Map) continue;
+    final title = entry['title'];
+    if (title is! String || title.isEmpty) continue;
+    habits.add((title: title, forDayKeys: _readStringList(entry['forDayKeys'])));
+  }
+  return habits;
 }
 
 /// The instant [value] holds, or null.
